@@ -1,0 +1,11 @@
+# TAVI - Triple-Axis Virtual Instrument Requirements
+# Python dependencies for running the TAVI simulation software
+
+# McStas Python interface
+mcstasscript>=0.1.0
+
+# Numerical computing
+numpy>=1.20.0
+
+# Plotting and visualization
+matplotlib>=3.3.0
