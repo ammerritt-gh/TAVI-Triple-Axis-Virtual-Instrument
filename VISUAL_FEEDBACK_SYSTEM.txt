@@ -1,0 +1,127 @@
+"""
+Visual Feedback System for Input Fields
+========================================
+
+This document describes the visual feedback system that shows users when
+changes are pending vs. when they've been saved and propagated.
+
+Behavior Flow:
+--------------
+
+1. NORMAL STATE (Default)
+   ┌─────────────┐
+   │  14.7       │  <- Normal border (default Qt style)
+   └─────────────┘
+   
+2. USER STARTS TYPING (Pending Changes)
+   ┌─────────────┐
+   │  15.        │  <- Orange border (2px solid #FF8C00)
+   └─────────────┘
+   Status: Changes are pending, not yet propagated
+   
+3. USER PRESSES ENTER (Changes Saved - Flash)
+   ┌═════════════┐
+   ║  15.2       ║  <- Bold black border (3px solid #000000)
+   ╚═════════════╝
+   Status: Changes saved! Flash for 300ms
+   
+4. AFTER FLASH (Back to Normal)
+   ┌─────────────┐
+   │  15.2       │  <- Normal border (default Qt style)
+   └─────────────┘
+   Status: Changes saved and propagated
+
+
+Visual States:
+--------------
+
+State              Border Style                   Duration
+-----              ------------                   --------
+Normal             Default Qt style               Persistent
+Pending            2px solid #FF8C00 (orange)    While editing
+Saved (flash)      3px solid #000000 (black)     300ms
+After save         Default Qt style               Persistent
+
+
+Key Features:
+-------------
+
+✓ ONLY shows feedback for user input (not programmatic updates)
+✓ Orange = "I'm typing, changes not saved yet"
+✓ Bold black flash = "Changes saved and propagated!"
+✓ Applied to ALL input fields (angles, energies, Q-space, HKL, etc.)
+✓ Makes field linking behavior transparent to users
+
+Examples:
+---------
+
+Scenario 1: User edits Ki field
+  1. User clicks in Ki field, types "2.8"
+  2. Field gets orange border (pending)
+  3. User presses Enter
+  4. Field flashes with bold border
+  5. Ki updates, AND mtt, Ei, deltaE all update automatically
+  6. All fields return to normal state
+
+Scenario 2: K_fixed mode change triggers updates
+  1. User changes dropdown from "Ki Fixed" to "Kf Fixed"
+  2. System updates Ei, Ef, Ki, Kf, mtt, att, deltaE
+  3. NO visual feedback (these are programmatic updates)
+  4. Fields update silently in background
+
+Scenario 3: User changes mtt (mono 2θ)
+  1. User types new value in mtt field
+  2. mtt field gets orange border
+  3. User presses Enter
+  4. mtt flashes bold
+  5. Ki and Ei update automatically (no visual feedback)
+  6. deltaE recalculates (no visual feedback)
+  7. Only the user-edited field shows feedback
+
+
+Implementation Details:
+-----------------------
+
+Location: TAVI_PySide6.py
+Methods:
+  - setup_visual_feedback(): Sets up feedback for all fields
+  - _setup_field_feedback(line_edit): Sets up feedback for one field
+
+Signal Connections:
+  - textChanged: Detects user typing, shows orange border
+  - editingFinished: Detects Enter/focus loss, flashes then clears
+
+Properties Used:
+  - original_value: Tracks what value was when field gained focus
+  - original_style: Stores default stylesheet to restore later
+
+Recursion Prevention:
+  - Checks self.updating flag
+  - Only shows feedback if NOT in programmatic update mode
+  - Ensures only user actions trigger visual feedback
+
+
+Color Choices:
+--------------
+
+Orange (#FF8C00):
+  - Warning color suggesting "not yet saved"
+  - Distinct from normal blue Qt focus highlight
+  - Warm, attention-grabbing but not alarming
+
+Black (#000000):
+  - Strong, definitive "done" signal
+  - Bold (3px) makes it very visible
+  - Brief (300ms) so it doesn't distract
+  - Returns to normal quickly
+
+
+Benefits:
+---------
+
+1. Transparency: Users know when changes are saved
+2. Confidence: Flash confirms propagation happened
+3. Clarity: Orange = pending, Flash = done
+4. Selective: Only shows for user edits, not cascading updates
+5. Non-intrusive: Returns to normal after brief flash
+6. Consistent: Same behavior across all fields
