@@ -633,7 +633,6 @@ def open_folder_dialog(entry_widget):
     default_folder = os.getcwd()
     folder_selected = filedialog.askdirectory(initialdir=default_folder)
     if folder_selected:
-        folder_selected = folder_selected.replace('/', '\\')  # Replace forward slashes with backslashes
         entry_widget.delete(0, tk.END)  # Clear the existing content
         entry_widget.insert(0, folder_selected)  # Insert the selected folder path into the entry widget
          
@@ -661,7 +660,7 @@ def run_simulation(PUMA, data_folder):
     # If the folder already exists, increment instead
     new_data_folder = incremented_path_writing(output_directory, data_folder)
     # Inside the `run_simulation` function after creating or incrementing the folder
-    folder_label_actual_var.set(new_data_folder.replace("/", "\\"))
+    folder_label_actual_var.set(new_data_folder)
     data_folder = new_data_folder
 
     # Get values from the GUI and run the simulation
@@ -881,7 +880,7 @@ def run_simulation(PUMA, data_folder):
         ])
 
         # Combine description for folder
-        scan_folder = data_folder + "\\" + "_".join(scan_description)
+        scan_folder = os.path.join(data_folder, "_".join(scan_description))
 
         # Log parameters and start simulation
         if scan_mode == "momentum":

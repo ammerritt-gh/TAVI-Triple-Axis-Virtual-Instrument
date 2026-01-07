@@ -360,7 +360,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
 
     ## start the instrument
 
-    instrument = ms.McStas_instr("PUMA_McScript", input_path="C:\\mcstas-3.4\\python_test")
+    instrument = ms.McStas_instr("PUMA_McScript")
     instrument.settings(openacc=False) #uses nvc, must be set up on linux
     
     ## Add parameters
