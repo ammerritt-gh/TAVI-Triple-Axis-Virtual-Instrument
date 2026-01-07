@@ -272,6 +272,9 @@ class TAVIController(QObject):
             mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
             att = 2 * k2angle(Kf, self.anacris_info['da'])
             
+            # Recalculate deltaE to ensure consistency
+            deltaE = Ei - Ef
+            
             # Update all GUI fields
             self.window.instrument_dock.Ei_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.Ef_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
@@ -279,6 +282,7 @@ class TAVIController(QObject):
             self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
             
         except (ValueError, KeyError) as e:
             pass
