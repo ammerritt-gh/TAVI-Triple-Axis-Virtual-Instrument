@@ -21,6 +21,11 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
 2. **Install Python dependencies**
 
    ```bash
+   pip install -r requirements.txt
+   ```
+
+   Alternatively, install packages individually:
+   ```bash
    pip install mcstasscript numpy matplotlib
    ```
 
