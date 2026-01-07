@@ -36,12 +36,59 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
 
 ## Running the Application
 
-1. Navigate to the TAVI directory
-2. Run the main application:
+There are two ways to run TAVI:
 
-   ```bash
-   python McScript_Runner.py
-   ```
+### New MVVM Architecture (Recommended)
+
+```bash
+python run_tavi.py
+```
+
+### Legacy Application
+
+```bash
+python McScript_Runner.py
+```
+
+## Architecture
+
+TAVI uses an MVVM (Model-View-ViewModel) architecture for clean separation of concerns:
+
+```
+tavi/
+├── models/           # State management
+│   ├── instrument_model.py    # Instrument configuration state
+│   ├── sample_model.py        # Sample/lattice parameters
+│   ├── reciprocal_space_model.py  # Q-space and HKL state
+│   ├── scan_model.py          # Scan configuration
+│   ├── diagnostics_model.py   # Diagnostic monitor settings
+│   ├── data_model.py          # I/O configuration
+│   └── application_model.py   # Central state aggregator
+├── views/            # GUI components
+│   ├── main_view.py           # Main application window
+│   └── docks/                 # Dock widgets
+│       ├── instrument_config_dock.py
+│       ├── reciprocal_space_dock.py
+│       ├── sample_control_dock.py
+│       ├── scan_controls_dock.py
+│       ├── output_dock.py
+│       ├── data_control_dock.py
+│       └── diagnostics_dock.py
+├── viewmodels/       # Data binding (future)
+├── controllers/      # Business logic
+│   └── scan_controller.py     # Asynchronous simulation execution
+├── instruments/      # Instrument definitions
+│   ├── base_instrument.py     # Abstract TAS instrument
+│   └── puma.py                # PUMA-specific implementation
+└── application.py    # Main application wiring
+```
+
+### Key Components
+
+- **Models**: Hold the application state as observable values. Changes propagate to subscribers.
+- **Views/Docks**: GUI widgets organized into logical sections (instrument, sample, scan, etc.)
+- **Controllers**: Handle business logic like running simulations asynchronously.
+- **Instruments**: Define instrument geometry and physics calculations. New instruments can be added by inheriting from `BaseInstrument`.
 
 ## Features
 
@@ -52,6 +99,8 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
 - Sample configuration including lattice parameters
 - Automatic data processing and visualization
 - Cross-platform support (Windows, macOS, Linux)
+- Asynchronous simulation execution (GUI remains responsive)
+- Modular design for adding new instruments
 
 ## Configuration
 
@@ -63,7 +112,12 @@ These files are created in the current working directory and can be freely moved
 
 ## File Structure
 
-- `McScript_Runner.py` - Main GUI application
+### New Architecture (tavi package)
+- `run_tavi.py` - Entry point for new MVVM application
+- `tavi/` - Main package with MVVM architecture
+
+### Legacy Files
+- `McScript_Runner.py` - Legacy GUI application
 - `PUMA_instrument_definition.py` - PUMA instrument setup and McStas interface
 - `PUMA_GUI_calculations.py` - GUI calculation utilities
 - `McScript_Functions.py` - Helper functions for file operations
@@ -77,6 +131,27 @@ Simulation results are saved in the `output` directory with the following struct
 - Individual scan points are saved in subfolders with encoded parameters
 - Data files include detector readings and scan parameters
 - Plots are automatically generated for 1D and 2D scans
+
+## Extending TAVI
+
+### Adding a New Instrument
+
+1. Create a new file in `tavi/instruments/` (e.g., `my_instrument.py`)
+2. Create a class that inherits from `BaseInstrument`
+3. Implement required methods: `name`, `get_available_monochromators()`, `get_available_analyzers()`, `calculate_crystal_bending()`
+4. Define the instrument geometry (arm lengths, crystal options, etc.)
+
+Example:
+```python
+from tavi.instruments.base_instrument import BaseInstrument, CrystalInfo
+
+class MyInstrument(BaseInstrument):
+    @property
+    def name(self) -> str:
+        return "MY_INSTRUMENT"
+    
+    # ... implement other required methods
+```
 
 ## Troubleshooting
 
@@ -100,4 +175,5 @@ See LICENSE file for details.
 Contributions are welcome! Please ensure your code:
 - Uses platform-independent path handling (os.path.join, pathlib)
 - Avoids hard-coded file paths
+- Follows the MVVM architecture for new GUI features
 - Includes appropriate comments and documentation
