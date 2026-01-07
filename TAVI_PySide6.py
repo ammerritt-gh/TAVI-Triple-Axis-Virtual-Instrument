@@ -46,8 +46,9 @@ class TAVIController(QObject):
         self.stop_flag = False
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
-        self.monocris_info = {}
-        self.anacris_info = {}
+        
+        # Initialize crystal info with default values
+        self.monocris_info, self.anacris_info = mono_ana_crystals_setup("PG[002]", "PG[002]")
         
         # Initialize output directory
         self.output_directory = os.path.join(os.getcwd(), "output")
@@ -59,6 +60,10 @@ class TAVIController(QObject):
         
         # Load parameters
         self.load_parameters()
+        
+        # Update crystal info based on loaded parameters
+        self.update_monocris_info()
+        self.update_anacris_info()
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
