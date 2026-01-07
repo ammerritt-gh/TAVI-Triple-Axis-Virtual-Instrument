@@ -1062,9 +1062,38 @@ class TAVIController(QObject):
             # Update crystal bending
             self.PUMA.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
             
-            # Generate scan folder name
-            scan_description = f"scan_{i+1:04d}"
-            scan_folder = os.path.join(data_folder, scan_description)
+            # Generate scan folder name (match McScript_Runner convention)
+            scan_description = []
+            if scan_mode == "momentum":
+                scan_description.extend([
+                    f"qx_{letter_encode_number(qx)}",
+                    f"qy_{letter_encode_number(qy)}",
+                    f"qz_{letter_encode_number(qz)}",
+                    f"dE_{letter_encode_number(deltaE)}",
+                ])
+            elif scan_mode == "rlu":
+                scan_description.extend([
+                    f"H_{letter_encode_number(H)}",
+                    f"K_{letter_encode_number(K)}",
+                    f"L_{letter_encode_number(L)}",
+                    f"dE_{letter_encode_number(deltaE)}",
+                ])
+            else:  # Angle mode
+                scan_description.extend([
+                    f"A1_{letter_encode_number(A1)}",
+                    f"A2_{letter_encode_number(A2)}",
+                    f"A3_{letter_encode_number(A3)}",
+                    f"A4_{letter_encode_number(A4)}",
+                ])
+
+            scan_description.extend([
+                f"rhm_{letter_encode_number(rhm)}",
+                f"rvm_{letter_encode_number(rvm)}",
+                f"rha_{letter_encode_number(rha)}",
+                f"rva_{letter_encode_number(rva)}",
+            ])
+
+            scan_folder = os.path.join(data_folder, "_".join(scan_description))
             
             # Log scan parameters before running
             if scan_mode == "momentum":
@@ -1129,7 +1158,8 @@ class TAVIController(QObject):
         # Generate simple plot if scan commands were provided
         if scan_command1 or scan_command2:
             try:
-                simple_plot_scan_commands(data_folder, scan_command1, scan_command2)
+                # McScript_DataProcessing.simple_plot_scan_commands reads scan commands from file
+                simple_plot_scan_commands(None, data_folder)
                 self.message_printed.emit("Plots generated successfully")
             except Exception as e:
                 self.message_printed.emit(f"Plot generation failed: {e}")

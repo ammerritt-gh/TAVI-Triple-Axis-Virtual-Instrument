@@ -117,9 +117,18 @@ def read_all_scans(data_folder):
 
 def write_parameters_to_file(target_folder, parameters):
     file_path = os.path.join(target_folder, "scan_parameters.txt")
+    os.makedirs(target_folder, exist_ok=True)
     with open(file_path, 'w') as file:
-        for key in parameters.__dict__.keys():
-            value = getattr(parameters, key)
+        # Support both dict and objects with __dict__
+        if isinstance(parameters, dict):
+            items = parameters.items()
+        elif hasattr(parameters, "__dict__"):
+            items = parameters.__dict__.items()
+        else:
+            # Fallback: try to iterate public attributes
+            items = ((k, getattr(parameters, k)) for k in dir(parameters) if not k.startswith('_'))
+
+        for key, value in items:
             file.write(f"{key}: {value}\n")
 
 def read_parameters_from_file(target_folder):
