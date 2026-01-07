@@ -288,14 +288,14 @@ class TAVIController(QObject):
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
         self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_from_current_values()
+        self.update_all_variables()
     
     def update_anacris_info(self):
         """Update analyzer crystal information."""
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
         _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_from_current_values()
+        self.update_all_variables()
     
     def get_gui_values(self):
         """Helper to get all GUI values as a dict."""
@@ -314,6 +314,9 @@ class TAVIController(QObject):
                 'qx': float(self.window.reciprocal_space_dock.qx_edit.text() or 0),
                 'qy': float(self.window.reciprocal_space_dock.qy_edit.text() or 0),
                 'qz': float(self.window.reciprocal_space_dock.qz_edit.text() or 0),
+                'H': float(self.window.reciprocal_space_dock.H_edit.text() or 0),
+                'K': float(self.window.reciprocal_space_dock.K_edit.text() or 0),
+                'L': float(self.window.reciprocal_space_dock.L_edit.text() or 0),
                 'deltaE': float(self.window.reciprocal_space_dock.deltaE_edit.text() or 0),
                 'lattice_a': float(self.window.sample_dock.lattice_a_edit.text() or 1),
                 'lattice_b': float(self.window.sample_dock.lattice_b_edit.text() or 1),
@@ -323,6 +326,21 @@ class TAVIController(QObject):
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
                 'monocris': self.window.instrument_dock.monocris_combo.currentText(),
                 'anacris': self.window.instrument_dock.anacris_combo.currentText(),
+                'rhmfac': float(self.window.instrument_dock.rhmfac_edit.text() or 1),
+                'rvmfac': float(self.window.instrument_dock.rvmfac_edit.text() or 1),
+                'rhafac': float(self.window.instrument_dock.rhafac_edit.text() or 1),
+                'NMO_installed': self.window.instrument_dock.nmo_combo.currentText(),
+                'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked(),
+                'alpha_1': self.window.instrument_dock.alpha_1_combo.currentText(),
+                'alpha_2_30': self.window.instrument_dock.alpha_2_30_check.isChecked(),
+                'alpha_2_40': self.window.instrument_dock.alpha_2_40_check.isChecked(),
+                'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
+                'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
+                'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
+                'number_neutrons': int(self.window.scan_controls_dock.number_neutrons_edit.text() or 1000000),
+                'scan_command1': self.window.scan_controls_dock.scan_command_1_edit.text(),
+                'scan_command2': self.window.scan_controls_dock.scan_command_2_edit.text(),
+                'diagnostic_mode': self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
             }
         except ValueError:
             return None
@@ -833,11 +851,264 @@ class TAVIController(QObject):
         self.print_to_message_center("Stop requested...")
     
     def run_simulation(self, data_folder):
-        """Run the simulation (simplified version for now)."""
-        self.print_to_message_center("Starting simulation...")
-        self.print_to_message_center("Note: Full simulation integration is not yet complete")
-        # TODO: Implement full simulation logic from original McScript_Runner.py
-        # This would include all the scan logic, parameter extraction, etc.
+        """Run the full simulation."""
+        self.message_printed.emit("Starting simulation...")
+        self.save_parameters()
+        
+        # Get the output folder from the text box
+        data_folder = self.window.data_control_dock.save_folder_edit.text()
+        # If the folder already exists, increment instead
+        new_data_folder = incremented_path_writing(self.output_directory, data_folder)
+        # Update actual folder label
+        self.window.data_control_dock.actual_folder_label.setText(new_data_folder)
+        data_folder = new_data_folder
+        
+        # Get all parameters from GUI
+        vals = self.get_gui_values()
+        if not vals:
+            self.message_printed.emit("Error: Could not get GUI values")
+            return
+        
+        # Configure PUMA instrument
+        self.PUMA.K_fixed = vals['K_fixed']
+        self.PUMA.NMO_installed = vals['NMO_installed']
+        self.PUMA.V_selector_installed = vals['V_selector_installed']
+        self.PUMA.rhmfac = vals['rhmfac']
+        self.PUMA.rvmfac = vals['rvmfac']
+        self.PUMA.rhafac = vals['rhafac']
+        self.PUMA.fixed_E = vals['fixed_E']
+        self.PUMA.monocris = vals['monocris']
+        self.PUMA.anacris = vals['anacris']
+        self.PUMA.alpha_1 = float(vals['alpha_1'])
+        self.PUMA.alpha_2 = [
+            30 if vals['alpha_2_30'] else 0,
+            40 if vals['alpha_2_40'] else 0,
+            60 if vals['alpha_2_60'] else 0
+        ]
+        self.PUMA.alpha_3 = float(vals['alpha_3'])
+        self.PUMA.alpha_4 = float(vals['alpha_4'])
+        
+        number_neutrons = vals['number_neutrons']
+        scan_command1 = vals['scan_command1']
+        scan_command2 = vals['scan_command2']
+        diagnostic_mode = vals['diagnostic_mode']
+        
+        # Write parameters to file
+        write_parameters_to_file(data_folder, vals)
+        
+        # Initialize scan arrays
+        scan_parameter_input = []
+        
+        # Determine scan mode
+        scan_mode = "momentum"  # Default
+        if scan_command1:
+            if "qx" in scan_command1 or "qy" in scan_command1 or "qz" in scan_command1:
+                scan_mode = "momentum"
+            elif "H" in scan_command1 or "K" in scan_command1 or "L" in scan_command1:
+                scan_mode = "rlu"
+            elif "A1" in scan_command1 or "A2" in scan_command1 or "A3" in scan_command1 or "A4" in scan_command1:
+                scan_mode = "angle"
+        
+        # Mapping for scannable parameters
+        variable_to_index = {
+            'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+            'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
+            'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
+            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7
+        }
+        
+        # Initialize scan point template
+        scan_point_template = [0] * 8
+        if scan_mode == "momentum":
+            scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
+        elif scan_mode == "rlu":
+            scan_point_template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
+        elif scan_mode == "angle":
+            scan_point_template[:4] = [0, 0, 0, 0]
+        
+        # Handle no scan commands
+        if not scan_command1 and not scan_command2:
+            scan_parameter_input.append(scan_point_template[:])
+        
+        # Swap if only second command provided
+        if scan_command2 and not scan_command1:
+            scan_command1 = scan_command2
+            scan_command2 = None
+        
+        puma_instance = PUMA_Instrument()
+        variable_name1 = ""
+        variable_name2 = ""
+        
+        # Single scan command
+        if scan_command1 and not scan_command2:
+            variable_name1, array_values1 = parse_scan_steps(scan_command1)
+            for value1 in array_values1:
+                scan_point = scan_point_template[:]
+                scan_point[variable_to_index[variable_name1]] = value1
+                if scan_mode == "momentum":
+                    _, error_flags = puma_instance.calculate_angles(
+                        *scan_point[:4], self.PUMA.fixed_E, self.PUMA.K_fixed, 
+                        self.PUMA.monocris, self.PUMA.anacris
+                    )
+                elif scan_mode == "rlu":
+                    qx, qy, qz = update_Q_from_HKL_direct(
+                        scan_point[0], scan_point[1], scan_point[2],
+                        vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                        vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                    )
+                    _, error_flags = puma_instance.calculate_angles(
+                        qx, qy, qz, scan_point[3], self.PUMA.fixed_E, 
+                        self.PUMA.K_fixed, self.PUMA.monocris, self.PUMA.anacris
+                    )
+                else:
+                    error_flags = []
+                if not error_flags:
+                    scan_parameter_input.append(scan_point)
+        
+        # Double scan command
+        if scan_command2 and scan_command1:
+            variable_name1, array_values1 = parse_scan_steps(scan_command1)
+            variable_name2, array_values2 = parse_scan_steps(scan_command2)
+            for value1 in array_values1:
+                for value2 in array_values2:
+                    scan_point = scan_point_template[:]
+                    scan_point[variable_to_index[variable_name1]] = value1
+                    scan_point[variable_to_index[variable_name2]] = value2
+                    if scan_mode == "momentum":
+                        _, error_flags = puma_instance.calculate_angles(
+                            *scan_point[:4], self.PUMA.fixed_E, self.PUMA.K_fixed,
+                            self.PUMA.monocris, self.PUMA.anacris
+                        )
+                    elif scan_mode == "rlu":
+                        qx, qy, qz = update_Q_from_HKL_direct(
+                            scan_point[0], scan_point[1], scan_point[2],
+                            vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                            vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                        )
+                        _, error_flags = puma_instance.calculate_angles(
+                            qx, qy, qz, scan_point[3], self.PUMA.fixed_E,
+                            self.PUMA.K_fixed, self.PUMA.monocris, self.PUMA.anacris
+                        )
+                    else:
+                        error_flags = []
+                    if not error_flags:
+                        scan_parameter_input.append(scan_point)
+        
+        # Run the scans
+        start_time = time.time()
+        total_scans = len(scan_parameter_input)
+        self.message_printed.emit(f"Running {total_scans} scan points...")
+        
+        total_counts = 0
+        max_counts = 0
+        
+        for i, scans in enumerate(scan_parameter_input):
+            if self.stop_flag:
+                self.message_printed.emit("Simulation stopped by user.")
+                return data_folder
+            
+            # Extract scannable parameters
+            if scan_mode == "momentum":
+                qx, qy, qz, deltaE = scans[:4]
+                angles_array, error_flags = self.PUMA.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                if not error_flags:
+                    mtt, stt, sth, saz, att = angles_array
+                    self.PUMA.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+            elif scan_mode == "rlu":
+                H, K, L, deltaE = scans[:4]
+                qx, qy, qz = update_Q_from_HKL_direct(
+                    H, K, L, vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                )
+                angles_array, error_flags = self.PUMA.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                if not error_flags:
+                    mtt, stt, sth, saz, att = angles_array
+                    self.PUMA.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+            else:  # Angle mode
+                A1, A2, A3, A4 = scans[:4]
+                self.PUMA.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
+            
+            rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
+            
+            # Check if bending parameters are part of scan commands
+            if 'rhm' not in [variable_name1, variable_name2]:
+                rhm = self.PUMA.calculate_crystal_bending(
+                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
+                    self.PUMA.A1, self.PUMA.A4
+                )[0]
+            if 'rvm' not in [variable_name1, variable_name2]:
+                rvm = self.PUMA.calculate_crystal_bending(
+                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
+                    self.PUMA.A1, self.PUMA.A4
+                )[1]
+            if 'rha' not in [variable_name1, variable_name2]:
+                rha = self.PUMA.calculate_crystal_bending(
+                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
+                    self.PUMA.A1, self.PUMA.A4
+                )[2]
+            if 'rva' not in [variable_name1, variable_name2]:
+                rva = self.PUMA.calculate_crystal_bending(
+                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
+                    self.PUMA.A1, self.PUMA.A4
+                )[3]
+            
+            # Update crystal bending
+            self.PUMA.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
+            
+            # Generate scan folder name
+            scan_description = f"scan_{i+1:04d}"
+            scan_folder = os.path.join(data_folder, scan_description)
+            
+            # Run the PUMA simulation
+            if diagnostic_mode:
+                counts = run_PUMA_instrument(
+                    self.PUMA, scan_folder, number_neutrons, 
+                    diagnostic_mode=True, diagnostic_settings=self.diagnostic_settings
+                )
+            else:
+                counts = run_PUMA_instrument(
+                    self.PUMA, scan_folder, number_neutrons
+                )
+            
+            # Update progress
+            total_counts += counts
+            max_counts = max(max_counts, counts)
+            
+            # Emit progress signals
+            self.progress_updated.emit(i + 1, total_scans)
+            self.counts_updated.emit(max_counts, total_counts)
+            
+            # Calculate remaining time
+            elapsed_time = time.time() - start_time
+            avg_time_per_scan = elapsed_time / (i + 1)
+            remaining_scans = total_scans - (i + 1)
+            remaining_time = avg_time_per_scan * remaining_scans
+            
+            hours = int(remaining_time // 3600)
+            minutes = int((remaining_time % 3600) // 60)
+            seconds = int(remaining_time % 60)
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            self.remaining_time_updated.emit(time_str)
+        
+        # Simulation complete
+        self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
+        self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
+        
+        # Generate simple plot if scan commands were provided
+        if scan_command1 or scan_command2:
+            try:
+                simple_plot_scan_commands(data_folder, scan_command1, scan_command2)
+                self.message_printed.emit("Plots generated successfully")
+            except Exception as e:
+                self.message_printed.emit(f"Plot generation failed: {e}")
+        
+        return data_folder
 
 
 def main():
