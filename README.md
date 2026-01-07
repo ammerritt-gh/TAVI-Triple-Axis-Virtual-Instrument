@@ -10,7 +10,8 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
   - mcstasscript
   - numpy
   - matplotlib
-  - tkinter (usually included with Python)
+  - PySide6 (for the new modular GUI)
+  - tkinter (for the legacy GUI, usually included with Python)
 
 ## Installation
 
@@ -36,12 +37,32 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
 
 ## Running the Application
 
-1. Navigate to the TAVI directory
-2. Run the main application:
+TAVI now offers two GUI options:
 
-   ```bash
-   python McScript_Runner.py
-   ```
+### New Modular PySide6 GUI (Recommended)
+
+The new GUI uses PySide6 with a dockable window interface organized into separate modules:
+
+```bash
+python TAVI_PySide6.py
+```
+
+The modular interface includes:
+- **Instrument Configuration Dock**: Instrument angles, energies, crystal selections, collimations, and experimental modules
+- **Reciprocal Lattice Space Dock**: Absolute Q-space (qx, qy, qz) and relative HKL coordinates with energy transfer
+- **Sample Control Dock**: Lattice parameters and sample configuration
+- **Scan Controls Dock**: Scan parameters, commands, and control buttons
+- **Diagnostics Dock**: Monitor configuration and diagnostic mode
+- **Output Window**: Message center and progress tracking
+- **Data Control Dock**: Output folder selection and data loading
+
+### Legacy Tkinter GUI
+
+The original single-window interface:
+
+```bash
+python McScript_Runner.py
+```
 
 ## Features
 
@@ -63,7 +84,11 @@ These files are created in the current working directory and can be freely moved
 
 ## File Structure
 
-- `McScript_Runner.py` - Main GUI application
+- `TAVI_PySide6.py` - New modular GUI application with PySide6
+- `McScript_Runner.py` - Legacy GUI application with Tkinter
+- `gui/` - PySide6 GUI modules
+  - `main_window.py` - Main window with dock arrangement
+  - `docks/` - Individual dock widget modules
 - `PUMA_instrument_definition.py` - PUMA instrument setup and McStas interface
 - `PUMA_GUI_calculations.py` - GUI calculation utilities
 - `McScript_Functions.py` - Helper functions for file operations
