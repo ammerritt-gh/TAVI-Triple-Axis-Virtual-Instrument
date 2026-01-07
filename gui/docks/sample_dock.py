@@ -25,19 +25,23 @@ class SampleDock(QDockWidget):
         # Lattice parameters section
         lattice_group = QGroupBox("Lattice Parameters")
         lattice_layout = QGridLayout()
+        lattice_layout.setSpacing(5)
         lattice_group.setLayout(lattice_layout)
         
         # Row 1: a, b, c
         lattice_layout.addWidget(QLabel("a:"), 0, 0)
         self.lattice_a_edit = QLineEdit()
+        self.lattice_a_edit.setMaximumWidth(60)
         lattice_layout.addWidget(self.lattice_a_edit, 0, 1)
         
         lattice_layout.addWidget(QLabel("b:"), 0, 2)
         self.lattice_b_edit = QLineEdit()
+        self.lattice_b_edit.setMaximumWidth(60)
         lattice_layout.addWidget(self.lattice_b_edit, 0, 3)
         
         lattice_layout.addWidget(QLabel("c:"), 0, 4)
         self.lattice_c_edit = QLineEdit()
+        self.lattice_c_edit.setMaximumWidth(60)
         lattice_layout.addWidget(self.lattice_c_edit, 0, 5)
         
         lattice_layout.addWidget(QLabel("(Å)"), 0, 6)
@@ -45,14 +49,17 @@ class SampleDock(QDockWidget):
         # Row 2: alpha, beta, gamma
         lattice_layout.addWidget(QLabel("α:"), 1, 0)
         self.lattice_alpha_edit = QLineEdit()
+        self.lattice_alpha_edit.setMaximumWidth(60)
         lattice_layout.addWidget(self.lattice_alpha_edit, 1, 1)
         
         lattice_layout.addWidget(QLabel("β:"), 1, 2)
         self.lattice_beta_edit = QLineEdit()
+        self.lattice_beta_edit.setMaximumWidth(60)
         lattice_layout.addWidget(self.lattice_beta_edit, 1, 3)
         
         lattice_layout.addWidget(QLabel("γ:"), 1, 4)
         self.lattice_gamma_edit = QLineEdit()
+        self.lattice_gamma_edit.setMaximumWidth(60)
         lattice_layout.addWidget(self.lattice_gamma_edit, 1, 5)
         
         lattice_layout.addWidget(QLabel("(deg)"), 1, 6)

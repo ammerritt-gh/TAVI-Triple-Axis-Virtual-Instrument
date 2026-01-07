@@ -20,33 +20,30 @@ class ScanControlsDock(QDockWidget):
         
         # Scan parameters section
         params_group = QGroupBox("Scan Parameters")
-        params_layout = QFormLayout()
+        params_layout = QGridLayout()
+        params_layout.setSpacing(5)
         params_group.setLayout(params_layout)
         
         # Number of neutrons
-        neutrons_widget = QWidget()
-        neutrons_layout = QHBoxLayout()
-        neutrons_layout.setContentsMargins(0, 0, 0, 0)
+        params_layout.addWidget(QLabel("# neutrons:"), 0, 0)
         self.number_neutrons_edit = QLineEdit()
-        neutrons_layout.addWidget(self.number_neutrons_edit)
-        neutrons_layout.addWidget(QLabel("n"))
-        neutrons_widget.setLayout(neutrons_layout)
-        params_layout.addRow("Number of neutrons:", neutrons_widget)
+        self.number_neutrons_edit.setMaximumWidth(100)
+        params_layout.addWidget(self.number_neutrons_edit, 0, 1)
+        params_layout.addWidget(QLabel("n"), 0, 2)
         
         # Ki or Kf fixed
+        params_layout.addWidget(QLabel("Ki/Kf fixed:"), 1, 0)
         self.K_fixed_combo = QComboBox()
         self.K_fixed_combo.addItems(["Ki Fixed", "Kf Fixed"])
-        params_layout.addRow("Ki or Kf fixed:", self.K_fixed_combo)
+        self.K_fixed_combo.setMaximumWidth(100)
+        params_layout.addWidget(self.K_fixed_combo, 1, 1, 1, 2)
         
         # Fixed E
-        fixed_E_widget = QWidget()
-        fixed_E_layout = QHBoxLayout()
-        fixed_E_layout.setContentsMargins(0, 0, 0, 0)
+        params_layout.addWidget(QLabel("Fixed E:"), 2, 0)
         self.fixed_E_edit = QLineEdit()
-        fixed_E_layout.addWidget(self.fixed_E_edit)
-        fixed_E_layout.addWidget(QLabel("meV"))
-        fixed_E_widget.setLayout(fixed_E_layout)
-        params_layout.addRow("Fixed E:", fixed_E_widget)
+        self.fixed_E_edit.setMaximumWidth(100)
+        params_layout.addWidget(self.fixed_E_edit, 2, 1)
+        params_layout.addWidget(QLabel("meV"), 2, 2)
         
         main_layout.addWidget(params_group)
         
