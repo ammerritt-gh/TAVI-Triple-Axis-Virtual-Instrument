@@ -266,11 +266,16 @@ class Application:
         
         # Get output folder
         output_folder = self.model.data.output_folder.get()
+        if not output_folder:
+            # Use default output directory from data model
+            output_folder = os.path.join(self.model.data.ensure_output_directory(), "initial_testing")
         output_dir = os.path.dirname(output_folder)
         folder_name = os.path.basename(output_folder)
         
-        # Create incremented folder
-        actual_folder = incremented_path_writing(output_dir if output_dir else "output", folder_name)
+        # Create incremented folder, using data model's output directory as fallback
+        if not output_dir:
+            output_dir = self.model.data.ensure_output_directory()
+        actual_folder = incremented_path_writing(output_dir, folder_name)
         self.model.data.actual_output_folder.set(actual_folder)
         self.view.update_actual_folder(actual_folder)
         

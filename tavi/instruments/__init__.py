@@ -4,6 +4,7 @@ TAVI Instruments - Instrument definitions for various TAS instruments.
 from .base_instrument import (
     BaseInstrument,
     CrystalInfo,
+    InvalidAngleError,
     k_to_angle,
     angle_to_k,
     k_to_energy,
@@ -20,6 +21,7 @@ from .puma import PUMAInstrument, get_crystal_setup
 __all__ = [
     "BaseInstrument",
     "CrystalInfo",
+    "InvalidAngleError",
     "PUMAInstrument",
     "get_crystal_setup",
     "k_to_angle",

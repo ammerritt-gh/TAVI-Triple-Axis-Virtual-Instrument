@@ -181,13 +181,35 @@ class ScanController:
                         puma_instrument.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
                 elif scan_mode == "rlu":
                     H, K, L, deltaE = scan_point[:4]
-                    # Convert HKL to Q - would need lattice params here
-                    # For now, use placeholder
-                    qx, qy, qz = H, K, L  # Simplified
-                    angles_array, error_flags = puma_instrument.calculate_angles(
+                    # Convert HKL to Q using lattice parameters from scan_params
+                    # Note: This requires lattice parameters to be passed in scan_params
+                    lattice_a = scan_params.get("lattice_a", 4.05)
+                    lattice_b = scan_params.get("lattice_b", 4.05)
+                    lattice_c = scan_params.get("lattice_c", 4.05)
+                    lattice_alpha = scan_params.get("lattice_alpha", 90.0)
+                    lattice_beta = scan_params.get("lattice_beta", 90.0)
+                    lattice_gamma = scan_params.get("lattice_gamma", 90.0)
+                    
+                    # Import reciprocal space model for conversion
+                    from tavi.models.reciprocal_space_model import ReciprocalSpaceModel
+                    recip = ReciprocalSpaceModel()
+                    recip.H.set(H)
+                    recip.K.set(K)
+                    recip.L.set(L)
+                    try:
+                        recip.update_Q_from_HKL(lattice_a, lattice_b, lattice_c,
+                                                lattice_alpha, lattice_beta, lattice_gamma)
+                        qx, qy, qz = recip.qx.get(), recip.qy.get(), recip.qz.get()
+                    except ValueError as e:
+                        self._log(f"HKL to Q conversion failed: {e}")
+                        qx, qy, qz = 0, 0, 0
+                        error_flags.append("hkl_conversion")
+                    
+                    angles_array, calc_errors = puma_instrument.calculate_angles(
                         qx, qy, qz, deltaE, puma_instrument.fixed_E,
                         puma_instrument.K_fixed, puma_instrument.monocris, puma_instrument.anacris
                     )
+                    error_flags.extend(calc_errors)
                     if not error_flags:
                         mtt, stt, sth, saz, att = angles_array
                         puma_instrument.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)

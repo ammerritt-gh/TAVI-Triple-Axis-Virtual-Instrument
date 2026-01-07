@@ -93,8 +93,7 @@ class MainView:
         """Handle quit button click."""
         if self._quit_callback:
             self._quit_callback()
-        self.root.quit()
-        sys.exit()
+        self.root.destroy()
     
     def set_quit_callback(self, callback: Callable):
         """Set the callback for quit button."""

@@ -60,7 +60,12 @@ class ScanModel(BaseModel):
             end_value = float(words[2])
             step_size = float(words[3])
             
-            array_values = np.arange(start_value, end_value + step_size, step_size)
+            # Use linspace for more predictable behavior than arange with floats
+            if step_size != 0:
+                num_points = int(round((end_value - start_value) / step_size)) + 1
+                array_values = np.linspace(start_value, end_value, num_points)
+            else:
+                array_values = np.array([start_value])
             array_values = np.round(array_values, 3)
             
             return variable_name, array_values

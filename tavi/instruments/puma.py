@@ -7,6 +7,10 @@ import math
 from .base_instrument import BaseInstrument, CrystalInfo
 
 
+# Minimum angle epsilon to avoid division by zero
+MIN_ANGLE_EPSILON = 0.001
+
+
 class PUMAInstrument(BaseInstrument):
     """
     PUMA Triple-Axis Spectrometer instrument definition.
@@ -114,11 +118,11 @@ class PUMAInstrument(BaseInstrument):
         Returns:
             Tuple of (rhm, rvm, rha, rva) in meters
         """
-        # Avoid division by zero
+        # Avoid division by zero with minimum angle epsilon
         if mth == 0:
-            mth = 0.001
+            mth = MIN_ANGLE_EPSILON
         if ath == 0:
-            ath = 0.001
+            ath = MIN_ANGLE_EPSILON
             
         sin_mth = math.sin(math.radians(mth))
         sin_ath = math.sin(math.radians(ath))

@@ -15,12 +15,31 @@ HBAR_MEV = 6.582119569e-13  # H-bar (meV*s)
 HBAR = 1.05459e-34  # H-bar (J*s)
 
 
+class InvalidAngleError(ValueError):
+    """Raised when a Bragg angle calculation produces an invalid result."""
+    pass
+
+
 def k_to_angle(k: float, d: float) -> float:
-    """Convert a k value to a Bragg scattering 2-theta angle."""
+    """
+    Convert a k value to a Bragg scattering 2-theta angle.
+    
+    Args:
+        k: Wavevector magnitude (1/Å)
+        d: Crystal d-spacing (Å)
+        
+    Returns:
+        2-theta angle in degrees
+        
+    Raises:
+        InvalidAngleError: If the momentum transfer is outside the valid range
+    """
+    if k == 0 or d == 0:
+        raise InvalidAngleError(f"Invalid k ({k}) or d ({d}) value: cannot be zero")
     arg = 2 * math.pi / (2 * k * d)
     if -1 <= arg <= 1:
         return math.degrees(math.asin(arg))
-    return math.inf
+    raise InvalidAngleError(f"Momentum transfer {k} with d-spacing {d} produces invalid angle (sin={arg})")
 
 
 def angle_to_k(angle: float, d: float) -> float:
@@ -204,29 +223,42 @@ class BaseInstrument(ABC):
         
         K = energy_to_k(fixed_E)
         
-        if K_fixed == "Ki Fixed":
-            mtt = 2 * k_to_angle(K, dm)
-            Ei = fixed_E
-            ki = energy_to_k(Ei)
-            Ef = Ei - deltaE
-            if Ef <= 0:
-                return [0, 0, 0, 0, 0], ["negative_Ef"]
-            kf = energy_to_k(Ef)
-            att = 2 * k_to_angle(kf, da)
-        else:  # Kf Fixed
-            att = 2 * k_to_angle(K, da)
-            Ef = fixed_E
-            kf = energy_to_k(Ef)
-            Ei = Ef + deltaE
-            if Ei <= 0:
-                return [0, 0, 0, 0, 0], ["negative_Ei"]
-            ki = energy_to_k(Ei)
-            mtt = 2 * k_to_angle(ki, dm)
+        mtt = 0
+        att = 0
+        ki = 0
+        kf = 0
+        Ei = 0
+        Ef = 0
         
-        if mtt == math.inf:
-            error_flags.append("mtt")
-        if att == math.inf:
-            error_flags.append("att")
+        try:
+            if K_fixed == "Ki Fixed":
+                mtt = 2 * k_to_angle(K, dm)
+                Ei = fixed_E
+                ki = energy_to_k(Ei)
+                Ef = Ei - deltaE
+                if Ef <= 0:
+                    return [0, 0, 0, 0, 0], ["negative_Ef"]
+                kf = energy_to_k(Ef)
+                att = 2 * k_to_angle(kf, da)
+            else:  # Kf Fixed
+                att = 2 * k_to_angle(K, da)
+                Ef = fixed_E
+                kf = energy_to_k(Ef)
+                Ei = Ef + deltaE
+                if Ei <= 0:
+                    return [0, 0, 0, 0, 0], ["negative_Ei"]
+                ki = energy_to_k(Ei)
+                mtt = 2 * k_to_angle(ki, dm)
+        except InvalidAngleError as e:
+            if "mtt" not in str(e).lower() and K_fixed == "Ki Fixed":
+                error_flags.append("att")
+            else:
+                error_flags.append("mtt")
+            # Set to 0 for invalid angles
+            if mtt == 0:
+                mtt = 0
+            if att == 0:
+                att = 0
         
         # Calculate sample two-theta (law of cosines)
         cos_stt = (q**2 - ki**2 - kf**2) / (-2 * ki * kf)

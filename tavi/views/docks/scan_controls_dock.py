@@ -189,7 +189,8 @@ class ScanControlsDock(BaseDock):
     def set_values(self, values: Dict[str, Any]):
         """Set values in the dock from a dictionary."""
         if "number_neutrons" in values:
-            self.number_neutrons_var.set(int(values["number_neutrons"]))
+            # Use int for display but preserve float precision for large values
+            self.number_neutrons_var.set(int(float(values["number_neutrons"])))
         if "K_fixed" in values:
             self.K_fixed_var.set(values["K_fixed"])
         if "fixed_E" in values:

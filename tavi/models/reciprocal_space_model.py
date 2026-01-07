@@ -76,14 +76,19 @@ class ReciprocalSpaceModel(BaseModel):
         # The momentum transfer vector
         q_vector = np.array([self.qx.get(), self.qy.get(), self.qz.get()])
         
-        # Solve for H, K, L
+        # Solve for H, K, L with robust error handling
         try:
+            # Check matrix condition before solving
+            cond_num = np.linalg.cond(reciprocal_matrix)
+            if cond_num > 1e10:
+                raise ValueError(f"Matrix is ill-conditioned (condition number: {cond_num:.2e})")
+            
             HKL = np.linalg.solve(reciprocal_matrix, q_vector)
             self.H.set(HKL[0])
             self.K.set(HKL[1])
             self.L.set(HKL[2])
-        except np.linalg.LinAlgError:
-            raise ValueError("Matrix inversion failed. Check lattice parameters.")
+        except np.linalg.LinAlgError as e:
+            raise ValueError(f"Matrix inversion failed: {e}. Check lattice parameters.")
     
     def update_Q_from_HKL(self, a: float, b: float, c: float,
                           alpha: float, beta: float, gamma: float):
