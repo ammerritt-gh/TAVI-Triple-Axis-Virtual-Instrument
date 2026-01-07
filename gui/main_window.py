@@ -19,7 +19,7 @@ class TAVIMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TAVI - Triple-Axis Virtual Instrument")
-        self.setGeometry(100, 100, 1600, 900)
+        self.setGeometry(100, 100, 1400, 850)
         
         # Create dock widgets
         self.instrument_dock = InstrumentDock(self)
@@ -34,31 +34,28 @@ class TAVIMainWindow(QMainWindow):
         # Left side: Instrument configuration
         self.addDockWidget(Qt.LeftDockWidgetArea, self.instrument_dock)
         
-        # Right side top: Reciprocal space and Sample control
+        # Right side top: Reciprocal space
         self.addDockWidget(Qt.RightDockWidgetArea, self.reciprocal_space_dock)
+        
+        # Right side: Sample control below reciprocal space
         self.addDockWidget(Qt.RightDockWidgetArea, self.sample_dock)
         
-        # Right side middle: Scan controls
+        # Right side: Scan controls below sample
         self.addDockWidget(Qt.RightDockWidgetArea, self.scan_controls_dock)
         
-        # Right side bottom: Diagnostics
+        # Right side: Diagnostics at bottom
         self.addDockWidget(Qt.RightDockWidgetArea, self.diagnostics_dock)
         
-        # Bottom: Data control
+        # Bottom left: Data control
         self.addDockWidget(Qt.BottomDockWidgetArea, self.data_control_dock)
         
-        # Center: Output window
+        # Bottom right: Output window
         self.addDockWidget(Qt.BottomDockWidgetArea, self.output_dock)
         
-        # Tabify some docks for better space usage
-        self.tabifyDockWidget(self.reciprocal_space_dock, self.sample_dock)
-        
-        # Set initial sizes (optional)
-        self.resizeDocks(
-            [self.instrument_dock, self.output_dock],
-            [400, 300],
-            Qt.Horizontal
-        )
+        # Set size policies for better space distribution
+        self.instrument_dock.setMinimumWidth(320)
+        self.reciprocal_space_dock.setMinimumWidth(280)
+        self.output_dock.setMinimumHeight(180)
 
 
 def main():

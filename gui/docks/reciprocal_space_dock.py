@@ -19,73 +19,70 @@ class ReciprocalSpaceDock(QDockWidget):
         
         # Absolute Q space section
         q_group = QGroupBox("Absolute Q Space (Å⁻¹)")
-        q_layout = QFormLayout()
+        q_layout = QGridLayout()
+        q_layout.setSpacing(5)
         q_group.setLayout(q_layout)
         
         # qx
-        qx_widget = QWidget()
-        qx_layout = QHBoxLayout()
-        qx_layout.setContentsMargins(0, 0, 0, 0)
+        q_layout.addWidget(QLabel("qx:"), 0, 0)
         self.qx_edit = QLineEdit()
-        qx_layout.addWidget(self.qx_edit)
-        qx_layout.addWidget(QLabel("1/Å"))
-        qx_widget.setLayout(qx_layout)
-        q_layout.addRow("qx:", qx_widget)
+        self.qx_edit.setMaximumWidth(80)
+        q_layout.addWidget(self.qx_edit, 0, 1)
+        q_layout.addWidget(QLabel("1/Å"), 0, 2)
         
         # qy
-        qy_widget = QWidget()
-        qy_layout = QHBoxLayout()
-        qy_layout.setContentsMargins(0, 0, 0, 0)
+        q_layout.addWidget(QLabel("qy:"), 1, 0)
         self.qy_edit = QLineEdit()
-        qy_layout.addWidget(self.qy_edit)
-        qy_layout.addWidget(QLabel("1/Å"))
-        qy_widget.setLayout(qy_layout)
-        q_layout.addRow("qy:", qy_widget)
+        self.qy_edit.setMaximumWidth(80)
+        q_layout.addWidget(self.qy_edit, 1, 1)
+        q_layout.addWidget(QLabel("1/Å"), 1, 2)
         
         # qz
-        qz_widget = QWidget()
-        qz_layout = QHBoxLayout()
-        qz_layout.setContentsMargins(0, 0, 0, 0)
+        q_layout.addWidget(QLabel("qz:"), 2, 0)
         self.qz_edit = QLineEdit()
-        qz_layout.addWidget(self.qz_edit)
-        qz_layout.addWidget(QLabel("1/Å"))
-        qz_widget.setLayout(qz_layout)
-        q_layout.addRow("qz:", qz_widget)
+        self.qz_edit.setMaximumWidth(80)
+        q_layout.addWidget(self.qz_edit, 2, 1)
+        q_layout.addWidget(QLabel("1/Å"), 2, 2)
         
         main_layout.addWidget(q_group)
         
         # Relative HKL space section
         hkl_group = QGroupBox("Relative HKL Space (r.l.u.)")
-        hkl_layout = QFormLayout()
+        hkl_layout = QGridLayout()
+        hkl_layout.setSpacing(5)
         hkl_group.setLayout(hkl_layout)
         
         # H
+        hkl_layout.addWidget(QLabel("H:"), 0, 0)
         self.H_edit = QLineEdit()
-        hkl_layout.addRow("H:", self.H_edit)
+        self.H_edit.setMaximumWidth(80)
+        hkl_layout.addWidget(self.H_edit, 0, 1)
         
         # K
+        hkl_layout.addWidget(QLabel("K:"), 1, 0)
         self.K_edit = QLineEdit()
-        hkl_layout.addRow("K:", self.K_edit)
+        self.K_edit.setMaximumWidth(80)
+        hkl_layout.addWidget(self.K_edit, 1, 1)
         
         # L
+        hkl_layout.addWidget(QLabel("L:"), 2, 0)
         self.L_edit = QLineEdit()
-        hkl_layout.addRow("L:", self.L_edit)
+        self.L_edit.setMaximumWidth(80)
+        hkl_layout.addWidget(self.L_edit, 2, 1)
         
         main_layout.addWidget(hkl_group)
         
         # Energy transfer section
         energy_group = QGroupBox("Energy Transfer")
-        energy_layout = QFormLayout()
+        energy_layout = QGridLayout()
+        energy_layout.setSpacing(5)
         energy_group.setLayout(energy_layout)
         
-        deltaE_widget = QWidget()
-        deltaE_layout = QHBoxLayout()
-        deltaE_layout.setContentsMargins(0, 0, 0, 0)
+        energy_layout.addWidget(QLabel("ΔE:"), 0, 0)
         self.deltaE_edit = QLineEdit()
-        deltaE_layout.addWidget(self.deltaE_edit)
-        deltaE_layout.addWidget(QLabel("meV"))
-        deltaE_widget.setLayout(deltaE_layout)
-        energy_layout.addRow("ΔE:", deltaE_widget)
+        self.deltaE_edit.setMaximumWidth(80)
+        energy_layout.addWidget(self.deltaE_edit, 0, 1)
+        energy_layout.addWidget(QLabel("meV"), 0, 2)
         
         main_layout.addWidget(energy_group)
         

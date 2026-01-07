@@ -21,54 +21,64 @@ class InstrumentDock(QDockWidget):
         # Angles section
         angles_group = QGroupBox("Instrument Angles")
         angles_layout = QGridLayout()
+        angles_layout.setSpacing(5)
         angles_group.setLayout(angles_layout)
         
         # Mono 2theta
         angles_layout.addWidget(QLabel("Mono 2θ:"), 0, 0)
         self.mtt_edit = QLineEdit()
+        self.mtt_edit.setMaximumWidth(70)
         angles_layout.addWidget(self.mtt_edit, 0, 1)
         
         # Sample 2theta
         angles_layout.addWidget(QLabel("Sample 2θ:"), 0, 2)
         self.stt_edit = QLineEdit()
+        self.stt_edit.setMaximumWidth(70)
         angles_layout.addWidget(self.stt_edit, 0, 3)
         
         # Sample Psi
-        angles_layout.addWidget(QLabel("Sample Ψ:"), 0, 4)
+        angles_layout.addWidget(QLabel("Sample Ψ:"), 1, 0)
         self.psi_edit = QLineEdit()
-        angles_layout.addWidget(self.psi_edit, 0, 5)
+        self.psi_edit.setMaximumWidth(70)
+        angles_layout.addWidget(self.psi_edit, 1, 1)
         
         # Analyzer 2theta
-        angles_layout.addWidget(QLabel("Ana 2θ:"), 0, 6)
+        angles_layout.addWidget(QLabel("Ana 2θ:"), 1, 2)
         self.att_edit = QLineEdit()
-        angles_layout.addWidget(self.att_edit, 0, 7)
+        self.att_edit.setMaximumWidth(70)
+        angles_layout.addWidget(self.att_edit, 1, 3)
         
         main_layout.addWidget(angles_group)
         
         # Energies section
         energies_group = QGroupBox("Energies and Wave Vectors")
         energies_layout = QGridLayout()
+        energies_layout.setSpacing(5)
         energies_group.setLayout(energies_layout)
         
         # Ki
         energies_layout.addWidget(QLabel("Ki (1/Å):"), 0, 0)
         self.Ki_edit = QLineEdit()
+        self.Ki_edit.setMaximumWidth(70)
         energies_layout.addWidget(self.Ki_edit, 0, 1)
         
         # Ei
         energies_layout.addWidget(QLabel("Ei (meV):"), 0, 2)
         self.Ei_edit = QLineEdit()
+        self.Ei_edit.setMaximumWidth(70)
         energies_layout.addWidget(self.Ei_edit, 0, 3)
         
         # Kf
-        energies_layout.addWidget(QLabel("Kf (1/Å):"), 0, 4)
+        energies_layout.addWidget(QLabel("Kf (1/Å):"), 1, 0)
         self.Kf_edit = QLineEdit()
-        energies_layout.addWidget(self.Kf_edit, 0, 5)
+        self.Kf_edit.setMaximumWidth(70)
+        energies_layout.addWidget(self.Kf_edit, 1, 1)
         
         # Ef
-        energies_layout.addWidget(QLabel("Ef (meV):"), 0, 6)
+        energies_layout.addWidget(QLabel("Ef (meV):"), 1, 2)
         self.Ef_edit = QLineEdit()
-        energies_layout.addWidget(self.Ef_edit, 0, 7)
+        self.Ef_edit.setMaximumWidth(70)
+        energies_layout.addWidget(self.Ef_edit, 1, 3)
         
         main_layout.addWidget(energies_group)
         
@@ -103,40 +113,47 @@ class InstrumentDock(QDockWidget):
         
         # Focusing section
         focusing_group = QGroupBox("Crystal Focusing Factors")
-        focusing_layout = QFormLayout()
+        focusing_layout = QGridLayout()
+        focusing_layout.setSpacing(5)
         focusing_group.setLayout(focusing_layout)
         
+        focusing_layout.addWidget(QLabel("rhm:"), 0, 0)
         self.rhmfac_edit = QLineEdit()
-        focusing_layout.addRow("rhm factor:", self.rhmfac_edit)
+        self.rhmfac_edit.setMaximumWidth(60)
+        focusing_layout.addWidget(self.rhmfac_edit, 0, 1)
         
+        focusing_layout.addWidget(QLabel("rvm:"), 0, 2)
         self.rvmfac_edit = QLineEdit()
-        focusing_layout.addRow("rvm factor:", self.rvmfac_edit)
+        self.rvmfac_edit.setMaximumWidth(60)
+        focusing_layout.addWidget(self.rvmfac_edit, 0, 3)
         
+        focusing_layout.addWidget(QLabel("rha:"), 1, 0)
         self.rhafac_edit = QLineEdit()
-        focusing_layout.addRow("rha factor:", self.rhafac_edit)
+        self.rhafac_edit.setMaximumWidth(60)
+        focusing_layout.addWidget(self.rhafac_edit, 1, 1)
         
         main_layout.addWidget(focusing_group)
         
         # Collimations section
         collimations_group = QGroupBox("Collimations")
-        collimations_layout = QFormLayout()
+        collimations_layout = QGridLayout()
+        collimations_layout.setSpacing(5)
         collimations_group.setLayout(collimations_layout)
         
         # Alpha 1
+        collimations_layout.addWidget(QLabel("α1 (src-mono):"), 0, 0)
         self.alpha_1_combo = QComboBox()
         self.alpha_1_combo.addItems(["0", "20", "40", "60"])
-        alpha_1_widget = QWidget()
-        alpha_1_layout = QHBoxLayout()
-        alpha_1_layout.setContentsMargins(0, 0, 0, 0)
-        alpha_1_layout.addWidget(self.alpha_1_combo)
-        alpha_1_layout.addWidget(QLabel("'"))
-        alpha_1_widget.setLayout(alpha_1_layout)
-        collimations_layout.addRow("Alpha 1 (source-mono):", alpha_1_widget)
+        self.alpha_1_combo.setMaximumWidth(80)
+        collimations_layout.addWidget(self.alpha_1_combo, 0, 1)
+        collimations_layout.addWidget(QLabel("'"), 0, 2)
         
         # Alpha 2
+        collimations_layout.addWidget(QLabel("α2 (mono-smp):"), 1, 0)
         alpha_2_widget = QWidget()
         alpha_2_layout = QHBoxLayout()
         alpha_2_layout.setContentsMargins(0, 0, 0, 0)
+        alpha_2_layout.setSpacing(3)
         self.alpha_2_30_check = QCheckBox("30'")
         self.alpha_2_40_check = QCheckBox("40'")
         self.alpha_2_60_check = QCheckBox("60'")
@@ -144,29 +161,23 @@ class InstrumentDock(QDockWidget):
         alpha_2_layout.addWidget(self.alpha_2_40_check)
         alpha_2_layout.addWidget(self.alpha_2_60_check)
         alpha_2_widget.setLayout(alpha_2_layout)
-        collimations_layout.addRow("Alpha 2 (mono-sample):", alpha_2_widget)
+        collimations_layout.addWidget(alpha_2_widget, 1, 1, 1, 2)
         
         # Alpha 3
+        collimations_layout.addWidget(QLabel("α3 (smp-ana):"), 2, 0)
         self.alpha_3_combo = QComboBox()
         self.alpha_3_combo.addItems(["0", "10", "20", "30", "45", "60"])
-        alpha_3_widget = QWidget()
-        alpha_3_layout = QHBoxLayout()
-        alpha_3_layout.setContentsMargins(0, 0, 0, 0)
-        alpha_3_layout.addWidget(self.alpha_3_combo)
-        alpha_3_layout.addWidget(QLabel("'"))
-        alpha_3_widget.setLayout(alpha_3_layout)
-        collimations_layout.addRow("Alpha 3 (sample-analyzer):", alpha_3_widget)
+        self.alpha_3_combo.setMaximumWidth(80)
+        collimations_layout.addWidget(self.alpha_3_combo, 2, 1)
+        collimations_layout.addWidget(QLabel("'"), 2, 2)
         
         # Alpha 4
+        collimations_layout.addWidget(QLabel("α4 (ana-det):"), 3, 0)
         self.alpha_4_combo = QComboBox()
         self.alpha_4_combo.addItems(["0", "10", "20", "30", "45", "60"])
-        alpha_4_widget = QWidget()
-        alpha_4_layout = QHBoxLayout()
-        alpha_4_layout.setContentsMargins(0, 0, 0, 0)
-        alpha_4_layout.addWidget(self.alpha_4_combo)
-        alpha_4_layout.addWidget(QLabel("'"))
-        alpha_4_widget.setLayout(alpha_4_layout)
-        collimations_layout.addRow("Alpha 4 (analyzer-detector):", alpha_4_widget)
+        self.alpha_4_combo.setMaximumWidth(80)
+        collimations_layout.addWidget(self.alpha_4_combo, 3, 1)
+        collimations_layout.addWidget(QLabel("'"), 3, 2)
         
         main_layout.addWidget(collimations_group)
         

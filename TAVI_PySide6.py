@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
 from McScript_DataProcessing import read_1Ddetector_file, write_parameters_to_file, simple_plot_scan_commands, display_existing_data
 from McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing
-from McScript_Sample_Definition import update_Q_from_HKL_direct
+from McScript_Sample_Definition import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 import PUMA_GUI_calculations as GUIcalc
 
 # Import GUI
@@ -101,7 +101,43 @@ class TAVIController(QObject):
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
         
-        # TODO: Connect variable bindings for linked updates between docks
+        # Connect field editing events for linked updates
+        # Instrument angles - update energies and Q-space
+        self.window.instrument_dock.mtt_edit.editingFinished.connect(self.on_mtt_changed)
+        self.window.instrument_dock.att_edit.editingFinished.connect(self.on_att_changed)
+        self.window.instrument_dock.stt_edit.editingFinished.connect(self.on_angles_changed)
+        self.window.instrument_dock.psi_edit.editingFinished.connect(self.on_angles_changed)
+        
+        # Energies - update related energies and angles
+        self.window.instrument_dock.Ki_edit.editingFinished.connect(self.on_Ki_changed)
+        self.window.instrument_dock.Ei_edit.editingFinished.connect(self.on_Ei_changed)
+        self.window.instrument_dock.Kf_edit.editingFinished.connect(self.on_Kf_changed)
+        self.window.instrument_dock.Ef_edit.editingFinished.connect(self.on_Ef_changed)
+        
+        # K fixed mode and fixed E - update all related values
+        self.window.scan_controls_dock.K_fixed_combo.currentTextChanged.connect(self.on_K_fixed_changed)
+        self.window.scan_controls_dock.fixed_E_edit.editingFinished.connect(self.on_fixed_E_changed)
+        
+        # Q-space - update HKL and angles
+        self.window.reciprocal_space_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.reciprocal_space_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.reciprocal_space_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
+        
+        # HKL - update Q-space and angles
+        self.window.reciprocal_space_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.reciprocal_space_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.reciprocal_space_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
+        
+        # DeltaE - update energies
+        self.window.reciprocal_space_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
+        
+        # Lattice parameters - update HKL/Q conversions
+        self.window.sample_dock.lattice_a_edit.editingFinished.connect(self.on_lattice_changed)
+        self.window.sample_dock.lattice_b_edit.editingFinished.connect(self.on_lattice_changed)
+        self.window.sample_dock.lattice_c_edit.editingFinished.connect(self.on_lattice_changed)
+        self.window.sample_dock.lattice_alpha_edit.editingFinished.connect(self.on_lattice_changed)
+        self.window.sample_dock.lattice_beta_edit.editingFinished.connect(self.on_lattice_changed)
+        self.window.sample_dock.lattice_gamma_edit.editingFinished.connect(self.on_lattice_changed)
     
     def quit_application(self):
         """Quit the application."""
@@ -144,14 +180,276 @@ class TAVIController(QObject):
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
         self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
-        # TODO: Update all related variables
+        self.update_all_from_current_values()
     
     def update_anacris_info(self):
         """Update analyzer crystal information."""
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
         _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
-        # TODO: Update all related variables
+        self.update_all_from_current_values()
+    
+    def get_gui_values(self):
+        """Helper to get all GUI values as a dict."""
+        try:
+            return {
+                'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
+                'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
+                'psi': float(self.window.instrument_dock.psi_edit.text() or 0),
+                'att': float(self.window.instrument_dock.att_edit.text() or 0),
+                'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
+                'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
+                'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
+                'Ef': float(self.window.instrument_dock.Ef_edit.text() or 0),
+                'K_fixed': self.window.scan_controls_dock.K_fixed_combo.currentText(),
+                'fixed_E': float(self.window.scan_controls_dock.fixed_E_edit.text() or 0),
+                'qx': float(self.window.reciprocal_space_dock.qx_edit.text() or 0),
+                'qy': float(self.window.reciprocal_space_dock.qy_edit.text() or 0),
+                'qz': float(self.window.reciprocal_space_dock.qz_edit.text() or 0),
+                'deltaE': float(self.window.reciprocal_space_dock.deltaE_edit.text() or 0),
+                'lattice_a': float(self.window.sample_dock.lattice_a_edit.text() or 1),
+                'lattice_b': float(self.window.sample_dock.lattice_b_edit.text() or 1),
+                'lattice_c': float(self.window.sample_dock.lattice_c_edit.text() or 1),
+                'lattice_alpha': float(self.window.sample_dock.lattice_alpha_edit.text() or 90),
+                'lattice_beta': float(self.window.sample_dock.lattice_beta_edit.text() or 90),
+                'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
+                'monocris': self.window.instrument_dock.monocris_combo.currentText(),
+                'anacris': self.window.instrument_dock.anacris_combo.currentText(),
+            }
+        except ValueError:
+            return None
+    
+    def set_gui_value(self, widget, value, precision=4):
+        """Helper to set GUI value with proper formatting."""
+        try:
+            formatted = f"{float(value):.{precision}f}".rstrip('0').rstrip('.')
+            widget.setText(formatted)
+        except (ValueError, TypeError):
+            pass
+    
+    def on_mtt_changed(self):
+        """Update energies when mono 2theta changes."""
+        vals = self.get_gui_values()
+        if not vals or not self.monocris_info:
+            return
+        
+        # Update Ki and Ei from mtt
+        from PUMA_instrument_definition import angle2k, k2energy
+        Ki = angle2k(vals['mtt'] / 2, self.monocris_info['dm'])
+        Ei = k2energy(Ki)
+        
+        self.set_gui_value(self.window.instrument_dock.Ki_edit, Ki)
+        self.set_gui_value(self.window.instrument_dock.Ei_edit, Ei)
+        
+        # Update deltaE and related
+        if vals['K_fixed'] == "Kf Fixed":
+            deltaE = Ei - vals['Ef']
+            self.set_gui_value(self.window.reciprocal_space_dock.deltaE_edit, deltaE)
+        
+        self.on_angles_changed()
+    
+    def on_att_changed(self):
+        """Update energies when analyzer 2theta changes."""
+        vals = self.get_gui_values()
+        if not vals or not self.anacris_info:
+            return
+        
+        # Update Kf and Ef from att
+        from PUMA_instrument_definition import angle2k, k2energy
+        Kf = angle2k(vals['att'] / 2, self.anacris_info['da'])
+        Ef = k2energy(Kf)
+        
+        self.set_gui_value(self.window.instrument_dock.Kf_edit, Kf)
+        self.set_gui_value(self.window.instrument_dock.Ef_edit, Ef)
+        
+        # Update deltaE and related
+        if vals['K_fixed'] == "Ki Fixed":
+            deltaE = vals['Ei'] - Ef
+            self.set_gui_value(self.window.reciprocal_space_dock.deltaE_edit, deltaE)
+        
+        self.on_angles_changed()
+    
+    def on_Ki_changed(self):
+        """Update Ei and mtt when Ki changes."""
+        vals = self.get_gui_values()
+        if not vals or not self.monocris_info:
+            return
+        
+        from PUMA_instrument_definition import k2energy, k2angle
+        Ei = k2energy(vals['Ki'])
+        mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
+        
+        self.set_gui_value(self.window.instrument_dock.Ei_edit, Ei)
+        self.set_gui_value(self.window.instrument_dock.mtt_edit, mtt)
+        
+        if vals['K_fixed'] == "Kf Fixed":
+            deltaE = Ei - vals['Ef']
+            self.set_gui_value(self.window.reciprocal_space_dock.deltaE_edit, deltaE)
+    
+    def on_Ei_changed(self):
+        """Update Ki and mtt when Ei changes."""
+        vals = self.get_gui_values()
+        if not vals or not self.monocris_info:
+            return
+        
+        from PUMA_instrument_definition import energy2k, k2angle
+        Ki = energy2k(vals['Ei'])
+        mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
+        
+        self.set_gui_value(self.window.instrument_dock.Ki_edit, Ki)
+        self.set_gui_value(self.window.instrument_dock.mtt_edit, mtt)
+        
+        if vals['K_fixed'] == "Kf Fixed":
+            deltaE = vals['Ei'] - vals['Ef']
+            self.set_gui_value(self.window.reciprocal_space_dock.deltaE_edit, deltaE)
+    
+    def on_Kf_changed(self):
+        """Update Ef and att when Kf changes."""
+        vals = self.get_gui_values()
+        if not vals or not self.anacris_info:
+            return
+        
+        from PUMA_instrument_definition import k2energy, k2angle
+        Ef = k2energy(vals['Kf'])
+        att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
+        
+        self.set_gui_value(self.window.instrument_dock.Ef_edit, Ef)
+        self.set_gui_value(self.window.instrument_dock.att_edit, att)
+        
+        if vals['K_fixed'] == "Ki Fixed":
+            deltaE = vals['Ei'] - Ef
+            self.set_gui_value(self.window.reciprocal_space_dock.deltaE_edit, deltaE)
+    
+    def on_Ef_changed(self):
+        """Update Kf and att when Ef changes."""
+        vals = self.get_gui_values()
+        if not vals or not self.anacris_info:
+            return
+        
+        from PUMA_instrument_definition import energy2k, k2angle
+        Kf = energy2k(vals['Ef'])
+        att = 2 * k2angle(Kf, self.anacris_info['da'])
+        
+        self.set_gui_value(self.window.instrument_dock.Kf_edit, Kf)
+        self.set_gui_value(self.window.instrument_dock.att_edit, att)
+        
+        if vals['K_fixed'] == "Ki Fixed":
+            deltaE = vals['Ei'] - vals['Ef']
+            self.set_gui_value(self.window.reciprocal_space_dock.deltaE_edit, deltaE)
+    
+    def on_K_fixed_changed(self):
+        """Update all when K fixed mode changes."""
+        self.update_all_from_current_values()
+    
+    def on_fixed_E_changed(self):
+        """Update all when fixed E changes."""
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        
+        if vals['K_fixed'] == "Ki Fixed":
+            # Update Ei and Ki
+            Ei = vals['fixed_E']
+            self.set_gui_value(self.window.instrument_dock.Ei_edit, Ei)
+            self.on_Ei_changed()
+        else:
+            # Update Ef and Kf
+            Ef = vals['fixed_E']
+            self.set_gui_value(self.window.instrument_dock.Ef_edit, Ef)
+            self.on_Ef_changed()
+    
+    def on_deltaE_changed(self):
+        """Update energies when deltaE changes."""
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        
+        if vals['K_fixed'] == "Ki Fixed":
+            # Ef changes
+            Ef = vals['Ei'] - vals['deltaE']
+            self.set_gui_value(self.window.instrument_dock.Ef_edit, Ef)
+            self.on_Ef_changed()
+        else:
+            # Ei changes
+            Ei = vals['Ef'] + vals['deltaE']
+            self.set_gui_value(self.window.instrument_dock.Ei_edit, Ei)
+            self.on_Ei_changed()
+    
+    def on_angles_changed(self):
+        """Update Q-space when angles change."""
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        
+        # Calculate Q from angles using PUMA_GUI_calculations
+        # This is a placeholder - the full implementation would use the angle-to-Q conversion
+        pass
+    
+    def on_Q_changed(self):
+        """Update HKL and angles when Q changes."""
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        
+        # Update HKL from Q
+        try:
+            H, K, L = update_HKL_from_Q_direct(
+                vals['qx'], vals['qy'], vals['qz'],
+                vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+            )
+            self.set_gui_value(self.window.reciprocal_space_dock.H_edit, H)
+            self.set_gui_value(self.window.reciprocal_space_dock.K_edit, K)
+            self.set_gui_value(self.window.reciprocal_space_dock.L_edit, L)
+        except:
+            pass
+    
+    def on_HKL_changed(self):
+        """Update Q when HKL changes."""
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        
+        try:
+            H = float(self.window.reciprocal_space_dock.H_edit.text() or 0)
+            K = float(self.window.reciprocal_space_dock.K_edit.text() or 0)
+            L = float(self.window.reciprocal_space_dock.L_edit.text() or 0)
+            
+            # Update Q from HKL
+            qx, qy, qz = update_Q_from_HKL_direct(
+                H, K, L,
+                vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+            )
+            self.set_gui_value(self.window.reciprocal_space_dock.qx_edit, qx)
+            self.set_gui_value(self.window.reciprocal_space_dock.qy_edit, qy)
+            self.set_gui_value(self.window.reciprocal_space_dock.qz_edit, qz)
+        except:
+            pass
+    
+    def on_lattice_changed(self):
+        """Update Q/HKL conversion when lattice parameters change."""
+        # Re-calculate Q from current HKL with new lattice parameters
+        self.on_HKL_changed()
+    
+    def update_all_from_current_values(self):
+        """Update all related fields based on current values."""
+        vals = self.get_gui_values()
+        if not vals or not self.monocris_info or not self.anacris_info:
+            return
+        
+        # Update based on K_fixed mode
+        if vals['K_fixed'] == "Ki Fixed":
+            # Ki and Ei are fixed
+            Ef = vals['Ei'] - vals['deltaE']
+            self.set_gui_value(self.window.instrument_dock.Ef_edit, Ef)
+            self.on_Ef_changed()
+        else:
+            # Kf and Ef are fixed
+            Ei = vals['Ef'] + vals['deltaE']
+            self.set_gui_value(self.window.instrument_dock.Ei_edit, Ei)
+            self.on_Ei_changed()
+
     
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
