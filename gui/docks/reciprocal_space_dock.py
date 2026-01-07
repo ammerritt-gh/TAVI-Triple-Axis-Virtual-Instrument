@@ -1,6 +1,7 @@
 """Reciprocal Lattice Space Dock for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                                QLabel, QLineEdit, QGroupBox, QFormLayout)
+                                QLabel, QLineEdit, QGroupBox, QFormLayout,
+                                QGridLayout)
 from PySide6.QtCore import Qt
 
 
