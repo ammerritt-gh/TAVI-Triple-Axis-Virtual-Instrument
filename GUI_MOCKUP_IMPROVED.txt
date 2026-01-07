@@ -1,0 +1,88 @@
+"""
+Updated TAVI PySide6 GUI Layout - After Spacing Improvements
+=============================================================
+
+This shows the improved layout with compact spacing and better organization.
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ TAVI - Triple-Axis Virtual Instrument                    [─] [□] [×]     │
+├──────────────────────────────────────────────────────────────────────────┤
+│ File  Edit  View  Help                                                   │
+├─────────────────┬────────────────────────────────────────────────────────┤
+│                 │                                                         │
+│ ┌─ Instrument ─┐│ ┌─ Reciprocal Lattice Space ───────────────────────┐ │
+│ │Configuration ││ │                                                   │ │
+│ │              ││ │ Absolute Q Space (Å⁻¹)                           │ │
+│ │ Angles       ││ │  qx: [2.0  ] 1/Å    qy: [0.0  ] 1/Å             │ │
+│ │ Mono 2θ:[30]││ │  qz: [0.0  ] 1/Å                                  │ │
+│ │ Samp 2θ:[30]││ │                                                   │ │
+│ │ Samp Ψ: [30]││ │ Relative HKL Space (r.l.u.)                       │ │
+│ │ Ana 2θ: [30]││ │  H: [0.0  ]    K: [0.0  ]    L: [0.0  ]          │ │
+│ │              ││ │                                                   │ │
+│ │ Energies     ││ │ Energy Transfer                                   │ │
+│ │ Ki:[2.662]  ││ │  ΔE: [5.25 ] meV                                  │ │
+│ │ Ei:[14.7 ]  ││ └───────────────────────────────────────────────────┘ │
+│ │ Kf:[2.662]  ││                                                         │
+│ │ Ef:[14.7 ]  ││ ┌─ Sample Control ──────────────────────────────────┐ │
+│ │              ││ │ ☐ Sample frame mode                               │ │
+│ │ Crystals     ││ │                                                   │ │
+│ │ Mono:[PG002▼]││ │ Lattice Parameters                                │ │
+│ │ Ana: [PG002▼]││ │  a:[4.05] b:[4.05] c:[4.05] (Å)                  │ │
+│ │              ││ │  α:[90] β:[90] γ:[90] (deg)                       │ │
+│ │ Modules      ││ │                                                   │ │
+│ │ NMO:[None ▼]││ │ [Sample Configuration]                            │ │
+│ │ ☐ Vel.select││ └───────────────────────────────────────────────────┘ │
+│ │              ││                                                         │
+│ │ Focusing     ││ ┌─ Scan Controls ───────────────────────────────────┐ │
+│ │ rhm:[1.0]   ││ │ # neutrons: [1000000 ] n                          │ │
+│ │ rvm:[1.0]   ││ │ Ki/Kf fixed:[Kf Fixed▼]                           │ │
+│ │ rha:[1.0]   ││ │ Fixed E: [14.7    ] meV                           │ │
+│ │              ││ │                                                   │ │
+│ │ Collimations ││ │ Scan Commands                                     │ │
+│ │ α1:[40▼]'   ││ │  [qx 2 2.2 0.1                          ]        │ │
+│ │ α2:☐30'☑40' ││ │  [deltaE 3 7 0.25                       ]        │ │
+│ │    ☐60'     ││ │                                                   │ │
+│ │ α3:[30▼]'   ││ │ [Run Simulation] [Stop Simulation]                │ │
+│ │ α4:[30▼]'   ││ │ [Quit] [Open Validation GUI]                      │ │
+│ └─────────────┘│ │                                                   │ │
+│                 │ │ [Save Params] [Load Params] [Load Defaults]       │ │
+│                 │ │                                                   │ │
+│                 │ │ Max counts: [0]    Total counts: [0]              │ │
+│                 │ └───────────────────────────────────────────────────┘ │
+│                 │                                                         │
+│                 │ ┌─ Diagnostics ─────────────────────────────────────┐ │
+│                 │ │ ☑ Enable Diagnostic Mode  [Configuration]         │ │
+│                 │ └───────────────────────────────────────────────────┘ │
+├─────────────────┴────────────────────────────────────────────────────────┤
+│ ┌─ Data Control ───────────────────┐ ┌─ Output ──────────────────────┐ │
+│ │ Output Folder                    │ │ Message Center                │ │
+│ │  Target: [Browse]                │ │ ┌──────────────────────────┐ │ │
+│ │  [/path/to/output/folder      ] │ │ │ GUI initialized.         │ │ │
+│ │  Actual: /path/to/folder_001    │ │ │ Parameters loaded.       │ │ │
+│ │                                  │ │ │ Mono 2θ changed -> Ki,Ei │ │ │
+│ │ Load Data                        │ │ │ updated                  │ │ │
+│ │  [Browse] [Load]                 │ │ └──────────────────────────┘ │ │
+│ │  [/path/to/load/folder        ] │ │                               │ │
+│ └──────────────────────────────────┘ │ Progress ████░░░ 40% (4/10)  │ │
+│                                       │ Remaining Time: 00:15:32     │ │
+│                                       └──────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────┘
+
+Key Improvements:
+-----------------
+✓ Compact entry fields (max width: 60-100px)
+✓ Better grid layouts with reduced spacing
+✓ Two-row layouts for angles and energies
+✓ Tighter collimation display
+✓ More efficient use of vertical space
+✓ Improved dock arrangement
+
+GUI Element Linking:
+--------------------
+✓ Mono 2θ ⟷ Ki ⟷ Ei (all update each other)
+✓ Ana 2θ ⟷ Kf ⟷ Ef (all update each other)
+✓ Ki/Kf fixed mode + Fixed E → updates all energies
+✓ ΔE changes → updates Ei or Ef based on mode
+✓ Q-space (qx,qy,qz) ⟷ HKL coordinates
+✓ Lattice parameters → updates Q/HKL conversion
+✓ Crystal selection → updates all related values
