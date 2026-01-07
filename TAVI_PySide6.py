@@ -7,8 +7,8 @@ import datetime
 import threading
 import queue
 
-from PySide6.QtWidgets import QApplication, QFileDialog
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
+from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import existing backend modules
 from PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
@@ -67,6 +67,9 @@ class TAVIController(QObject):
         # Update crystal info based on loaded parameters
         self.update_monocris_info()
         self.update_anacris_info()
+        
+        # Set up visual feedback for all input fields
+        self.setup_visual_feedback()
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
@@ -146,6 +149,103 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_beta_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_gamma_edit.editingFinished.connect(self.on_lattice_changed)
+    
+    def setup_visual_feedback(self):
+        """Set up visual feedback for all input fields to show pending/saved states."""
+        # Collect all QLineEdit widgets from all docks
+        line_edits = []
+        
+        # Instrument dock
+        line_edits.extend([
+            self.window.instrument_dock.mtt_edit,
+            self.window.instrument_dock.stt_edit,
+            self.window.instrument_dock.psi_edit,
+            self.window.instrument_dock.att_edit,
+            self.window.instrument_dock.Ki_edit,
+            self.window.instrument_dock.Ei_edit,
+            self.window.instrument_dock.Kf_edit,
+            self.window.instrument_dock.Ef_edit,
+            self.window.instrument_dock.rhmfac_edit,
+            self.window.instrument_dock.rvmfac_edit,
+            self.window.instrument_dock.rhafac_edit,
+        ])
+        
+        # Reciprocal space dock
+        line_edits.extend([
+            self.window.reciprocal_space_dock.qx_edit,
+            self.window.reciprocal_space_dock.qy_edit,
+            self.window.reciprocal_space_dock.qz_edit,
+            self.window.reciprocal_space_dock.H_edit,
+            self.window.reciprocal_space_dock.K_edit,
+            self.window.reciprocal_space_dock.L_edit,
+            self.window.reciprocal_space_dock.deltaE_edit,
+        ])
+        
+        # Sample dock
+        line_edits.extend([
+            self.window.sample_dock.lattice_a_edit,
+            self.window.sample_dock.lattice_b_edit,
+            self.window.sample_dock.lattice_c_edit,
+            self.window.sample_dock.lattice_alpha_edit,
+            self.window.sample_dock.lattice_beta_edit,
+            self.window.sample_dock.lattice_gamma_edit,
+        ])
+        
+        # Scan controls dock
+        line_edits.extend([
+            self.window.scan_controls_dock.number_neutrons_edit,
+            self.window.scan_controls_dock.fixed_E_edit,
+            self.window.scan_controls_dock.scan_command_1_edit,
+            self.window.scan_controls_dock.scan_command_2_edit,
+        ])
+        
+        # Apply visual feedback to all line edits
+        for line_edit in line_edits:
+            self._setup_field_feedback(line_edit)
+    
+    def _setup_field_feedback(self, line_edit):
+        """Set up visual feedback for a single QLineEdit widget."""
+        # Store original value and style
+        line_edit.setProperty("original_value", line_edit.text())
+        line_edit.setProperty("original_style", line_edit.styleSheet())
+        
+        # Connect to textChanged to show pending state
+        def on_text_changed():
+            if not self.updating:  # Only show pending if not programmatically updating
+                original = line_edit.property("original_value")
+                current = line_edit.text()
+                if current != original:
+                    # Show pending state with orange border
+                    line_edit.setStyleSheet("QLineEdit { border: 2px solid #FF8C00; }")
+        
+        line_edit.textChanged.connect(on_text_changed)
+        
+        # Connect to editingFinished to show saved state and flash
+        original_finished_handler = None
+        
+        def on_editing_finished():
+            original = line_edit.property("original_value")
+            current = line_edit.text()
+            
+            if current != original:
+                # Flash with bold dark border to show changes were saved
+                line_edit.setStyleSheet("QLineEdit { border: 3px solid #000000; }")
+                
+                # Update stored original value
+                line_edit.setProperty("original_value", current)
+                
+                # After 300ms, return to normal state
+                QTimer.singleShot(300, lambda: line_edit.setStyleSheet(line_edit.property("original_style") or ""))
+            else:
+                # No changes, just return to normal
+                line_edit.setStyleSheet(line_edit.property("original_style") or "")
+        
+        # We need to ensure editingFinished fires AFTER the field update handlers
+        # So we'll connect with a slight delay
+        def delayed_on_editing_finished():
+            QTimer.singleShot(10, on_editing_finished)
+        
+        line_edit.editingFinished.connect(delayed_on_editing_finished)
     
     def quit_application(self):
         """Quit the application."""
