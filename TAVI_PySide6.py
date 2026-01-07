@@ -1007,7 +1007,8 @@ class TAVIController(QObject):
                 self.message_printed.emit("Simulation stopped by user.")
                 return data_folder
             
-            # Extract scannable parameters
+            # Extract scannable parameters and calculate angles
+            error_flags = []
             if scan_mode == "momentum":
                 qx, qy, qz, deltaE = scans[:4]
                 angles_array, error_flags = self.PUMA.calculate_angles(
@@ -1065,20 +1066,45 @@ class TAVIController(QObject):
             scan_description = f"scan_{i+1:04d}"
             scan_folder = os.path.join(data_folder, scan_description)
             
+            # Log scan parameters before running
+            if scan_mode == "momentum":
+                message = (f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+            elif scan_mode == "rlu":
+                message = (f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+            else:
+                message = (f"Scan parameters - A1: {A1}, A2: {A2}, A3: {A3}, A4: {A4}\n"
+                           f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}")
+            self.message_printed.emit(message)
+            
             # Run the PUMA simulation
             if diagnostic_mode:
-                counts = run_PUMA_instrument(
-                    self.PUMA, scan_folder, number_neutrons, 
-                    diagnostic_mode=True, diagnostic_settings=self.diagnostic_settings
+                data, error_flags = run_PUMA_instrument(
+                    self.PUMA, number_neutrons, deltaE, diagnostic_mode, 
+                    self.diagnostic_settings, scan_folder, i
                 )
             else:
-                counts = run_PUMA_instrument(
-                    self.PUMA, scan_folder, number_neutrons
+                data, error_flags = run_PUMA_instrument(
+                    self.PUMA, number_neutrons, deltaE, False, {}, scan_folder, i
                 )
             
-            # Update progress
-            total_counts += counts
-            max_counts = max(max_counts, counts)
+            # Check for errors
+            if error_flags:
+                message = f"Scan failed, error flags: {error_flags}"
+                self.message_printed.emit(message)
+            else:
+                # Write parameters to scan folder
+                write_parameters_to_file(scan_folder, vals)
+                
+                # Read detector file to get counts
+                intensity, intensity_error, counts = read_1Ddetector_file(scan_folder)
+                message = f"Final counts at detector: {int(counts)}"
+                self.message_printed.emit(message)
+                
+                # Update counts
+                total_counts += counts
+                max_counts = max(max_counts, counts)
             
             # Emit progress signals
             self.progress_updated.emit(i + 1, total_scans)
