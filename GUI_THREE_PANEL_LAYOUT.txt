@@ -1,0 +1,99 @@
+"""
+TAVI PySide6 GUI - Three-Panel Layout (Matching Original)
+==========================================================
+
+This shows the restored 3-panel layout matching the original tkinter GUI.
+
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│ TAVI - Triple-Axis Virtual Instrument                              [─] [□] [×]         │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ File  Edit  View  Help                                                                 │
+├──────────────────┬──────────────────────┬──────────────────────────────────────────────┤
+│                  │                      │                                              │
+│ LEFT PANEL       │ MIDDLE PANEL         │ RIGHT PANEL                                  │
+│ (Instrument)     │ (Parameters)         │ (Output & Data)                              │
+│                  │                      │                                              │
+│ ╔══════════════╗ │ ╔══════════════════╗ │ ╔══════════════════════════════════════════╗ │
+│ ║ Instrument   ║ │ ║ Reciprocal Space ║ │ ║ Output                                   ║ │
+│ ║Configuration ║ │ ║                  ║ │ ║                                          ║ │
+│ ╚══════════════╝ │ ║ Absolute Q Space ║ │ ║ Message Center                           ║ │
+│                  │ ║  qx: [2.0 ] 1/Å  ║ │ ║ ┌──────────────────────────────────────┐ ║ │
+│ Angles           │ ║  qy: [0.0 ] 1/Å  ║ │ ║ │ GUI initialized.                     │ ║ │
+│ Mono 2θ: [30]   │ ║  qz: [0.0 ] 1/Å  ║ │ ║ │ Parameters loaded.                   │ ║ │
+│ Samp 2θ: [30]   │ ║                  ║ │ ║ │ Crystal info initialized.            │ ║ │
+│ Samp Ψ:  [30]   │ ║ Relative HKL     ║ │ ║ │ Mono 2θ → Ki, Ei updated            │ ║ │
+│ Ana 2θ:  [30]   │ ║  H: [0.0]        ║ │ ║ │                                      │ ║ │
+│                  │ ║  K: [0.0]        ║ │ ║ │                                      │ ║ │
+│ Energies         │ ║  L: [0.0]        ║ │ ║ │                                      │ ║ │
+│ Ki: [2.662]     │ ║                  ║ │ ║ │                                      │ ║ │
+│ Ei: [14.7 ]     │ ║ ΔE: [5.25] meV   ║ │ ║ └──────────────────────────────────────┘ ║ │
+│ Kf: [2.662]     │ ╚══════════════════╝ │ ║                                          ║ │
+│ Ef: [14.7 ]     │                      │ ║ Progress ████████░░░░ 60% (6/10)         ║ │
+│                  │ ╔══════════════════╗ │ ║ Remaining Time: 00:10:25                 ║ │
+│ Crystals         │ ║ Sample Control   ║ │ ╚══════════════════════════════════════════╝ │
+│ Mono: [PG002 ▼] │ ║                  ║ │                                              │
+│ Ana:  [PG002 ▼] │ ║ ☐ Sample frame   ║ │ ╔══════════════════════════════════════════╗ │
+│                  │ ║                  ║ │ ║ Data Control                             ║ │
+│ Modules          │ ║ Lattice Params   ║ │ ║                                          ║ │
+│ NMO: [None  ▼]  │ ║  a:[4.05]        ║ │ ║ Output Folder                            ║ │
+│ ☐ Vel.selector  │ ║  b:[4.05]        ║ │ ║  Target: [Browse]                        ║ │
+│                  │ ║  c:[4.05] (Å)    ║ │ ║  [/path/to/output               ]       ║ │
+│ Focusing         │ ║  α:[90] β:[90]   ║ │ ║  Actual: /path/to/output_001             ║ │
+│ rhm:[1.0]       │ ║  γ:[90] (deg)    ║ │ ║                                          ║ │
+│ rvm:[1.0]       │ ║                  ║ │ ║ Load Data                                ║ │
+│ rha:[1.0]       │ ║ [Sample Config]  ║ │ ║  [Browse] [Load]                         ║ │
+│                  │ ╚══════════════════╝ │ ║  [/path/to/load                 ]       ║ │
+│ Collimations     │                      │ ╚══════════════════════════════════════════╝ │
+│ α1: [40▼]'      │ ╔══════════════════╗ │                                              │
+│ α2: ☐30'☑40'    │ ║ Scan Controls    ║ │                                              │
+│     ☐60'        │ ║                  ║ │                                              │
+│ α3: [30▼]'      │ ║ # neutrons:      ║ │                                              │
+│ α4: [30▼]'      │ ║   [1000000] n    ║ │                                              │
+│                  │ ║ Ki/Kf fixed:     ║ │                                              │
+│                  │ ║   [Kf Fixed ▼]   ║ │                                              │
+│                  │ ║ Fixed E:         ║ │                                              │
+│                  │ ║   [14.7] meV     ║ │                                              │
+│                  │ ║                  ║ │                                              │
+│                  │ ║ Scan Commands    ║ │                                              │
+│ (scrollable)     │ ║  [qx 2 2.2 0.1 ] ║ │                                              │
+│                  │ ║  [dE 3 7 0.25  ] ║ │                                              │
+│                  │ ║                  ║ │                                              │
+│                  │ ║ [Run] [Stop]     ║ │                                              │
+│                  │ ║ [Quit] [Valid]   ║ │                                              │
+│                  │ ║                  ║ │                                              │
+│                  │ ║ [Save] [Load]    ║ │                                              │
+│                  │ ║ [Defaults]       ║ │                                              │
+│                  │ ║                  ║ │                                              │
+│                  │ ║ Max: [0]         ║ │                                              │
+│                  │ ║ Total: [0]       ║ │                                              │
+│                  │ ╚══════════════════╝ │                                              │
+│                  │                      │                                              │
+│                  │ ╔══════════════════╗ │                                              │
+│                  │ ║ Diagnostics      ║ │                                              │
+│                  │ ║ ☑ Enable         ║ │                                              │
+│                  │ ║ [Configuration]  ║ │                                              │
+│                  │ ╚══════════════════╝ │                                              │
+│                  │ (scrollable)         │                                              │
+└──────────────────┴──────────────────────┴──────────────────────────────────────────────┘
+        ↕                    ↕                           ↕
+   Resizable with splitter handles
+
+Key Features:
+-------------
+✓ THREE-PANEL LAYOUT matching original tkinter GUI
+✓ Left panel: All instrument configuration
+✓ Middle panel: All scan parameters and settings
+✓ Right panel: Output messages and data control
+✓ Resizable columns with QSplitter
+✓ Scroll areas for left and middle panels
+✓ All widgets properly grouped by function
+
+Field Linking (Now Working):
+-----------------------------
+✓ Changing Mono 2θ → updates Ki and Ei immediately
+✓ Changing Ana 2θ → updates Kf and Ef immediately
+✓ Ki/Ei/Kf/Ef changes → update corresponding values
+✓ Q-space ⟷ HKL bidirectional updates
+✓ Crystal selection → updates all related values
+✓ K_fixed mode → propagates changes correctly
+✓ All updates work on GUI launch (crystal info pre-initialized)
