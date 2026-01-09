@@ -38,6 +38,7 @@ class TAVIController(QObject):
     remaining_time_updated = Signal(str)
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
+    plot_requested = Signal(str, str, str)  # data_folder, scan_command1, scan_command2
     
     # Variable index mapping for scan parameters (shared constant)
     VARIABLE_INDEX_MAP = {
@@ -116,6 +117,7 @@ class TAVIController(QObject):
         self.remaining_time_updated.connect(self.update_remaining_time)
         self.counts_updated.connect(self.update_counts_entry)
         self.message_printed.connect(self.window.output_dock.message_text.append)
+        self.plot_requested.connect(self.plot_in_main_thread)
         
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
@@ -693,31 +695,46 @@ class TAVIController(QObject):
         if folder and os.path.exists(folder):
             self.print_to_message_center(f"Loading data from: {folder}")
             try:
-                # Call the PySide6-compatible wrapper function
-                self.display_existing_data_pyside6(folder)
+                # Read parameters to get scan commands
+                scan_parameters = read_parameters_from_file(folder)
+                scan_cmd1 = scan_parameters.get('scan_command1', '')
+                scan_cmd2 = scan_parameters.get('scan_command2', '')
+                # Emit signal to plot in main thread (already on main thread, but keeps consistency)
+                self.plot_requested.emit(folder, scan_cmd1, scan_cmd2)
             except Exception as e:
                 self.print_to_message_center(f"Error loading data: {str(e)}")
         else:
             self.print_to_message_center("Invalid folder path for loading data")
     
-    def display_existing_data_pyside6(self, data_folder_path):
-        """PySide6-compatible wrapper for display_existing_data."""
-        import matplotlib
-        matplotlib.use('Qt5Agg')  # Use Qt backend compatible with PySide6
-        import matplotlib.pyplot as plt
-        import numpy as np
-        
-        scan_parameters = read_parameters_from_file(data_folder_path)
-        if scan_parameters.get('scan_command1') and not scan_parameters.get('scan_command2'):
-            # 1D scan
-            self.plot_1D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters, plt, np)
-            self.print_to_message_center("1D plot displayed and saved to data folder")
-        elif scan_parameters.get('scan_command1') and scan_parameters.get('scan_command2'):
-            # 2D scan
-            self.plot_2D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters.get('scan_command2'), scan_parameters, plt, np)
-            self.print_to_message_center("2D plot displayed and saved to data folder")
-        else:
-            self.print_to_message_center("No scan commands found in parameters file")
+    @Slot(str, str, str)
+    def plot_in_main_thread(self, data_folder, scan_command1, scan_command2):
+        """Plot data in main thread (thread-safe matplotlib operations)."""
+        try:
+            # Use Qt backend compatible with PySide6 - must be set on main thread
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+            import matplotlib.pyplot as plt
+            import numpy as np
+            
+            scan_parameters = read_parameters_from_file(data_folder)
+            
+            if not scan_command1 and not scan_command2:
+                # Single point - no plot needed
+                self.print_to_message_center("Single point - no plot generated")
+                return
+            
+            if scan_command1 and not scan_command2:
+                # 1D scan
+                self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters, plt, np)
+                self.print_to_message_center("1D plot displayed and saved to data folder")
+            
+            if scan_command2 and scan_command1:
+                # 2D scan
+                self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters, plt, np)
+                self.print_to_message_center("2D plot displayed and saved to data folder")
+                
+        except Exception as e:
+            self.print_to_message_center(f"Plot generation failed: {e}")
     
     def save_parameters(self):
         """Save all parameters to JSON file."""
@@ -1193,39 +1210,16 @@ class TAVIController(QObject):
         # Generate and display plots if auto_display is enabled
         if auto_display and (scan_command1 or scan_command2):
             try:
-                self.generate_plots_non_blocking(data_folder, scan_command1, scan_command2)
-                self.message_printed.emit("Plots generated and saved successfully")
-                self.message_printed.emit(f"Plot files saved to: {data_folder}")
+                # Emit signal to plot in main thread (thread-safe)
+                self.plot_requested.emit(data_folder, scan_command1 or "", scan_command2 or "")
+                self.message_printed.emit("Plot generation requested...")
             except Exception as e:
-                self.message_printed.emit(f"Plot generation failed: {e}")
+                self.message_printed.emit(f"Plot request failed: {e}")
         elif not auto_display:
             self.message_printed.emit("Auto-display disabled. Plots not generated.")
             self.message_printed.emit("You can manually generate plots from the data folder.")
         
         return data_folder
-    
-    def generate_plots_non_blocking(self, data_folder, scan_command1, scan_command2):
-        """Generate plots without showing them (save to file only)."""
-        # Use Qt backend compatible with PySide6
-        import matplotlib
-        matplotlib.use('Qt5Agg')  # Use Qt backend compatible with PySide6
-        import matplotlib.pyplot as plt
-        import numpy as np
-        
-        # Read scan parameters from file
-        scan_parameters = read_parameters_from_file(data_folder)
-        
-        if not scan_command1 and not scan_command2:
-            # Single point - no plot needed
-            return
-        
-        if scan_command1 and not scan_command2:
-            # 1D scan
-            self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters, plt, np)
-        
-        if scan_command2 and scan_command1:
-            # 2D scan
-            self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters, plt, np)
     
     def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
         """Generate 1D plot and display it in a window."""
