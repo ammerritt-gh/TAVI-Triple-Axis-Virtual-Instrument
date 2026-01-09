@@ -703,7 +703,7 @@ class TAVIController(QObject):
     def display_existing_data_pyside6(self, data_folder_path):
         """PySide6-compatible wrapper for display_existing_data."""
         import matplotlib
-        matplotlib.use('Agg')  # Use non-interactive backend
+        matplotlib.use('TkAgg')  # Use interactive backend compatible with threading
         import matplotlib.pyplot as plt
         import numpy as np
         
@@ -711,11 +711,11 @@ class TAVIController(QObject):
         if scan_parameters.get('scan_command1') and not scan_parameters.get('scan_command2'):
             # 1D scan
             self.plot_1D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters, plt, np)
-            self.print_to_message_center("1D plot generated and saved to data folder")
+            self.print_to_message_center("1D plot displayed and saved to data folder")
         elif scan_parameters.get('scan_command1') and scan_parameters.get('scan_command2'):
             # 2D scan
             self.plot_2D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters.get('scan_command2'), scan_parameters, plt, np)
-            self.print_to_message_center("2D plot generated and saved to data folder")
+            self.print_to_message_center("2D plot displayed and saved to data folder")
         else:
             self.print_to_message_center("No scan commands found in parameters file")
     
@@ -1208,7 +1208,7 @@ class TAVIController(QObject):
         """Generate plots without showing them (save to file only)."""
         # Use non-interactive backend to avoid threading issues with matplotlib
         import matplotlib
-        matplotlib.use('Agg')
+        matplotlib.use('TkAgg')  # Use interactive backend
         import matplotlib.pyplot as plt
         import numpy as np
         
@@ -1228,7 +1228,7 @@ class TAVIController(QObject):
             self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters, plt, np)
     
     def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
-        """Generate 1D plot without displaying it."""
+        """Generate 1D plot and display it in a window."""
         from McScript_DataProcessing import write_1D_scan
         
         variable_name, array_values = parse_scan_steps(scan_command1)
@@ -1292,13 +1292,15 @@ class TAVIController(QObject):
         # Save plot
         plot_file = os.path.join(data_folder, "1D_plot.png")
         plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        plt.close()
+        
+        # Display the plot in a window
+        plt.show(block=False)
         
         # Write data to file
         write_1D_scan(scan_params, counts_array, data_folder, "1D_data.txt")
     
     def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
-        """Generate 2D heatmap without displaying it."""
+        """Generate 2D heatmap and display it in a window."""
         from McScript_DataProcessing import write_2D_scan
         
         variable_name1, array_values1 = parse_scan_steps(scan_command1)
@@ -1356,7 +1358,9 @@ class TAVIController(QObject):
         # Save plot
         plot_file = os.path.join(data_folder, "Heatmap.png")
         plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        plt.close()
+        
+        # Display the plot in a window
+        plt.show(block=False)
         
         # Write data to file
         write_2D_scan(x_vals, y_vals, grid, data_folder, "2D_data.txt")
