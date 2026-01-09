@@ -103,7 +103,7 @@ class ScanControlsDock(QDockWidget):
         display_group.setLayout(display_layout)
         
         self.auto_display_check = QCheckBox("Auto-display plots after simulation")
-        self.auto_display_check.setChecked(False)  # Default to off to avoid threading issues
+        self.auto_display_check.setChecked(True)  # Default to on
         display_layout.addWidget(self.auto_display_check)
         
         main_layout.addWidget(display_group)
