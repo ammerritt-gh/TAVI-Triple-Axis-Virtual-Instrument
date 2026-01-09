@@ -1,4 +1,4 @@
-from PUMA_instrument_definition import k2angle, k2energy, angle2k, energy2k, PUMA_Instrument
+from instruments.PUMA_instrument_definition import k2angle, k2energy, angle2k, energy2k, PUMA_Instrument
 import tkinter as tk
 from decimal import Decimal, InvalidOperation
 import math
