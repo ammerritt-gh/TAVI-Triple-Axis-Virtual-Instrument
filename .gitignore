@@ -372,3 +372,5 @@ parameters.json
 *.c
 *.out
 mcstas_*
+PUMA_McScript.exe
+PUMA_McScript.instr
