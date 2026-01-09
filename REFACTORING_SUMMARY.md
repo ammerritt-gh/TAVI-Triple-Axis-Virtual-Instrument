@@ -227,3 +227,94 @@ The GUI structure is complete. Remaining tasks for full functionality:
 ## Conclusion
 
 The TAVI GUI has been successfully refactored into a modern, modular architecture using PySide6 with separate dock widgets. All original functionality is preserved and organized into logical, user-configurable sections. The new architecture provides a solid foundation for future enhancements while maintaining backward compatibility with the original tkinter interface.
+
+---
+
+## Follow-up: Code Reorganization (January 2026)
+
+### What Was Accomplished
+
+After the initial GUI refactoring, the codebase was further reorganized to separate concerns more clearly:
+- Legacy modules moved to `archive/` folder
+- Instrument definitions moved to `instruments/` folder  
+- Import paths updated throughout the codebase
+
+### Changes Made
+
+#### 1. Created Package Structure
+
+Added `__init__.py` files to make folders proper Python packages:
+- `archive/__init__.py` - Marks the archive folder as a package
+- `instruments/__init__.py` - Marks the instruments folder as a package
+
+These enable proper module imports using the `archive.` and `instruments.` prefixes.
+
+#### 2. Updated Import Statements
+
+**In TAVI_PySide6.py:**
+- Changed `from McScript_DataProcessing import ...` → `from archive.McScript_DataProcessing import ...`
+- Changed `from McScript_Functions import ...` → `from archive.McScript_Functions import ...`
+- Changed `from McScript_Sample_Definition import ...` → `from archive.McScript_Sample_Definition import ...`
+- Changed `import PUMA_GUI_calculations` → `import archive.PUMA_GUI_calculations`
+- Kept `from instruments.PUMA_instrument_definition import ...` (already correct)
+
+**In archive/McScript_DataProcessing.py:**
+- Changed `from McScript_Functions import ...` → `from archive.McScript_Functions import ...`
+
+**In archive/McScript_Runner.py:**
+- Changed `from McScript_DataProcessing import ...` → `from archive.McScript_DataProcessing import ...`
+- Changed `from McScript_Functions import ...` → `from archive.McScript_Functions import ...`
+- Changed `from McScript_Sample_Definition import ...` → `from archive.McScript_Sample_Definition import ...`
+- Changed `import PUMA_GUI_calculations` → `import archive.PUMA_GUI_calculations`
+
+#### 3. Updated Documentation
+
+**In README.md:**
+- Updated File Structure section to reflect the new organization
+- Updated command to run legacy GUI: `python archive/McScript_Runner.py`
+- Clarified that legacy modules are in the archive folder but still referenced by the application
+
+### Final Directory Structure
+
+```
+TAVI-Triple-Axis-Virtual-Instrument/
+├── TAVI_PySide6.py              # Main PySide6 application
+├── test_gui.py                   # GUI verification script
+├── gui/                          # PySide6 GUI modules
+│   ├── __init__.py
+│   ├── main_window.py
+│   └── docks/
+│       ├── __init__.py
+│       ├── instrument_dock.py
+│       ├── reciprocal_space_dock.py
+│       ├── sample_dock.py
+│       ├── scan_controls_dock.py
+│       ├── diagnostics_dock.py
+│       ├── output_dock.py
+│       └── data_control_dock.py
+├── instruments/                  # Instrument definitions
+│   ├── __init__.py
+│   └── PUMA_instrument_definition.py
+└── archive/                      # Legacy modules (still used)
+    ├── __init__.py
+    ├── McScript_Runner.py
+    ├── PUMA_GUI_calculations.py
+    ├── McScript_Functions.py
+    ├── McScript_DataProcessing.py
+    └── McScript_Sample_Definition.py
+```
+
+### Benefits
+
+1. **Clearer Organization**: Related files are grouped together in logical folders
+2. **Maintainability**: Easier to identify which code is legacy vs. current
+3. **Backwards Compatibility**: All functionality preserved, imports properly updated
+4. **Future-Ready**: Clear structure makes it easier to refactor or replace legacy code
+
+### Files Modified (6 files)
+1. `TAVI_PySide6.py` - Updated imports to reference archive modules
+2. `archive/McScript_DataProcessing.py` - Updated internal cross-reference
+3. `archive/McScript_Runner.py` - Updated imports to reference archive modules
+4. `archive/__init__.py` - Created package marker
+5. `instruments/__init__.py` - Created package marker
+6. `README.md` - Updated documentation to reflect new structure
