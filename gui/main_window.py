@@ -1,6 +1,6 @@
 """Main Window for TAVI application with PySide6."""
 import sys
-import os
+
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, QScrollArea
 from PySide6.QtCore import Qt
 

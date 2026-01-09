@@ -1,6 +1,6 @@
 """Diagnostics Dock for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                                QLabel, QCheckBox, QGroupBox, QPushButton)
+                                QCheckBox, QGroupBox, QPushButton)
 from PySide6.QtCore import Qt
 
 

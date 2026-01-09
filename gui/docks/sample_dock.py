@@ -1,7 +1,7 @@
 """Sample Control Dock for TAVI application."""
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
-                                QGridLayout, QFormLayout, QCheckBox)
+                                QGridLayout, QCheckBox)
 from PySide6.QtCore import Qt
 
 

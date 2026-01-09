@@ -3,21 +3,20 @@ import sys
 import os
 import json
 import time
-import datetime
-import threading
-import queue
 
-from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
+import threading
+
+
+from PySide6.QtWidgets import QApplication, QFileDialog
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import existing backend modules
-from PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
-from McScript_DataProcessing import (read_1Ddetector_file, write_parameters_to_file, 
-                                      simple_plot_scan_commands, display_existing_data,
+from PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, mono_ana_crystals_setup
+from McScript_DataProcessing import (read_1Ddetector_file, write_parameters_to_file,
                                       read_parameters_from_file)
 from McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing, extract_variable_values
 from McScript_Sample_Definition import update_Q_from_HKL_direct, update_HKL_from_Q_direct
-import PUMA_GUI_calculations as GUIcalc
+
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -232,7 +231,7 @@ class TAVIController(QObject):
         line_edit.textChanged.connect(on_text_changed)
         
         # Connect to editingFinished to show saved state and flash
-        original_finished_handler = None
+
         
         def on_editing_finished():
             original = line_edit.property("original_value")
@@ -365,6 +364,7 @@ class TAVIController(QObject):
             formatted = f"{float(value):.{precision}f}".rstrip('0').rstrip('.')
             widget.setText(formatted)
         except (ValueError, TypeError):
+            # If the value cannot be converted to float, leave the widget text unchanged.
             pass
     
     def update_all_variables(self):
@@ -414,7 +414,9 @@ class TAVIController(QObject):
             self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
             
-        except (ValueError, KeyError) as e:
+        except (ValueError, KeyError):
+            # If GUI values are incomplete or invalid during editing, skip this update
+            # rather than raising, and rely on the next valid change to refresh fields.
             pass
         finally:
             self.updating = False
@@ -661,19 +663,7 @@ class TAVIController(QObject):
         # Re-calculate Q from current HKL with new lattice parameters
         self.on_HKL_changed()
     
-    def update_monocris_info(self):
-        """Update monochromator crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_variables()
-    
-    def update_anacris_info(self):
-        """Update analyzer crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_variables()    
+
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
         # TODO: Implement diagnostics configuration dialog
@@ -963,11 +953,11 @@ class TAVIController(QObject):
         
         # Mapping for scannable parameters
         variable_to_index = {
-            'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-            'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
+            'qx': 0, 'qy': 1, 'qz': 2,
+            'H': 0, 'K': 1, 'L': 2,
+            'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7
-        }
         
         # Initialize scan point template
         scan_point_template = [0] * 8
