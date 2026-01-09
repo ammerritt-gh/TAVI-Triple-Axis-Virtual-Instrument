@@ -703,7 +703,7 @@ class TAVIController(QObject):
     def display_existing_data_pyside6(self, data_folder_path):
         """PySide6-compatible wrapper for display_existing_data."""
         import matplotlib
-        matplotlib.use('TkAgg')  # Use interactive backend compatible with threading
+        matplotlib.use('Qt5Agg')  # Use Qt backend compatible with PySide6
         import matplotlib.pyplot as plt
         import numpy as np
         
@@ -1206,9 +1206,9 @@ class TAVIController(QObject):
     
     def generate_plots_non_blocking(self, data_folder, scan_command1, scan_command2):
         """Generate plots without showing them (save to file only)."""
-        # Use non-interactive backend to avoid threading issues with matplotlib
+        # Use Qt backend compatible with PySide6
         import matplotlib
-        matplotlib.use('TkAgg')  # Use interactive backend
+        matplotlib.use('Qt5Agg')  # Use Qt backend compatible with PySide6
         import matplotlib.pyplot as plt
         import numpy as np
         
