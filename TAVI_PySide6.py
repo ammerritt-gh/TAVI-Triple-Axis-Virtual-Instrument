@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import existing backend modules
-from PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
+from instruments.PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
 from McScript_DataProcessing import (read_1Ddetector_file, write_parameters_to_file, 
                                       simple_plot_scan_commands, display_existing_data,
                                       read_parameters_from_file)
@@ -382,7 +382,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             
-            from PUMA_instrument_definition import energy2k, k2angle
+            from instruments.PUMA_instrument_definition import energy2k, k2angle
             
             # Update Ei and Ef based on K_fixed mode
             if vals['K_fixed'] == "Ki Fixed":
@@ -430,7 +430,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Ki and Ei from mtt
-            from PUMA_instrument_definition import angle2k, k2energy
+            from instruments.PUMA_instrument_definition import angle2k, k2energy
             Ki = angle2k(vals['mtt'] / 2, self.monocris_info['dm'])
             Ei = k2energy(Ki)
             
@@ -459,7 +459,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Kf and Ef from att
-            from PUMA_instrument_definition import angle2k, k2energy
+            from instruments.PUMA_instrument_definition import angle2k, k2energy
             Kf = angle2k(vals['att'] / 2, self.anacris_info['da'])
             Ef = k2energy(Kf)
             
@@ -487,7 +487,7 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from PUMA_instrument_definition import k2energy, k2angle
+            from instruments.PUMA_instrument_definition import k2energy, k2angle
             Ei = k2energy(vals['Ki'])
             mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
             
@@ -515,7 +515,7 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from PUMA_instrument_definition import energy2k, k2angle
+            from instruments.PUMA_instrument_definition import energy2k, k2angle
             Ki = energy2k(vals['Ei'])
             mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
             
@@ -543,7 +543,7 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from PUMA_instrument_definition import k2energy, k2angle
+            from instruments.PUMA_instrument_definition import k2energy, k2angle
             Ef = k2energy(vals['Kf'])
             att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
             
@@ -571,7 +571,7 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from PUMA_instrument_definition import energy2k, k2angle
+            from instruments.PUMA_instrument_definition import energy2k, k2angle
             Kf = energy2k(vals['Ef'])
             att = 2 * k2angle(Kf, self.anacris_info['da'])
             
