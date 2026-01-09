@@ -318,3 +318,95 @@ TAVI-Triple-Axis-Virtual-Instrument/
 4. `archive/__init__.py` - Created package marker
 5. `instruments/__init__.py` - Created package marker
 6. `README.md` - Updated documentation to reflect new structure
+
+---
+
+## Follow-up: Extract Functions from Archive (January 2026)
+
+### What Was Accomplished
+
+Following feedback that archive modules should not be imported directly, all necessary functions were extracted from the archive into a new `tavi/` package. The main application no longer depends on the archive folder, which can now be safely removed in the future.
+
+### Changes Made
+
+#### 1. Created New `tavi/` Package
+
+A new package structure was created with focused, well-documented modules:
+
+**tavi/utilities.py** - General utility functions:
+- `parse_scan_steps()` - Parse scan command strings into variable name and value arrays
+- `letter_encode_number()` / `letter_decode_string()` - Encode/decode numbers for filenames
+- `extract_variable_values()` - Extract scan parameters from folder names
+- `incremented_path_writing()` - Create folders with automatic counter increment
+
+**tavi/reciprocal_space.py** - Crystallographic calculations:
+- `update_Q_from_HKL_direct()` - Convert Miller indices (H, K, L) to Q-space (qx, qy, qz)
+- `update_HKL_from_Q_direct()` - Convert Q-space coordinates to Miller indices
+
+**tavi/data_processing.py** - Data file operations:
+- `read_1Ddetector_file()` - Read McStas 1D detector output files
+- `write_parameters_to_file()` / `read_parameters_from_file()` - Save/load scan parameters
+- `simple_plot_scan_commands()` - Wrapper for plotting functions
+- `display_existing_data()` - Display previously saved scan data
+- `write_1D_scan()` / `write_2D_scan()` - Write scan data to text files
+
+#### 2. Updated All Imports
+
+**In TAVI_PySide6.py:**
+- Changed `from archive.McScript_Functions import ...` → `from tavi.utilities import ...`
+- Changed `from archive.McScript_Sample_Definition import ...` → `from tavi.reciprocal_space import ...`
+- Changed `from archive.McScript_DataProcessing import ...` → `from tavi.data_processing import ...`
+- Removed unused `import archive.PUMA_GUI_calculations as GUIcalc`
+
+All imports (including function-scope imports) now reference the new `tavi` package.
+
+#### 3. Updated Documentation
+
+**In README.md:**
+- Added `tavi/` package to File Structure section
+- Clarified that archive modules are "no longer used by main application"
+
+### Final Directory Structure
+
+```
+TAVI-Triple-Axis-Virtual-Instrument/
+├── TAVI_PySide6.py              # Main PySide6 application
+├── test_gui.py                   # GUI verification script
+├── gui/                          # PySide6 GUI modules
+│   ├── __init__.py
+│   ├── main_window.py
+│   └── docks/
+│       ├── __init__.py
+│       └── [7 dock modules]
+├── tavi/                         # Core TAVI functionality (NEW)
+│   ├── __init__.py
+│   ├── utilities.py              # Scan parsing, file operations
+│   ├── reciprocal_space.py       # HKL ↔ Q-space conversions
+│   └── data_processing.py        # Detector file I/O, parameters
+├── instruments/                  # Instrument definitions
+│   ├── __init__.py
+│   └── PUMA_instrument_definition.py
+└── archive/                      # Legacy code (no longer used)
+    ├── __init__.py
+    ├── McScript_Runner.py
+    ├── PUMA_GUI_calculations.py
+    ├── McScript_Functions.py
+    ├── McScript_DataProcessing.py
+    └── McScript_Sample_Definition.py
+```
+
+### Benefits
+
+1. **No Archive Dependencies**: Main application completely independent of archive folder
+2. **Clear Module Organization**: Functions grouped by purpose in focused modules
+3. **Better Documentation**: All extracted functions have proper docstrings
+4. **Future-Proof**: Archive can be safely removed when legacy GUI is deprecated
+5. **Maintainable**: Clean separation makes code easier to understand and modify
+
+### Files Modified (6 files)
+1. `TAVI_PySide6.py` - Updated all imports to use tavi package
+2. `tavi/__init__.py` - Created package initialization
+3. `tavi/utilities.py` - Created with utility functions
+4. `tavi/reciprocal_space.py` - Created with crystallographic calculations
+5. `tavi/data_processing.py` - Created with data I/O functions
+6. `README.md` - Updated file structure documentation
