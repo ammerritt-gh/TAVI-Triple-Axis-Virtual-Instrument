@@ -776,6 +776,9 @@ class TAVIController(QObject):
             "lattice_gamma_var": self.window.sample_dock.lattice_gamma_edit.text(),
             "scan_command_var1": self.window.scan_controls_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.scan_controls_dock.scan_command_2_edit.text(),
+            "auto_display_var": self.window.scan_controls_dock.auto_display_check.isChecked(),
+            "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
+            "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings
         }
@@ -829,6 +832,11 @@ class TAVIController(QObject):
                 self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", 90)))
                 self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", 90)))
                 self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", 90)))
+                # Set display and folder fields (use sensible defaults if missing)
+                folder_suggestion = os.path.join(self.output_directory, "initial_testing")
+                self.window.scan_controls_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
+                self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
+                self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
                 self.diagnostic_settings = parameters.get("diagnostic_settings", {})
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
@@ -878,6 +886,7 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_gamma_edit.setText("90")
         self.window.scan_controls_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
         self.window.scan_controls_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
+        self.window.scan_controls_dock.auto_display_check.setChecked(True)
         
         # Set default folder paths
         folder_suggestion = os.path.join(self.output_directory, "initial_testing")
@@ -1146,6 +1155,18 @@ class TAVIController(QObject):
             ])
 
             scan_folder = os.path.join(data_folder, "_".join(scan_description))
+            
+            # Log scan parameters before running
+            if scan_mode == "momentum":
+                message = (f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+            elif scan_mode == "rlu":
+                message = (f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+            else:
+                message = (f"Scan parameters - A1: {A1}, A2: {A2}, A3: {A3}, A4: {A4}\n"
+                           f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}")
+            self.message_printed.emit(message)
             
             # Log scan parameters before running
             if scan_mode == "momentum":
