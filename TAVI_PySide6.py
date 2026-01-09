@@ -341,6 +341,7 @@ class TAVIController(QObject):
                 'scan_command1': self.window.scan_controls_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.scan_controls_dock.scan_command_2_edit.text(),
                 'diagnostic_mode': self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
+                'auto_display': self.window.scan_controls_dock.auto_display_check.isChecked(),
             }
         except ValueError:
             return None
@@ -892,6 +893,7 @@ class TAVIController(QObject):
         scan_command1 = vals['scan_command1']
         scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
+        auto_display = vals['auto_display']
         
         # Write parameters to file
         write_parameters_to_file(data_folder, vals)
@@ -1155,16 +1157,201 @@ class TAVIController(QObject):
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
         self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
-        # Generate simple plot if scan commands were provided
-        if scan_command1 or scan_command2:
+        # Generate and display plots if auto_display is enabled
+        if auto_display and (scan_command1 or scan_command2):
             try:
-                # McScript_DataProcessing.simple_plot_scan_commands reads scan commands from file
-                simple_plot_scan_commands(None, data_folder)
-                self.message_printed.emit("Plots generated successfully")
+                # Use non-interactive backend to avoid threading issues with matplotlib
+                import matplotlib
+                matplotlib.use('Agg')  # Non-interactive backend
+                import matplotlib.pyplot as plt
+                
+                # Generate plots without plt.show() - save only
+                self.generate_plots_non_blocking(data_folder, scan_command1, scan_command2)
+                self.message_printed.emit("Plots generated and saved successfully")
+                self.message_printed.emit(f"Plot files saved to: {data_folder}")
             except Exception as e:
                 self.message_printed.emit(f"Plot generation failed: {e}")
+        elif not auto_display:
+            self.message_printed.emit("Auto-display disabled. Plots not generated.")
+            self.message_printed.emit("You can manually generate plots from the data folder.")
         
         return data_folder
+    
+    def generate_plots_non_blocking(self, data_folder, scan_command1, scan_command2):
+        """Generate plots without showing them (save to file only)."""
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        
+        # Import plotting functions
+        from McScript_DataProcessing import (read_parameters_from_file, parse_scan_steps, 
+                                              extract_variable_values, read_1Ddetector_file,
+                                              write_1D_scan, write_2D_scan)
+        import numpy as np
+        
+        scan_parameters = read_parameters_from_file(data_folder)
+        
+        if not scan_command1 and not scan_command2:
+            # Single point - no plot needed
+            return
+        
+        if scan_command1 and not scan_command2:
+            # 1D scan
+            self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters)
+        
+        if scan_command2 and scan_command1:
+            # 2D scan
+            self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters)
+    
+    def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters):
+        """Generate 1D plot without displaying it."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from McScript_DataProcessing import parse_scan_steps, extract_variable_values, read_1Ddetector_file, write_1D_scan
+        
+        variable_name, array_values = parse_scan_steps(scan_command1)
+        scan_params = []
+        counts_array = []
+        
+        for folder_name in os.listdir(data_folder):
+            full_path = os.path.join(data_folder, folder_name)
+            if os.path.isdir(full_path):
+                extracted_values = extract_variable_values(folder_name)
+                if extracted_values:
+                    variable_index = {
+                        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+                        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+                        'H': 8, 'K': 9, 'L': 10
+                    }.get(variable_name)
+                    
+                    if variable_index is not None:
+                        scan_params.append(extracted_values[variable_index])
+                        intensity, intensity_error, counts = read_1Ddetector_file(full_path)
+                        counts_array.append(counts)
+        
+        if not scan_params:
+            return
+        
+        scan_params = np.array(scan_params)
+        counts_array = np.array(counts_array)
+        
+        # Sort by scan parameter
+        sorted_indices = np.argsort(scan_params)
+        scan_params = scan_params[sorted_indices]
+        counts_array = counts_array[sorted_indices]
+        
+        # Create plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(scan_params, counts_array, marker='o', linestyle='-', color='b', label='Counts')
+        
+        # Set labels
+        if variable_name in ['qx', 'qy', 'qz']:
+            plt.xlabel(f'{variable_name} (1/Å)')
+        elif variable_name == 'deltaE':
+            plt.xlabel(f'{variable_name} (meV)')
+        elif variable_name in ['H', 'K', 'L']:
+            plt.xlabel(f'{variable_name} (r.l.u.)')
+        else:
+            plt.xlabel(variable_name)
+        
+        plt.ylabel('Counts')
+        
+        # Build title
+        plot_title = f"N: {np.format_float_scientific(scan_parameters.get('number_neutrons'), unique=True, precision=2)}"
+        if variable_name != 'qx' and 'qx' in scan_parameters:
+            plot_title += f" qx={scan_parameters.get('qx')}"
+        if variable_name != 'qy' and 'qy' in scan_parameters:
+            plot_title += f" qy={scan_parameters.get('qy')}"
+        if variable_name != 'qz' and 'qz' in scan_parameters:
+            plot_title += f" qz={scan_parameters.get('qz')}"
+        if variable_name != 'deltaE' and 'deltaE' in scan_parameters:
+            plot_title += f" dE={scan_parameters.get('deltaE')}"
+        
+        plt.title(plot_title)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # Save plot
+        plot_file = os.path.join(data_folder, "1D_plot.png")
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # Write data to file
+        write_1D_scan(scan_params, counts_array, data_folder, "1D_data.txt")
+    
+    def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters):
+        """Generate 2D heatmap without displaying it."""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from McScript_DataProcessing import parse_scan_steps, extract_variable_values, read_1Ddetector_file, write_2D_scan
+        
+        variable_name1, array_values1 = parse_scan_steps(scan_command1)
+        variable_name2, array_values2 = parse_scan_steps(scan_command2)
+        
+        scan_data = []
+        
+        for folder_name in os.listdir(data_folder):
+            full_path = os.path.join(data_folder, folder_name)
+            if os.path.isdir(full_path):
+                extracted_values = extract_variable_values(folder_name)
+                if extracted_values:
+                    variable_index1 = {
+                        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+                        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+                        'H': 8, 'K': 9, 'L': 10
+                    }.get(variable_name1)
+                    variable_index2 = {
+                        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+                        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+                        'H': 8, 'K': 9, 'L': 10
+                    }.get(variable_name2)
+                    
+                    if variable_index1 is not None and variable_index2 is not None:
+                        x = extracted_values[variable_index1]
+                        y = extracted_values[variable_index2]
+                        intensity, intensity_error, counts = read_1Ddetector_file(full_path)
+                        scan_data.append((x, y, counts))
+        
+        if not scan_data:
+            return
+        
+        # Create grid for heatmap
+        x_vals = np.unique([d[0] for d in scan_data])
+        y_vals = np.unique([d[1] for d in scan_data])
+        
+        grid = np.full((len(y_vals), len(x_vals)), np.nan)
+        
+        for x, y, counts in scan_data:
+            x_idx = np.abs(x_vals - x).argmin()
+            y_idx = np.abs(y_vals - y).argmin()
+            grid[y_idx, x_idx] = counts
+        
+        # Create heatmap
+        plt.figure(figsize=(10, 8))
+        plt.imshow(grid, cmap='viridis', origin='lower', 
+                   extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
+                   aspect='auto')
+        plt.colorbar(label='Counts')
+        
+        # Set labels
+        x_label = f'{variable_name1} (1/Å)' if variable_name1 in ['qx', 'qy', 'qz'] else \
+                  f'{variable_name1} (meV)' if variable_name1 == 'deltaE' else variable_name1
+        y_label = f'{variable_name2} (1/Å)' if variable_name2 in ['qx', 'qy', 'qz'] else \
+                  f'{variable_name2} (meV)' if variable_name2 == 'deltaE' else variable_name2
+        
+        plt.xlabel(x_label)
+        plt.ylabel(y_label)
+        
+        plot_title = f"N: {np.format_float_scientific(scan_parameters.get('number_neutrons'), unique=True, precision=2)}"
+        plt.title(plot_title)
+        
+        # Save plot
+        plot_file = os.path.join(data_folder, "Heatmap.png")
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # Write data to file
+        write_2D_scan(x_vals, y_vals, grid, data_folder, "2D_data.txt")
 
 
 def main():

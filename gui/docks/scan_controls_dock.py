@@ -1,7 +1,7 @@
 """Scan Controls Dock for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QComboBox, QGroupBox, QPushButton,
-                                QFormLayout, QGridLayout)
+                                QFormLayout, QGridLayout, QCheckBox)
 from PySide6.QtCore import Qt
 
 
@@ -96,6 +96,17 @@ class ScanControlsDock(QDockWidget):
         param_buttons_layout.addWidget(self.defaults_button, 0, 2)
         
         main_layout.addWidget(param_buttons_group)
+        
+        # Display options section
+        display_group = QGroupBox("Display Options")
+        display_layout = QVBoxLayout()
+        display_group.setLayout(display_layout)
+        
+        self.auto_display_check = QCheckBox("Auto-display plots after simulation")
+        self.auto_display_check.setChecked(False)  # Default to off to avoid threading issues
+        display_layout.addWidget(self.auto_display_check)
+        
+        main_layout.addWidget(display_group)
         
         # Counts display section
         counts_group = QGroupBox("Counts")
