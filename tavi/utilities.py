@@ -67,9 +67,9 @@ def extract_variable_values(folder_name):
         rva = letter_decode_string(match.group(8)) if match.group(8) else None
 
         # Check if HKL variables are present
-        H = letter_decode_string(match.group(1)) if match.group(1) else None
-        K = letter_decode_string(match.group(2)) if match.group(2) else None
-        L = letter_decode_string(match.group(3)) if match.group(3) else None
+        H = letter_decode_string(match.group(9)) if match.group(9) else None
+        K = letter_decode_string(match.group(10)) if match.group(10) else None
+        L = letter_decode_string(match.group(11)) if match.group(11) else None
         
         # Return all extracted values as a tuple
         return qx, qy, qz, deltaE, rhm, rvm, rha, rva, H, K, L
