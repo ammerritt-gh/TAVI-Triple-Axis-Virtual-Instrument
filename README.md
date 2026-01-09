@@ -58,10 +58,10 @@ The modular interface includes:
 
 ### Legacy Tkinter GUI
 
-The original single-window interface:
+The original single-window interface (now located in the archive folder):
 
 ```bash
-python McScript_Runner.py
+python archive/McScript_Runner.py
 ```
 
 ## Features
@@ -85,15 +85,17 @@ These files are created in the current working directory and can be freely moved
 ## File Structure
 
 - `TAVI_PySide6.py` - New modular GUI application with PySide6
-- `McScript_Runner.py` - Legacy GUI application with Tkinter
 - `gui/` - PySide6 GUI modules
   - `main_window.py` - Main window with dock arrangement
   - `docks/` - Individual dock widget modules
-- `PUMA_instrument_definition.py` - PUMA instrument setup and McStas interface
-- `PUMA_GUI_calculations.py` - GUI calculation utilities
-- `McScript_Functions.py` - Helper functions for file operations
-- `McScript_DataProcessing.py` - Data reading and plotting utilities
-- `McScript_Sample_Definition.py` - Sample and reciprocal space calculations
+- `instruments/` - Instrument definitions
+  - `PUMA_instrument_definition.py` - PUMA instrument setup and McStas interface
+- `archive/` - Legacy modules (still referenced by the application)
+  - `McScript_Runner.py` - Legacy GUI application with Tkinter
+  - `PUMA_GUI_calculations.py` - GUI calculation utilities
+  - `McScript_Functions.py` - Helper functions for file operations
+  - `McScript_DataProcessing.py` - Data reading and plotting utilities
+  - `McScript_Sample_Definition.py` - Sample and reciprocal space calculations
 
 ## Output
 
