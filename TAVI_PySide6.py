@@ -702,16 +702,19 @@ class TAVIController(QObject):
     
     def display_existing_data_pyside6(self, data_folder_path):
         """PySide6-compatible wrapper for display_existing_data."""
-        from McScript_DataProcessing import read_parameters_from_file
+        import matplotlib
+        matplotlib.use('Agg')  # Use non-interactive backend
+        import matplotlib.pyplot as plt
+        import numpy as np
         
         scan_parameters = read_parameters_from_file(data_folder_path)
         if scan_parameters.get('scan_command1') and not scan_parameters.get('scan_command2'):
             # 1D scan
-            self.plot_1D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'))
+            self.plot_1D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters, plt, np)
             self.print_to_message_center("1D plot generated and saved to data folder")
         elif scan_parameters.get('scan_command1') and scan_parameters.get('scan_command2'):
             # 2D scan
-            self.plot_2D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters.get('scan_command2'))
+            self.plot_2D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters.get('scan_command2'), scan_parameters, plt, np)
             self.print_to_message_center("2D plot generated and saved to data folder")
         else:
             self.print_to_message_center("No scan commands found in parameters file")
