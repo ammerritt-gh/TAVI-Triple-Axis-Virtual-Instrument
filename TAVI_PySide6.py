@@ -1244,7 +1244,7 @@ class TAVIController(QObject):
     
     def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
         """Generate 1D plot and display it in a window."""
-        from McScript_DataProcessing import write_1D_scan
+        from archive.McScript_DataProcessing import write_1D_scan
         
         variable_name, array_values = parse_scan_steps(scan_command1)
         scan_params = []
@@ -1316,7 +1316,7 @@ class TAVIController(QObject):
     
     def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
         """Generate 2D heatmap and display it in a window."""
-        from McScript_DataProcessing import write_2D_scan
+        from archive.McScript_DataProcessing import write_2D_scan
         
         variable_name1, array_values1 = parse_scan_steps(scan_command1)
         variable_name2, array_values2 = parse_scan_steps(scan_command2)
