@@ -688,12 +688,33 @@ class TAVIController(QObject):
         self.print_to_message_center("Validation window not yet implemented")
     
     def load_and_display_data(self):
-        """Load and display existing data."""
+        """Load and display existing data using PySide6-compatible wrapper."""
         folder = self.window.data_control_dock.load_folder_edit.text()
         if folder and os.path.exists(folder):
-            display_existing_data(self.window.data_control_dock.load_folder_edit)
+            self.print_to_message_center(f"Loading data from: {folder}")
+            try:
+                # Call the PySide6-compatible wrapper function
+                self.display_existing_data_pyside6(folder)
+            except Exception as e:
+                self.print_to_message_center(f"Error loading data: {str(e)}")
         else:
             self.print_to_message_center("Invalid folder path for loading data")
+    
+    def display_existing_data_pyside6(self, data_folder_path):
+        """PySide6-compatible wrapper for display_existing_data."""
+        from McScript_DataProcessing import read_parameters_from_file
+        
+        scan_parameters = read_parameters_from_file(data_folder_path)
+        if scan_parameters.get('scan_command1') and not scan_parameters.get('scan_command2'):
+            # 1D scan
+            self.plot_1D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'))
+            self.print_to_message_center("1D plot generated and saved to data folder")
+        elif scan_parameters.get('scan_command1') and scan_parameters.get('scan_command2'):
+            # 2D scan
+            self.plot_2D_scan_non_blocking(data_folder_path, scan_parameters.get('scan_command1'), scan_parameters.get('scan_command2'))
+            self.print_to_message_center("2D plot generated and saved to data folder")
+        else:
+            self.print_to_message_center("No scan commands found in parameters file")
     
     def save_parameters(self):
         """Save all parameters to JSON file."""
