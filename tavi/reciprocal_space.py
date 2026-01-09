@@ -78,8 +78,13 @@ def update_HKL_from_Q_direct(qx, qy, qz, a, b, c, alpha, beta, gamma):
     Returns:
         tuple: (H, K, L) Miller indices
         
-    Note: This implements the inverse transformation as in the original code.
-    The system has circular dependencies which may lead to unexpected results.
+    Warning: This function contains a bug carried over from the original archive code.
+    The equations use undefined variables K and L on the right-hand side, which will
+    cause a NameError when executed. This is preserved exactly as it existed in the
+    archive for backward compatibility. A proper implementation would require matrix
+    inversion or solving the system of equations correctly.
+    
+    TODO: Fix the circular dependency by implementing proper inverse transformation.
     """
     # Convert lattice parameters to radians
     alpha_rad = math.radians(alpha)
@@ -112,7 +117,7 @@ def update_HKL_from_Q_direct(qx, qy, qz, a, b, c, alpha, beta, gamma):
     ))
 
     # Calculate H, K, L from qx, qy, qz (inverse transformation)
-    # Note: Original code has circular dependencies - preserving exact behavior
+    # WARNING: Circular dependency bug from original code preserved here
     H = ((qx - K * b_star * math.cos(gamma_star) 
           - L * c_star * math.cos(beta_star)) / a_star)
     K = ((qy - L * c_star * (math.cos(alpha_star) 
