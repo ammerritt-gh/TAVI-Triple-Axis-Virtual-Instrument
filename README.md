@@ -88,14 +88,18 @@ These files are created in the current working directory and can be freely moved
 - `gui/` - PySide6 GUI modules
   - `main_window.py` - Main window with dock arrangement
   - `docks/` - Individual dock widget modules
+- `tavi/` - Core TAVI functionality modules
+  - `utilities.py` - Helper functions for file operations and scan parsing
+  - `reciprocal_space.py` - HKL and Q-space coordinate conversions
+  - `data_processing.py` - Detector file reading and scan data management
 - `instruments/` - Instrument definitions
   - `PUMA_instrument_definition.py` - PUMA instrument setup and McStas interface
-- `archive/` - Legacy modules (still referenced by the application)
+- `archive/` - Legacy modules (no longer used by main application)
   - `McScript_Runner.py` - Legacy GUI application with Tkinter
-  - `PUMA_GUI_calculations.py` - GUI calculation utilities
-  - `McScript_Functions.py` - Helper functions for file operations
-  - `McScript_DataProcessing.py` - Data reading and plotting utilities
-  - `McScript_Sample_Definition.py` - Sample and reciprocal space calculations
+  - `PUMA_GUI_calculations.py` - Legacy GUI calculation utilities
+  - `McScript_Functions.py` - Legacy helper functions
+  - `McScript_DataProcessing.py` - Legacy data processing
+  - `McScript_Sample_Definition.py` - Legacy sample calculations
 
 ## Output
 
