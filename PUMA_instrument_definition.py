@@ -713,28 +713,28 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
 
          
 
-        Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        Al_rod_phonon.radius = 20e-3
-        Al_rod_phonon.yheight = 30e-3
-        Al_rod_phonon.sigma_abs = 0*0.231 #0.23 for Al
-        Al_rod_phonon.sigma_inc = 0*0.0082 #0.0082 for Al
-        Al_rod_phonon.a = 4.05 #4.05 for Al
-        Al_rod_phonon.b = 345 #3.45 for Al
-        Al_rod_phonon.M = 27 #atomic mass of Al
-        Al_rod_phonon.c = 4
-        Al_rod_phonon.DW = 1
-        Al_rod_phonon.T = 200
-        Al_rod_phonon.target_index = +2
-        Al_rod_phonon.focus_aw = 5 #horizontal focus region in degrees, 5
-        Al_rod_phonon.focus_ah = 15 #vertical focus region in degrees, 15
-        Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
+        # Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
+        # Al_rod_phonon.radius = 20e-3
+        # Al_rod_phonon.yheight = 30e-3
+        # Al_rod_phonon.sigma_abs = 0*0.231 #0.23 for Al
+        # Al_rod_phonon.sigma_inc = 0*0.0082 #0.0082 for Al
+        # Al_rod_phonon.a = 4.05 #4.05 for Al
+        # Al_rod_phonon.b = 345 #3.45 for Al
+        # Al_rod_phonon.M = 27 #atomic mass of Al
+        # Al_rod_phonon.c = 4
+        # Al_rod_phonon.DW = 1
+        # Al_rod_phonon.T = 200
+        # Al_rod_phonon.target_index = +2
+        # Al_rod_phonon.focus_aw = 5 #horizontal focus region in degrees, 5
+        # Al_rod_phonon.focus_ah = 15 #vertical focus region in degrees, 15
+        # Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
 
-        # Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # Al_Bragg.reflections = '"Al.lau"'
-        # Al_Bragg.radius = 20e-3
-        # Al_Bragg.yheight = 30e-3
-        # Al_Bragg.mosaic = 5
-        # Al_Bragg.sigma_inc = -1
+        Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
+        Al_Bragg.reflections = '"Al.lau"'
+        Al_Bragg.radius = 20e-3
+        Al_Bragg.yheight = 30e-3
+        Al_Bragg.mosaic = 5
+        Al_Bragg.sigma_inc = -1
 
 
         # powder_test = instrument.add_component("powder_test", "Powder1", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
