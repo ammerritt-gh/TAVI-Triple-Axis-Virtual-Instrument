@@ -12,8 +12,10 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import existing backend modules
 from PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
-from McScript_DataProcessing import read_1Ddetector_file, write_parameters_to_file, simple_plot_scan_commands, display_existing_data
-from McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing
+from McScript_DataProcessing import (read_1Ddetector_file, write_parameters_to_file, 
+                                      simple_plot_scan_commands, display_existing_data,
+                                      read_parameters_from_file)
+from McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing, extract_variable_values
 from McScript_Sample_Definition import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 import PUMA_GUI_calculations as GUIcalc
 
@@ -36,6 +38,13 @@ class TAVIController(QObject):
     remaining_time_updated = Signal(str)
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
+    
+    # Variable index mapping for scan parameters (shared constant)
+    VARIABLE_INDEX_MAP = {
+        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+        'H': 8, 'K': 9, 'L': 10
+    }
     
     def __init__(self, window):
         super().__init__()
@@ -1160,12 +1169,6 @@ class TAVIController(QObject):
         # Generate and display plots if auto_display is enabled
         if auto_display and (scan_command1 or scan_command2):
             try:
-                # Use non-interactive backend to avoid threading issues with matplotlib
-                import matplotlib
-                matplotlib.use('Agg')  # Non-interactive backend
-                import matplotlib.pyplot as plt
-                
-                # Generate plots without plt.show() - save only
                 self.generate_plots_non_blocking(data_folder, scan_command1, scan_command2)
                 self.message_printed.emit("Plots generated and saved successfully")
                 self.message_printed.emit(f"Plot files saved to: {data_folder}")
@@ -1179,16 +1182,13 @@ class TAVIController(QObject):
     
     def generate_plots_non_blocking(self, data_folder, scan_command1, scan_command2):
         """Generate plots without showing them (save to file only)."""
+        # Use non-interactive backend to avoid threading issues with matplotlib
         import matplotlib
-        matplotlib.use('Agg')  # Non-interactive backend
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
-        
-        # Import plotting functions
-        from McScript_DataProcessing import (read_parameters_from_file, parse_scan_steps, 
-                                              extract_variable_values, read_1Ddetector_file,
-                                              write_1D_scan, write_2D_scan)
         import numpy as np
         
+        # Read scan parameters from file
         scan_parameters = read_parameters_from_file(data_folder)
         
         if not scan_command1 and not scan_command2:
@@ -1197,17 +1197,15 @@ class TAVIController(QObject):
         
         if scan_command1 and not scan_command2:
             # 1D scan
-            self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters)
+            self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters, plt, np)
         
         if scan_command2 and scan_command1:
             # 2D scan
-            self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters)
+            self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters, plt, np)
     
-    def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters):
+    def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
         """Generate 1D plot without displaying it."""
-        import matplotlib.pyplot as plt
-        import numpy as np
-        from McScript_DataProcessing import parse_scan_steps, extract_variable_values, read_1Ddetector_file, write_1D_scan
+        from McScript_DataProcessing import write_1D_scan
         
         variable_name, array_values = parse_scan_steps(scan_command1)
         scan_params = []
@@ -1218,11 +1216,7 @@ class TAVIController(QObject):
             if os.path.isdir(full_path):
                 extracted_values = extract_variable_values(folder_name)
                 if extracted_values:
-                    variable_index = {
-                        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-                        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-                        'H': 8, 'K': 9, 'L': 10
-                    }.get(variable_name)
+                    variable_index = self.VARIABLE_INDEX_MAP.get(variable_name)
                     
                     if variable_index is not None:
                         scan_params.append(extracted_values[variable_index])
@@ -1279,11 +1273,9 @@ class TAVIController(QObject):
         # Write data to file
         write_1D_scan(scan_params, counts_array, data_folder, "1D_data.txt")
     
-    def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters):
+    def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
         """Generate 2D heatmap without displaying it."""
-        import matplotlib.pyplot as plt
-        import numpy as np
-        from McScript_DataProcessing import parse_scan_steps, extract_variable_values, read_1Ddetector_file, write_2D_scan
+        from McScript_DataProcessing import write_2D_scan
         
         variable_name1, array_values1 = parse_scan_steps(scan_command1)
         variable_name2, array_values2 = parse_scan_steps(scan_command2)
@@ -1295,16 +1287,8 @@ class TAVIController(QObject):
             if os.path.isdir(full_path):
                 extracted_values = extract_variable_values(folder_name)
                 if extracted_values:
-                    variable_index1 = {
-                        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-                        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-                        'H': 8, 'K': 9, 'L': 10
-                    }.get(variable_name1)
-                    variable_index2 = {
-                        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-                        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-                        'H': 8, 'K': 9, 'L': 10
-                    }.get(variable_name2)
+                    variable_index1 = self.VARIABLE_INDEX_MAP.get(variable_name1)
+                    variable_index2 = self.VARIABLE_INDEX_MAP.get(variable_name2)
                     
                     if variable_index1 is not None and variable_index2 is not None:
                         x = extracted_values[variable_index1]
