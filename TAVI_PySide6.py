@@ -12,12 +12,13 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import existing backend modules
 from instruments.PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
-from McScript_DataProcessing import (read_1Ddetector_file, write_parameters_to_file, 
-                                      simple_plot_scan_commands, display_existing_data,
-                                      read_parameters_from_file)
-from McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing, extract_variable_values
-from McScript_Sample_Definition import update_Q_from_HKL_direct, update_HKL_from_Q_direct
-import PUMA_GUI_calculations as GUIcalc
+
+# Import TAVI core modules
+from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file, 
+                                   simple_plot_scan_commands, display_existing_data,
+                                   read_parameters_from_file)
+from tavi.utilities import parse_scan_steps, letter_encode_number, incremented_path_writing, extract_variable_values
+from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -1244,7 +1245,7 @@ class TAVIController(QObject):
     
     def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
         """Generate 1D plot and display it in a window."""
-        from McScript_DataProcessing import write_1D_scan
+        from tavi.data_processing import write_1D_scan
         
         variable_name, array_values = parse_scan_steps(scan_command1)
         scan_params = []
@@ -1316,7 +1317,7 @@ class TAVIController(QObject):
     
     def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
         """Generate 2D heatmap and display it in a window."""
-        from McScript_DataProcessing import write_2D_scan
+        from tavi.data_processing import write_2D_scan
         
         variable_name1, array_values1 = parse_scan_steps(scan_command1)
         variable_name2, array_values2 = parse_scan_steps(scan_command2)
