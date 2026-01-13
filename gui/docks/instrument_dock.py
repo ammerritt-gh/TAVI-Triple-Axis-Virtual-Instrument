@@ -180,7 +180,7 @@ class InstrumentDock(QDockWidget):
         
         # Store alpha_2 checkboxes dynamically
         self.alpha_2_checks = {}
-        alpha_2_options = self.instrument_config.alpha_2_options if self.instrument_config else [30, 40, 60]
+        alpha_2_options = getattr(self.instrument_config, 'alpha_2_options', [30, 40, 60]) if self.instrument_config else [30, 40, 60]
         for option in alpha_2_options:
             checkbox = QCheckBox(f"{option}'")
             self.alpha_2_checks[option] = checkbox

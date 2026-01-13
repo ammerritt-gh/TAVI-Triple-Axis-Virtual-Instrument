@@ -1,6 +1,6 @@
 """Slit Controls Dock for TAVI application."""
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, 
-                                QLabel, QLineEdit, QGroupBox, QGridLayout, QDoubleSpinBox)
+from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, 
+                                QLabel, QGroupBox, QGridLayout, QDoubleSpinBox)
 from PySide6.QtCore import Qt
 
 

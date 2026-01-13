@@ -21,6 +21,7 @@
       "r0": 1.0
     },
     "PG[002] test": {
+      "comment": "Test crystal with intentionally different d-spacing for testing purposes",
       "dm": 2.355,
       "slabwidth": 0.0202,
       "slabheight": 0.018,
