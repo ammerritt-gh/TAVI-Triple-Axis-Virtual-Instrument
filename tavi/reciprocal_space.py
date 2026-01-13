@@ -47,22 +47,26 @@ def update_Q_from_HKL_direct(H, K, L, a, b, c, alpha, beta, gamma):
         / (math.sin(alpha_rad) * math.sin(beta_rad))
     ))
 
+    # Convert reciprocal lattice angles to radians for trigonometric calculations
+    alpha_star_rad = math.radians(alpha_star)
+    beta_star_rad = math.radians(beta_star)
+    gamma_star_rad = math.radians(gamma_star)
+
     # Convert HKL to qx, qy, qz
-    # Note: Original code uses angles in degrees with trig functions - preserving exact behavior
     H = float(H)
     K = float(K)
     L = float(L)
     
-    qx = (H * a_star + K * b_star * math.cos(gamma_star) 
-          + L * c_star * math.cos(beta_star))
-    qy = (K * b_star * math.sin(gamma_star) 
-          + L * c_star * (math.cos(alpha_star) - math.cos(beta_star) * math.cos(gamma_star)) 
-          / math.sin(gamma_star))
+    qx = (H * a_star + K * b_star * math.cos(gamma_star_rad) 
+          + L * c_star * math.cos(beta_star_rad))
+    qy = (K * b_star * math.sin(gamma_star_rad) 
+          + L * c_star * (math.cos(alpha_star_rad) - math.cos(beta_star_rad) * math.cos(gamma_star_rad)) 
+          / math.sin(gamma_star_rad))
     qz = (L * c_star * math.sqrt(
-        1 - math.cos(alpha_star)**2 - math.cos(beta_star)**2 
-        - math.cos(gamma_star)**2 
-        + 2 * math.cos(alpha_star) * math.cos(beta_star) * math.cos(gamma_star)
-    ) / math.sin(gamma_star))
+        1 - math.cos(alpha_star_rad)**2 - math.cos(beta_star_rad)**2 
+        - math.cos(gamma_star_rad)**2 
+        + 2 * math.cos(alpha_star_rad) * math.cos(beta_star_rad) * math.cos(gamma_star_rad)
+    ) / math.sin(gamma_star_rad))
 
     return qx, qy, qz
 
@@ -116,19 +120,24 @@ def update_HKL_from_Q_direct(qx, qy, qz, a, b, c, alpha, beta, gamma):
         / (math.sin(alpha_rad) * math.sin(beta_rad))
     ))
 
+    # Convert reciprocal lattice angles to radians for trigonometric calculations
+    alpha_star_rad = math.radians(alpha_star)
+    beta_star_rad = math.radians(beta_star)
+    gamma_star_rad = math.radians(gamma_star)
+
     # Calculate H, K, L from qx, qy, qz (inverse transformation)
     # WARNING: Circular dependency bug from original code preserved here
-    H = ((qx - K * b_star * math.cos(gamma_star) 
-          - L * c_star * math.cos(beta_star)) / a_star)
-    K = ((qy - L * c_star * (math.cos(alpha_star) 
-                              - math.cos(beta_star) * math.cos(gamma_star)) 
-          / math.sin(gamma_star)) 
-         / (b_star * math.sin(gamma_star)))
-    L = (qz * math.sin(gamma_star) 
+    H = ((qx - K * b_star * math.cos(gamma_star_rad) 
+          - L * c_star * math.cos(beta_star_rad)) / a_star)
+    K = ((qy - L * c_star * (math.cos(alpha_star_rad) 
+                              - math.cos(beta_star_rad) * math.cos(gamma_star_rad)) 
+          / math.sin(gamma_star_rad)) 
+         / (b_star * math.sin(gamma_star_rad)))
+    L = (qz * math.sin(gamma_star_rad) 
          / (c_star * math.sqrt(
-             1 - math.cos(alpha_star)**2 - math.cos(beta_star)**2 
-             - math.cos(gamma_star)**2 
-             + 2 * math.cos(alpha_star) * math.cos(beta_star) * math.cos(gamma_star)
+             1 - math.cos(alpha_star_rad)**2 - math.cos(beta_star_rad)**2 
+             - math.cos(gamma_star_rad)**2 
+             + 2 * math.cos(alpha_star_rad) * math.cos(beta_star_rad) * math.cos(gamma_star_rad)
          )))
 
     return H, K, L
