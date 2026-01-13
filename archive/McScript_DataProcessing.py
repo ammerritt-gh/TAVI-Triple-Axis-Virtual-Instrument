@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import math
 import tkinter as tk
 from tkinter import ttk
-from McScript_Functions import parse_scan_steps, extract_variable_values
+from archive.McScript_Functions import parse_scan_steps, extract_variable_values
 
 def read_2Ddetector_file(data_folder): # TODO: Check this 2D-detector reading function
     for folder_name in os.listdir(data_folder):
