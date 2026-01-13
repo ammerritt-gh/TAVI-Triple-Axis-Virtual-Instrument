@@ -8,9 +8,10 @@ from PySide6.QtCore import Qt
 class InstrumentDock(QDockWidget):
     """Dock widget for instrument configuration."""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, instrument_config=None):
         super().__init__("Instrument Configuration", parent)
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.instrument_config = instrument_config
         
         # Create main widget and layout
         main_widget = QWidget()
@@ -88,11 +89,21 @@ class InstrumentDock(QDockWidget):
         crystals_group.setLayout(crystals_layout)
         
         self.monocris_combo = QComboBox()
-        self.monocris_combo.addItems(["PG[002]", "PG[002] test"])
+        # Populate from config if available
+        if self.instrument_config:
+            mono_crystals = self.instrument_config.get_monochromator_names()
+            self.monocris_combo.addItems(mono_crystals)
+        else:
+            self.monocris_combo.addItems(["PG[002]", "PG[002] test"])
         crystals_layout.addRow("Monochromator crystal:", self.monocris_combo)
         
         self.anacris_combo = QComboBox()
-        self.anacris_combo.addItems(["PG[002]"])
+        # Populate from config if available
+        if self.instrument_config:
+            ana_crystals = self.instrument_config.get_analyzer_names()
+            self.anacris_combo.addItems(ana_crystals)
+        else:
+            self.anacris_combo.addItems(["PG[002]"])
         crystals_layout.addRow("Analyzer crystal:", self.anacris_combo)
         
         main_layout.addWidget(crystals_group)
@@ -103,11 +114,18 @@ class InstrumentDock(QDockWidget):
         optics_group.setLayout(optics_layout)
         
         self.nmo_combo = QComboBox()
-        self.nmo_combo.addItems(["None", "Vertical", "Horizontal", "Both"])
+        # Populate from config if available
+        if self.instrument_config:
+            self.nmo_combo.addItems(self.instrument_config.nmo_options)
+        else:
+            self.nmo_combo.addItems(["None", "Vertical", "Horizontal", "Both"])
         optics_layout.addRow("NMO installed:", self.nmo_combo)
         
-        self.v_selector_check = QCheckBox("Enable velocity selector (Use in Ki fixed mode)")
-        optics_layout.addRow(self.v_selector_check)
+        # Show velocity selector option only if available in config
+        self.v_selector_check = None
+        if not self.instrument_config or self.instrument_config.v_selector_available:
+            self.v_selector_check = QCheckBox("Enable velocity selector (Use in Ki fixed mode)")
+            optics_layout.addRow(self.v_selector_check)
         
         main_layout.addWidget(optics_group)
         
@@ -143,7 +161,12 @@ class InstrumentDock(QDockWidget):
         # Alpha 1
         collimations_layout.addWidget(QLabel("α1 (src-mono):"), 0, 0)
         self.alpha_1_combo = QComboBox()
-        self.alpha_1_combo.addItems(["0", "20", "40", "60"])
+        # Populate from config if available
+        if self.instrument_config:
+            alpha_1_items = [str(x) for x in self.instrument_config.alpha_1_options]
+            self.alpha_1_combo.addItems(alpha_1_items)
+        else:
+            self.alpha_1_combo.addItems(["0", "20", "40", "60"])
         self.alpha_1_combo.setMaximumWidth(80)
         collimations_layout.addWidget(self.alpha_1_combo, 0, 1)
         collimations_layout.addWidget(QLabel("'"), 0, 2)
@@ -154,19 +177,35 @@ class InstrumentDock(QDockWidget):
         alpha_2_layout = QHBoxLayout()
         alpha_2_layout.setContentsMargins(0, 0, 0, 0)
         alpha_2_layout.setSpacing(3)
-        self.alpha_2_30_check = QCheckBox("30'")
-        self.alpha_2_40_check = QCheckBox("40'")
-        self.alpha_2_60_check = QCheckBox("60'")
-        alpha_2_layout.addWidget(self.alpha_2_30_check)
-        alpha_2_layout.addWidget(self.alpha_2_40_check)
-        alpha_2_layout.addWidget(self.alpha_2_60_check)
+        
+        # Store alpha_2 checkboxes dynamically
+        self.alpha_2_checks = {}
+        alpha_2_options = getattr(self.instrument_config, 'alpha_2_options', [30, 40, 60]) if self.instrument_config else [30, 40, 60]
+        for option in alpha_2_options:
+            checkbox = QCheckBox(f"{option}'")
+            self.alpha_2_checks[option] = checkbox
+            alpha_2_layout.addWidget(checkbox)
+        
+        # For backward compatibility, keep old attribute names if they exist
+        if 30 in self.alpha_2_checks:
+            self.alpha_2_30_check = self.alpha_2_checks[30]
+        if 40 in self.alpha_2_checks:
+            self.alpha_2_40_check = self.alpha_2_checks[40]
+        if 60 in self.alpha_2_checks:
+            self.alpha_2_60_check = self.alpha_2_checks[60]
+        
         alpha_2_widget.setLayout(alpha_2_layout)
         collimations_layout.addWidget(alpha_2_widget, 1, 1, 1, 2)
         
         # Alpha 3
         collimations_layout.addWidget(QLabel("α3 (smp-ana):"), 2, 0)
         self.alpha_3_combo = QComboBox()
-        self.alpha_3_combo.addItems(["0", "10", "20", "30", "45", "60"])
+        # Populate from config if available
+        if self.instrument_config:
+            alpha_3_items = [str(x) for x in self.instrument_config.alpha_3_options]
+            self.alpha_3_combo.addItems(alpha_3_items)
+        else:
+            self.alpha_3_combo.addItems(["0", "10", "20", "30", "45", "60"])
         self.alpha_3_combo.setMaximumWidth(80)
         collimations_layout.addWidget(self.alpha_3_combo, 2, 1)
         collimations_layout.addWidget(QLabel("'"), 2, 2)
@@ -174,7 +213,12 @@ class InstrumentDock(QDockWidget):
         # Alpha 4
         collimations_layout.addWidget(QLabel("α4 (ana-det):"), 3, 0)
         self.alpha_4_combo = QComboBox()
-        self.alpha_4_combo.addItems(["0", "10", "20", "30", "45", "60"])
+        # Populate from config if available
+        if self.instrument_config:
+            alpha_4_items = [str(x) for x in self.instrument_config.alpha_4_options]
+            self.alpha_4_combo.addItems(alpha_4_items)
+        else:
+            self.alpha_4_combo.addItems(["0", "10", "20", "30", "45", "60"])
         self.alpha_4_combo.setMaximumWidth(80)
         collimations_layout.addWidget(self.alpha_4_combo, 3, 1)
         collimations_layout.addWidget(QLabel("'"), 3, 2)

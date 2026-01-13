@@ -1,0 +1,87 @@
+{
+  "name": "PUMA",
+  "description": "PUMA Triple-Axis Spectrometer at MLZ",
+  
+  "arm_lengths": {
+    "L1": 2.150,
+    "L2": 2.290,
+    "L3": 0.880,
+    "L4": 0.750
+  },
+  
+  "monochromator_crystals": {
+    "PG[002]": {
+      "dm": 3.355,
+      "slabwidth": 0.0202,
+      "slabheight": 0.018,
+      "ncolumns": 13,
+      "nrows": 9,
+      "gap": 0.0005,
+      "mosaic": 35,
+      "r0": 1.0
+    },
+    "PG[002] test": {
+      "comment": "Test crystal with intentionally different d-spacing for testing purposes",
+      "dm": 2.355,
+      "slabwidth": 0.0202,
+      "slabheight": 0.018,
+      "ncolumns": 13,
+      "nrows": 9,
+      "gap": 0.0005,
+      "mosaic": 35,
+      "r0": 1.0
+    }
+  },
+  
+  "analyzer_crystals": {
+    "PG[002]": {
+      "da": 3.355,
+      "slabwidth": 0.01,
+      "slabheight": 0.0295,
+      "ncolumns": 21,
+      "nrows": 5,
+      "gap": 0.0005,
+      "mosaic": 35,
+      "r0": 1.0
+    }
+  },
+  
+  "focusing": {
+    "rhm_range": [0, 10],
+    "rvm_range": [0, 10],
+    "rha_range": [0, 10],
+    "rva_value": 0.8,
+    "rhm_min": 2.0,
+    "rvm_min": 0.5,
+    "rha_min": 2.0
+  },
+  
+  "experimental_modules": {
+    "nmo_options": ["None", "Vertical", "Horizontal", "Both"],
+    "v_selector_available": true
+  },
+  
+  "collimators": {
+    "alpha_1_options": [0, 20, 40, 60],
+    "alpha_2_options": [30, 40, 60],
+    "alpha_3_options": [0, 10, 20, 30, 45, 60],
+    "alpha_4_options": [0, 10, 20, 30, 45, 60]
+  },
+  
+  "slits": {
+    "hbl_hgap": 0.078,
+    "hbl_vgap": 0.150,
+    "vbl_hgap": 0.088,
+    "pbl_hgap": 0.100,
+    "pbl_vgap": 0.100,
+    "pbl_hoffset": 0.0,
+    "pbl_voffset": 0.0,
+    "dbl_hgap": 0.050,
+    "hbl_hgap_range": [0.01, 0.20],
+    "hbl_vgap_range": [0.01, 0.30],
+    "vbl_hgap_range": [0.01, 0.20],
+    "pbl_hgap_range": [0.01, 0.20],
+    "pbl_vgap_range": [0.01, 0.20],
+    "dbl_hgap_range": [0.01, 0.10]
+  }
+}
