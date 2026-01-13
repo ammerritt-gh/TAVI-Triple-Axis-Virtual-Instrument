@@ -345,7 +345,7 @@ class TAVIController(QObject):
     def get_gui_values(self):
         """Helper to get all GUI values as a dict."""
         try:
-            return {
+            values = {
                 'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'psi': float(self.window.instrument_dock.psi_edit.text() or 0),
