@@ -287,7 +287,7 @@ class TAVIController(QObject):
     @Slot(str)
     def update_remaining_time(self, remaining_time):
         """Update remaining time label."""
-        self.window.output_dock.remaining_time_label.setText(f"Remaining Time: {remaining_time}")
+        self.window.output_dock.remaining_time_label.setText(f"Estimated Remaining Time: {remaining_time}")
     
     @Slot(float, float)
     def update_counts_entry(self, max_counts, total_counts):
@@ -1156,18 +1156,6 @@ class TAVIController(QObject):
             ])
 
             scan_folder = os.path.join(data_folder, "_".join(scan_description))
-            
-            # Log scan parameters before running
-            if scan_mode == "momentum":
-                message = (f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
-                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
-            elif scan_mode == "rlu":
-                message = (f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
-                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
-            else:
-                message = (f"Scan parameters - A1: {A1}, A2: {A2}, A3: {A3}, A4: {A4}\n"
-                           f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}")
-            self.message_printed.emit(message)
             
             # Log scan parameters before running
             if scan_mode == "momentum":
