@@ -11,24 +11,51 @@ from gui.docks.scan_controls_dock import ScanControlsDock
 from gui.docks.diagnostics_dock import DiagnosticsDock
 from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
+from gui.docks.slit_controls_dock import SlitControlsDock
 
 
 class TAVIMainWindow(QMainWindow):
     """Main window for TAVI application with 3-panel layout."""
     
-    def __init__(self):
+    def __init__(self, instrument_config=None):
         super().__init__()
         self.setWindowTitle("TAVI - Triple-Axis Virtual Instrument")
         self.setGeometry(100, 100, 1500, 900)
+        self.instrument_config = instrument_config
         
         # Create dock widgets
-        self.instrument_dock = InstrumentDock(self)
+        self.instrument_dock = InstrumentDock(self, instrument_config)
+        self.slit_controls_dock = SlitControlsDock(self)
         self.reciprocal_space_dock = ReciprocalSpaceDock(self)
         self.sample_dock = SampleDock(self)
         self.scan_controls_dock = ScanControlsDock(self)
         self.diagnostics_dock = DiagnosticsDock(self)
         self.output_dock = OutputDock(self)
         self.data_control_dock = DataControlDock(self)
+        
+        # Initialize slit controls from config if available
+        if instrument_config:
+            slit_values = {
+                'hbl_hgap': instrument_config.hbl_hgap,
+                'hbl_vgap': instrument_config.hbl_vgap,
+                'vbl_hgap': instrument_config.vbl_hgap,
+                'pbl_hgap': instrument_config.pbl_hgap,
+                'pbl_vgap': instrument_config.pbl_vgap,
+                'pbl_hoffset': instrument_config.pbl_hoffset,
+                'pbl_voffset': instrument_config.pbl_voffset,
+                'dbl_hgap': instrument_config.dbl_hgap,
+            }
+            self.slit_controls_dock.set_slit_values(slit_values)
+            
+            slit_ranges = {
+                'hbl_hgap_range': instrument_config.hbl_hgap_range,
+                'hbl_vgap_range': instrument_config.hbl_vgap_range,
+                'vbl_hgap_range': instrument_config.vbl_hgap_range,
+                'pbl_hgap_range': instrument_config.pbl_hgap_range,
+                'pbl_vgap_range': instrument_config.pbl_vgap_range,
+                'dbl_hgap_range': instrument_config.dbl_hgap_range,
+            }
+            self.slit_controls_dock.set_slit_ranges(slit_ranges)
         
         # Create central widget with 3-panel layout
         central_widget = QWidget()
@@ -43,10 +70,17 @@ class TAVIMainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
         
-        # Left panel: Instrument configuration (with scroll)
+        # Left panel: Instrument configuration and Slit controls (with scroll)
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(5)
+        left_layout.addWidget(self.instrument_dock.widget())
+        left_layout.addWidget(self.slit_controls_dock.widget())
+        
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
-        left_scroll.setWidget(self.instrument_dock.widget())
+        left_scroll.setWidget(left_widget)
         left_scroll.setFrameShape(QScrollArea.NoFrame)
         splitter.addWidget(left_scroll)
         

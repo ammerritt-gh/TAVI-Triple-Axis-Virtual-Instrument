@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import existing backend modules
 from instruments.PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
+from instruments.instrument_config import load_instrument_config, InstrumentConfig
 
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file, 
@@ -48,10 +49,26 @@ class TAVIController(QObject):
         'H': 8, 'K': 9, 'L': 10
     }
     
-    def __init__(self, window):
+    def __init__(self, window, instrument_config=None):
         super().__init__()
         self.window = window
+        self.instrument_config = instrument_config
         self.PUMA = PUMA_Instrument()
+        
+        # Apply instrument configuration to PUMA if available
+        if instrument_config:
+            self.PUMA.L1 = instrument_config.L1
+            self.PUMA.L2 = instrument_config.L2
+            self.PUMA.L3 = instrument_config.L3
+            self.PUMA.L4 = instrument_config.L4
+            self.PUMA.hbl_hgap = instrument_config.hbl_hgap
+            self.PUMA.hbl_vgap = instrument_config.hbl_vgap
+            self.PUMA.vbl_hgap = instrument_config.vbl_hgap
+            self.PUMA.pbl_hgap = instrument_config.pbl_hgap
+            self.PUMA.pbl_vgap = instrument_config.pbl_vgap
+            self.PUMA.pbl_hoffset = instrument_config.pbl_hoffset
+            self.PUMA.pbl_voffset = instrument_config.pbl_voffset
+            self.PUMA.dbl_hgap = instrument_config.dbl_hgap
         
         # Global variables
         self.stop_flag = False
@@ -299,14 +316,30 @@ class TAVIController(QObject):
         """Update monochromator crystal information."""
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
-        self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
+        
+        # Try to get from instrument config first
+        if self.instrument_config:
+            self.monocris_info = self.instrument_config.get_monochromator_info(monocris)
+            if not self.monocris_info:
+                # Fall back to PUMA function if not in config
+                self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
+        else:
+            self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
         self.update_all_variables()
     
     def update_anacris_info(self):
         """Update analyzer crystal information."""
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
-        _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
+        
+        # Try to get from instrument config first
+        if self.instrument_config:
+            self.anacris_info = self.instrument_config.get_analyzer_info(anacris)
+            if not self.anacris_info:
+                # Fall back to PUMA function if not in config
+                _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
+        else:
+            _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
         self.update_all_variables()
     
     def get_gui_values(self):
@@ -342,11 +375,11 @@ class TAVIController(QObject):
                 'rvmfac': float(self.window.instrument_dock.rvmfac_edit.text() or 1),
                 'rhafac': float(self.window.instrument_dock.rhafac_edit.text() or 1),
                 'NMO_installed': self.window.instrument_dock.nmo_combo.currentText(),
-                'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked(),
+                'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked() if self.window.instrument_dock.v_selector_check else False,
                 'alpha_1': self.window.instrument_dock.alpha_1_combo.currentText(),
-                'alpha_2_30': self.window.instrument_dock.alpha_2_30_check.isChecked(),
-                'alpha_2_40': self.window.instrument_dock.alpha_2_40_check.isChecked(),
-                'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
+                'alpha_2_30': self.window.instrument_dock.alpha_2_30_check.isChecked() if hasattr(self.window.instrument_dock, 'alpha_2_30_check') else False,
+                'alpha_2_40': self.window.instrument_dock.alpha_2_40_check.isChecked() if hasattr(self.window.instrument_dock, 'alpha_2_40_check') else False,
+                'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked() if hasattr(self.window.instrument_dock, 'alpha_2_60_check') else False,
                 'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
                 'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
                 'number_neutrons': int(self.window.scan_controls_dock.number_neutrons_edit.text() or 1000000),
@@ -355,6 +388,9 @@ class TAVIController(QObject):
                 'diagnostic_mode': self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
                 'auto_display': self.window.scan_controls_dock.auto_display_check.isChecked(),
             }
+            # Add slit values
+            values.update(self.window.slit_controls_dock.get_slit_values())
+            return values
         except ValueError:
             return None
     
@@ -751,7 +787,7 @@ class TAVIController(QObject):
             "number_neutrons_var": self.window.scan_controls_dock.number_neutrons_edit.text(),
             "K_fixed_var": self.window.scan_controls_dock.K_fixed_combo.currentText(),
             "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
-            "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
+            "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked() if self.window.instrument_dock.v_selector_check else False,
             "rhmfac_var": self.window.instrument_dock.rhmfac_edit.text(),
             "rvmfac_var": self.window.instrument_dock.rvmfac_edit.text(),
             "rhafac_var": self.window.instrument_dock.rhafac_edit.text(),
@@ -763,9 +799,9 @@ class TAVIController(QObject):
             "monocris_var": self.window.instrument_dock.monocris_combo.currentText(),
             "anacris_var": self.window.instrument_dock.anacris_combo.currentText(),
             "alpha_1_var": self.window.instrument_dock.alpha_1_combo.currentText(),
-            "alpha_2_30_var": self.window.instrument_dock.alpha_2_30_check.isChecked(),
-            "alpha_2_40_var": self.window.instrument_dock.alpha_2_40_check.isChecked(),
-            "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked(),
+            "alpha_2_30_var": self.window.instrument_dock.alpha_2_30_check.isChecked() if hasattr(self.window.instrument_dock, 'alpha_2_30_check') else False,
+            "alpha_2_40_var": self.window.instrument_dock.alpha_2_40_check.isChecked() if hasattr(self.window.instrument_dock, 'alpha_2_40_check') else False,
+            "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked() if hasattr(self.window.instrument_dock, 'alpha_2_60_check') else False,
             "alpha_3_var": self.window.instrument_dock.alpha_3_combo.currentText(),
             "alpha_4_var": self.window.instrument_dock.alpha_4_combo.currentText(),
             "diagnostic_mode_var": self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
@@ -781,7 +817,8 @@ class TAVIController(QObject):
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
-            "current_sample_settings": self.current_sample_settings
+            "current_sample_settings": self.current_sample_settings,
+            "slit_values": self.window.slit_controls_dock.get_slit_values()
         }
         with open("parameters.json", "w") as file:
             json.dump(parameters, file)
@@ -805,14 +842,18 @@ class TAVIController(QObject):
                 self.window.instrument_dock.Ei_edit.setText(str(parameters.get("Ei_var", "14.7")))
                 self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
                 self.window.instrument_dock.nmo_combo.setCurrentText(parameters.get("NMO_installed_var", "None"))
-                self.window.instrument_dock.v_selector_check.setChecked(parameters.get("V_selector_installed_var", False))
+                if self.window.instrument_dock.v_selector_check:
+                    self.window.instrument_dock.v_selector_check.setChecked(parameters.get("V_selector_installed_var", False))
                 self.window.instrument_dock.rhmfac_edit.setText(str(parameters.get("rhmfac_var", 1)))
                 self.window.instrument_dock.rvmfac_edit.setText(str(parameters.get("rvmfac_var", 1)))
                 self.window.instrument_dock.rhafac_edit.setText(str(parameters.get("rhafac_var", 1)))
                 self.window.instrument_dock.alpha_1_combo.setCurrentText(str(parameters.get("alpha_1_var", 40)))
-                self.window.instrument_dock.alpha_2_30_check.setChecked(parameters.get("alpha_2_30_var", False))
-                self.window.instrument_dock.alpha_2_40_check.setChecked(parameters.get("alpha_2_40_var", True))
-                self.window.instrument_dock.alpha_2_60_check.setChecked(parameters.get("alpha_2_60_var", False))
+                if hasattr(self.window.instrument_dock, 'alpha_2_30_check'):
+                    self.window.instrument_dock.alpha_2_30_check.setChecked(parameters.get("alpha_2_30_var", False))
+                if hasattr(self.window.instrument_dock, 'alpha_2_40_check'):
+                    self.window.instrument_dock.alpha_2_40_check.setChecked(parameters.get("alpha_2_40_var", True))
+                if hasattr(self.window.instrument_dock, 'alpha_2_60_check'):
+                    self.window.instrument_dock.alpha_2_60_check.setChecked(parameters.get("alpha_2_60_var", False))
                 self.window.instrument_dock.alpha_3_combo.setCurrentText(str(parameters.get("alpha_3_var", 30)))
                 self.window.instrument_dock.alpha_4_combo.setCurrentText(str(parameters.get("alpha_4_var", 30)))
                 
@@ -841,6 +882,11 @@ class TAVIController(QObject):
                 
                 self.diagnostic_settings = parameters.get("diagnostic_settings", {})
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
+                
+                # Load slit values if available
+                slit_values = parameters.get("slit_values", {})
+                if slit_values:
+                    self.window.slit_controls_dock.set_slit_values(slit_values)
                 
             self.print_to_message_center("Parameters loaded successfully")
         else:
@@ -948,6 +994,16 @@ class TAVIController(QObject):
         ]
         self.PUMA.alpha_3 = float(vals['alpha_3'])
         self.PUMA.alpha_4 = float(vals['alpha_4'])
+        
+        # Update slit values
+        self.PUMA.hbl_hgap = vals['hbl_hgap']
+        self.PUMA.hbl_vgap = vals['hbl_vgap']
+        self.PUMA.vbl_hgap = vals['vbl_hgap']
+        self.PUMA.pbl_hgap = vals['pbl_hgap']
+        self.PUMA.pbl_vgap = vals['pbl_vgap']
+        self.PUMA.pbl_hoffset = vals['pbl_hoffset']
+        self.PUMA.pbl_voffset = vals['pbl_voffset']
+        self.PUMA.dbl_hgap = vals['dbl_hgap']
         
         number_neutrons = vals['number_neutrons']
         scan_command1 = vals['scan_command1']
@@ -1373,8 +1429,21 @@ class TAVIController(QObject):
 def main():
     """Main entry point for the application."""
     app = QApplication(sys.argv)
-    window = TAVIMainWindow()
-    controller = TAVIController(window)
+    
+    # Load instrument configuration (default to PUMA)
+    instruments_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instruments')
+    config_file = os.path.join(instruments_dir, 'PUMA_config.json')
+    
+    instrument_config = None
+    try:
+        instrument_config = load_instrument_config(config_file)
+        print(f"Loaded instrument configuration: {instrument_config.name}")
+    except Exception as e:
+        print(f"Warning: Could not load instrument configuration: {e}")
+        print("Using default configuration.")
+    
+    window = TAVIMainWindow(instrument_config)
+    controller = TAVIController(window, instrument_config)
     window.show()
     sys.exit(app.exec())
 
