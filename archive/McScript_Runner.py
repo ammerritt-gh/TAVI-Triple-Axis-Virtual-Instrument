@@ -12,10 +12,10 @@ import sys
 import time
 import datetime
 from instruments.PUMA_instrument_definition import PUMA_Instrument, run_PUMA_instrument, validate_angles, mono_ana_crystals_setup
-from McScript_DataProcessing import read_1Ddetector_file, write_parameters_to_file, simple_plot_scan_commands, display_existing_data
-from McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing
-from McScript_Sample_Definition import update_Q_from_HKL, update_HKL_from_Q, update_HKL_from_Q_direct, update_Q_from_HKL_direct
-import PUMA_GUI_calculations as GUIcalc
+from archive.McScript_DataProcessing import read_1Ddetector_file, write_parameters_to_file, simple_plot_scan_commands, display_existing_data
+from archive.McScript_Functions import parse_scan_steps, letter_encode_number, incremented_path_writing
+from archive.McScript_Sample_Definition import update_Q_from_HKL, update_HKL_from_Q, update_HKL_from_Q_direct, update_Q_from_HKL_direct
+import archive.PUMA_GUI_calculations as GUIcalc
 import threading
 import queue
 import json
