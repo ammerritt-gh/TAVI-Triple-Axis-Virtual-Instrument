@@ -66,17 +66,28 @@ def write_parameters_to_file(target_folder, parameters):
     """
     file_path = os.path.join(target_folder, "scan_parameters.txt")
     os.makedirs(target_folder, exist_ok=True)
-    
-    with open(file_path, 'w') as file:
-        # Support both dict and objects with __dict__
-        if isinstance(parameters, dict):
-            items = parameters.items()
-        elif hasattr(parameters, "__dict__"):
-            items = parameters.__dict__.items()
-        else:
-            # Fallback: try to iterate public attributes
-            items = ((k, getattr(parameters, k)) for k in dir(parameters) if not k.startswith('_'))
 
+    # Determine all items before opening/truncating the file so that any
+    # exception (e.g. from getattr in the fallback) does not leave a
+    # partially written parameters file.
+    if isinstance(parameters, dict):
+        items = list(parameters.items())
+    elif hasattr(parameters, "__dict__"):
+        items = list(parameters.__dict__.items())
+    else:
+        # Fallback: try to iterate public attributes eagerly
+        items = []
+        for k in dir(parameters):
+            if k.startswith('_'):
+                continue
+            try:
+                value = getattr(parameters, k)
+            except AttributeError:
+                # Skip attributes that cannot be accessed
+                continue
+            items.append((k, value))
+
+    with open(file_path, 'w') as file:
         for key, value in items:
             file.write(f"{key}: {value}\n")
 
@@ -102,10 +113,12 @@ def read_parameters_from_file(target_folder):
                 else:
                     key = key_value[0]
                     value = None
-                    
-                if value is not None and value.replace('.', '', 1).replace('-', '', 1).isdigit():
-                    value = float(value)
-                    
+
+                if value is not None:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        pass
                 parameters[key] = value
     except FileNotFoundError:
         print(f"Warning: Parameter file not found at {file_path}")

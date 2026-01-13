@@ -95,8 +95,13 @@ def parse_scan_steps(input_string):
     end_value = float(words[2])
     step_size = float(words[3])
 
-    # Create an array using numpy
-    array_values = np.arange(start_value, end_value + step_size, step_size)
+    # Create an array of scan values.
+    # Compute the number of steps in a way that is robust to floating-point
+    # rounding, then generate the sequence using np.linspace instead of
+    # np.arange with a floating step.
+    num_steps = int(np.floor((end_value - start_value) / step_size + 0.5)) + 1
+    last_value = start_value + step_size * (num_steps - 1)
+    array_values = np.linspace(start_value, last_value, num_steps)
     array_values = np.round(array_values, 3)
 
     return variable_name, array_values
