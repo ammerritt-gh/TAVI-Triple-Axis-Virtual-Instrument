@@ -1,4 +1,3 @@
-from cgi import test
 from tracemalloc import take_snapshot
 import mcstasscript as ms
 import math
@@ -403,6 +402,17 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         source.energy_distribution=2
         source.E0 = 25
         source.divergence_distribution=0
+
+        # source = instrument.add_component("source", "Source_Maxwell_3")
+        # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
+        # source.yheight=0.1 #PUMA.hbl_vgap*1.5
+        # source.focus_xw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
+        # source.focus_yh=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
+        # source.T1 = 300
+        # source.I1 = 1e12
+        # source.Lmin = 0.01
+        # source.Lmax = 20
+        # source.dist = 1
 
         hblende = instrument.add_component("hblende", "Slit", AT=[0, 0, 0.0001], RELATIVE="origin")
         hblende.xwidth=PUMA.hbl_hgap
