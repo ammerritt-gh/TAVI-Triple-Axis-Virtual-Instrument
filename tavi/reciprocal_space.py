@@ -4,6 +4,7 @@ This module contains functions for converting between HKL reciprocal lattice
 coordinates and Cartesian Q-space coordinates.
 """
 import math
+import numpy as np
 
 
 def update_Q_from_HKL_direct(H, K, L, a, b, c, alpha, beta, gamma):
@@ -82,13 +83,6 @@ def update_HKL_from_Q_direct(qx, qy, qz, a, b, c, alpha, beta, gamma):
     Returns:
         tuple: (H, K, L) Miller indices
         
-    Warning: This function contains a bug carried over from the original archive code.
-    The equations use undefined variables K and L on the right-hand side, which will
-    cause a NameError when executed. This is preserved exactly as it existed in the
-    archive for backward compatibility. A proper implementation would require matrix
-    inversion or solving the system of equations correctly.
-    
-    TODO: Fix the circular dependency by implementing proper inverse transformation.
     """
     # Convert lattice parameters to radians
     alpha_rad = math.radians(alpha)
@@ -100,6 +94,8 @@ def update_HKL_from_Q_direct(qx, qy, qz, a, b, c, alpha, beta, gamma):
         1 - math.cos(alpha_rad)**2 - math.cos(beta_rad)**2 - math.cos(gamma_rad)**2 
         + 2 * math.cos(alpha_rad) * math.cos(beta_rad) * math.cos(gamma_rad)
     )
+    if V <= 0:
+        raise ValueError("Invalid lattice parameters: unit cell volume is zero or negative.")
     
     # Calculate reciprocal lattice parameters
     a_star = 2 * math.pi * b * c * math.sin(alpha_rad) / V
@@ -125,19 +121,29 @@ def update_HKL_from_Q_direct(qx, qy, qz, a, b, c, alpha, beta, gamma):
     beta_star_rad = math.radians(beta_star)
     gamma_star_rad = math.radians(gamma_star)
 
-    # Calculate H, K, L from qx, qy, qz (inverse transformation)
-    # WARNING: Circular dependency bug from original code preserved here
-    H = ((qx - K * b_star * math.cos(gamma_star_rad) 
-          - L * c_star * math.cos(beta_star_rad)) / a_star)
-    K = ((qy - L * c_star * (math.cos(alpha_star_rad) 
-                              - math.cos(beta_star_rad) * math.cos(gamma_star_rad)) 
-          / math.sin(gamma_star_rad)) 
-         / (b_star * math.sin(gamma_star_rad)))
-    L = (qz * math.sin(gamma_star_rad) 
-         / (c_star * math.sqrt(
-             1 - math.cos(alpha_star_rad)**2 - math.cos(beta_star_rad)**2 
-             - math.cos(gamma_star_rad)**2 
-             + 2 * math.cos(alpha_star_rad) * math.cos(beta_star_rad) * math.cos(gamma_star_rad)
-         )))
+    # Assemble reciprocal lattice matrix and solve for HKL
+    b1 = np.array([a_star, 0.0, 0.0])
+    b2 = np.array([
+        b_star * math.cos(gamma_star_rad),
+        b_star * math.sin(gamma_star_rad),
+        0.0
+    ])
+    b3 = np.array([
+        c_star * math.cos(beta_star_rad),
+        c_star * (math.cos(alpha_star_rad) - math.cos(beta_star_rad) * math.cos(gamma_star_rad)) / math.sin(gamma_star_rad),
+        c_star * math.sqrt(
+            1 - math.cos(alpha_star_rad)**2 - math.cos(beta_star_rad)**2
+            - math.cos(gamma_star_rad)**2
+            + 2 * math.cos(alpha_star_rad) * math.cos(beta_star_rad) * math.cos(gamma_star_rad)
+        ) / math.sin(gamma_star_rad)
+    ])
+
+    reciprocal_matrix = np.array([b1, b2, b3]).T
+    q_vector = np.array([qx, qy, qz], dtype=float)
+
+    try:
+        H, K, L = np.linalg.solve(reciprocal_matrix, q_vector)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("Reciprocal lattice matrix is singular; check lattice parameters.") from exc
 
     return H, K, L

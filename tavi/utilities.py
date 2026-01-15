@@ -45,36 +45,47 @@ def extract_variable_values(folder_name):
     Returns:
         tuple: (qx, qy, qz, deltaE, rhm, rvm, rha, rva, H, K, L) or None if no match
     """
-    # Define the pattern to match variable values
-    pattern = (r"qx_([\dmp]+)_qy_([\dmp]+)_qz_([\dmp]+)_dE_([\dmp]+)"
-               r"(?:_rhm_([\dmp]+)_rvm_([\dmp]+)_rha_([\dmp]+)_rva_([\dmp]+))?"
-               r"(?:_H_([\dmp]+)_K_([\dmp]+)_L_([\dmp]+))?")
-    
-    # Use regular expression to find matches
-    match = re.match(pattern, folder_name)
-    
-    # Extract variable values if there's a match
+    # Pattern 1: qx/qy/qz first (legacy format)
+    pattern_q = (r"qx_([\dmp]+)_qy_([\dmp]+)_qz_([\dmp]+)_dE_([\dmp]+)"
+                 r"(?:_rhm_([\dmp]+)_rvm_([\dmp]+)_rha_([\dmp]+)_rva_([\dmp]+))?"
+                 r"(?:_H_([\dmp]+)_K_([\dmp]+)_L_([\dmp]+))?")
+
+    match = re.match(pattern_q, folder_name)
     if match:
         qx = letter_decode_string(match.group(1))
         qy = letter_decode_string(match.group(2))
         qz = letter_decode_string(match.group(3))
         deltaE = letter_decode_string(match.group(4))
-        
-        # Check if optional variables are present
+
         rhm = letter_decode_string(match.group(5)) if match.group(5) else None
         rvm = letter_decode_string(match.group(6)) if match.group(6) else None
         rha = letter_decode_string(match.group(7)) if match.group(7) else None
         rva = letter_decode_string(match.group(8)) if match.group(8) else None
 
-        # Check if HKL variables are present
         H = letter_decode_string(match.group(9)) if match.group(9) else None
         K = letter_decode_string(match.group(10)) if match.group(10) else None
         L = letter_decode_string(match.group(11)) if match.group(11) else None
-        
-        # Return all extracted values as a tuple
+
         return qx, qy, qz, deltaE, rhm, rvm, rha, rva, H, K, L
-    else:
-        return None
+
+    # Pattern 2: H/K/L first (rlu scan format)
+    pattern_hkl = (r"H_([\dmp]+)_K_([\dmp]+)_L_([\dmp]+)_dE_([\dmp]+)"
+                   r"(?:_rhm_([\dmp]+)_rvm_([\dmp]+)_rha_([\dmp]+)_rva_([\dmp]+))?")
+    match = re.match(pattern_hkl, folder_name)
+    if match:
+        H = letter_decode_string(match.group(1))
+        K = letter_decode_string(match.group(2))
+        L = letter_decode_string(match.group(3))
+        deltaE = letter_decode_string(match.group(4))
+
+        rhm = letter_decode_string(match.group(5)) if match.group(5) else None
+        rvm = letter_decode_string(match.group(6)) if match.group(6) else None
+        rha = letter_decode_string(match.group(7)) if match.group(7) else None
+        rva = letter_decode_string(match.group(8)) if match.group(8) else None
+
+        return None, None, None, deltaE, rhm, rvm, rha, rva, H, K, L
+
+    return None
 
 
 def parse_scan_steps(input_string):
