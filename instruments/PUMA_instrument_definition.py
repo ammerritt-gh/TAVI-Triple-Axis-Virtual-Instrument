@@ -108,13 +108,15 @@ class TAS_Instrument:
         self.A4 = A4 # ana two-theta angle
         self.saz = saz # sample z-angle
         # Sample orientation angles (user-controllable)
-        self.omega = 0  # sample rotation about vertical (Y) axis - scannable
-        self.chi = 0    # sample tilt about horizontal (X) axis - scannable
-        self.psi_offset = 0  # sample offset correction (Y axis) - typically set once
+        self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
+        self.chi = 0    # out-of-plane sample tilt (about horizontal X axis) - actual instrument angle
+        # Sample alignment offsets (user-controllable)
+        self.psi = 0    # omega alignment offset (in-plane) - set during alignment
+        self.kappa = 0  # chi alignment offset (out-of-plane) - set during alignment
         # Hidden misalignment angles (for training exercises)
-        self.mis_omega = 0  # hidden misalignment rotation about Y
-        self.mis_chi = 0    # hidden misalignment tilt about X
-        self.mis_psi = 0    # hidden misalignment rotation about Y (additional)
+        self.mis_omega = 0  # hidden misalignment in omega (in-plane)
+        self.mis_chi = 0    # hidden misalignment in chi (out-of-plane)
+        self.mis_psi = 0    # hidden misalignment in psi (additional in-plane)
         self.K_fixed = "Ki_fixed" # working in Ki- or Kf-fixed mode
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
@@ -128,7 +130,7 @@ class TAS_Instrument:
             else:
                 print(f"Parameter '{key}' not found.")
     
-    def set_angles(self, A1=None, A2=None, A3=None, A4=None, omega=None, chi=None, psi_offset=None):
+    def set_angles(self, A1=None, A2=None, A3=None, A4=None, omega=None, chi=None, kappa=None, psi=None):
         """Method to set A1-A4 angles and sample orientation angles."""
         if A1 is not None:
             self.A1 = A1
@@ -142,8 +144,10 @@ class TAS_Instrument:
             self.omega = omega
         if chi is not None:
             self.chi = chi
-        if psi_offset is not None:
-            self.psi_offset = psi_offset
+        if kappa is not None:
+            self.kappa = kappa
+        if psi is not None:
+            self.psi = psi
     
     def set_misalignment(self, mis_omega=None, mis_chi=None, mis_psi=None):
         """Method to set hidden misalignment angles for training exercises."""
@@ -155,12 +159,18 @@ class TAS_Instrument:
             self.mis_psi = mis_psi
     
     def get_effective_sample_angles(self):
-        """Return effective sample angles combining user angles and hidden misalignment."""
-        # Effective Y-axis rotation: calculated A3 + omega + psi_offset + misalignments
-        effective_omega = self.omega + self.psi_offset + self.mis_omega + self.mis_psi
-        # Effective X-axis tilt: chi + misalignment
-        effective_chi = self.chi + self.mis_chi
-        return effective_omega, effective_chi
+        """Return effective sample angle OFFSETS (not including calculated A3).
+        
+        The total in-plane rotation is: A3 (calculated) + psi (offset) + misalignments
+        The total out-of-plane tilt is: chi + kappa (offset) + misalignments
+        
+        Note: omega is NOT added here because omega IS the calculated A3 (just displayed).
+        """
+        # Effective in-plane OFFSET: psi offset + misalignments (added to calculated A3)
+        effective_omega_offset = self.psi + self.mis_omega + self.mis_psi
+        # Effective out-of-plane tilt: chi + kappa offset + misalignment
+        effective_chi = self.chi + self.kappa + self.mis_chi
+        return effective_omega_offset, effective_chi
             
     def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
         """Method to set rhm, rvm, rha, and rva values."""
@@ -709,13 +719,15 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
 
         # Sample orientation hierarchy:
         # 1. sample_gonio: applies calculated saz (out-of-plane tilt from qz)
-        # 2. sample_chi_arm: applies user chi + hidden chi misalignment
-        # 3. sample_cradle: applies A3 (calculated sample theta) + omega + psi_offset + hidden omega/psi misalignment
+        # 2. sample_chi_arm: applies user chi + kappa (chi offset) + hidden chi misalignment
+        # 3. sample_cradle: applies A3 (calculated sample theta) + omega + psi (omega offset) + hidden omega/psi misalignment
         effective_omega, effective_chi = PUMA.get_effective_sample_angles()
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=[PUMA.saz,0,0], RELATIVE="sample_arm")
-        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=[effective_chi,0,0], RELATIVE="sample_gonio")
-        # A3_param is the calculated sample theta; effective_omega adds user omega, psi_offset, and misalignments
-        instrument.add_parameter("omega_offset", value=effective_omega, comment="Combined omega + psi_offset + misalignment")
+        # chi_offset parameter: chi + kappa (chi offset) + hidden chi misalignment
+        instrument.add_parameter("chi_offset", value=effective_chi, comment="Combined chi + kappa (offset) + misalignment")
+        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_offset",0,0], RELATIVE="sample_gonio")
+        # omega_offset parameter: omega + psi (omega offset) + hidden omega/psi misalignment
+        instrument.add_parameter("omega_offset", value=effective_omega, comment="Combined omega + psi (offset) + misalignment")
         instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset",0], RELATIVE="sample_chi_arm")
 
 
@@ -991,6 +1003,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=10, force_compile=False)
             print("Not compiled")
         if not error_flag_array: #check if the error flags are empty
+            # Get current effective sample angles (includes omega, chi, psi, kappa, and misalignments)
+            effective_omega, effective_chi = PUMA.get_effective_sample_angles()
             instrument.set_parameters(
                 A1_param=PUMA.A1,
                 A2_param=PUMA.A2,
@@ -999,7 +1013,9 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
                 rhm_param=PUMA.rhm,
                 rvm_param=PUMA.rvm,
                 rha_param=PUMA.rha,
-                rva_param=PUMA.rva
+                rva_param=PUMA.rva,
+                omega_offset=effective_omega,
+                chi_offset=effective_chi
             )
             data = instrument.backengine()
         else:
