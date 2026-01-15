@@ -739,12 +739,58 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # Al_rod_phonon.focus_ah = 15 #vertical focus region in degrees, 15
         # Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
 
-        Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        Al_Bragg.reflections = '"Al.lau"'
-        Al_Bragg.radius = 20e-3
-        Al_Bragg.yheight = 30e-3
-        Al_Bragg.mosaic = 5
-        Al_Bragg.sigma_inc = -1
+        # Add sample component according to selected sample_key on PUMA (if set)
+        sample_key = getattr(PUMA, 'sample_key', None)
+        if sample_key == "Al_rod_phonon":
+            Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
+            Al_rod_phonon.radius = 20e-3
+            Al_rod_phonon.yheight = 30e-3
+            Al_rod_phonon.sigma_abs = 0*0.231
+            Al_rod_phonon.sigma_inc = 0*0.0082
+            Al_rod_phonon.a = 4.05
+            Al_rod_phonon.b = 345
+            Al_rod_phonon.M = 27
+            Al_rod_phonon.c = 4
+            Al_rod_phonon.DW = 1
+            Al_rod_phonon.T = 200
+            Al_rod_phonon.target_index = +2
+            Al_rod_phonon.focus_aw = 5
+            Al_rod_phonon.focus_ah = 15
+            try:
+                Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;")
+            except Exception:
+                pass
+        elif sample_key == "Al_rod_phonon_optic":
+            Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
+            Al_rod_phonon_optic.radius = 2e-2
+            Al_rod_phonon_optic.yheight = 3e-2
+            Al_rod_phonon_optic.sigma_abs = 0
+            Al_rod_phonon_optic.sigma_inc = 0
+            Al_rod_phonon_optic.a = 3.14
+            Al_rod_phonon_optic.b = 345
+            Al_rod_phonon_optic.M = 27
+            Al_rod_phonon_optic.c = 4
+            Al_rod_phonon_optic.DW = 1
+            Al_rod_phonon_optic.T = 300
+            Al_rod_phonon_optic.zero_energy = 4
+            Al_rod_phonon_optic.maximum_energy = 1
+            Al_rod_phonon_optic.target_index = +2
+            Al_rod_phonon_optic.focus_aw = 5
+            Al_rod_phonon_optic.focus_ah = 15
+            try:
+                Al_rod_phonon_optic.append_EXTEND("if(!SCATTERED) ABSORB;")
+            except Exception:
+                pass
+        elif sample_key == "Al_bragg":
+            Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
+            Al_Bragg.reflections = '"Al.lau"'
+            Al_Bragg.radius = 20e-3
+            Al_Bragg.yheight = 30e-3
+            Al_Bragg.mosaic = 5
+            Al_Bragg.sigma_inc = -1
+        else:
+            # No sample selected; proceed without adding a sample component.
+            print("Warning: No sample selected for instrument run; running without sample component.")
 
 
         # powder_test = instrument.add_component("powder_test", "Powder1", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
@@ -759,22 +805,6 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # powder_test.F2 = 100
         # powder_test.DW = 1
         # powder_test.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-
-        # Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # Al_rod_phonon.radius = 2e-2
-        # Al_rod_phonon.yheight = 3e-2
-        # Al_rod_phonon.sigma_abs = 0 #0.23 for Al
-        # Al_rod_phonon.sigma_inc = 0 #0.0082 for Al
-        # Al_rod_phonon.a = 3.14 #4.05 for Al
-        # Al_rod_phonon.b = 345 #3.45 for Al
-        # Al_rod_phonon.M = 27 #atomic mass of Al
-        # Al_rod_phonon.c = 4
-        # Al_rod_phonon.DW = 1
-        # Al_rod_phonon.T = 300
-        #Al_rod_phonon.target_index = +2	#relative index of component to focus at, e.g. next is +1	#set for the analyzer collimator
-        #Al_rod_phonon.focus_aw = 5 #horizontal focus region in degrees, 5
-        #Al_rod_phonon.focus_ah = 15 #vertical focus region in degrees, 15
-        #Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
         
         # Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
         # Al_rod_phonon_optic.radius = 2e-2

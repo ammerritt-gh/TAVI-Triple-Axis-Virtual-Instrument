@@ -1,7 +1,7 @@
 """Sample Control Dock for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
-                                QGridLayout, QFormLayout, QCheckBox)
+                                QGridLayout, QFormLayout, QCheckBox, QComboBox)
 from PySide6.QtCore import Qt
 
 
@@ -21,6 +21,23 @@ class SampleDock(QDockWidget):
         # Sample frame mode checkbox
         self.sample_frame_mode_check = QCheckBox("Sample frame mode")
         main_layout.addWidget(self.sample_frame_mode_check)
+
+        # Sample selection combo box
+        sample_select_layout = QHBoxLayout()
+        sample_select_layout.setContentsMargins(0, 0, 0, 0)
+        sample_select_layout.setSpacing(6)
+        sample_select_layout.addWidget(QLabel("Sample:"))
+        self.sample_combo = QComboBox()
+        # Mapping of displayed label -> internal sample key used in instrument definitions
+        self.sample_map = {
+            "None": None,
+            "AL: acoustic phonon": "Al_rod_phonon",
+            "Al: optic phonon": "Al_rod_phonon_optic",
+            "AL: Bragg": "Al_bragg",
+        }
+        self.sample_combo.addItems(list(self.sample_map.keys()))
+        sample_select_layout.addWidget(self.sample_combo)
+        main_layout.addLayout(sample_select_layout)
         
         # Lattice parameters section
         lattice_group = QGroupBox("Lattice Parameters")
@@ -69,6 +86,11 @@ class SampleDock(QDockWidget):
         # Sample configuration button
         self.config_sample_button = QPushButton("Sample Configuration")
         main_layout.addWidget(self.config_sample_button)
+
+    def get_selected_sample_key(self):
+        """Return the internal sample key for the currently selected sample."""
+        label = self.sample_combo.currentText()
+        return self.sample_map.get(label, None)
         
         # Add stretch at the end to push everything up
         main_layout.addStretch()
