@@ -107,6 +107,14 @@ class TAS_Instrument:
         self.A3 = A3 # sample theta angle (psi)
         self.A4 = A4 # ana two-theta angle
         self.saz = saz # sample z-angle
+        # Sample orientation angles (user-controllable)
+        self.omega = 0  # sample rotation about vertical (Y) axis - scannable
+        self.chi = 0    # sample tilt about horizontal (X) axis - scannable
+        self.psi_offset = 0  # sample offset correction (Y axis) - typically set once
+        # Hidden misalignment angles (for training exercises)
+        self.mis_omega = 0  # hidden misalignment rotation about Y
+        self.mis_chi = 0    # hidden misalignment tilt about X
+        self.mis_psi = 0    # hidden misalignment rotation about Y (additional)
         self.K_fixed = "Ki_fixed" # working in Ki- or Kf-fixed mode
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
@@ -120,8 +128,8 @@ class TAS_Instrument:
             else:
                 print(f"Parameter '{key}' not found.")
     
-    def set_angles(self, A1=None, A2=None, A3=None, A4=None):
-        """Method to set A1-A4 angles."""
+    def set_angles(self, A1=None, A2=None, A3=None, A4=None, omega=None, chi=None, psi_offset=None):
+        """Method to set A1-A4 angles and sample orientation angles."""
         if A1 is not None:
             self.A1 = A1
         if A2 is not None:
@@ -130,6 +138,29 @@ class TAS_Instrument:
             self.A3 = A3
         if A4 is not None:
             self.A4 = A4
+        if omega is not None:
+            self.omega = omega
+        if chi is not None:
+            self.chi = chi
+        if psi_offset is not None:
+            self.psi_offset = psi_offset
+    
+    def set_misalignment(self, mis_omega=None, mis_chi=None, mis_psi=None):
+        """Method to set hidden misalignment angles for training exercises."""
+        if mis_omega is not None:
+            self.mis_omega = mis_omega
+        if mis_chi is not None:
+            self.mis_chi = mis_chi
+        if mis_psi is not None:
+            self.mis_psi = mis_psi
+    
+    def get_effective_sample_angles(self):
+        """Return effective sample angles combining user angles and hidden misalignment."""
+        # Effective Y-axis rotation: calculated A3 + omega + psi_offset + misalignments
+        effective_omega = self.omega + self.psi_offset + self.mis_omega + self.mis_psi
+        # Effective X-axis tilt: chi + misalignment
+        effective_chi = self.chi + self.mis_chi
+        return effective_omega, effective_chi
             
     def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
         """Method to set rhm, rvm, rha, and rva values."""
@@ -676,8 +707,16 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             sample_Emonitor.Emax = 30
             sample_Emonitor.restore_neutron = 1
 
+        # Sample orientation hierarchy:
+        # 1. sample_gonio: applies calculated saz (out-of-plane tilt from qz)
+        # 2. sample_chi_arm: applies user chi + hidden chi misalignment
+        # 3. sample_cradle: applies A3 (calculated sample theta) + omega + psi_offset + hidden omega/psi misalignment
+        effective_omega, effective_chi = PUMA.get_effective_sample_angles()
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=[PUMA.saz,0,0], RELATIVE="sample_arm")
-        instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param",0], RELATIVE="sample_gonio")
+        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=[effective_chi,0,0], RELATIVE="sample_gonio")
+        # A3_param is the calculated sample theta; effective_omega adds user omega, psi_offset, and misalignments
+        instrument.add_parameter("omega_offset", value=effective_omega, comment="Combined omega + psi_offset + misalignment")
+        instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset",0], RELATIVE="sample_chi_arm")
 
 
         

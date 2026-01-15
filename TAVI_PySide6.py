@@ -18,7 +18,7 @@ from instruments.PUMA_instrument_definition import PUMA_Instrument, run_PUMA_ins
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file, 
                                    simple_plot_scan_commands, display_existing_data,
                                    read_parameters_from_file)
-from tavi.utilities import parse_scan_steps, letter_encode_number, incremented_path_writing, extract_variable_values
+from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 
 # Import GUI
@@ -41,13 +41,6 @@ class TAVIController(QObject):
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
     plot_requested = Signal(str, str, str)  # data_folder, scan_command1, scan_command2
-    
-    # Variable index mapping for scan parameters (shared constant)
-    VARIABLE_INDEX_MAP = {
-        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-        'H': 8, 'K': 9, 'L': 10
-    }
     
     def __init__(self, window):
         super().__init__()
@@ -94,22 +87,32 @@ class TAVIController(QObject):
     
     def connect_signals(self):
         """Connect all GUI signals to controller methods."""
-        # Scan control buttons
-        self.window.scan_controls_dock.run_button.clicked.connect(self.run_simulation_thread)
-        self.window.scan_controls_dock.stop_button.clicked.connect(self.stop_simulation)
-        self.window.scan_controls_dock.quit_button.clicked.connect(self.quit_application)
-        self.window.scan_controls_dock.validation_button.clicked.connect(self.open_validation_window)
+        # Simulation control buttons (moved to right panel)
+        self.window.simulation_control_dock.run_button.clicked.connect(self.run_simulation_thread)
+        self.window.simulation_control_dock.stop_button.clicked.connect(self.stop_simulation)
+        self.window.simulation_control_dock.quit_button.clicked.connect(self.quit_application)
+        self.window.simulation_control_dock.validation_button.clicked.connect(self.open_validation_window)
         
-        # Parameter buttons
-        self.window.scan_controls_dock.save_button.clicked.connect(self.save_parameters)
-        self.window.scan_controls_dock.load_button.clicked.connect(self.load_parameters)
-        self.window.scan_controls_dock.defaults_button.clicked.connect(self.set_default_parameters)
+        # Parameter buttons (moved to right panel)
+        self.window.simulation_control_dock.save_button.clicked.connect(self.save_parameters)
+        self.window.simulation_control_dock.load_button.clicked.connect(self.load_parameters)
+        self.window.simulation_control_dock.defaults_button.clicked.connect(self.set_default_parameters)
         
         # Diagnostics button
         self.window.diagnostics_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
         
         # Sample configuration button
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
+        
+        # Sample orientation controls
+        self.window.sample_dock.omega_edit.editingFinished.connect(self.on_sample_orientation_changed)
+        self.window.sample_dock.chi_edit.editingFinished.connect(self.on_sample_orientation_changed)
+        self.window.sample_dock.psi_offset_edit.editingFinished.connect(self.on_sample_orientation_changed)
+        
+        # Misalignment training dock
+        self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
+        self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
+        self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
         
         # Data control buttons
         self.window.data_control_dock.save_browse_button.clicked.connect(
@@ -240,6 +243,9 @@ class TAVIController(QObject):
             self.window.sample_dock.lattice_alpha_edit,
             self.window.sample_dock.lattice_beta_edit,
             self.window.sample_dock.lattice_gamma_edit,
+            self.window.sample_dock.omega_edit,
+            self.window.sample_dock.chi_edit,
+            self.window.sample_dock.psi_offset_edit,
         ])
         
         # Scan controls dock
@@ -331,8 +337,8 @@ class TAVIController(QObject):
     @Slot(float, float)
     def update_counts_entry(self, max_counts, total_counts):
         """Update counts display."""
-        self.window.scan_controls_dock.max_counts_label.setText(str(int(max_counts)))
-        self.window.scan_controls_dock.total_counts_label.setText(str(int(total_counts)))
+        self.window.simulation_control_dock.max_counts_label.setText(str(int(max_counts)))
+        self.window.simulation_control_dock.total_counts_label.setText(str(int(total_counts)))
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
@@ -375,6 +381,9 @@ class TAVIController(QObject):
                 'lattice_alpha': float(self.window.sample_dock.lattice_alpha_edit.text() or 90),
                 'lattice_beta': float(self.window.sample_dock.lattice_beta_edit.text() or 90),
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
+                'omega': float(self.window.sample_dock.omega_edit.text() or 0),
+                'chi': float(self.window.sample_dock.chi_edit.text() or 0),
+                'psi_offset': float(self.window.sample_dock.psi_offset_edit.text() or 0),
                 'monocris': self.window.instrument_dock.monocris_combo.currentText(),
                 'anacris': self.window.instrument_dock.anacris_combo.currentText(),
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
@@ -392,7 +401,7 @@ class TAVIController(QObject):
                 'scan_command1': self.window.scan_controls_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.scan_controls_dock.scan_command_2_edit.text(),
                 'diagnostic_mode': self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
-                'auto_display': self.window.scan_controls_dock.auto_display_check.isChecked(),
+                'auto_display': self.window.simulation_control_dock.auto_display_check.isChecked(),
             }
         except ValueError:
             return None
@@ -1026,7 +1035,41 @@ class TAVIController(QObject):
         monocris = self.window.instrument_dock.monocris_combo.currentText()
         anacris = self.window.instrument_dock.anacris_combo.currentText()
         _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_variables()    
+        self.update_all_variables()
+    
+    def on_sample_orientation_changed(self):
+        """Handle changes to sample orientation angles (omega, chi, psi_offset)."""
+        try:
+            omega = float(self.window.sample_dock.omega_edit.text() or 0)
+            chi = float(self.window.sample_dock.chi_edit.text() or 0)
+            psi_offset = float(self.window.sample_dock.psi_offset_edit.text() or 0)
+            self.PUMA.set_angles(omega=omega, chi=chi, psi_offset=psi_offset)
+            self.print_to_message_center(f"Sample orientation updated: ω={omega}°, χ={chi}°, ψ offset={psi_offset}°")
+        except ValueError:
+            self.print_to_message_center("Invalid sample orientation angle value")
+    
+    def on_load_misalignment_hash(self):
+        """Handle loading misalignment from hash - apply hidden values to instrument."""
+        if self.window.misalignment_dock.has_misalignment():
+            mis_omega, mis_chi, mis_psi = self.window.misalignment_dock.get_loaded_misalignment()
+            self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi, mis_psi=mis_psi)
+            self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
+    
+    def on_clear_misalignment(self):
+        """Handle clearing misalignment - reset hidden values on instrument."""
+        self.PUMA.set_misalignment(mis_omega=0, mis_chi=0, mis_psi=0)
+        self.print_to_message_center("Misalignment cleared")
+    
+    def on_check_alignment(self):
+        """Check user's alignment against hidden misalignment and update feedback."""
+        try:
+            omega = float(self.window.sample_dock.omega_edit.text() or 0)
+            chi = float(self.window.sample_dock.chi_edit.text() or 0)
+            psi_offset = float(self.window.sample_dock.psi_offset_edit.text() or 0)
+            self.window.misalignment_dock.update_alignment_feedback(omega, chi, psi_offset)
+        except ValueError:
+            self.print_to_message_center("Invalid sample orientation values for alignment check")
+    
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
         # TODO: Implement diagnostics configuration dialog
@@ -1114,6 +1157,10 @@ class TAVIController(QObject):
             "qx_var": self.window.reciprocal_space_dock.qx_edit.text(),
             "qy_var": self.window.reciprocal_space_dock.qy_edit.text(),
             "qz_var": self.window.reciprocal_space_dock.qz_edit.text(),
+            # HKL values
+            "H_var": self.window.reciprocal_space_dock.H_edit.text(),
+            "K_var": self.window.reciprocal_space_dock.K_edit.text(),
+            "L_var": self.window.reciprocal_space_dock.L_edit.text(),
             "deltaE_var": self.window.reciprocal_space_dock.deltaE_edit.text(),
             "monocris_var": self.window.instrument_dock.monocris_combo.currentText(),
             "anacris_var": self.window.instrument_dock.anacris_combo.currentText(),
@@ -1130,10 +1177,16 @@ class TAVIController(QObject):
             "lattice_alpha_var": self.window.sample_dock.lattice_alpha_edit.text(),
             "lattice_beta_var": self.window.sample_dock.lattice_beta_edit.text(),
             "lattice_gamma_var": self.window.sample_dock.lattice_gamma_edit.text(),
+            # Sample orientation angles
+            "omega_var": self.window.sample_dock.omega_edit.text(),
+            "chi_var": self.window.sample_dock.chi_edit.text(),
+            "psi_offset_var": self.window.sample_dock.psi_offset_edit.text(),
+            # Misalignment hash only (keeps values hidden from students)
+            "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
             "scan_command_var1": self.window.scan_controls_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.scan_controls_dock.scan_command_2_edit.text(),
-            "auto_display_var": self.window.scan_controls_dock.auto_display_check.isChecked(),
+            "auto_display_var": self.window.simulation_control_dock.auto_display_check.isChecked(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
@@ -1186,6 +1239,10 @@ class TAVIController(QObject):
                 self.window.reciprocal_space_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
                 self.window.reciprocal_space_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
                 self.window.reciprocal_space_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
+                # HKL values
+                self.window.reciprocal_space_dock.H_edit.setText(str(parameters.get("H_var", 1)))
+                self.window.reciprocal_space_dock.K_edit.setText(str(parameters.get("K_var", 0)))
+                self.window.reciprocal_space_dock.L_edit.setText(str(parameters.get("L_var", 0)))
                 self.window.reciprocal_space_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 5.25)))
                 self.window.diagnostics_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
                 self.window.scan_controls_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", ""))
@@ -1197,6 +1254,25 @@ class TAVIController(QObject):
                 self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", 90)))
                 self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", 90)))
                 self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", 90)))
+                # Sample orientation angles
+                self.window.sample_dock.omega_edit.setText(str(parameters.get("omega_var", 0)))
+                self.window.sample_dock.chi_edit.setText(str(parameters.get("chi_var", 0)))
+                self.window.sample_dock.psi_offset_edit.setText(str(parameters.get("psi_offset_var", 0)))
+                # Misalignment hash - decode and apply without revealing values
+                mis_hash = str(parameters.get("misalignment_hash_var", ""))
+                if mis_hash and mis_hash != "None" and mis_hash != "":
+                    self.window.misalignment_dock.load_hash_edit.setText(mis_hash)
+                    # Decode and apply the misalignment to the instrument
+                    try:
+                        from gui.docks.misalignment_dock import decode_misalignment
+                        omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
+                        self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
+                        # Update student display with "???" to indicate active but hidden
+                        self.window.misalignment_dock.student_omega_display.setText("???")
+                        self.window.misalignment_dock.student_chi_display.setText("???")
+                        self.window.misalignment_dock.student_psi_display.setText("???")
+                    except:
+                        pass
                 self.window.sample_dock.sample_frame_mode_check.setChecked(
                     parameters.get("sample_frame_mode_var", False)
                 )
@@ -1209,7 +1285,7 @@ class TAVIController(QObject):
                     pass
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
-                self.window.scan_controls_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
+                self.window.simulation_control_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
@@ -1255,6 +1331,10 @@ class TAVIController(QObject):
         self.window.reciprocal_space_dock.qx_edit.setText("2")
         self.window.reciprocal_space_dock.qy_edit.setText("0")
         self.window.reciprocal_space_dock.qz_edit.setText("0")
+        # Set HKL defaults (computed from Q and lattice)
+        self.window.reciprocal_space_dock.H_edit.setText("1")
+        self.window.reciprocal_space_dock.K_edit.setText("0")
+        self.window.reciprocal_space_dock.L_edit.setText("0")
         self.window.reciprocal_space_dock.deltaE_edit.setText("5.25")
         self.window.diagnostics_dock.diagnostic_mode_check.setChecked(True)
         
@@ -1264,10 +1344,14 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.setText("90")
         self.window.sample_dock.lattice_beta_edit.setText("90")
         self.window.sample_dock.lattice_gamma_edit.setText("90")
+        # Sample orientation defaults
+        self.window.sample_dock.omega_edit.setText("0")
+        self.window.sample_dock.chi_edit.setText("0")
+        self.window.sample_dock.psi_offset_edit.setText("0")
         self.window.sample_dock.sample_frame_mode_check.setChecked(False)
         self.window.scan_controls_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
         self.window.scan_controls_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
-        self.window.scan_controls_dock.auto_display_check.setChecked(True)
+        self.window.simulation_control_dock.auto_display_check.setChecked(True)
         
         # Set default folder paths
         folder_suggestion = os.path.join(self.output_directory, "initial_testing")
@@ -1378,25 +1462,39 @@ class TAVIController(QObject):
                     scan_mode = "rlu"
                 elif var_name_probe in ["A1", "A2", "A3", "A4"]:
                     scan_mode = "angle"
+                elif var_name_probe in ["omega", "chi"]:
+                    scan_mode = "orientation"
             except Exception:
                 pass
         
         # Mapping for scannable parameters
+        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-9: sample orientation
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
             'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
-            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7
+            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+            'omega': 8, 'chi': 9
         }
         
         # Initialize scan point template
-        scan_point_template = [0] * 8
+        # Extended to 10 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-9: omega/chi
+        scan_point_template = [0] * 10
         if scan_mode == "momentum":
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         elif scan_mode == "rlu":
             scan_point_template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
         elif scan_mode == "angle":
             scan_point_template[:4] = [0, 0, 0, 0]
+        elif scan_mode == "orientation":
+            # For orientation scans, use current Q values but scan omega/chi
+            scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
+        # Set default omega/chi from GUI
+        try:
+            scan_point_template[8] = float(self.window.sample_dock.omega_edit.text() or 0)
+            scan_point_template[9] = float(self.window.sample_dock.chi_edit.text() or 0)
+        except ValueError:
+            pass
         
         # Handle no scan commands
         if not scan_command1 and not scan_command2:
@@ -1506,11 +1604,22 @@ class TAVIController(QObject):
                 if not error_flags:
                     mtt, stt, sth, saz, att = angles_array
                     self.PUMA.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+            elif scan_mode == "orientation":
+                # Orientation scan: calculate angles from Q, then apply omega/chi from scan
+                qx, qy, qz, deltaE = scans[:4]
+                angles_array, error_flags = self.PUMA.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                if not error_flags:
+                    mtt, stt, sth, saz, att = angles_array
+                    self.PUMA.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
             else:  # Angle mode
                 A1, A2, A3, A4 = scans[:4]
                 self.PUMA.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
             
             rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
+            omega_scan, chi_scan = scans[8], scans[9]
             
             # Check if bending parameters are part of scan commands
             if 'rhm' not in [variable_name1, variable_name2]:
@@ -1522,41 +1631,17 @@ class TAVIController(QObject):
             if 'rva' not in [variable_name1, variable_name2]:
                 rva = self.PUMA.rva
             
+            # Check if orientation parameters are part of scan commands
+            if 'omega' in [variable_name1, variable_name2]:
+                self.PUMA.omega = omega_scan
+            if 'chi' in [variable_name1, variable_name2]:
+                self.PUMA.chi = chi_scan
+            
             # Update crystal bending
             self.PUMA.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
             
-            # Generate scan folder name (match McScript_Runner convention)
-            scan_description = []
-            if scan_mode == "momentum":
-                scan_description.extend([
-                    f"qx_{letter_encode_number(qx)}",
-                    f"qy_{letter_encode_number(qy)}",
-                    f"qz_{letter_encode_number(qz)}",
-                    f"dE_{letter_encode_number(deltaE)}",
-                ])
-            elif scan_mode == "rlu":
-                scan_description.extend([
-                    f"H_{letter_encode_number(H)}",
-                    f"K_{letter_encode_number(K)}",
-                    f"L_{letter_encode_number(L)}",
-                    f"dE_{letter_encode_number(deltaE)}",
-                ])
-            else:  # Angle mode
-                scan_description.extend([
-                    f"A1_{letter_encode_number(A1)}",
-                    f"A2_{letter_encode_number(A2)}",
-                    f"A3_{letter_encode_number(A3)}",
-                    f"A4_{letter_encode_number(A4)}",
-                ])
-
-            scan_description.extend([
-                f"rhm_{letter_encode_number(rhm)}",
-                f"rvm_{letter_encode_number(rvm)}",
-                f"rha_{letter_encode_number(rha)}",
-                f"rva_{letter_encode_number(rva)}",
-            ])
-
-            scan_folder = os.path.join(data_folder, "_".join(scan_description))
+            # Generate scan folder name (simple sequential format)
+            scan_folder = os.path.join(data_folder, f"scan_{i:04d}")
             
             # Log scan parameters before running
             if scan_mode == "momentum":
@@ -1565,8 +1650,12 @@ class TAVIController(QObject):
             elif scan_mode == "rlu":
                 message = (f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
                            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
-            else:
-                message = (f"Scan parameters - A1: {A1}, A2: {A2}, A3: {A3}, A4: {A4}\n"
+            elif scan_mode == "orientation":
+                message = (f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+                           f"omega: {omega_scan:.2f}, chi: {chi_scan:.2f}\n"
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+            else:  # angle mode
+                message = (f"Scan parameters - A1: {self.PUMA.A1}, A2: {self.PUMA.A2}, A3: {self.PUMA.A3}, A4: {self.PUMA.A4}\n"
                            f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}")
             self.message_printed.emit(message)
             
@@ -1586,8 +1675,34 @@ class TAVIController(QObject):
                 message = f"Scan failed, error flags: {error_flags}"
                 self.message_printed.emit(message)
             else:
-                # Write parameters to scan folder
-                write_parameters_to_file(scan_folder, vals)
+                # Build scan-specific parameters for this point
+                scan_point_params = {
+                    'scan_index': i,
+                    'qx': qx if scan_mode in ["momentum", "orientation"] else None,
+                    'qy': qy if scan_mode in ["momentum", "orientation"] else None,
+                    'qz': qz if scan_mode in ["momentum", "orientation"] else None,
+                    'deltaE': deltaE,
+                    'H': H if scan_mode == "rlu" else None,
+                    'K': K if scan_mode == "rlu" else None,
+                    'L': L if scan_mode == "rlu" else None,
+                    'mtt': mtt,
+                    'stt': stt,
+                    'sth': sth,
+                    'att': att,
+                    'rhm': rhm,
+                    'rvm': rvm,
+                    'rha': rha,
+                    'rva': rva,
+                    'omega': omega_scan,
+                    'chi': chi_scan,
+                    'scan_mode': scan_mode,
+                    'scan_command1': scan_command1,
+                    'scan_command2': scan_command2,
+                    'number_neutrons': number_neutrons,
+                }
+                # Merge with full GUI vals for completeness
+                full_params = {**vals, **scan_point_params}
+                write_parameters_to_file(scan_folder, full_params)
                 
                 # Read detector file to get counts
                 intensity, intensity_error, counts = read_1Ddetector_file(scan_folder)
@@ -1634,7 +1749,7 @@ class TAVIController(QObject):
     
     def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
         """Generate 1D plot and display it in a window."""
-        from tavi.data_processing import write_1D_scan
+        from tavi.data_processing import write_1D_scan, read_parameters_from_file
         
         variable_name, array_values = parse_scan_steps(scan_command1)
         variable_name = self.normalize_scan_variable(variable_name)
@@ -1644,14 +1759,15 @@ class TAVIController(QObject):
         for folder_name in os.listdir(data_folder):
             full_path = os.path.join(data_folder, folder_name)
             if os.path.isdir(full_path):
-                extracted_values = extract_variable_values(folder_name)
-                if extracted_values:
-                    variable_index = self.VARIABLE_INDEX_MAP.get(variable_name)
-                    
-                    if variable_index is not None:
-                        scan_params.append(extracted_values[variable_index])
+                # Read scan parameters from file instead of parsing folder name
+                point_params = read_parameters_from_file(full_path)
+                if point_params and variable_name in point_params:
+                    scan_value = point_params.get(variable_name)
+                    if scan_value is not None:
+                        scan_params.append(float(scan_value))
                         intensity, intensity_error, counts = read_1Ddetector_file(full_path)
-                        counts_array.append(counts)
+                        if counts is not None:
+                            counts_array.append(counts)
         
         if not scan_params:
             return
@@ -1707,7 +1823,7 @@ class TAVIController(QObject):
     
     def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
         """Generate 2D heatmap and display it in a window."""
-        from tavi.data_processing import write_2D_scan
+        from tavi.data_processing import write_2D_scan, read_parameters_from_file
         
         variable_name1, array_values1 = parse_scan_steps(scan_command1)
         variable_name2, array_values2 = parse_scan_steps(scan_command2)
@@ -1719,16 +1835,15 @@ class TAVIController(QObject):
         for folder_name in os.listdir(data_folder):
             full_path = os.path.join(data_folder, folder_name)
             if os.path.isdir(full_path):
-                extracted_values = extract_variable_values(folder_name)
-                if extracted_values:
-                    variable_index1 = self.VARIABLE_INDEX_MAP.get(variable_name1)
-                    variable_index2 = self.VARIABLE_INDEX_MAP.get(variable_name2)
-                    
-                    if variable_index1 is not None and variable_index2 is not None:
-                        x = extracted_values[variable_index1]
-                        y = extracted_values[variable_index2]
+                # Read scan parameters from file instead of parsing folder name
+                point_params = read_parameters_from_file(full_path)
+                if point_params and variable_name1 in point_params and variable_name2 in point_params:
+                    x = point_params.get(variable_name1)
+                    y = point_params.get(variable_name2)
+                    if x is not None and y is not None:
                         intensity, intensity_error, counts = read_1Ddetector_file(full_path)
-                        scan_data.append((x, y, counts))
+                        if counts is not None:
+                            scan_data.append((float(x), float(y), counts))
         
         if not scan_data:
             return

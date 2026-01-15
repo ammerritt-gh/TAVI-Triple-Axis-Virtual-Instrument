@@ -7,10 +7,11 @@ from PySide6.QtCore import Qt
 from gui.docks.instrument_dock import InstrumentDock
 from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
 from gui.docks.sample_dock import SampleDock
-from gui.docks.scan_controls_dock import ScanControlsDock
+from gui.docks.scan_controls_dock import ScanControlsDock, SimulationControlDock
 from gui.docks.diagnostics_dock import DiagnosticsDock
 from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
+from gui.docks.misalignment_dock import MisalignmentDock
 
 
 class TAVIMainWindow(QMainWindow):
@@ -19,14 +20,16 @@ class TAVIMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TAVI - Triple-Axis Virtual Instrument")
-        self.setGeometry(100, 100, 1500, 900)
+        self.setGeometry(100, 100, 1600, 900)
         
         # Create dock widgets
         self.instrument_dock = InstrumentDock(self)
         self.reciprocal_space_dock = ReciprocalSpaceDock(self)
         self.sample_dock = SampleDock(self)
         self.scan_controls_dock = ScanControlsDock(self)
+        self.misalignment_dock = MisalignmentDock(self)
         self.diagnostics_dock = DiagnosticsDock(self)
+        self.simulation_control_dock = SimulationControlDock(self)
         self.output_dock = OutputDock(self)
         self.data_control_dock = DataControlDock(self)
         
@@ -50,7 +53,7 @@ class TAVIMainWindow(QMainWindow):
         left_scroll.setFrameShape(QScrollArea.NoFrame)
         splitter.addWidget(left_scroll)
         
-        # Middle panel: Reciprocal space, Sample, Scan controls, Diagnostics (with scroll)
+        # Middle panel: Reciprocal space, Sample, Scan controls, Misalignment (with scroll)
         middle_widget = QWidget()
         middle_layout = QVBoxLayout(middle_widget)
         middle_layout.setContentsMargins(0, 0, 0, 0)
@@ -58,7 +61,7 @@ class TAVIMainWindow(QMainWindow):
         middle_layout.addWidget(self.reciprocal_space_dock.widget())
         middle_layout.addWidget(self.sample_dock.widget())
         middle_layout.addWidget(self.scan_controls_dock.widget())
-        middle_layout.addWidget(self.diagnostics_dock.widget())
+        middle_layout.addWidget(self.misalignment_dock.widget())
         middle_layout.addStretch()
         
         middle_scroll = QScrollArea()
@@ -67,11 +70,13 @@ class TAVIMainWindow(QMainWindow):
         middle_scroll.setFrameShape(QScrollArea.NoFrame)
         splitter.addWidget(middle_scroll)
         
-        # Right panel: Output and Data control
+        # Right panel: Simulation control, Diagnostics, Output and Data control
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(5)
+        right_layout.addWidget(self.simulation_control_dock.widget())
+        right_layout.addWidget(self.diagnostics_dock.widget())
         right_layout.addWidget(self.output_dock.widget())
         right_layout.addWidget(self.data_control_dock.widget())
         splitter.addWidget(right_widget)
