@@ -159,7 +159,7 @@ class MisalignmentDock(QDockWidget):
         teacher_layout.addWidget(self.mis_chi_edit, 0, 4)
         teacher_layout.addWidget(QLabel("°"), 0, 5)
         
-        teacher_layout.addWidget(QLabel("ψ mis:"), 1, 0)
+        teacher_layout.addWidget(QLabel("κ mis:"), 1, 0)
         self.mis_psi_edit = QLineEdit()
         self.mis_psi_edit.setMaximumWidth(60)
         self.mis_psi_edit.setPlaceholderText("0.0")
@@ -228,7 +228,7 @@ class MisalignmentDock(QDockWidget):
         check_layout.addWidget(self.check_alignment_button)
         
         # Alignment feedback labels
-        self.y_axis_feedback_label = QLabel("Y-axis (ω/ψ): ---")
+        self.y_axis_feedback_label = QLabel("Y-axis (ω): ---")
         check_layout.addWidget(self.y_axis_feedback_label)
         
         self.x_axis_feedback_label = QLabel("X-axis (χ): ---")
@@ -296,7 +296,7 @@ class MisalignmentDock(QDockWidget):
     
     def _reset_feedback(self):
         """Reset alignment feedback labels."""
-        self.y_axis_feedback_label.setText("Y-axis (ω/ψ): ---")
+        self.y_axis_feedback_label.setText("Y-axis (ω): ---")
         self.y_axis_feedback_label.setStyleSheet("")
         self.x_axis_feedback_label.setText("X-axis (χ): ---")
         self.x_axis_feedback_label.setStyleSheet("")
