@@ -6,6 +6,7 @@ import time
 import datetime
 import threading
 import queue
+import math
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
@@ -78,6 +79,9 @@ class TAVIController(QObject):
         # Update crystal info based on loaded parameters
         self.update_monocris_info()
         self.update_anacris_info()
+
+        # Update ideal focusing buttons after initial load
+        self.update_ideal_bending_buttons()
         
         # Set up visual feedback for all input fields
         self.setup_visual_feedback()
@@ -123,6 +127,28 @@ class TAVIController(QObject):
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
+
+        # Ideal focusing buttons
+        self.window.instrument_dock.rhm_ideal_button.clicked.connect(
+            lambda: self.apply_ideal_bending_value("rhm")
+        )
+        self.window.instrument_dock.rvm_ideal_button.clicked.connect(
+            lambda: self.apply_ideal_bending_value("rvm")
+        )
+        self.window.instrument_dock.rha_ideal_button.clicked.connect(
+            lambda: self.apply_ideal_bending_value("rha")
+        )
+
+        # User edits unlock ideal lock
+        self.window.instrument_dock.rhm_edit.textEdited.connect(
+            lambda: self.unlock_ideal_bending("rhm")
+        )
+        self.window.instrument_dock.rvm_edit.textEdited.connect(
+            lambda: self.unlock_ideal_bending("rvm")
+        )
+        self.window.instrument_dock.rha_edit.textEdited.connect(
+            lambda: self.unlock_ideal_bending("rha")
+        )
         
         # Connect field editing events for linked updates
         # Instrument angles - update energies and Q-space
@@ -182,9 +208,9 @@ class TAVIController(QObject):
             self.window.instrument_dock.Ei_edit,
             self.window.instrument_dock.Kf_edit,
             self.window.instrument_dock.Ef_edit,
-            self.window.instrument_dock.rhmfac_edit,
-            self.window.instrument_dock.rvmfac_edit,
-            self.window.instrument_dock.rhafac_edit,
+            self.window.instrument_dock.rhm_edit,
+            self.window.instrument_dock.rvm_edit,
+            self.window.instrument_dock.rha_edit,
         ])
         
         # Reciprocal space dock
@@ -343,9 +369,9 @@ class TAVIController(QObject):
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
                 'monocris': self.window.instrument_dock.monocris_combo.currentText(),
                 'anacris': self.window.instrument_dock.anacris_combo.currentText(),
-                'rhmfac': float(self.window.instrument_dock.rhmfac_edit.text() or 1),
-                'rvmfac': float(self.window.instrument_dock.rvmfac_edit.text() or 1),
-                'rhafac': float(self.window.instrument_dock.rhafac_edit.text() or 1),
+                'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
+                'rvm': float(self.window.instrument_dock.rvm_edit.text() or 0),
+                'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
                 'NMO_installed': self.window.instrument_dock.nmo_combo.currentText(),
                 'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked(),
                 'alpha_1': self.window.instrument_dock.alpha_1_combo.currentText(),
@@ -424,6 +450,203 @@ class TAVIController(QObject):
             pass
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
+
+    def _compute_ideal_bending_values(self, mtt=None, att=None):
+        """Compute ideal absolute bending radii from current angles."""
+        try:
+            if mtt is None:
+                mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
+            if att is None:
+                att = float(self.window.instrument_dock.att_edit.text() or 0)
+
+            denom_m = (1 / self.PUMA.L1 + 1 / self.PUMA.L2)
+            denom_a = (1 / self.PUMA.L3 + 1 / self.PUMA.L4)
+            sin_m = math.sin(math.radians(mtt))
+            sin_a = math.sin(math.radians(att))
+
+            if denom_m == 0 or denom_a == 0 or sin_m == 0 or sin_a == 0:
+                return None
+
+            rhm = 2 / sin_m / denom_m
+            rvm = 2 * sin_m / denom_m
+            rha = 2 / sin_a / denom_a
+            rva = 0.8
+
+            if rhm < 2.0:
+                rhm = 2.0
+            if rvm < 0.5:
+                rvm = 0.5
+            if rha < 2.0:
+                rha = 2.0
+
+            return {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+        except Exception:
+            return None
+
+    def update_ideal_bending_buttons(self):
+        """Update ideal bending button labels based on current angles."""
+        ideal = self._compute_ideal_bending_values()
+        if not ideal:
+            self.window.instrument_dock.rhm_ideal_button.setText("Ideal: --")
+            self.window.instrument_dock.rvm_ideal_button.setText("Ideal: --")
+            self.window.instrument_dock.rha_ideal_button.setText("Ideal: --")
+            return
+
+        rhm_locked = self.is_bending_locked("rhm")
+        rvm_locked = self.is_bending_locked("rvm")
+        rha_locked = self.is_bending_locked("rha")
+
+        self.window.instrument_dock.rhm_ideal_button.setText(
+            f"Ideal ({'L' if rhm_locked else 'U'}): {ideal['rhm']:.3f} m"
+        )
+        self.window.instrument_dock.rvm_ideal_button.setText(
+            f"Ideal ({'L' if rvm_locked else 'U'}): {ideal['rvm']:.3f} m"
+        )
+        self.window.instrument_dock.rha_ideal_button.setText(
+            f"Ideal ({'L' if rha_locked else 'U'}): {ideal['rha']:.3f} m"
+        )
+
+        # If locked to ideal, keep fields synced
+        if not self.updating:
+            self.updating = True
+            try:
+                if rhm_locked:
+                    self._update_locked_field_if_needed(self.window.instrument_dock.rhm_edit, ideal['rhm'])
+                if rvm_locked:
+                    self._update_locked_field_if_needed(self.window.instrument_dock.rvm_edit, ideal['rvm'])
+                if rha_locked:
+                    self._update_locked_field_if_needed(self.window.instrument_dock.rha_edit, ideal['rha'])
+            finally:
+                self.updating = False
+
+    def apply_ideal_bending_value(self, key):
+        """Apply the ideal bending value to the selected input field."""
+        ideal = self._compute_ideal_bending_values()
+        if not ideal:
+            return
+        if key == "rhm":
+            self.window.instrument_dock.rhm_ideal_button.setChecked(True)
+            self.window.instrument_dock.rhm_ideal_button.setEnabled(False)
+            self._set_and_confirm_field(self.window.instrument_dock.rhm_edit, ideal['rhm'])
+        elif key == "rvm":
+            self.window.instrument_dock.rvm_ideal_button.setChecked(True)
+            self.window.instrument_dock.rvm_ideal_button.setEnabled(False)
+            self._set_and_confirm_field(self.window.instrument_dock.rvm_edit, ideal['rvm'])
+        elif key == "rha":
+            self.window.instrument_dock.rha_ideal_button.setChecked(True)
+            self.window.instrument_dock.rha_ideal_button.setEnabled(False)
+            self._set_and_confirm_field(self.window.instrument_dock.rha_edit, ideal['rha'])
+        self.update_ideal_bending_buttons()
+
+    def apply_ideal_bending_values(self):
+        """Apply ideal bending values to all fields."""
+        ideal = self._compute_ideal_bending_values()
+        if not ideal:
+            return
+        self._set_and_confirm_field(self.window.instrument_dock.rhm_edit, ideal['rhm'])
+        self._set_and_confirm_field(self.window.instrument_dock.rvm_edit, ideal['rvm'])
+        self._set_and_confirm_field(self.window.instrument_dock.rha_edit, ideal['rha'])
+
+    def unlock_ideal_bending(self, key):
+        """Unlock ideal bending button when user edits the field."""
+        if key == "rhm":
+            self.window.instrument_dock.rhm_ideal_button.setChecked(False)
+            self.window.instrument_dock.rhm_ideal_button.setEnabled(True)
+        elif key == "rvm":
+            self.window.instrument_dock.rvm_ideal_button.setChecked(False)
+            self.window.instrument_dock.rvm_ideal_button.setEnabled(True)
+        elif key == "rha":
+            self.window.instrument_dock.rha_ideal_button.setChecked(False)
+            self.window.instrument_dock.rha_ideal_button.setEnabled(True)
+
+    def is_bending_locked(self, key):
+        """Return True if a bending field is locked to ideal."""
+        if key == "rhm":
+            return self.window.instrument_dock.rhm_ideal_button.isChecked() and not self.window.instrument_dock.rhm_ideal_button.isEnabled()
+        if key == "rvm":
+            return self.window.instrument_dock.rvm_ideal_button.isChecked() and not self.window.instrument_dock.rvm_ideal_button.isEnabled()
+        if key == "rha":
+            return self.window.instrument_dock.rha_ideal_button.isChecked() and not self.window.instrument_dock.rha_ideal_button.isEnabled()
+        return False
+
+    def _set_and_confirm_field(self, line_edit, value, force=False):
+        """Set a field programmatically and flash accepted state."""
+        if self.updating and not force:
+            return
+        try:
+            self.updating = True
+            formatted = self._format_field_value(value)
+            line_edit.setText(formatted)
+            line_edit.setProperty("original_value", line_edit.text())
+            self._flash_field_saved(line_edit)
+        except (ValueError, TypeError):
+            pass
+        finally:
+            self.updating = False
+
+    def _format_field_value(self, value, precision=4):
+        """Format numeric field value consistently."""
+        return f"{float(value):.{precision}f}".rstrip('0').rstrip('.')
+
+    def _update_locked_field_if_needed(self, line_edit, value):
+        """Update locked field only if the value changed."""
+        try:
+            formatted = self._format_field_value(value)
+        except (ValueError, TypeError):
+            return
+        if line_edit.text() == formatted:
+            return
+        self._set_and_confirm_field(line_edit, value, force=True)
+
+    def _flash_field_saved(self, line_edit):
+        """Flash field to indicate programmatic update accepted."""
+        original_style = line_edit.property("original_style") or ""
+        line_edit.setStyleSheet("QLineEdit { border: 2px solid #FF8C00; }")
+
+        def _bold_then_reset():
+            line_edit.setStyleSheet("QLineEdit { border: 3px solid #000000; }")
+            QTimer.singleShot(300, lambda: line_edit.setStyleSheet(original_style))
+
+        QTimer.singleShot(150, _bold_then_reset)
+
+    def _load_bending_parameters(self, parameters):
+        """Load bending parameters from file (supports old factor-based values)."""
+        ideal = self._compute_ideal_bending_values()
+
+        if any(key in parameters for key in ("rhm_var", "rvm_var", "rha_var")):
+            self.window.instrument_dock.rhm_edit.setText(str(parameters.get("rhm_var", "")))
+            self.window.instrument_dock.rvm_edit.setText(str(parameters.get("rvm_var", "")))
+            self.window.instrument_dock.rha_edit.setText(str(parameters.get("rha_var", "")))
+            return
+
+        if ideal:
+            try:
+                rhmfac = float(parameters.get("rhmfac_var", 1) or 1)
+                rvmfac = float(parameters.get("rvmfac_var", 1) or 1)
+                rhafac = float(parameters.get("rhafac_var", 1) or 1)
+                self.window.instrument_dock.rhm_edit.setText(f"{ideal['rhm'] * rhmfac:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.rvm_edit.setText(f"{ideal['rvm'] * rvmfac:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.rha_edit.setText(f"{ideal['rha'] * rhafac:.4f}".rstrip('0').rstrip('.'))
+                return
+            except Exception:
+                pass
+
+        self.window.instrument_dock.rhm_edit.setText("0")
+        self.window.instrument_dock.rvm_edit.setText("0")
+        self.window.instrument_dock.rha_edit.setText("0")
+
+    def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked):
+        """Apply lock state for ideal bending buttons."""
+        self.window.instrument_dock.rhm_ideal_button.setChecked(bool(rhm_locked))
+        self.window.instrument_dock.rhm_ideal_button.setEnabled(not bool(rhm_locked))
+        self.window.instrument_dock.rvm_ideal_button.setChecked(bool(rvm_locked))
+        self.window.instrument_dock.rvm_ideal_button.setEnabled(not bool(rvm_locked))
+        self.window.instrument_dock.rha_ideal_button.setChecked(bool(rha_locked))
+        self.window.instrument_dock.rha_ideal_button.setEnabled(not bool(rha_locked))
+
+        if any([rhm_locked, rvm_locked, rha_locked]):
+            self.update_ideal_bending_buttons()
     
     def on_mtt_changed(self):
         """Update energies when mono 2theta changes."""
@@ -453,6 +676,7 @@ class TAVIController(QObject):
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
     
     def on_att_changed(self):
         """Update energies when analyzer 2theta changes."""
@@ -482,6 +706,7 @@ class TAVIController(QObject):
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
     
     def on_Ki_changed(self):
         """Update Ei and mtt when Ki changes."""
@@ -510,6 +735,7 @@ class TAVIController(QObject):
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
     
     def on_Ei_changed(self):
         """Update Ki and mtt when Ei changes."""
@@ -538,6 +764,7 @@ class TAVIController(QObject):
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
     
     def on_Kf_changed(self):
         """Update Ef and att when Kf changes."""
@@ -566,6 +793,7 @@ class TAVIController(QObject):
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
     
     def on_Ef_changed(self):
         """Update Kf and att when Ef changes."""
@@ -594,6 +822,7 @@ class TAVIController(QObject):
             self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
+            self.update_ideal_bending_buttons()
     
     def on_K_fixed_changed(self):
         """Update all when K fixed mode changes."""
@@ -757,9 +986,12 @@ class TAVIController(QObject):
             "K_fixed_var": self.window.scan_controls_dock.K_fixed_combo.currentText(),
             "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
             "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
-            "rhmfac_var": self.window.instrument_dock.rhmfac_edit.text(),
-            "rvmfac_var": self.window.instrument_dock.rvmfac_edit.text(),
-            "rhafac_var": self.window.instrument_dock.rhafac_edit.text(),
+            "rhm_var": self.window.instrument_dock.rhm_edit.text(),
+            "rvm_var": self.window.instrument_dock.rvm_edit.text(),
+            "rha_var": self.window.instrument_dock.rha_edit.text(),
+            "rhm_ideal_locked": self.is_bending_locked("rhm"),
+            "rvm_ideal_locked": self.is_bending_locked("rvm"),
+            "rha_ideal_locked": self.is_bending_locked("rha"),
             "fixed_E_var": self.window.scan_controls_dock.fixed_E_edit.text(),
             "qx_var": self.window.reciprocal_space_dock.qx_edit.text(),
             "qy_var": self.window.reciprocal_space_dock.qy_edit.text(),
@@ -812,15 +1044,22 @@ class TAVIController(QObject):
                 self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
                 self.window.instrument_dock.nmo_combo.setCurrentText(parameters.get("NMO_installed_var", "None"))
                 self.window.instrument_dock.v_selector_check.setChecked(parameters.get("V_selector_installed_var", False))
-                self.window.instrument_dock.rhmfac_edit.setText(str(parameters.get("rhmfac_var", 1)))
-                self.window.instrument_dock.rvmfac_edit.setText(str(parameters.get("rvmfac_var", 1)))
-                self.window.instrument_dock.rhafac_edit.setText(str(parameters.get("rhafac_var", 1)))
                 self.window.instrument_dock.alpha_1_combo.setCurrentText(str(parameters.get("alpha_1_var", 40)))
                 self.window.instrument_dock.alpha_2_30_check.setChecked(parameters.get("alpha_2_30_var", False))
                 self.window.instrument_dock.alpha_2_40_check.setChecked(parameters.get("alpha_2_40_var", True))
                 self.window.instrument_dock.alpha_2_60_check.setChecked(parameters.get("alpha_2_60_var", False))
                 self.window.instrument_dock.alpha_3_combo.setCurrentText(str(parameters.get("alpha_3_var", 30)))
                 self.window.instrument_dock.alpha_4_combo.setCurrentText(str(parameters.get("alpha_4_var", 30)))
+
+                # Load absolute bending values (backward-compatible with factor-based params)
+                self._load_bending_parameters(parameters)
+
+                # Restore ideal lock state
+                self._apply_bending_lock_state(
+                    parameters.get("rhm_ideal_locked", False),
+                    parameters.get("rvm_ideal_locked", False),
+                    parameters.get("rha_ideal_locked", False),
+                )
                 
                 self.window.scan_controls_dock.number_neutrons_edit.setText(str(parameters.get("number_neutrons_var", 1e8)))
                 self.window.scan_controls_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
@@ -854,6 +1093,8 @@ class TAVIController(QObject):
                 
                 self.diagnostic_settings = parameters.get("diagnostic_settings", {})
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
+
+                self.update_ideal_bending_buttons()
                 
             self.print_to_message_center("Parameters loaded successfully")
         else:
@@ -873,15 +1114,16 @@ class TAVIController(QObject):
         self.window.instrument_dock.Ef_edit.setText("14.7")
         self.window.instrument_dock.nmo_combo.setCurrentText("None")
         self.window.instrument_dock.v_selector_check.setChecked(False)
-        self.window.instrument_dock.rhmfac_edit.setText("1")
-        self.window.instrument_dock.rvmfac_edit.setText("1")
-        self.window.instrument_dock.rhafac_edit.setText("1")
         self.window.instrument_dock.alpha_1_combo.setCurrentText("40")
         self.window.instrument_dock.alpha_2_30_check.setChecked(False)
         self.window.instrument_dock.alpha_2_40_check.setChecked(True)
         self.window.instrument_dock.alpha_2_60_check.setChecked(False)
         self.window.instrument_dock.alpha_3_combo.setCurrentText("30")
         self.window.instrument_dock.alpha_4_combo.setCurrentText("30")
+
+        # Set default absolute bending to ideal values
+        self.update_ideal_bending_buttons()
+        self.apply_ideal_bending_values()
         
         self.window.scan_controls_dock.number_neutrons_edit.setText("1000000")
         self.window.scan_controls_dock.K_fixed_combo.setCurrentText("Kf Fixed")
@@ -962,9 +1204,13 @@ class TAVIController(QObject):
         self.PUMA.K_fixed = vals['K_fixed']
         self.PUMA.NMO_installed = vals['NMO_installed']
         self.PUMA.V_selector_installed = vals['V_selector_installed']
-        self.PUMA.rhmfac = vals['rhmfac']
-        self.PUMA.rvmfac = vals['rvmfac']
-        self.PUMA.rhafac = vals['rhafac']
+        self.PUMA.rhm = vals['rhm']
+        self.PUMA.rvm = vals['rvm']
+        self.PUMA.rha = vals['rha']
+        self.PUMA.rva = 0.8
+        if self.PUMA.NMO_installed != "None":
+            self.PUMA.rhm = 0
+            self.PUMA.rvm = 0
         self.PUMA.fixed_E = vals['fixed_E']
         self.PUMA.monocris = vals['monocris']
         self.PUMA.anacris = vals['anacris']
@@ -1134,25 +1380,13 @@ class TAVIController(QObject):
             
             # Check if bending parameters are part of scan commands
             if 'rhm' not in [variable_name1, variable_name2]:
-                rhm = self.PUMA.calculate_crystal_bending(
-                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
-                    self.PUMA.A1, self.PUMA.A4
-                )[0]
+                rhm = self.PUMA.rhm
             if 'rvm' not in [variable_name1, variable_name2]:
-                rvm = self.PUMA.calculate_crystal_bending(
-                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
-                    self.PUMA.A1, self.PUMA.A4
-                )[1]
+                rvm = self.PUMA.rvm
             if 'rha' not in [variable_name1, variable_name2]:
-                rha = self.PUMA.calculate_crystal_bending(
-                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
-                    self.PUMA.A1, self.PUMA.A4
-                )[2]
+                rha = self.PUMA.rha
             if 'rva' not in [variable_name1, variable_name2]:
-                rva = self.PUMA.calculate_crystal_bending(
-                    self.PUMA.rhmfac, self.PUMA.rvmfac, self.PUMA.rhafac,
-                    self.PUMA.A1, self.PUMA.A4
-                )[3]
+                rva = self.PUMA.rva
             
             # Update crystal bending
             self.PUMA.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
