@@ -82,6 +82,9 @@ class TAVIController(QObject):
 
         # Update ideal focusing buttons after initial load
         self.update_ideal_bending_buttons()
+
+        # Apply initial sample frame mode state
+        self.update_sample_frame_mode()
         
         # Set up visual feedback for all input fields
         self.setup_visual_feedback()
@@ -187,6 +190,11 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_beta_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_gamma_edit.editingFinished.connect(self.on_lattice_changed)
+        # Sample frame mode toggle (HKL vs Q)
+        try:
+            self.window.sample_dock.sample_frame_mode_check.toggled.connect(self.on_sample_frame_mode_toggled)
+        except Exception:
+            pass
         # Sample selection change -> update PUMA and show status
         try:
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
@@ -398,6 +406,22 @@ class TAVIController(QObject):
             widget.setText(formatted)
         except (ValueError, TypeError):
             pass
+
+    def normalize_scan_variable(self, name):
+        """Normalize scan variable names to canonical form."""
+        if not name:
+            return name
+        name = str(name).strip()
+        lower = name.lower()
+        if lower in ["h", "k", "l"]:
+            return lower.upper()
+        if lower in ["a1", "a2", "a3", "a4"]:
+            return lower.upper()
+        if lower == "deltae":
+            return "deltaE"
+        if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
+            return lower
+        return name
     
     def update_all_variables(self):
         """
@@ -827,19 +851,54 @@ class TAVIController(QObject):
     def on_K_fixed_changed(self):
         """Update all when K fixed mode changes."""
         self.update_all_variables()
+        self.update_angles_from_q()
     
     def on_fixed_E_changed(self):
         """Update all when fixed E changes."""
         self.update_all_variables()
+        self.update_angles_from_q()
     
     def on_deltaE_changed(self):
         """Update energies when deltaE changes."""
         self.update_all_variables()
+        # Keep sample angles in sync with updated deltaE
+        self.update_angles_from_q()
     
     def on_angles_changed(self):
         """Update Q-space when angles change."""
-        # Placeholder for angle-to-Q conversion if needed
-        pass
+        if self.updating:
+            return
+        vals = self.get_gui_values()
+        if not vals:
+            return
+
+        try:
+            self.updating = True
+            mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
+            stt = float(self.window.instrument_dock.stt_edit.text() or 0)
+            sth = float(self.window.instrument_dock.psi_edit.text() or 0)
+            att = float(self.window.instrument_dock.att_edit.text() or 0)
+            saz = 0.0  # No explicit GUI field for azimuthal angle
+
+            q_vals, error_flags = self.PUMA.calculate_q_and_deltaE(
+                mtt, stt, sth, saz, att,
+                vals['fixed_E'], vals['K_fixed'],
+                vals['monocris'], vals['anacris']
+            )
+            if not error_flags:
+                qx, qy, qz, deltaE = q_vals
+                self.window.reciprocal_space_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
+                self.window.reciprocal_space_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
+                self.window.reciprocal_space_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+                self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+        except Exception:
+            pass
+        finally:
+            self.updating = False
+            # Update HKL based on new Q values
+            self.on_Q_changed()
+            # Update energies based on updated deltaE
+            self.update_all_variables()
     
     def on_Q_changed(self):
         """Update HKL when Q changes."""
@@ -863,6 +922,8 @@ class TAVIController(QObject):
             pass
         finally:
             self.updating = False
+            # Update sample/instrument angles based on Q
+            self.update_angles_from_q()
     
     def on_HKL_changed(self):
         """Update Q when HKL changes."""
@@ -890,11 +951,68 @@ class TAVIController(QObject):
             pass
         finally:
             self.updating = False
+            # Update sample/instrument angles based on Q
+            self.update_angles_from_q()
     
     def on_lattice_changed(self):
         """Update Q/HKL conversion when lattice parameters change."""
-        # Re-calculate Q from current HKL with new lattice parameters
-        self.on_HKL_changed()
+        # Recalculate based on sample frame mode
+        if self.window.sample_dock.sample_frame_mode_check.isChecked():
+            self.on_HKL_changed()
+        else:
+            self.on_Q_changed()
+
+    def on_sample_frame_mode_toggled(self, checked):
+        """Handle sample frame mode toggling to lock HKL or Q fields."""
+        self.update_sample_frame_mode(checked)
+
+    def update_sample_frame_mode(self, checked=None):
+        """Enable/disable HKL vs Q inputs based on sample frame mode."""
+        if checked is None:
+            checked = self.window.sample_dock.sample_frame_mode_check.isChecked()
+
+        hkl_enabled = bool(checked)
+        q_enabled = not hkl_enabled
+
+        self.window.reciprocal_space_dock.H_edit.setEnabled(hkl_enabled)
+        self.window.reciprocal_space_dock.K_edit.setEnabled(hkl_enabled)
+        self.window.reciprocal_space_dock.L_edit.setEnabled(hkl_enabled)
+
+        self.window.reciprocal_space_dock.qx_edit.setEnabled(q_enabled)
+        self.window.reciprocal_space_dock.qy_edit.setEnabled(q_enabled)
+        self.window.reciprocal_space_dock.qz_edit.setEnabled(q_enabled)
+
+        # Recalculate the dependent variables when mode changes
+        if hkl_enabled:
+            self.on_HKL_changed()
+        else:
+            self.on_Q_changed()
+
+    def update_angles_from_q(self):
+        """Update instrument/sample angles based on current Q and deltaE."""
+        if self.updating:
+            return
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        try:
+            self.updating = True
+            angles_array, error_flags = self.PUMA.calculate_angles(
+                vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
+                vals['fixed_E'], vals['K_fixed'],
+                vals['monocris'], vals['anacris']
+            )
+            if not error_flags:
+                mtt, stt, sth, saz, att = angles_array
+                self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.stt_edit.setText(f"{stt:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.psi_edit.setText(f"{sth:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+        except Exception:
+            pass
+        finally:
+            self.updating = False
+            self.update_ideal_bending_buttons()
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
@@ -1012,6 +1130,7 @@ class TAVIController(QObject):
             "lattice_alpha_var": self.window.sample_dock.lattice_alpha_edit.text(),
             "lattice_beta_var": self.window.sample_dock.lattice_beta_edit.text(),
             "lattice_gamma_var": self.window.sample_dock.lattice_gamma_edit.text(),
+            "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
             "scan_command_var1": self.window.scan_controls_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.scan_controls_dock.scan_command_2_edit.text(),
             "auto_display_var": self.window.scan_controls_dock.auto_display_check.isChecked(),
@@ -1078,6 +1197,9 @@ class TAVIController(QObject):
                 self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", 90)))
                 self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", 90)))
                 self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", 90)))
+                self.window.sample_dock.sample_frame_mode_check.setChecked(
+                    parameters.get("sample_frame_mode_var", False)
+                )
                 # Restore sample selection if present
                 try:
                     sample_label = parameters.get("sample_label_var", "None")
@@ -1093,6 +1215,8 @@ class TAVIController(QObject):
                 
                 self.diagnostic_settings = parameters.get("diagnostic_settings", {})
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
+
+                self.update_sample_frame_mode()
 
                 self.update_ideal_bending_buttons()
                 
@@ -1140,6 +1264,7 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.setText("90")
         self.window.sample_dock.lattice_beta_edit.setText("90")
         self.window.sample_dock.lattice_gamma_edit.setText("90")
+        self.window.sample_dock.sample_frame_mode_check.setChecked(False)
         self.window.scan_controls_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
         self.window.scan_controls_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
         self.window.scan_controls_dock.auto_display_check.setChecked(True)
@@ -1151,6 +1276,7 @@ class TAVIController(QObject):
         
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
+        self.update_sample_frame_mode()
         # Ensure sample defaults to None in GUI
         try:
             if hasattr(self.window.sample_dock, 'sample_combo'):
@@ -1243,12 +1369,17 @@ class TAVIController(QObject):
         # Determine scan mode
         scan_mode = "momentum"  # Default
         if scan_command1:
-            if "qx" in scan_command1 or "qy" in scan_command1 or "qz" in scan_command1:
-                scan_mode = "momentum"
-            elif "H" in scan_command1 or "K" in scan_command1 or "L" in scan_command1:
-                scan_mode = "rlu"
-            elif "A1" in scan_command1 or "A2" in scan_command1 or "A3" in scan_command1 or "A4" in scan_command1:
-                scan_mode = "angle"
+            try:
+                var_name_probe, _ = parse_scan_steps(scan_command1)
+                var_name_probe = self.normalize_scan_variable(var_name_probe)
+                if var_name_probe in ["qx", "qy", "qz"]:
+                    scan_mode = "momentum"
+                elif var_name_probe in ["H", "K", "L"]:
+                    scan_mode = "rlu"
+                elif var_name_probe in ["A1", "A2", "A3", "A4"]:
+                    scan_mode = "angle"
+            except Exception:
+                pass
         
         # Mapping for scannable parameters
         variable_to_index = {
@@ -1283,6 +1414,7 @@ class TAVIController(QObject):
         # Single scan command
         if scan_command1 and not scan_command2:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
+            variable_name1 = self.normalize_scan_variable(variable_name1)
             for value1 in array_values1:
                 scan_point = scan_point_template[:]
                 scan_point[variable_to_index[variable_name1]] = value1
@@ -1310,6 +1442,8 @@ class TAVIController(QObject):
         if scan_command2 and scan_command1:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
             variable_name2, array_values2 = parse_scan_steps(scan_command2)
+            variable_name1 = self.normalize_scan_variable(variable_name1)
+            variable_name2 = self.normalize_scan_variable(variable_name2)
             for value1 in array_values1:
                 for value2 in array_values2:
                     scan_point = scan_point_template[:]
@@ -1503,6 +1637,7 @@ class TAVIController(QObject):
         from tavi.data_processing import write_1D_scan
         
         variable_name, array_values = parse_scan_steps(scan_command1)
+        variable_name = self.normalize_scan_variable(variable_name)
         scan_params = []
         counts_array = []
         
@@ -1576,6 +1711,8 @@ class TAVIController(QObject):
         
         variable_name1, array_values1 = parse_scan_steps(scan_command1)
         variable_name2, array_values2 = parse_scan_steps(scan_command2)
+        variable_name1 = self.normalize_scan_variable(variable_name1)
+        variable_name2 = self.normalize_scan_variable(variable_name2)
         
         scan_data = []
         
@@ -1616,9 +1753,11 @@ class TAVIController(QObject):
         
         # Set labels
         x_label = f'{variable_name1} (1/Å)' if variable_name1 in ['qx', 'qy', 'qz'] else \
-                  f'{variable_name1} (meV)' if variable_name1 == 'deltaE' else variable_name1
+              f'{variable_name1} (meV)' if variable_name1 == 'deltaE' else \
+              f'{variable_name1} (r.l.u.)' if variable_name1 in ['H', 'K', 'L'] else variable_name1
         y_label = f'{variable_name2} (1/Å)' if variable_name2 in ['qx', 'qy', 'qz'] else \
-                  f'{variable_name2} (meV)' if variable_name2 == 'deltaE' else variable_name2
+              f'{variable_name2} (meV)' if variable_name2 == 'deltaE' else \
+              f'{variable_name2} (r.l.u.)' if variable_name2 in ['H', 'K', 'L'] else variable_name2
         
         plt.xlabel(x_label)
         plt.ylabel(y_label)
