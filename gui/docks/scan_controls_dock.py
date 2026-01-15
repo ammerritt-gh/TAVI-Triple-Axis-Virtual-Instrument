@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 
 
 class ScanControlsDock(QDockWidget):
-    """Dock widget for scan controls."""
+    """Dock widget for scan controls (scan parameters and commands only)."""
     
     def __init__(self, parent=None):
         super().__init__("Scan Controls", parent)
@@ -61,6 +61,23 @@ class ScanControlsDock(QDockWidget):
         scan_layout.addWidget(self.scan_command_2_edit)
         
         main_layout.addWidget(scan_group)
+        
+        # Add stretch at the end to push everything up
+        main_layout.addStretch()
+
+
+class SimulationControlDock(QDockWidget):
+    """Dock widget for simulation control buttons and status (for right panel)."""
+    
+    def __init__(self, parent=None):
+        super().__init__("Simulation Control", parent)
+        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        
+        # Create main widget and layout
+        main_widget = QWidget()
+        main_layout = QVBoxLayout()
+        main_widget.setLayout(main_layout)
+        self.setWidget(main_widget)
         
         # Control buttons section
         buttons_group = QGroupBox("Control Buttons")
