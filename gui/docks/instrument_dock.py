@@ -24,29 +24,35 @@ class InstrumentDock(QDockWidget):
         angles_layout.setSpacing(5)
         angles_group.setLayout(angles_layout)
         
-        # Mono 2theta
+        # Row 0: Mono 2theta, Sample 2theta
         angles_layout.addWidget(QLabel("Mono 2θ:"), 0, 0)
         self.mtt_edit = QLineEdit()
         self.mtt_edit.setMaximumWidth(70)
         angles_layout.addWidget(self.mtt_edit, 0, 1)
         
-        # Sample 2theta
         angles_layout.addWidget(QLabel("Sample 2θ:"), 0, 2)
         self.stt_edit = QLineEdit()
         self.stt_edit.setMaximumWidth(70)
         angles_layout.addWidget(self.stt_edit, 0, 3)
         
-        # Sample Psi
-        angles_layout.addWidget(QLabel("Sample Ψ:"), 1, 0)
-        self.psi_edit = QLineEdit()
-        self.psi_edit.setMaximumWidth(70)
-        angles_layout.addWidget(self.psi_edit, 1, 1)
+        # Row 1: Sample omega (ω), Sample chi (χ)
+        angles_layout.addWidget(QLabel("ω:"), 1, 0)
+        self.omega_edit = QLineEdit()
+        self.omega_edit.setMaximumWidth(70)
+        self.omega_edit.setToolTip("Sample rotation angle (in-plane)")
+        angles_layout.addWidget(self.omega_edit, 1, 1)
         
-        # Analyzer 2theta
-        angles_layout.addWidget(QLabel("Ana 2θ:"), 1, 2)
+        angles_layout.addWidget(QLabel("χ:"), 1, 2)
+        self.chi_edit = QLineEdit()
+        self.chi_edit.setMaximumWidth(70)
+        self.chi_edit.setToolTip("Sample tilt angle (out-of-plane)")
+        angles_layout.addWidget(self.chi_edit, 1, 3)
+        
+        # Row 2: Analyzer 2theta
+        angles_layout.addWidget(QLabel("Ana 2θ:"), 2, 0)
         self.att_edit = QLineEdit()
         self.att_edit.setMaximumWidth(70)
-        angles_layout.addWidget(self.att_edit, 1, 3)
+        angles_layout.addWidget(self.att_edit, 2, 1)
         
         main_layout.addWidget(angles_group)
         

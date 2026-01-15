@@ -104,10 +104,8 @@ class TAVIController(QObject):
         # Sample configuration button
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
         
-        # Sample orientation controls
-        self.window.sample_dock.omega_edit.editingFinished.connect(self.on_sample_orientation_changed)
-        self.window.sample_dock.chi_edit.editingFinished.connect(self.on_sample_orientation_changed)
-        self.window.sample_dock.psi_offset_edit.editingFinished.connect(self.on_sample_orientation_changed)
+        # Sample orientation controls - connected later in signal setup
+        # (omega/chi are actual angles, psi/kappa are alignment offsets)
         
         # Misalignment training dock
         self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
@@ -161,7 +159,8 @@ class TAVIController(QObject):
         self.window.instrument_dock.mtt_edit.editingFinished.connect(self.on_mtt_changed)
         self.window.instrument_dock.att_edit.editingFinished.connect(self.on_att_changed)
         self.window.instrument_dock.stt_edit.editingFinished.connect(self.on_angles_changed)
-        self.window.instrument_dock.psi_edit.editingFinished.connect(self.on_angles_changed)
+        self.window.instrument_dock.omega_edit.editingFinished.connect(self.on_omega_changed)
+        self.window.instrument_dock.chi_edit.editingFinished.connect(self.on_chi_changed)
         
         # Energies - update related energies and angles
         self.window.instrument_dock.Ki_edit.editingFinished.connect(self.on_Ki_changed)
@@ -198,6 +197,9 @@ class TAVIController(QObject):
             self.window.sample_dock.sample_frame_mode_check.toggled.connect(self.on_sample_frame_mode_toggled)
         except Exception:
             pass
+        # Sample alignment offsets (kappa and psi)
+        self.window.sample_dock.kappa_edit.editingFinished.connect(self.on_alignment_offset_changed)
+        self.window.sample_dock.psi_edit.editingFinished.connect(self.on_alignment_offset_changed)
         # Sample selection change -> update PUMA and show status
         try:
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
@@ -213,7 +215,8 @@ class TAVIController(QObject):
         line_edits.extend([
             self.window.instrument_dock.mtt_edit,
             self.window.instrument_dock.stt_edit,
-            self.window.instrument_dock.psi_edit,
+            self.window.instrument_dock.omega_edit,
+            self.window.instrument_dock.chi_edit,
             self.window.instrument_dock.att_edit,
             self.window.instrument_dock.Ki_edit,
             self.window.instrument_dock.Ei_edit,
@@ -243,9 +246,8 @@ class TAVIController(QObject):
             self.window.sample_dock.lattice_alpha_edit,
             self.window.sample_dock.lattice_beta_edit,
             self.window.sample_dock.lattice_gamma_edit,
-            self.window.sample_dock.omega_edit,
-            self.window.sample_dock.chi_edit,
-            self.window.sample_dock.psi_offset_edit,
+            self.window.sample_dock.kappa_edit,
+            self.window.sample_dock.psi_edit,
         ])
         
         # Scan controls dock
@@ -360,7 +362,8 @@ class TAVIController(QObject):
             return {
                 'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
-                'psi': float(self.window.instrument_dock.psi_edit.text() or 0),
+                'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
+                'chi': float(self.window.instrument_dock.chi_edit.text() or 0),
                 'att': float(self.window.instrument_dock.att_edit.text() or 0),
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
@@ -381,9 +384,8 @@ class TAVIController(QObject):
                 'lattice_alpha': float(self.window.sample_dock.lattice_alpha_edit.text() or 90),
                 'lattice_beta': float(self.window.sample_dock.lattice_beta_edit.text() or 90),
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
-                'omega': float(self.window.sample_dock.omega_edit.text() or 0),
-                'chi': float(self.window.sample_dock.chi_edit.text() or 0),
-                'psi_offset': float(self.window.sample_dock.psi_offset_edit.text() or 0),
+                'kappa': float(self.window.sample_dock.kappa_edit.text() or 0),
+                'psi': float(self.window.sample_dock.psi_edit.text() or 0),
                 'monocris': self.window.instrument_dock.monocris_combo.currentText(),
                 'anacris': self.window.instrument_dock.anacris_combo.currentText(),
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
@@ -429,6 +431,8 @@ class TAVIController(QObject):
         if lower == "deltae":
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
+            return lower
+        if lower in ["omega", "chi", "kappa", "psi"]:
             return lower
         return name
     
@@ -885,9 +889,9 @@ class TAVIController(QObject):
             self.updating = True
             mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
             stt = float(self.window.instrument_dock.stt_edit.text() or 0)
-            sth = float(self.window.instrument_dock.psi_edit.text() or 0)
+            sth = float(self.window.instrument_dock.omega_edit.text() or 0)
             att = float(self.window.instrument_dock.att_edit.text() or 0)
-            saz = 0.0  # No explicit GUI field for azimuthal angle
+            saz = float(self.window.instrument_dock.chi_edit.text() or 0)
 
             q_vals, error_flags = self.PUMA.calculate_q_and_deltaE(
                 mtt, stt, sth, saz, att,
@@ -1015,7 +1019,8 @@ class TAVIController(QObject):
                 mtt, stt, sth, saz, att = angles_array
                 self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
                 self.window.instrument_dock.stt_edit.setText(f"{stt:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.psi_edit.setText(f"{sth:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.omega_edit.setText(f"{sth:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.chi_edit.setText(f"{saz:.4f}".rstrip('0').rstrip('.'))
                 self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
         except Exception:
             pass
@@ -1037,16 +1042,44 @@ class TAVIController(QObject):
         _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
         self.update_all_variables()
     
-    def on_sample_orientation_changed(self):
-        """Handle changes to sample orientation angles (omega, chi, psi_offset)."""
+    def on_alignment_offset_changed(self):
+        """Handle changes to alignment offsets (kappa=chi offset, psi=omega offset)."""
+        if self.updating:
+            return
         try:
-            omega = float(self.window.sample_dock.omega_edit.text() or 0)
-            chi = float(self.window.sample_dock.chi_edit.text() or 0)
-            psi_offset = float(self.window.sample_dock.psi_offset_edit.text() or 0)
-            self.PUMA.set_angles(omega=omega, chi=chi, psi_offset=psi_offset)
-            self.print_to_message_center(f"Sample orientation updated: ω={omega}°, χ={chi}°, ψ offset={psi_offset}°")
+            kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
+            psi = float(self.window.sample_dock.psi_edit.text() or 0)
+            self.PUMA.kappa = kappa
+            self.PUMA.psi = psi
+            self.print_to_message_center(f"Alignment offsets updated: κ={kappa}° (chi offset), ψ={psi}° (omega offset)")
         except ValueError:
-            self.print_to_message_center("Invalid sample orientation angle value")
+            self.print_to_message_center("Invalid alignment offset value")
+    
+    def on_omega_changed(self):
+        """Handle omega (ω) change - sample in-plane rotation."""
+        if self.updating:
+            return
+        try:
+            omega = float(self.window.instrument_dock.omega_edit.text() or 0)
+            self.PUMA.omega = omega
+            self.print_to_message_center(f"Sample ω updated: {omega}°")
+            # Trigger angle-based updates
+            self.on_angles_changed()
+        except ValueError:
+            self.print_to_message_center("Invalid omega value")
+    
+    def on_chi_changed(self):
+        """Handle chi (χ) change - sample out-of-plane tilt."""
+        if self.updating:
+            return
+        try:
+            chi = float(self.window.instrument_dock.chi_edit.text() or 0)
+            self.PUMA.chi = chi
+            self.print_to_message_center(f"Sample χ updated: {chi}° (out-of-plane)")
+            # Chi affects qz - trigger recalculation
+            self.on_angles_changed()
+        except ValueError:
+            self.print_to_message_center("Invalid chi value")
     
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
@@ -1063,10 +1096,9 @@ class TAVIController(QObject):
     def on_check_alignment(self):
         """Check user's alignment against hidden misalignment and update feedback."""
         try:
-            omega = float(self.window.sample_dock.omega_edit.text() or 0)
-            chi = float(self.window.sample_dock.chi_edit.text() or 0)
-            psi_offset = float(self.window.sample_dock.psi_offset_edit.text() or 0)
-            self.window.misalignment_dock.update_alignment_feedback(omega, chi, psi_offset)
+            kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
+            psi = float(self.window.sample_dock.psi_edit.text() or 0)
+            self.window.misalignment_dock.update_alignment_feedback(kappa, psi, 0)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     
@@ -1137,7 +1169,8 @@ class TAVIController(QObject):
         parameters = {
             "mtt_var": self.window.instrument_dock.mtt_edit.text(),
             "stt_var": self.window.instrument_dock.stt_edit.text(),
-            "psi_var": self.window.instrument_dock.psi_edit.text(),
+            "omega_var": self.window.instrument_dock.omega_edit.text(),
+            "chi_var": self.window.instrument_dock.chi_edit.text(),
             "att_var": self.window.instrument_dock.att_edit.text(),
             "Ki_var": self.window.instrument_dock.Ki_edit.text(),
             "Kf_var": self.window.instrument_dock.Kf_edit.text(),
@@ -1177,10 +1210,9 @@ class TAVIController(QObject):
             "lattice_alpha_var": self.window.sample_dock.lattice_alpha_edit.text(),
             "lattice_beta_var": self.window.sample_dock.lattice_beta_edit.text(),
             "lattice_gamma_var": self.window.sample_dock.lattice_gamma_edit.text(),
-            # Sample orientation angles
-            "omega_var": self.window.sample_dock.omega_edit.text(),
-            "chi_var": self.window.sample_dock.chi_edit.text(),
-            "psi_offset_var": self.window.sample_dock.psi_offset_edit.text(),
+            # Sample alignment offsets (kappa and psi)
+            "kappa_var": self.window.sample_dock.kappa_edit.text(),
+            "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             # Misalignment hash only (keeps values hidden from students)
             "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
@@ -1208,7 +1240,8 @@ class TAVIController(QObject):
                 self.window.instrument_dock.anacris_combo.setCurrentText(parameters.get("anacris_var", "PG[002]"))
                 self.window.instrument_dock.mtt_edit.setText(str(parameters.get("mtt_var", "30")))
                 self.window.instrument_dock.stt_edit.setText(str(parameters.get("stt_var", "30")))
-                self.window.instrument_dock.psi_edit.setText(str(parameters.get("psi_var", 30)))
+                self.window.instrument_dock.omega_edit.setText(str(parameters.get("omega_var", 0)))
+                self.window.instrument_dock.chi_edit.setText(str(parameters.get("chi_var", 0)))
                 self.window.instrument_dock.att_edit.setText(str(parameters.get("att_var", 30)))
                 self.window.instrument_dock.Ki_edit.setText(str(parameters.get("Ki_var", "2.662")))
                 self.window.instrument_dock.Kf_edit.setText(str(parameters.get("Kf_var", "2.662")))
@@ -1254,10 +1287,9 @@ class TAVIController(QObject):
                 self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", 90)))
                 self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", 90)))
                 self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", 90)))
-                # Sample orientation angles
-                self.window.sample_dock.omega_edit.setText(str(parameters.get("omega_var", 0)))
-                self.window.sample_dock.chi_edit.setText(str(parameters.get("chi_var", 0)))
-                self.window.sample_dock.psi_offset_edit.setText(str(parameters.get("psi_offset_var", 0)))
+                # Sample alignment offsets (kappa and psi)
+                self.window.sample_dock.kappa_edit.setText(str(parameters.get("kappa_var", 0)))
+                self.window.sample_dock.psi_edit.setText(str(parameters.get("psi_offset_var", 0)))
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
@@ -1267,12 +1299,14 @@ class TAVIController(QObject):
                         from gui.docks.misalignment_dock import decode_misalignment
                         omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
                         self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
-                        # Update student display with "???" to indicate active but hidden
-                        self.window.misalignment_dock.student_omega_display.setText("???")
-                        self.window.misalignment_dock.student_chi_display.setText("???")
-                        self.window.misalignment_dock.student_psi_display.setText("???")
-                    except:
-                        pass
+                        # Store in dock and update UI to show it's loaded
+                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
+                        self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
+                        self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
+                        self.window.misalignment_dock.check_alignment_button.setEnabled(True)
+                        self.print_to_message_center("Misalignment hash restored from saved parameters")
+                    except Exception as e:
+                        self.print_to_message_center(f"Failed to restore misalignment: {e}")
                 self.window.sample_dock.sample_frame_mode_check.setChecked(
                     parameters.get("sample_frame_mode_var", False)
                 )
@@ -1306,7 +1340,8 @@ class TAVIController(QObject):
         self.window.instrument_dock.anacris_combo.setCurrentText("PG[002]")
         self.window.instrument_dock.mtt_edit.setText("30")
         self.window.instrument_dock.stt_edit.setText("30")
-        self.window.instrument_dock.psi_edit.setText("30")
+        self.window.instrument_dock.omega_edit.setText("0")
+        self.window.instrument_dock.chi_edit.setText("0")
         self.window.instrument_dock.att_edit.setText("30")
         self.window.instrument_dock.Ki_edit.setText("2.662")
         self.window.instrument_dock.Kf_edit.setText("2.662")
@@ -1344,10 +1379,9 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.setText("90")
         self.window.sample_dock.lattice_beta_edit.setText("90")
         self.window.sample_dock.lattice_gamma_edit.setText("90")
-        # Sample orientation defaults
-        self.window.sample_dock.omega_edit.setText("0")
-        self.window.sample_dock.chi_edit.setText("0")
-        self.window.sample_dock.psi_offset_edit.setText("0")
+        # Sample alignment offset defaults
+        self.window.sample_dock.kappa_edit.setText("0")
+        self.window.sample_dock.psi_edit.setText("0")
         self.window.sample_dock.sample_frame_mode_check.setChecked(False)
         self.window.scan_controls_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
         self.window.scan_controls_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
@@ -1468,18 +1502,18 @@ class TAVIController(QObject):
                 pass
         
         # Mapping for scannable parameters
-        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-9: sample orientation
+        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-11: sample orientation (omega, chi, kappa, psi)
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
             'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-            'omega': 8, 'chi': 9
+            'omega': 8, 'chi': 9, 'kappa': 10, 'psi': 11
         }
         
         # Initialize scan point template
-        # Extended to 10 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-9: omega/chi
-        scan_point_template = [0] * 10
+        # Extended to 12 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-11: omega/chi/kappa/psi
+        scan_point_template = [0] * 12
         if scan_mode == "momentum":
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         elif scan_mode == "rlu":
@@ -1487,12 +1521,14 @@ class TAVIController(QObject):
         elif scan_mode == "angle":
             scan_point_template[:4] = [0, 0, 0, 0]
         elif scan_mode == "orientation":
-            # For orientation scans, use current Q values but scan omega/chi
+            # For orientation scans, use current Q values but scan omega/chi/kappa/psi
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        # Set default omega/chi from GUI
+        # Set default omega/chi from instrument_dock, kappa/psi from sample_dock
         try:
-            scan_point_template[8] = float(self.window.sample_dock.omega_edit.text() or 0)
-            scan_point_template[9] = float(self.window.sample_dock.chi_edit.text() or 0)
+            scan_point_template[8] = float(self.window.instrument_dock.omega_edit.text() or 0)
+            scan_point_template[9] = float(self.window.instrument_dock.chi_edit.text() or 0)
+            scan_point_template[10] = float(self.window.sample_dock.kappa_edit.text() or 0)
+            scan_point_template[11] = float(self.window.sample_dock.psi_edit.text() or 0)
         except ValueError:
             pass
         
@@ -1619,9 +1655,14 @@ class TAVIController(QObject):
                 self.PUMA.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
             
             rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-            omega_scan, chi_scan = scans[8], scans[9]
+            omega_scan, chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10], scans[11]
             
-            # Check if bending parameters are part of scan commands
+            # For RLU/momentum scans, omega IS the calculated sth (they're the same angle)
+            # Only update omega_scan if we calculated new angles (not for orientation/angle scans)
+            if scan_mode in ["momentum", "rlu"] and not error_flags:
+                omega_scan = sth  # omega displays the calculated sample theta
+            
+            # Check if bending parameters are part of scan commands; if not, use current PUMA values
             if 'rhm' not in [variable_name1, variable_name2]:
                 rhm = self.PUMA.rhm
             if 'rvm' not in [variable_name1, variable_name2]:
@@ -1631,11 +1672,12 @@ class TAVIController(QObject):
             if 'rva' not in [variable_name1, variable_name2]:
                 rva = self.PUMA.rva
             
-            # Check if orientation parameters are part of scan commands
-            if 'omega' in [variable_name1, variable_name2]:
-                self.PUMA.omega = omega_scan
-            if 'chi' in [variable_name1, variable_name2]:
-                self.PUMA.chi = chi_scan
+            # Set orientation parameters - always apply to PUMA
+            # If scanning, use scan value; otherwise use value from scan_point_template (from GUI)
+            self.PUMA.omega = omega_scan
+            self.PUMA.chi = chi_scan
+            self.PUMA.kappa = kappa_scan
+            self.PUMA.psi = psi_scan
             
             # Update crystal bending
             self.PUMA.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
@@ -1644,19 +1686,23 @@ class TAVIController(QObject):
             scan_folder = os.path.join(data_folder, f"scan_{i:04d}")
             
             # Log scan parameters before running
+            orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
             if scan_mode == "momentum":
                 message = (f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
-                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
+                           f"Orientation: {orientation_info}")
             elif scan_mode == "rlu":
                 message = (f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
-                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
+                           f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
+                           f"Orientation: {orientation_info}")
             elif scan_mode == "orientation":
                 message = (f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
-                           f"omega: {omega_scan:.2f}, chi: {chi_scan:.2f}\n"
+                           f"Orientation: {orientation_info}\n"
                            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}")
             else:  # angle mode
                 message = (f"Scan parameters - A1: {self.PUMA.A1}, A2: {self.PUMA.A2}, A3: {self.PUMA.A3}, A4: {self.PUMA.A4}\n"
-                           f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}")
+                           f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}\n"
+                           f"Orientation: {orientation_info}")
             self.message_printed.emit(message)
             
             # Run the PUMA simulation
@@ -1695,6 +1741,8 @@ class TAVIController(QObject):
                     'rva': rva,
                     'omega': omega_scan,
                     'chi': chi_scan,
+                    'psi': psi_scan,
+                    'kappa': kappa_scan,
                     'scan_mode': scan_mode,
                     'scan_command1': scan_command1,
                     'scan_command2': scan_command2,
