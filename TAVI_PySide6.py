@@ -161,6 +161,11 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_beta_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_gamma_edit.editingFinished.connect(self.on_lattice_changed)
+        # Sample selection change -> update PUMA and show status
+        try:
+            self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
+        except Exception:
+            pass
     
     def setup_visual_feedback(self):
         """Set up visual feedback for all input fields to show pending/saved states."""
@@ -781,7 +786,8 @@ class TAVIController(QObject):
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
-            "current_sample_settings": self.current_sample_settings
+            "current_sample_settings": self.current_sample_settings,
+            "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None"
         }
         with open("parameters.json", "w") as file:
             json.dump(parameters, file)
@@ -833,6 +839,13 @@ class TAVIController(QObject):
                 self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", 90)))
                 self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", 90)))
                 self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", 90)))
+                # Restore sample selection if present
+                try:
+                    sample_label = parameters.get("sample_label_var", "None")
+                    if hasattr(self.window.sample_dock, 'sample_combo'):
+                        self.window.sample_dock.sample_combo.setCurrentText(sample_label)
+                except Exception:
+                    pass
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
                 self.window.scan_controls_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
@@ -896,7 +909,12 @@ class TAVIController(QObject):
         
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
-        
+        # Ensure sample defaults to None in GUI
+        try:
+            if hasattr(self.window.sample_dock, 'sample_combo'):
+                self.window.sample_dock.sample_combo.setCurrentText("None")
+        except Exception:
+            pass
         self.print_to_message_center("Default parameters loaded")
     
     def run_simulation_thread(self):
@@ -905,6 +923,16 @@ class TAVIController(QObject):
         data_folder = self.window.data_control_dock.save_folder_edit.text()
         simulation_thread = threading.Thread(target=self.run_simulation, args=(data_folder,))
         simulation_thread.start()
+
+    def on_sample_changed(self, label):
+        """Handle sample selection changes from the GUI."""
+        try:
+            key = self.window.sample_dock.get_selected_sample_key()
+            self.PUMA.sample_key = key
+            self.current_sample_settings = {"sample_label": label, "sample_key": key}
+            self.print_to_message_center(f"Sample selection changed: {label} ({key})")
+        except Exception as e:
+            self.print_to_message_center(f"Sample selection change failed: {e}")
     
     def stop_simulation(self):
         """Stop the running simulation."""
@@ -940,6 +968,11 @@ class TAVIController(QObject):
         self.PUMA.fixed_E = vals['fixed_E']
         self.PUMA.monocris = vals['monocris']
         self.PUMA.anacris = vals['anacris']
+        # Set selected sample key from GUI sample dropdown (internal instrument name)
+        try:
+            self.PUMA.sample_key = self.window.sample_dock.get_selected_sample_key()
+        except Exception:
+            self.PUMA.sample_key = None
         self.PUMA.alpha_1 = float(vals['alpha_1'])
         self.PUMA.alpha_2 = [
             30 if vals['alpha_2_30'] else 0,
