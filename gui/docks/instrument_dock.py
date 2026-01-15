@@ -1,7 +1,7 @@
 """Instrument Configuration Dock for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, 
                                 QLabel, QLineEdit, QComboBox, QCheckBox, QGroupBox,
-                                QFormLayout, QGridLayout)
+                                QFormLayout, QGridLayout, QPushButton)
 from PySide6.QtCore import Qt
 
 
@@ -112,25 +112,40 @@ class InstrumentDock(QDockWidget):
         main_layout.addWidget(optics_group)
         
         # Focusing section
-        focusing_group = QGroupBox("Crystal Focusing Factors")
+        focusing_group = QGroupBox("Crystal Focusing (Absolute Radii, m)")
         focusing_layout = QGridLayout()
         focusing_layout.setSpacing(5)
         focusing_group.setLayout(focusing_layout)
         
         focusing_layout.addWidget(QLabel("rhm:"), 0, 0)
-        self.rhmfac_edit = QLineEdit()
-        self.rhmfac_edit.setMaximumWidth(60)
-        focusing_layout.addWidget(self.rhmfac_edit, 0, 1)
+        self.rhm_edit = QLineEdit()
+        self.rhm_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rhm_edit, 0, 1)
+        self.rhm_ideal_button = QPushButton("Ideal: --")
+        self.rhm_ideal_button.setCheckable(True)
+        self.rhm_ideal_button.setMaximumWidth(140)
+        self.rhm_ideal_button.setToolTip("Set rhm to the calculated ideal value")
+        focusing_layout.addWidget(self.rhm_ideal_button, 0, 2)
         
-        focusing_layout.addWidget(QLabel("rvm:"), 0, 2)
-        self.rvmfac_edit = QLineEdit()
-        self.rvmfac_edit.setMaximumWidth(60)
-        focusing_layout.addWidget(self.rvmfac_edit, 0, 3)
+        focusing_layout.addWidget(QLabel("rvm:"), 0, 3)
+        self.rvm_edit = QLineEdit()
+        self.rvm_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rvm_edit, 0, 4)
+        self.rvm_ideal_button = QPushButton("Ideal: --")
+        self.rvm_ideal_button.setCheckable(True)
+        self.rvm_ideal_button.setMaximumWidth(140)
+        self.rvm_ideal_button.setToolTip("Set rvm to the calculated ideal value")
+        focusing_layout.addWidget(self.rvm_ideal_button, 0, 5)
         
         focusing_layout.addWidget(QLabel("rha:"), 1, 0)
-        self.rhafac_edit = QLineEdit()
-        self.rhafac_edit.setMaximumWidth(60)
-        focusing_layout.addWidget(self.rhafac_edit, 1, 1)
+        self.rha_edit = QLineEdit()
+        self.rha_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rha_edit, 1, 1)
+        self.rha_ideal_button = QPushButton("Ideal: --")
+        self.rha_ideal_button.setCheckable(True)
+        self.rha_ideal_button.setMaximumWidth(140)
+        self.rha_ideal_button.setToolTip("Set rha to the calculated ideal value")
+        focusing_layout.addWidget(self.rha_ideal_button, 1, 2)
         
         main_layout.addWidget(focusing_group)
         
