@@ -1225,14 +1225,16 @@ class TAVIController(QObject):
             "current_sample_settings": self.current_sample_settings,
             "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None"
         }
-        with open("parameters.json", "w") as file:
+        # Ensure config directory exists
+        os.makedirs("config", exist_ok=True)
+        with open("config/parameters.json", "w") as file:
             json.dump(parameters, file)
         self.print_to_message_center("Parameters saved successfully")
     
     def load_parameters(self):
         """Load parameters from JSON file."""
-        if os.path.exists("parameters.json"):
-            with open("parameters.json", "r") as file:
+        if os.path.exists("config/parameters.json"):
+            with open("config/parameters.json", "r") as file:
                 parameters = json.load(file)
                 
                 # Set GUI values from parameters
