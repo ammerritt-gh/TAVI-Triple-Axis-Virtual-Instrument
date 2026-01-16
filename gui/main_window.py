@@ -19,7 +19,7 @@ class TAVIMainWindow(QMainWindow):
     """Main window for TAVI application with dockable panels."""
     
     # Layout config file path
-    LAYOUT_CONFIG_FILE = "view_layout.json"
+    LAYOUT_CONFIG_FILE = "config/view_layout.json"
     
     def __init__(self):
         super().__init__()
@@ -293,9 +293,12 @@ class TAVIMainWindow(QMainWindow):
     
     def _get_layout_config_path(self):
         """Get the path to the layout config file."""
-        # Store in the same directory as the application
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), 
-                          self.LAYOUT_CONFIG_FILE)
+        # Store in config directory at project root
+        project_root = os.path.dirname(os.path.dirname(__file__))
+        config_dir = os.path.join(project_root, "config")
+        # Create config directory if it doesn't exist
+        os.makedirs(config_dir, exist_ok=True)
+        return os.path.join(project_root, self.LAYOUT_CONFIG_FILE)
     
     def _show_about(self):
         """Show the About dialog."""
