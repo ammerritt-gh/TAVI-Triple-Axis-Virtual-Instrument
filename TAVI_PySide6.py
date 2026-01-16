@@ -7,6 +7,7 @@ import datetime
 import threading
 import queue
 import math
+import mcstasscript as ms
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
@@ -23,6 +24,7 @@ from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_di
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
+from gui.dialogs.diagnostic_config_dialog import DiagnosticConfigDialog
 
 # Physical constants
 N_MASS = 1.67492749804e-27  # neutron mass
@@ -40,7 +42,18 @@ class TAVIController(QObject):
     remaining_time_updated = Signal(str)
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
-    plot_requested = Signal(str, str, str)  # data_folder, scan_command1, scan_command2
+    
+    # Signals for real-time display dock updates
+    scan_initialized = Signal(str, list, list, str, str, list, list)  # mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d
+    scan_point_updated_1d = Signal(int, float)  # index, counts
+    scan_point_updated_2d = Signal(int, int, float)  # idx_x, idx_y, counts
+    scan_current_index_1d = Signal(int)  # current index
+    scan_current_index_2d = Signal(int, int)  # idx_x, idx_y
+    scan_completed = Signal()  # scan finished
+    
+    # Signals for diagnostic plots (must run on main thread)
+    diagnostic_plot_requested = Signal(object)  # McStasData object
+    instrument_diagram_requested = Signal(object)  # McStas instrument object
     
     def __init__(self, window):
         super().__init__()
@@ -88,18 +101,18 @@ class TAVIController(QObject):
     def connect_signals(self):
         """Connect all GUI signals to controller methods."""
         # Simulation control buttons (moved to right panel)
-        self.window.simulation_control_dock.run_button.clicked.connect(self.run_simulation_thread)
-        self.window.simulation_control_dock.stop_button.clicked.connect(self.stop_simulation)
-        self.window.simulation_control_dock.quit_button.clicked.connect(self.quit_application)
-        self.window.simulation_control_dock.validation_button.clicked.connect(self.open_validation_window)
+        self.window.simulation_dock.run_button.clicked.connect(self.run_simulation_thread)
+        self.window.simulation_dock.stop_button.clicked.connect(self.stop_simulation)
+        self.window.simulation_dock.quit_button.clicked.connect(self.quit_application)
+        self.window.simulation_dock.validation_button.clicked.connect(self.open_validation_window)
         
         # Parameter buttons (moved to right panel)
-        self.window.simulation_control_dock.save_button.clicked.connect(self.save_parameters)
-        self.window.simulation_control_dock.load_button.clicked.connect(self.load_parameters)
-        self.window.simulation_control_dock.defaults_button.clicked.connect(self.set_default_parameters)
+        self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
+        self.window.simulation_dock.load_button.clicked.connect(self.load_parameters)
+        self.window.simulation_dock.defaults_button.clicked.connect(self.set_default_parameters)
         
         # Diagnostics button
-        self.window.diagnostics_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
+        self.window.simulation_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
         
         # Sample configuration button
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
@@ -108,9 +121,9 @@ class TAVIController(QObject):
         # (omega/chi are actual angles, psi/kappa are alignment offsets)
         
         # Misalignment training dock
-        self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
-        self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
-        self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
+        self.window.sample_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
+        self.window.sample_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
+        self.window.sample_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
         
         # Data control buttons
         self.window.data_control_dock.save_browse_button.clicked.connect(
@@ -126,7 +139,18 @@ class TAVIController(QObject):
         self.remaining_time_updated.connect(self.update_remaining_time)
         self.counts_updated.connect(self.update_counts_entry)
         self.message_printed.connect(self.window.output_dock.message_text.append)
-        self.plot_requested.connect(self.plot_in_main_thread)
+        
+        # Connect display dock signals
+        self.scan_initialized.connect(self._on_scan_initialized)
+        self.scan_point_updated_1d.connect(self.window.display_dock.update_1d_point)
+        self.scan_point_updated_2d.connect(self.window.display_dock.update_2d_point)
+        self.scan_current_index_1d.connect(self.window.display_dock.set_current_scan_index)
+        self.scan_current_index_2d.connect(self.window.display_dock.set_current_scan_index_2d)
+        self.scan_completed.connect(self.window.display_dock.scan_complete)
+        
+        # Connect diagnostic plot signals (runs on main thread for matplotlib)
+        self.diagnostic_plot_requested.connect(self._show_diagnostic_plots)
+        self.instrument_diagram_requested.connect(self._show_instrument_diagram)
         
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
@@ -169,21 +193,21 @@ class TAVIController(QObject):
         self.window.instrument_dock.Ef_edit.editingFinished.connect(self.on_Ef_changed)
         
         # K fixed mode and fixed E - update all related values
-        self.window.scan_controls_dock.K_fixed_combo.currentTextChanged.connect(self.on_K_fixed_changed)
-        self.window.scan_controls_dock.fixed_E_edit.editingFinished.connect(self.on_fixed_E_changed)
+        self.window.scattering_dock.K_fixed_combo.currentTextChanged.connect(self.on_K_fixed_changed)
+        self.window.scattering_dock.fixed_E_edit.editingFinished.connect(self.on_fixed_E_changed)
         
         # Q-space - update HKL and angles
-        self.window.reciprocal_space_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
-        self.window.reciprocal_space_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
-        self.window.reciprocal_space_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
         
         # HKL - update Q-space and angles
-        self.window.reciprocal_space_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
-        self.window.reciprocal_space_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
-        self.window.reciprocal_space_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
         
         # DeltaE - update energies
-        self.window.reciprocal_space_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
+        self.window.scattering_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
         
         # Lattice parameters - update HKL/Q conversions
         self.window.sample_dock.lattice_a_edit.editingFinished.connect(self.on_lattice_changed)
@@ -229,13 +253,13 @@ class TAVIController(QObject):
         
         # Reciprocal space dock
         line_edits.extend([
-            self.window.reciprocal_space_dock.qx_edit,
-            self.window.reciprocal_space_dock.qy_edit,
-            self.window.reciprocal_space_dock.qz_edit,
-            self.window.reciprocal_space_dock.H_edit,
-            self.window.reciprocal_space_dock.K_edit,
-            self.window.reciprocal_space_dock.L_edit,
-            self.window.reciprocal_space_dock.deltaE_edit,
+            self.window.scattering_dock.qx_edit,
+            self.window.scattering_dock.qy_edit,
+            self.window.scattering_dock.qz_edit,
+            self.window.scattering_dock.H_edit,
+            self.window.scattering_dock.K_edit,
+            self.window.scattering_dock.L_edit,
+            self.window.scattering_dock.deltaE_edit,
         ])
         
         # Sample dock
@@ -252,10 +276,10 @@ class TAVIController(QObject):
         
         # Scan controls dock
         line_edits.extend([
-            self.window.scan_controls_dock.number_neutrons_edit,
-            self.window.scan_controls_dock.fixed_E_edit,
-            self.window.scan_controls_dock.scan_command_1_edit,
-            self.window.scan_controls_dock.scan_command_2_edit,
+            self.window.simulation_dock.number_neutrons_edit,
+            self.window.scattering_dock.fixed_E_edit,
+            self.window.simulation_dock.scan_command_1_edit,
+            self.window.simulation_dock.scan_command_2_edit,
         ])
         
         # Apply visual feedback to all line edits
@@ -328,19 +352,137 @@ class TAVIController(QObject):
     def update_progress(self, current, total):
         """Update progress bar."""
         percentage = int(current * 100 / total) if total > 0 else 0
-        self.window.output_dock.progress_bar.setValue(percentage)
-        self.window.output_dock.progress_label.setText(f"{percentage}% ({current}/{total})")
+        self.window.simulation_dock.progress_bar.setValue(percentage)
+        self.window.simulation_dock.progress_label.setText(f"{percentage}% ({current}/{total})")
     
     @Slot(str)
     def update_remaining_time(self, remaining_time):
         """Update remaining time label."""
-        self.window.output_dock.remaining_time_label.setText(f"Estimated Remaining Time: {remaining_time}")
+        self.window.simulation_dock.remaining_time_label.setText(f"Estimated Remaining Time: {remaining_time}")
     
     @Slot(float, float)
     def update_counts_entry(self, max_counts, total_counts):
         """Update counts display."""
-        self.window.simulation_control_dock.max_counts_label.setText(str(int(max_counts)))
-        self.window.simulation_control_dock.total_counts_label.setText(str(int(total_counts)))
+        self.window.simulation_dock.max_counts_label.setText(str(int(max_counts)))
+        self.window.simulation_dock.total_counts_label.setText(str(int(total_counts)))
+    
+    @Slot(str, list, list, str, str, list, list)
+    def _on_scan_initialized(self, mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d):
+        """Handle scan initialization signal and forward to display dock."""
+        if mode == '1D':
+            self.window.display_dock.initialize_scan(mode, values1, valid_mask1, var1)
+        else:
+            self.window.display_dock.initialize_scan(mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d)
+        
+        # Set data folder and metadata
+        data_folder = self.window.data_control_dock.save_folder_edit.text()
+        actual_folder = self.window.data_control_dock.actual_folder_label.text()
+        if actual_folder:
+            self.window.display_dock.set_data_folder(actual_folder)
+        elif data_folder:
+            self.window.display_dock.set_data_folder(
+                os.path.join(self.output_directory, data_folder) if self.output_directory else data_folder
+            )
+        
+        # Set scan metadata from current GUI values
+        self.window.display_dock.set_scan_metadata(self._build_current_scan_metadata())
+    
+    @Slot(object)
+    def _show_diagnostic_plots(self, data):
+        """Display diagnostic monitor plots on the main thread.
+        
+        This slot is called from the simulation thread via signal to ensure
+        matplotlib GUI runs on the main thread.
+        """
+        if data is None or data is math.nan:
+            self.print_to_message_center("No diagnostic data to display")
+            return
+        
+        try:
+            self.print_to_message_center("Displaying diagnostic monitor plots...")
+            ms.make_sub_plot(data, log=False)
+        except Exception as e:
+            self.print_to_message_center(f"Could not display diagnostic plots: {e}")
+    
+    @Slot(object)
+    def _show_instrument_diagram(self, instrument):
+        """Display instrument diagram on the main thread.
+        
+        This slot is called from the simulation thread via signal to ensure
+        matplotlib GUI runs on the main thread.
+        """
+        if instrument is None:
+            return
+        
+        try:
+            self.print_to_message_center("Displaying instrument diagram...")
+            instrument.show_diagram()
+        except Exception as e:
+            self.print_to_message_center(f"Could not display instrument diagram: {e}")
+    
+    def _build_current_scan_metadata(self):
+        """Build scan metadata from current GUI values."""
+        vals = self.get_gui_values()
+        if not vals:
+            return {}
+        
+        metadata = {}
+        
+        # Number of neutrons
+        metadata['number_neutrons'] = vals.get('number_neutrons', 1000000)
+        
+        # Ki/Kf fixed mode
+        metadata['K_fixed'] = vals.get('K_fixed', 'Ki Fixed')
+        
+        # Fixed E
+        metadata['fixed_E'] = vals.get('fixed_E', 0)
+        
+        # Collimations
+        metadata['alpha_1'] = vals.get('alpha_1', 'open')
+        # Build alpha_2 string from checkboxes
+        alpha_2_parts = []
+        if vals.get('alpha_2_30'):
+            alpha_2_parts.append("30'")
+        if vals.get('alpha_2_40'):
+            alpha_2_parts.append("40'")
+        if vals.get('alpha_2_60'):
+            alpha_2_parts.append("60'")
+        metadata['alpha_2'] = "+".join(alpha_2_parts) if alpha_2_parts else "open"
+        metadata['alpha_3'] = vals.get('alpha_3', 'open')
+        metadata['alpha_4'] = vals.get('alpha_4', 'open')
+        
+        # Crystals
+        metadata['monocris'] = vals.get('monocris', 'PG[002]')
+        metadata['anacris'] = vals.get('anacris', 'PG[002]')
+        
+        # Alignment offsets
+        metadata['kappa'] = vals.get('kappa', 0)
+        metadata['psi'] = vals.get('psi', 0)
+        
+        # Q-space coordinates
+        metadata['qx'] = vals.get('qx', 0)
+        metadata['qy'] = vals.get('qy', 0)
+        metadata['qz'] = vals.get('qz', 0)
+        
+        # HKL coordinates
+        metadata['H'] = vals.get('H', 0)
+        metadata['K'] = vals.get('K', 0)
+        metadata['L'] = vals.get('L', 0)
+        
+        # Energy transfer
+        metadata['deltaE'] = vals.get('deltaE', 0)
+        
+        # Sample frame mode
+        try:
+            metadata['sample_frame_mode'] = 'HKL' if self.window.sample_dock.sample_frame_mode_check.isChecked() else 'Q'
+        except:
+            metadata['sample_frame_mode'] = 'Q'
+        
+        # NMO and velocity selector
+        metadata['NMO_installed'] = vals.get('NMO_installed', 'None')
+        metadata['V_selector_installed'] = vals.get('V_selector_installed', False)
+        
+        return metadata
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
@@ -369,15 +511,15 @@ class TAVIController(QObject):
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
                 'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
                 'Ef': float(self.window.instrument_dock.Ef_edit.text() or 0),
-                'K_fixed': self.window.scan_controls_dock.K_fixed_combo.currentText(),
-                'fixed_E': float(self.window.scan_controls_dock.fixed_E_edit.text() or 0),
-                'qx': float(self.window.reciprocal_space_dock.qx_edit.text() or 0),
-                'qy': float(self.window.reciprocal_space_dock.qy_edit.text() or 0),
-                'qz': float(self.window.reciprocal_space_dock.qz_edit.text() or 0),
-                'H': float(self.window.reciprocal_space_dock.H_edit.text() or 0),
-                'K': float(self.window.reciprocal_space_dock.K_edit.text() or 0),
-                'L': float(self.window.reciprocal_space_dock.L_edit.text() or 0),
-                'deltaE': float(self.window.reciprocal_space_dock.deltaE_edit.text() or 0),
+                'K_fixed': self.window.scattering_dock.K_fixed_combo.currentText(),
+                'fixed_E': float(self.window.scattering_dock.fixed_E_edit.text() or 0),
+                'qx': float(self.window.scattering_dock.qx_edit.text() or 0),
+                'qy': float(self.window.scattering_dock.qy_edit.text() or 0),
+                'qz': float(self.window.scattering_dock.qz_edit.text() or 0),
+                'H': float(self.window.scattering_dock.H_edit.text() or 0),
+                'K': float(self.window.scattering_dock.K_edit.text() or 0),
+                'L': float(self.window.scattering_dock.L_edit.text() or 0),
+                'deltaE': float(self.window.scattering_dock.deltaE_edit.text() or 0),
                 'lattice_a': float(self.window.sample_dock.lattice_a_edit.text() or 1),
                 'lattice_b': float(self.window.sample_dock.lattice_b_edit.text() or 1),
                 'lattice_c': float(self.window.sample_dock.lattice_c_edit.text() or 1),
@@ -399,11 +541,10 @@ class TAVIController(QObject):
                 'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
                 'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
                 'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
-                'number_neutrons': int(self.window.scan_controls_dock.number_neutrons_edit.text() or 1000000),
-                'scan_command1': self.window.scan_controls_dock.scan_command_1_edit.text(),
-                'scan_command2': self.window.scan_controls_dock.scan_command_2_edit.text(),
-                'diagnostic_mode': self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
-                'auto_display': self.window.simulation_control_dock.auto_display_check.isChecked(),
+                'number_neutrons': int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000),
+                'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
+                'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
+                'diagnostic_mode': self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             }
         except ValueError:
             return None
@@ -481,7 +622,7 @@ class TAVIController(QObject):
             self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
             
         except (ValueError, KeyError) as e:
             pass
@@ -705,12 +846,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -735,12 +876,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -764,12 +905,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -793,12 +934,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{vals['Ei']:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{vals['Ei']:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = vals['Ei'] - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -822,12 +963,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -851,12 +992,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{vals['Ef']:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{vals['Ef']:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - vals['Ef']
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -900,10 +1041,10 @@ class TAVIController(QObject):
             )
             if not error_flags:
                 qx, qy, qz, deltaE = q_vals
-                self.window.reciprocal_space_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
-                self.window.reciprocal_space_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
-                self.window.reciprocal_space_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
-                self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         except Exception:
             pass
         finally:
@@ -928,9 +1069,9 @@ class TAVIController(QObject):
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
-            self.window.reciprocal_space_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
         except:
             pass
         finally:
@@ -948,18 +1089,18 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            H = float(self.window.reciprocal_space_dock.H_edit.text() or 0)
-            K = float(self.window.reciprocal_space_dock.K_edit.text() or 0)
-            L = float(self.window.reciprocal_space_dock.L_edit.text() or 0)
+            H = float(self.window.scattering_dock.H_edit.text() or 0)
+            K = float(self.window.scattering_dock.K_edit.text() or 0)
+            L = float(self.window.scattering_dock.L_edit.text() or 0)
             
             qx, qy, qz = update_Q_from_HKL_direct(
                 H, K, L,
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
-            self.window.reciprocal_space_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
         except:
             pass
         finally:
@@ -987,13 +1128,13 @@ class TAVIController(QObject):
         hkl_enabled = bool(checked)
         q_enabled = not hkl_enabled
 
-        self.window.reciprocal_space_dock.H_edit.setEnabled(hkl_enabled)
-        self.window.reciprocal_space_dock.K_edit.setEnabled(hkl_enabled)
-        self.window.reciprocal_space_dock.L_edit.setEnabled(hkl_enabled)
+        self.window.scattering_dock.H_edit.setEnabled(hkl_enabled)
+        self.window.scattering_dock.K_edit.setEnabled(hkl_enabled)
+        self.window.scattering_dock.L_edit.setEnabled(hkl_enabled)
 
-        self.window.reciprocal_space_dock.qx_edit.setEnabled(q_enabled)
-        self.window.reciprocal_space_dock.qy_edit.setEnabled(q_enabled)
-        self.window.reciprocal_space_dock.qz_edit.setEnabled(q_enabled)
+        self.window.scattering_dock.qx_edit.setEnabled(q_enabled)
+        self.window.scattering_dock.qy_edit.setEnabled(q_enabled)
+        self.window.scattering_dock.qz_edit.setEnabled(q_enabled)
 
         # Recalculate the dependent variables when mode changes
         if hkl_enabled:
@@ -1083,8 +1224,8 @@ class TAVIController(QObject):
     
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
-        if self.window.misalignment_dock.has_misalignment():
-            mis_omega, mis_chi, mis_psi = self.window.misalignment_dock.get_loaded_misalignment()
+        if self.window.sample_dock.has_misalignment():
+            mis_omega, mis_chi, mis_psi = self.window.sample_dock.get_loaded_misalignment()
             self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi, mis_psi=mis_psi)
             self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
     
@@ -1098,14 +1239,23 @@ class TAVIController(QObject):
         try:
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.window.misalignment_dock.update_alignment_feedback(kappa, psi, 0)
+            self.window.sample_dock.update_alignment_feedback(kappa, psi, 0)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
-        # TODO: Implement diagnostics configuration dialog
-        self.print_to_message_center("Diagnostics configuration window not yet implemented")
+        dialog = DiagnosticConfigDialog(self.window, self.diagnostic_settings)
+        if dialog.exec():
+            # User clicked Save and Close
+            self.diagnostic_settings = dialog.get_settings()
+            # Update PUMA instrument with new settings
+            self.PUMA.update_diagnostic_settings(self.diagnostic_settings)
+            # Save parameters to persist the settings
+            self.save_parameters()
+            self.print_to_message_center("Diagnostic settings saved")
+        else:
+            self.print_to_message_center("Diagnostic configuration cancelled")
     
     def configure_sample(self):
         """Open sample configuration window."""
@@ -1118,7 +1268,7 @@ class TAVIController(QObject):
         self.print_to_message_center("Validation window not yet implemented")
     
     def load_and_display_data(self):
-        """Load and display existing data using PySide6-compatible wrapper."""
+        """Load and display existing data in the display dock."""
         folder = self.window.data_control_dock.load_folder_edit.text()
         if folder and os.path.exists(folder):
             self.print_to_message_center(f"Loading data from: {folder}")
@@ -1127,42 +1277,93 @@ class TAVIController(QObject):
                 scan_parameters = read_parameters_from_file(folder)
                 scan_cmd1 = scan_parameters.get('scan_command1', '')
                 scan_cmd2 = scan_parameters.get('scan_command2', '')
-                # Emit signal to plot in main thread (already on main thread, but keeps consistency)
-                self.plot_requested.emit(folder, scan_cmd1, scan_cmd2)
+                
+                # Build metadata for info panel
+                metadata = self._build_scan_metadata_from_parameters(scan_parameters)
+                
+                # Load data into display dock
+                self.window.display_dock.load_existing_data(folder, scan_cmd1, scan_cmd2, metadata)
+                self.print_to_message_center("Data loaded into display dock")
             except Exception as e:
                 self.print_to_message_center(f"Error loading data: {str(e)}")
         else:
             self.print_to_message_center("Invalid folder path for loading data")
     
-    @Slot(str, str, str)
-    def plot_in_main_thread(self, data_folder, scan_command1, scan_command2):
-        """Plot data in main thread (thread-safe matplotlib operations)."""
-        try:
-            # Use Qt backend compatible with PySide6 - must be set on main thread
-            import matplotlib
-            matplotlib.use('Qt5Agg')
-            import matplotlib.pyplot as plt
-            import numpy as np
-            
-            scan_parameters = read_parameters_from_file(data_folder)
-            
-            if not scan_command1 and not scan_command2:
-                # Single point - no plot needed
-                self.print_to_message_center("Single point - no plot generated")
-                return
-            
-            if scan_command1 and not scan_command2:
-                # 1D scan
-                self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters, plt, np)
-                self.print_to_message_center("1D plot displayed and saved to data folder")
-            
-            if scan_command2 and scan_command1:
-                # 2D scan
-                self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters, plt, np)
-                self.print_to_message_center("2D plot displayed and saved to data folder")
-                
-        except Exception as e:
-            self.print_to_message_center(f"Plot generation failed: {e}")
+    def _build_scan_metadata_from_parameters(self, params):
+        """Build scan metadata dict from loaded parameters."""
+        metadata = {}
+        
+        # Number of neutrons
+        if 'number_neutrons' in params:
+            try:
+                metadata['number_neutrons'] = int(float(params['number_neutrons']))
+            except (ValueError, TypeError):
+                pass
+        
+        # Ki/Kf fixed mode
+        if 'K_fixed' in params:
+            metadata['K_fixed'] = params['K_fixed']
+        
+        # Fixed E
+        if 'fixed_E' in params:
+            try:
+                metadata['fixed_E'] = float(params['fixed_E'])
+            except (ValueError, TypeError):
+                pass
+        
+        # Collimations
+        for key in ['alpha_1', 'alpha_2', 'alpha_3', 'alpha_4']:
+            if key in params:
+                metadata[key] = params[key]
+        
+        # Crystals
+        if 'monocris' in params:
+            metadata['monocris'] = params['monocris']
+        if 'anacris' in params:
+            metadata['anacris'] = params['anacris']
+        
+        # Alignment offsets
+        for key in ['kappa', 'psi']:
+            if key in params:
+                try:
+                    metadata[key] = float(params[key])
+                except (ValueError, TypeError):
+                    pass
+        
+        # Q-space coordinates
+        for key in ['qx', 'qy', 'qz']:
+            if key in params:
+                try:
+                    metadata[key] = float(params[key])
+                except (ValueError, TypeError):
+                    pass
+        
+        # HKL coordinates
+        for key in ['H', 'K', 'L']:
+            if key in params:
+                try:
+                    metadata[key] = float(params[key])
+                except (ValueError, TypeError):
+                    pass
+        
+        # Energy transfer
+        if 'deltaE' in params:
+            try:
+                metadata['deltaE'] = float(params['deltaE'])
+            except (ValueError, TypeError):
+                pass
+        
+        # Sample frame mode
+        if 'sample_frame_mode' in params:
+            metadata['sample_frame_mode'] = params['sample_frame_mode']
+        
+        # NMO and velocity selector
+        if 'NMO_installed' in params:
+            metadata['NMO_installed'] = params['NMO_installed']
+        if 'V_selector_installed' in params:
+            metadata['V_selector_installed'] = params.get('V_selector_installed', False)
+        
+        return metadata
     
     def save_parameters(self):
         """Save all parameters to JSON file."""
@@ -1176,8 +1377,8 @@ class TAVIController(QObject):
             "Kf_var": self.window.instrument_dock.Kf_edit.text(),
             "Ei_var": self.window.instrument_dock.Ei_edit.text(),
             "Ef_var": self.window.instrument_dock.Ef_edit.text(),
-            "number_neutrons_var": self.window.scan_controls_dock.number_neutrons_edit.text(),
-            "K_fixed_var": self.window.scan_controls_dock.K_fixed_combo.currentText(),
+            "number_neutrons_var": self.window.simulation_dock.number_neutrons_edit.text(),
+            "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
             "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
             "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
             "rhm_var": self.window.instrument_dock.rhm_edit.text(),
@@ -1186,15 +1387,15 @@ class TAVIController(QObject):
             "rhm_ideal_locked": self.is_bending_locked("rhm"),
             "rvm_ideal_locked": self.is_bending_locked("rvm"),
             "rha_ideal_locked": self.is_bending_locked("rha"),
-            "fixed_E_var": self.window.scan_controls_dock.fixed_E_edit.text(),
-            "qx_var": self.window.reciprocal_space_dock.qx_edit.text(),
-            "qy_var": self.window.reciprocal_space_dock.qy_edit.text(),
-            "qz_var": self.window.reciprocal_space_dock.qz_edit.text(),
+            "fixed_E_var": self.window.scattering_dock.fixed_E_edit.text(),
+            "qx_var": self.window.scattering_dock.qx_edit.text(),
+            "qy_var": self.window.scattering_dock.qy_edit.text(),
+            "qz_var": self.window.scattering_dock.qz_edit.text(),
             # HKL values
-            "H_var": self.window.reciprocal_space_dock.H_edit.text(),
-            "K_var": self.window.reciprocal_space_dock.K_edit.text(),
-            "L_var": self.window.reciprocal_space_dock.L_edit.text(),
-            "deltaE_var": self.window.reciprocal_space_dock.deltaE_edit.text(),
+            "H_var": self.window.scattering_dock.H_edit.text(),
+            "K_var": self.window.scattering_dock.K_edit.text(),
+            "L_var": self.window.scattering_dock.L_edit.text(),
+            "deltaE_var": self.window.scattering_dock.deltaE_edit.text(),
             "monocris_var": self.window.instrument_dock.monocris_combo.currentText(),
             "anacris_var": self.window.instrument_dock.anacris_combo.currentText(),
             "alpha_1_var": self.window.instrument_dock.alpha_1_combo.currentText(),
@@ -1203,7 +1404,7 @@ class TAVIController(QObject):
             "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked(),
             "alpha_3_var": self.window.instrument_dock.alpha_3_combo.currentText(),
             "alpha_4_var": self.window.instrument_dock.alpha_4_combo.currentText(),
-            "diagnostic_mode_var": self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
+            "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             "lattice_a_var": self.window.sample_dock.lattice_a_edit.text(),
             "lattice_b_var": self.window.sample_dock.lattice_b_edit.text(),
             "lattice_c_var": self.window.sample_dock.lattice_c_edit.text(),
@@ -1214,25 +1415,26 @@ class TAVIController(QObject):
             "kappa_var": self.window.sample_dock.kappa_edit.text(),
             "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             # Misalignment hash only (keeps values hidden from students)
-            "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
+            "misalignment_hash_var": self.window.sample_dock.load_hash_edit.text(),
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
-            "scan_command_var1": self.window.scan_controls_dock.scan_command_1_edit.text(),
-            "scan_command_var2": self.window.scan_controls_dock.scan_command_2_edit.text(),
-            "auto_display_var": self.window.simulation_control_dock.auto_display_check.isChecked(),
+            "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
+            "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
             "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None"
         }
-        with open("parameters.json", "w") as file:
+        # Ensure config directory exists
+        os.makedirs("config", exist_ok=True)
+        with open("config/parameters.json", "w") as file:
             json.dump(parameters, file)
         self.print_to_message_center("Parameters saved successfully")
     
     def load_parameters(self):
         """Load parameters from JSON file."""
-        if os.path.exists("parameters.json"):
-            with open("parameters.json", "r") as file:
+        if os.path.exists("config/parameters.json"):
+            with open("config/parameters.json", "r") as file:
                 parameters = json.load(file)
                 
                 # Set GUI values from parameters
@@ -1266,20 +1468,20 @@ class TAVIController(QObject):
                     parameters.get("rha_ideal_locked", False),
                 )
                 
-                self.window.scan_controls_dock.number_neutrons_edit.setText(str(parameters.get("number_neutrons_var", 1e8)))
-                self.window.scan_controls_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
-                self.window.scan_controls_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
-                self.window.reciprocal_space_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
-                self.window.reciprocal_space_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
-                self.window.reciprocal_space_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
+                self.window.simulation_dock.number_neutrons_edit.setText(str(parameters.get("number_neutrons_var", 1e8)))
+                self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
+                self.window.scattering_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
+                self.window.scattering_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
+                self.window.scattering_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
+                self.window.scattering_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
                 # HKL values
-                self.window.reciprocal_space_dock.H_edit.setText(str(parameters.get("H_var", 1)))
-                self.window.reciprocal_space_dock.K_edit.setText(str(parameters.get("K_var", 0)))
-                self.window.reciprocal_space_dock.L_edit.setText(str(parameters.get("L_var", 0)))
-                self.window.reciprocal_space_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 5.25)))
-                self.window.diagnostics_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
-                self.window.scan_controls_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", ""))
-                self.window.scan_controls_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
+                self.window.scattering_dock.H_edit.setText(str(parameters.get("H_var", 1)))
+                self.window.scattering_dock.K_edit.setText(str(parameters.get("K_var", 0)))
+                self.window.scattering_dock.L_edit.setText(str(parameters.get("L_var", 0)))
+                self.window.scattering_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 5.25)))
+                self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
+                self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", ""))
+                self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
                 
                 self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", 4.05)))
                 self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", 4.05)))
@@ -1293,17 +1495,17 @@ class TAVIController(QObject):
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
-                    self.window.misalignment_dock.load_hash_edit.setText(mis_hash)
+                    self.window.sample_dock.load_hash_edit.setText(mis_hash)
                     # Decode and apply the misalignment to the instrument
                     try:
-                        from gui.docks.misalignment_dock import decode_misalignment
+                        from gui.docks.unified_sample_dock import decode_misalignment
                         omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
                         self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
                         # Store in dock and update UI to show it's loaded
-                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
-                        self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
-                        self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
-                        self.window.misalignment_dock.check_alignment_button.setEnabled(True)
+                        self.window.sample_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
+                        self.window.sample_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
+                        self.window.sample_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
+                        self.window.sample_dock.check_alignment_button.setEnabled(True)
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
@@ -1319,11 +1521,14 @@ class TAVIController(QObject):
                     pass
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
-                self.window.simulation_control_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
-                self.diagnostic_settings = parameters.get("diagnostic_settings", {})
+                # Load diagnostic settings with defaults for any missing keys
+                default_diag = DiagnosticConfigDialog.get_default_settings()
+                loaded_diag = parameters.get("diagnostic_settings", {})
+                # Merge: use loaded value if present, else default
+                self.diagnostic_settings = {**default_diag, **loaded_diag}
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
 
                 self.update_sample_frame_mode()
@@ -1360,18 +1565,18 @@ class TAVIController(QObject):
         self.update_ideal_bending_buttons()
         self.apply_ideal_bending_values()
         
-        self.window.scan_controls_dock.number_neutrons_edit.setText("1000000")
-        self.window.scan_controls_dock.K_fixed_combo.setCurrentText("Kf Fixed")
-        self.window.scan_controls_dock.fixed_E_edit.setText("14.7")
-        self.window.reciprocal_space_dock.qx_edit.setText("2")
-        self.window.reciprocal_space_dock.qy_edit.setText("0")
-        self.window.reciprocal_space_dock.qz_edit.setText("0")
+        self.window.simulation_dock.number_neutrons_edit.setText("1000000")
+        self.window.scattering_dock.K_fixed_combo.setCurrentText("Kf Fixed")
+        self.window.scattering_dock.fixed_E_edit.setText("14.7")
+        self.window.scattering_dock.qx_edit.setText("2")
+        self.window.scattering_dock.qy_edit.setText("0")
+        self.window.scattering_dock.qz_edit.setText("0")
         # Set HKL defaults (computed from Q and lattice)
-        self.window.reciprocal_space_dock.H_edit.setText("1")
-        self.window.reciprocal_space_dock.K_edit.setText("0")
-        self.window.reciprocal_space_dock.L_edit.setText("0")
-        self.window.reciprocal_space_dock.deltaE_edit.setText("5.25")
-        self.window.diagnostics_dock.diagnostic_mode_check.setChecked(True)
+        self.window.scattering_dock.H_edit.setText("1")
+        self.window.scattering_dock.K_edit.setText("0")
+        self.window.scattering_dock.L_edit.setText("0")
+        self.window.scattering_dock.deltaE_edit.setText("5.25")
+        self.window.simulation_dock.diagnostic_mode_check.setChecked(True)
         
         self.window.sample_dock.lattice_a_edit.setText("3.78")
         self.window.sample_dock.lattice_b_edit.setText("3.78")
@@ -1383,16 +1588,15 @@ class TAVIController(QObject):
         self.window.sample_dock.kappa_edit.setText("0")
         self.window.sample_dock.psi_edit.setText("0")
         self.window.sample_dock.sample_frame_mode_check.setChecked(False)
-        self.window.scan_controls_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
-        self.window.scan_controls_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
-        self.window.simulation_control_dock.auto_display_check.setChecked(True)
+        self.window.simulation_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
+        self.window.simulation_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
         
         # Set default folder paths
         folder_suggestion = os.path.join(self.output_directory, "initial_testing")
         self.window.data_control_dock.save_folder_edit.setText(folder_suggestion)
         self.window.data_control_dock.load_folder_edit.setText(folder_suggestion)
         
-        self.diagnostic_settings = {}
+        self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
         self.current_sample_settings = {}
         self.update_sample_frame_mode()
         # Ensure sample defaults to None in GUI
@@ -1406,6 +1610,12 @@ class TAVIController(QObject):
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
         self.stop_flag = False
+        
+        # Reset progress bar and show initializing state
+        self.window.simulation_dock.progress_bar.setValue(0)
+        self.window.simulation_dock.progress_label.setText("Initializing...")
+        self.window.simulation_dock.remaining_time_label.setText("Estimated Remaining Time: calculating...")
+        
         data_folder = self.window.data_control_dock.save_folder_edit.text()
         simulation_thread = threading.Thread(target=self.run_simulation, args=(data_folder,))
         simulation_thread.start()
@@ -1476,7 +1686,6 @@ class TAVIController(QObject):
         scan_command1 = vals['scan_command1']
         scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
-        auto_display = vals['auto_display']
         
         # Write parameters to file
         write_parameters_to_file(data_folder, vals)
@@ -1532,9 +1741,10 @@ class TAVIController(QObject):
         except ValueError:
             pass
         
-        # Handle no scan commands
+        # Handle no scan commands (single point simulation)
         if not scan_command1 and not scan_command2:
-            scan_parameter_input.append(scan_point_template[:])
+            # Store as tuple (scan_point, idx_1d) for consistency
+            scan_parameter_input.append((scan_point_template[:], 0))
         
         # Swap if only second command provided
         if scan_command2 and not scan_command1:
@@ -1545,11 +1755,19 @@ class TAVIController(QObject):
         variable_name1 = ""
         variable_name2 = ""
         
+        # Arrays to track valid/invalid points for display
+        valid_mask_1d = []  # For 1D: bool list - True if point is valid
+        valid_mask_2d = None  # For 2D: 2D list of bools
+        array_values1 = []
+        array_values2 = []
+        
         # Single scan command
         if scan_command1 and not scan_command2:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
             variable_name1 = self.normalize_scan_variable(variable_name1)
-            for value1 in array_values1:
+            valid_mask_1d = [False] * len(array_values1)
+            
+            for idx, value1 in enumerate(array_values1):
                 scan_point = scan_point_template[:]
                 scan_point[variable_to_index[variable_name1]] = value1
                 if scan_mode == "momentum":
@@ -1570,7 +1788,13 @@ class TAVIController(QObject):
                 else:
                     error_flags = []
                 if not error_flags:
-                    scan_parameter_input.append(scan_point)
+                    valid_mask_1d[idx] = True
+                    # Store as tuple (scan_point, idx_1d) for consistency with 2D
+                    scan_parameter_input.append((scan_point, idx))
+            
+            # Initialize display dock for 1D scan
+            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d, 
+                                       variable_name1, "", [], [])
         
         # Double scan command
         if scan_command2 and scan_command1:
@@ -1578,8 +1802,12 @@ class TAVIController(QObject):
             variable_name2, array_values2 = parse_scan_steps(scan_command2)
             variable_name1 = self.normalize_scan_variable(variable_name1)
             variable_name2 = self.normalize_scan_variable(variable_name2)
-            for value1 in array_values1:
-                for value2 in array_values2:
+            
+            # Initialize 2D valid mask
+            valid_mask_2d = [[False] * len(array_values1) for _ in range(len(array_values2))]
+            
+            for idx_y, value2 in enumerate(array_values2):
+                for idx_x, value1 in enumerate(array_values1):
                     scan_point = scan_point_template[:]
                     scan_point[variable_to_index[variable_name1]] = value1
                     scan_point[variable_to_index[variable_name2]] = value2
@@ -1601,7 +1829,15 @@ class TAVIController(QObject):
                     else:
                         error_flags = []
                     if not error_flags:
-                        scan_parameter_input.append(scan_point)
+                        valid_mask_2d[idx_y][idx_x] = True
+                        scan_parameter_input.append((scan_point, idx_x, idx_y))
+            
+            # Initialize display dock for 2D scan
+            self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
+                                       variable_name2, list(array_values2), valid_mask_2d)
+        
+        # Track if this is a 2D scan
+        is_2d_scan = scan_command2 and scan_command1
         
         # Run the scans
         start_time = time.time()
@@ -1611,10 +1847,23 @@ class TAVIController(QObject):
         total_counts = 0
         max_counts = 0
         
-        for i, scans in enumerate(scan_parameter_input):
+        for i, scan_item in enumerate(scan_parameter_input):
             if self.stop_flag:
                 self.message_printed.emit("Simulation stopped by user.")
+                self.scan_completed.emit()
                 return data_folder
+            
+            # Extract scan point and indices (both 1D and 2D now use tuples)
+            if is_2d_scan:
+                scans, idx_x, idx_y = scan_item
+                # Emit current scan position for 2D
+                self.scan_current_index_2d.emit(idx_x, idx_y)
+                idx_1d = -1  # Not used for 2D
+            else:
+                scans, idx_1d = scan_item
+                # Emit current scan position for 1D
+                self.scan_current_index_1d.emit(idx_1d)
+                idx_x, idx_y = -1, -1  # Not used for 1D
             
             # Extract scannable parameters and calculate angles
             error_flags = []
@@ -1706,15 +1955,20 @@ class TAVIController(QObject):
             self.message_printed.emit(message)
             
             # Run the PUMA simulation
+            # Returns (data, error_flags, instrument) where instrument is set if diagram display is requested
             if diagnostic_mode:
-                data, error_flags = run_PUMA_instrument(
+                data, error_flags, instrument_for_diagram = run_PUMA_instrument(
                     self.PUMA, number_neutrons, deltaE, diagnostic_mode, 
                     self.diagnostic_settings, scan_folder, i
                 )
             else:
-                data, error_flags = run_PUMA_instrument(
+                data, error_flags, instrument_for_diagram = run_PUMA_instrument(
                     self.PUMA, number_neutrons, deltaE, False, {}, scan_folder, i
                 )
+            
+            # Show instrument diagram if requested (via signal to main thread)
+            if instrument_for_diagram is not None:
+                self.instrument_diagram_requested.emit(instrument_for_diagram)
             
             # Check for errors
             if error_flags:
@@ -1760,6 +2014,13 @@ class TAVIController(QObject):
                 # Update counts
                 total_counts += counts
                 max_counts = max(max_counts, counts)
+                
+                # Emit display update signal
+                if is_2d_scan:
+                    self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                else:
+                    if idx_1d >= 0:
+                        self.scan_point_updated_1d.emit(idx_1d, counts)
             
             # Emit progress signals
             self.progress_updated.emit(i + 1, total_scans)
@@ -1781,162 +2042,21 @@ class TAVIController(QObject):
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
         self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
-        # Generate and display plots if auto_display is enabled
-        if auto_display and (scan_command1 or scan_command2):
-            try:
-                # Emit signal to plot in main thread (thread-safe)
-                self.plot_requested.emit(data_folder, scan_command1 or "", scan_command2 or "")
-                self.message_printed.emit("Plot generation requested...")
-            except Exception as e:
-                self.message_printed.emit(f"Plot request failed: {e}")
-        elif not auto_display:
-            self.message_printed.emit("Auto-display disabled. Plots not generated.")
-            self.message_printed.emit("You can manually generate plots from the data folder.")
+        # Signal scan complete to display dock
+        self.scan_completed.emit()
+        
+        # Display diagnostic subplots if in diagnostic mode and any monitors were enabled
+        if diagnostic_mode:
+            # Check if any diagnostic monitors were enabled (excluding Show Instrument Diagram)
+            monitors_enabled = any(
+                enabled for key, enabled in self.diagnostic_settings.items() 
+                if key != "Show Instrument Diagram" and enabled
+            )
+            if monitors_enabled and data is not None and data is not math.nan:
+                # Emit signal to display plots on main thread (matplotlib requires this)
+                self.diagnostic_plot_requested.emit(data)
         
         return data_folder
-    
-    def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
-        """Generate 1D plot and display it in a window."""
-        from tavi.data_processing import write_1D_scan, read_parameters_from_file
-        
-        variable_name, array_values = parse_scan_steps(scan_command1)
-        variable_name = self.normalize_scan_variable(variable_name)
-        scan_params = []
-        counts_array = []
-        
-        for folder_name in os.listdir(data_folder):
-            full_path = os.path.join(data_folder, folder_name)
-            if os.path.isdir(full_path):
-                # Read scan parameters from file instead of parsing folder name
-                point_params = read_parameters_from_file(full_path)
-                if point_params and variable_name in point_params:
-                    scan_value = point_params.get(variable_name)
-                    if scan_value is not None:
-                        scan_params.append(float(scan_value))
-                        intensity, intensity_error, counts = read_1Ddetector_file(full_path)
-                        if counts is not None:
-                            counts_array.append(counts)
-        
-        if not scan_params:
-            return
-        
-        scan_params = np.array(scan_params)
-        counts_array = np.array(counts_array)
-        
-        # Sort by scan parameter
-        sorted_indices = np.argsort(scan_params)
-        scan_params = scan_params[sorted_indices]
-        counts_array = counts_array[sorted_indices]
-        
-        # Create plot
-        plt.figure(figsize=(10, 6))
-        plt.plot(scan_params, counts_array, marker='o', linestyle='-', color='b', label='Counts')
-        
-        # Set labels
-        if variable_name in ['qx', 'qy', 'qz']:
-            plt.xlabel(f'{variable_name} (1/Å)')
-        elif variable_name == 'deltaE':
-            plt.xlabel(f'{variable_name} (meV)')
-        elif variable_name in ['H', 'K', 'L']:
-            plt.xlabel(f'{variable_name} (r.l.u.)')
-        else:
-            plt.xlabel(variable_name)
-        
-        plt.ylabel('Counts')
-        
-        # Build title
-        plot_title = f"N: {np.format_float_scientific(scan_parameters.get('number_neutrons'), unique=True, precision=2)}"
-        if variable_name != 'qx' and 'qx' in scan_parameters:
-            plot_title += f" qx={scan_parameters.get('qx')}"
-        if variable_name != 'qy' and 'qy' in scan_parameters:
-            plot_title += f" qy={scan_parameters.get('qy')}"
-        if variable_name != 'qz' and 'qz' in scan_parameters:
-            plot_title += f" qz={scan_parameters.get('qz')}"
-        if variable_name != 'deltaE' and 'deltaE' in scan_parameters:
-            plot_title += f" dE={scan_parameters.get('deltaE')}"
-        
-        plt.title(plot_title)
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Save plot
-        plot_file = os.path.join(data_folder, "1D_plot.png")
-        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        
-        # Display the plot in a window
-        plt.show(block=False)
-        
-        # Write data to file
-        write_1D_scan(scan_params, counts_array, data_folder, "1D_data.txt")
-    
-    def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
-        """Generate 2D heatmap and display it in a window."""
-        from tavi.data_processing import write_2D_scan, read_parameters_from_file
-        
-        variable_name1, array_values1 = parse_scan_steps(scan_command1)
-        variable_name2, array_values2 = parse_scan_steps(scan_command2)
-        variable_name1 = self.normalize_scan_variable(variable_name1)
-        variable_name2 = self.normalize_scan_variable(variable_name2)
-        
-        scan_data = []
-        
-        for folder_name in os.listdir(data_folder):
-            full_path = os.path.join(data_folder, folder_name)
-            if os.path.isdir(full_path):
-                # Read scan parameters from file instead of parsing folder name
-                point_params = read_parameters_from_file(full_path)
-                if point_params and variable_name1 in point_params and variable_name2 in point_params:
-                    x = point_params.get(variable_name1)
-                    y = point_params.get(variable_name2)
-                    if x is not None and y is not None:
-                        intensity, intensity_error, counts = read_1Ddetector_file(full_path)
-                        if counts is not None:
-                            scan_data.append((float(x), float(y), counts))
-        
-        if not scan_data:
-            return
-        
-        # Create grid for heatmap
-        x_vals = np.unique([d[0] for d in scan_data])
-        y_vals = np.unique([d[1] for d in scan_data])
-        
-        grid = np.full((len(y_vals), len(x_vals)), np.nan)
-        
-        for x, y, counts in scan_data:
-            x_idx = np.abs(x_vals - x).argmin()
-            y_idx = np.abs(y_vals - y).argmin()
-            grid[y_idx, x_idx] = counts
-        
-        # Create heatmap
-        plt.figure(figsize=(10, 8))
-        plt.imshow(grid, cmap='viridis', origin='lower', 
-                   extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
-                   aspect='auto')
-        plt.colorbar(label='Counts')
-        
-        # Set labels
-        x_label = f'{variable_name1} (1/Å)' if variable_name1 in ['qx', 'qy', 'qz'] else \
-              f'{variable_name1} (meV)' if variable_name1 == 'deltaE' else \
-              f'{variable_name1} (r.l.u.)' if variable_name1 in ['H', 'K', 'L'] else variable_name1
-        y_label = f'{variable_name2} (1/Å)' if variable_name2 in ['qx', 'qy', 'qz'] else \
-              f'{variable_name2} (meV)' if variable_name2 == 'deltaE' else \
-              f'{variable_name2} (r.l.u.)' if variable_name2 in ['H', 'K', 'L'] else variable_name2
-        
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        
-        plot_title = f"N: {np.format_float_scientific(scan_parameters.get('number_neutrons'), unique=True, precision=2)}"
-        plt.title(plot_title)
-        
-        # Save plot
-        plot_file = os.path.join(data_folder, "Heatmap.png")
-        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        
-        # Display the plot in a window
-        plt.show(block=False)
-        
-        # Write data to file
-        write_2D_scan(x_vals, y_vals, grid, data_folder, "2D_data.txt")
 
 
 def main():

@@ -363,8 +363,8 @@ MigrationBackup/
 # Output directory for simulation results
 output/
 
-# User-specific parameters file (users should maintain their own)
-parameters.json
+# Configuration directory (user-specific settings)
+config/
 
 # McStas generated files
 *.dat

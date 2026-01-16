@@ -1,22 +1,21 @@
 """Instrument Configuration Dock for TAVI application."""
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, 
-                                QLabel, QLineEdit, QComboBox, QCheckBox, QGroupBox,
-                                QFormLayout, QGridLayout, QPushButton)
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox, 
+                                QCheckBox, QGroupBox, QFormLayout, QGridLayout, 
+                                QPushButton, QWidget)
 from PySide6.QtCore import Qt
 
+from gui.docks.base_dock import BaseDockWidget
 
-class InstrumentDock(QDockWidget):
+
+class InstrumentDock(BaseDockWidget):
     """Dock widget for instrument configuration."""
     
     def __init__(self, parent=None):
-        super().__init__("Instrument Configuration", parent)
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        super().__init__("Instrument Configuration", parent, use_scroll_area=True)
+        self.setObjectName("InstrumentDock")
         
-        # Create main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-        main_widget.setLayout(main_layout)
-        self.setWidget(main_widget)
+        # Get the content layout from base class
+        main_layout = self.content_layout
         
         # Angles section
         angles_group = QGroupBox("Instrument Angles")
