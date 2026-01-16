@@ -21,8 +21,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 
-# Import GUI
-from gui.main_window import TAVIMainWindow
+# Import GUI - use dockable main window
+from gui.main_window_dockable import TAVIMainWindow
 
 # Physical constants
 N_MASS = 1.67492749804e-27  # neutron mass
@@ -88,18 +88,18 @@ class TAVIController(QObject):
     def connect_signals(self):
         """Connect all GUI signals to controller methods."""
         # Simulation control buttons (moved to right panel)
-        self.window.simulation_control_dock.run_button.clicked.connect(self.run_simulation_thread)
-        self.window.simulation_control_dock.stop_button.clicked.connect(self.stop_simulation)
-        self.window.simulation_control_dock.quit_button.clicked.connect(self.quit_application)
-        self.window.simulation_control_dock.validation_button.clicked.connect(self.open_validation_window)
+        self.window.simulation_dock.run_button.clicked.connect(self.run_simulation_thread)
+        self.window.simulation_dock.stop_button.clicked.connect(self.stop_simulation)
+        self.window.simulation_dock.quit_button.clicked.connect(self.quit_application)
+        self.window.simulation_dock.validation_button.clicked.connect(self.open_validation_window)
         
         # Parameter buttons (moved to right panel)
-        self.window.simulation_control_dock.save_button.clicked.connect(self.save_parameters)
-        self.window.simulation_control_dock.load_button.clicked.connect(self.load_parameters)
-        self.window.simulation_control_dock.defaults_button.clicked.connect(self.set_default_parameters)
+        self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
+        self.window.simulation_dock.load_button.clicked.connect(self.load_parameters)
+        self.window.simulation_dock.defaults_button.clicked.connect(self.set_default_parameters)
         
         # Diagnostics button
-        self.window.diagnostics_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
+        self.window.simulation_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
         
         # Sample configuration button
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
@@ -108,9 +108,9 @@ class TAVIController(QObject):
         # (omega/chi are actual angles, psi/kappa are alignment offsets)
         
         # Misalignment training dock
-        self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
-        self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
-        self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
+        self.window.sample_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
+        self.window.sample_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
+        self.window.sample_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
         
         # Data control buttons
         self.window.data_control_dock.save_browse_button.clicked.connect(
@@ -169,21 +169,21 @@ class TAVIController(QObject):
         self.window.instrument_dock.Ef_edit.editingFinished.connect(self.on_Ef_changed)
         
         # K fixed mode and fixed E - update all related values
-        self.window.scan_controls_dock.K_fixed_combo.currentTextChanged.connect(self.on_K_fixed_changed)
-        self.window.scan_controls_dock.fixed_E_edit.editingFinished.connect(self.on_fixed_E_changed)
+        self.window.scattering_dock.K_fixed_combo.currentTextChanged.connect(self.on_K_fixed_changed)
+        self.window.scattering_dock.fixed_E_edit.editingFinished.connect(self.on_fixed_E_changed)
         
         # Q-space - update HKL and angles
-        self.window.reciprocal_space_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
-        self.window.reciprocal_space_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
-        self.window.reciprocal_space_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
         
         # HKL - update Q-space and angles
-        self.window.reciprocal_space_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
-        self.window.reciprocal_space_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
-        self.window.reciprocal_space_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
         
         # DeltaE - update energies
-        self.window.reciprocal_space_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
+        self.window.scattering_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
         
         # Lattice parameters - update HKL/Q conversions
         self.window.sample_dock.lattice_a_edit.editingFinished.connect(self.on_lattice_changed)
@@ -229,13 +229,13 @@ class TAVIController(QObject):
         
         # Reciprocal space dock
         line_edits.extend([
-            self.window.reciprocal_space_dock.qx_edit,
-            self.window.reciprocal_space_dock.qy_edit,
-            self.window.reciprocal_space_dock.qz_edit,
-            self.window.reciprocal_space_dock.H_edit,
-            self.window.reciprocal_space_dock.K_edit,
-            self.window.reciprocal_space_dock.L_edit,
-            self.window.reciprocal_space_dock.deltaE_edit,
+            self.window.scattering_dock.qx_edit,
+            self.window.scattering_dock.qy_edit,
+            self.window.scattering_dock.qz_edit,
+            self.window.scattering_dock.H_edit,
+            self.window.scattering_dock.K_edit,
+            self.window.scattering_dock.L_edit,
+            self.window.scattering_dock.deltaE_edit,
         ])
         
         # Sample dock
@@ -252,10 +252,10 @@ class TAVIController(QObject):
         
         # Scan controls dock
         line_edits.extend([
-            self.window.scan_controls_dock.number_neutrons_edit,
-            self.window.scan_controls_dock.fixed_E_edit,
-            self.window.scan_controls_dock.scan_command_1_edit,
-            self.window.scan_controls_dock.scan_command_2_edit,
+            self.window.simulation_dock.number_neutrons_edit,
+            self.window.scattering_dock.fixed_E_edit,
+            self.window.simulation_dock.scan_command_1_edit,
+            self.window.simulation_dock.scan_command_2_edit,
         ])
         
         # Apply visual feedback to all line edits
@@ -328,19 +328,19 @@ class TAVIController(QObject):
     def update_progress(self, current, total):
         """Update progress bar."""
         percentage = int(current * 100 / total) if total > 0 else 0
-        self.window.output_dock.progress_bar.setValue(percentage)
-        self.window.output_dock.progress_label.setText(f"{percentage}% ({current}/{total})")
+        self.window.simulation_dock.progress_bar.setValue(percentage)
+        self.window.simulation_dock.progress_label.setText(f"{percentage}% ({current}/{total})")
     
     @Slot(str)
     def update_remaining_time(self, remaining_time):
         """Update remaining time label."""
-        self.window.output_dock.remaining_time_label.setText(f"Estimated Remaining Time: {remaining_time}")
+        self.window.simulation_dock.remaining_time_label.setText(f"Estimated Remaining Time: {remaining_time}")
     
     @Slot(float, float)
     def update_counts_entry(self, max_counts, total_counts):
         """Update counts display."""
-        self.window.simulation_control_dock.max_counts_label.setText(str(int(max_counts)))
-        self.window.simulation_control_dock.total_counts_label.setText(str(int(total_counts)))
+        self.window.simulation_dock.max_counts_label.setText(str(int(max_counts)))
+        self.window.simulation_dock.total_counts_label.setText(str(int(total_counts)))
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
@@ -369,15 +369,15 @@ class TAVIController(QObject):
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
                 'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
                 'Ef': float(self.window.instrument_dock.Ef_edit.text() or 0),
-                'K_fixed': self.window.scan_controls_dock.K_fixed_combo.currentText(),
-                'fixed_E': float(self.window.scan_controls_dock.fixed_E_edit.text() or 0),
-                'qx': float(self.window.reciprocal_space_dock.qx_edit.text() or 0),
-                'qy': float(self.window.reciprocal_space_dock.qy_edit.text() or 0),
-                'qz': float(self.window.reciprocal_space_dock.qz_edit.text() or 0),
-                'H': float(self.window.reciprocal_space_dock.H_edit.text() or 0),
-                'K': float(self.window.reciprocal_space_dock.K_edit.text() or 0),
-                'L': float(self.window.reciprocal_space_dock.L_edit.text() or 0),
-                'deltaE': float(self.window.reciprocal_space_dock.deltaE_edit.text() or 0),
+                'K_fixed': self.window.scattering_dock.K_fixed_combo.currentText(),
+                'fixed_E': float(self.window.scattering_dock.fixed_E_edit.text() or 0),
+                'qx': float(self.window.scattering_dock.qx_edit.text() or 0),
+                'qy': float(self.window.scattering_dock.qy_edit.text() or 0),
+                'qz': float(self.window.scattering_dock.qz_edit.text() or 0),
+                'H': float(self.window.scattering_dock.H_edit.text() or 0),
+                'K': float(self.window.scattering_dock.K_edit.text() or 0),
+                'L': float(self.window.scattering_dock.L_edit.text() or 0),
+                'deltaE': float(self.window.scattering_dock.deltaE_edit.text() or 0),
                 'lattice_a': float(self.window.sample_dock.lattice_a_edit.text() or 1),
                 'lattice_b': float(self.window.sample_dock.lattice_b_edit.text() or 1),
                 'lattice_c': float(self.window.sample_dock.lattice_c_edit.text() or 1),
@@ -399,11 +399,11 @@ class TAVIController(QObject):
                 'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
                 'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
                 'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
-                'number_neutrons': int(self.window.scan_controls_dock.number_neutrons_edit.text() or 1000000),
-                'scan_command1': self.window.scan_controls_dock.scan_command_1_edit.text(),
-                'scan_command2': self.window.scan_controls_dock.scan_command_2_edit.text(),
-                'diagnostic_mode': self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
-                'auto_display': self.window.simulation_control_dock.auto_display_check.isChecked(),
+                'number_neutrons': int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000),
+                'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
+                'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
+                'diagnostic_mode': self.window.simulation_dock.diagnostic_mode_check.isChecked(),
+                'auto_display': self.window.simulation_dock.auto_display_check.isChecked(),
             }
         except ValueError:
             return None
@@ -481,7 +481,7 @@ class TAVIController(QObject):
             self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
             
         except (ValueError, KeyError) as e:
             pass
@@ -705,12 +705,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -735,12 +735,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -764,12 +764,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -793,12 +793,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{vals['Ei']:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{vals['Ei']:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = vals['Ei'] - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -822,12 +822,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -851,12 +851,12 @@ class TAVIController(QObject):
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scan_controls_dock.fixed_E_edit.setText(f"{vals['Ef']:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(f"{vals['Ef']:.4f}".rstrip('0').rstrip('.'))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - vals['Ef']
-            self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -900,10 +900,10 @@ class TAVIController(QObject):
             )
             if not error_flags:
                 qx, qy, qz, deltaE = q_vals
-                self.window.reciprocal_space_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
-                self.window.reciprocal_space_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
-                self.window.reciprocal_space_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
-                self.window.reciprocal_space_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
         except Exception:
             pass
         finally:
@@ -928,9 +928,9 @@ class TAVIController(QObject):
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
-            self.window.reciprocal_space_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
         except:
             pass
         finally:
@@ -948,18 +948,18 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            H = float(self.window.reciprocal_space_dock.H_edit.text() or 0)
-            K = float(self.window.reciprocal_space_dock.K_edit.text() or 0)
-            L = float(self.window.reciprocal_space_dock.L_edit.text() or 0)
+            H = float(self.window.scattering_dock.H_edit.text() or 0)
+            K = float(self.window.scattering_dock.K_edit.text() or 0)
+            L = float(self.window.scattering_dock.L_edit.text() or 0)
             
             qx, qy, qz = update_Q_from_HKL_direct(
                 H, K, L,
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
-            self.window.reciprocal_space_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
-            self.window.reciprocal_space_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
         except:
             pass
         finally:
@@ -987,13 +987,13 @@ class TAVIController(QObject):
         hkl_enabled = bool(checked)
         q_enabled = not hkl_enabled
 
-        self.window.reciprocal_space_dock.H_edit.setEnabled(hkl_enabled)
-        self.window.reciprocal_space_dock.K_edit.setEnabled(hkl_enabled)
-        self.window.reciprocal_space_dock.L_edit.setEnabled(hkl_enabled)
+        self.window.scattering_dock.H_edit.setEnabled(hkl_enabled)
+        self.window.scattering_dock.K_edit.setEnabled(hkl_enabled)
+        self.window.scattering_dock.L_edit.setEnabled(hkl_enabled)
 
-        self.window.reciprocal_space_dock.qx_edit.setEnabled(q_enabled)
-        self.window.reciprocal_space_dock.qy_edit.setEnabled(q_enabled)
-        self.window.reciprocal_space_dock.qz_edit.setEnabled(q_enabled)
+        self.window.scattering_dock.qx_edit.setEnabled(q_enabled)
+        self.window.scattering_dock.qy_edit.setEnabled(q_enabled)
+        self.window.scattering_dock.qz_edit.setEnabled(q_enabled)
 
         # Recalculate the dependent variables when mode changes
         if hkl_enabled:
@@ -1083,8 +1083,8 @@ class TAVIController(QObject):
     
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
-        if self.window.misalignment_dock.has_misalignment():
-            mis_omega, mis_chi, mis_psi = self.window.misalignment_dock.get_loaded_misalignment()
+        if self.window.sample_dock.has_misalignment():
+            mis_omega, mis_chi, mis_psi = self.window.sample_dock.get_loaded_misalignment()
             self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi, mis_psi=mis_psi)
             self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
     
@@ -1098,7 +1098,7 @@ class TAVIController(QObject):
         try:
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.window.misalignment_dock.update_alignment_feedback(kappa, psi, 0)
+            self.window.sample_dock.update_alignment_feedback(kappa, psi, 0)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     
@@ -1176,8 +1176,8 @@ class TAVIController(QObject):
             "Kf_var": self.window.instrument_dock.Kf_edit.text(),
             "Ei_var": self.window.instrument_dock.Ei_edit.text(),
             "Ef_var": self.window.instrument_dock.Ef_edit.text(),
-            "number_neutrons_var": self.window.scan_controls_dock.number_neutrons_edit.text(),
-            "K_fixed_var": self.window.scan_controls_dock.K_fixed_combo.currentText(),
+            "number_neutrons_var": self.window.simulation_dock.number_neutrons_edit.text(),
+            "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
             "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
             "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
             "rhm_var": self.window.instrument_dock.rhm_edit.text(),
@@ -1186,15 +1186,15 @@ class TAVIController(QObject):
             "rhm_ideal_locked": self.is_bending_locked("rhm"),
             "rvm_ideal_locked": self.is_bending_locked("rvm"),
             "rha_ideal_locked": self.is_bending_locked("rha"),
-            "fixed_E_var": self.window.scan_controls_dock.fixed_E_edit.text(),
-            "qx_var": self.window.reciprocal_space_dock.qx_edit.text(),
-            "qy_var": self.window.reciprocal_space_dock.qy_edit.text(),
-            "qz_var": self.window.reciprocal_space_dock.qz_edit.text(),
+            "fixed_E_var": self.window.scattering_dock.fixed_E_edit.text(),
+            "qx_var": self.window.scattering_dock.qx_edit.text(),
+            "qy_var": self.window.scattering_dock.qy_edit.text(),
+            "qz_var": self.window.scattering_dock.qz_edit.text(),
             # HKL values
-            "H_var": self.window.reciprocal_space_dock.H_edit.text(),
-            "K_var": self.window.reciprocal_space_dock.K_edit.text(),
-            "L_var": self.window.reciprocal_space_dock.L_edit.text(),
-            "deltaE_var": self.window.reciprocal_space_dock.deltaE_edit.text(),
+            "H_var": self.window.scattering_dock.H_edit.text(),
+            "K_var": self.window.scattering_dock.K_edit.text(),
+            "L_var": self.window.scattering_dock.L_edit.text(),
+            "deltaE_var": self.window.scattering_dock.deltaE_edit.text(),
             "monocris_var": self.window.instrument_dock.monocris_combo.currentText(),
             "anacris_var": self.window.instrument_dock.anacris_combo.currentText(),
             "alpha_1_var": self.window.instrument_dock.alpha_1_combo.currentText(),
@@ -1203,7 +1203,7 @@ class TAVIController(QObject):
             "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked(),
             "alpha_3_var": self.window.instrument_dock.alpha_3_combo.currentText(),
             "alpha_4_var": self.window.instrument_dock.alpha_4_combo.currentText(),
-            "diagnostic_mode_var": self.window.diagnostics_dock.diagnostic_mode_check.isChecked(),
+            "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             "lattice_a_var": self.window.sample_dock.lattice_a_edit.text(),
             "lattice_b_var": self.window.sample_dock.lattice_b_edit.text(),
             "lattice_c_var": self.window.sample_dock.lattice_c_edit.text(),
@@ -1214,11 +1214,11 @@ class TAVIController(QObject):
             "kappa_var": self.window.sample_dock.kappa_edit.text(),
             "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             # Misalignment hash only (keeps values hidden from students)
-            "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
+            "misalignment_hash_var": self.window.sample_dock.load_hash_edit.text(),
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
-            "scan_command_var1": self.window.scan_controls_dock.scan_command_1_edit.text(),
-            "scan_command_var2": self.window.scan_controls_dock.scan_command_2_edit.text(),
-            "auto_display_var": self.window.simulation_control_dock.auto_display_check.isChecked(),
+            "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
+            "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
+            "auto_display_var": self.window.simulation_dock.auto_display_check.isChecked(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
@@ -1266,20 +1266,20 @@ class TAVIController(QObject):
                     parameters.get("rha_ideal_locked", False),
                 )
                 
-                self.window.scan_controls_dock.number_neutrons_edit.setText(str(parameters.get("number_neutrons_var", 1e8)))
-                self.window.scan_controls_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
-                self.window.scan_controls_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
-                self.window.reciprocal_space_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
-                self.window.reciprocal_space_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
-                self.window.reciprocal_space_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
+                self.window.simulation_dock.number_neutrons_edit.setText(str(parameters.get("number_neutrons_var", 1e8)))
+                self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
+                self.window.scattering_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
+                self.window.scattering_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
+                self.window.scattering_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
+                self.window.scattering_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
                 # HKL values
-                self.window.reciprocal_space_dock.H_edit.setText(str(parameters.get("H_var", 1)))
-                self.window.reciprocal_space_dock.K_edit.setText(str(parameters.get("K_var", 0)))
-                self.window.reciprocal_space_dock.L_edit.setText(str(parameters.get("L_var", 0)))
-                self.window.reciprocal_space_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 5.25)))
-                self.window.diagnostics_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
-                self.window.scan_controls_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", ""))
-                self.window.scan_controls_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
+                self.window.scattering_dock.H_edit.setText(str(parameters.get("H_var", 1)))
+                self.window.scattering_dock.K_edit.setText(str(parameters.get("K_var", 0)))
+                self.window.scattering_dock.L_edit.setText(str(parameters.get("L_var", 0)))
+                self.window.scattering_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 5.25)))
+                self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
+                self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", ""))
+                self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
                 
                 self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", 4.05)))
                 self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", 4.05)))
@@ -1293,17 +1293,17 @@ class TAVIController(QObject):
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
-                    self.window.misalignment_dock.load_hash_edit.setText(mis_hash)
+                    self.window.sample_dock.load_hash_edit.setText(mis_hash)
                     # Decode and apply the misalignment to the instrument
                     try:
-                        from gui.docks.misalignment_dock import decode_misalignment
+                        from gui.docks.unified_sample_dock import decode_misalignment
                         omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
                         self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
                         # Store in dock and update UI to show it's loaded
-                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
-                        self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
-                        self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
-                        self.window.misalignment_dock.check_alignment_button.setEnabled(True)
+                        self.window.sample_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
+                        self.window.sample_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
+                        self.window.sample_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
+                        self.window.sample_dock.check_alignment_button.setEnabled(True)
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
@@ -1319,7 +1319,7 @@ class TAVIController(QObject):
                     pass
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
-                self.window.simulation_control_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
+                self.window.simulation_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
@@ -1360,18 +1360,18 @@ class TAVIController(QObject):
         self.update_ideal_bending_buttons()
         self.apply_ideal_bending_values()
         
-        self.window.scan_controls_dock.number_neutrons_edit.setText("1000000")
-        self.window.scan_controls_dock.K_fixed_combo.setCurrentText("Kf Fixed")
-        self.window.scan_controls_dock.fixed_E_edit.setText("14.7")
-        self.window.reciprocal_space_dock.qx_edit.setText("2")
-        self.window.reciprocal_space_dock.qy_edit.setText("0")
-        self.window.reciprocal_space_dock.qz_edit.setText("0")
+        self.window.simulation_dock.number_neutrons_edit.setText("1000000")
+        self.window.scattering_dock.K_fixed_combo.setCurrentText("Kf Fixed")
+        self.window.scattering_dock.fixed_E_edit.setText("14.7")
+        self.window.scattering_dock.qx_edit.setText("2")
+        self.window.scattering_dock.qy_edit.setText("0")
+        self.window.scattering_dock.qz_edit.setText("0")
         # Set HKL defaults (computed from Q and lattice)
-        self.window.reciprocal_space_dock.H_edit.setText("1")
-        self.window.reciprocal_space_dock.K_edit.setText("0")
-        self.window.reciprocal_space_dock.L_edit.setText("0")
-        self.window.reciprocal_space_dock.deltaE_edit.setText("5.25")
-        self.window.diagnostics_dock.diagnostic_mode_check.setChecked(True)
+        self.window.scattering_dock.H_edit.setText("1")
+        self.window.scattering_dock.K_edit.setText("0")
+        self.window.scattering_dock.L_edit.setText("0")
+        self.window.scattering_dock.deltaE_edit.setText("5.25")
+        self.window.simulation_dock.diagnostic_mode_check.setChecked(True)
         
         self.window.sample_dock.lattice_a_edit.setText("3.78")
         self.window.sample_dock.lattice_b_edit.setText("3.78")
@@ -1383,9 +1383,9 @@ class TAVIController(QObject):
         self.window.sample_dock.kappa_edit.setText("0")
         self.window.sample_dock.psi_edit.setText("0")
         self.window.sample_dock.sample_frame_mode_check.setChecked(False)
-        self.window.scan_controls_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
-        self.window.scan_controls_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
-        self.window.simulation_control_dock.auto_display_check.setChecked(True)
+        self.window.simulation_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
+        self.window.simulation_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
+        self.window.simulation_dock.auto_display_check.setChecked(True)
         
         # Set default folder paths
         folder_suggestion = os.path.join(self.output_directory, "initial_testing")
