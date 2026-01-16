@@ -113,17 +113,6 @@ class UnifiedSimulationDock(BaseDockWidget):
         
         main_layout.addWidget(mode_group)
         
-        # ===== Display Options Section =====
-        display_group = QGroupBox("Display Options")
-        display_layout = QVBoxLayout()
-        display_group.setLayout(display_layout)
-        
-        self.auto_display_check = QCheckBox("Auto-display plots after simulation")
-        self.auto_display_check.setChecked(True)
-        display_layout.addWidget(self.auto_display_check)
-        
-        main_layout.addWidget(display_group)
-        
         # ===== Progress Section =====
         progress_group = QGroupBox("Progress")
         progress_layout = QVBoxLayout()
