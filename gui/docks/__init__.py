@@ -5,6 +5,7 @@ from gui.docks.data_control_dock import DataControlDock
 from gui.docks.unified_scattering_dock import UnifiedScatteringDock
 from gui.docks.unified_sample_dock import UnifiedSampleDock
 from gui.docks.unified_simulation_dock import UnifiedSimulationDock
+from gui.docks.display_dock import DisplayDock
 
 __all__ = [
     'InstrumentDock',
@@ -13,4 +14,5 @@ __all__ = [
     'UnifiedScatteringDock',
     'UnifiedSampleDock', 
     'UnifiedSimulationDock',
+    'DisplayDock',
 ]
