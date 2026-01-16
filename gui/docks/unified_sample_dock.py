@@ -179,23 +179,23 @@ class UnifiedSampleDock(BaseDockWidget):
         orientation_layout.setSpacing(5)
         orientation_group.setLayout(orientation_layout)
         
-        # Row 0: kappa (κ) and psi (ψ) - alignment offsets
-        orientation_layout.addWidget(QLabel("κ:"), 0, 0)
-        self.kappa_edit = QLineEdit()
-        self.kappa_edit.setMaximumWidth(70)
-        self.kappa_edit.setToolTip("Alignment offset for ω (omega)")
-        orientation_layout.addWidget(self.kappa_edit, 0, 1)
-        orientation_layout.addWidget(QLabel("°"), 0, 2)
-        
-        orientation_layout.addWidget(QLabel("ψ:"), 0, 3)
+        # Row 0: psi (ψ) - offset for omega, kappa (κ) - offset for chi
+        orientation_layout.addWidget(QLabel("ψ:"), 0, 0)
         self.psi_edit = QLineEdit()
         self.psi_edit.setMaximumWidth(70)
-        self.psi_edit.setToolTip("Alignment offset for χ (chi)")
-        orientation_layout.addWidget(self.psi_edit, 0, 4)
+        self.psi_edit.setToolTip("Alignment offset for ω (omega) - in-plane")
+        orientation_layout.addWidget(self.psi_edit, 0, 1)
+        orientation_layout.addWidget(QLabel("°"), 0, 2)
+        
+        orientation_layout.addWidget(QLabel("κ:"), 0, 3)
+        self.kappa_edit = QLineEdit()
+        self.kappa_edit.setMaximumWidth(70)
+        self.kappa_edit.setToolTip("Alignment offset for χ (chi) - out-of-plane")
+        orientation_layout.addWidget(self.kappa_edit, 0, 4)
         orientation_layout.addWidget(QLabel("°"), 0, 5)
         
         # Info label
-        orientation_info = QLabel("κ, ψ: alignment offsets")
+        orientation_info = QLabel("ψ: offset for ω, κ: offset for χ")
         orientation_info.setStyleSheet("color: gray; font-size: 10px;")
         orientation_layout.addWidget(orientation_info, 1, 0, 1, 6)
         
@@ -228,7 +228,7 @@ class UnifiedSampleDock(BaseDockWidget):
         teacher_layout.addWidget(self.mis_chi_edit, 0, 4)
         teacher_layout.addWidget(QLabel("°"), 0, 5)
         
-        teacher_layout.addWidget(QLabel("κ mis:"), 1, 0)
+        teacher_layout.addWidget(QLabel("ψ mis:"), 1, 0)
         self.mis_psi_edit = QLineEdit()
         self.mis_psi_edit.setMaximumWidth(60)
         self.mis_psi_edit.setPlaceholderText("0.0")
