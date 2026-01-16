@@ -7,6 +7,7 @@ import datetime
 import threading
 import queue
 import math
+import mcstasscript as ms
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
@@ -23,6 +24,7 @@ from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_di
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
+from gui.dialogs.diagnostic_config_dialog import DiagnosticConfigDialog
 
 # Physical constants
 N_MASS = 1.67492749804e-27  # neutron mass
@@ -48,6 +50,10 @@ class TAVIController(QObject):
     scan_current_index_1d = Signal(int)  # current index
     scan_current_index_2d = Signal(int, int)  # idx_x, idx_y
     scan_completed = Signal()  # scan finished
+    
+    # Signals for diagnostic plots (must run on main thread)
+    diagnostic_plot_requested = Signal(object)  # McStasData object
+    instrument_diagram_requested = Signal(object)  # McStas instrument object
     
     def __init__(self, window):
         super().__init__()
@@ -141,6 +147,10 @@ class TAVIController(QObject):
         self.scan_current_index_1d.connect(self.window.display_dock.set_current_scan_index)
         self.scan_current_index_2d.connect(self.window.display_dock.set_current_scan_index_2d)
         self.scan_completed.connect(self.window.display_dock.scan_complete)
+        
+        # Connect diagnostic plot signals (runs on main thread for matplotlib)
+        self.diagnostic_plot_requested.connect(self._show_diagnostic_plots)
+        self.instrument_diagram_requested.connect(self._show_instrument_diagram)
         
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
@@ -376,6 +386,39 @@ class TAVIController(QObject):
         
         # Set scan metadata from current GUI values
         self.window.display_dock.set_scan_metadata(self._build_current_scan_metadata())
+    
+    @Slot(object)
+    def _show_diagnostic_plots(self, data):
+        """Display diagnostic monitor plots on the main thread.
+        
+        This slot is called from the simulation thread via signal to ensure
+        matplotlib GUI runs on the main thread.
+        """
+        if data is None or data is math.nan:
+            self.print_to_message_center("No diagnostic data to display")
+            return
+        
+        try:
+            self.print_to_message_center("Displaying diagnostic monitor plots...")
+            ms.make_sub_plot(data, log=False)
+        except Exception as e:
+            self.print_to_message_center(f"Could not display diagnostic plots: {e}")
+    
+    @Slot(object)
+    def _show_instrument_diagram(self, instrument):
+        """Display instrument diagram on the main thread.
+        
+        This slot is called from the simulation thread via signal to ensure
+        matplotlib GUI runs on the main thread.
+        """
+        if instrument is None:
+            return
+        
+        try:
+            self.print_to_message_center("Displaying instrument diagram...")
+            instrument.show_diagram()
+        except Exception as e:
+            self.print_to_message_center(f"Could not display instrument diagram: {e}")
     
     def _build_current_scan_metadata(self):
         """Build scan metadata from current GUI values."""
@@ -1202,8 +1245,17 @@ class TAVIController(QObject):
     
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
-        # TODO: Implement diagnostics configuration dialog
-        self.print_to_message_center("Diagnostics configuration window not yet implemented")
+        dialog = DiagnosticConfigDialog(self.window, self.diagnostic_settings)
+        if dialog.exec():
+            # User clicked Save and Close
+            self.diagnostic_settings = dialog.get_settings()
+            # Update PUMA instrument with new settings
+            self.PUMA.update_diagnostic_settings(self.diagnostic_settings)
+            # Save parameters to persist the settings
+            self.save_parameters()
+            self.print_to_message_center("Diagnostic settings saved")
+        else:
+            self.print_to_message_center("Diagnostic configuration cancelled")
     
     def configure_sample(self):
         """Open sample configuration window."""
@@ -1472,7 +1524,11 @@ class TAVIController(QObject):
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
-                self.diagnostic_settings = parameters.get("diagnostic_settings", {})
+                # Load diagnostic settings with defaults for any missing keys
+                default_diag = DiagnosticConfigDialog.get_default_settings()
+                loaded_diag = parameters.get("diagnostic_settings", {})
+                # Merge: use loaded value if present, else default
+                self.diagnostic_settings = {**default_diag, **loaded_diag}
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
 
                 self.update_sample_frame_mode()
@@ -1540,7 +1596,7 @@ class TAVIController(QObject):
         self.window.data_control_dock.save_folder_edit.setText(folder_suggestion)
         self.window.data_control_dock.load_folder_edit.setText(folder_suggestion)
         
-        self.diagnostic_settings = {}
+        self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
         self.current_sample_settings = {}
         self.update_sample_frame_mode()
         # Ensure sample defaults to None in GUI
@@ -1554,6 +1610,12 @@ class TAVIController(QObject):
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
         self.stop_flag = False
+        
+        # Reset progress bar and show initializing state
+        self.window.simulation_dock.progress_bar.setValue(0)
+        self.window.simulation_dock.progress_label.setText("Initializing...")
+        self.window.simulation_dock.remaining_time_label.setText("Estimated Remaining Time: calculating...")
+        
         data_folder = self.window.data_control_dock.save_folder_edit.text()
         simulation_thread = threading.Thread(target=self.run_simulation, args=(data_folder,))
         simulation_thread.start()
@@ -1679,9 +1741,10 @@ class TAVIController(QObject):
         except ValueError:
             pass
         
-        # Handle no scan commands
+        # Handle no scan commands (single point simulation)
         if not scan_command1 and not scan_command2:
-            scan_parameter_input.append(scan_point_template[:])
+            # Store as tuple (scan_point, idx_1d) for consistency
+            scan_parameter_input.append((scan_point_template[:], 0))
         
         # Swap if only second command provided
         if scan_command2 and not scan_command1:
@@ -1892,15 +1955,20 @@ class TAVIController(QObject):
             self.message_printed.emit(message)
             
             # Run the PUMA simulation
+            # Returns (data, error_flags, instrument) where instrument is set if diagram display is requested
             if diagnostic_mode:
-                data, error_flags = run_PUMA_instrument(
+                data, error_flags, instrument_for_diagram = run_PUMA_instrument(
                     self.PUMA, number_neutrons, deltaE, diagnostic_mode, 
                     self.diagnostic_settings, scan_folder, i
                 )
             else:
-                data, error_flags = run_PUMA_instrument(
+                data, error_flags, instrument_for_diagram = run_PUMA_instrument(
                     self.PUMA, number_neutrons, deltaE, False, {}, scan_folder, i
                 )
+            
+            # Show instrument diagram if requested (via signal to main thread)
+            if instrument_for_diagram is not None:
+                self.instrument_diagram_requested.emit(instrument_for_diagram)
             
             # Check for errors
             if error_flags:
@@ -1976,6 +2044,17 @@ class TAVIController(QObject):
         
         # Signal scan complete to display dock
         self.scan_completed.emit()
+        
+        # Display diagnostic subplots if in diagnostic mode and any monitors were enabled
+        if diagnostic_mode:
+            # Check if any diagnostic monitors were enabled (excluding Show Instrument Diagram)
+            monitors_enabled = any(
+                enabled for key, enabled in self.diagnostic_settings.items() 
+                if key != "Show Instrument Diagram" and enabled
+            )
+            if monitors_enabled and data is not None and data is not math.nan:
+                # Emit signal to display plots on main thread (matplotlib requires this)
+                self.diagnostic_plot_requested.emit(data)
         
         return data_folder
 
