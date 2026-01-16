@@ -362,6 +362,8 @@ MigrationBackup/
 # TAVI-specific files
 # Output directory for simulation results
 output/
+# Config files
+config/
 
 # User-specific parameters file (users should maintain their own)
 parameters.json
