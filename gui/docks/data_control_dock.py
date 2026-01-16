@@ -1,21 +1,21 @@
 """Data Control Dock for TAVI application."""
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                                QLabel, QLineEdit, QGroupBox, QPushButton)
+from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
+                                QLabel, QLineEdit, QGroupBox, QPushButton,
+                                QWidget)
 from PySide6.QtCore import Qt
 
+from gui.docks.base_dock import BaseDockWidget
 
-class DataControlDock(QDockWidget):
+
+class DataControlDock(BaseDockWidget):
     """Dock widget for data control (save/load)."""
     
     def __init__(self, parent=None):
-        super().__init__("Data Control", parent)
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
+        super().__init__("Data Control", parent, use_scroll_area=True)
+        self.setObjectName("DataControlDock")
         
-        # Create main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-        main_widget.setLayout(main_layout)
-        self.setWidget(main_widget)
+        # Get the content layout from base class
+        main_layout = self.content_layout
         
         # Save folder section
         save_group = QGroupBox("Output Folder")
