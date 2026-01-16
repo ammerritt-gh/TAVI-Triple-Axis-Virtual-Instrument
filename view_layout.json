@@ -1,0 +1,20 @@
+{
+  "window_geometry": "AdnQywADAAAAAAAA////+AAACf8AAAV3AAAAZAAAAGQAAAajAAAFVQAAAAACAAAACgAAAAAAAAAAFwAACf8AAAV3",
+  "window_state": "AAAA/wAAAAD9AAAAAgAAAAAAAAT8AAAFS/wCAAAAAfwAAAAWAAAFSwAABIQA/////AEAAAAC+wAAABwASQBuAHMAdAByAHUAbQBlAG4AdABEAG8AYwBrAQAAAAAAAALpAAABoAD////8AAAC7QAAAg8AAAExAP////wCAAAAAvsAAAAcAFMAYwBhAHQAdABlAHIAaQBuAGcARABvAGMAawEAAAAWAAAB/AAAAbEA////+wAAABQAUwBhAG0AcABsAGUARABvAGMAawEAAAIWAAADSwAAAs8A////AAAAAQAABPwAAAVL/AIAAAAD+wAAABwAUwBpAG0AdQBsAGEAdABpAG8AbgBEAG8AYwBrAQAAABYAAAMRAAACxAD////7AAAAFABPAHUAdABwAHUAdABEAG8AYwBrAQAAAysAAAEGAAAA7QD////7AAAAHgBEAGEAdABhAEMAbwBuAHQAcgBvAGwARABvAGMAawEAAAQ1AAABLAAAAQ4A////AAAAAAAABUsAAAAEAAAABAAAAAgAAAAI/AAAAAA=",
+  "dock_visibility": {
+    "InstrumentDock": true,
+    "ScatteringDock": true,
+    "SampleDock": true,
+    "SimulationDock": true,
+    "OutputDock": true,
+    "DataControlDock": true
+  },
+  "dock_floating": {
+    "InstrumentDock": false,
+    "ScatteringDock": false,
+    "SampleDock": false,
+    "SimulationDock": false,
+    "OutputDock": false,
+    "DataControlDock": false
+  }
+}
