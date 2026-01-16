@@ -40,7 +40,14 @@ class TAVIController(QObject):
     remaining_time_updated = Signal(str)
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
-    plot_requested = Signal(str, str, str)  # data_folder, scan_command1, scan_command2
+    
+    # Signals for real-time display dock updates
+    scan_initialized = Signal(str, list, list, str, str, list, list)  # mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d
+    scan_point_updated_1d = Signal(int, float)  # index, counts
+    scan_point_updated_2d = Signal(int, int, float)  # idx_x, idx_y, counts
+    scan_current_index_1d = Signal(int)  # current index
+    scan_current_index_2d = Signal(int, int)  # idx_x, idx_y
+    scan_completed = Signal()  # scan finished
     
     def __init__(self, window):
         super().__init__()
@@ -126,7 +133,14 @@ class TAVIController(QObject):
         self.remaining_time_updated.connect(self.update_remaining_time)
         self.counts_updated.connect(self.update_counts_entry)
         self.message_printed.connect(self.window.output_dock.message_text.append)
-        self.plot_requested.connect(self.plot_in_main_thread)
+        
+        # Connect display dock signals
+        self.scan_initialized.connect(self._on_scan_initialized)
+        self.scan_point_updated_1d.connect(self.window.display_dock.update_1d_point)
+        self.scan_point_updated_2d.connect(self.window.display_dock.update_2d_point)
+        self.scan_current_index_1d.connect(self.window.display_dock.set_current_scan_index)
+        self.scan_current_index_2d.connect(self.window.display_dock.set_current_scan_index_2d)
+        self.scan_completed.connect(self.window.display_dock.scan_complete)
         
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
@@ -342,6 +356,91 @@ class TAVIController(QObject):
         self.window.simulation_dock.max_counts_label.setText(str(int(max_counts)))
         self.window.simulation_dock.total_counts_label.setText(str(int(total_counts)))
     
+    @Slot(str, list, list, str, str, list, list)
+    def _on_scan_initialized(self, mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d):
+        """Handle scan initialization signal and forward to display dock."""
+        if mode == '1D':
+            self.window.display_dock.initialize_scan(mode, values1, valid_mask1, var1)
+        else:
+            self.window.display_dock.initialize_scan(mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d)
+        
+        # Set data folder and metadata
+        data_folder = self.window.data_control_dock.save_folder_edit.text()
+        actual_folder = self.window.data_control_dock.actual_folder_label.text()
+        if actual_folder:
+            self.window.display_dock.set_data_folder(actual_folder)
+        elif data_folder:
+            self.window.display_dock.set_data_folder(
+                os.path.join(self.output_directory, data_folder) if self.output_directory else data_folder
+            )
+        
+        # Set scan metadata from current GUI values
+        self.window.display_dock.set_scan_metadata(self._build_current_scan_metadata())
+    
+    def _build_current_scan_metadata(self):
+        """Build scan metadata from current GUI values."""
+        vals = self.get_gui_values()
+        if not vals:
+            return {}
+        
+        metadata = {}
+        
+        # Number of neutrons
+        metadata['number_neutrons'] = vals.get('number_neutrons', 1000000)
+        
+        # Ki/Kf fixed mode
+        metadata['K_fixed'] = vals.get('K_fixed', 'Ki Fixed')
+        
+        # Fixed E
+        metadata['fixed_E'] = vals.get('fixed_E', 0)
+        
+        # Collimations
+        metadata['alpha_1'] = vals.get('alpha_1', 'open')
+        # Build alpha_2 string from checkboxes
+        alpha_2_parts = []
+        if vals.get('alpha_2_30'):
+            alpha_2_parts.append("30'")
+        if vals.get('alpha_2_40'):
+            alpha_2_parts.append("40'")
+        if vals.get('alpha_2_60'):
+            alpha_2_parts.append("60'")
+        metadata['alpha_2'] = "+".join(alpha_2_parts) if alpha_2_parts else "open"
+        metadata['alpha_3'] = vals.get('alpha_3', 'open')
+        metadata['alpha_4'] = vals.get('alpha_4', 'open')
+        
+        # Crystals
+        metadata['monocris'] = vals.get('monocris', 'PG[002]')
+        metadata['anacris'] = vals.get('anacris', 'PG[002]')
+        
+        # Alignment offsets
+        metadata['kappa'] = vals.get('kappa', 0)
+        metadata['psi'] = vals.get('psi', 0)
+        
+        # Q-space coordinates
+        metadata['qx'] = vals.get('qx', 0)
+        metadata['qy'] = vals.get('qy', 0)
+        metadata['qz'] = vals.get('qz', 0)
+        
+        # HKL coordinates
+        metadata['H'] = vals.get('H', 0)
+        metadata['K'] = vals.get('K', 0)
+        metadata['L'] = vals.get('L', 0)
+        
+        # Energy transfer
+        metadata['deltaE'] = vals.get('deltaE', 0)
+        
+        # Sample frame mode
+        try:
+            metadata['sample_frame_mode'] = 'HKL' if self.window.sample_dock.sample_frame_mode_check.isChecked() else 'Q'
+        except:
+            metadata['sample_frame_mode'] = 'Q'
+        
+        # NMO and velocity selector
+        metadata['NMO_installed'] = vals.get('NMO_installed', 'None')
+        metadata['V_selector_installed'] = vals.get('V_selector_installed', False)
+        
+        return metadata
+    
     def update_monocris_info(self):
         """Update monochromator crystal information."""
         monocris = self.window.instrument_dock.monocris_combo.currentText()
@@ -403,7 +502,6 @@ class TAVIController(QObject):
                 'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
                 'diagnostic_mode': self.window.simulation_dock.diagnostic_mode_check.isChecked(),
-                'auto_display': self.window.simulation_dock.auto_display_check.isChecked(),
             }
         except ValueError:
             return None
@@ -1118,7 +1216,7 @@ class TAVIController(QObject):
         self.print_to_message_center("Validation window not yet implemented")
     
     def load_and_display_data(self):
-        """Load and display existing data using PySide6-compatible wrapper."""
+        """Load and display existing data in the display dock."""
         folder = self.window.data_control_dock.load_folder_edit.text()
         if folder and os.path.exists(folder):
             self.print_to_message_center(f"Loading data from: {folder}")
@@ -1127,42 +1225,93 @@ class TAVIController(QObject):
                 scan_parameters = read_parameters_from_file(folder)
                 scan_cmd1 = scan_parameters.get('scan_command1', '')
                 scan_cmd2 = scan_parameters.get('scan_command2', '')
-                # Emit signal to plot in main thread (already on main thread, but keeps consistency)
-                self.plot_requested.emit(folder, scan_cmd1, scan_cmd2)
+                
+                # Build metadata for info panel
+                metadata = self._build_scan_metadata_from_parameters(scan_parameters)
+                
+                # Load data into display dock
+                self.window.display_dock.load_existing_data(folder, scan_cmd1, scan_cmd2, metadata)
+                self.print_to_message_center("Data loaded into display dock")
             except Exception as e:
                 self.print_to_message_center(f"Error loading data: {str(e)}")
         else:
             self.print_to_message_center("Invalid folder path for loading data")
     
-    @Slot(str, str, str)
-    def plot_in_main_thread(self, data_folder, scan_command1, scan_command2):
-        """Plot data in main thread (thread-safe matplotlib operations)."""
-        try:
-            # Use Qt backend compatible with PySide6 - must be set on main thread
-            import matplotlib
-            matplotlib.use('Qt5Agg')
-            import matplotlib.pyplot as plt
-            import numpy as np
-            
-            scan_parameters = read_parameters_from_file(data_folder)
-            
-            if not scan_command1 and not scan_command2:
-                # Single point - no plot needed
-                self.print_to_message_center("Single point - no plot generated")
-                return
-            
-            if scan_command1 and not scan_command2:
-                # 1D scan
-                self.plot_1D_scan_non_blocking(data_folder, scan_command1, scan_parameters, plt, np)
-                self.print_to_message_center("1D plot displayed and saved to data folder")
-            
-            if scan_command2 and scan_command1:
-                # 2D scan
-                self.plot_2D_scan_non_blocking(data_folder, scan_command1, scan_command2, scan_parameters, plt, np)
-                self.print_to_message_center("2D plot displayed and saved to data folder")
-                
-        except Exception as e:
-            self.print_to_message_center(f"Plot generation failed: {e}")
+    def _build_scan_metadata_from_parameters(self, params):
+        """Build scan metadata dict from loaded parameters."""
+        metadata = {}
+        
+        # Number of neutrons
+        if 'number_neutrons' in params:
+            try:
+                metadata['number_neutrons'] = int(float(params['number_neutrons']))
+            except (ValueError, TypeError):
+                pass
+        
+        # Ki/Kf fixed mode
+        if 'K_fixed' in params:
+            metadata['K_fixed'] = params['K_fixed']
+        
+        # Fixed E
+        if 'fixed_E' in params:
+            try:
+                metadata['fixed_E'] = float(params['fixed_E'])
+            except (ValueError, TypeError):
+                pass
+        
+        # Collimations
+        for key in ['alpha_1', 'alpha_2', 'alpha_3', 'alpha_4']:
+            if key in params:
+                metadata[key] = params[key]
+        
+        # Crystals
+        if 'monocris' in params:
+            metadata['monocris'] = params['monocris']
+        if 'anacris' in params:
+            metadata['anacris'] = params['anacris']
+        
+        # Alignment offsets
+        for key in ['kappa', 'psi']:
+            if key in params:
+                try:
+                    metadata[key] = float(params[key])
+                except (ValueError, TypeError):
+                    pass
+        
+        # Q-space coordinates
+        for key in ['qx', 'qy', 'qz']:
+            if key in params:
+                try:
+                    metadata[key] = float(params[key])
+                except (ValueError, TypeError):
+                    pass
+        
+        # HKL coordinates
+        for key in ['H', 'K', 'L']:
+            if key in params:
+                try:
+                    metadata[key] = float(params[key])
+                except (ValueError, TypeError):
+                    pass
+        
+        # Energy transfer
+        if 'deltaE' in params:
+            try:
+                metadata['deltaE'] = float(params['deltaE'])
+            except (ValueError, TypeError):
+                pass
+        
+        # Sample frame mode
+        if 'sample_frame_mode' in params:
+            metadata['sample_frame_mode'] = params['sample_frame_mode']
+        
+        # NMO and velocity selector
+        if 'NMO_installed' in params:
+            metadata['NMO_installed'] = params['NMO_installed']
+        if 'V_selector_installed' in params:
+            metadata['V_selector_installed'] = params.get('V_selector_installed', False)
+        
+        return metadata
     
     def save_parameters(self):
         """Save all parameters to JSON file."""
@@ -1218,7 +1367,6 @@ class TAVIController(QObject):
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
-            "auto_display_var": self.window.simulation_dock.auto_display_check.isChecked(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
@@ -1321,7 +1469,6 @@ class TAVIController(QObject):
                     pass
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
-                self.window.simulation_dock.auto_display_check.setChecked(parameters.get("auto_display_var", True))
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
@@ -1387,7 +1534,6 @@ class TAVIController(QObject):
         self.window.sample_dock.sample_frame_mode_check.setChecked(False)
         self.window.simulation_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
         self.window.simulation_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
-        self.window.simulation_dock.auto_display_check.setChecked(True)
         
         # Set default folder paths
         folder_suggestion = os.path.join(self.output_directory, "initial_testing")
@@ -1478,7 +1624,6 @@ class TAVIController(QObject):
         scan_command1 = vals['scan_command1']
         scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
-        auto_display = vals['auto_display']
         
         # Write parameters to file
         write_parameters_to_file(data_folder, vals)
@@ -1547,11 +1692,19 @@ class TAVIController(QObject):
         variable_name1 = ""
         variable_name2 = ""
         
+        # Arrays to track valid/invalid points for display
+        valid_mask_1d = []  # For 1D: bool list - True if point is valid
+        valid_mask_2d = None  # For 2D: 2D list of bools
+        array_values1 = []
+        array_values2 = []
+        
         # Single scan command
         if scan_command1 and not scan_command2:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
             variable_name1 = self.normalize_scan_variable(variable_name1)
-            for value1 in array_values1:
+            valid_mask_1d = [False] * len(array_values1)
+            
+            for idx, value1 in enumerate(array_values1):
                 scan_point = scan_point_template[:]
                 scan_point[variable_to_index[variable_name1]] = value1
                 if scan_mode == "momentum":
@@ -1572,7 +1725,13 @@ class TAVIController(QObject):
                 else:
                     error_flags = []
                 if not error_flags:
-                    scan_parameter_input.append(scan_point)
+                    valid_mask_1d[idx] = True
+                    # Store as tuple (scan_point, idx_1d) for consistency with 2D
+                    scan_parameter_input.append((scan_point, idx))
+            
+            # Initialize display dock for 1D scan
+            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d, 
+                                       variable_name1, "", [], [])
         
         # Double scan command
         if scan_command2 and scan_command1:
@@ -1580,8 +1739,12 @@ class TAVIController(QObject):
             variable_name2, array_values2 = parse_scan_steps(scan_command2)
             variable_name1 = self.normalize_scan_variable(variable_name1)
             variable_name2 = self.normalize_scan_variable(variable_name2)
-            for value1 in array_values1:
-                for value2 in array_values2:
+            
+            # Initialize 2D valid mask
+            valid_mask_2d = [[False] * len(array_values1) for _ in range(len(array_values2))]
+            
+            for idx_y, value2 in enumerate(array_values2):
+                for idx_x, value1 in enumerate(array_values1):
                     scan_point = scan_point_template[:]
                     scan_point[variable_to_index[variable_name1]] = value1
                     scan_point[variable_to_index[variable_name2]] = value2
@@ -1603,7 +1766,15 @@ class TAVIController(QObject):
                     else:
                         error_flags = []
                     if not error_flags:
-                        scan_parameter_input.append(scan_point)
+                        valid_mask_2d[idx_y][idx_x] = True
+                        scan_parameter_input.append((scan_point, idx_x, idx_y))
+            
+            # Initialize display dock for 2D scan
+            self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
+                                       variable_name2, list(array_values2), valid_mask_2d)
+        
+        # Track if this is a 2D scan
+        is_2d_scan = scan_command2 and scan_command1
         
         # Run the scans
         start_time = time.time()
@@ -1613,10 +1784,23 @@ class TAVIController(QObject):
         total_counts = 0
         max_counts = 0
         
-        for i, scans in enumerate(scan_parameter_input):
+        for i, scan_item in enumerate(scan_parameter_input):
             if self.stop_flag:
                 self.message_printed.emit("Simulation stopped by user.")
+                self.scan_completed.emit()
                 return data_folder
+            
+            # Extract scan point and indices (both 1D and 2D now use tuples)
+            if is_2d_scan:
+                scans, idx_x, idx_y = scan_item
+                # Emit current scan position for 2D
+                self.scan_current_index_2d.emit(idx_x, idx_y)
+                idx_1d = -1  # Not used for 2D
+            else:
+                scans, idx_1d = scan_item
+                # Emit current scan position for 1D
+                self.scan_current_index_1d.emit(idx_1d)
+                idx_x, idx_y = -1, -1  # Not used for 1D
             
             # Extract scannable parameters and calculate angles
             error_flags = []
@@ -1762,6 +1946,13 @@ class TAVIController(QObject):
                 # Update counts
                 total_counts += counts
                 max_counts = max(max_counts, counts)
+                
+                # Emit display update signal
+                if is_2d_scan:
+                    self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                else:
+                    if idx_1d >= 0:
+                        self.scan_point_updated_1d.emit(idx_1d, counts)
             
             # Emit progress signals
             self.progress_updated.emit(i + 1, total_scans)
@@ -1783,162 +1974,10 @@ class TAVIController(QObject):
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
         self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
-        # Generate and display plots if auto_display is enabled
-        if auto_display and (scan_command1 or scan_command2):
-            try:
-                # Emit signal to plot in main thread (thread-safe)
-                self.plot_requested.emit(data_folder, scan_command1 or "", scan_command2 or "")
-                self.message_printed.emit("Plot generation requested...")
-            except Exception as e:
-                self.message_printed.emit(f"Plot request failed: {e}")
-        elif not auto_display:
-            self.message_printed.emit("Auto-display disabled. Plots not generated.")
-            self.message_printed.emit("You can manually generate plots from the data folder.")
+        # Signal scan complete to display dock
+        self.scan_completed.emit()
         
         return data_folder
-    
-    def plot_1D_scan_non_blocking(self, data_folder, scan_command1, scan_parameters, plt, np):
-        """Generate 1D plot and display it in a window."""
-        from tavi.data_processing import write_1D_scan, read_parameters_from_file
-        
-        variable_name, array_values = parse_scan_steps(scan_command1)
-        variable_name = self.normalize_scan_variable(variable_name)
-        scan_params = []
-        counts_array = []
-        
-        for folder_name in os.listdir(data_folder):
-            full_path = os.path.join(data_folder, folder_name)
-            if os.path.isdir(full_path):
-                # Read scan parameters from file instead of parsing folder name
-                point_params = read_parameters_from_file(full_path)
-                if point_params and variable_name in point_params:
-                    scan_value = point_params.get(variable_name)
-                    if scan_value is not None:
-                        scan_params.append(float(scan_value))
-                        intensity, intensity_error, counts = read_1Ddetector_file(full_path)
-                        if counts is not None:
-                            counts_array.append(counts)
-        
-        if not scan_params:
-            return
-        
-        scan_params = np.array(scan_params)
-        counts_array = np.array(counts_array)
-        
-        # Sort by scan parameter
-        sorted_indices = np.argsort(scan_params)
-        scan_params = scan_params[sorted_indices]
-        counts_array = counts_array[sorted_indices]
-        
-        # Create plot
-        plt.figure(figsize=(10, 6))
-        plt.plot(scan_params, counts_array, marker='o', linestyle='-', color='b', label='Counts')
-        
-        # Set labels
-        if variable_name in ['qx', 'qy', 'qz']:
-            plt.xlabel(f'{variable_name} (1/Å)')
-        elif variable_name == 'deltaE':
-            plt.xlabel(f'{variable_name} (meV)')
-        elif variable_name in ['H', 'K', 'L']:
-            plt.xlabel(f'{variable_name} (r.l.u.)')
-        else:
-            plt.xlabel(variable_name)
-        
-        plt.ylabel('Counts')
-        
-        # Build title
-        plot_title = f"N: {np.format_float_scientific(scan_parameters.get('number_neutrons'), unique=True, precision=2)}"
-        if variable_name != 'qx' and 'qx' in scan_parameters:
-            plot_title += f" qx={scan_parameters.get('qx')}"
-        if variable_name != 'qy' and 'qy' in scan_parameters:
-            plot_title += f" qy={scan_parameters.get('qy')}"
-        if variable_name != 'qz' and 'qz' in scan_parameters:
-            plot_title += f" qz={scan_parameters.get('qz')}"
-        if variable_name != 'deltaE' and 'deltaE' in scan_parameters:
-            plot_title += f" dE={scan_parameters.get('deltaE')}"
-        
-        plt.title(plot_title)
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Save plot
-        plot_file = os.path.join(data_folder, "1D_plot.png")
-        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        
-        # Display the plot in a window
-        plt.show(block=False)
-        
-        # Write data to file
-        write_1D_scan(scan_params, counts_array, data_folder, "1D_data.txt")
-    
-    def plot_2D_scan_non_blocking(self, data_folder, scan_command1, scan_command2, scan_parameters, plt, np):
-        """Generate 2D heatmap and display it in a window."""
-        from tavi.data_processing import write_2D_scan, read_parameters_from_file
-        
-        variable_name1, array_values1 = parse_scan_steps(scan_command1)
-        variable_name2, array_values2 = parse_scan_steps(scan_command2)
-        variable_name1 = self.normalize_scan_variable(variable_name1)
-        variable_name2 = self.normalize_scan_variable(variable_name2)
-        
-        scan_data = []
-        
-        for folder_name in os.listdir(data_folder):
-            full_path = os.path.join(data_folder, folder_name)
-            if os.path.isdir(full_path):
-                # Read scan parameters from file instead of parsing folder name
-                point_params = read_parameters_from_file(full_path)
-                if point_params and variable_name1 in point_params and variable_name2 in point_params:
-                    x = point_params.get(variable_name1)
-                    y = point_params.get(variable_name2)
-                    if x is not None and y is not None:
-                        intensity, intensity_error, counts = read_1Ddetector_file(full_path)
-                        if counts is not None:
-                            scan_data.append((float(x), float(y), counts))
-        
-        if not scan_data:
-            return
-        
-        # Create grid for heatmap
-        x_vals = np.unique([d[0] for d in scan_data])
-        y_vals = np.unique([d[1] for d in scan_data])
-        
-        grid = np.full((len(y_vals), len(x_vals)), np.nan)
-        
-        for x, y, counts in scan_data:
-            x_idx = np.abs(x_vals - x).argmin()
-            y_idx = np.abs(y_vals - y).argmin()
-            grid[y_idx, x_idx] = counts
-        
-        # Create heatmap
-        plt.figure(figsize=(10, 8))
-        plt.imshow(grid, cmap='viridis', origin='lower', 
-                   extent=[x_vals.min(), x_vals.max(), y_vals.min(), y_vals.max()],
-                   aspect='auto')
-        plt.colorbar(label='Counts')
-        
-        # Set labels
-        x_label = f'{variable_name1} (1/Å)' if variable_name1 in ['qx', 'qy', 'qz'] else \
-              f'{variable_name1} (meV)' if variable_name1 == 'deltaE' else \
-              f'{variable_name1} (r.l.u.)' if variable_name1 in ['H', 'K', 'L'] else variable_name1
-        y_label = f'{variable_name2} (1/Å)' if variable_name2 in ['qx', 'qy', 'qz'] else \
-              f'{variable_name2} (meV)' if variable_name2 == 'deltaE' else \
-              f'{variable_name2} (r.l.u.)' if variable_name2 in ['H', 'K', 'L'] else variable_name2
-        
-        plt.xlabel(x_label)
-        plt.ylabel(y_label)
-        
-        plot_title = f"N: {np.format_float_scientific(scan_parameters.get('number_neutrons'), unique=True, precision=2)}"
-        plt.title(plot_title)
-        
-        # Save plot
-        plot_file = os.path.join(data_folder, "Heatmap.png")
-        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
-        
-        # Display the plot in a window
-        plt.show(block=False)
-        
-        # Write data to file
-        write_2D_scan(x_vals, y_vals, grid, data_folder, "2D_data.txt")
 
 
 def main():

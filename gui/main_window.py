@@ -13,6 +13,7 @@ from gui.docks.unified_sample_dock import UnifiedSampleDock
 from gui.docks.unified_simulation_dock import UnifiedSimulationDock
 from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
+from gui.docks.display_dock import DisplayDock
 
 
 class TAVIMainWindow(QMainWindow):
@@ -67,7 +68,10 @@ class TAVIMainWindow(QMainWindow):
         # Simulation Panel (column 2, bottom)
         self.simulation_dock = UnifiedSimulationDock(self)
         
-        # Message Panel (column 3, top)
+        # Display Panel (column 3, top) - Real-time plot display
+        self.display_dock = DisplayDock(self)
+        
+        # Message Panel (column 3, middle)
         self.output_dock = OutputDock(self)
         
         # Data Control Panel (column 3, bottom)
@@ -79,6 +83,7 @@ class TAVIMainWindow(QMainWindow):
             self.scattering_dock,
             self.sample_dock,
             self.simulation_dock,
+            self.display_dock,
             self.output_dock,
             self.data_control_dock,
         ]
@@ -97,10 +102,11 @@ class TAVIMainWindow(QMainWindow):
         
         Layout:
         ┌─────────────┬─────────────┬─────────────┐
-        │ Instrument  │   Sample    │   Output    │
+        │ Instrument  │   Sample    │  Display    │
+        │             │             │  (Plot)     │
+        ├─────────────┼─────────────┼─────────────┤
+        │ Scattering  │ Simulation  │   Output    │
         │             │             │  (Message)  │
-        ├─────────────┼─────────────┤             │
-        │ Scattering  │ Simulation  │             │
         │             │             ├─────────────┤
         │             │             │    Data     │
         │             │             │   Control   │
@@ -109,13 +115,13 @@ class TAVIMainWindow(QMainWindow):
         # Step 1: Add all docks to the left area first
         self.addDockWidget(Qt.LeftDockWidgetArea, self.instrument_dock)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.sample_dock)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.output_dock)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.display_dock)
         
         # Step 2: Create 3 columns by splitting horizontally
         # Split instrument from sample (instrument stays left, sample goes right)
         self.splitDockWidget(self.instrument_dock, self.sample_dock, Qt.Horizontal)
-        # Split sample from output (sample stays left, output goes right)
-        self.splitDockWidget(self.sample_dock, self.output_dock, Qt.Horizontal)
+        # Split sample from display (sample stays left, display goes right)
+        self.splitDockWidget(self.sample_dock, self.display_dock, Qt.Horizontal)
         
         # Step 3: Add bottom docks to each column
         # Scattering below Instrument (column 1)
@@ -126,13 +132,17 @@ class TAVIMainWindow(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, self.simulation_dock)
         self.splitDockWidget(self.sample_dock, self.simulation_dock, Qt.Vertical)
         
+        # Output below Display (column 3)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.output_dock)
+        self.splitDockWidget(self.display_dock, self.output_dock, Qt.Vertical)
+        
         # Data Control below Output (column 3)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
         self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
         
         # Step 4: Set column widths
         self.resizeDocks(
-            [self.instrument_dock, self.sample_dock, self.output_dock],
+            [self.instrument_dock, self.sample_dock, self.display_dock],
             [400, 500, 450],
             Qt.Horizontal
         )
@@ -151,8 +161,8 @@ class TAVIMainWindow(QMainWindow):
         )
         
         self.resizeDocks(
-            [self.output_dock, self.data_control_dock],
-            [600, 200],
+            [self.display_dock, self.output_dock, self.data_control_dock],
+            [350, 350, 150],
             Qt.Vertical
         )
     
