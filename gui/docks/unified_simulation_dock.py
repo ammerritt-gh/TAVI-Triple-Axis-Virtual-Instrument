@@ -3,27 +3,24 @@
 Combines scan parameters, control buttons, diagnostic mode, counts display,
 and progress tracking into a single dockable panel.
 """
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QComboBox, QGroupBox, QPushButton,
-                                QGridLayout, QCheckBox, QFormLayout, QProgressBar)
+                                QGridLayout, QCheckBox, QFormLayout, QProgressBar,
+                                QWidget)
 from PySide6.QtCore import Qt
 
+from gui.docks.base_dock import BaseDockWidget
 
-class UnifiedSimulationDock(QDockWidget):
+
+class UnifiedSimulationDock(BaseDockWidget):
     """Unified dock widget for simulation control and parameters."""
     
     def __init__(self, parent=None):
-        super().__init__("Simulation", parent)
+        super().__init__("Simulation", parent, use_scroll_area=True)
         self.setObjectName("SimulationDock")
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | 
-                            Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
         
-        # Create main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(8)
-        main_widget.setLayout(main_layout)
-        self.setWidget(main_widget)
+        # Get the content layout from base class
+        main_layout = self.content_layout
         
         # ===== Scan Parameters Section =====
         params_group = QGroupBox("Scan Parameters")
