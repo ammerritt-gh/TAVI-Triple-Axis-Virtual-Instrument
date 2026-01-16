@@ -229,6 +229,10 @@ class TAVIController(QObject):
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
         except Exception:
             pass
+        
+        # Scan command validation - check for conflicts and errors on text change
+        self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
+        self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self.validate_scan_commands)
     
     def setup_visual_feedback(self):
         """Set up visual feedback for all input fields to show pending/saved states."""
@@ -569,11 +573,15 @@ class TAVIController(QObject):
             return lower.upper()
         if lower in ["a1", "a2", "a3", "a4"]:
             return lower.upper()
+        if lower == "2theta":
+            return "A2"  # 2theta is an alias for sample 2theta (A2)
+        if lower == "omega":
+            return "A3"  # omega is the same angle as A3 (sample theta)
         if lower == "deltae":
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
             return lower
-        if lower in ["omega", "chi", "kappa", "psi"]:
+        if lower in ["chi", "kappa", "psi"]:
             return lower
         return name
     
@@ -1196,6 +1204,199 @@ class TAVIController(QObject):
         except ValueError:
             self.print_to_message_center("Invalid alignment offset value")
     
+    def validate_scan_commands(self):
+        """Validate scan commands for errors, typos, and parameter conflicts.
+        
+        This checks:
+        1. Unknown/invalid variable names (typos)
+        2. Malformed commands (wrong number of parts, invalid numbers)
+        3. Suspicious parameters (e.g., > 1000 scan points)
+        4. Conflicts between linked parameters (e.g., qx + H)
+        5. Mode conflicts (orientation angles vs momentum/HKL)
+        """
+        from gui.docks.unified_simulation_dock import (
+            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
+        )
+        
+        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
+        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
+        
+        # Clear all previous warnings
+        self.window.simulation_dock.clear_all_scan_warnings()
+        
+        # Validate each command individually
+        var1, warning1 = self._validate_single_scan_command(cmd1)
+        var2, warning2 = self._validate_single_scan_command(cmd2)
+        
+        if warning1:
+            self.window.simulation_dock.set_scan_command_warning(1, warning1)
+        if warning2:
+            self.window.simulation_dock.set_scan_command_warning(2, warning2)
+        
+        # If both commands have variables, check for conflicts
+        if var1 and var2:
+            conflict = self._check_scan_parameter_conflict(var1, var2)
+            if conflict:
+                self.window.simulation_dock.set_scan_conflict_warning(conflict)
+    
+    def _validate_single_scan_command(self, command: str) -> tuple:
+        """Validate a single scan command and return (variable_name, warning_message).
+        
+        Returns:
+            tuple: (normalized_variable_name or None, warning_message or None)
+        """
+        from gui.docks.unified_simulation_dock import VALID_SCAN_VARIABLES
+        
+        if not command:
+            return (None, None)
+        
+        parts = command.split()
+        
+        # Check for minimum parts (variable, start, end, step)
+        if len(parts) < 4:
+            return (None, "Incomplete: needs 'variable start end step'")
+        
+        if len(parts) > 4:
+            return (None, "Too many parts: use 'variable start end step'")
+        
+        var_name = parts[0]
+        var_lower = var_name.lower()
+        
+        # Handle 2theta as alias for A2
+        if var_lower == "2theta":
+            var_lower = "a2"
+        
+        # Check for known variable name
+        if var_lower not in VALID_SCAN_VARIABLES:
+            # Try to suggest similar names
+            suggestions = [v for v in VALID_SCAN_VARIABLES if var_lower in v or v in var_lower]
+            if suggestions:
+                return (None, f"Unknown variable '{var_name}'. Did you mean: {', '.join(suggestions)}?")
+            else:
+                return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, chi, etc.")
+        
+        # Validate numeric parts
+        try:
+            start = float(parts[1])
+            end = float(parts[2])
+            step = float(parts[3])
+        except ValueError:
+            return (None, "Invalid numbers. Check start, end, and step values.")
+        
+        # Check for zero step
+        if step == 0:
+            return (var_lower, "Step size cannot be zero.")
+        
+        # Check step sign consistency with direction
+        if (end > start and step < 0) or (end < start and step > 0):
+            return (var_lower, "Step sign doesn't match direction (start → end).")
+        
+        # Calculate number of points and warn if too many or too few
+        import numpy as np
+        num_points = int(np.floor(abs(end - start) / abs(step) + 0.5)) + 1
+        
+        if num_points > 1000:
+            return (var_lower, f"⚠ {num_points} points - this may take a very long time!")
+        elif num_points > 500:
+            return (var_lower, f"Warning: {num_points} scan points. Consider fewer steps.")
+        elif num_points == 1:
+            return (var_lower, f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end}).")
+        elif num_points <= 0:
+            return (var_lower, "Invalid range: no points would be generated.")
+        
+        # Normalize variable name
+        normalized = self.normalize_scan_variable(var_name)
+        return (normalized.lower() if normalized else var_lower, None)
+    
+    def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
+        """Check if two scan variables conflict with each other.
+        
+        Args:
+            var1: First variable name (lowercase)
+            var2: Second variable name (lowercase)
+            
+        Returns:
+            str: Conflict warning message, or empty string if no conflict
+        """
+        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS, MODE_CONFLICTS
+        
+        # Normalize to lowercase for comparison
+        v1 = var1.lower()
+        v2 = var2.lower()
+        
+        # Same variable - definitely a conflict
+        if v1 == v2:
+            return f"⚠ Both commands scan '{v1}' - use different parameters"
+        
+        # Check linked parameter groups (parameters that control the same thing)
+        for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
+            if v1 in group_vars and v2 in group_vars:
+                return f"⚠ Conflict: '{var1}' and '{var2}' are linked ({group_name.replace('_', ' ')})"
+        
+        # Check mode conflicts (orientation vs momentum/HKL)
+        for conflict_name, (set1, set2) in MODE_CONFLICTS.items():
+            if (v1 in set1 and v2 in set2) or (v1 in set2 and v2 in set1):
+                return f"⚠ Conflict: orientation angle vs Q/HKL - angles will override calculated positions"
+        
+        return ""
+    
+    def _get_current_value_for_variable(self, var_name: str, vals: dict, scan_point_template: list) -> float:
+        """Get the current value for a scan variable to use as relative base.
+        
+        Args:
+            var_name: Normalized variable name (e.g., 'qx', 'H', 'omega')
+            vals: Dictionary of GUI values
+            scan_point_template: Template array with current values
+            
+        Returns:
+            float: Current value for the variable
+        """
+        var = var_name.lower() if var_name else ""
+        
+        # Q-space variables
+        if var == 'qx':
+            return vals.get('qx', 0)
+        elif var == 'qy':
+            return vals.get('qy', 0)
+        elif var == 'qz':
+            return vals.get('qz', 0)
+        elif var == 'deltae':
+            return vals.get('deltaE', 0)
+        # HKL variables
+        elif var == 'h':
+            return vals.get('H', 0)
+        elif var == 'k':
+            return vals.get('K', 0)
+        elif var == 'l':
+            return vals.get('L', 0)
+        # Instrument angles
+        elif var == 'a1':
+            return float(self.window.instrument_dock.mtt_edit.text() or 0)
+        elif var == 'a2':
+            return float(self.window.instrument_dock.stt_edit.text() or 0)
+        elif var == 'a3':
+            return float(self.window.instrument_dock.omega_edit.text() or 0)
+        elif var == 'a4':
+            return float(self.window.instrument_dock.att_edit.text() or 0)
+        # Sample orientation (chi, kappa, psi - omega is normalized to A3)
+        elif var == 'chi':
+            return scan_point_template[8] if len(scan_point_template) > 8 else 0
+        elif var == 'kappa':
+            return scan_point_template[9] if len(scan_point_template) > 9 else 0
+        elif var == 'psi':
+            return scan_point_template[10] if len(scan_point_template) > 10 else 0
+        # Crystal bending
+        elif var == 'rhm':
+            return vals.get('rhm', 0)
+        elif var == 'rvm':
+            return vals.get('rvm', 0)
+        elif var == 'rha':
+            return vals.get('rha', 0)
+        elif var == 'rva':
+            return vals.get('rva', 0.8)
+        
+        return 0
+    
     def on_omega_changed(self):
         """Handle omega (ω) change - sample in-plane rotation."""
         if self.updating:
@@ -1609,6 +1810,22 @@ class TAVIController(QObject):
     
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
+        # Pre-flight validation - check for scan command issues
+        validation_result = self._preflight_scan_validation()
+        if validation_result:
+            # There are issues - show warning but allow proceeding
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.warning(
+                self.window,
+                "Scan Command Issues",
+                f"{validation_result}\n\nDo you want to continue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                self.print_to_message_center("Simulation cancelled due to scan command issues")
+                return
+        
         self.stop_flag = False
         
         # Reset progress bar and show initializing state
@@ -1619,6 +1836,43 @@ class TAVIController(QObject):
         data_folder = self.window.data_control_dock.save_folder_edit.text()
         simulation_thread = threading.Thread(target=self.run_simulation, args=(data_folder,))
         simulation_thread.start()
+    
+    def _preflight_scan_validation(self) -> str:
+        """Check scan commands before running simulation.
+        
+        Returns:
+            str: Error/warning message if issues found, empty string if OK
+        """
+        from gui.docks.unified_simulation_dock import (
+            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
+        )
+        
+        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
+        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
+        
+        issues = []
+        
+        # Validate command 1
+        var1, warning1 = self._validate_single_scan_command(cmd1)
+        if warning1 and "⚠" in warning1:  # Only block on serious warnings
+            issues.append(f"Command 1: {warning1}")
+        elif warning1 and "Unknown" in warning1:
+            issues.append(f"Command 1: {warning1}")
+        
+        # Validate command 2
+        var2, warning2 = self._validate_single_scan_command(cmd2)
+        if warning2 and "⚠" in warning2:
+            issues.append(f"Command 2: {warning2}")
+        elif warning2 and "Unknown" in warning2:
+            issues.append(f"Command 2: {warning2}")
+        
+        # Check for conflicts between commands
+        if var1 and var2:
+            conflict = self._check_scan_parameter_conflict(var1, var2)
+            if conflict:
+                issues.append(conflict)
+        
+        return "\n".join(issues)
 
     def on_sample_changed(self, label):
         """Handle sample selection changes from the GUI."""
@@ -1687,6 +1941,10 @@ class TAVIController(QObject):
         scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
         
+        # Check if relative scan mode is enabled for each command
+        relative_mode_1 = self.window.simulation_dock.relative_1_button.isChecked()
+        relative_mode_2 = self.window.simulation_dock.relative_2_button.isChecked()
+        
         # Write parameters to file
         write_parameters_to_file(data_folder, vals)
         
@@ -1711,18 +1969,20 @@ class TAVIController(QObject):
                 pass
         
         # Mapping for scannable parameters
-        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-11: sample orientation (omega, chi, kappa, psi)
+        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-10: sample orientation (chi, kappa, psi)
+        # Note: omega is normalized to A3 (they are the same angle)
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
             'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-            'omega': 8, 'chi': 9, 'kappa': 10, 'psi': 11
+            'chi': 8, 'kappa': 9, 'psi': 10
         }
         
         # Initialize scan point template
-        # Extended to 12 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-11: omega/chi/kappa/psi
-        scan_point_template = [0] * 12
+        # Extended to 11 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-10: chi/kappa/psi
+        # Note: omega is normalized to A3, so no separate index needed
+        scan_point_template = [0] * 11
         if scan_mode == "momentum":
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         elif scan_mode == "rlu":
@@ -1730,14 +1990,15 @@ class TAVIController(QObject):
         elif scan_mode == "angle":
             scan_point_template[:4] = [0, 0, 0, 0]
         elif scan_mode == "orientation":
-            # For orientation scans, use current Q values but scan omega/chi/kappa/psi
+            # For orientation scans, use current Q values but scan chi/kappa/psi
+            # Note: omega is normalized to A3, so omega scans work via angle mode
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        # Set default omega/chi from instrument_dock, kappa/psi from sample_dock
+        # Set default chi from instrument_dock, kappa/psi from sample_dock
+        # Note: omega is same as A3, no separate storage needed
         try:
-            scan_point_template[8] = float(self.window.instrument_dock.omega_edit.text() or 0)
-            scan_point_template[9] = float(self.window.instrument_dock.chi_edit.text() or 0)
-            scan_point_template[10] = float(self.window.sample_dock.kappa_edit.text() or 0)
-            scan_point_template[11] = float(self.window.sample_dock.psi_edit.text() or 0)
+            scan_point_template[8] = float(self.window.instrument_dock.chi_edit.text() or 0)
+            scan_point_template[9] = float(self.window.sample_dock.kappa_edit.text() or 0)
+            scan_point_template[10] = float(self.window.sample_dock.psi_edit.text() or 0)
         except ValueError:
             pass
         
@@ -1765,6 +2026,13 @@ class TAVIController(QObject):
         if scan_command1 and not scan_command2:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
             variable_name1 = self.normalize_scan_variable(variable_name1)
+            
+            # Apply relative offset if enabled for command 1
+            if relative_mode_1:
+                base_value = self._get_current_value_for_variable(variable_name1, vals, scan_point_template)
+                array_values1 = array_values1 + base_value
+                self.message_printed.emit(f"Relative scan: {variable_name1} base value = {base_value}")
+            
             valid_mask_1d = [False] * len(array_values1)
             
             for idx, value1 in enumerate(array_values1):
@@ -1802,6 +2070,16 @@ class TAVIController(QObject):
             variable_name2, array_values2 = parse_scan_steps(scan_command2)
             variable_name1 = self.normalize_scan_variable(variable_name1)
             variable_name2 = self.normalize_scan_variable(variable_name2)
+            
+            # Apply relative offset if enabled for each command independently
+            if relative_mode_1:
+                base_value1 = self._get_current_value_for_variable(variable_name1, vals, scan_point_template)
+                array_values1 = array_values1 + base_value1
+                self.message_printed.emit(f"Relative scan 1: {variable_name1} base = {base_value1}")
+            if relative_mode_2:
+                base_value2 = self._get_current_value_for_variable(variable_name2, vals, scan_point_template)
+                array_values2 = array_values2 + base_value2
+                self.message_printed.emit(f"Relative scan 2: {variable_name2} base = {base_value2}")
             
             # Initialize 2D valid mask
             valid_mask_2d = [[False] * len(array_values1) for _ in range(len(array_values2))]
@@ -1902,14 +2180,25 @@ class TAVIController(QObject):
             else:  # Angle mode
                 A1, A2, A3, A4 = scans[:4]
                 self.PUMA.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
+                # In angle mode, use deltaE from GUI since we're not calculating from Q
+                deltaE = vals['deltaE']
+                # Set placeholder variables for logging (not calculated in angle mode)
+                mtt, stt, sth, att = A1, A2, A3, A4
+                qx, qy, qz = 0, 0, 0  # Not applicable in angle mode
             
             rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-            omega_scan, chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10], scans[11]
+            chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10]
             
-            # For RLU/momentum scans, omega IS the calculated sth (they're the same angle)
-            # Only update omega_scan if we calculated new angles (not for orientation/angle scans)
-            if scan_mode in ["momentum", "rlu"] and not error_flags:
+            # omega = A3 (they are the same angle)
+            # In angle mode, omega comes from A3; in momentum/rlu modes, from calculated sth
+            if scan_mode == "angle":
+                omega_scan = scans[2]  # A3 position in scans array
+            elif scan_mode in ["momentum", "rlu"] and not error_flags:
                 omega_scan = sth  # omega displays the calculated sample theta
+            elif scan_mode == "orientation":
+                omega_scan = sth if not error_flags else vals.get('omega', 0)
+            else:
+                omega_scan = 0
             
             # Check if bending parameters are part of scan commands; if not, use current PUMA values
             if 'rhm' not in [variable_name1, variable_name2]:
