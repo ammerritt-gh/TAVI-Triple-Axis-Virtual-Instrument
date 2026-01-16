@@ -5,11 +5,13 @@ into a single dockable panel.
 """
 import base64
 import struct
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
                                 QGridLayout, QCheckBox, QComboBox, QFrame,
                                 QMessageBox)
 from PySide6.QtCore import Qt
+
+from gui.docks.base_dock import BaseDockWidget
 
 
 # Simple XOR key for obfuscation (not secure, but sufficient for educational use)
@@ -82,24 +84,18 @@ def _get_hint(error: float, tol_good: float, tol_close: float) -> str:
         return f"Way off (>{error:.0f}°)"
 
 
-class UnifiedSampleDock(QDockWidget):
+class UnifiedSampleDock(BaseDockWidget):
     """Unified dock widget for sample configuration and misalignment training."""
     
     def __init__(self, parent=None):
-        super().__init__("Sample", parent)
+        super().__init__("Sample", parent, use_scroll_area=True)
         self.setObjectName("SampleDock")
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | 
-                            Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
         
         # Store loaded misalignment (hidden from user)
         self._loaded_misalignment = None
         
-        # Create main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(8)
-        main_widget.setLayout(main_layout)
-        self.setWidget(main_widget)
+        # Get the content layout from base class
+        main_layout = self.content_layout
         
         # ===== Sample Selection Section =====
         sample_select_group = QGroupBox("Sample Selection")

@@ -2,27 +2,21 @@
 
 Contains absolute Q-space, relative HKL space, and energy transfer parameters.
 """
-from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-                                QLabel, QLineEdit, QGroupBox, QGridLayout,
-                                QComboBox)
+from PySide6.QtWidgets import (QLabel, QLineEdit, QGroupBox, QGridLayout, QComboBox)
 from PySide6.QtCore import Qt
 
+from gui.docks.base_dock import BaseDockWidget
 
-class UnifiedScatteringDock(QDockWidget):
+
+class UnifiedScatteringDock(BaseDockWidget):
     """Dock widget for scattering parameters (Q-space, HKL, energy transfer)."""
     
     def __init__(self, parent=None):
-        super().__init__("Scattering", parent)
+        super().__init__("Scattering", parent, use_scroll_area=True)
         self.setObjectName("ScatteringDock")
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea | 
-                            Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
         
-        # Create main widget and layout
-        main_widget = QWidget()
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(8)
-        main_widget.setLayout(main_layout)
-        self.setWidget(main_widget)
+        # Get the content layout from base class
+        main_layout = self.content_layout
         
         # ===== Absolute Q Space Section =====
         q_group = QGroupBox("Absolute Q Space (Å⁻¹)")

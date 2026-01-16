@@ -21,8 +21,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 
-# Import GUI - use dockable main window
-from gui.main_window_dockable import TAVIMainWindow
+# Import GUI
+from gui.main_window import TAVIMainWindow
 
 # Physical constants
 N_MASS = 1.67492749804e-27  # neutron mass
