@@ -1021,15 +1021,18 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         else:
             data = math.nan
         
-        #if diagnostic_mode is True:
-            #instrument.show_diagram()
+        # Note: Show Instrument Diagram is handled by the GUI controller
+        # to ensure matplotlib runs on the main thread
 
         #print(parameter_array)
         #print("\n")
         #print(parameter_array_header)
     else:
         data = math.nan
-    return(data, error_flag_array)
+    
+    # Return instrument object as well if diagram display is requested
+    show_diagram = diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False)
+    return (data, error_flag_array, instrument if show_diagram else None)
 
 def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
 
