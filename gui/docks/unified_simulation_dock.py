@@ -20,6 +20,8 @@ LINKED_PARAMETER_GROUPS = {
     "q_x_component": {"qx", "h"},
     "q_y_component": {"qy", "k"},
     "q_z_component": {"qz", "l"},
+    # Sample 2theta - A2 and 2theta are the same angle
+    "sample_2theta": {"a2", "2theta"},
     # Sample theta - omega and A3 are the same angle; psi is the alignment offset
     "sample_theta": {"omega", "a3"},
     # Omega/psi both affect in-plane rotation

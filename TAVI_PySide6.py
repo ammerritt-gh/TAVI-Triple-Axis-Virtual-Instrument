@@ -564,7 +564,11 @@ class TAVIController(QObject):
             pass
 
     def normalize_scan_variable(self, name):
-        """Normalize scan variable names to canonical form."""
+        """Normalize scan variable names to canonical form.
+        
+        Note: omega and 2theta are kept as-is for display purposes,
+        but they map to the same indices as A3 and A2 respectively.
+        """
         if not name:
             return name
         name = str(name).strip()
@@ -574,9 +578,9 @@ class TAVIController(QObject):
         if lower in ["a1", "a2", "a3", "a4"]:
             return lower.upper()
         if lower == "2theta":
-            return "A2"  # 2theta is an alias for sample 2theta (A2)
+            return "2theta"  # Keep as 2theta for display, maps to same index as A2
         if lower == "omega":
-            return "A3"  # omega is the same angle as A3 (sample theta)
+            return "omega"  # Keep as omega for display, maps to same index as A3
         if lower == "deltae":
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
@@ -1369,16 +1373,16 @@ class TAVIController(QObject):
             return vals.get('K', 0)
         elif var == 'l':
             return vals.get('L', 0)
-        # Instrument angles
+        # Instrument angles (omega = A3, 2theta = A2)
         elif var == 'a1':
             return float(self.window.instrument_dock.mtt_edit.text() or 0)
-        elif var == 'a2':
+        elif var == 'a2' or var == '2theta':
             return float(self.window.instrument_dock.stt_edit.text() or 0)
-        elif var == 'a3':
+        elif var == 'a3' or var == 'omega':
             return float(self.window.instrument_dock.omega_edit.text() or 0)
         elif var == 'a4':
             return float(self.window.instrument_dock.att_edit.text() or 0)
-        # Sample orientation (chi, kappa, psi - omega is normalized to A3)
+        # Sample orientation (chi, kappa, psi)
         elif var == 'chi':
             return scan_point_template[8] if len(scan_point_template) > 8 else 0
         elif var == 'kappa':
@@ -1961,20 +1965,21 @@ class TAVIController(QObject):
                     scan_mode = "momentum"
                 elif var_name_probe in ["H", "K", "L"]:
                     scan_mode = "rlu"
-                elif var_name_probe in ["A1", "A2", "A3", "A4"]:
+                elif var_name_probe in ["A1", "A2", "A3", "A4", "omega", "2theta"]:
                     scan_mode = "angle"
-                elif var_name_probe in ["omega", "chi"]:
+                elif var_name_probe in ["chi"]:
                     scan_mode = "orientation"
             except Exception:
                 pass
         
         # Mapping for scannable parameters
         # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-10: sample orientation (chi, kappa, psi)
-        # Note: omega is normalized to A3 (they are the same angle)
+        # Note: omega maps to same index as A3, 2theta maps to same index as A2
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
             'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
+            'omega': 2, '2theta': 1,  # omega = A3 (index 2), 2theta = A2 (index 1)
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
             'chi': 8, 'kappa': 9, 'psi': 10
         }
@@ -1988,7 +1993,15 @@ class TAVIController(QObject):
         elif scan_mode == "rlu":
             scan_point_template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
         elif scan_mode == "angle":
-            scan_point_template[:4] = [0, 0, 0, 0]
+            # For angle scans, use current instrument angles from GUI
+            try:
+                A1_current = float(self.window.instrument_dock.mtt_edit.text() or 0)
+                A2_current = float(self.window.instrument_dock.stt_edit.text() or 0)
+                A3_current = float(self.window.instrument_dock.omega_edit.text() or 0)
+                A4_current = float(self.window.instrument_dock.att_edit.text() or 0)
+                scan_point_template[:4] = [A1_current, A2_current, A3_current, A4_current]
+            except ValueError:
+                scan_point_template[:4] = [0, 0, 0, 0]
         elif scan_mode == "orientation":
             # For orientation scans, use current Q values but scan chi/kappa/psi
             # Note: omega is normalized to A3, so omega scans work via angle mode
