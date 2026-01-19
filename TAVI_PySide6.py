@@ -251,6 +251,11 @@ class TAVIController(QObject):
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self._trigger_scan_update)
         self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self._trigger_scan_update)
         self.window.simulation_dock.number_neutrons_edit.textChanged.connect(self._trigger_scan_update)
+        # Also update on editingFinished to catch committed changes
+        try:
+            self.window.simulation_dock.number_neutrons_edit.editingFinished.connect(self._trigger_scan_update)
+        except Exception:
+            pass
     
     def setup_visual_feedback(self):
         """Set up visual feedback for all input fields to show pending/saved states."""
