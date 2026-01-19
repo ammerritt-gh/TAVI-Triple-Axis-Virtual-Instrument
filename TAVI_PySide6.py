@@ -21,6 +21,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file)
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
+from tavi.runtime_tracker import RuntimeTracker
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -68,6 +69,15 @@ class TAVIController(QObject):
         # Flag to prevent recursive updates
         self.updating = False
         
+        # Initialize runtime tracker for scan time estimation
+        self.runtime_tracker = RuntimeTracker()
+        
+        # Debounce timer for scan command validation and time estimates
+        self._scan_update_timer = QTimer()
+        self._scan_update_timer.setSingleShot(True)
+        self._scan_update_timer.setInterval(300)  # 300ms debounce
+        self._scan_update_timer.timeout.connect(self._update_scan_estimates)
+        
         # Initialize crystal info with default values
         self.monocris_info, self.anacris_info = mono_ana_crystals_setup("PG[002]", "PG[002]")
         
@@ -94,6 +104,9 @@ class TAVIController(QObject):
         
         # Set up visual feedback for all input fields
         self.setup_visual_feedback()
+        
+        # Trigger initial scan estimate update
+        self._update_scan_estimates()
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
@@ -233,6 +246,11 @@ class TAVIController(QObject):
         # Scan command validation - check for conflicts and errors on text change
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
         self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self.validate_scan_commands)
+        
+        # Connect scan command and neutron changes to debounced time estimate update
+        self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self._trigger_scan_update)
+        self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self._trigger_scan_update)
+        self.window.simulation_dock.number_neutrons_edit.textChanged.connect(self._trigger_scan_update)
     
     def setup_visual_feedback(self):
         """Set up visual feedback for all input fields to show pending/saved states."""
@@ -1401,6 +1419,277 @@ class TAVIController(QObject):
         
         return 0
     
+    def _trigger_scan_update(self):
+        """Trigger a debounced update of scan estimates."""
+        self._scan_update_timer.start()
+    
+    def _update_scan_estimates(self):
+        """Update all scan time estimates based on current settings.
+        
+        This is called after a debounce delay when scan commands or neutron count change.
+        It updates:
+        1. Time per point estimate (next to neutron count)
+        2. Point count breakdown (below scan commands)
+        3. Total time estimate (below point count)
+        """
+        import numpy as np
+        
+        # Get current values
+        try:
+            num_neutrons = int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000)
+        except ValueError:
+            num_neutrons = 1000000
+        
+        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
+        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
+        
+        # Get instrument name
+        instrument_name = "PUMA"  # Currently only PUMA is supported
+        
+        # Update time per point estimate
+        _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, num_neutrons)
+        if run_time_per_point is not None:
+            time_str = f"~{RuntimeTracker.format_time(run_time_per_point)}/point"
+            self.window.simulation_dock.update_time_per_point(time_str)
+        else:
+            self.window.simulation_dock.update_time_per_point("No timing data")
+        
+        # Calculate point counts
+        count1, count2 = 0, 0
+        valid_count = 0
+        invalid_count = 0
+        single_point_invalid = False
+        
+        if cmd1:
+            try:
+                _, array1 = parse_scan_steps(cmd1)
+                count1 = len(array1)
+            except Exception:
+                count1 = 0
+        
+        if cmd2:
+            try:
+                _, array2 = parse_scan_steps(cmd2)
+                count2 = len(array2)
+            except Exception:
+                count2 = 0
+        
+        # Calculate valid/invalid counts
+        if count1 > 0 or count2 > 0:
+            valid_count, invalid_count = self._count_valid_scan_points(cmd1, cmd2)
+        else:
+            # Single point mode - check if current position is valid
+            valid, _ = self._check_current_point_validity()
+            if valid:
+                valid_count = 1
+                invalid_count = 0
+            else:
+                valid_count = 0
+                invalid_count = 1
+                single_point_invalid = True
+        
+        total_points = valid_count + invalid_count
+        all_invalid = (valid_count == 0 and total_points > 0)
+        
+        # Update point count display
+        self.window.simulation_dock.update_point_count_display(
+            count1, count2, valid_count, invalid_count, all_invalid or single_point_invalid
+        )
+        
+        # Update total time estimate
+        total_time, compile_time, _ = self.runtime_tracker.estimate_total_time(
+            instrument_name, valid_count, num_neutrons
+        )
+        if total_time is not None:
+            total_str = RuntimeTracker.format_time(total_time)
+            compile_str = RuntimeTracker.format_time(compile_time)
+            self.window.simulation_dock.update_total_time_estimate(total_str, compile_str)
+        else:
+            self.window.simulation_dock.update_total_time_estimate("")
+    
+    def _count_valid_scan_points(self, cmd1: str, cmd2: str) -> tuple:
+        """Count valid and invalid scan points for given scan commands.
+        
+        Args:
+            cmd1: First scan command
+            cmd2: Second scan command (may be empty)
+            
+        Returns:
+            tuple: (valid_count, invalid_count)
+        """
+        import numpy as np
+        
+        # Get current GUI values for validation
+        vals = self.get_gui_values()
+        
+        # Build scan point template
+        scan_point_template = [
+            vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
+            vals['rhm'], vals['rvm'], vals['rha'], vals.get('rva', 0.8),
+            vals.get('chi', 0), vals.get('kappa', 0), vals.get('psi', 0),
+            vals.get('H', 0), vals.get('K', 0), vals.get('L', 0)
+        ]
+        
+        variable_to_index = {
+            'qx': 0, 'qy': 1, 'qz': 2, 'deltae': 3,
+            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+            'chi': 8, 'kappa': 9, 'psi': 10,
+            'h': 11, 'k': 12, 'l': 13,
+            'a1': 0, 'a2': 1, 'a3': 2, 'a4': 3,  # Angle mode
+            '2theta': 1, 'omega': 2,
+        }
+        
+        # Determine scan mode
+        scan_mode = self._determine_scan_mode(cmd1, cmd2)
+        
+        # Create temp PUMA for validation
+        puma_instance = PUMA_Instrument()
+        puma_instance.monocris = self.PUMA.monocris
+        puma_instance.anacris = self.PUMA.anacris
+        puma_instance.K_fixed = self.PUMA.K_fixed
+        puma_instance.fixed_E = self.PUMA.fixed_E
+        
+        valid_count = 0
+        invalid_count = 0
+        
+        try:
+            variable_name1, array_values1 = parse_scan_steps(cmd1) if cmd1 else (None, [])
+            variable_name2, array_values2 = parse_scan_steps(cmd2) if cmd2 else (None, [])
+            
+            if variable_name1:
+                variable_name1 = self.normalize_scan_variable(variable_name1).lower()
+            if variable_name2:
+                variable_name2 = self.normalize_scan_variable(variable_name2).lower()
+            
+            # 1D scan
+            if cmd1 and not cmd2:
+                for value1 in array_values1:
+                    scan_point = scan_point_template[:]
+                    if variable_name1 in variable_to_index:
+                        scan_point[variable_to_index[variable_name1]] = value1
+                    
+                    valid = self._validate_scan_point(scan_point, scan_mode, vals, puma_instance)
+                    if valid:
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+            
+            # 2D scan
+            elif cmd1 and cmd2:
+                for value2 in array_values2:
+                    for value1 in array_values1:
+                        scan_point = scan_point_template[:]
+                        if variable_name1 in variable_to_index:
+                            scan_point[variable_to_index[variable_name1]] = value1
+                        if variable_name2 in variable_to_index:
+                            scan_point[variable_to_index[variable_name2]] = value2
+                        
+                        valid = self._validate_scan_point(scan_point, scan_mode, vals, puma_instance)
+                        if valid:
+                            valid_count += 1
+                        else:
+                            invalid_count += 1
+        except Exception as e:
+            # If parsing fails, return 0 valid points
+            return (0, 0)
+        
+        return (valid_count, invalid_count)
+    
+    def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, puma_instance) -> bool:
+        """Validate a single scan point.
+        
+        Args:
+            scan_point: List of scan parameters
+            scan_mode: One of 'momentum', 'rlu', 'angle', 'orientation'
+            vals: GUI values dictionary
+            puma_instance: PUMA instrument instance
+            
+        Returns:
+            True if point is valid, False otherwise
+        """
+        try:
+            if scan_mode == "momentum":
+                qx, qy, qz, deltaE = scan_point[:4]
+                _, error_flags = puma_instance.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                return not error_flags
+            elif scan_mode == "rlu":
+                H, K, L = scan_point[11], scan_point[12], scan_point[13]
+                deltaE = scan_point[3]
+                qx, qy, qz = update_Q_from_HKL_direct(
+                    H, K, L,
+                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                )
+                _, error_flags = puma_instance.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                return not error_flags
+            else:
+                # Angle mode - always valid
+                return True
+        except Exception:
+            return False
+    
+    def _determine_scan_mode(self, cmd1: str, cmd2: str) -> str:
+        """Determine the scan mode based on scan command variables.
+        
+        Args:
+            cmd1: First scan command
+            cmd2: Second scan command
+            
+        Returns:
+            str: One of 'momentum', 'rlu', 'angle', 'orientation'
+        """
+        momentum_vars = {'qx', 'qy', 'qz', 'deltae'}
+        rlu_vars = {'h', 'k', 'l'}
+        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta'}
+        orientation_vars = {'omega', 'chi', 'psi', 'kappa'}
+        
+        vars_used = set()
+        for cmd in [cmd1, cmd2]:
+            if cmd:
+                parts = cmd.split()
+                if parts:
+                    vars_used.add(parts[0].lower())
+        
+        if vars_used & rlu_vars:
+            return "rlu"
+        elif vars_used & momentum_vars:
+            return "momentum"
+        elif vars_used & angle_vars:
+            return "angle"
+        elif vars_used & orientation_vars:
+            return "orientation"
+        else:
+            # Default based on sample frame mode
+            try:
+                if self.window.sample_dock.sample_frame_mode_check.isChecked():
+                    return "rlu"
+            except Exception:
+                pass
+            return "momentum"
+    
+    def _check_current_point_validity(self) -> tuple:
+        """Check if the current single point (no scan) is valid.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        try:
+            vals = self.get_gui_values()
+            _, error_flags = self.PUMA.calculate_angles(
+                vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
+                self.PUMA.fixed_E, self.PUMA.K_fixed,
+                self.PUMA.monocris, self.PUMA.anacris
+            )
+            return (not error_flags, error_flags if error_flags else "")
+        except Exception as e:
+            return (False, str(e))
+
     def on_omega_changed(self):
         """Handle omega (ω) change - sample in-plane rotation."""
         if self.updating:
@@ -2135,10 +2424,25 @@ class TAVIController(QObject):
         total_scans = len(scan_parameter_input)
         self.message_printed.emit(f"Running {total_scans} scan points...")
         
+        # Show pre-scan estimate based on historical data
+        instrument_name = "PUMA"
+        total_est, compile_est, _ = self.runtime_tracker.estimate_total_time(
+            instrument_name, total_scans, number_neutrons
+        )
+        if total_est is not None:
+            est_str = RuntimeTracker.format_time(total_est)
+            self.window.simulation_dock.update_pre_scan_estimate(est_str)
+            self.message_printed.emit(f"Estimated total time: {est_str}")
+        
         total_counts = 0
         max_counts = 0
         
+        # Track individual scan times for runtime recording
+        scan_times = []  # List of (scan_index, elapsed_time_for_this_scan)
+        
         for i, scan_item in enumerate(scan_parameter_input):
+            scan_start_time = time.time()  # Track start time for this scan point
+            
             if self.stop_flag:
                 self.message_printed.emit("Simulation stopped by user.")
                 self.scan_completed.emit()
@@ -2324,21 +2628,57 @@ class TAVIController(QObject):
                     if idx_1d >= 0:
                         self.scan_point_updated_1d.emit(idx_1d, counts)
             
+            # Record scan time for this point
+            scan_elapsed = time.time() - scan_start_time
+            scan_times.append(scan_elapsed)
+            
             # Emit progress signals
             self.progress_updated.emit(i + 1, total_scans)
             self.counts_updated.emit(max_counts, total_counts)
             
-            # Calculate remaining time
+            # Calculate remaining time - ignore first scan (compilation overhead)
             elapsed_time = time.time() - start_time
-            avg_time_per_scan = elapsed_time / (i + 1)
-            remaining_scans = total_scans - (i + 1)
-            remaining_time = avg_time_per_scan * remaining_scans
+            if i == 0:
+                # After first scan, use historical data for estimation if available
+                _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
+                if run_time_per_point is not None and total_scans > 1:
+                    remaining_time = run_time_per_point * (total_scans - 1)
+                else:
+                    remaining_time = scan_elapsed * (total_scans - 1)
+            else:
+                # For subsequent scans, use average of scans 2+ (excluding first/compile scan)
+                subsequent_times = scan_times[1:]  # Exclude first scan
+                avg_time_per_scan = sum(subsequent_times) / len(subsequent_times)
+                remaining_scans = total_scans - (i + 1)
+                remaining_time = avg_time_per_scan * remaining_scans
             
             hours = int(remaining_time // 3600)
             minutes = int((remaining_time % 3600) // 60)
             seconds = int(remaining_time % 60)
             time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             self.remaining_time_updated.emit(time_str)
+        
+        # Record runtime data for future estimates (only if scan completed normally)
+        if scan_times and not self.stop_flag:
+            total_time = time.time() - start_time
+            first_scan_time = scan_times[0] if scan_times else 0
+            
+            # Calculate average time for subsequent scans (excluding first)
+            if len(scan_times) > 1:
+                avg_subsequent_time = sum(scan_times[1:]) / len(scan_times[1:])
+            else:
+                # Only one scan point - use first scan time as both
+                avg_subsequent_time = first_scan_time
+            
+            self.runtime_tracker.add_record(
+                instrument_name=instrument_name,
+                num_points=total_scans,
+                num_neutrons=number_neutrons,
+                first_scan_time=first_scan_time,
+                avg_subsequent_time=avg_subsequent_time,
+                total_time=total_time
+            )
+            self.message_printed.emit(f"Timing data recorded: {total_scans} points in {RuntimeTracker.format_time(total_time)}")
         
         # Simulation complete
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
