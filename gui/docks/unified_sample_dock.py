@@ -357,6 +357,11 @@ class UnifiedSampleDock(BaseDockWidget):
     def _on_clear_misalignment(self):
         """Clear loaded misalignment."""
         self._loaded_misalignment = None
+        # Clear any pasted hash so it isn't saved back to parameters
+        try:
+            self.load_hash_edit.clear()
+        except Exception:
+            pass
         self.misalignment_status_label.setText("No misalignment loaded")
         self.misalignment_status_label.setStyleSheet("color: gray;")
         self.check_alignment_button.setEnabled(False)

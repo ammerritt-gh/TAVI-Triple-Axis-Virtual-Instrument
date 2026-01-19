@@ -1732,6 +1732,19 @@ class TAVIController(QObject):
         """Handle clearing misalignment - reset hidden values on instrument."""
         self.PUMA.set_misalignment(mis_omega=0, mis_chi=0, mis_psi=0)
         self.print_to_message_center("Misalignment cleared")
+        # Also clear any stored hash in the sample dock so it won't be reloaded
+        try:
+            if hasattr(self.window, 'sample_dock') and hasattr(self.window.sample_dock, 'load_hash_edit'):
+                self.window.sample_dock.load_hash_edit.clear()
+            if hasattr(self.window.sample_dock, '_loaded_misalignment'):
+                self.window.sample_dock._loaded_misalignment = None
+            if hasattr(self.window.sample_dock, 'misalignment_status_label'):
+                self.window.sample_dock.misalignment_status_label.setText("No misalignment loaded")
+                self.window.sample_dock.misalignment_status_label.setStyleSheet("color: gray;")
+            if hasattr(self.window.sample_dock, 'check_alignment_button'):
+                self.window.sample_dock.check_alignment_button.setEnabled(False)
+        except Exception:
+            pass
     
     def on_check_alignment(self):
         """Check user's alignment against hidden misalignment and update feedback."""
