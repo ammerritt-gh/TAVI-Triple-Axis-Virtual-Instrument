@@ -235,17 +235,20 @@ class RuntimeTracker:
         """
         if seconds is None:
             return "N/A"
-        
+
         if seconds < 0:
             return "N/A"
-        
+
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        
+        secs = seconds % 60
+
+        # For durations >= 1 hour, keep minutes and integer seconds
         if hours > 0:
-            return f"{hours}h {minutes:02d}m {secs:02d}s"
+            return f"{hours}h {minutes:02d}m {int(secs):02d}s"
+        # For durations >= 1 minute but < 1 hour, show minutes and integer seconds
         elif minutes > 0:
-            return f"{minutes}m {secs:02d}s"
+            return f"{minutes}m {int(secs):02d}s"
+        # For durations < 1 minute, show seconds with one decimal place
         else:
-            return f"{secs}s"
+            return f"{secs:.1f}s"
