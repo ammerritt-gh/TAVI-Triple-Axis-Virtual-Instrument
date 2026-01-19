@@ -134,9 +134,9 @@ class TAVIController(QObject):
         # (omega/chi are actual angles, psi/kappa are alignment offsets)
         
         # Misalignment training dock
-        self.window.sample_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
-        self.window.sample_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
-        self.window.sample_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
+        self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
+        self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
+        self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
         
         # Data control buttons
         self.window.data_control_dock.save_browse_button.clicked.connect(
@@ -1723,8 +1723,8 @@ class TAVIController(QObject):
     
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
-        if self.window.sample_dock.has_misalignment():
-            mis_omega, mis_chi, mis_psi = self.window.sample_dock.get_loaded_misalignment()
+        if self.window.misalignment_dock.has_misalignment():
+            mis_omega, mis_chi, mis_psi = self.window.misalignment_dock.get_loaded_misalignment()
             self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi, mis_psi=mis_psi)
             self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
     
@@ -1737,12 +1737,12 @@ class TAVIController(QObject):
             if hasattr(self.window, 'sample_dock') and hasattr(self.window.sample_dock, 'load_hash_edit'):
                 self.window.sample_dock.load_hash_edit.clear()
             if hasattr(self.window.sample_dock, '_loaded_misalignment'):
-                self.window.sample_dock._loaded_misalignment = None
-            if hasattr(self.window.sample_dock, 'misalignment_status_label'):
-                self.window.sample_dock.misalignment_status_label.setText("No misalignment loaded")
-                self.window.sample_dock.misalignment_status_label.setStyleSheet("color: gray;")
-            if hasattr(self.window.sample_dock, 'check_alignment_button'):
-                self.window.sample_dock.check_alignment_button.setEnabled(False)
+                self.window.misalignment_dock._loaded_misalignment = None
+            if hasattr(self.window.misalignment_dock, 'misalignment_status_label'):
+                self.window.misalignment_dock.misalignment_status_label.setText("No misalignment loaded")
+                self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: gray;")
+            if hasattr(self.window.misalignment_dock, 'check_alignment_button'):
+                self.window.misalignment_dock.check_alignment_button.setEnabled(False)
         except Exception:
             pass
     
@@ -1751,7 +1751,7 @@ class TAVIController(QObject):
         try:
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.window.sample_dock.update_alignment_feedback(kappa, psi, 0)
+            self.window.misalignment_dock.update_alignment_feedback(kappa, psi, 0)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     
@@ -1927,7 +1927,7 @@ class TAVIController(QObject):
             "kappa_var": self.window.sample_dock.kappa_edit.text(),
             "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             # Misalignment hash only (keeps values hidden from students)
-            "misalignment_hash_var": self.window.sample_dock.load_hash_edit.text(),
+            "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
@@ -2007,17 +2007,19 @@ class TAVIController(QObject):
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
-                    self.window.sample_dock.load_hash_edit.setText(mis_hash)
+                    self.window.misalignment_dock.load_hash_edit.setText(mis_hash)
                     # Decode and apply the misalignment to the instrument
                     try:
-                        from gui.docks.unified_sample_dock import decode_misalignment
+                        from gui.docks.misalignment_dock import decode_misalignment
                         omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
                         self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
                         # Store in dock and update UI to show it's loaded
-                        self.window.sample_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
-                        self.window.sample_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
-                        self.window.sample_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
-                        self.window.sample_dock.check_alignment_button.setEnabled(True)
+                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
+                        self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
+                        self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
+                        self.window.misalignment_dock.check_alignment_button.setEnabled(True)
+                        # Update the indicator in the sample dock
+                        self.window.sample_dock.update_misalignment_indicator(True)
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
