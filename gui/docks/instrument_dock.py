@@ -201,5 +201,45 @@ class InstrumentDock(BaseDockWidget):
         
         main_layout.addWidget(collimations_group)
         
+        # Slit Apertures section
+        slits_group = QGroupBox("Slit Apertures (mm)")
+        slits_layout = QGridLayout()
+        slits_layout.setSpacing(5)
+        slits_group.setLayout(slits_layout)
+        
+        # Post-mono slit (between mono and sample)
+        slits_layout.addWidget(QLabel("Post-mono (width):"), 0, 0)
+        self.vbl_hgap_edit = QLineEdit()
+        self.vbl_hgap_edit.setMaximumWidth(70)
+        self.vbl_hgap_edit.setToolTip("Slit after monochromator, before sample collimators")
+        slits_layout.addWidget(self.vbl_hgap_edit, 0, 1)
+        
+        # Pre-sample slit (right before sample)
+        slits_layout.addWidget(QLabel("Pre-sample (W×H):"), 1, 0)
+        presample_widget = QWidget()
+        presample_layout = QHBoxLayout()
+        presample_layout.setContentsMargins(0, 0, 0, 0)
+        presample_layout.setSpacing(3)
+        self.pbl_hgap_edit = QLineEdit()
+        self.pbl_hgap_edit.setMaximumWidth(50)
+        self.pbl_hgap_edit.setToolTip("Pre-sample slit width (horizontal aperture)")
+        presample_layout.addWidget(self.pbl_hgap_edit)
+        presample_layout.addWidget(QLabel("×"))
+        self.pbl_vgap_edit = QLineEdit()
+        self.pbl_vgap_edit.setMaximumWidth(50)
+        self.pbl_vgap_edit.setToolTip("Pre-sample slit height (vertical aperture)")
+        presample_layout.addWidget(self.pbl_vgap_edit)
+        presample_widget.setLayout(presample_layout)
+        slits_layout.addWidget(presample_widget, 1, 1)
+        
+        # Detector slit (before detector)
+        slits_layout.addWidget(QLabel("Detector (width):"), 2, 0)
+        self.dbl_hgap_edit = QLineEdit()
+        self.dbl_hgap_edit.setMaximumWidth(70)
+        self.dbl_hgap_edit.setToolTip("Slit before detector")
+        slits_layout.addWidget(self.dbl_hgap_edit, 2, 1)
+        
+        main_layout.addWidget(slits_group)
+        
         # Add stretch at the end to push everything up
         main_layout.addStretch()
