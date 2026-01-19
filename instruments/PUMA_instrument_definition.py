@@ -445,10 +445,16 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
     instrument.add_parameter("A2_param", comment="Sample 2-theta angle.")
     instrument.add_parameter("A3_param", comment="Sample phi angle.")
     instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
+    instrument.add_parameter("saz_param", comment="Sample azimuthal angle (out-of-plane).")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
     instrument.add_parameter("rha_param", comment="Analyzer horizontal bending.")
     instrument.add_parameter("rva_param", comment="Analyzer vertical bending.")
+    # Slit aperture parameters (scannable)
+    instrument.add_parameter("vbl_hgap_param", comment="Post-mono slit horizontal gap (m).")
+    instrument.add_parameter("pbl_hgap_param", comment="Pre-sample slit horizontal gap (m).")
+    instrument.add_parameter("pbl_vgap_param", comment="Pre-sample slit vertical gap (m).")
+    instrument.add_parameter("dbl_hgap_param", comment="Detector slit horizontal gap (m).")
     
 
     # Monochromator crystal
@@ -472,10 +478,6 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         source.yheight=0.1 #PUMA.hbl_vgap*1.5
         source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
         source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
-        if PUMA.K_fixed == "Ki Fixed":
-            source.E0=PUMA.fixed_E
-        if PUMA.K_fixed == "Kf Fixed":
-            source.E0=PUMA.fixed_E + deltaE
         source.dE=5
         source.energy_distribution=2
         source.E0 = 25
@@ -603,7 +605,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             postmono_Emonitor.restore_neutron = 1
 
         postmono_slit = instrument.add_component("postmono_slit", "Slit", AT=[0,0,0.286], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        postmono_slit.xwidth = PUMA.vbl_hgap
+        postmono_slit.xwidth = "vbl_hgap_param"
         postmono_slit.yheight = 0.142
 
         # # This is just an entrance slit
@@ -718,9 +720,9 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
 
         ## sample table
         
-        # sample_slit = instrument.add_component("sample_slit", "Slit", AT=[0,0,PUMA.L2-0.674], RELATIVE="sample_arm")
-        # sample_slit.xwidth = PUMA.pbl_hgap
-        # sample_slit.yheight = PUMA.pbl_vgap
+        sample_slit = instrument.add_component("sample_slit", "Slit", AT=[0,0,PUMA.L2-0.674], RELATIVE="sample_arm")
+        sample_slit.xwidth = "pbl_hgap_param"
+        sample_slit.yheight = "pbl_vgap_param"
            
         if diagnostic_mode and diagnostic_settings.get('Sample PSD @ L2-0.5'):
             sample2_PSD = instrument.add_component("sample2_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.5], ROTATED=[0,0,0], RELATIVE="sample_arm")
@@ -785,7 +787,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         instrument.add_parameter("omega_offset_total", value=sample_angles['effective_omega_offset'],
                                  comment="Total omega offset = psi + mis_omega + mis_psi")
         
-        instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=[PUMA.saz,0,0], RELATIVE="sample_arm")
+        instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
         instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
         instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset_total",0], RELATIVE="sample_chi_arm")
 
@@ -1040,7 +1042,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         detector_collimator.divergence = PUMA.alpha_4
 
         detector_slit = instrument.add_component("detector_slit", "Slit", AT=[0,0,PUMA.L4-0.03], ROTATED=[0,0,0], RELATIVE="detector_arm")
-        detector_slit.xwidth = PUMA.dbl_hgap
+        detector_slit.xwidth = "dbl_hgap_param"
         detector_slit.yheight = 0.07
 
         if diagnostic_mode and diagnostic_settings.get('Detector PSD'):
@@ -1069,10 +1071,16 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
                 A2_param=PUMA.A2,
                 A3_param=PUMA.A3,
                 A4_param=PUMA.A4,
+                saz_param=PUMA.saz,
                 rhm_param=PUMA.rhm,
                 rvm_param=PUMA.rvm,
                 rha_param=PUMA.rha,
                 rva_param=PUMA.rva,
+                # Slit apertures
+                vbl_hgap_param=PUMA.vbl_hgap,
+                pbl_hgap_param=PUMA.pbl_hgap,
+                pbl_vgap_param=PUMA.pbl_vgap,
+                dbl_hgap_param=PUMA.dbl_hgap,
                 # Individual sample angle components (for inspection/debugging)
                 chi_param=sample_angles['chi'],
                 kappa_param=sample_angles['kappa'],
