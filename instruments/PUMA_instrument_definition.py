@@ -165,12 +165,49 @@ class TAS_Instrument:
         The total out-of-plane tilt is: chi + kappa (offset) + misalignments
         
         Note: omega is NOT added here because omega IS the calculated A3 (just displayed).
+        
+        Returns:
+            tuple: (effective_omega_offset, effective_chi) for backwards compatibility
         """
         # Effective in-plane OFFSET: psi offset + misalignments (added to calculated A3)
         effective_omega_offset = self.psi + self.mis_omega + self.mis_psi
         # Effective out-of-plane tilt: chi + kappa offset + misalignment
         effective_chi = self.chi + self.kappa + self.mis_chi
         return effective_omega_offset, effective_chi
+    
+    def get_sample_angle_components(self):
+        """Return all individual sample angle components for clear tracking.
+        
+        This method provides explicit access to each angle component separately,
+        making it easier to understand how each angle contributes to the final
+        sample orientation in the instrument.
+        
+        Returns:
+            dict: Dictionary containing all individual angle components:
+                - 'omega': Sample rotation angle (in-plane, user-controllable)
+                - 'chi': Sample tilt angle (out-of-plane, user-controllable)
+                - 'psi': Omega alignment offset (in-plane, set during alignment)
+                - 'kappa': Chi alignment offset (out-of-plane, set during alignment)
+                - 'mis_omega': Hidden omega misalignment (in-plane, for training)
+                - 'mis_chi': Hidden chi misalignment (out-of-plane, for training)
+                - 'mis_psi': Hidden psi misalignment (additional in-plane, for training)
+                - 'effective_omega_offset': Combined in-plane offset (psi + mis_omega + mis_psi)
+                - 'effective_chi': Combined out-of-plane tilt (chi + kappa + mis_chi)
+        """
+        effective_omega_offset = self.psi + self.mis_omega + self.mis_psi
+        effective_chi = self.chi + self.kappa + self.mis_chi
+        
+        return {
+            'omega': self.omega,
+            'chi': self.chi,
+            'psi': self.psi,
+            'kappa': self.kappa,
+            'mis_omega': self.mis_omega,
+            'mis_chi': self.mis_chi,
+            'mis_psi': self.mis_psi,
+            'effective_omega_offset': effective_omega_offset,
+            'effective_chi': effective_chi,
+        }
             
     def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
         """Method to set rhm, rvm, rha, and rva values."""
@@ -459,6 +496,15 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         hblende.xwidth=PUMA.hbl_hgap
         hblende.yheight=PUMA.hbl_vgap
 
+        if diagnostic_mode and diagnostic_settings.get('Source EMonitor'):
+            sample_Emonitor = instrument.add_component("sample_Emonitor", "E_monitor", AT=[0,0,0.144], ROTATED=[0,0,0], RELATIVE="origin")
+            sample_Emonitor.xwidth = 0.2
+            sample_Emonitor.yheight = 0.2
+            sample_Emonitor.nE = 100
+            sample_Emonitor.Emin = -2
+            sample_Emonitor.Emax = 30
+            sample_Emonitor.restore_neutron = 1
+
         if diagnostic_mode and diagnostic_settings.get('Source PSD'):
             source_PSD = instrument.add_component("source_PSD", "PSD_monitor", AT=[0,0,0.145], RELATIVE="origin")
             source_PSD.xwidth = PUMA.hbl_hgap*1.5
@@ -720,15 +766,28 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # Sample orientation hierarchy:
         # 1. sample_gonio: applies calculated saz (out-of-plane tilt from qz)
         # 2. sample_chi_arm: applies user chi + kappa (chi offset) + hidden chi misalignment
-        # 3. sample_cradle: applies A3 (calculated sample theta) + omega + psi (omega offset) + hidden omega/psi misalignment
-        effective_omega, effective_chi = PUMA.get_effective_sample_angles()
+        # 3. sample_cradle: applies A3 (calculated sample theta) + psi (omega offset) + hidden omega/psi misalignment
+        #
+        # Get individual angle components for clarity
+        sample_angles = PUMA.get_sample_angle_components()
+        
+        # Add individual parameters for each angle component (for debugging/inspection)
+        instrument.add_parameter("chi_param", value=sample_angles['chi'], comment="User chi - out-of-plane tilt")
+        instrument.add_parameter("kappa_param", value=sample_angles['kappa'], comment="Kappa - chi alignment offset")
+        instrument.add_parameter("mis_chi_param", value=sample_angles['mis_chi'], comment="Hidden chi misalignment (training)")
+        instrument.add_parameter("psi_param", value=sample_angles['psi'], comment="Psi - omega alignment offset")
+        instrument.add_parameter("mis_omega_param", value=sample_angles['mis_omega'], comment="Hidden omega misalignment (training)")
+        instrument.add_parameter("mis_psi_param", value=sample_angles['mis_psi'], comment="Hidden psi misalignment (training)")
+        
+        # Combined effective angles (these are actually used in the geometry)
+        instrument.add_parameter("chi_total", value=sample_angles['effective_chi'], 
+                                 comment="Total chi = chi + kappa + mis_chi")
+        instrument.add_parameter("omega_offset_total", value=sample_angles['effective_omega_offset'],
+                                 comment="Total omega offset = psi + mis_omega + mis_psi")
+        
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=[PUMA.saz,0,0], RELATIVE="sample_arm")
-        # chi_offset parameter: chi + kappa (chi offset) + hidden chi misalignment
-        instrument.add_parameter("chi_offset", value=effective_chi, comment="Combined chi + kappa (offset) + misalignment")
-        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_offset",0,0], RELATIVE="sample_gonio")
-        # omega_offset parameter: omega + psi (omega offset) + hidden omega/psi misalignment
-        instrument.add_parameter("omega_offset", value=effective_omega, comment="Combined omega + psi (offset) + misalignment")
-        instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset",0], RELATIVE="sample_chi_arm")
+        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
+        instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset_total",0], RELATIVE="sample_chi_arm")
 
 
         
@@ -1003,8 +1062,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=10, force_compile=False)
             print("Not compiled")
         if not error_flag_array: #check if the error flags are empty
-            # Get current effective sample angles (includes omega, chi, psi, kappa, and misalignments)
-            effective_omega, effective_chi = PUMA.get_effective_sample_angles()
+            # Get individual sample angle components
+            sample_angles = PUMA.get_sample_angle_components()
             instrument.set_parameters(
                 A1_param=PUMA.A1,
                 A2_param=PUMA.A2,
@@ -1014,8 +1073,16 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
                 rvm_param=PUMA.rvm,
                 rha_param=PUMA.rha,
                 rva_param=PUMA.rva,
-                omega_offset=effective_omega,
-                chi_offset=effective_chi
+                # Individual sample angle components (for inspection/debugging)
+                chi_param=sample_angles['chi'],
+                kappa_param=sample_angles['kappa'],
+                mis_chi_param=sample_angles['mis_chi'],
+                psi_param=sample_angles['psi'],
+                mis_omega_param=sample_angles['mis_omega'],
+                mis_psi_param=sample_angles['mis_psi'],
+                # Combined effective angles (used in geometry)
+                chi_total=sample_angles['effective_chi'],
+                omega_offset_total=sample_angles['effective_omega_offset']
             )
             data = instrument.backengine()
         else:
