@@ -41,7 +41,8 @@ VALID_SCAN_VARIABLES = {
     "qx", "qy", "qz", "deltae", "h", "k", "l",
     "a1", "a2", "a3", "a4", "2theta",
     "omega", "chi", "kappa", "psi",
-    "rhm", "rvm", "rha", "rva"
+    "rhm", "rvm", "rha", "rva",
+    "vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"
 }
 
 # Descriptions for each scan variable (for help dialog)
@@ -66,6 +67,10 @@ SCAN_VARIABLE_DESCRIPTIONS = {
     "rvm": "Monochromator vertical bending radius (m)",
     "rha": "Analyzer horizontal bending radius (m)",
     "rva": "Analyzer vertical bending radius (m)",
+    "vbl_hgap": "Post-mono slit width (m) - between monochromator and sample",
+    "pbl_hgap": "Pre-sample slit width (m) - horizontal aperture before sample",
+    "pbl_vgap": "Pre-sample slit height (m) - vertical aperture before sample",
+    "dbl_hgap": "Detector slit width (m) - before detector",
 }
 
 
@@ -350,6 +355,7 @@ class UnifiedSimulationDock(BaseDockWidget):
             ("Instrument Angles", ["a1", "a2", "2theta", "a3", "a4"]),
             ("Sample Orientation", ["omega", "chi", "psi", "kappa"]),
             ("Crystal Focusing", ["rhm", "rvm", "rha", "rva"]),
+            ("Slit Apertures", ["vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"]),
         ]
         
         for category, vars in categories:

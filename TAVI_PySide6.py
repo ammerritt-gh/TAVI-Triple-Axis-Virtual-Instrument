@@ -283,6 +283,10 @@ class TAVIController(QObject):
             self.window.instrument_dock.rhm_edit,
             self.window.instrument_dock.rvm_edit,
             self.window.instrument_dock.rha_edit,
+            self.window.instrument_dock.vbl_hgap_edit,
+            self.window.instrument_dock.pbl_hgap_edit,
+            self.window.instrument_dock.pbl_vgap_edit,
+            self.window.instrument_dock.dbl_hgap_edit,
         ])
         
         # Reciprocal space dock
@@ -588,6 +592,11 @@ class TAVIController(QObject):
                 'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
                 'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
                 'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
+                # Slit apertures (in mm, convert to m for PUMA)
+                'vbl_hgap': float(self.window.instrument_dock.vbl_hgap_edit.text() or 88) / 1000,
+                'pbl_hgap': float(self.window.instrument_dock.pbl_hgap_edit.text() or 100) / 1000,
+                'pbl_vgap': float(self.window.instrument_dock.pbl_vgap_edit.text() or 100) / 1000,
+                'dbl_hgap': float(self.window.instrument_dock.dbl_hgap_edit.text() or 50) / 1000,
                 'number_neutrons': int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000),
                 'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
@@ -1947,6 +1956,11 @@ class TAVIController(QObject):
             "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked(),
             "alpha_3_var": self.window.instrument_dock.alpha_3_combo.currentText(),
             "alpha_4_var": self.window.instrument_dock.alpha_4_combo.currentText(),
+            # Slit apertures (stored in mm)
+            "vbl_hgap_var": self.window.instrument_dock.vbl_hgap_edit.text(),
+            "pbl_hgap_var": self.window.instrument_dock.pbl_hgap_edit.text(),
+            "pbl_vgap_var": self.window.instrument_dock.pbl_vgap_edit.text(),
+            "dbl_hgap_var": self.window.instrument_dock.dbl_hgap_edit.text(),
             "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             "lattice_a_var": self.window.sample_dock.lattice_a_edit.text(),
             "lattice_b_var": self.window.sample_dock.lattice_b_edit.text(),
@@ -2004,6 +2018,11 @@ class TAVIController(QObject):
                 self.window.instrument_dock.alpha_2_60_check.setChecked(parameters.get("alpha_2_60_var", False))
                 self.window.instrument_dock.alpha_3_combo.setCurrentText(str(parameters.get("alpha_3_var", 30)))
                 self.window.instrument_dock.alpha_4_combo.setCurrentText(str(parameters.get("alpha_4_var", 30)))
+                # Slit apertures (in mm)
+                self.window.instrument_dock.vbl_hgap_edit.setText(str(parameters.get("vbl_hgap_var", "88")))
+                self.window.instrument_dock.pbl_hgap_edit.setText(str(parameters.get("pbl_hgap_var", "100")))
+                self.window.instrument_dock.pbl_vgap_edit.setText(str(parameters.get("pbl_vgap_var", "100")))
+                self.window.instrument_dock.dbl_hgap_edit.setText(str(parameters.get("dbl_hgap_var", "50")))
 
                 # Load absolute bending values (backward-compatible with factor-based params)
                 self._load_bending_parameters(parameters)
@@ -2117,6 +2136,11 @@ class TAVIController(QObject):
         self.window.instrument_dock.alpha_2_60_check.setChecked(False)
         self.window.instrument_dock.alpha_3_combo.setCurrentText("30")
         self.window.instrument_dock.alpha_4_combo.setCurrentText("30")
+        # Slit apertures (in mm) - PUMA defaults
+        self.window.instrument_dock.vbl_hgap_edit.setText("88")
+        self.window.instrument_dock.pbl_hgap_edit.setText("100")
+        self.window.instrument_dock.pbl_vgap_edit.setText("100")
+        self.window.instrument_dock.dbl_hgap_edit.setText("50")
 
         # Set default absolute bending to ideal values
         self.update_ideal_bending_buttons()
@@ -2296,6 +2320,11 @@ class TAVIController(QObject):
         ]
         self.PUMA.alpha_3 = float(vals['alpha_3'])
         self.PUMA.alpha_4 = float(vals['alpha_4'])
+        # Slit apertures (already in meters from get_gui_values)
+        self.PUMA.vbl_hgap = vals['vbl_hgap']
+        self.PUMA.pbl_hgap = vals['pbl_hgap']
+        self.PUMA.pbl_vgap = vals['pbl_vgap']
+        self.PUMA.dbl_hgap = vals['dbl_hgap']
         
         number_neutrons = vals['number_neutrons']
         scan_command1 = vals['scan_command1']
