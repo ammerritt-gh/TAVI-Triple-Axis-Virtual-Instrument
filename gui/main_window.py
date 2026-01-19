@@ -173,14 +173,7 @@ class TAVIMainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
         self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
         
-        # Add misalignment dock to the window (kept hidden; opened by Sample panel)
-        # Add it to the right area so it can float separately when shown
-        try:
-            self.addDockWidget(Qt.RightDockWidgetArea, self.misalignment_dock)
-            self.misalignment_dock.setFloating(True)
-            self.misalignment_dock.setVisible(False)
-        except Exception:
-            pass
+        # Misalignment dock is added and configured elsewhere to avoid duplicate layout entries.
         
         # Step 4: Set column widths
         self.resizeDocks(
@@ -208,11 +201,7 @@ class TAVIMainWindow(QMainWindow):
             [350, 350, 150],
             Qt.Vertical
         )
-        
-        # Step 6: Add misalignment dock (initially hidden, floats as separate window)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.misalignment_dock)
-        self.misalignment_dock.setFloating(True)
-        self.misalignment_dock.setVisible(False)
+
     
     def _create_menus(self):
         """Create the menu bar with View menu for dock management."""
