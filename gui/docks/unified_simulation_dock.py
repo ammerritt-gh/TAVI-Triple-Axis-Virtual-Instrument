@@ -94,7 +94,11 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.number_neutrons_edit = QLineEdit()
         self.number_neutrons_edit.setMaximumWidth(100)
         params_layout.addWidget(self.number_neutrons_edit, 0, 1)
-        params_layout.addWidget(QLabel("n"), 0, 2)
+        
+        # Time per point estimate (updated dynamically based on neutron count)
+        self.time_per_point_label = QLabel("")
+        self.time_per_point_label.setStyleSheet("color: #666666; font-size: 10px;")
+        params_layout.addWidget(self.time_per_point_label, 0, 2)
         
         main_layout.addWidget(params_group)
         
@@ -161,6 +165,16 @@ class UnifiedSimulationDock(BaseDockWidget):
         scan_options_layout.addWidget(self.show_commands_button)
         scan_options_layout.addStretch()
         scan_layout.addLayout(scan_options_layout)
+        
+        # Point count breakdown label (shows "N × M = Z (valid/invalid)")
+        self.point_count_label = QLabel("1 point")
+        self.point_count_label.setStyleSheet("font-weight: bold;")
+        scan_layout.addWidget(self.point_count_label)
+        
+        # Total time estimate label
+        self.total_time_estimate_label = QLabel("")
+        self.total_time_estimate_label.setStyleSheet("color: #666666; font-size: 10px;")
+        scan_layout.addWidget(self.total_time_estimate_label)
         
         main_layout.addWidget(scan_group)
         
@@ -229,6 +243,11 @@ class UnifiedSimulationDock(BaseDockWidget):
         progress_group = QGroupBox("Progress")
         progress_layout = QVBoxLayout()
         progress_group.setLayout(progress_layout)
+        
+        # Estimated time before scan starts (from historical data)
+        self.pre_scan_estimate_label = QLabel("")
+        self.pre_scan_estimate_label.setStyleSheet("color: #0066cc; font-size: 10px;")
+        progress_layout.addWidget(self.pre_scan_estimate_label)
         
         # Progress bar and label
         progress_widget = QWidget()
@@ -345,3 +364,95 @@ class UnifiedSimulationDock(BaseDockWidget):
         layout.addWidget(button_box)
         
         dialog.exec()
+
+    def update_time_per_point(self, time_str: str):
+        """Update the time per point estimate display.
+        
+        Args:
+            time_str: Formatted time string (e.g., "~5s/point") or empty to hide
+        """
+        if time_str:
+            self.time_per_point_label.setText(time_str)
+            self.time_per_point_label.show()
+        else:
+            self.time_per_point_label.setText("")
+            self.time_per_point_label.hide()
+    
+    def update_point_count_display(self, count1: int, count2: int, valid: int, invalid: int, 
+                                    all_invalid: bool = False):
+        """Update the point count breakdown display.
+        
+        Args:
+            count1: Number of points in scan command 1 (0 if no scan)
+            count2: Number of points in scan command 2 (0 if no 2D scan)
+            valid: Number of valid scan points
+            invalid: Number of invalid scan points
+            all_invalid: If True, highlight in red to warn user
+        """
+        total = valid + invalid
+        
+        if count1 == 0 and count2 == 0:
+            # Single point mode (no scan commands)
+            if all_invalid:
+                self.point_count_label.setText("1 point (invalid)")
+                self.point_count_label.setStyleSheet(
+                    "font-weight: bold; color: #cc0000; background-color: #ffcccc; padding: 2px;"
+                )
+            else:
+                self.point_count_label.setText("1 point")
+                self.point_count_label.setStyleSheet("font-weight: bold;")
+        elif count2 == 0:
+            # 1D scan
+            text = f"{total} points ({valid} valid / {invalid} invalid)"
+            if all_invalid:
+                self.point_count_label.setStyleSheet(
+                    "font-weight: bold; color: #cc0000; background-color: #ffcccc; padding: 2px;"
+                )
+            elif invalid > 0:
+                self.point_count_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+            else:
+                self.point_count_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.point_count_label.setText(text)
+        else:
+            # 2D scan
+            text = f"{count1} × {count2} = {total} points ({valid} valid / {invalid} invalid)"
+            if all_invalid:
+                self.point_count_label.setStyleSheet(
+                    "font-weight: bold; color: #cc0000; background-color: #ffcccc; padding: 2px;"
+                )
+            elif invalid > 0:
+                self.point_count_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+            else:
+                self.point_count_label.setStyleSheet("font-weight: bold; color: #006600;")
+            self.point_count_label.setText(text)
+    
+    def update_total_time_estimate(self, total_time_str: str, compile_time_str: str = ""):
+        """Update the total time estimate display.
+        
+        Args:
+            total_time_str: Formatted total time string or empty to hide
+            compile_time_str: Formatted compile time string (optional)
+        """
+        if total_time_str:
+            if compile_time_str:
+                text = f"Est. total time: {total_time_str} (Compile: {compile_time_str})"
+            else:
+                text = f"Est. total time: {total_time_str}"
+            self.total_time_estimate_label.setText(text)
+            self.total_time_estimate_label.show()
+        else:
+            self.total_time_estimate_label.setText("No timing data")
+            self.total_time_estimate_label.show()
+    
+    def update_pre_scan_estimate(self, estimate_str: str):
+        """Update the pre-scan estimate in the progress section.
+        
+        Args:
+            estimate_str: Formatted estimate string or empty to hide
+        """
+        if estimate_str:
+            self.pre_scan_estimate_label.setText(f"Estimated: {estimate_str}")
+            self.pre_scan_estimate_label.show()
+        else:
+            self.pre_scan_estimate_label.setText("")
+            self.pre_scan_estimate_label.hide()
