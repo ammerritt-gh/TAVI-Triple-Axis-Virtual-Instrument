@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 # List of diagnostic options to display with checkboxes
 # These correspond to the monitors available in the PUMA instrument definition
 DIAGNOSTIC_OPTIONS = [
+    "Source EMonitor",
     "Source PSD",
     "Source DSD",
     "Postcollimation PSD",

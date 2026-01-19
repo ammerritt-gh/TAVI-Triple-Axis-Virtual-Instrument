@@ -41,6 +41,7 @@ class TAVIController(QObject):
     # Signals for thread-safe GUI updates
     progress_updated = Signal(int, int)  # current, total
     remaining_time_updated = Signal(str)
+    elapsed_time_updated = Signal(str)
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
     
@@ -150,6 +151,7 @@ class TAVIController(QObject):
         # Connect internal signals to GUI updates
         self.progress_updated.connect(self.update_progress)
         self.remaining_time_updated.connect(self.update_remaining_time)
+        self.elapsed_time_updated.connect(self.update_elapsed_time)
         self.counts_updated.connect(self.update_counts_entry)
         self.message_printed.connect(self.window.output_dock.message_text.append)
         
@@ -243,9 +245,14 @@ class TAVIController(QObject):
         except Exception:
             pass
         
-        # Scan command validation - check for conflicts and errors on text change
+        # Scan command validation - check for conflicts and errors on text change and on focus out
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
         self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self.validate_scan_commands)
+        # Also validate when editing is finished (focus lost) to catch final state
+        self.window.simulation_dock.scan_command_1_edit.editingFinished.connect(self.validate_scan_commands)
+        self.window.simulation_dock.scan_command_2_edit.editingFinished.connect(self.validate_scan_commands)
+        self.window.simulation_dock.scan_command_1_edit.editingFinished.connect(self._trigger_scan_update)
+        self.window.simulation_dock.scan_command_2_edit.editingFinished.connect(self._trigger_scan_update)
         
         # Connect scan command and neutron changes to debounced time estimate update
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self._trigger_scan_update)
@@ -386,6 +393,19 @@ class TAVIController(QObject):
     def update_remaining_time(self, remaining_time):
         """Update remaining time label."""
         self.window.simulation_dock.remaining_time_label.setText(f"Estimated Remaining Time: {remaining_time}")
+
+    @Slot(str)
+    def update_elapsed_time(self, elapsed_time_str):
+        """Update elapsed time label in the UI."""
+        # Use the dock helper if available
+        try:
+            self.window.simulation_dock.update_elapsed_time(elapsed_time_str)
+        except Exception:
+            # Fallback: set label directly
+            try:
+                self.window.simulation_dock.elapsed_time_label.setText(f"Elapsed Time: {elapsed_time_str}")
+            except Exception:
+                pass
     
     @Slot(float, float)
     def update_counts_entry(self, max_counts, total_counts):
@@ -1547,12 +1567,13 @@ class TAVIController(QObject):
         # Determine scan mode
         scan_mode = self._determine_scan_mode(cmd1, cmd2)
         
-        # Create temp PUMA for validation
+        # Create temp PUMA for validation - use GUI values, not self.PUMA
+        # (self.PUMA may not be updated until run_simulation is called)
         puma_instance = PUMA_Instrument()
-        puma_instance.monocris = self.PUMA.monocris
-        puma_instance.anacris = self.PUMA.anacris
-        puma_instance.K_fixed = self.PUMA.K_fixed
-        puma_instance.fixed_E = self.PUMA.fixed_E
+        puma_instance.monocris = vals.get('monocris', 'PG[002]')
+        puma_instance.anacris = vals.get('anacris', 'PG[002]')
+        puma_instance.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+        puma_instance.fixed_E = vals.get('fixed_E', 14.7)
         
         valid_count = 0
         invalid_count = 0
@@ -1607,7 +1628,7 @@ class TAVIController(QObject):
             scan_point: List of scan parameters
             scan_mode: One of 'momentum', 'rlu', 'angle', 'orientation'
             vals: GUI values dictionary
-            puma_instance: PUMA instrument instance
+            puma_instance: PUMA instrument instance (configured with GUI values)
             
         Returns:
             True if point is valid, False otherwise
@@ -1616,8 +1637,8 @@ class TAVIController(QObject):
             if scan_mode == "momentum":
                 qx, qy, qz, deltaE = scan_point[:4]
                 _, error_flags = puma_instance.calculate_angles(
-                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
-                    self.PUMA.monocris, self.PUMA.anacris
+                    qx, qy, qz, deltaE, puma_instance.fixed_E, puma_instance.K_fixed,
+                    puma_instance.monocris, puma_instance.anacris
                 )
                 return not error_flags
             elif scan_mode == "rlu":
@@ -1629,8 +1650,8 @@ class TAVIController(QObject):
                     vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
                 )
                 _, error_flags = puma_instance.calculate_angles(
-                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
-                    self.PUMA.monocris, self.PUMA.anacris
+                    qx, qy, qz, deltaE, puma_instance.fixed_E, puma_instance.K_fixed,
+                    puma_instance.monocris, puma_instance.anacris
                 )
                 return not error_flags
             else:
@@ -1686,10 +1707,20 @@ class TAVIController(QObject):
         """
         try:
             vals = self.get_gui_values()
-            _, error_flags = self.PUMA.calculate_angles(
+            if not vals:
+                return (False, "Could not get GUI values")
+            
+            # Use GUI values directly, not self.PUMA (may not be updated)
+            puma_instance = PUMA_Instrument()
+            puma_instance.monocris = vals.get('monocris', 'PG[002]')
+            puma_instance.anacris = vals.get('anacris', 'PG[002]')
+            puma_instance.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+            puma_instance.fixed_E = vals.get('fixed_E', 14.7)
+            
+            _, error_flags = puma_instance.calculate_angles(
                 vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
-                self.PUMA.fixed_E, self.PUMA.K_fixed,
-                self.PUMA.monocris, self.PUMA.anacris
+                puma_instance.fixed_E, puma_instance.K_fixed,
+                puma_instance.monocris, puma_instance.anacris
             )
             return (not error_flags, error_flags if error_flags else "")
         except Exception as e:
@@ -1949,6 +1980,10 @@ class TAVIController(QObject):
             with open("config/parameters.json", "r") as file:
                 parameters = json.load(file)
                 
+                # Block signals during loading to prevent premature validation
+                self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
+                self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
+                
                 # Set GUI values from parameters
                 self.window.instrument_dock.monocris_combo.setCurrentText(parameters.get("monocris_var", "PG[002]"))
                 self.window.instrument_dock.anacris_combo.setCurrentText(parameters.get("anacris_var", "PG[002]"))
@@ -2049,12 +2084,20 @@ class TAVIController(QObject):
 
                 self.update_ideal_bending_buttons()
                 
+                # Unblock signals after all parameters are loaded
+                self.window.simulation_dock.scan_command_1_edit.blockSignals(False)
+                self.window.simulation_dock.scan_command_2_edit.blockSignals(False)
+                
             self.print_to_message_center("Parameters loaded successfully")
         else:
             self.set_default_parameters()
     
     def set_default_parameters(self):
         """Set default parameters."""
+        # Block signals during loading to prevent premature validation
+        self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
+        self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
+        
         self.window.instrument_dock.monocris_combo.setCurrentText("PG[002]")
         self.window.instrument_dock.anacris_combo.setCurrentText("PG[002]")
         self.window.instrument_dock.mtt_edit.setText("30")
@@ -2119,6 +2162,11 @@ class TAVIController(QObject):
                 self.window.sample_dock.sample_combo.setCurrentText("None")
         except Exception:
             pass
+        
+        # Unblock signals after all parameters are set
+        self.window.simulation_dock.scan_command_1_edit.blockSignals(False)
+        self.window.simulation_dock.scan_command_2_edit.blockSignals(False)
+        
         self.print_to_message_center("Default parameters loaded")
     
     def run_simulation_thread(self):
@@ -2656,8 +2704,14 @@ class TAVIController(QObject):
             self.progress_updated.emit(i + 1, total_scans)
             self.counts_updated.emit(max_counts, total_counts)
             
-            # Calculate remaining time - ignore first scan (compilation overhead)
+            # Calculate elapsed time and remaining time - ignore first scan (compilation overhead)
             elapsed_time = time.time() - start_time
+            # Emit elapsed time for UI
+            try:
+                elapsed_str = RuntimeTracker.format_time(elapsed_time)
+                self.elapsed_time_updated.emit(elapsed_str)
+            except Exception:
+                pass
             if i == 0:
                 # After first scan, use historical data for estimation if available
                 _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
