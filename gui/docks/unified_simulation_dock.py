@@ -266,6 +266,10 @@ class UnifiedSimulationDock(BaseDockWidget):
         # Remaining time label
         self.remaining_time_label = QLabel("Remaining Time: ")
         progress_layout.addWidget(self.remaining_time_label)
+
+        # Elapsed time label
+        self.elapsed_time_label = QLabel("Elapsed Time: ")
+        progress_layout.addWidget(self.elapsed_time_label)
         
         main_layout.addWidget(progress_group)
         
@@ -456,3 +460,16 @@ class UnifiedSimulationDock(BaseDockWidget):
         else:
             self.pre_scan_estimate_label.setText("")
             self.pre_scan_estimate_label.hide()
+
+    def update_elapsed_time(self, elapsed_str: str):
+        """Update the elapsed time display in the progress section.
+
+        Args:
+            elapsed_str: Formatted elapsed time string or empty to hide
+        """
+        if elapsed_str:
+            self.elapsed_time_label.setText(f"Elapsed Time: {elapsed_str}")
+            self.elapsed_time_label.show()
+        else:
+            self.elapsed_time_label.setText("")
+            self.elapsed_time_label.hide()
