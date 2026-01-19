@@ -21,6 +21,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file)
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
+from tavi.runtime_tracker import RuntimeTracker
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -68,6 +69,15 @@ class TAVIController(QObject):
         # Flag to prevent recursive updates
         self.updating = False
         
+        # Initialize runtime tracker for scan time estimation
+        self.runtime_tracker = RuntimeTracker()
+        
+        # Debounce timer for scan command validation and time estimates
+        self._scan_update_timer = QTimer()
+        self._scan_update_timer.setSingleShot(True)
+        self._scan_update_timer.setInterval(300)  # 300ms debounce
+        self._scan_update_timer.timeout.connect(self._update_scan_estimates)
+        
         # Initialize crystal info with default values
         self.monocris_info, self.anacris_info = mono_ana_crystals_setup("PG[002]", "PG[002]")
         
@@ -95,6 +105,9 @@ class TAVIController(QObject):
         # Set up visual feedback for all input fields
         self.setup_visual_feedback()
         
+        # Trigger initial scan estimate update
+        self._update_scan_estimates()
+        
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
     
@@ -121,9 +134,9 @@ class TAVIController(QObject):
         # (omega/chi are actual angles, psi/kappa are alignment offsets)
         
         # Misalignment training dock
-        self.window.sample_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
-        self.window.sample_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
-        self.window.sample_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
+        self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
+        self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
+        self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
         
         # Data control buttons
         self.window.data_control_dock.save_browse_button.clicked.connect(
@@ -227,6 +240,20 @@ class TAVIController(QObject):
         # Sample selection change -> update PUMA and show status
         try:
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
+        except Exception:
+            pass
+        
+        # Scan command validation - check for conflicts and errors on text change
+        self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
+        self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self.validate_scan_commands)
+        
+        # Connect scan command and neutron changes to debounced time estimate update
+        self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self._trigger_scan_update)
+        self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self._trigger_scan_update)
+        self.window.simulation_dock.number_neutrons_edit.textChanged.connect(self._trigger_scan_update)
+        # Also update on editingFinished to catch committed changes
+        try:
+            self.window.simulation_dock.number_neutrons_edit.editingFinished.connect(self._trigger_scan_update)
         except Exception:
             pass
     
@@ -560,7 +587,11 @@ class TAVIController(QObject):
             pass
 
     def normalize_scan_variable(self, name):
-        """Normalize scan variable names to canonical form."""
+        """Normalize scan variable names to canonical form.
+        
+        Note: omega and 2theta are kept as-is for display purposes,
+        but they map to the same indices as A3 and A2 respectively.
+        """
         if not name:
             return name
         name = str(name).strip()
@@ -569,11 +600,15 @@ class TAVIController(QObject):
             return lower.upper()
         if lower in ["a1", "a2", "a3", "a4"]:
             return lower.upper()
+        if lower == "2theta":
+            return "2theta"  # Keep as 2theta for display, maps to same index as A2
+        if lower == "omega":
+            return "omega"  # Keep as omega for display, maps to same index as A3
         if lower == "deltae":
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
             return lower
-        if lower in ["omega", "chi", "kappa", "psi"]:
+        if lower in ["chi", "kappa", "psi"]:
             return lower
         return name
     
@@ -1196,6 +1231,470 @@ class TAVIController(QObject):
         except ValueError:
             self.print_to_message_center("Invalid alignment offset value")
     
+    def validate_scan_commands(self):
+        """Validate scan commands for errors, typos, and parameter conflicts.
+        
+        This checks:
+        1. Unknown/invalid variable names (typos)
+        2. Malformed commands (wrong number of parts, invalid numbers)
+        3. Suspicious parameters (e.g., > 1000 scan points)
+        4. Conflicts between linked parameters (e.g., qx + H)
+        5. Mode conflicts (orientation angles vs momentum/HKL)
+        """
+        from gui.docks.unified_simulation_dock import (
+            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
+        )
+        
+        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
+        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
+        
+        # Clear all previous warnings
+        self.window.simulation_dock.clear_all_scan_warnings()
+        
+        # Validate each command individually
+        var1, warning1 = self._validate_single_scan_command(cmd1)
+        var2, warning2 = self._validate_single_scan_command(cmd2)
+        
+        if warning1:
+            self.window.simulation_dock.set_scan_command_warning(1, warning1)
+        if warning2:
+            self.window.simulation_dock.set_scan_command_warning(2, warning2)
+        
+        # If both commands have variables, check for conflicts
+        if var1 and var2:
+            conflict = self._check_scan_parameter_conflict(var1, var2)
+            if conflict:
+                self.window.simulation_dock.set_scan_conflict_warning(conflict)
+    
+    def _validate_single_scan_command(self, command: str) -> tuple:
+        """Validate a single scan command and return (variable_name, warning_message).
+        
+        Returns:
+            tuple: (normalized_variable_name or None, warning_message or None)
+        """
+        from gui.docks.unified_simulation_dock import VALID_SCAN_VARIABLES
+        
+        if not command:
+            return (None, None)
+        
+        parts = command.split()
+        
+        # Check for minimum parts (variable, start, end, step)
+        if len(parts) < 4:
+            return (None, "Incomplete: needs 'variable start end step'")
+        
+        if len(parts) > 4:
+            return (None, "Too many parts: use 'variable start end step'")
+        
+        var_name = parts[0]
+        var_lower = var_name.lower()
+        
+        # Handle 2theta as alias for A2
+        if var_lower == "2theta":
+            var_lower = "a2"
+        
+        # Check for known variable name
+        if var_lower not in VALID_SCAN_VARIABLES:
+            # Try to suggest similar names
+            suggestions = [v for v in VALID_SCAN_VARIABLES if var_lower in v or v in var_lower]
+            if suggestions:
+                return (None, f"Unknown variable '{var_name}'. Did you mean: {', '.join(suggestions)}?")
+            else:
+                return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, chi, etc.")
+        
+        # Validate numeric parts
+        try:
+            start = float(parts[1])
+            end = float(parts[2])
+            step = float(parts[3])
+        except ValueError:
+            return (None, "Invalid numbers. Check start, end, and step values.")
+        
+        # Check for zero step
+        if step == 0:
+            return (var_lower, "Step size cannot be zero.")
+        
+        # Check step sign consistency with direction
+        if (end > start and step < 0) or (end < start and step > 0):
+            return (var_lower, "Step sign doesn't match direction (start → end).")
+        
+        # Calculate number of points and warn if too many or too few
+        import numpy as np
+        num_points = int(np.floor(abs(end - start) / abs(step) + 0.5)) + 1
+        
+        if num_points > 1000:
+            return (var_lower, f"⚠ {num_points} points - this may take a very long time!")
+        elif num_points > 500:
+            return (var_lower, f"Warning: {num_points} scan points. Consider fewer steps.")
+        elif num_points == 1:
+            return (var_lower, f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end}).")
+        elif num_points <= 0:
+            return (var_lower, "Invalid range: no points would be generated.")
+        
+        # Normalize variable name
+        normalized = self.normalize_scan_variable(var_name)
+        return (normalized.lower() if normalized else var_lower, None)
+    
+    def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
+        """Check if two scan variables conflict with each other.
+        
+        Args:
+            var1: First variable name (lowercase)
+            var2: Second variable name (lowercase)
+            
+        Returns:
+            str: Conflict warning message, or empty string if no conflict
+        """
+        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS, MODE_CONFLICTS
+        
+        # Normalize to lowercase for comparison
+        v1 = var1.lower()
+        v2 = var2.lower()
+        
+        # Same variable - definitely a conflict
+        if v1 == v2:
+            return f"⚠ Both commands scan '{v1}' - use different parameters"
+        
+        # Check linked parameter groups (parameters that control the same thing)
+        for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
+            if v1 in group_vars and v2 in group_vars:
+                return f"⚠ Conflict: '{var1}' and '{var2}' are linked ({group_name.replace('_', ' ')})"
+        
+        # Check mode conflicts (orientation vs momentum/HKL)
+        for conflict_name, (set1, set2) in MODE_CONFLICTS.items():
+            if (v1 in set1 and v2 in set2) or (v1 in set2 and v2 in set1):
+                return f"⚠ Conflict: orientation angle vs Q/HKL - angles will override calculated positions"
+        
+        return ""
+    
+    def _get_current_value_for_variable(self, var_name: str, vals: dict, scan_point_template: list) -> float:
+        """Get the current value for a scan variable to use as relative base.
+        
+        Args:
+            var_name: Normalized variable name (e.g., 'qx', 'H', 'omega')
+            vals: Dictionary of GUI values
+            scan_point_template: Template array with current values
+            
+        Returns:
+            float: Current value for the variable
+        """
+        var = var_name.lower() if var_name else ""
+        
+        # Q-space variables
+        if var == 'qx':
+            return vals.get('qx', 0)
+        elif var == 'qy':
+            return vals.get('qy', 0)
+        elif var == 'qz':
+            return vals.get('qz', 0)
+        elif var == 'deltae':
+            return vals.get('deltaE', 0)
+        # HKL variables
+        elif var == 'h':
+            return vals.get('H', 0)
+        elif var == 'k':
+            return vals.get('K', 0)
+        elif var == 'l':
+            return vals.get('L', 0)
+        # Instrument angles (omega = A3, 2theta = A2)
+        elif var == 'a1':
+            return float(self.window.instrument_dock.mtt_edit.text() or 0)
+        elif var == 'a2' or var == '2theta':
+            return float(self.window.instrument_dock.stt_edit.text() or 0)
+        elif var == 'a3' or var == 'omega':
+            return float(self.window.instrument_dock.omega_edit.text() or 0)
+        elif var == 'a4':
+            return float(self.window.instrument_dock.att_edit.text() or 0)
+        # Sample orientation (chi, kappa, psi)
+        elif var == 'chi':
+            return scan_point_template[8] if len(scan_point_template) > 8 else 0
+        elif var == 'kappa':
+            return scan_point_template[9] if len(scan_point_template) > 9 else 0
+        elif var == 'psi':
+            return scan_point_template[10] if len(scan_point_template) > 10 else 0
+        # Crystal bending
+        elif var == 'rhm':
+            return vals.get('rhm', 0)
+        elif var == 'rvm':
+            return vals.get('rvm', 0)
+        elif var == 'rha':
+            return vals.get('rha', 0)
+        elif var == 'rva':
+            return vals.get('rva', 0.8)
+        
+        return 0
+    
+    def _trigger_scan_update(self):
+        """Trigger a debounced update of scan estimates."""
+        self._scan_update_timer.start()
+    
+    def _update_scan_estimates(self):
+        """Update all scan time estimates based on current settings.
+        
+        This is called after a debounce delay when scan commands or neutron count change.
+        It updates:
+        1. Time per point estimate (next to neutron count)
+        2. Point count breakdown (below scan commands)
+        3. Total time estimate (below point count)
+        """
+        import numpy as np
+        
+        # Get current values
+        try:
+            num_neutrons = int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000)
+        except ValueError:
+            num_neutrons = 1000000
+        
+        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
+        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
+        
+        # Get instrument name
+        instrument_name = "PUMA"  # Currently only PUMA is supported
+        
+        # Update time per point estimate
+        _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, num_neutrons)
+        if run_time_per_point is not None:
+            time_str = f"~{RuntimeTracker.format_time(run_time_per_point)}/point"
+            self.window.simulation_dock.update_time_per_point(time_str)
+        else:
+            self.window.simulation_dock.update_time_per_point("No timing data")
+        
+        # Calculate point counts
+        count1, count2 = 0, 0
+        valid_count = 0
+        invalid_count = 0
+        single_point_invalid = False
+        
+        if cmd1:
+            try:
+                _, array1 = parse_scan_steps(cmd1)
+                count1 = len(array1)
+            except Exception:
+                count1 = 0
+        
+        if cmd2:
+            try:
+                _, array2 = parse_scan_steps(cmd2)
+                count2 = len(array2)
+            except Exception:
+                count2 = 0
+        
+        # Calculate valid/invalid counts
+        if count1 > 0 or count2 > 0:
+            valid_count, invalid_count = self._count_valid_scan_points(cmd1, cmd2)
+        else:
+            # Single point mode - check if current position is valid
+            valid, _ = self._check_current_point_validity()
+            if valid:
+                valid_count = 1
+                invalid_count = 0
+            else:
+                valid_count = 0
+                invalid_count = 1
+                single_point_invalid = True
+        
+        total_points = valid_count + invalid_count
+        all_invalid = (valid_count == 0 and total_points > 0)
+        
+        # Update point count display
+        self.window.simulation_dock.update_point_count_display(
+            count1, count2, valid_count, invalid_count, all_invalid or single_point_invalid
+        )
+        
+        # Update total time estimate
+        total_time, compile_time, _ = self.runtime_tracker.estimate_total_time(
+            instrument_name, valid_count, num_neutrons
+        )
+        if total_time is not None:
+            total_str = RuntimeTracker.format_time(total_time)
+            compile_str = RuntimeTracker.format_time(compile_time)
+            self.window.simulation_dock.update_total_time_estimate(total_str, compile_str)
+        else:
+            self.window.simulation_dock.update_total_time_estimate("")
+    
+    def _count_valid_scan_points(self, cmd1: str, cmd2: str) -> tuple:
+        """Count valid and invalid scan points for given scan commands.
+        
+        Args:
+            cmd1: First scan command
+            cmd2: Second scan command (may be empty)
+            
+        Returns:
+            tuple: (valid_count, invalid_count)
+        """
+        import numpy as np
+        
+        # Get current GUI values for validation
+        vals = self.get_gui_values()
+        
+        # Build scan point template
+        scan_point_template = [
+            vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
+            vals['rhm'], vals['rvm'], vals['rha'], vals.get('rva', 0.8),
+            vals.get('chi', 0), vals.get('kappa', 0), vals.get('psi', 0),
+            vals.get('H', 0), vals.get('K', 0), vals.get('L', 0)
+        ]
+        
+        variable_to_index = {
+            'qx': 0, 'qy': 1, 'qz': 2, 'deltae': 3,
+            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+            'chi': 8, 'kappa': 9, 'psi': 10,
+            'h': 11, 'k': 12, 'l': 13,
+            'a1': 0, 'a2': 1, 'a3': 2, 'a4': 3,  # Angle mode
+            '2theta': 1, 'omega': 2,
+        }
+        
+        # Determine scan mode
+        scan_mode = self._determine_scan_mode(cmd1, cmd2)
+        
+        # Create temp PUMA for validation
+        puma_instance = PUMA_Instrument()
+        puma_instance.monocris = self.PUMA.monocris
+        puma_instance.anacris = self.PUMA.anacris
+        puma_instance.K_fixed = self.PUMA.K_fixed
+        puma_instance.fixed_E = self.PUMA.fixed_E
+        
+        valid_count = 0
+        invalid_count = 0
+        
+        try:
+            variable_name1, array_values1 = parse_scan_steps(cmd1) if cmd1 else (None, [])
+            variable_name2, array_values2 = parse_scan_steps(cmd2) if cmd2 else (None, [])
+            
+            if variable_name1:
+                variable_name1 = self.normalize_scan_variable(variable_name1).lower()
+            if variable_name2:
+                variable_name2 = self.normalize_scan_variable(variable_name2).lower()
+            
+            # 1D scan
+            if cmd1 and not cmd2:
+                for value1 in array_values1:
+                    scan_point = scan_point_template[:]
+                    if variable_name1 in variable_to_index:
+                        scan_point[variable_to_index[variable_name1]] = value1
+                    
+                    valid = self._validate_scan_point(scan_point, scan_mode, vals, puma_instance)
+                    if valid:
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+            
+            # 2D scan
+            elif cmd1 and cmd2:
+                for value2 in array_values2:
+                    for value1 in array_values1:
+                        scan_point = scan_point_template[:]
+                        if variable_name1 in variable_to_index:
+                            scan_point[variable_to_index[variable_name1]] = value1
+                        if variable_name2 in variable_to_index:
+                            scan_point[variable_to_index[variable_name2]] = value2
+                        
+                        valid = self._validate_scan_point(scan_point, scan_mode, vals, puma_instance)
+                        if valid:
+                            valid_count += 1
+                        else:
+                            invalid_count += 1
+        except Exception as e:
+            # If parsing fails, return 0 valid points
+            return (0, 0)
+        
+        return (valid_count, invalid_count)
+    
+    def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, puma_instance) -> bool:
+        """Validate a single scan point.
+        
+        Args:
+            scan_point: List of scan parameters
+            scan_mode: One of 'momentum', 'rlu', 'angle', 'orientation'
+            vals: GUI values dictionary
+            puma_instance: PUMA instrument instance
+            
+        Returns:
+            True if point is valid, False otherwise
+        """
+        try:
+            if scan_mode == "momentum":
+                qx, qy, qz, deltaE = scan_point[:4]
+                _, error_flags = puma_instance.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                return not error_flags
+            elif scan_mode == "rlu":
+                H, K, L = scan_point[11], scan_point[12], scan_point[13]
+                deltaE = scan_point[3]
+                qx, qy, qz = update_Q_from_HKL_direct(
+                    H, K, L,
+                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                )
+                _, error_flags = puma_instance.calculate_angles(
+                    qx, qy, qz, deltaE, self.PUMA.fixed_E, self.PUMA.K_fixed,
+                    self.PUMA.monocris, self.PUMA.anacris
+                )
+                return not error_flags
+            else:
+                # Angle mode - always valid
+                return True
+        except Exception:
+            return False
+    
+    def _determine_scan_mode(self, cmd1: str, cmd2: str) -> str:
+        """Determine the scan mode based on scan command variables.
+        
+        Args:
+            cmd1: First scan command
+            cmd2: Second scan command
+            
+        Returns:
+            str: One of 'momentum', 'rlu', 'angle', 'orientation'
+        """
+        momentum_vars = {'qx', 'qy', 'qz', 'deltae'}
+        rlu_vars = {'h', 'k', 'l'}
+        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta'}
+        orientation_vars = {'omega', 'chi', 'psi', 'kappa'}
+        
+        vars_used = set()
+        for cmd in [cmd1, cmd2]:
+            if cmd:
+                parts = cmd.split()
+                if parts:
+                    vars_used.add(parts[0].lower())
+        
+        if vars_used & rlu_vars:
+            return "rlu"
+        elif vars_used & momentum_vars:
+            return "momentum"
+        elif vars_used & angle_vars:
+            return "angle"
+        elif vars_used & orientation_vars:
+            return "orientation"
+        else:
+            # Default based on sample frame mode
+            try:
+                if self.window.sample_dock.sample_frame_mode_check.isChecked():
+                    return "rlu"
+            except Exception:
+                pass
+            return "momentum"
+    
+    def _check_current_point_validity(self) -> tuple:
+        """Check if the current single point (no scan) is valid.
+        
+        Returns:
+            tuple: (is_valid, error_message)
+        """
+        try:
+            vals = self.get_gui_values()
+            _, error_flags = self.PUMA.calculate_angles(
+                vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
+                self.PUMA.fixed_E, self.PUMA.K_fixed,
+                self.PUMA.monocris, self.PUMA.anacris
+            )
+            return (not error_flags, error_flags if error_flags else "")
+        except Exception as e:
+            return (False, str(e))
+
     def on_omega_changed(self):
         """Handle omega (ω) change - sample in-plane rotation."""
         if self.updating:
@@ -1224,8 +1723,8 @@ class TAVIController(QObject):
     
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
-        if self.window.sample_dock.has_misalignment():
-            mis_omega, mis_chi, mis_psi = self.window.sample_dock.get_loaded_misalignment()
+        if self.window.misalignment_dock.has_misalignment():
+            mis_omega, mis_chi, mis_psi = self.window.misalignment_dock.get_loaded_misalignment()
             self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi, mis_psi=mis_psi)
             self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
     
@@ -1233,13 +1732,26 @@ class TAVIController(QObject):
         """Handle clearing misalignment - reset hidden values on instrument."""
         self.PUMA.set_misalignment(mis_omega=0, mis_chi=0, mis_psi=0)
         self.print_to_message_center("Misalignment cleared")
+        # Also clear any stored hash in the sample dock so it won't be reloaded
+        try:
+            if hasattr(self.window, 'sample_dock') and hasattr(self.window.sample_dock, 'load_hash_edit'):
+                self.window.sample_dock.load_hash_edit.clear()
+            if hasattr(self.window.sample_dock, '_loaded_misalignment'):
+                self.window.misalignment_dock._loaded_misalignment = None
+            if hasattr(self.window.misalignment_dock, 'misalignment_status_label'):
+                self.window.misalignment_dock.misalignment_status_label.setText("No misalignment loaded")
+                self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: gray;")
+            if hasattr(self.window.misalignment_dock, 'check_alignment_button'):
+                self.window.misalignment_dock.check_alignment_button.setEnabled(False)
+        except Exception:
+            pass
     
     def on_check_alignment(self):
         """Check user's alignment against hidden misalignment and update feedback."""
         try:
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.window.sample_dock.update_alignment_feedback(kappa, psi, 0)
+            self.window.misalignment_dock.update_alignment_feedback(kappa, psi, 0)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     
@@ -1415,7 +1927,7 @@ class TAVIController(QObject):
             "kappa_var": self.window.sample_dock.kappa_edit.text(),
             "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             # Misalignment hash only (keeps values hidden from students)
-            "misalignment_hash_var": self.window.sample_dock.load_hash_edit.text(),
+            "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
             "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
@@ -1495,17 +2007,19 @@ class TAVIController(QObject):
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
-                    self.window.sample_dock.load_hash_edit.setText(mis_hash)
+                    self.window.misalignment_dock.load_hash_edit.setText(mis_hash)
                     # Decode and apply the misalignment to the instrument
                     try:
-                        from gui.docks.unified_sample_dock import decode_misalignment
+                        from gui.docks.misalignment_dock import decode_misalignment
                         omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
                         self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
                         # Store in dock and update UI to show it's loaded
-                        self.window.sample_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
-                        self.window.sample_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
-                        self.window.sample_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
-                        self.window.sample_dock.check_alignment_button.setEnabled(True)
+                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
+                        self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
+                        self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
+                        self.window.misalignment_dock.check_alignment_button.setEnabled(True)
+                        # Update the indicator in the sample dock
+                        self.window.sample_dock.update_misalignment_indicator(True)
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
@@ -1609,6 +2123,22 @@ class TAVIController(QObject):
     
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
+        # Pre-flight validation - check for scan command issues
+        validation_result = self._preflight_scan_validation()
+        if validation_result:
+            # There are issues - show warning but allow proceeding
+            from PySide6.QtWidgets import QMessageBox
+            reply = QMessageBox.warning(
+                self.window,
+                "Scan Command Issues",
+                f"{validation_result}\n\nDo you want to continue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                self.print_to_message_center("Simulation cancelled due to scan command issues")
+                return
+        
         self.stop_flag = False
         
         # Reset progress bar and show initializing state
@@ -1619,6 +2149,43 @@ class TAVIController(QObject):
         data_folder = self.window.data_control_dock.save_folder_edit.text()
         simulation_thread = threading.Thread(target=self.run_simulation, args=(data_folder,))
         simulation_thread.start()
+    
+    def _preflight_scan_validation(self) -> str:
+        """Check scan commands before running simulation.
+        
+        Returns:
+            str: Error/warning message if issues found, empty string if OK
+        """
+        from gui.docks.unified_simulation_dock import (
+            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
+        )
+        
+        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
+        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
+        
+        issues = []
+        
+        # Validate command 1
+        var1, warning1 = self._validate_single_scan_command(cmd1)
+        if warning1 and "⚠" in warning1:  # Only block on serious warnings
+            issues.append(f"Command 1: {warning1}")
+        elif warning1 and "Unknown" in warning1:
+            issues.append(f"Command 1: {warning1}")
+        
+        # Validate command 2
+        var2, warning2 = self._validate_single_scan_command(cmd2)
+        if warning2 and "⚠" in warning2:
+            issues.append(f"Command 2: {warning2}")
+        elif warning2 and "Unknown" in warning2:
+            issues.append(f"Command 2: {warning2}")
+        
+        # Check for conflicts between commands
+        if var1 and var2:
+            conflict = self._check_scan_parameter_conflict(var1, var2)
+            if conflict:
+                issues.append(conflict)
+        
+        return "\n".join(issues)
 
     def on_sample_changed(self, label):
         """Handle sample selection changes from the GUI."""
@@ -1687,6 +2254,10 @@ class TAVIController(QObject):
         scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
         
+        # Check if relative scan mode is enabled for each command
+        relative_mode_1 = self.window.simulation_dock.relative_1_button.isChecked()
+        relative_mode_2 = self.window.simulation_dock.relative_2_button.isChecked()
+        
         # Write parameters to file
         write_parameters_to_file(data_folder, vals)
         
@@ -1703,41 +2274,53 @@ class TAVIController(QObject):
                     scan_mode = "momentum"
                 elif var_name_probe in ["H", "K", "L"]:
                     scan_mode = "rlu"
-                elif var_name_probe in ["A1", "A2", "A3", "A4"]:
+                elif var_name_probe in ["A1", "A2", "A3", "A4", "omega", "2theta"]:
                     scan_mode = "angle"
-                elif var_name_probe in ["omega", "chi"]:
+                elif var_name_probe in ["chi"]:
                     scan_mode = "orientation"
             except Exception:
                 pass
         
         # Mapping for scannable parameters
-        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-11: sample orientation (omega, chi, kappa, psi)
+        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-10: sample orientation (chi, kappa, psi)
+        # Note: omega maps to same index as A3, 2theta maps to same index as A2
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
             'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
+            'omega': 2, '2theta': 1,  # omega = A3 (index 2), 2theta = A2 (index 1)
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-            'omega': 8, 'chi': 9, 'kappa': 10, 'psi': 11
+            'chi': 8, 'kappa': 9, 'psi': 10
         }
         
         # Initialize scan point template
-        # Extended to 12 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-11: omega/chi/kappa/psi
-        scan_point_template = [0] * 12
+        # Extended to 11 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-10: chi/kappa/psi
+        # Note: omega is normalized to A3, so no separate index needed
+        scan_point_template = [0] * 11
         if scan_mode == "momentum":
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         elif scan_mode == "rlu":
             scan_point_template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
         elif scan_mode == "angle":
-            scan_point_template[:4] = [0, 0, 0, 0]
+            # For angle scans, use current instrument angles from GUI
+            try:
+                A1_current = float(self.window.instrument_dock.mtt_edit.text() or 0)
+                A2_current = float(self.window.instrument_dock.stt_edit.text() or 0)
+                A3_current = float(self.window.instrument_dock.omega_edit.text() or 0)
+                A4_current = float(self.window.instrument_dock.att_edit.text() or 0)
+                scan_point_template[:4] = [A1_current, A2_current, A3_current, A4_current]
+            except ValueError:
+                scan_point_template[:4] = [0, 0, 0, 0]
         elif scan_mode == "orientation":
-            # For orientation scans, use current Q values but scan omega/chi/kappa/psi
+            # For orientation scans, use current Q values but scan chi/kappa/psi
+            # Note: omega is normalized to A3, so omega scans work via angle mode
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        # Set default omega/chi from instrument_dock, kappa/psi from sample_dock
+        # Set default chi from instrument_dock, kappa/psi from sample_dock
+        # Note: omega is same as A3, no separate storage needed
         try:
-            scan_point_template[8] = float(self.window.instrument_dock.omega_edit.text() or 0)
-            scan_point_template[9] = float(self.window.instrument_dock.chi_edit.text() or 0)
-            scan_point_template[10] = float(self.window.sample_dock.kappa_edit.text() or 0)
-            scan_point_template[11] = float(self.window.sample_dock.psi_edit.text() or 0)
+            scan_point_template[8] = float(self.window.instrument_dock.chi_edit.text() or 0)
+            scan_point_template[9] = float(self.window.sample_dock.kappa_edit.text() or 0)
+            scan_point_template[10] = float(self.window.sample_dock.psi_edit.text() or 0)
         except ValueError:
             pass
         
@@ -1765,6 +2348,13 @@ class TAVIController(QObject):
         if scan_command1 and not scan_command2:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
             variable_name1 = self.normalize_scan_variable(variable_name1)
+            
+            # Apply relative offset if enabled for command 1
+            if relative_mode_1:
+                base_value = self._get_current_value_for_variable(variable_name1, vals, scan_point_template)
+                array_values1 = array_values1 + base_value
+                self.message_printed.emit(f"Relative scan: {variable_name1} base value = {base_value}")
+            
             valid_mask_1d = [False] * len(array_values1)
             
             for idx, value1 in enumerate(array_values1):
@@ -1802,6 +2392,16 @@ class TAVIController(QObject):
             variable_name2, array_values2 = parse_scan_steps(scan_command2)
             variable_name1 = self.normalize_scan_variable(variable_name1)
             variable_name2 = self.normalize_scan_variable(variable_name2)
+            
+            # Apply relative offset if enabled for each command independently
+            if relative_mode_1:
+                base_value1 = self._get_current_value_for_variable(variable_name1, vals, scan_point_template)
+                array_values1 = array_values1 + base_value1
+                self.message_printed.emit(f"Relative scan 1: {variable_name1} base = {base_value1}")
+            if relative_mode_2:
+                base_value2 = self._get_current_value_for_variable(variable_name2, vals, scan_point_template)
+                array_values2 = array_values2 + base_value2
+                self.message_printed.emit(f"Relative scan 2: {variable_name2} base = {base_value2}")
             
             # Initialize 2D valid mask
             valid_mask_2d = [[False] * len(array_values1) for _ in range(len(array_values2))]
@@ -1844,10 +2444,25 @@ class TAVIController(QObject):
         total_scans = len(scan_parameter_input)
         self.message_printed.emit(f"Running {total_scans} scan points...")
         
+        # Show pre-scan estimate based on historical data
+        instrument_name = "PUMA"
+        total_est, compile_est, _ = self.runtime_tracker.estimate_total_time(
+            instrument_name, total_scans, number_neutrons
+        )
+        if total_est is not None:
+            est_str = RuntimeTracker.format_time(total_est)
+            self.window.simulation_dock.update_pre_scan_estimate(est_str)
+            self.message_printed.emit(f"Estimated total time: {est_str}")
+        
         total_counts = 0
         max_counts = 0
         
+        # Track individual scan times for runtime recording
+        scan_times = []  # List of (scan_index, elapsed_time_for_this_scan)
+        
         for i, scan_item in enumerate(scan_parameter_input):
+            scan_start_time = time.time()  # Track start time for this scan point
+            
             if self.stop_flag:
                 self.message_printed.emit("Simulation stopped by user.")
                 self.scan_completed.emit()
@@ -1902,14 +2517,25 @@ class TAVIController(QObject):
             else:  # Angle mode
                 A1, A2, A3, A4 = scans[:4]
                 self.PUMA.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
+                # In angle mode, use deltaE from GUI since we're not calculating from Q
+                deltaE = vals['deltaE']
+                # Set placeholder variables for logging (not calculated in angle mode)
+                mtt, stt, sth, att = A1, A2, A3, A4
+                qx, qy, qz = 0, 0, 0  # Not applicable in angle mode
             
             rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-            omega_scan, chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10], scans[11]
+            chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10]
             
-            # For RLU/momentum scans, omega IS the calculated sth (they're the same angle)
-            # Only update omega_scan if we calculated new angles (not for orientation/angle scans)
-            if scan_mode in ["momentum", "rlu"] and not error_flags:
+            # omega = A3 (they are the same angle)
+            # In angle mode, omega comes from A3; in momentum/rlu modes, from calculated sth
+            if scan_mode == "angle":
+                omega_scan = scans[2]  # A3 position in scans array
+            elif scan_mode in ["momentum", "rlu"] and not error_flags:
                 omega_scan = sth  # omega displays the calculated sample theta
+            elif scan_mode == "orientation":
+                omega_scan = sth if not error_flags else vals.get('omega', 0)
+            else:
+                omega_scan = 0
             
             # Check if bending parameters are part of scan commands; if not, use current PUMA values
             if 'rhm' not in [variable_name1, variable_name2]:
@@ -2022,21 +2648,57 @@ class TAVIController(QObject):
                     if idx_1d >= 0:
                         self.scan_point_updated_1d.emit(idx_1d, counts)
             
+            # Record scan time for this point
+            scan_elapsed = time.time() - scan_start_time
+            scan_times.append(scan_elapsed)
+            
             # Emit progress signals
             self.progress_updated.emit(i + 1, total_scans)
             self.counts_updated.emit(max_counts, total_counts)
             
-            # Calculate remaining time
+            # Calculate remaining time - ignore first scan (compilation overhead)
             elapsed_time = time.time() - start_time
-            avg_time_per_scan = elapsed_time / (i + 1)
-            remaining_scans = total_scans - (i + 1)
-            remaining_time = avg_time_per_scan * remaining_scans
+            if i == 0:
+                # After first scan, use historical data for estimation if available
+                _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
+                if run_time_per_point is not None and total_scans > 1:
+                    remaining_time = run_time_per_point * (total_scans - 1)
+                else:
+                    remaining_time = scan_elapsed * (total_scans - 1)
+            else:
+                # For subsequent scans, use average of scans 2+ (excluding first/compile scan)
+                subsequent_times = scan_times[1:]  # Exclude first scan
+                avg_time_per_scan = sum(subsequent_times) / len(subsequent_times)
+                remaining_scans = total_scans - (i + 1)
+                remaining_time = avg_time_per_scan * remaining_scans
             
             hours = int(remaining_time // 3600)
             minutes = int((remaining_time % 3600) // 60)
             seconds = int(remaining_time % 60)
             time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             self.remaining_time_updated.emit(time_str)
+        
+        # Record runtime data for future estimates (only if scan completed normally)
+        if scan_times and not self.stop_flag:
+            total_time = time.time() - start_time
+            first_scan_time = scan_times[0] if scan_times else 0
+            
+            # Calculate average time for subsequent scans (excluding first)
+            if len(scan_times) > 1:
+                avg_subsequent_time = sum(scan_times[1:]) / len(scan_times[1:])
+            else:
+                # Only one scan point - use first scan time as both
+                avg_subsequent_time = first_scan_time
+            
+            self.runtime_tracker.add_record(
+                instrument_name=instrument_name,
+                num_points=total_scans,
+                num_neutrons=number_neutrons,
+                first_scan_time=first_scan_time,
+                avg_subsequent_time=avg_subsequent_time,
+                total_time=total_time
+            )
+            self.message_printed.emit(f"Timing data recorded: {total_scans} points in {RuntimeTracker.format_time(total_time)}")
         
         # Simulation complete
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")

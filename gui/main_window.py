@@ -14,6 +14,7 @@ from gui.docks.unified_simulation_dock import UnifiedSimulationDock
 from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
 from gui.docks.display_dock import DisplayDock
+from gui.docks.misalignment_dock import MisalignmentDock
 
 
 class TAVIMainWindow(QMainWindow):
@@ -35,6 +36,9 @@ class TAVIMainWindow(QMainWindow):
         
         # Create dock widgets with unique object names for state persistence
         self._create_docks()
+        
+        # Connect signals between docks
+        self._connect_dock_signals()
         
         # Set up the central widget (minimal, as most content is in docks)
         self._setup_central_widget()
@@ -65,6 +69,15 @@ class TAVIMainWindow(QMainWindow):
         # Sample Panel (column 2, top)
         self.sample_dock = UnifiedSampleDock(self)
         
+        # Misalignment Training Panel (initially hidden, opened from Sample panel)
+        self.misalignment_dock = MisalignmentDock(self)
+        # Prefer it to open as a floating panel and start hidden
+        try:
+            self.misalignment_dock.setFloating(True)
+            self.misalignment_dock.setVisible(False)
+        except Exception:
+            pass
+        
         # Simulation Panel (column 2, bottom)
         self.simulation_dock = UnifiedSimulationDock(self)
         
@@ -82,11 +95,31 @@ class TAVIMainWindow(QMainWindow):
             self.instrument_dock,
             self.scattering_dock,
             self.sample_dock,
+            self.misalignment_dock,
             self.simulation_dock,
             self.display_dock,
             self.output_dock,
             self.data_control_dock,
         ]
+    
+    def _connect_dock_signals(self):
+        """Connect signals between docks."""
+        # Connect sample dock button to open misalignment dock
+        self.sample_dock.open_misalignment_dock_requested.connect(
+            self._on_open_misalignment_dock
+        )
+        
+        # Connect misalignment dock signal to update sample dock indicator
+        self.misalignment_dock.misalignment_changed.connect(
+            self.sample_dock.update_misalignment_indicator
+        )
+    
+    def _on_open_misalignment_dock(self):
+        """Handle request to open the misalignment dock."""
+        # Show and raise the misalignment dock
+        self.misalignment_dock.setVisible(True)
+        self.misalignment_dock.raise_()
+        self.misalignment_dock.activateWindow()
     
     def _setup_central_widget(self):
         """Set up a minimal central widget."""
@@ -140,6 +173,8 @@ class TAVIMainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
         self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
         
+        # Misalignment dock is added and configured elsewhere to avoid duplicate layout entries.
+        
         # Step 4: Set column widths
         self.resizeDocks(
             [self.instrument_dock, self.sample_dock, self.display_dock],
@@ -154,9 +189,10 @@ class TAVIMainWindow(QMainWindow):
             Qt.Vertical
         )
         
+        # Make Sample shorter and Simulation taller to better use vertical space
         self.resizeDocks(
             [self.sample_dock, self.simulation_dock],
-            [400, 400],
+            [300, 500],
             Qt.Vertical
         )
         
@@ -165,6 +201,7 @@ class TAVIMainWindow(QMainWindow):
             [350, 350, 150],
             Qt.Vertical
         )
+
     
     def _create_menus(self):
         """Create the menu bar with View menu for dock management."""
