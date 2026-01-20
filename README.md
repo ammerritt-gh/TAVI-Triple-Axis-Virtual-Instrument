@@ -17,7 +17,7 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
 
 1. **Install McStas**
    
-   Follow the instructions at [https://mcstas.org/](https://mcstas.org/) to install McStas for your operating system.
+   Follow the instructions at [https://mcstas.org/](https://mcstas.org/) to install McStas for your operating system. Do NOT use the McStas package, but install the McStas metapackage (under legacy options). Be sure to add McStas to your system path.
 
 2. **Install Python dependencies**
 
@@ -37,31 +37,10 @@ TAVI is a Python-based graphical user interface for simulating triple-axis spect
 
 ## Running the Application
 
-TAVI now offers two GUI options:
-
-### New Modular PySide6 GUI (Recommended)
-
-The new GUI uses PySide6 with a dockable window interface organized into separate modules:
+To run TAVI, navigate to the folder containing the files and run:
 
 ```bash
 python TAVI_PySide6.py
-```
-
-The modular interface includes:
-- **Instrument Configuration Dock**: Instrument angles, energies, crystal selections, collimations, and experimental modules
-- **Reciprocal Lattice Space Dock**: Absolute Q-space (qx, qy, qz) and relative HKL coordinates with energy transfer
-- **Sample Control Dock**: Lattice parameters and sample configuration
-- **Scan Controls Dock**: Scan parameters, commands, and control buttons
-- **Diagnostics Dock**: Monitor configuration and diagnostic mode
-- **Output Window**: Message center and progress tracking
-- **Data Control Dock**: Output folder selection and data loading
-
-### Legacy Tkinter GUI
-
-The original single-window interface (now located in the archive folder):
-
-```bash
-python archive/McScript_Runner.py
 ```
 
 ## Features
@@ -122,13 +101,12 @@ Simulation results are saved in the `output` directory with the following struct
 - Check that tkinter is installed
 - Try running with `-v` flag for verbose output
 
+## External Credits
+
+TAVI is based on McStas and McStasScript, which can be found at the following location (respectively):
+[https://mcstas.org/](https://mcstas.org/)
+[https://mads-bertelsen.github.io/index.html](https://mads-bertelsen.github.io/index.html)
+
 ## License
 
-See LICENSE file for details.
-
-## Contributing
-
-Contributions are welcome! Please ensure your code:
-- Uses platform-independent path handling (os.path.join, pathlib)
-- Avoids hard-coded file paths
-- Includes appropriate comments and documentation
+Licensed under the GNU General Public License v3.0. See `LICENSE`.
