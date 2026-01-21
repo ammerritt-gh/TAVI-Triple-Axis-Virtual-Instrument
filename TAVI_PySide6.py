@@ -1764,13 +1764,13 @@ class TAVIController(QObject):
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
         if self.window.misalignment_dock.has_misalignment():
-            mis_omega, mis_chi, mis_psi = self.window.misalignment_dock.get_loaded_misalignment()
-            self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi, mis_psi=mis_psi)
+            mis_omega, mis_chi = self.window.misalignment_dock.get_loaded_misalignment()
+            self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
             self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
     
     def on_clear_misalignment(self):
         """Handle clearing misalignment - reset hidden values on instrument."""
-        self.PUMA.set_misalignment(mis_omega=0, mis_chi=0, mis_psi=0)
+        self.PUMA.set_misalignment(mis_omega=0, mis_chi=0)
         self.print_to_message_center("Misalignment cleared")
         # Also clear any stored hash in the sample dock so it won't be reloaded
         try:
@@ -1789,13 +1789,12 @@ class TAVIController(QObject):
     def on_check_alignment(self):
         """Check user's alignment against hidden misalignment and update feedback."""
         try:
-            # psi_edit is the in-plane offset (corrects omega/psi misalignment)
+            # psi_edit is the in-plane offset (corrects omega misalignment)
             # kappa_edit is the out-of-plane offset (corrects chi misalignment)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
-            # update_alignment_feedback(user_omega, user_chi, user_psi)
-            # user_omega = 0 (no direct omega input), user_chi = kappa, user_psi = psi
-            self.window.misalignment_dock.update_alignment_feedback(0, kappa, psi)
+            # update_alignment_feedback(user_psi, user_kappa)
+            self.window.misalignment_dock.update_alignment_feedback(psi, kappa)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     
