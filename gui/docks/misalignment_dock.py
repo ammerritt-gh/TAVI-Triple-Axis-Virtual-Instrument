@@ -189,10 +189,10 @@ class MisalignmentDock(BaseDockWidget):
         check_layout.addWidget(self.check_alignment_button)
         
         # Alignment feedback labels
-        self.y_axis_feedback_label = QLabel("Y-axis (ω): ---")
+        self.y_axis_feedback_label = QLabel("In-plane (ω/ψ): ---")
         check_layout.addWidget(self.y_axis_feedback_label)
         
-        self.x_axis_feedback_label = QLabel("X-axis (χ): ---")
+        self.x_axis_feedback_label = QLabel("Out-of-plane (χ/κ): ---")
         check_layout.addWidget(self.x_axis_feedback_label)
         
         self.overall_feedback_label = QLabel("Overall: ---")
@@ -266,9 +266,9 @@ class MisalignmentDock(BaseDockWidget):
     
     def _reset_feedback(self):
         """Reset alignment feedback labels."""
-        self.y_axis_feedback_label.setText("Y-axis (ω): ---")
+        self.y_axis_feedback_label.setText("In-plane (ω/ψ): ---")
         self.y_axis_feedback_label.setStyleSheet("")
-        self.x_axis_feedback_label.setText("X-axis (χ): ---")
+        self.x_axis_feedback_label.setText("Out-of-plane (χ/κ): ---")
         self.x_axis_feedback_label.setStyleSheet("")
         self.overall_feedback_label.setText("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
@@ -290,16 +290,16 @@ class MisalignmentDock(BaseDockWidget):
         result = check_alignment_quality(user_omega, user_chi, user_psi,
                                          mis_omega, mis_chi, mis_psi)
         
-        # Update Y-axis feedback
+        # Update in-plane feedback (omega/psi - corrected by psi offset)
         y_status = result["y_axis"]
         y_hint = result["y_axis_hint"]
-        self.y_axis_feedback_label.setText(f"Y-axis (ω/ψ): {y_hint}")
+        self.y_axis_feedback_label.setText(f"In-plane (ω/ψ): {y_hint}")
         self.y_axis_feedback_label.setStyleSheet(self._status_style(y_status))
         
-        # Update X-axis feedback
+        # Update out-of-plane feedback (chi - corrected by kappa offset)
         x_status = result["x_axis"]
         x_hint = result["x_axis_hint"]
-        self.x_axis_feedback_label.setText(f"X-axis (χ): {x_hint}")
+        self.x_axis_feedback_label.setText(f"Out-of-plane (χ/κ): {x_hint}")
         self.x_axis_feedback_label.setStyleSheet(self._status_style(x_status))
         
         # Update overall feedback
