@@ -1789,9 +1789,13 @@ class TAVIController(QObject):
     def on_check_alignment(self):
         """Check user's alignment against hidden misalignment and update feedback."""
         try:
-            kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
+            # psi_edit is the in-plane offset (corrects omega/psi misalignment)
+            # kappa_edit is the out-of-plane offset (corrects chi misalignment)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.window.misalignment_dock.update_alignment_feedback(kappa, psi, 0)
+            kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
+            # update_alignment_feedback(user_omega, user_chi, user_psi)
+            # user_omega = 0 (no direct omega input), user_chi = kappa, user_psi = psi
+            self.window.misalignment_dock.update_alignment_feedback(0, kappa, psi)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
     

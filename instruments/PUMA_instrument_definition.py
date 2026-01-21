@@ -981,6 +981,11 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         analyzer_collimator.length = 0.2
         analyzer_collimator.divergence = PUMA.alpha_3
 
+        analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
+        analyzer_filter.length = 0.05
+        analyzer_filter.xwidth = 0.5
+        analyzer_filter.yheight = 0.5
+
         if diagnostic_mode and diagnostic_settings.get('Pre-analyzer EMonitor'):
             preanalyzer_Emonitor = instrument.add_component("preanalyzer_Emonitor", "E_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
             preanalyzer_Emonitor.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
