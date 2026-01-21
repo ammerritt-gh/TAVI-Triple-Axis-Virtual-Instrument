@@ -22,31 +22,50 @@ def _xor_bytes(data: bytes, key: bytes) -> bytes:
     return bytes(d ^ key[i % len(key)] for i, d in enumerate(data))
 
 
-def encode_misalignment(omega: float, chi: float, psi: float) -> str:
-    """Encode misalignment angles into a portable hash string."""
-    packed = struct.pack('<fff', omega, chi, psi)
+def encode_misalignment(omega: float, chi: float) -> str:
+    """Encode misalignment angles into a portable hash string.
+    
+    Args:
+        omega: In-plane misalignment angle (degrees)
+        chi: Out-of-plane misalignment angle (degrees)
+    """
+    packed = struct.pack('<ff', omega, chi)
     obfuscated = _xor_bytes(packed, _OBFUSCATION_KEY)
     encoded = base64.urlsafe_b64encode(obfuscated).decode('ascii')
     return encoded
 
 
 def decode_misalignment(hash_str: str) -> tuple:
-    """Decode a misalignment hash string back to angles."""
+    """Decode a misalignment hash string back to angles.
+    
+    Returns:
+        tuple: (omega, chi) misalignment angles in degrees
+    """
     try:
         obfuscated = base64.urlsafe_b64decode(hash_str.encode('ascii'))
         packed = _xor_bytes(obfuscated, _OBFUSCATION_KEY)
-        omega, chi, psi = struct.unpack('<fff', packed)
-        return omega, chi, psi
+        omega, chi = struct.unpack('<ff', packed)
+        return omega, chi
     except Exception as e:
         raise ValueError(f"Invalid misalignment hash: {e}")
 
 
-def check_alignment_quality(user_omega: float, user_chi: float, user_psi: float,
-                            mis_omega: float, mis_chi: float, mis_psi: float,
+def check_alignment_quality(user_psi: float, user_kappa: float,
+                            mis_omega: float, mis_chi: float,
                             tolerance_good: float = 0.2, tolerance_close: float = 1.0) -> dict:
-    """Check how well the user has aligned the sample."""
-    y_axis_error = abs(user_omega + user_psi - (-mis_omega - mis_psi))
-    x_axis_error = abs(user_chi - (-mis_chi))
+    """Check how well the user has aligned the sample.
+    
+    Args:
+        user_psi: User's in-plane offset (ψ) to correct omega misalignment
+        user_kappa: User's out-of-plane offset (κ) to correct chi misalignment
+        mis_omega: Hidden in-plane misalignment angle
+        mis_chi: Hidden out-of-plane misalignment angle
+        tolerance_good: Tolerance for "aligned" status (degrees)
+        tolerance_close: Tolerance for "close" status (degrees)
+    """
+    # To correct misalignment, user offset should be negative of misalignment
+    in_plane_error = abs(user_psi - (-mis_omega))
+    out_of_plane_error = abs(user_kappa - (-mis_chi))
     
     def status_for_error(err):
         if err <= tolerance_good:
@@ -56,17 +75,17 @@ def check_alignment_quality(user_omega: float, user_chi: float, user_psi: float,
         else:
             return "way_off"
     
-    omega_psi_status = status_for_error(y_axis_error)
-    chi_status = status_for_error(x_axis_error)
+    in_plane_status = status_for_error(in_plane_error)
+    out_of_plane_status = status_for_error(out_of_plane_error)
     
     status_priority = {"aligned": 0, "close": 1, "way_off": 2}
-    overall = max([omega_psi_status, chi_status], key=lambda s: status_priority[s])
+    overall = max([in_plane_status, out_of_plane_status], key=lambda s: status_priority[s])
     
     return {
-        "y_axis": omega_psi_status,
-        "y_axis_hint": _get_hint(y_axis_error, tolerance_good, tolerance_close),
-        "x_axis": chi_status,
-        "x_axis_hint": _get_hint(x_axis_error, tolerance_good, tolerance_close),
+        "in_plane": in_plane_status,
+        "in_plane_hint": _get_hint(in_plane_error, tolerance_good, tolerance_close),
+        "out_of_plane": out_of_plane_status,
+        "out_of_plane_hint": _get_hint(out_of_plane_error, tolerance_good, tolerance_close),
         "overall": overall
     }
 
@@ -111,11 +130,12 @@ class MisalignmentDock(BaseDockWidget):
         teacher_layout.setSpacing(5)
         teacher_group.setLayout(teacher_layout)
         
-        # Misalignment inputs
+        # Misalignment inputs - omega (in-plane) and chi (out-of-plane)
         teacher_layout.addWidget(QLabel("ω mis:"), 0, 0)
         self.mis_omega_edit = QLineEdit()
         self.mis_omega_edit.setMaximumWidth(60)
         self.mis_omega_edit.setPlaceholderText("0.0")
+        self.mis_omega_edit.setToolTip("In-plane misalignment (corrected by ψ)")
         teacher_layout.addWidget(self.mis_omega_edit, 0, 1)
         teacher_layout.addWidget(QLabel("°"), 0, 2)
         
@@ -123,31 +143,25 @@ class MisalignmentDock(BaseDockWidget):
         self.mis_chi_edit = QLineEdit()
         self.mis_chi_edit.setMaximumWidth(60)
         self.mis_chi_edit.setPlaceholderText("0.0")
+        self.mis_chi_edit.setToolTip("Out-of-plane misalignment (corrected by κ)")
         teacher_layout.addWidget(self.mis_chi_edit, 0, 4)
         teacher_layout.addWidget(QLabel("°"), 0, 5)
         
-        teacher_layout.addWidget(QLabel("ψ mis:"), 1, 0)
-        self.mis_psi_edit = QLineEdit()
-        self.mis_psi_edit.setMaximumWidth(60)
-        self.mis_psi_edit.setPlaceholderText("0.0")
-        teacher_layout.addWidget(self.mis_psi_edit, 1, 1)
-        teacher_layout.addWidget(QLabel("°"), 1, 2)
-        
         # Generate button
         self.generate_hash_button = QPushButton("Generate Hash")
-        teacher_layout.addWidget(self.generate_hash_button, 1, 3, 1, 3)
+        teacher_layout.addWidget(self.generate_hash_button, 0, 6)
         
         # Generated hash display
-        teacher_layout.addWidget(QLabel("Hash:"), 2, 0)
+        teacher_layout.addWidget(QLabel("Hash:"), 1, 0)
         self.generated_hash_edit = QLineEdit()
         self.generated_hash_edit.setReadOnly(True)
         self.generated_hash_edit.setPlaceholderText("Click 'Generate Hash'")
-        teacher_layout.addWidget(self.generated_hash_edit, 2, 1, 1, 5)
+        teacher_layout.addWidget(self.generated_hash_edit, 1, 1, 1, 5)
         
         # Copy button
         self.copy_hash_button = QPushButton("Copy")
         self.copy_hash_button.setMaximumWidth(50)
-        teacher_layout.addWidget(self.copy_hash_button, 2, 6)
+        teacher_layout.addWidget(self.copy_hash_button, 1, 6)
         
         main_layout.addWidget(teacher_group)
         
@@ -189,11 +203,11 @@ class MisalignmentDock(BaseDockWidget):
         check_layout.addWidget(self.check_alignment_button)
         
         # Alignment feedback labels
-        self.y_axis_feedback_label = QLabel("In-plane (ω/ψ): ---")
-        check_layout.addWidget(self.y_axis_feedback_label)
+        self.in_plane_feedback_label = QLabel("In-plane (ψ → ω): ---")
+        check_layout.addWidget(self.in_plane_feedback_label)
         
-        self.x_axis_feedback_label = QLabel("Out-of-plane (χ/κ): ---")
-        check_layout.addWidget(self.x_axis_feedback_label)
+        self.out_of_plane_feedback_label = QLabel("Out-of-plane (κ → χ): ---")
+        check_layout.addWidget(self.out_of_plane_feedback_label)
         
         self.overall_feedback_label = QLabel("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
@@ -215,9 +229,8 @@ class MisalignmentDock(BaseDockWidget):
         try:
             omega = float(self.mis_omega_edit.text() or 0)
             chi = float(self.mis_chi_edit.text() or 0)
-            psi = float(self.mis_psi_edit.text() or 0)
             
-            hash_str = encode_misalignment(omega, chi, psi)
+            hash_str = encode_misalignment(omega, chi)
             self.generated_hash_edit.setText(hash_str)
         except ValueError:
             QMessageBox.warning(self, "Invalid Input", 
@@ -238,8 +251,8 @@ class MisalignmentDock(BaseDockWidget):
             return
         
         try:
-            omega, chi, psi = decode_misalignment(hash_str)
-            self._loaded_misalignment = (omega, chi, psi)
+            omega, chi = decode_misalignment(hash_str)
+            self._loaded_misalignment = (omega, chi)
             self.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
             self.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
             self.check_alignment_button.setEnabled(True)
@@ -266,41 +279,45 @@ class MisalignmentDock(BaseDockWidget):
     
     def _reset_feedback(self):
         """Reset alignment feedback labels."""
-        self.y_axis_feedback_label.setText("In-plane (ω/ψ): ---")
-        self.y_axis_feedback_label.setStyleSheet("")
-        self.x_axis_feedback_label.setText("Out-of-plane (χ/κ): ---")
-        self.x_axis_feedback_label.setStyleSheet("")
+        self.in_plane_feedback_label.setText("In-plane (ψ → ω): ---")
+        self.in_plane_feedback_label.setStyleSheet("")
+        self.out_of_plane_feedback_label.setText("Out-of-plane (κ → χ): ---")
+        self.out_of_plane_feedback_label.setStyleSheet("")
         self.overall_feedback_label.setText("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
     
     def get_loaded_misalignment(self) -> tuple:
-        """Return loaded misalignment angles, or (0,0,0) if none loaded."""
-        return self._loaded_misalignment if self._loaded_misalignment else (0, 0, 0)
+        """Return loaded misalignment angles (omega, chi), or (0, 0) if none loaded."""
+        return self._loaded_misalignment if self._loaded_misalignment else (0, 0)
     
     def has_misalignment(self) -> bool:
         """Return True if a misalignment is currently loaded."""
         return self._loaded_misalignment is not None
     
-    def update_alignment_feedback(self, user_omega: float, user_chi: float, user_psi: float):
-        """Update the alignment feedback display based on current user angles."""
+    def update_alignment_feedback(self, user_psi: float, user_kappa: float):
+        """Update the alignment feedback display based on current user offsets.
+        
+        Args:
+            user_psi: User's in-plane offset (ψ) to correct omega misalignment
+            user_kappa: User's out-of-plane offset (κ) to correct chi misalignment
+        """
         if not self._loaded_misalignment:
             return
         
-        mis_omega, mis_chi, mis_psi = self._loaded_misalignment
-        result = check_alignment_quality(user_omega, user_chi, user_psi,
-                                         mis_omega, mis_chi, mis_psi)
+        mis_omega, mis_chi = self._loaded_misalignment
+        result = check_alignment_quality(user_psi, user_kappa, mis_omega, mis_chi)
         
-        # Update in-plane feedback (omega/psi - corrected by psi offset)
-        y_status = result["y_axis"]
-        y_hint = result["y_axis_hint"]
-        self.y_axis_feedback_label.setText(f"In-plane (ω/ψ): {y_hint}")
-        self.y_axis_feedback_label.setStyleSheet(self._status_style(y_status))
+        # Update in-plane feedback (psi corrects omega misalignment)
+        in_plane_status = result["in_plane"]
+        in_plane_hint = result["in_plane_hint"]
+        self.in_plane_feedback_label.setText(f"In-plane (ψ → ω): {in_plane_hint}")
+        self.in_plane_feedback_label.setStyleSheet(self._status_style(in_plane_status))
         
-        # Update out-of-plane feedback (chi - corrected by kappa offset)
-        x_status = result["x_axis"]
-        x_hint = result["x_axis_hint"]
-        self.x_axis_feedback_label.setText(f"Out-of-plane (χ/κ): {x_hint}")
-        self.x_axis_feedback_label.setStyleSheet(self._status_style(x_status))
+        # Update out-of-plane feedback (kappa corrects chi misalignment)
+        out_of_plane_status = result["out_of_plane"]
+        out_of_plane_hint = result["out_of_plane_hint"]
+        self.out_of_plane_feedback_label.setText(f"Out-of-plane (κ → χ): {out_of_plane_hint}")
+        self.out_of_plane_feedback_label.setStyleSheet(self._status_style(out_of_plane_status))
         
         # Update overall feedback
         overall = result["overall"]

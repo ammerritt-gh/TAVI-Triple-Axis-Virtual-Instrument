@@ -116,7 +116,6 @@ class TAS_Instrument:
         # Hidden misalignment angles (for training exercises)
         self.mis_omega = 0  # hidden misalignment in omega (in-plane)
         self.mis_chi = 0    # hidden misalignment in chi (out-of-plane)
-        self.mis_psi = 0    # hidden misalignment in psi (additional in-plane)
         self.K_fixed = "Ki_fixed" # working in Ki- or Kf-fixed mode
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
@@ -149,29 +148,32 @@ class TAS_Instrument:
         if psi is not None:
             self.psi = psi
     
-    def set_misalignment(self, mis_omega=None, mis_chi=None, mis_psi=None):
-        """Method to set hidden misalignment angles for training exercises."""
+    def set_misalignment(self, mis_omega=None, mis_chi=None):
+        """Method to set hidden misalignment angles for training exercises.
+        
+        Args:
+            mis_omega: In-plane misalignment angle (degrees) - corrected by psi offset
+            mis_chi: Out-of-plane misalignment angle (degrees) - corrected by kappa offset
+        """
         if mis_omega is not None:
             self.mis_omega = mis_omega
         if mis_chi is not None:
             self.mis_chi = mis_chi
-        if mis_psi is not None:
-            self.mis_psi = mis_psi
     
     def get_effective_sample_angles(self):
         """Return effective sample angle OFFSETS (not including calculated A3).
         
-        The total in-plane rotation is: A3 (calculated) + psi (offset) + misalignments
-        The total out-of-plane tilt is: chi + kappa (offset) + misalignments
+        The total in-plane rotation is: A3 (calculated) + psi (offset) + mis_omega
+        The total out-of-plane tilt is: chi + kappa (offset) + mis_chi
         
         Note: omega is NOT added here because omega IS the calculated A3 (just displayed).
         
         Returns:
             tuple: (effective_omega_offset, effective_chi) for backwards compatibility
         """
-        # Effective in-plane OFFSET: psi offset + misalignments (added to calculated A3)
-        effective_omega_offset = self.psi + self.mis_omega + self.mis_psi
-        # Effective out-of-plane tilt: chi + kappa offset + misalignment
+        # Effective in-plane OFFSET: psi offset + omega misalignment (added to calculated A3)
+        effective_omega_offset = self.psi + self.mis_omega
+        # Effective out-of-plane tilt: chi + kappa offset + chi misalignment
         effective_chi = self.chi + self.kappa + self.mis_chi
         return effective_omega_offset, effective_chi
     
@@ -190,11 +192,10 @@ class TAS_Instrument:
                 - 'kappa': Chi alignment offset (out-of-plane, set during alignment)
                 - 'mis_omega': Hidden omega misalignment (in-plane, for training)
                 - 'mis_chi': Hidden chi misalignment (out-of-plane, for training)
-                - 'mis_psi': Hidden psi misalignment (additional in-plane, for training)
-                - 'effective_omega_offset': Combined in-plane offset (psi + mis_omega + mis_psi)
+                - 'effective_omega_offset': Combined in-plane offset (psi + mis_omega)
                 - 'effective_chi': Combined out-of-plane tilt (chi + kappa + mis_chi)
         """
-        effective_omega_offset = self.psi + self.mis_omega + self.mis_psi
+        effective_omega_offset = self.psi + self.mis_omega
         effective_chi = self.chi + self.kappa + self.mis_chi
         
         return {
@@ -204,7 +205,6 @@ class TAS_Instrument:
             'kappa': self.kappa,
             'mis_omega': self.mis_omega,
             'mis_chi': self.mis_chi,
-            'mis_psi': self.mis_psi,
             'effective_omega_offset': effective_omega_offset,
             'effective_chi': effective_chi,
         }
@@ -779,13 +779,12 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         instrument.add_parameter("mis_chi_param", value=sample_angles['mis_chi'], comment="Hidden chi misalignment (training)")
         instrument.add_parameter("psi_param", value=sample_angles['psi'], comment="Psi - omega alignment offset")
         instrument.add_parameter("mis_omega_param", value=sample_angles['mis_omega'], comment="Hidden omega misalignment (training)")
-        instrument.add_parameter("mis_psi_param", value=sample_angles['mis_psi'], comment="Hidden psi misalignment (training)")
         
         # Combined effective angles (these are actually used in the geometry)
         instrument.add_parameter("chi_total", value=sample_angles['effective_chi'], 
                                  comment="Total chi = chi + kappa + mis_chi")
         instrument.add_parameter("omega_offset_total", value=sample_angles['effective_omega_offset'],
-                                 comment="Total omega offset = psi + mis_omega + mis_psi")
+                                 comment="Total omega offset = psi + mis_omega")
         
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
         instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
@@ -1092,7 +1091,6 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
                 mis_chi_param=sample_angles['mis_chi'],
                 psi_param=sample_angles['psi'],
                 mis_omega_param=sample_angles['mis_omega'],
-                mis_psi_param=sample_angles['mis_psi'],
                 # Combined effective angles (used in geometry)
                 chi_total=sample_angles['effective_chi'],
                 omega_offset_total=sample_angles['effective_omega_offset']
