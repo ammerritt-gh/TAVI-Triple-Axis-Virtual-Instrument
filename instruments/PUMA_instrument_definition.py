@@ -53,6 +53,8 @@ def mono_ana_crystals_setup(monocris, anacris):
         monochromator_info['gap'] = 0.0005
         monochromator_info['mosaic'] = 35
         monochromator_info['r0'] = 1.0 #0.7
+        monochromator_info['reflect'] = '"HOPG.rfl"'
+        monochromator_info['transmit'] = '"HOPG.trm"'
     if monocris == "PG[002] test":
         #print("\nPG[002] monochromator crystal")
         monochromator_info['dm'] = 2.355
@@ -63,6 +65,8 @@ def mono_ana_crystals_setup(monocris, anacris):
         monochromator_info['gap'] = 0.0005
         monochromator_info['mosaic'] = 35
         monochromator_info['r0'] = 1.0 #0.7
+        monochromator_info['reflect'] = '"HOPG.rfl"'
+        monochromator_info['transmit'] = '"HOPG.trm"'
     # else:
     #     print("\nNo monochromator crystal selected")
 
@@ -77,6 +81,8 @@ def mono_ana_crystals_setup(monocris, anacris):
         analyzer_info['gap'] = 0.0005
         analyzer_info['mosaic'] = 35
         analyzer_info['r0'] = 1.0 #0.7
+        analyzer_info['reflect'] = '"HOPG.rfl"'
+        analyzer_info['transmit'] = '"HOPG.trm"'
     # else:
     #     print("\nNo analyzer crystal selected")
 
@@ -473,6 +479,18 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         mono_width = monochromator_info['slabwidth']*monochromator_info['ncolumns'] + monochromator_info['gap']*(monochromator_info['ncolumns']-1)
         mono_height  =  monochromator_info['slabheight']*monochromator_info['nrows'] + monochromator_info['gap']*(monochromator_info['nrows']-1)
 
+        # source = instrument.add_component("source", "Source_div")
+        # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
+        # source.yheight=0.1 #PUMA.hbl_vgap*1.5
+        # source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
+        # source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
+        # source.dE=2
+        # #source.E0 = 25
+        # if PUMA.K_fixed == "Ki Fixed":
+        #     source.E0=PUMA.fixed_E
+        # if PUMA.K_fixed == "Kf Fixed":
+        #     source.E0=PUMA.fixed_E + deltaE
+
         source = instrument.add_component("source", "Source_div_Maxwellian")
         source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
         source.yheight=0.1 #PUMA.hbl_vgap*1.5
@@ -486,26 +504,26 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # source = instrument.add_component("source", "Source_Maxwell_3")
         # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
         # source.yheight=0.1 #PUMA.hbl_vgap*1.5
-        # source.focus_xw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
-        # source.focus_yh=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
+        # source.focus_xw=mono_width #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
+        # source.focus_yh=mono_height #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
         # source.T1 = 300
         # source.I1 = 1e12
         # source.Lmin = 0.01
         # source.Lmax = 20
-        # source.dist = 1
+        # source.dist = PUMA.L1
 
         hblende = instrument.add_component("hblende", "Slit", AT=[0, 0, 0.0001], RELATIVE="origin")
         hblende.xwidth=PUMA.hbl_hgap
         hblende.yheight=PUMA.hbl_vgap
 
         if diagnostic_mode and diagnostic_settings.get('Source EMonitor'):
-            sample_Emonitor = instrument.add_component("sample_Emonitor", "E_monitor", AT=[0,0,0.144], ROTATED=[0,0,0], RELATIVE="origin")
-            sample_Emonitor.xwidth = 0.2
-            sample_Emonitor.yheight = 0.2
-            sample_Emonitor.nE = 100
-            sample_Emonitor.Emin = -2
-            sample_Emonitor.Emax = 30
-            sample_Emonitor.restore_neutron = 1
+            source_Emonitor = instrument.add_component("source_Emonitor", "E_monitor", AT=[0,0,0.144], ROTATED=[0,0,0], RELATIVE="origin")
+            source_Emonitor.xwidth = 0.2
+            source_Emonitor.yheight = 0.2
+            source_Emonitor.nE = 100
+            source_Emonitor.Emin = -2
+            source_Emonitor.Emax = 200
+            source_Emonitor.restore_neutron = 1
 
         if diagnostic_mode and diagnostic_settings.get('Source PSD'):
             source_PSD = instrument.add_component("source_PSD", "PSD_monitor", AT=[0,0,0.145], RELATIVE="origin")
@@ -589,6 +607,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         monochromator.RH = "rhm_param"
         monochromator.mosaic = monochromator_info['mosaic']
         monochromator.order = 0 # all orders
+        monochromator.reflect = monochromator_info['reflect']
+        monochromator.transmit = monochromator_info['transmit']
         monochromator.append_EXTEND("if(!SCATTERED) ABSORB;")
 
         ## sample arm
@@ -659,6 +679,12 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         exit_beam_tube = instrument.add_component("exit_beam_tube", "Slit", AT=[0,0,1.1385], RELATIVE="sample_arm") 
         exit_beam_tube.xwidth = 0.105
         exit_beam_tube.yheight = 0.18
+
+        # There is no actual sample filter on PUMA
+        sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
+        sample_filter.length = 0.05
+        sample_filter.xwidth = 0.5
+        sample_filter.yheight = 0.5
             
         ## NMO
         
@@ -762,7 +788,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             sample_Emonitor.yheight = 0.2
             sample_Emonitor.nE = 100
             sample_Emonitor.Emin = -2
-            sample_Emonitor.Emax = 30
+            sample_Emonitor.Emax = 200
             sample_Emonitor.restore_neutron = 1
 
         # Sample orientation hierarchy:
@@ -980,10 +1006,10 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         analyzer_collimator.length = 0.2
         analyzer_collimator.divergence = PUMA.alpha_3
 
-        analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-        analyzer_filter.length = 0.05
-        analyzer_filter.xwidth = 0.5
-        analyzer_filter.yheight = 0.5
+        # analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
+        # analyzer_filter.length = 0.05
+        # analyzer_filter.xwidth = 0.5
+        # analyzer_filter.yheight = 0.5
 
         if diagnostic_mode and diagnostic_settings.get('Pre-analyzer EMonitor'):
             preanalyzer_Emonitor = instrument.add_component("preanalyzer_Emonitor", "E_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
@@ -1016,6 +1042,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         analyzer.RH = "rha_param"
         analyzer.mosaic = analyzer_info['mosaic']
         analyzer.r0 = analyzer_info['r0']
+        analyzer.reflect = analyzer_info['reflect']
+        analyzer.transmit = analyzer_info['transmit']
         analyzer.order = 0 # all orders
 
         ## detector
