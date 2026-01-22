@@ -43,48 +43,11 @@ To run TAVI, navigate to the folder containing the files and run:
 python TAVI_PySide6.py
 ```
 
-## Features
-
-- Interactive GUI for configuring PUMA triple-axis spectrometer parameters
-- Support for different crystal configurations (monochromator and analyzer)
-- Scan command interface for 1D and 2D scans
-- Diagnostic mode with configurable monitors
-- Sample configuration including lattice parameters
-- Automatic data processing and visualization
-- Cross-platform support (Windows, macOS, Linux)
-
-## Configuration
-
-On first run, the application will:
-- Create an `output` directory for simulation results
-- Generate a `parameters.json` file to save your settings
-
-These files are created in the current working directory and can be freely moved or shared between computers.
-
-## File Structure
-
-- `TAVI_PySide6.py` - New modular GUI application with PySide6
-- `gui/` - PySide6 GUI modules
-  - `main_window.py` - Main window with dock arrangement
-  - `docks/` - Individual dock widget modules
-- `tavi/` - Core TAVI functionality modules
-  - `utilities.py` - Helper functions for file operations and scan parsing
-  - `reciprocal_space.py` - HKL and Q-space coordinate conversions
-  - `data_processing.py` - Detector file reading and scan data management
-- `instruments/` - Instrument definitions
-  - `PUMA_instrument_definition.py` - PUMA instrument setup and McStas interface
-- `archive/` - Legacy modules (no longer used by main application)
-  - `McScript_Runner.py` - Legacy GUI application with Tkinter
-  - `PUMA_GUI_calculations.py` - Legacy GUI calculation utilities
-  - `McScript_Functions.py` - Legacy helper functions
-  - `McScript_DataProcessing.py` - Legacy data processing
-  - `McScript_Sample_Definition.py` - Legacy sample calculations
-
 ## Output
 
 Simulation results are saved in the `output` directory with the following structure:
 - Each simulation run creates a timestamped folder
-- Individual scan points are saved in subfolders with encoded parameters
+- Individual scan points are saved in subfolders
 - Data files include detector readings and scan parameters
 - Plots are automatically generated for 1D and 2D scans
 
@@ -95,16 +58,12 @@ Simulation results are saved in the `output` directory with the following struct
 
 **McStas not found**
 - Ensure McStas is installed and in your PATH
-- The application will use the default McStas configuration
-
-**GUI doesn't appear**
-- Check that tkinter is installed
-- Try running with `-v` flag for verbose output
 
 ## External Credits
 
 TAVI is based on McStas and McStasScript, which can be found at the following location (respectively):
 [https://mcstas.org/](https://mcstas.org/)
+
 [https://mads-bertelsen.github.io/index.html](https://mads-bertelsen.github.io/index.html)
 
 ## License

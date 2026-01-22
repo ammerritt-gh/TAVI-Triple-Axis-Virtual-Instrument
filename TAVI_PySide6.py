@@ -52,6 +52,8 @@ class TAVIController(QObject):
     scan_current_index_1d = Signal(int)  # current index
     scan_current_index_2d = Signal(int, int)  # idx_x, idx_y
     scan_completed = Signal()  # scan finished
+    scan_auto_save = Signal()  # trigger auto-save of plot
+    single_point_result = Signal(float, float)  # max_counts, total_counts for single-point scan
     
     # Signals for diagnostic plots (must run on main thread)
     diagnostic_plot_requested = Signal(object)  # McStasData object
@@ -162,6 +164,8 @@ class TAVIController(QObject):
         self.scan_current_index_1d.connect(self.window.display_dock.set_current_scan_index)
         self.scan_current_index_2d.connect(self.window.display_dock.set_current_scan_index_2d)
         self.scan_completed.connect(self.window.display_dock.scan_complete)
+        self.scan_auto_save.connect(self.window.display_dock.auto_save_plot)
+        self.single_point_result.connect(self.window.display_dock.show_single_point_result)
         
         # Connect diagnostic plot signals (runs on main thread for matplotlib)
         self.diagnostic_plot_requested.connect(self._show_diagnostic_plots)
@@ -2404,6 +2408,9 @@ class TAVIController(QObject):
         except ValueError:
             pass
         
+        # Track if this is a single-point scan (no scan commands)
+        is_single_point_scan = not scan_command1 and not scan_command2
+        
         # Handle no scan commands (single point simulation)
         if not scan_command1 and not scan_command2:
             # Store as tuple (scan_point, idx_1d) for consistency
@@ -2790,8 +2797,14 @@ class TAVIController(QObject):
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
         self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
-        # Signal scan complete to display dock
-        self.scan_completed.emit()
+        # Handle display based on scan type
+        if is_single_point_scan:
+            # For single-point scans, show results as text instead of plot
+            self.single_point_result.emit(max_counts, total_counts)
+        else:
+            # For 1D/2D scans, signal completion and auto-save the plot
+            self.scan_completed.emit()
+            self.scan_auto_save.emit()
         
         # Display diagnostic subplots if in diagnostic mode and any monitors were enabled
         if diagnostic_mode:

@@ -1,5 +1,6 @@
 """Display Dock for TAVI application - Real-time 1D/2D plot visualization."""
 import os
+import datetime
 import numpy as np
 
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -16,7 +17,6 @@ from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
 
 from gui.docks.base_dock import BaseDockWidget
-
 
 class SavePlotDialog(QDialog):
     """Dialog for saving plots with preview and customizable information panel."""
@@ -1000,6 +1000,240 @@ class DisplayDock(BaseDockWidget):
         self.status_label.setText(f"Scan complete: {measured}/{total} points")
         
         self.canvas.draw_idle()
+    
+    def auto_save_plot(self):
+        """Automatically save the plot with full parameters to the data folder.
+        
+        This is called after 1D or 2D scans complete. The plot is saved with
+        all parameter info included.
+        """
+        if self._mode is None or self._data_folder is None:
+            return
+        
+        # Generate filename based on scan type and timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        if self._mode == '1D':
+            filename = f"scan_{self._variable_name_1}_{timestamp}.png"
+        elif self._mode == '2D':
+            filename = f"scan_{self._variable_name_1}_vs_{self._variable_name_2}_{timestamp}.png"
+        else:
+            filename = f"scan_plot_{timestamp}.png"
+        
+        file_path = os.path.join(self._data_folder, filename)
+        
+        try:
+            # Create a new figure for saving
+            save_fig = Figure(figsize=(8, 6), dpi=150)
+            
+            # Create axes with info panel area
+            save_ax = save_fig.add_axes([0.1, 0.22, 0.85, 0.68])
+            save_info_ax = save_fig.add_axes([0.1, 0.02, 0.85, 0.15])
+            save_info_ax.axis('off')
+            
+            # Copy plot to save figure
+            self._copy_plot_to_save_figure(save_ax, save_fig)
+            
+            # Add title
+            if self._mode == '1D':
+                title = f"{self._variable_name_1} Scan"
+            elif self._mode == '2D':
+                title = f"{self._variable_name_1} vs {self._variable_name_2} Scan"
+            else:
+                title = "Scan Plot"
+            save_ax.set_title(title, fontsize=12, fontweight='bold')
+            
+            # Add full information panel
+            self._add_full_info_panel_to_figure(save_info_ax)
+            
+            save_fig.tight_layout()
+            save_fig.savefig(file_path, dpi=150, bbox_inches='tight')
+            
+            self.status_label.setText(f"Plot auto-saved to: {os.path.basename(file_path)}")
+            
+        except Exception as e:
+            self.status_label.setText(f"Auto-save failed: {str(e)}")
+    
+    def _copy_plot_to_save_figure(self, ax, fig):
+        """Copy the plot to the save figure's axes."""
+        if self._mode == '1D':
+            # Plot measured data
+            measured_mask = self._measured_mask & self._valid_mask
+            if np.any(measured_mask):
+                x_measured = self._scan_values_1[measured_mask]
+                y_measured = self._counts[measured_mask]
+                sort_idx = np.argsort(x_measured)
+                ax.plot(x_measured[sort_idx], y_measured[sort_idx], 'b-o', 
+                       markersize=5, linewidth=1.5, label='Measured')
+            
+            # Mark impossible points
+            impossible_x = self._scan_values_1[~self._valid_mask]
+            if len(impossible_x) > 0:
+                ax.scatter(impossible_x, np.zeros(len(impossible_x)), 
+                          marker='x', color='black', s=40, linewidths=2, 
+                          label='Impossible', zorder=5)
+            
+            ax.set_xlabel(self._get_axis_label(self._variable_name_1))
+            ax.set_ylabel('Counts')
+            ax.grid(True, alpha=0.3)
+            ax.legend(loc='upper right', fontsize='small')
+            
+        elif self._mode == '2D':
+            # Calculate extent
+            dx = (self._scan_values_1[-1] - self._scan_values_1[0]) / (len(self._scan_values_1) - 1) if len(self._scan_values_1) > 1 else 1
+            dy = (self._scan_values_2[-1] - self._scan_values_2[0]) / (len(self._scan_values_2) - 1) if len(self._scan_values_2) > 1 else 1
+            
+            extent = [
+                self._scan_values_1[0] - dx/2, self._scan_values_1[-1] + dx/2,
+                self._scan_values_2[0] - dy/2, self._scan_values_2[-1] + dy/2
+            ]
+            
+            # Create heatmap
+            im = ax.imshow(self._counts, cmap='viridis', origin='lower',
+                           extent=extent, aspect='auto', interpolation='nearest')
+            
+            fig.colorbar(im, ax=ax, label='Counts')
+            
+            # Mark impossible points
+            for i, y_val in enumerate(self._scan_values_2):
+                for j, x_val in enumerate(self._scan_values_1):
+                    if not self._valid_mask[i, j]:
+                        rect = Rectangle((x_val - dx/2, y_val - dy/2), dx, dy,
+                                        facecolor='black', edgecolor='black')
+                        ax.add_patch(rect)
+            
+            ax.set_xlabel(self._get_axis_label(self._variable_name_1))
+            ax.set_ylabel(self._get_axis_label(self._variable_name_2))
+    
+    def _add_full_info_panel_to_figure(self, ax):
+        """Add full information panel with all parameters to the save figure."""
+        info_lines = []
+        meta = self._scan_metadata
+        
+        # Number of neutrons
+        if 'number_neutrons' in meta:
+            n = meta['number_neutrons']
+            if n >= 1e6:
+                info_lines.append(f"Neutrons: {n:.2e}")
+            else:
+                info_lines.append(f"Neutrons: {n:,}")
+        
+        # Ki/Kf mode
+        if 'K_fixed' in meta:
+            info_lines.append(f"Mode: {meta['K_fixed']}")
+        
+        # Fixed E
+        if 'fixed_E' in meta:
+            info_lines.append(f"Fixed E: {meta['fixed_E']:.3f} meV")
+        
+        # Collimations
+        coll_parts = []
+        if 'alpha_1' in meta:
+            coll_parts.append(f"α1={meta['alpha_1']}")
+        if 'alpha_2' in meta:
+            coll_parts.append(f"α2={meta['alpha_2']}")
+        if 'alpha_3' in meta:
+            coll_parts.append(f"α3={meta['alpha_3']}")
+        if 'alpha_4' in meta:
+            coll_parts.append(f"α4={meta['alpha_4']}")
+        if coll_parts:
+            info_lines.append("Coll: " + ", ".join(coll_parts))
+        
+        # Crystals
+        crystal_parts = []
+        if 'monocris' in meta:
+            crystal_parts.append(f"Mono={meta['monocris']}")
+        if 'anacris' in meta:
+            crystal_parts.append(f"Ana={meta['anacris']}")
+        if crystal_parts:
+            info_lines.append("Crystals: " + ", ".join(crystal_parts))
+        
+        # Alignment offsets
+        align_parts = []
+        if 'kappa' in meta and meta['kappa'] != 0:
+            align_parts.append(f"κ={meta['kappa']:.2f}°")
+        if 'psi' in meta and meta['psi'] != 0:
+            align_parts.append(f"ψ={meta['psi']:.2f}°")
+        if align_parts:
+            info_lines.append("Alignment: " + ", ".join(align_parts))
+        elif 'kappa' in meta or 'psi' in meta:
+            info_lines.append("Alignment: none")
+        
+        # Q/HKL + ΔE
+        if 'sample_frame_mode' in meta and meta['sample_frame_mode'] == 'HKL':
+            if all(k in meta for k in ['H', 'K', 'L']):
+                info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
+        else:
+            if all(k in meta for k in ['qx', 'qy', 'qz']):
+                info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
+        if 'deltaE' in meta:
+            info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
+        
+        # NMO / Velocity selector
+        nmo_vs_parts = []
+        if 'NMO_installed' in meta:
+            nmo_vs_parts.append(f"NMO: {meta['NMO_installed']}")
+        if 'V_selector_installed' in meta:
+            vs_status = "On" if meta['V_selector_installed'] else "Off"
+            nmo_vs_parts.append(f"VS: {vs_status}")
+        if nmo_vs_parts:
+            info_lines.append(" | ".join(nmo_vs_parts))
+        
+        # Display info text
+        if info_lines:
+            # Split into two rows if many lines
+            if len(info_lines) <= 4:
+                info_text = "  |  ".join(info_lines)
+            else:
+                mid = (len(info_lines) + 1) // 2
+                row1 = "  |  ".join(info_lines[:mid])
+                row2 = "  |  ".join(info_lines[mid:])
+                info_text = row1 + "\n" + row2
+            
+            ax.text(0.5, 0.5, info_text, ha='center', va='center',
+                    fontsize=9, transform=ax.transAxes,
+                    bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+    
+    @Slot(float, float)
+    def show_single_point_result(self, max_counts, total_counts):
+        """Display results for a single-point scan (no scan commands).
+        
+        Instead of plotting, just show the final counts as text.
+        
+        Args:
+            max_counts: Maximum counts from the measurement
+            total_counts: Total counts from the measurement
+        """
+        # Clear any existing plot data without resetting metadata
+        if self._colorbar is not None:
+            try:
+                self._colorbar.remove()
+            except (ValueError, AttributeError):
+                pass
+            self._colorbar = None
+        
+        self._mode = None
+        self._scan_values_1 = None
+        self._scan_values_2 = None
+        self._counts = None
+        self._valid_mask = None
+        self._measured_mask = None
+        
+        self.ax.clear()
+        
+        # Display the counts as text
+        result_text = f"Single Point Measurement Complete\n\n"
+        result_text += f"Max Counts: {int(max_counts):,}\n"
+        result_text += f"Total Counts: {int(total_counts):,}"
+        
+        self.ax.text(0.5, 0.5, result_text,
+                     ha='center', va='center', transform=self.ax.transAxes,
+                     fontsize=14, color='black',
+                     bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        
+        self.canvas.draw()
+        self.status_label.setText("Single point measurement complete")
     
     @Slot()
     def clear_plot(self):
