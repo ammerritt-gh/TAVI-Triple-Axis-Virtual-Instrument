@@ -357,7 +357,11 @@ class TAVIMainWindow(QMainWindow):
                          "Use View menu to manage panel visibility.")
     
     def closeEvent(self, event):
-        """Handle window close event - save layout automatically."""
+        """Handle window close event - stop simulation and save layout."""
+        # Stop any running simulation before closing
+        if hasattr(self, 'controller') and self.controller is not None:
+            self.controller.stop_flag = True
+            self.controller.print_to_message_center("Window closing - stopping simulation...")
         self.save_layout_to_file()
         event.accept()
 

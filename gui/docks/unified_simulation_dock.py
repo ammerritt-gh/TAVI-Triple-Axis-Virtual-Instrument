@@ -479,3 +479,20 @@ class UnifiedSimulationDock(BaseDockWidget):
         else:
             self.elapsed_time_label.setText("")
             self.elapsed_time_label.hide()
+    
+    def update_point_count_display_deferred(self, count1: int, count2: int):
+        """Update the point count display when precalculation is deferred (>1000 points).
+        
+        Args:
+            count1: Number of points in scan command 1
+            count2: Number of points in scan command 2 (0 if no 2D scan)
+        """
+        total = count1 * count2 if count2 > 0 else count1
+        
+        if count2 == 0:
+            text = f"{total} points (validation deferred - too many points)"
+        else:
+            text = f"{count1} × {count2} = {total} points (validation deferred)"
+        
+        self.point_count_label.setText(text)
+        self.point_count_label.setStyleSheet("font-weight: bold; color: #cc6600;")

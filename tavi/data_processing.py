@@ -166,32 +166,49 @@ def display_existing_data(data_folder):
     print(f"Scan parameters: {scan_parameters}")
 
 
-def write_1D_scan(x_values, data_values, data_folder, file_name):
-    """Write 1D scan data to a text file.
-    
+def write_1D_scan(x_values, data_values, data_folder, file_name, x_label: str = 'x', y_label: str = 'counts'):
+    """Write 1D scan data to a text file with a header describing columns.
+
     Args:
         x_values: Array of x-axis values
         data_values: Array of corresponding data points
         data_folder: Directory to write file
         file_name: Name of output file
+        x_label: Human-readable label for the x-axis / scan parameter
+        y_label: Human-readable label for the measurement (defaults to 'counts')
     """
-    with open(os.path.join(data_folder, file_name), 'w') as f:
+    os.makedirs(data_folder, exist_ok=True)
+    file_path = os.path.join(data_folder, file_name)
+    with open(file_path, 'w') as f:
+        # Header: column names
+        f.write(f"# {x_label} {y_label}\n")
         # Write X-axis values and data points in two columns
         for x, data in zip(x_values, data_values):
             f.write(f"{x} {data}\n")
 
 
-def write_2D_scan(x_values, y_values, nan_grid, data_folder, file_name):
-    """Write 2D scan data to a text file.
-    
+def write_2D_scan(x_values, y_values, nan_grid, data_folder, file_name, x_label: str = 'x', y_label: str = 'y'):
+    """Write 2D scan data to a text file with a header describing the scanned parameters.
+
+    The format preserves the previous layout where the first row contains x-axis
+    values (preceded by a spacer) and each following row starts with the y-axis
+    value followed by the row data. Header lines beginning with '#' are added
+    at the top describing the column semantics.
+
     Args:
         x_values: Array of x-axis values
         y_values: Array of y-axis values
         nan_grid: 2D grid of data values
         data_folder: Directory to write file
         file_name: Name of output file
+        x_label: Label for x-axis / scan parameter
+        y_label: Label for y-axis / scan parameter
     """
-    with open(os.path.join(data_folder, file_name), 'w') as f:
+    os.makedirs(data_folder, exist_ok=True)
+    file_path = os.path.join(data_folder, file_name)
+    with open(file_path, 'w') as f:
+        # Header: describe scan axes and measurement
+        f.write(f"# {x_label} vs {y_label}  (values arranged as rows: {y_label} then counts...)\n")
         # Write the first spacer for the 0,0 position
         f.write('00 ')
         # Write X-axis values in the first row

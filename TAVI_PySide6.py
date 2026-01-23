@@ -18,7 +18,7 @@ from instruments.PUMA_instrument_definition import PUMA_Instrument, run_PUMA_ins
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file, 
                                    simple_plot_scan_commands, display_existing_data,
-                                   read_parameters_from_file)
+                                   read_parameters_from_file, write_1D_scan, write_2D_scan)
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
 from tavi.runtime_tracker import RuntimeTracker
@@ -377,6 +377,9 @@ class TAVIController(QObject):
     
     def quit_application(self):
         """Quit the application."""
+        # Stop any running simulation before quitting
+        self.stop_flag = True
+        self.print_to_message_center("Shutting down...")
         QApplication.quit()
     
     def open_folder_dialog(self, line_edit):
@@ -1609,6 +1612,25 @@ class TAVIController(QObject):
             except Exception:
                 count2 = 0
         
+        # Calculate total points for determining if precalculation should be skipped
+        total_potential_points = count1 * count2 if (count1 > 0 and count2 > 0) else max(count1, count2)
+        
+        # If >1000 points, defer validation to avoid GUI hang
+        if total_potential_points > 1000:
+            self.print_to_message_center(f"⚠ {total_potential_points} scan points - validation deferred until simulation starts")
+            self.window.simulation_dock.update_point_count_display_deferred(count1, count2)
+            # Still show time estimate based on total points (assume all valid for estimate)
+            total_time, compile_time, _ = self.runtime_tracker.estimate_total_time(
+                instrument_name, total_potential_points, num_neutrons
+            )
+            if total_time is not None:
+                total_str = RuntimeTracker.format_time(total_time)
+                compile_str = RuntimeTracker.format_time(compile_time)
+                self.window.simulation_dock.update_total_time_estimate(total_str, compile_str)
+            else:
+                self.window.simulation_dock.update_total_time_estimate("")
+            return
+        
         # Calculate valid/invalid counts
         if count1 > 0 or count2 > 0:
             valid_count, invalid_count = self._count_valid_scan_points(cmd1, cmd2)
@@ -2650,6 +2672,16 @@ class TAVIController(QObject):
         # Track individual scan times for runtime recording
         scan_times = []  # List of (scan_index, elapsed_time_for_this_scan)
         
+        # Data collection for output files
+        import numpy as np
+        if is_2d_scan:
+            # For 2D scans: store counts in a 2D grid
+            counts_grid = np.full((len(array_values2), len(array_values1)), np.nan)
+        else:
+            # For 1D scans: store x values and counts as parallel arrays
+            scan_x_values = []
+            scan_counts = []
+        
         for i, scan_item in enumerate(scan_parameter_input):
             scan_start_time = time.time()  # Track start time for this scan point
             
@@ -2834,9 +2866,14 @@ class TAVIController(QObject):
                 # Emit display update signal
                 if is_2d_scan:
                     self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                    # Store in grid for output file
+                    counts_grid[idx_y, idx_x] = counts
                 else:
                     if idx_1d >= 0:
                         self.scan_point_updated_1d.emit(idx_1d, counts)
+                    # Store in arrays for output file
+                    scan_x_values.append(array_values1[idx_1d] if idx_1d >= 0 else 0)
+                    scan_counts.append(counts)
             
             # Record scan time for this point
             scan_elapsed = time.time() - scan_start_time
@@ -2900,6 +2937,36 @@ class TAVIController(QObject):
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
         self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
+        # Write scan data to output files
+        if not is_single_point_scan and not self.stop_flag:
+            try:
+                if is_2d_scan:
+                    # Write 2D scan data (include parameter labels if available)
+                    x_label = variable_name1 if 'variable_name1' in locals() and variable_name1 else 'scan1'
+                    y_label = variable_name2 if 'variable_name2' in locals() and variable_name2 else 'scan2'
+                    write_2D_scan(
+                        np.array(array_values1),
+                        np.array(array_values2),
+                        counts_grid,
+                        data_folder,
+                        "2D_scan_data.txt",
+                        x_label=x_label,
+                        y_label=y_label,
+                    )
+                    self.message_printed.emit(f"2D scan data written to: {os.path.join(data_folder, '2D_scan_data.txt')}")
+                else:
+                    # Write 1D scan data
+                    if scan_x_values and scan_counts:
+                        # Sort by x values for proper ordering
+                        sorted_indices = np.argsort(scan_x_values)
+                        sorted_x = np.array(scan_x_values)[sorted_indices]
+                        sorted_counts = np.array(scan_counts)[sorted_indices]
+                        x_label = variable_name1 if 'variable_name1' in locals() and variable_name1 else 'scan'
+                        write_1D_scan(sorted_x, sorted_counts, data_folder, "1D_scan_data.txt", x_label=x_label, y_label='counts')
+                        self.message_printed.emit(f"1D scan data written to: {os.path.join(data_folder, '1D_scan_data.txt')}")
+            except Exception as e:
+                self.message_printed.emit(f"Warning: Failed to write scan data file: {e}")
+        
         # Handle display based on scan type
         if is_single_point_scan:
             # For single-point scans, show results as text instead of plot
@@ -2928,6 +2995,8 @@ def main():
     app = QApplication(sys.argv)
     window = TAVIMainWindow()
     controller = TAVIController(window)
+    # Store controller reference on window so closeEvent can access it
+    window.controller = controller
     window.show()
     sys.exit(app.exec())
 
