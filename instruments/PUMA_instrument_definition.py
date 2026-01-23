@@ -230,12 +230,17 @@ class TAS_Instrument:
         """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
         error_flags = []
         
+        # Check for zero momentum transfer early to avoid division by zero
+        if qx == 0 and qy == 0 and qz == 0:
+            print("\nInvalid: zero momentum transfer (qx=qy=qz=0)")
+            error_flags.append("zero_q")
+            return [0, 0, 0, 0, 0], error_flags
+        
         # Retrieve mono/ana crystal information
         monochromator_info, analyzer_info = mono_ana_crystals_setup(monocris, anacris)
          
         # pre-calculate values from parameters
         q = math.sqrt(qx**2 + qy**2 + qz**2)
-        ## TODO: error if q=0
 
         K = energy2k(fixed_E)
 
@@ -483,27 +488,27 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         mono_width = monochromator_info['slabwidth']*monochromator_info['ncolumns'] + monochromator_info['gap']*(monochromator_info['ncolumns']-1)
         mono_height  =  monochromator_info['slabheight']*monochromator_info['nrows'] + monochromator_info['gap']*(monochromator_info['nrows']-1)
 
-        # source = instrument.add_component("source", "Source_div")
-        # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
-        # source.yheight=0.1 #PUMA.hbl_vgap*1.5
-        # source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
-        # source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
-        # source.dE=2
-        # #source.E0 = 25
-        # if PUMA.K_fixed == "Ki Fixed":
-        #     source.E0=PUMA.fixed_E
-        # if PUMA.K_fixed == "Kf Fixed":
-        #     source.E0=PUMA.fixed_E + deltaE
-
-        source = instrument.add_component("source", "Source_div_Maxwellian")
+        source = instrument.add_component("source", "Source_div")
         source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
         source.yheight=0.1 #PUMA.hbl_vgap*1.5
         source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
         source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
-        source.dE=5
-        source.energy_distribution=2
-        source.E0 = 25
-        source.divergence_distribution=0
+        source.dE=2
+        #source.E0 = 25
+        if PUMA.K_fixed == "Ki Fixed":
+            source.E0=PUMA.fixed_E
+        if PUMA.K_fixed == "Kf Fixed":
+            source.E0=PUMA.fixed_E + deltaE
+
+        # source = instrument.add_component("source", "Source_div_Maxwellian")
+        # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
+        # source.yheight=0.1 #PUMA.hbl_vgap*1.5
+        # source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
+        # source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
+        # source.dE=5
+        # source.energy_distribution=2
+        # source.E0 = 25
+        # source.divergence_distribution=0
 
         # source = instrument.add_component("source", "Source_Maxwell_3")
         # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
@@ -1148,6 +1153,11 @@ def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
 
     # error flag array
     error_flag_array = []
+    
+    # Check for zero momentum transfer early to avoid division by zero
+    if qx == 0 and qy == 0 and qz == 0:
+        error_flag_array.append("zero_q")
+        return error_flag_array
 
     # base instrument parameters
     # distances in meters
