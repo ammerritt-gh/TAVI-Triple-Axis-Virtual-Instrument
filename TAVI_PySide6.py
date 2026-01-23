@@ -72,6 +72,9 @@ class TAVIController(QObject):
         # Flag to prevent recursive updates
         self.updating = False
         
+        # Track previous field values to detect actual changes (vs spurious editingFinished signals)
+        self._previous_values = {}
+        
         # Initialize runtime tracker for scan time estimation
         self.runtime_tracker = RuntimeTracker()
         
@@ -201,7 +204,7 @@ class TAVIController(QObject):
         # Instrument angles - update energies and Q-space
         self.window.instrument_dock.mtt_edit.editingFinished.connect(self.on_mtt_changed)
         self.window.instrument_dock.att_edit.editingFinished.connect(self.on_att_changed)
-        self.window.instrument_dock.stt_edit.editingFinished.connect(self.on_angles_changed)
+        self.window.instrument_dock.stt_edit.editingFinished.connect(self.on_stt_changed)
         self.window.instrument_dock.omega_edit.editingFinished.connect(self.on_omega_changed)
         self.window.instrument_dock.chi_edit.editingFinished.connect(self.on_chi_changed)
         
@@ -645,10 +648,37 @@ class TAVIController(QObject):
             return lower
         return name
     
-    def update_all_variables(self):
+    def _field_value_changed(self, field_name: str, current_value: float, tolerance: float = 1e-9) -> bool:
+        """
+        Check if a field value has actually changed from its previous value.
+        This prevents spurious updates from editingFinished signals when focus changes
+        without the value being modified.
+        
+        Args:
+            field_name: Unique identifier for the field
+            current_value: The current numeric value of the field
+            tolerance: Tolerance for floating point comparison
+            
+        Returns:
+            True if the value has changed, False otherwise
+        """
+        previous = self._previous_values.get(field_name)
+        if previous is None or abs(previous - current_value) > tolerance:
+            self._previous_values[field_name] = current_value
+            return True
+        return False
+    
+    def _update_tracked_value(self, field_name: str, value: float):
+        """Update the tracked value for a field (use when setting field programmatically)."""
+        self._previous_values[field_name] = value
+    
+    def update_all_variables(self, skip_crystal_angles=False):
         """
         Comprehensive update of all instrument variables based on K_fixed mode.
         This is the central method that ensures all fields stay in sync.
+        
+        Args:
+            skip_crystal_angles: If True, don't update mtt/att (use when angles are source of truth)
         """
         if self.updating:
             return
@@ -676,21 +706,22 @@ class TAVIController(QObject):
             Ki = energy2k(Ei)
             Kf = energy2k(Ef)
             
-            # Calculate angles from wave vectors
-            mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
-            att = 2 * k2angle(Kf, self.anacris_info['da'])
-            
             # Recalculate deltaE to ensure consistency
             deltaE = Ei - Ef
             
-            # Update all GUI fields
+            # Update energy-related GUI fields
             self.window.instrument_dock.Ei_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.Ef_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.Ki_edit.setText(f"{Ki:.4f}".rstrip('0').rstrip('.'))
             self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            
+            # Only update crystal angles if not skipping (angles are not the source of truth)
+            if not skip_crystal_angles:
+                mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
+                att = 2 * k2angle(Kf, self.anacris_info['da'])
+                self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
+                self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
             
         except (ValueError, KeyError) as e:
             pass
@@ -902,6 +933,10 @@ class TAVIController(QObject):
         if not vals or not self.monocris_info:
             return
         
+        # Check if value actually changed
+        if not self._field_value_changed('mtt', vals['mtt']):
+            return
+        
         try:
             self.updating = True
             # Update Ki and Ei from mtt
@@ -930,6 +965,10 @@ class TAVIController(QObject):
             return
         vals = self.get_gui_values()
         if not vals or not self.anacris_info:
+            return
+        
+        # Check if value actually changed
+        if not self._field_value_changed('att', vals['att']):
             return
         
         try:
@@ -1086,6 +1125,20 @@ class TAVIController(QObject):
         # Keep sample angles in sync with updated deltaE
         self.update_angles_from_q()
     
+    def on_stt_changed(self):
+        """Handle sample 2theta (stt) change."""
+        if self.updating:
+            return
+        try:
+            stt = float(self.window.instrument_dock.stt_edit.text() or 0)
+            # Only update if value actually changed (avoid spurious editingFinished signals)
+            if not self._field_value_changed('stt', stt):
+                return
+            # Trigger angle-based updates
+            self.on_angles_changed()
+        except ValueError:
+            self.print_to_message_center("Invalid sample 2θ value")
+    
     def on_angles_changed(self):
         """Update Q-space when angles change."""
         if self.updating:
@@ -1113,21 +1166,41 @@ class TAVIController(QObject):
                 self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
                 self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
                 self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+                # Update tracked Q values since we just set them
+                self._update_tracked_value('qx', qx)
+                self._update_tracked_value('qy', qy)
+                self._update_tracked_value('qz', qz)
         except Exception:
             pass
         finally:
             self.updating = False
-            # Update HKL based on new Q values
-            self.on_Q_changed()
-            # Update energies based on updated deltaE
-            self.update_all_variables()
+            # Update HKL based on new Q values, but skip recalculating angles
+            # since the angles are the source of truth here
+            self.on_Q_changed(skip_angle_update=True)
+            # Update energies based on updated deltaE, but don't recalculate mtt/att
+            # since crystal angles are part of the input and shouldn't change
+            self.update_all_variables(skip_crystal_angles=True)
     
-    def on_Q_changed(self):
-        """Update HKL when Q changes."""
+    def on_Q_changed(self, skip_angle_update=False):
+        """Update HKL when Q changes.
+        
+        This is called either:
+        1. Directly by user editing Q fields (skip_angle_update=False)
+        2. From on_angles_changed when angles are source of truth (skip_angle_update=True)
+        """
         if self.updating:
             return
         vals = self.get_gui_values()
         if not vals:
+            return
+        
+        # Check if any Q value actually changed (avoid spurious editingFinished triggers)
+        qx_changed = self._field_value_changed('qx', vals['qx'])
+        qy_changed = self._field_value_changed('qy', vals['qy'])
+        qz_changed = self._field_value_changed('qz', vals['qz'])
+        
+        if not skip_angle_update and not (qx_changed or qy_changed or qz_changed):
+            # No actual change and not called from angles - skip update
             return
         
         try:
@@ -1140,12 +1213,17 @@ class TAVIController(QObject):
             self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
+            # Update tracked values for HKL since we just set them
+            self._update_tracked_value('H', H)
+            self._update_tracked_value('K', K)
+            self._update_tracked_value('L', L)
         except:
             pass
         finally:
             self.updating = False
-            # Update sample/instrument angles based on Q
-            self.update_angles_from_q()
+            # Update sample/instrument angles based on Q (skip if change originated from angles)
+            if not skip_angle_update:
+                self.update_angles_from_q()
     
     def on_HKL_changed(self):
         """Update Q when HKL changes."""
@@ -1156,11 +1234,20 @@ class TAVIController(QObject):
             return
         
         try:
-            self.updating = True
             H = float(self.window.scattering_dock.H_edit.text() or 0)
             K = float(self.window.scattering_dock.K_edit.text() or 0)
             L = float(self.window.scattering_dock.L_edit.text() or 0)
             
+            # Check if any HKL value actually changed (avoid spurious editingFinished triggers)
+            h_changed = self._field_value_changed('H', H)
+            k_changed = self._field_value_changed('K', K)
+            l_changed = self._field_value_changed('L', L)
+            
+            if not (h_changed or k_changed or l_changed):
+                # No actual change - skip update
+                return
+            
+            self.updating = True
             qx, qy, qz = update_Q_from_HKL_direct(
                 H, K, L,
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
@@ -1169,6 +1256,10 @@ class TAVIController(QObject):
             self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+            # Update tracked values for Q since we just set them
+            self._update_tracked_value('qx', qx)
+            self._update_tracked_value('qy', qy)
+            self._update_tracked_value('qz', qz)
         except:
             pass
         finally:
@@ -1231,6 +1322,12 @@ class TAVIController(QObject):
                 self.window.instrument_dock.omega_edit.setText(f"{sth:.4f}".rstrip('0').rstrip('.'))
                 self.window.instrument_dock.chi_edit.setText(f"{saz:.4f}".rstrip('0').rstrip('.'))
                 self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+                # Update tracked values for angles since we just set them
+                self._update_tracked_value('omega', sth)
+                self._update_tracked_value('chi', saz)
+                self._update_tracked_value('stt', stt)
+                self._update_tracked_value('mtt', mtt)
+                self._update_tracked_value('att', att)
         except Exception:
             pass
         finally:
@@ -1745,6 +1842,9 @@ class TAVIController(QObject):
             return
         try:
             omega = float(self.window.instrument_dock.omega_edit.text() or 0)
+            # Only update if value actually changed (avoid spurious editingFinished signals)
+            if not self._field_value_changed('omega', omega):
+                return
             self.PUMA.omega = omega
             self.print_to_message_center(f"Sample ω updated: {omega}°")
             # Trigger angle-based updates
@@ -1758,6 +1858,9 @@ class TAVIController(QObject):
             return
         try:
             chi = float(self.window.instrument_dock.chi_edit.text() or 0)
+            # Only update if value actually changed (avoid spurious editingFinished signals)
+            if not self._field_value_changed('chi', chi):
+                return
             self.PUMA.chi = chi
             self.print_to_message_center(f"Sample χ updated: {chi}° (out-of-plane)")
             # Chi affects qz - trigger recalculation
