@@ -277,13 +277,13 @@ class TAS_Instrument:
             print("\nCannot compute sample theta angle as sample two theta angle invalid")
             sth = 0
         else:
-            if qx == 0:
-                sth = stt / 2 + math.degrees(math.pi / 2)
-            else:
-                sth = stt / 2 + math.degrees(math.atan(qy/qx))
+            # For Bragg condition (deltaE=0, qy=0), omega = stt/2
+            # The formula: sth = stt/2 + atan2(qy, qx)
+            # This gives sth = stt/2 when Q is along the reference direction (qy=0)
+            sth = stt / 2 + math.degrees(math.atan2(qy, qx))
         
         ## TODO: error if qx=qy=0
-        saz = -math.degrees(math.atan(qz/math.sqrt(qx**2 + qy**2)))
+        saz = -math.degrees(math.atan2(qz, math.sqrt(qx**2 + qy**2)))
 
 
         print(f"\nmtt: {mtt:.2f} ki: {ki:.3f} Ei: {Ei:.3f} stt: {stt:.3f} sth: {sth:.3f} saz: {saz:.3f} Q: {q:.2f} kf: {kf:.3f} Ef: {Ef:.3f} att: {att:.2f}")
@@ -317,13 +317,17 @@ class TAS_Instrument:
             return [0, 0, 0, 0], error_flags
 
         # Compute Q components
+        # For the Bragg condition (elastic, deltaE=0), omega = stt/2 should give Q along the reference axis (qy=0)
+        # Q magnitude from the scattering triangle: |Q|^2 = ki^2 + kf^2 - 2*ki*kf*cos(stt)
+        # Q direction in sample frame: angle = (sth - stt/2) from the reference
         stt_rad = math.radians(stt)
         sth_rad = math.radians(sth)
         saz_rad = math.radians(saz)
-
-        qx = ki * math.cos(sth_rad) - kf * math.cos(sth_rad + stt_rad)
-        qy = ki * math.sin(sth_rad) - kf * math.sin(sth_rad + stt_rad)
-        qz = -kf * math.tan(saz_rad)  # Based on azimuthal angle definition
+        
+        Q_mag = math.sqrt(ki**2 + kf**2 - 2*ki*kf*math.cos(stt_rad))
+        qx = Q_mag * math.cos(sth_rad - stt_rad/2)
+        qy = Q_mag * math.sin(sth_rad - stt_rad/2)
+        qz = -kf * math.tan(saz_rad)  # Out-of-plane component from azimuthal angle
 
         # Validate Q magnitude
         q = math.sqrt(qx**2 + qy**2 + qz**2)
