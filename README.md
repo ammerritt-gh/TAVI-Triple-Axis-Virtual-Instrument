@@ -79,3 +79,7 @@ TAVI is based on McStas and McStasScript, which can be found at the following lo
 ## License
 
 Licensed under the GNU General Public License v3.0. See `LICENSE`.
+
+## Funding
+
+This work was funded by the **Bundesministerium für Forschung, Technologie und Raumfahrt** (BMBFTR) under the **NMO4PUMA** project, supported by the Karlsruhe Institute for Technology (KIT).
