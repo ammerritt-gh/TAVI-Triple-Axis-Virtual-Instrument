@@ -93,6 +93,10 @@ class RuntimeTracker:
                    total_time: float) -> None:
         """Add a new scan record.
         
+        Single-point scans (num_points == 1) are not saved since they cannot
+        reliably separate compile time from run time, and thus cannot contribute
+        to runtime estimation.
+        
         Args:
             instrument_name: Name of the instrument (e.g., 'PUMA')
             num_points: Total number of scan points
@@ -102,6 +106,10 @@ class RuntimeTracker:
             total_time: Total scan time
         """
         from datetime import datetime
+        
+        # Skip single-point scans - they can't separate compile from run time
+        if num_points == 1:
+            return
         
         record = ScanRecord(
             instrument_name=instrument_name,
@@ -149,6 +157,12 @@ class RuntimeTracker:
         
         for rec in records:
             if rec.num_neutrons > 0 and rec.num_points > 0:
+                # Skip single-point scans for estimation - they cannot reliably
+                # separate compile time from run time since first_scan_time
+                # equals avg_subsequent_time, polluting the run time estimates
+                if rec.num_points == 1:
+                    continue
+                
                 # Compile time = first scan time - average subsequent time
                 # This is the overhead of first compilation
                 compile_time = rec.first_scan_time - rec.avg_subsequent_time
@@ -222,6 +236,26 @@ class RuntimeTracker:
             Number of scan records
         """
         return len(self.records.get(instrument_name, []))
+    
+    def clear_records(self, instrument_name: Optional[str] = None) -> int:
+        """Clear runtime records.
+        
+        Args:
+            instrument_name: Name of instrument to clear, or None to clear all
+            
+        Returns:
+            Number of records cleared
+        """
+        if instrument_name is not None:
+            count = len(self.records.get(instrument_name, []))
+            if instrument_name in self.records:
+                del self.records[instrument_name]
+        else:
+            count = sum(len(recs) for recs in self.records.values())
+            self.records = {}
+        
+        self._save()
+        return count
     
     @staticmethod
     def format_time(seconds: Optional[float]) -> str:

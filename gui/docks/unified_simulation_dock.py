@@ -229,8 +229,12 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.quit_button = QPushButton("Quit")
         buttons_layout.addWidget(self.quit_button, 1, 0)
         
-        self.validation_button = QPushButton("Open Validation GUI")
-        buttons_layout.addWidget(self.validation_button, 1, 1)
+        self.clear_runtimes_button = QPushButton("Clear Runtimes")
+        self.clear_runtimes_button.setToolTip(
+            "Clear cached runtime data used for scan time estimation.\n"
+            "Use this if time estimates seem incorrect."
+        )
+        buttons_layout.addWidget(self.clear_runtimes_button, 1, 1)
         
         main_layout.addWidget(buttons_group)
         
