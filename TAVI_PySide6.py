@@ -59,6 +59,9 @@ class TAVIController(QObject):
     diagnostic_plot_requested = Signal(object)  # McStasData object
     instrument_diagram_requested = Signal(object)  # McStas instrument object
     
+    # Signal for runtime data updates (triggers re-estimation of scan times)
+    runtime_data_updated = Signal()
+    
     def __init__(self, window):
         super().__init__()
         self.window = window
@@ -123,7 +126,7 @@ class TAVIController(QObject):
         self.window.simulation_dock.run_button.clicked.connect(self.run_simulation_thread)
         self.window.simulation_dock.stop_button.clicked.connect(self.stop_simulation)
         self.window.simulation_dock.quit_button.clicked.connect(self.quit_application)
-        self.window.simulation_dock.validation_button.clicked.connect(self.open_validation_window)
+        self.window.simulation_dock.clear_runtimes_button.clicked.connect(self.clear_runtime_data)
         
         # Parameter buttons (moved to right panel)
         self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
@@ -173,6 +176,9 @@ class TAVIController(QObject):
         # Connect diagnostic plot signals (runs on main thread for matplotlib)
         self.diagnostic_plot_requested.connect(self._show_diagnostic_plots)
         self.instrument_diagram_requested.connect(self._show_instrument_diagram)
+        
+        # Connect runtime data update signal to refresh scan time estimates
+        self.runtime_data_updated.connect(self._update_scan_estimates)
         
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
@@ -1952,10 +1958,31 @@ class TAVIController(QObject):
         # TODO: Implement sample configuration dialog
         self.print_to_message_center("Sample configuration window not yet implemented")
     
-    def open_validation_window(self):
-        """Open validation window."""
-        # TODO: Implement validation window
-        self.print_to_message_center("Validation window not yet implemented")
+    def clear_runtime_data(self):
+        """Clear cached runtime data with confirmation dialog."""
+        from PySide6.QtWidgets import QMessageBox
+        
+        # Get current record count for the message
+        record_count = self.runtime_tracker.get_record_count("PUMA")
+        
+        reply = QMessageBox.question(
+            self.window,
+            "Clear Runtime Data",
+            f"Are you sure you want to clear all cached runtime data?\n\n"
+            f"This will delete {record_count} scan timing records used to estimate\n"
+            f"scan durations. New estimates will be generated as you run more scans.\n\n"
+            f"Use this if time estimates seem incorrect.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            cleared = self.runtime_tracker.clear_records()
+            self.print_to_message_center(f"Cleared {cleared} runtime records. Time estimates will be recalculated from new scans.")
+            # Clear displayed estimates
+            self.window.simulation_dock.update_total_time_estimate("")
+        else:
+            self.print_to_message_center("Runtime data clearing cancelled.")
     
     def load_and_display_data(self):
         """Load and display existing data in the display dock."""
@@ -2949,6 +2976,8 @@ class TAVIController(QObject):
                 total_time=total_time
             )
             self.message_printed.emit(f"Timing data recorded: {total_scans} points in {RuntimeTracker.format_time(total_time)}")
+            # Trigger update of scan time estimates on main thread
+            self.runtime_data_updated.emit()
         
         # Simulation complete
         self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
