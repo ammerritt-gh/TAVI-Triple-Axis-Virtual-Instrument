@@ -6,7 +6,7 @@ and progress tracking into a single dockable panel.
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QComboBox, QGroupBox, QPushButton,
                                 QGridLayout, QCheckBox, QFormLayout, QProgressBar,
-                                QWidget)
+                                QWidget, QSizePolicy)
 from PySide6.QtCore import Qt
 
 from gui.docks.base_dock import BaseDockWidget
@@ -94,11 +94,43 @@ class UnifiedSimulationDock(BaseDockWidget):
         params_layout.setSpacing(5)
         params_group.setLayout(params_layout)
         
-        # Number of neutrons
+        # Number of neutrons as mantissa × 10^exponent
         params_layout.addWidget(QLabel("# neutrons:"), 0, 0)
+        
+        # Container for mantissa × 10^exponent layout
+        neutron_input_widget = QWidget()
+        neutron_layout = QHBoxLayout()
+        neutron_layout.setContentsMargins(0, 0, 0, 0)
+        neutron_layout.setSpacing(2)
+        neutron_layout.setAlignment(Qt.AlignLeft)
+        neutron_input_widget.setLayout(neutron_layout)
+        neutron_input_widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+        
+        self.neutron_mantissa_edit = QLineEdit()
+        self.neutron_mantissa_edit.setMaximumWidth(50)
+        self.neutron_mantissa_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.neutron_mantissa_edit.setPlaceholderText("1.0")
+        self.neutron_mantissa_edit.setToolTip("Mantissa (e.g., 1.0, 5.0, 50)")
+        neutron_layout.addWidget(self.neutron_mantissa_edit)
+        
+        label_exp = QLabel("×10^")
+        label_exp.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        neutron_layout.addWidget(label_exp)
+        
+        self.neutron_exponent_edit = QLineEdit()
+        self.neutron_exponent_edit.setMaximumWidth(35)
+        self.neutron_exponent_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.neutron_exponent_edit.setPlaceholderText("6")
+        self.neutron_exponent_edit.setToolTip("Exponent (e.g., 6 for 10^6 = 1,000,000)")
+        neutron_layout.addWidget(self.neutron_exponent_edit)
+        
+        params_layout.addWidget(neutron_input_widget, 0, 1)
+        
+        # Legacy compatibility: create a hidden edit that mirrors the combined value
+        # This allows existing code to use number_neutrons_edit.text() transparently
         self.number_neutrons_edit = QLineEdit()
-        self.number_neutrons_edit.setMaximumWidth(100)
-        params_layout.addWidget(self.number_neutrons_edit, 0, 1)
+        self.number_neutrons_edit.hide()  # Hidden, just for compatibility
+        self._connect_neutron_sync()
         
         # Time per point estimate (updated dynamically based on neutron count)
         self.time_per_point_label = QLabel("")
@@ -496,3 +528,85 @@ class UnifiedSimulationDock(BaseDockWidget):
         
         self.point_count_label.setText(text)
         self.point_count_label.setStyleSheet("font-weight: bold; color: #cc6600;")
+
+    def _connect_neutron_sync(self):
+        """Connect mantissa and exponent changes to sync the hidden combined value."""
+        self.neutron_mantissa_edit.textChanged.connect(self._sync_neutron_value)
+        self.neutron_exponent_edit.textChanged.connect(self._sync_neutron_value)
+    
+    def _sync_neutron_value(self):
+        """Sync the hidden number_neutrons_edit with the combined mantissa × 10^exponent value."""
+        combined = self.get_number_neutrons()
+        self.number_neutrons_edit.blockSignals(True)
+        self.number_neutrons_edit.setText(str(combined))
+        self.number_neutrons_edit.blockSignals(False)
+        # Emit textChanged manually so connected slots are notified
+        self.number_neutrons_edit.textChanged.emit(str(combined))
+    
+    def get_number_neutrons(self) -> int:
+        """Get the combined number of neutrons from mantissa × 10^exponent.
+        
+        Returns:
+            The integer number of neutrons. Handles flexible inputs like:
+            - 50 × 10^0 = 50
+            - 5.0 × 10^1 = 50
+            - 1.0 × 10^6 = 1000000
+        """
+        try:
+            mantissa_text = self.neutron_mantissa_edit.text().strip()
+            exponent_text = self.neutron_exponent_edit.text().strip()
+            
+            # Default values if empty
+            mantissa = float(mantissa_text) if mantissa_text else 1.0
+            exponent = int(float(exponent_text)) if exponent_text else 6
+            
+            return int(mantissa * (10 ** exponent))
+        except (ValueError, OverflowError):
+            return 1000000  # Default fallback
+    
+    def set_number_neutrons(self, value):
+        """Set the neutron count by decomposing into mantissa × 10^exponent.
+        
+        Args:
+            value: Number of neutrons (int or float, or string like "1e8" or "1000000")
+        """
+        try:
+            # Convert to float first to handle scientific notation strings
+            num = float(value)
+            if num <= 0:
+                num = 1000000
+            
+            # Find the exponent (order of magnitude)
+            import math
+            if num >= 1:
+                exponent = int(math.floor(math.log10(num)))
+            else:
+                exponent = 0
+            
+            # Calculate mantissa
+            mantissa = num / (10 ** exponent) if exponent > 0 else num
+            
+            # Format nicely - if mantissa is close to integer, show as integer
+            if abs(mantissa - round(mantissa)) < 0.001:
+                mantissa_str = str(int(round(mantissa)))
+            else:
+                mantissa_str = f"{mantissa:.2f}".rstrip('0').rstrip('.')
+            
+            # Block signals during update to avoid recursive calls
+            self.neutron_mantissa_edit.blockSignals(True)
+            self.neutron_exponent_edit.blockSignals(True)
+            
+            self.neutron_mantissa_edit.setText(mantissa_str)
+            self.neutron_exponent_edit.setText(str(exponent))
+            
+            self.neutron_mantissa_edit.blockSignals(False)
+            self.neutron_exponent_edit.blockSignals(False)
+            
+            # Sync the hidden combined field
+            self._sync_neutron_value()
+            
+        except (ValueError, TypeError):
+            # Default to 1 × 10^6 if parsing fails
+            self.neutron_mantissa_edit.setText("1")
+            self.neutron_exponent_edit.setText("6")
+            self._sync_neutron_value()
