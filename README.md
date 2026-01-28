@@ -7,7 +7,11 @@ TAVI is built with a user-friendly GUI that makes it (subjectively speaking) eas
 
 <img width="1920" height="1080" alt="TAVI_usage_screenshot" src="https://github.com/user-attachments/assets/61ba084d-733e-4f3a-99ec-104e71be1691" />
 
-TAVI writes an instrument file at runtime through McStasScript, then calls McStas. This is a fairly fast process, and normal compile times are <10s. We have found that runtimes on a modern computer are roughly similar to nominal TAS counting times, i.e. 1 second per point for Bragg peak scan and ~1 minute per point for phonons.
+
+TAVI writes an instrument file at runtime through McStasScript, then calls McStas. This is a fairly fast process, and normal compile times are <10s. We have found that runtimes on a modern computer are roughly similar to nominal TAS counting times, i.e. 1 second per point for Bragg peak scan and ~1 minute per point for phonons. An example scan is shown below (a Bragg peak scan):
+
+
+![TAVI_scan_animation](https://github.com/user-attachments/assets/edf7c97b-b965-4184-90ee-d4ce6db9b333)
 
 ## Requirements
 
