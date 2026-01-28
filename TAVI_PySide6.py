@@ -2868,12 +2868,15 @@ class TAVIController(QObject):
                     self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
                     # Store in grid for output file
                     counts_grid[idx_y, idx_x] = counts
-                else:
+                elif not is_single_point_scan:
+                    # 1D scan with actual scan values
                     if idx_1d >= 0:
                         self.scan_point_updated_1d.emit(idx_1d, counts)
                     # Store in arrays for output file
-                    scan_x_values.append(array_values1[idx_1d] if idx_1d >= 0 else 0)
+                    if idx_1d >= 0 and idx_1d < len(array_values1):
+                        scan_x_values.append(array_values1[idx_1d])
                     scan_counts.append(counts)
+                # For single-point scans, we don't update scan arrays (handled separately)
             
             # Record scan time for this point
             scan_elapsed = time.time() - scan_start_time
