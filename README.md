@@ -2,6 +2,9 @@
 
 TAVI is a Python-based graphical user interface for simulating triple-axis spectrometer experiments using McStas.
 
+
+![TAVI in use](https://https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/repo_docs/TAVI_usage_screenshot.png?raw=true)
+
 ## Requirements
 
 - Python 3.x
