@@ -265,6 +265,9 @@ class TAVIController(QObject):
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self._trigger_scan_update)
         self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self._trigger_scan_update)
         self.window.simulation_dock.number_neutrons_edit.textChanged.connect(self._trigger_scan_update)
+        # Also connect the new mantissa/exponent fields directly for immediate feedback
+        self.window.simulation_dock.neutron_mantissa_edit.textChanged.connect(self._trigger_scan_update)
+        self.window.simulation_dock.neutron_exponent_edit.textChanged.connect(self._trigger_scan_update)
         # Also update on editingFinished to catch committed changes
         try:
             self.window.simulation_dock.number_neutrons_edit.editingFinished.connect(self._trigger_scan_update)
@@ -321,7 +324,8 @@ class TAVIController(QObject):
         
         # Scan controls dock
         line_edits.extend([
-            self.window.simulation_dock.number_neutrons_edit,
+            self.window.simulation_dock.neutron_mantissa_edit,
+            self.window.simulation_dock.neutron_exponent_edit,
             self.window.scattering_dock.fixed_E_edit,
             self.window.simulation_dock.scan_command_1_edit,
             self.window.simulation_dock.scan_command_2_edit,
@@ -607,7 +611,7 @@ class TAVIController(QObject):
                 'pbl_hgap': float(self.window.instrument_dock.pbl_hgap_edit.text() or 100) / 1000,
                 'pbl_vgap': float(self.window.instrument_dock.pbl_vgap_edit.text() or 100) / 1000,
                 'dbl_hgap': float(self.window.instrument_dock.dbl_hgap_edit.text() or 50) / 1000,
-                'number_neutrons': int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000),
+                'number_neutrons': self.window.simulation_dock.get_number_neutrons(),
                 'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
                 'diagnostic_mode': self.window.simulation_dock.diagnostic_mode_check.isChecked(),
@@ -1574,7 +1578,7 @@ class TAVIController(QObject):
         
         # Get current values
         try:
-            num_neutrons = int(self.window.simulation_dock.number_neutrons_edit.text() or 1000000)
+            num_neutrons = self.window.simulation_dock.get_number_neutrons()
         except ValueError:
             num_neutrons = 1000000
         
@@ -2061,7 +2065,7 @@ class TAVIController(QObject):
             "Kf_var": self.window.instrument_dock.Kf_edit.text(),
             "Ei_var": self.window.instrument_dock.Ei_edit.text(),
             "Ef_var": self.window.instrument_dock.Ef_edit.text(),
-            "number_neutrons_var": self.window.simulation_dock.number_neutrons_edit.text(),
+            "number_neutrons_var": self.window.simulation_dock.get_number_neutrons(),
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
             "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
             "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
@@ -2166,7 +2170,7 @@ class TAVIController(QObject):
                     parameters.get("rha_ideal_locked", False),
                 )
                 
-                self.window.simulation_dock.number_neutrons_edit.setText(str(parameters.get("number_neutrons_var", 1e8)))
+                self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1e8))
                 self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
                 self.window.scattering_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
                 self.window.scattering_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
@@ -2278,7 +2282,7 @@ class TAVIController(QObject):
         self.update_ideal_bending_buttons()
         self.apply_ideal_bending_values()
         
-        self.window.simulation_dock.number_neutrons_edit.setText("1000000")
+        self.window.simulation_dock.set_number_neutrons(1000000)
         self.window.scattering_dock.K_fixed_combo.setCurrentText("Kf Fixed")
         self.window.scattering_dock.fixed_E_edit.setText("14.7")
         self.window.scattering_dock.qx_edit.setText("2")
