@@ -15,6 +15,7 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
 
 from gui.docks.base_dock import BaseDockWidget
 
@@ -263,20 +264,43 @@ class SavePlotDialog(QDialog):
             y_measured = parent._counts[measured_mask]
             sort_idx = np.argsort(x_measured)
             ax.plot(x_measured[sort_idx], y_measured[sort_idx], 'b-o', 
-                   markersize=5, linewidth=1.5, label='Measured')
+                   markersize=5, linewidth=1.5)
         
         # Mark impossible points
         impossible_x = parent._scan_values_1[~parent._valid_mask]
         if len(impossible_x) > 0:
             ax.scatter(impossible_x, np.zeros(len(impossible_x)), 
-                      marker='x', color='black', s=40, linewidths=2, 
-                      label='Impossible', zorder=5)
+                      marker='x', color='black', s=40, linewidths=2, zorder=5)
+        
+        # Mark valid unmeasured points
+        valid_unmeasured = parent._valid_mask & ~parent._measured_mask
+        unmeasured_x = parent._scan_values_1[valid_unmeasured]
+        if len(unmeasured_x) > 0:
+            ax.scatter(unmeasured_x, np.zeros(len(unmeasured_x)),
+                      marker='o', facecolors='none', 
+                      edgecolors='gray', s=40, linewidths=1.5, zorder=4)
+        
+        # Add current scan marker if there is one
+        if isinstance(parent._current_index, int) and 0 <= parent._current_index < len(parent._scan_values_1):
+            ax.axvline(x=parent._scan_values_1[parent._current_index], 
+                      color='red', linestyle='--', linewidth=2, alpha=0.7)
         
         # Set labels
         ax.set_xlabel(parent._get_axis_label(parent._variable_name_1))
         ax.set_ylabel('Counts')
         ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper right', fontsize='small')
+        
+        # Create legend handles explicitly to ensure proper display
+        legend_handles = [
+            Line2D([0, 1], [0, 0], color='b', marker='o', linestyle='-', 
+                   markersize=5, linewidth=1.5, label='Measured'),
+            Line2D([0], [0], marker='x', color='black', linestyle='None',
+                   markersize=8, markeredgewidth=2, label='Impossible'),
+            Line2D([0], [0], marker='o', color='gray', linestyle='None',
+                   markersize=8, markerfacecolor='none', markeredgewidth=1.5, label='Unmeasured'),
+            Line2D([0, 1], [0, 0], color='red', linestyle='--', linewidth=2, label='Current')
+        ]
+        ax.legend(handles=legend_handles, loc='upper right', fontsize='small')
     
     def _copy_2d_plot(self):
         """Copy 2D plot to preview."""
@@ -734,8 +758,7 @@ class DisplayDock(BaseDockWidget):
         impossible_x = self._scan_values_1[~self._valid_mask]
         if len(impossible_x) > 0:
             self.ax.scatter(impossible_x, np.zeros(len(impossible_x)), 
-                          marker='x', color='black', s=50, linewidths=2, 
-                          label='Impossible', zorder=5)
+                          marker='x', color='black', s=50, linewidths=2, zorder=5)
         
         # Mark valid unmeasured points with hollow circles at y=0
         unmeasured_x = self._scan_values_1[valid_unmeasured]
@@ -743,14 +766,14 @@ class DisplayDock(BaseDockWidget):
             self._unmeasured_scatter = self.ax.scatter(unmeasured_x, np.zeros(len(unmeasured_x)),
                                                        marker='o', facecolors='none', 
                                                        edgecolors='gray', s=50, linewidths=1.5,
-                                                       label='Unmeasured', zorder=4)
+                                                       zorder=4)
         else:
             self._unmeasured_scatter = None
         
         # Current scan marker (vertical dashed line)
         self._current_line = self.ax.axvline(x=self._scan_values_1[0], color='red', 
                                              linestyle='--', linewidth=2, alpha=0.7,
-                                             label='Current', visible=False)
+                                             visible=False)
         
         # Set axis labels
         self.ax.set_xlabel(self._get_axis_label(self._variable_name_1))
@@ -763,7 +786,18 @@ class DisplayDock(BaseDockWidget):
         # Y-axis will auto-scale as data comes in
         self.ax.set_ylim(0, 1)  # Initial placeholder
         
-        self.ax.legend(loc='upper right', fontsize='small')
+        # Create legend with explicit handles (so invisible current line still shows)
+        measured_handle = Line2D([0, 1], [0, 0], color='b', marker='o', linestyle='-',
+                                  markersize=6, linewidth=1.5, label='Measured')
+        impossible_handle = Line2D([0], [0], marker='x', color='black', linestyle='None',
+                                    markersize=8, markeredgewidth=2, label='Impossible')
+        unmeasured_handle = Line2D([0], [0], marker='o', color='gray', linestyle='None',
+                                    markersize=8, markerfacecolor='none', markeredgewidth=1.5, 
+                                    label='Unmeasured')
+        current_handle = Line2D([0, 1], [0, 0], color='red', linestyle='--', 
+                                 linewidth=2, label='Current')
+        self.ax.legend(handles=[measured_handle, impossible_handle, unmeasured_handle, current_handle],
+                       loc='upper right', fontsize='small')
         self.ax.grid(True, alpha=0.3)
     
     def _setup_2d_plot(self):
