@@ -17,6 +17,33 @@ class InstrumentDock(BaseDockWidget):
         # Get the content layout from base class
         main_layout = self.content_layout
         
+        # Source Control section
+        source_group = QGroupBox("Source Control")
+        source_layout = QFormLayout()
+        source_group.setLayout(source_layout)
+        
+        self.source_type_combo = QComboBox()
+        self.source_type_combo.addItems(["Maxwellian", "Mono"])
+        self.source_type_combo.setToolTip("Maxwellian: thermal distribution peaking at E0 = 25 meV\nMono: narrow, uniform energy distribution centered on E_i")
+        source_layout.addRow("Source type:", self.source_type_combo)
+        
+        # Source dE input (for Mono mode)
+        self.source_dE_label = QLabel("Source dE (meV):")
+        self.source_dE_edit = QLineEdit()
+        self.source_dE_edit.setMaximumWidth(70)
+        self.source_dE_edit.setText("2")
+        self.source_dE_edit.setToolTip("Energy half-spread for Mono source (E0 ± dE)")
+        source_layout.addRow(self.source_dE_label, self.source_dE_edit)
+        
+        # Initially hide dE controls (shown when Mono is selected)
+        self.source_dE_label.setVisible(False)
+        self.source_dE_edit.setVisible(False)
+        
+        # Connect source type change to show/hide dE
+        self.source_type_combo.currentTextChanged.connect(self._on_source_type_changed)
+        
+        main_layout.addWidget(source_group)
+        
         # Angles section
         angles_group = QGroupBox("Instrument Angles")
         angles_layout = QGridLayout()
@@ -243,3 +270,9 @@ class InstrumentDock(BaseDockWidget):
         
         # Add stretch at the end to push everything up
         main_layout.addStretch()
+    
+    def _on_source_type_changed(self, source_type):
+        """Show/hide source dE controls based on source type selection."""
+        is_mono = (source_type == "Mono")
+        self.source_dE_label.setVisible(is_mono)
+        self.source_dE_edit.setVisible(is_mono)

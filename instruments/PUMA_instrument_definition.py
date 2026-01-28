@@ -376,6 +376,8 @@ class PUMA_Instrument(TAS_Instrument):
         self.rva = 0 # analyzer mirror radius of curvature - vertical
         self.NMO_installed = "None"
         self.V_selector_installed = False
+        self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
+        self.source_dE = 2  # Energy half-spread for Mono source (meV)
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -488,41 +490,27 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         mono_width = monochromator_info['slabwidth']*monochromator_info['ncolumns'] + monochromator_info['gap']*(monochromator_info['ncolumns']-1)
         mono_height  =  monochromator_info['slabheight']*monochromator_info['nrows'] + monochromator_info['gap']*(monochromator_info['nrows']-1)
 
-        # source = instrument.add_component("source", "Source_div")
-        # source.xwidth= 0.05 #PUMA.hbl_hgap*1.5
-        # source.yheight=0.1 #PUMA.hbl_vgap*1.5
-        # source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
-        # source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
-        # source.dE=2
-        # #source.E0 = 25
-        # if PUMA.K_fixed == "Ki Fixed":
-        #     source.E0=PUMA.fixed_E
-        # if PUMA.K_fixed == "Kf Fixed":
-        #     source.E0=PUMA.fixed_E + deltaE
-
         source = instrument.add_component("source", "Source_div_Maxwellian_v2")
         source.xwidth= PUMA.hbl_hgap
         source.yheight= PUMA.hbl_vgap
-        source.focus_aw=4 #2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
-        source.focus_ah=4 #2*math.degrees(math.atan(mono_height/2/PUMA.L1))
-        source.dE=5
-        source.energy_distribution=2
-        source.E0 = 25
+        source.focus_aw=2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
+        source.focus_ah=2*math.degrees(math.atan(mono_height/2/PUMA.L1))
+        # Source type: Mono (uniform, energy_distribution=0) or Maxwellian (energy_distribution=2)
+        if PUMA.source_type == "Mono":
+            source.energy_distribution = 0  # Uniform energy distribution
+            source.dE = PUMA.source_dE  # User-configurable energy half-spread for Mono
+            # Match source E0 to the fixed energy (Ki or Kf mode)
+            if PUMA.K_fixed == "Ki Fixed":
+                source.E0 = PUMA.fixed_E
+            elif PUMA.K_fixed == "Kf Fixed":
+                source.E0 = PUMA.fixed_E + deltaE
+            else:
+                source.E0 = PUMA.fixed_E
+        else:  # Maxwellian
+            source.energy_distribution = 2  # Maxwellian energy distribution
+            source.dE = 3  # Default for Maxwellian (not used for sampling but affects weight)
+            source.E0 = 25  # Thermal peak energy for Maxwellian
         source.divergence_distribution=0
-
-        # source = instrument.add_component("source", "Source_gen_Maxwellian")
-        # source.xwidth = 0.05
-        # source.yheight = 0.1
-        # source.focus_aw = 4
-        # source.focus_ah = 4
-        # source.T1 = 285.6
-        # source.I1 = 3.06e13
-        # source.T2 = 300.0
-        # source.I2 = 1.68e12
-        # source.T3 = 429.9
-        # source.I3 = 6.77e12
-        # source.Emin = 0.1
-        # source.Emax = 200
 
         # hblende = instrument.add_component("hblende", "Slit", AT=[0, 0, 0.0001], RELATIVE="origin")
         # hblende.xwidth=PUMA.hbl_hgap
@@ -578,7 +566,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         
 
         if diagnostic_mode and diagnostic_settings.get('Postcollimation PSD'):
-            postcollimation_PSD = instrument.add_component("postcollimation_PSD", "PSD_monitor", AT=[0,0,0.21], RELATIVE="PREVIOUS")
+            postcollimation_PSD = instrument.add_component("postcollimation_PSD", "PSD_monitor", AT=[0,0,PUMA.L1-0.003], RELATIVE="origin")
             postcollimation_PSD.xwidth = 0.05
             postcollimation_PSD.yheight = 0.25
             postcollimation_PSD.nx = 100

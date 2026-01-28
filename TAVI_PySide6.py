@@ -600,6 +600,8 @@ class TAVIController(QObject):
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
                 'NMO_installed': self.window.instrument_dock.nmo_combo.currentText(),
                 'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked(),
+                'source_type': self.window.instrument_dock.source_type_combo.currentText(),
+                'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
                 'alpha_1': self.window.instrument_dock.alpha_1_combo.currentText(),
                 'alpha_2_30': self.window.instrument_dock.alpha_2_30_check.isChecked(),
                 'alpha_2_40': self.window.instrument_dock.alpha_2_40_check.isChecked(),
@@ -2069,6 +2071,8 @@ class TAVIController(QObject):
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
             "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
             "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
+            "source_type_var": self.window.instrument_dock.source_type_combo.currentText(),
+            "source_dE_var": self.window.instrument_dock.source_dE_edit.text(),
             "rhm_var": self.window.instrument_dock.rhm_edit.text(),
             "rvm_var": self.window.instrument_dock.rvm_edit.text(),
             "rha_var": self.window.instrument_dock.rha_edit.text(),
@@ -2148,6 +2152,8 @@ class TAVIController(QObject):
                 self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
                 self.window.instrument_dock.nmo_combo.setCurrentText(parameters.get("NMO_installed_var", "None"))
                 self.window.instrument_dock.v_selector_check.setChecked(parameters.get("V_selector_installed_var", False))
+                self.window.instrument_dock.source_type_combo.setCurrentText(parameters.get("source_type_var", "Maxwellian"))
+                self.window.instrument_dock.source_dE_edit.setText(str(parameters.get("source_dE_var", "2")))
                 self.window.instrument_dock.alpha_1_combo.setCurrentText(str(parameters.get("alpha_1_var", 40)))
                 self.window.instrument_dock.alpha_2_30_check.setChecked(parameters.get("alpha_2_30_var", False))
                 self.window.instrument_dock.alpha_2_40_check.setChecked(parameters.get("alpha_2_40_var", True))
@@ -2266,6 +2272,8 @@ class TAVIController(QObject):
         self.window.instrument_dock.Ef_edit.setText("14.7")
         self.window.instrument_dock.nmo_combo.setCurrentText("None")
         self.window.instrument_dock.v_selector_check.setChecked(False)
+        self.window.instrument_dock.source_type_combo.setCurrentText("Maxwellian")
+        self.window.instrument_dock.source_dE_edit.setText("2")
         self.window.instrument_dock.alpha_1_combo.setCurrentText("40")
         self.window.instrument_dock.alpha_2_30_check.setChecked(False)
         self.window.instrument_dock.alpha_2_40_check.setChecked(True)
@@ -2433,6 +2441,8 @@ class TAVIController(QObject):
         self.PUMA.K_fixed = vals['K_fixed']
         self.PUMA.NMO_installed = vals['NMO_installed']
         self.PUMA.V_selector_installed = vals['V_selector_installed']
+        self.PUMA.source_type = vals['source_type']
+        self.PUMA.source_dE = vals['source_dE']
         self.PUMA.rhm = vals['rhm']
         self.PUMA.rvm = vals['rvm']
         self.PUMA.rha = vals['rha']
