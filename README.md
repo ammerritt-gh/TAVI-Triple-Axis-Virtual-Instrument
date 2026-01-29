@@ -50,7 +50,7 @@ To run TAVI, navigate to the folder containing the files and run:
 python TAVI_PySide6.py
 ```
 
-The GUI will launch. Adjust the instrument settings to your liking, decide on the number of neutrons for the simulation, and press the 'Run Simulation' button. Output will be saved in the `output` folder, and also displayed in the display dock. A more detailed tutorial is to follow...
+The GUI will launch. Adjust the instrument settings to your liking, decide on the number of neutrons for the simulation, and press the 'Run Simulation' button. Output will be saved in the `output` folder, and also displayed in the display dock. For a more detailed guide, please see the `user guide`.
 
 ## Output
 
