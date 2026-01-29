@@ -1,9 +1,9 @@
 # TAVI - Triple-Axis Virtual Instrument
 
-TAVI is a graphical user interface for simulating triple-axis spectrometer (TAS) experiments using McStas. It is basically a Python-based GUI that runs the Pyton-based McStasScript, to call McStas, then save and display the results. Currently, it simulates the PUMA TAS at the MLZ.
+TAVI is a graphical user interface for simulating triple-axis spectrometer (TAS) experiments using McStas, a neutron experiment simulation package. It is a Python-based GUI that runs the Pyton-based McStasScript, to call McStas, then save and display the results. Currently, it simulates the PUMA TAS at the MLZ.
 
 ## Why use TAVI?
-TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan.
+TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users who are not as familiar with McStas and/or neutron scattering; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan.
 
 <img width="1920" height="1080" alt="TAVI_usage_screenshot" src="https://github.com/user-attachments/assets/61ba084d-733e-4f3a-99ec-104e71be1691" />
 
@@ -16,14 +16,14 @@ TAVI writes an instrument file at runtime through McStasScript, then calls McSta
 ## Requirements
 
 - Python 3.x
-- McStas 3.4 or later (with mcstasscript)
+- McStas 3.4 or later
 - Required Python packages:
   - mcstasscript
   - numpy
   - matplotlib
   - PySide6 (for the new modular GUI)
  
-  - TAVI includes custom McStas components that are present in /components. These do not need to be placed in the McStas installation folders unless you try to use them in other programs.
+  - TAVI includes custom McStas components that are present in `components`. These do not need to be placed in the McStas installation folders unless you try to use them in other programs.
 
 ## Installation
 
@@ -67,6 +67,15 @@ Simulation results are saved in the `output` directory with the following struct
 
 **McStas not found**
 - Ensure McStas is installed and in your PATH
+
+## TODO List
+TAVI is still in development, and several major features still need to be integrated:
+- Dynamic loading of different instruments
+- Improved integration of varied samples and sample configuration
+- Tutorial documentation
+- Package development for deployment
+
+You are welcome to make other suggestions. If you find any bugs or problems, please report them!
 
 ## External Credits
 
