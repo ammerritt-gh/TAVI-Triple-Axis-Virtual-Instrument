@@ -752,6 +752,16 @@ class TAVIController(QObject):
         
         When NMO (Nested Mirror Optic) is installed, the ideal monochromator
         bending is flat (0), since the NMO provides the focusing.
+        
+        For the monochromator: Uses parallel beam formula since the source is
+        effectively at infinity (neutron guide produces quasi-parallel beam).
+        Per McStas Monochromator_curved documentation:
+            RV = 2*L*sin(theta)
+            RH = 2*L/sin(theta)
+        where L = L2 (monochromator to sample distance) and theta is Bragg angle.
+        
+        For the analyzer: Uses point-source formula since the sample is a real
+        point source at L3, focusing to the detector at L4.
         """
         try:
             if mtt is None:
@@ -766,22 +776,27 @@ class TAVIController(QObject):
                 rhm = 0
                 rvm = 0
             else:
-                denom_m = (1 / self.PUMA.L1 + 1 / self.PUMA.L2)
-                sin_m = math.sin(math.radians(mtt))
+                # Use theta (mtt/2) not 2-theta (mtt) per McStas documentation:
+                # RV = 2*L*sin(theta) where theta is the Bragg angle
+                sin_m = math.sin(math.radians(mtt / 2))
 
-                if denom_m == 0 or sin_m == 0:
+                if sin_m == 0:
                     return None
 
-                rhm = 2 / sin_m / denom_m
-                rvm = 2 * sin_m / denom_m
+                # Parallel beam formula: source effectively at infinity (guide output)
+                # Focus from monochromator to sample at distance L2
+                rhm = 2 * self.PUMA.L2 / sin_m
+                rvm = 2 * self.PUMA.L2 * sin_m
 
                 if rhm < 2.0:
                     rhm = 2.0
                 if rvm < 0.5:
                     rvm = 0.5
 
+            # Analyzer: point-source formula (sample is real point source)
             denom_a = (1 / self.PUMA.L3 + 1 / self.PUMA.L4)
-            sin_a = math.sin(math.radians(att))
+            # Use theta (att/2) not 2-theta (att) per McStas documentation
+            sin_a = math.sin(math.radians(att / 2))
 
             if denom_a == 0 or sin_a == 0:
                 return None
