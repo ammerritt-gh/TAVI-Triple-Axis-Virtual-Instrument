@@ -184,6 +184,9 @@ class TAVIController(QObject):
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
 
+        # Connect NMO selection change to update ideal bending values
+        self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
+
         # Ideal focusing buttons
         self.window.instrument_dock.rhm_ideal_button.clicked.connect(
             lambda: self.apply_ideal_bending_value("rhm")
@@ -745,30 +748,47 @@ class TAVIController(QObject):
             self.update_ideal_bending_buttons()
 
     def _compute_ideal_bending_values(self, mtt=None, att=None):
-        """Compute ideal absolute bending radii from current angles."""
+        """Compute ideal absolute bending radii from current angles.
+        
+        When NMO (Nested Mirror Optic) is installed, the ideal monochromator
+        bending is flat (0), since the NMO provides the focusing.
+        """
         try:
             if mtt is None:
                 mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
             if att is None:
                 att = float(self.window.instrument_dock.att_edit.text() or 0)
 
-            denom_m = (1 / self.PUMA.L1 + 1 / self.PUMA.L2)
+            # Check if NMO is installed - if so, ideal monochromator bending is flat (0)
+            nmo_installed = self.window.instrument_dock.nmo_combo.currentText()
+            if nmo_installed != "None":
+                # NMO provides focusing, so ideal monochromator bending is flat
+                rhm = 0
+                rvm = 0
+            else:
+                denom_m = (1 / self.PUMA.L1 + 1 / self.PUMA.L2)
+                sin_m = math.sin(math.radians(mtt))
+
+                if denom_m == 0 or sin_m == 0:
+                    return None
+
+                rhm = 2 / sin_m / denom_m
+                rvm = 2 * sin_m / denom_m
+
+                if rhm < 2.0:
+                    rhm = 2.0
+                if rvm < 0.5:
+                    rvm = 0.5
+
             denom_a = (1 / self.PUMA.L3 + 1 / self.PUMA.L4)
-            sin_m = math.sin(math.radians(mtt))
             sin_a = math.sin(math.radians(att))
 
-            if denom_m == 0 or denom_a == 0 or sin_m == 0 or sin_a == 0:
+            if denom_a == 0 or sin_a == 0:
                 return None
 
-            rhm = 2 / sin_m / denom_m
-            rvm = 2 * sin_m / denom_m
             rha = 2 / sin_a / denom_a
             rva = 0.8
 
-            if rhm < 2.0:
-                rhm = 2.0
-            if rvm < 0.5:
-                rvm = 0.5
             if rha < 2.0:
                 rha = 2.0
 
@@ -789,12 +809,25 @@ class TAVIController(QObject):
         rvm_locked = self.is_bending_locked("rvm")
         rha_locked = self.is_bending_locked("rha")
 
-        self.window.instrument_dock.rhm_ideal_button.setText(
-            f"Ideal ({'L' if rhm_locked else 'U'}): {ideal['rhm']:.3f} m"
-        )
-        self.window.instrument_dock.rvm_ideal_button.setText(
-            f"Ideal ({'L' if rvm_locked else 'U'}): {ideal['rvm']:.3f} m"
-        )
+        # Show "Flat" when NMO is installed and ideal value is 0
+        if ideal['rhm'] == 0:
+            self.window.instrument_dock.rhm_ideal_button.setText(
+                f"Ideal ({'L' if rhm_locked else 'U'}): Flat (NMO)"
+            )
+        else:
+            self.window.instrument_dock.rhm_ideal_button.setText(
+                f"Ideal ({'L' if rhm_locked else 'U'}): {ideal['rhm']:.3f} m"
+            )
+        
+        if ideal['rvm'] == 0:
+            self.window.instrument_dock.rvm_ideal_button.setText(
+                f"Ideal ({'L' if rvm_locked else 'U'}): Flat (NMO)"
+            )
+        else:
+            self.window.instrument_dock.rvm_ideal_button.setText(
+                f"Ideal ({'L' if rvm_locked else 'U'}): {ideal['rvm']:.3f} m"
+            )
+        
         self.window.instrument_dock.rha_ideal_button.setText(
             f"Ideal ({'L' if rha_locked else 'U'}): {ideal['rha']:.3f} m"
         )
