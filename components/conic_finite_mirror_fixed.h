@@ -1548,35 +1548,14 @@ double reflectNeutronFlat(Particle* p, FlatSurf s) {
         printf("this happens?");
         absorbParticle(p);
         return -1;
-    } else {//here we need to implement the refraction
-        if (getRandom() <= weight){//to be updated to use the mcstas random function or quasoi deterministic model
-            //printf("oh a reflections\n");
-            //printf("this total reflection?");
-            p->_vx = p->_vx-2*vn*n.x;
-            p->_vy = p->_vy-2*vn*n.y;
-            p->_vz = p->_vz-2*vn*n.z;
-            return ga;
-        }
-        else{//
-            //printf("enter the refraction process");
-            double m1 = 0;
-            double m2 = 0;
-            //if no mirrorwidth is specified no refraction has to be calc
-            if (p->silicon == 0){
-                return ga;
-            }
-            if (p->silicon == 1){
-                m1 = m_Si;
-                m2 = 0;
-            }
-            if (p->silicon == -1){
-                m1 = 0;
-                m2 = m_Si;                
-            }
-            //printf("k1 %f k2 %f k3 %f x %f y %f z %f\n", s.k1, s.k2, s.k3, p->_x, p->_y, p->_z);
-            refractNeutronFlat(p, n, m1, m2);// this can still lead to total reflection, we miss the supermirror, but are still reflected by the silicon takes care of change of material for refraction
-            return ga;
-        }
+    } else {
+        // Deterministic weight reduction instead of Monte Carlo sampling
+        // This preserves statistics and avoids the silicon=0 passthrough bug
+        p->_vx = p->_vx-2*vn*n.x;
+        p->_vy = p->_vy-2*vn*n.y;
+        p->_vz = p->_vz-2*vn*n.z;
+        p->w *= weight;  // Apply reflectivity as weight reduction
+        return ga;
     }
     return ga;
 }
