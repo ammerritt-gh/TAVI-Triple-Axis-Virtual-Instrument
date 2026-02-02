@@ -673,13 +673,6 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             sample_collimator_30.ymax = 69e-3
             sample_collimator_30.length = 0.202
             sample_collimator_30.divergence = 30
-            
-        # # This is the exit beam tube
-        # exit_beam_tube = instrument.add_component("exit_beam_tube", "Collimator_linear", AT=[0,0,0.9965], RELATIVE="sample_arm") 
-        # exit_beam_tube.xwidth = 0.105
-        # exit_beam_tube.yheight = 0.18
-        # exit_beam_tube.length = 0.142
-        # exit_beam_tube.divergence = 0
         
         # This is the exit beam tube
         exit_beam_tube = instrument.add_component("exit_beam_tube", "Slit", AT=[0,0,1.1385], RELATIVE="sample_arm") 
@@ -693,36 +686,79 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # sample_filter.yheight = 0.5
             
         ## NMO
+        # Nested Mirror Optics for beam focusing
+        # Two NMO arrays in series: vertical focusing (upstream) then horizontal focusing (downstream)
+        # Both focus to the sample position at z = L2
+        # Mirror arrays are defined from their CENTER point (z=0 local = mirror center)
+        #
+        # Geometry derivation:
+        # - Sample is at z = L2 (in sample_arm coordinates)
+        # - Vertical NMO (upstream) has focal length vert_focal_length from its center
+        # - Horizontal NMO (downstream) is placed after vertical with a small gap
+        # - All positions derived from vert_focal_length and physical dimensions
         
-        b0 = 0.2076
-        mf = 100
-        mb = 0
-        mirror_width= 0.003
-        focal_length = 1
-        mirror_sidelength = 0.06
-        lStart = -0.075 * 0
-        lEnd = 0.075 * 2
+        # Physical parameters
+        b0 = 0.2076              # Outermost mirror distance from optical axis [m]
+        mf = 100                 # Front coating m-value (ideal reflectivity for testing)
+        mb = 0                   # Back coating m-value
+        mirror_width = 0.003     # Silicon substrate thickness [m]
+        mirror_sidelength = 0.06 # Mirror height perpendicular to focusing direction [m]
+        mirror_length = 0.15     # Length of each NMO assembly along beam [m]
+        nmo_gap = 0.001          # Gap between the two NMO assemblies [m]
+        
+        # Focal length for the upstream (vertical) NMO - this is the primary design parameter
+        vert_focal_length = 1.0  # Distance from vertical NMO center to sample [m]
+        
+        # Mirror local coordinates: centered at component origin
+        lStart = -mirror_length / 2  # Mirrors start at -0.075m in local coords
+        lEnd = mirror_length / 2     # Mirrors end at +0.075m in local coords
+        
         rs_at_zero_str = '"NULL"'
         # Use relative paths for NMO mirror array files
         vertical_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_VerticalFocusing.txt").replace('\\', '/') + '"'
         horizontal_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_HorizontalFocusing.txt").replace('\\', '/') + '"'
-        focal_offset = -0.15
 
-        numVerticalMirrors = 76
-        numHorizontalMirrors = 62
+        # Mirror counts per side (symmetric arrays: 38 mirrors on each side = 76 total for vertical)
+        numVerticalMirrors = 38   # Must match rows in PUMA_NMO_VerticalFocusing.txt (76 total mirrors)
+        numHorizontalMirrors = 31 # Must match rows in PUMA_NMO_HorizontalFocusing.txt (62 total mirrors)
+        
+        # ============ Derive all positions from vert_focal_length ============
+        # 
+        # Vertical NMO center position (derived from desired focal length)
+        vert_nmo_z = PUMA.L2 - vert_focal_length
+        # LEnd for vertical NMO = distance from its center to sample
+        vert_LEnd = vert_focal_length
+        
+        # The vertical NMO back edge is at: vert_nmo_z + mirror_length/2
+        # The horizontal NMO front edge should be at: vert_nmo_z + mirror_length/2 + nmo_gap
+        # Therefore, horizontal NMO center is at:
+        horiz_nmo_z = vert_nmo_z + mirror_length + nmo_gap
+        # LEnd for horizontal NMO = distance from its center to sample
+        horiz_LEnd = PUMA.L2 - horiz_nmo_z
+        
+        # Verify geometry (these should all be positive and non-overlapping)
+        vert_back_edge = vert_nmo_z + mirror_length / 2
+        horiz_front_edge = horiz_nmo_z - mirror_length / 2
+        actual_gap = horiz_front_edge - vert_back_edge
+        # Note: actual_gap should equal nmo_gap
         
         if PUMA.NMO_installed != "None":
-            NMO_slit = instrument.add_component("NMO_slit", "Slit", AT=[0,0,PUMA.L2-focal_length-lStart-0.01], RELATIVE="sample_arm")
+            # Slit just before vertical NMO entrance (upstream of mirror front edge)
+            vert_front_edge = vert_nmo_z - mirror_length / 2
+            NMO_slit = instrument.add_component("NMO_slit", "Slit", 
+                                                 AT=[0, 0, vert_front_edge - 0.01], RELATIVE="sample_arm")
             NMO_slit.xwidth = 0.06
             NMO_slit.yheight = 0.06
         
-        if PUMA.NMO_installed == "Vertical" or PUMA.NMO_installed == "Both": #FlatEllipse_finite_mirror_mVal
-            vertical_focusing_NMO = instrument.add_component("vertical_focusing_NMO", "FlatEllipse_finite_mirror_optimized", AT=[0, 0, PUMA.L2-focal_length], ROTATED=[0,0,90], RELATIVE="sample_arm")
-            vertical_focusing_NMO.sourceDist=-(1000)
-            vertical_focusing_NMO.LStart=-(1000)
-            vertical_focusing_NMO.LEnd=focal_length + focal_offset
-            vertical_focusing_NMO.lStart=lStart
-            vertical_focusing_NMO.lEnd=lEnd
+        if PUMA.NMO_installed == "Vertical" or PUMA.NMO_installed == "Both":
+            # Vertical focusing NMO (upstream) - rotated 90° to focus in Y direction
+            vertical_focusing_NMO = instrument.add_component("vertical_focusing_NMO", "FlatEllipse_finite_mirror_optimized", 
+                                                              AT=[0, 0, vert_nmo_z], ROTATED=[0, 0, 90], RELATIVE="sample_arm")
+            vertical_focusing_NMO.sourceDist = -1000        # Effectively parallel beam input
+            vertical_focusing_NMO.LStart = -1000            # Source at infinity
+            vertical_focusing_NMO.LEnd = vert_LEnd          # Focus at sample position
+            vertical_focusing_NMO.lStart = lStart
+            vertical_focusing_NMO.lEnd = lEnd
             vertical_focusing_NMO.r_0 = b0
             vertical_focusing_NMO.mirror_width = mirror_width
             vertical_focusing_NMO.mirror_sidelength = mirror_sidelength
@@ -730,18 +766,19 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             vertical_focusing_NMO.doubleReflections = 1
             vertical_focusing_NMO.mf = mf
             vertical_focusing_NMO.mb = mb
-            #vertical_focusing_NMO.rfront_inner_file = rs_at_zero_str
-            #vertical_focusing_NMO.mirror_mvalue_file = '"PUMA_NMO_VerticalFocusing.txt"'
             vertical_focusing_NMO.mirror_mvalue_file = vertical_mirror_array_str
+            vertical_focusing_NMO.enable_silicon_refraction = 1
 
         
         if PUMA.NMO_installed == "Horizontal" or PUMA.NMO_installed == "Both":
-            horizontal_focusing_NMO = instrument.add_component("horizontal_focusing_NMO", "FlatEllipse_finite_mirror_optimized", AT=[0, 0, PUMA.L2-(focal_length-(lEnd-lStart))+0.001], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            horizontal_focusing_NMO.sourceDist=-(1000)
-            horizontal_focusing_NMO.LStart=-(1000)
-            horizontal_focusing_NMO.LEnd=focal_length-(lEnd-lStart)+0.001 + focal_offset
-            horizontal_focusing_NMO.lStart=lStart
-            horizontal_focusing_NMO.lEnd=lEnd
+            # Horizontal focusing NMO (downstream) - no rotation, focuses in X direction
+            horizontal_focusing_NMO = instrument.add_component("horizontal_focusing_NMO", "FlatEllipse_finite_mirror_optimized", 
+                                                                AT=[0, 0, horiz_nmo_z], ROTATED=[0, 0, 0], RELATIVE="sample_arm")
+            horizontal_focusing_NMO.sourceDist = -1000         # Effectively parallel beam input
+            horizontal_focusing_NMO.LStart = -1000             # Source at infinity
+            horizontal_focusing_NMO.LEnd = horiz_LEnd          # Focus at sample position
+            horizontal_focusing_NMO.lStart = lStart
+            horizontal_focusing_NMO.lEnd = lEnd
             horizontal_focusing_NMO.r_0 = b0
             horizontal_focusing_NMO.mirror_width = mirror_width
             horizontal_focusing_NMO.mirror_sidelength = mirror_sidelength
@@ -749,9 +786,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             horizontal_focusing_NMO.doubleReflections = 1
             horizontal_focusing_NMO.mf = mf
             horizontal_focusing_NMO.mb = mb
-            #horizontal_focusing_NMO.rfront_inner_file = rs_at_zero_str
-            #horizontal_focusing_NMO.mirror_mvalue_file = '"PUMA_NMO_HorizontalFocusing.txt"'
             horizontal_focusing_NMO.mirror_mvalue_file = horizontal_mirror_array_str
+            horizontal_focusing_NMO.enable_silicon_refraction = 1
 
         ## sample table
         
