@@ -408,24 +408,30 @@ class PUMA_Instrument(TAS_Instrument):
         
     def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
         """Calculates the required bending for the monochromator and analyzer crystals based on their angles of rotation and the arm distances.
-        Note that the monochromator has particular trouble because the source is virtual."""
-        # These are the old focusing formulas, from the initial files
-        #rhm = rhmfac * 2 * (1 / self.L1 + 1 / self.L2) / math.sin(math.radians(mth))
-        #rvm = rvmfac * 2 * (1 / self.L1 + 1 / self.L2) * math.sin(math.radians(mth))
-        #rha = rhafac * 2 * (1 / self.L3 + 1 / self.L4) / math.sin(math.radians(ath))
-        # rva = 0.8 # 1.6  # Said to be fixed at 0.8 m ##TODO double check whether this radius is correct or if it should be doubled
         
+        Parameters:
+            mth: Monochromator theta angle (Bragg angle = A1/2, NOT the 2-theta)
+            ath: Analyzer theta angle (Bragg angle = A4/2, NOT the 2-theta)
+            
+        Note: The formulas follow McStas Monochromator_curved convention:
+            RV = 2*L*sin(theta) and RH = 2*L/sin(theta)
         
-        rhm = rhmfac * 2 / math.sin(math.radians(mth)) / (1/self.L1 + 1/self.L2)
-        rvm = rvmfac * 2 * math.sin(math.radians(mth)) / (1/self.L1 + 1/self.L2)
+        For monochromator: Uses parallel beam formula (L = L2 only) since the 
+        neutron guide produces a quasi-parallel beam (source effectively at infinity).
+        
+        For analyzer: Uses point-source formula with L = 1/(1/L3 + 1/L4) since
+        the sample is a real point source.
+        """
+        # Monochromator: parallel beam formula (source at infinity from guide)
+        # RH = 2*L2/sin(theta), RV = 2*L2*sin(theta)
+        rhm = rhmfac * 2 * self.L2 / math.sin(math.radians(mth))
+        rvm = rvmfac * 2 * self.L2 * math.sin(math.radians(mth))
+        
+        # Analyzer: point-source formula (sample is real source)
+        # RH = 2/sin(theta)/(1/L3 + 1/L4), RV = 2*sin(theta)/(1/L3 + 1/L4)
         rha = rhafac * 2 / math.sin(math.radians(ath)) / (1/self.L3 + 1/self.L4)
-        rva = 0.8 # Said to be fixed at 0.8 m ##TODO double check whether this radius is correct or if it should be doubled
-        
-        #rhm = rhmfac * 2 / math.sin(math.radians(mth)) / (1/self.L2)
-        #rvm = rvmfac * 2 * math.sin(math.radians(mth)) / (1/self.L2)
+        rva = 0.8 # Said to be fixed at 0.8 m
 
-        # print(f"\nOld rhm: {rhm_old:.2f}, rvm: {rvm_old:.2f}, New rhm: {rhm:.2f}, rvm: {rvm:.2f}")
-        
         print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
 
         if rhm < 2.0 and rhmfac != 0:
@@ -433,7 +439,7 @@ class PUMA_Instrument(TAS_Instrument):
             rhm = 2.0
 
         if rvm < 0.5 and rvmfac != 0:
-            print("\nRequeste d Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
+            print("\nRequested Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
             rvm = 0.5
 
         if rha < 2.0:
