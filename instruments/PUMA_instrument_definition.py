@@ -685,109 +685,183 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # sample_filter.xwidth = 0.5
         # sample_filter.yheight = 0.5
             
-        ## NMO
-        # Nested Mirror Optics for beam focusing
-        # Two NMO arrays in series: vertical focusing (upstream) then horizontal focusing (downstream)
-        # Both focus to the sample position at z = L2
-        # Mirror arrays are defined from their CENTER point (z=0 local = mirror center)
+        ##############################################################################
+        # NESTED MIRROR OPTICS (NMO) CONFIGURATION
+        ##############################################################################
         #
-        # Geometry derivation:
-        # - Sample is at z = L2 (in sample_arm coordinates)
-        # - Vertical NMO (upstream) has focal length vert_focal_length from its center
-        # - Horizontal NMO (downstream) is placed after vertical with a small gap
-        # - All positions derived from vert_focal_length and physical dimensions
+        # Physical NMO dimensions (in beam reference frame):
+        #   Length: 150mm (along beam, z-direction)
+        #   Width:  67mm  (horizontal, x-direction) 
+        #   Height: 79mm  (vertical, y-direction)
+        #
+        # Two NMO units are installed with DIFFERENT orientations:
+        #
+        # VERTICAL FOCUSING NMO:
+        #   - Rotated 90° so mirrors curve in vertical (y) direction
+        #   - Mirrors are 67mm wide in x (non-focusing) direction
+        #   - Focuses the 79mm vertical beam extent down to sample
+        #   - r_0 = 79mm/2 = 39.5mm (half the VERTICAL beam extent)
+        #   - mirror_sidelength = 67mm (horizontal extent, non-focusing)
+        #
+        # HORIZONTAL FOCUSING NMO:
+        #   - No rotation, mirrors curve in horizontal (x) direction
+        #   - Mirrors are 79mm tall in y (non-focusing) direction
+        #   - Focuses the 67mm horizontal beam extent down to sample
+        #   - r_0 = 67mm/2 = 33.5mm (half the HORIZONTAL beam extent)
+        #   - mirror_sidelength = 79mm (vertical extent, non-focusing)
+        #
+        ##############################################################################
+
+        # === MIRROR OPTICAL PARAMETERS ===
         
-        # Physical parameters
-        b0 = 0.2076              # Outermost mirror distance from optical axis [m]
-        mf = 100                 # Front coating m-value (ideal reflectivity for testing)
-        mb = 0                   # Back coating m-value
-        mirror_width = 0.003     # Silicon substrate thickness [m]
-        mirror_sidelength = 0.06 # Mirror height perpendicular to focusing direction [m]
-        mirror_length = 0.15     # Length of each NMO assembly along beam [m]
-        nmo_gap = 0.001          # Gap between the two NMO assemblies [m]
+        # Focal length: distance from NMO exit to focal point (sample position)
+        focal_length = 1.0  # [m] Distance from NMO to sample
         
-        # Focal length for the upstream (vertical) NMO - this is the primary design parameter
-        vert_focal_length = 1.0  # Distance from vertical NMO center to sample [m]
+        # Focal offset: fine adjustment to move focal point relative to sample
+        #   = 0: focus exactly AT sample (optimal)
+        #   > 0: focus BEYOND sample (underfocused)
+        #   < 0: focus BEFORE sample (overfocused)
+        focal_offset = 0.0  # [m] Keep at 0 for optimal focusing
         
-        # Mirror local coordinates: centered at component origin
-        lStart = -mirror_length / 2  # Mirrors start at -0.075m in local coords
-        lEnd = mirror_length / 2     # Mirrors end at +0.075m in local coords
+        # Source distance: large negative value for quasi-parallel input beam
+        source_distance = -1000  # [m] Effectively parallel beam from upstream
         
-        rs_at_zero_str = '"NULL"'
-        # Use relative paths for NMO mirror array files
+        # === MIRROR GEOMETRY (Physical Dimensions) ===
+        
+        # Mirror extent along beam (local z-coordinates)
+        lStart = 0.0    # [m] Mirrors start at component origin
+        lEnd = 0.150    # [m] Mirrors end 150mm downstream (mirror length)
+        
+        # Substrate thickness
+        mirror_width = 0.0003  # [m] 0.3mm silicon substrate
+        
+        # === ORIENTATION-SPECIFIC PARAMETERS ===
+        
+        # Vertical focusing NMO (rotated 90°):
+        #   - Focuses vertical extent (79mm) → r_0 = 39.5mm
+        #   - Non-focusing horizontal extent (67mm) → mirror_sidelength
+        b0_vertical = 0.0395           # [m] Half of 79mm vertical aperture
+        mirror_sidelength_vertical = 0.067  # [m] 67mm horizontal extent
+        
+        # Horizontal focusing NMO (no rotation):
+        #   - Focuses horizontal extent (67mm) → r_0 = 33.5mm
+        #   - Non-focusing vertical extent (79mm) → mirror_sidelength
+        b0_horizontal = 0.0335         # [m] Half of 67mm horizontal aperture
+        mirror_sidelength_horizontal = 0.079  # [m] 79mm vertical extent
+        
+        # === MIRROR COATING PARAMETERS ===
+        
+        mf = 100  # [1] Front surface m-value (100 ≈ perfect reflection for testing)
+        mb = 0    # [1] Back surface m-value (0 = no back reflection)
+        
+        # === NUMBER OF MIRROR SHELLS ===
+        # Must match rows in the corresponding m-value data files
+        
+        numVerticalMirrors = 38   # Rows in PUMA_NMO_VerticalFocusing.txt
+        numHorizontalMirrors = 31  # Rows in PUMA_NMO_HorizontalFocusing.txt
+        
+        # === FILE PATHS FOR PER-MIRROR M-VALUES ===
+        
         vertical_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_VerticalFocusing.txt").replace('\\', '/') + '"'
         horizontal_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_HorizontalFocusing.txt").replace('\\', '/') + '"'
-
-        # Mirror counts per side (symmetric arrays: 38 mirrors on each side = 76 total for vertical)
-        numVerticalMirrors = 38   # Must match rows in PUMA_NMO_VerticalFocusing.txt (76 total mirrors)
-        numHorizontalMirrors = 31 # Must match rows in PUMA_NMO_HorizontalFocusing.txt (62 total mirrors)
         
-        # ============ Derive all positions from vert_focal_length ============
-        # 
-        # Vertical NMO center position (derived from desired focal length)
-        vert_nmo_z = PUMA.L2 - vert_focal_length
-        # LEnd for vertical NMO = distance from its center to sample
-        vert_LEnd = vert_focal_length
+        ##############################################################################
+        # NMO COMPONENT PLACEMENT
+        ##############################################################################
         
-        # The vertical NMO back edge is at: vert_nmo_z + mirror_length/2
-        # The horizontal NMO front edge should be at: vert_nmo_z + mirror_length/2 + nmo_gap
-        # Therefore, horizontal NMO center is at:
-        horiz_nmo_z = vert_nmo_z + mirror_length + nmo_gap
-        # LEnd for horizontal NMO = distance from its center to sample
-        horiz_LEnd = PUMA.L2 - horiz_nmo_z
-        
-        # Verify geometry (these should all be positive and non-overlapping)
-        vert_back_edge = vert_nmo_z + mirror_length / 2
-        horiz_front_edge = horiz_nmo_z - mirror_length / 2
-        actual_gap = horiz_front_edge - vert_back_edge
-        # Note: actual_gap should equal nmo_gap
-        
+        # Pre-NMO slit to match beam to NMO aperture
         if PUMA.NMO_installed != "None":
-            # Slit just before vertical NMO entrance (upstream of mirror front edge)
-            vert_front_edge = vert_nmo_z - mirror_length / 2
             NMO_slit = instrument.add_component("NMO_slit", "Slit", 
-                                                 AT=[0, 0, vert_front_edge - 0.01], RELATIVE="sample_arm")
-            NMO_slit.xwidth = 0.06
-            NMO_slit.yheight = 0.06
+                AT=[0, 0, PUMA.L2 - focal_length - lStart - 0.01], 
+                RELATIVE="sample_arm")
+            NMO_slit.xwidth = 0.067   # [m] Match horizontal NMO aperture (67mm)
+            NMO_slit.yheight = 0.079  # [m] Match vertical NMO aperture (79mm)
         
+        # -------------------------------------------------------------------------
+        # VERTICAL FOCUSING NMO
+        # -------------------------------------------------------------------------
+        # Rotated 90° about z-axis: component x-axis → beam y-axis
+        # This makes the x-focusing of the component act in the vertical direction
+        #
+        # After rotation:
+        #   - Component focuses in beam's VERTICAL (y) direction
+        #   - r_0 corresponds to vertical beam half-height (79mm/2 = 39.5mm)
+        #   - mirror_sidelength is horizontal beam width (67mm)
+        #
         if PUMA.NMO_installed == "Vertical" or PUMA.NMO_installed == "Both":
-            # Vertical focusing NMO (upstream) - rotated 90° to focus in Y direction
-            vertical_focusing_NMO = instrument.add_component("vertical_focusing_NMO", "FlatEllipse_finite_mirror_optimized", 
-                                                              AT=[0, 0, vert_nmo_z], ROTATED=[0, 0, 90], RELATIVE="sample_arm")
-            vertical_focusing_NMO.sourceDist = -1000        # Effectively parallel beam input
-            vertical_focusing_NMO.LStart = -1000            # Source at infinity
-            vertical_focusing_NMO.LEnd = vert_LEnd          # Focus at sample position
+            vertical_focusing_NMO = instrument.add_component(
+                "vertical_focusing_NMO", 
+                "FlatEllipse_finite_mirror_optimized", 
+                AT=[0, 0, PUMA.L2 - focal_length], 
+                ROTATED=[0, 0, 90],  # Rotate to focus vertically
+                RELATIVE="sample_arm"
+            )
+            
+            # Focal points
+            vertical_focusing_NMO.sourceDist = source_distance
+            vertical_focusing_NMO.LStart = source_distance
+            vertical_focusing_NMO.LEnd = focal_length + focal_offset
+            
+            # Mirror geometry - VERTICAL FOCUSING specific
             vertical_focusing_NMO.lStart = lStart
             vertical_focusing_NMO.lEnd = lEnd
-            vertical_focusing_NMO.r_0 = b0
+            vertical_focusing_NMO.r_0 = b0_vertical              # 39.5mm (half of 79mm height)
+            vertical_focusing_NMO.mirror_sidelength = mirror_sidelength_vertical  # 67mm width
             vertical_focusing_NMO.mirror_width = mirror_width
-            vertical_focusing_NMO.mirror_sidelength = mirror_sidelength
             vertical_focusing_NMO.nummirror = numVerticalMirrors
-            vertical_focusing_NMO.doubleReflections = 1
+            
+            # Reflection parameters
             vertical_focusing_NMO.mf = mf
             vertical_focusing_NMO.mb = mb
+            vertical_focusing_NMO.doubleReflections = 1
             vertical_focusing_NMO.mirror_mvalue_file = vertical_mirror_array_str
             vertical_focusing_NMO.enable_silicon_refraction = 1
 
-        
+        # -------------------------------------------------------------------------
+        # HORIZONTAL FOCUSING NMO  
+        # -------------------------------------------------------------------------
+        # No rotation: component x-axis = beam x-axis
+        # Focuses in beam's HORIZONTAL (x) direction
+        #
+        # Placement: downstream of vertical NMO by mirror_length + gap
+        # to avoid physical overlap when both are installed
+        #
         if PUMA.NMO_installed == "Horizontal" or PUMA.NMO_installed == "Both":
-            # Horizontal focusing NMO (downstream) - no rotation, focuses in X direction
-            horizontal_focusing_NMO = instrument.add_component("horizontal_focusing_NMO", "FlatEllipse_finite_mirror_optimized", 
-                                                                AT=[0, 0, horiz_nmo_z], ROTATED=[0, 0, 0], RELATIVE="sample_arm")
-            horizontal_focusing_NMO.sourceDist = -1000         # Effectively parallel beam input
-            horizontal_focusing_NMO.LStart = -1000             # Source at infinity
-            horizontal_focusing_NMO.LEnd = horiz_LEnd          # Focus at sample position
+            # Offset to place horizontal NMO after vertical NMO
+            mirror_length = lEnd - lStart  # 0.150m
+            h_nmo_offset = mirror_length + 0.001  # Small gap to prevent overlap
+            
+            horizontal_focusing_NMO = instrument.add_component(
+                "horizontal_focusing_NMO", 
+                "FlatEllipse_finite_mirror_optimized", 
+                AT=[0, 0, PUMA.L2 - focal_length + h_nmo_offset], 
+                ROTATED=[0, 0, 0],  # No rotation - focus horizontally
+                RELATIVE="sample_arm"
+            )
+            
+            # Focal points - LEnd adjusted for closer position to sample
+            horizontal_focusing_NMO.sourceDist = source_distance
+            horizontal_focusing_NMO.LStart = source_distance
+            horizontal_focusing_NMO.LEnd = focal_length - h_nmo_offset + focal_offset
+            
+            # Mirror geometry - HORIZONTAL FOCUSING specific
             horizontal_focusing_NMO.lStart = lStart
             horizontal_focusing_NMO.lEnd = lEnd
-            horizontal_focusing_NMO.r_0 = b0
+            horizontal_focusing_NMO.r_0 = b0_horizontal          # 33.5mm (half of 67mm width)
+            horizontal_focusing_NMO.mirror_sidelength = mirror_sidelength_horizontal  # 79mm height
             horizontal_focusing_NMO.mirror_width = mirror_width
-            horizontal_focusing_NMO.mirror_sidelength = mirror_sidelength
             horizontal_focusing_NMO.nummirror = numHorizontalMirrors
-            horizontal_focusing_NMO.doubleReflections = 1
+            
+            # Reflection parameters
             horizontal_focusing_NMO.mf = mf
             horizontal_focusing_NMO.mb = mb
+            horizontal_focusing_NMO.doubleReflections = 1
             horizontal_focusing_NMO.mirror_mvalue_file = horizontal_mirror_array_str
             horizontal_focusing_NMO.enable_silicon_refraction = 1
+
+        ##############################################################################
+        # END NMO CONFIGURATION
+        ##############################################################################
 
         ## sample table
         
