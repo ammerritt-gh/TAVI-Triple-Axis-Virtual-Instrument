@@ -1,0 +1,18 @@
+# Example B-values file for FlatEllipse_finite_mirror NMO component
+# Format: index<TAB>b_value (distance to optical axis in meters)
+# 
+# The b-values define the semi-minor axes of the nested ellipses
+# Mirrors are ordered from outermost (largest b) to innermost (smallest b)
+# These values can be calculated using the iterative formula from the paper
+# or measured from an existing NMO assembly
+#
+0	0.01700
+1	0.01520
+2	0.01360
+3	0.01215
+4	0.01085
+5	0.00968
+6	0.00863
+7	0.00769
+8	0.00685
+9	0.00610

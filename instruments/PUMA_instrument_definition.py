@@ -2,12 +2,18 @@ from tracemalloc import take_snapshot
 import mcstasscript as ms
 import math
 import numpy as np
+import os
 
 N_MASS = 1.67492749804e-27 # neutron mass
 E_CHARGE = 1.602176634e-19 # electron charge
 K_B = 0.08617333262 # Boltzmann's constant in meV/K
 HBAR_meV = 6.582119569e-13 # H-bar in meV*s
 HBAR = 1.05459e-34  #H-bar in J*s
+
+# Get the directory containing this module, then find the components folder
+_module_dir = os.path.dirname(os.path.abspath(__file__))
+_project_dir = os.path.dirname(_module_dir)  # Go up one level from instruments/
+data_dir = os.path.join(_project_dir, "components")
 
 ##  some functions to convert between energies, angles and momenta ##
 def k2angle(k, d):
@@ -681,10 +687,10 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         exit_beam_tube.yheight = 0.18
 
         # There is no actual sample filter on PUMA
-        sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        sample_filter.length = 0.05
-        sample_filter.xwidth = 0.5
-        sample_filter.yheight = 0.5
+        # sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
+        # sample_filter.length = 0.05
+        # sample_filter.xwidth = 0.5
+        # sample_filter.yheight = 0.5
             
         ## NMO
         
@@ -697,8 +703,9 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         lStart = -0.075 * 0
         lEnd = 0.075 * 2
         rs_at_zero_str = '"NULL"'
-        vertical_mirror_array_str = '"C://NMO_McStas//PUMA_NMO_VerticalFocusing.txt"'
-        horizontal_mirror_array_str = '"C://NMO_McStas//PUMA_NMO_HorizontalFocusing.txt"'
+        # Use relative paths for NMO mirror array files
+        vertical_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_VerticalFocusing.txt").replace('\\', '/') + '"'
+        horizontal_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_HorizontalFocusing.txt").replace('\\', '/') + '"'
         focal_offset = -0.15
 
         numVerticalMirrors = 76
@@ -710,7 +717,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             NMO_slit.yheight = 0.06
         
         if PUMA.NMO_installed == "Vertical" or PUMA.NMO_installed == "Both": #FlatEllipse_finite_mirror_mVal
-            vertical_focusing_NMO = instrument.add_component("vertical_focusing_NMO", "FlatEllipse_finite_mirror", AT=[0, 0, PUMA.L2-focal_length], ROTATED=[0,0,90], RELATIVE="sample_arm")
+            vertical_focusing_NMO = instrument.add_component("vertical_focusing_NMO", "FlatEllipse_finite_mirror_optimized", AT=[0, 0, PUMA.L2-focal_length], ROTATED=[0,0,90], RELATIVE="sample_arm")
             vertical_focusing_NMO.sourceDist=-(1000)
             vertical_focusing_NMO.LStart=-(1000)
             vertical_focusing_NMO.LEnd=focal_length + focal_offset
@@ -724,11 +731,12 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             vertical_focusing_NMO.mf = mf
             vertical_focusing_NMO.mb = mb
             #vertical_focusing_NMO.rfront_inner_file = rs_at_zero_str
-            #vertical_focusing_NMO.mirror_mvalue_file = vertical_mirror_array_str
+            #vertical_focusing_NMO.mirror_mvalue_file = '"PUMA_NMO_VerticalFocusing.txt"'
+            vertical_focusing_NMO.mirror_mvalue_file = vertical_mirror_array_str
 
         
         if PUMA.NMO_installed == "Horizontal" or PUMA.NMO_installed == "Both":
-            horizontal_focusing_NMO = instrument.add_component("horizontal_focusing_NMO", "FlatEllipse_finite_mirror", AT=[0, 0, PUMA.L2-(focal_length-(lEnd-lStart))+0.001], ROTATED=[0,0,0], RELATIVE="sample_arm")
+            horizontal_focusing_NMO = instrument.add_component("horizontal_focusing_NMO", "FlatEllipse_finite_mirror_optimized", AT=[0, 0, PUMA.L2-(focal_length-(lEnd-lStart))+0.001], ROTATED=[0,0,0], RELATIVE="sample_arm")
             horizontal_focusing_NMO.sourceDist=-(1000)
             horizontal_focusing_NMO.LStart=-(1000)
             horizontal_focusing_NMO.LEnd=focal_length-(lEnd-lStart)+0.001 + focal_offset
@@ -742,7 +750,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             horizontal_focusing_NMO.mf = mf
             horizontal_focusing_NMO.mb = mb
             #horizontal_focusing_NMO.rfront_inner_file = rs_at_zero_str
-            #horizontal_focusing_NMO.mirror_mvalue_file = horizontal_mirror_array_str
+            #horizontal_focusing_NMO.mirror_mvalue_file = '"PUMA_NMO_HorizontalFocusing.txt"'
+            horizontal_focusing_NMO.mirror_mvalue_file = horizontal_mirror_array_str
 
         ## sample table
         
@@ -1006,10 +1015,10 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         analyzer_collimator.length = 0.2
         analyzer_collimator.divergence = PUMA.alpha_3
 
-        # analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-        # analyzer_filter.length = 0.05
-        # analyzer_filter.xwidth = 0.5
-        # analyzer_filter.yheight = 0.5
+        analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
+        analyzer_filter.length = 0.05
+        analyzer_filter.xwidth = 0.5
+        analyzer_filter.yheight = 0.5
 
         if diagnostic_mode and diagnostic_settings.get('Pre-analyzer EMonitor'):
             preanalyzer_Emonitor = instrument.add_component("preanalyzer_Emonitor", "E_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")

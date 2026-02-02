@@ -1,0 +1,21 @@
+# Example per-mirror m-values file for FlatEllipse_finite_mirror NMO component
+# Format: index<TAB>mf_front<TAB>mb_back
+#
+# mf = m-value for front (inner) coating facing optical axis
+# mb = m-value for back (outer) coating 
+# m > 10 results in perfect (R=1) reflections
+#
+# This allows different supermirror coatings on different shells
+# Outer mirrors typically need higher m-values for larger acceptance angles
+# Inner mirrors can use lower m-values (cheaper, better reflectivity)
+#
+0	4.5	0.0
+1	4.5	0.0
+2	4.0	0.0
+3	4.0	0.0
+4	3.5	0.0
+5	3.5	0.0
+6	3.0	0.0
+7	3.0	0.0
+8	2.5	0.0
+9	2.5	0.0
