@@ -1,0 +1,449 @@
+/*******************************************************************************
+*
+* Component: FlatEllipse_finite_mirror_optimized
+*
+* %I
+* Written by: Christoph Herb (original), optimized version
+* Version: 0.3 (MPI-safe)
+* Origin: TU Munich
+* Date: 2024
+*
+* %D
+* Nested Mirror Optics (NMO) component for neutron focusing using flat elliptical
+* mirrors. Supports reading mirror positions (B-values) and m-values from files,
+* with optional silicon substrate refraction modeling.
+*
+* %P
+* INPUT PARAMETERS:
+* sourceDist:        [m]   Distance used for calculating mirror spacing
+* LStart:            [m]   Z-coordinate of the first focal point
+* LEnd:              [m]   Z-coordinate of the second focal point
+* lStart:            [m]   Z-coordinate of the mirror assembly start
+* lEnd:              [m]   Z-coordinate of the mirror assembly end
+* r_0:               [m]   Distance to optical axis for outermost mirror
+* nummirror:         [1]   Number of mirrors
+* mf:                [1]   m-value of front coating
+* mb:                [1]   m-value of back coating
+* mirror_width:      [m]   Thickness of mirror substrate
+* mirror_sidelength: [m]   Lateral extension along y
+* doubleReflections: [1]   Allow backside reflections
+* enable_silicon_refraction: [1] Model Si refraction
+* rfront_inner_file: [str] File with mirror distances
+* mirror_mvalue_file:[str] File with per-mirror m-values
+*
+* %E
+*******************************************************************************/
+
+DEFINE COMPONENT FlatEllipse_finite_mirror_optimized
+SETTING PARAMETERS (
+    sourceDist = 0,
+    LStart = 0.6,
+    LEnd = 0.6,
+    lStart = 0.,
+    lEnd = 0.,
+    r_0 = 0.02076,
+    int nummirror = 9,
+    mf = 4,
+    mb = 0,
+    mirror_width = 0.003,
+    mirror_sidelength = 1,
+    int doubleReflections = 0,
+    int enable_silicon_refraction = 1,
+    string rfront_inner_file = "NULL",
+    string mirror_mvalue_file = "NULL"
+)
+OUTPUT PARAMETERS()
+
+SHARE
+%{
+    %include "conic_finite_mirror_fixed.h"
+    %include "calciterativemirrors_fixed.h"
+    %include "read_table-lib"
+    
+    int find_mirror_channel_binary(double x_pos, double *r_abs, double *r_outer, int n) {
+        int low = 0;
+        int high = n - 1;
+        
+        while (low <= high) {
+            int mid = (low + high) / 2;
+            if (r_abs[mid] <= x_pos) {
+                if (x_pos < r_outer[mid]) {
+                    return mid;
+                }
+                high = mid - 1;
+            } else {
+                low = mid + 1;
+            }
+        }
+        return -1;
+    }
+%}
+
+DECLARE
+%{
+    Scene s;
+    Point p1;
+    
+    double *rfront_inner;
+    double *rfront_inner_abs;
+    double *rfront_outer_abs;
+    
+    double *mf_array;
+    double *mb_array;
+    int use_mvalue_file;
+    
+    int silicon_tracking;
+    
+    t_Table rsTable;
+    t_Table mvalueTable;
+    int rsTable_loaded;
+    int mvalueTable_loaded;
+    
+    double m_silicon;
+%}
+
+INITIALIZE
+%{
+    int i;
+    int mpi_node_rank = 0;
+    
+    /* Get MPI rank - only rank 0 prints */
+    #ifdef USE_MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_node_rank);
+    #endif
+    
+    rsTable_loaded = 0;
+    mvalueTable_loaded = 0;
+    use_mvalue_file = 0;
+    m_silicon = 0.478;
+    
+    if (mpi_node_rank == 0) {
+        printf("FlatEllipse_finite_mirror_optimized: Initializing NMO component\n");
+    }
+    
+    /* STEP 1: Load or calculate mirror B-values */
+    if (rfront_inner_file && strlen(rfront_inner_file) && 
+        strcmp(rfront_inner_file, "NULL") && strcmp(rfront_inner_file, "0")) {
+        
+        if (mpi_node_rank == 0) {
+            printf("  Loading B-values from file: %s\n", rfront_inner_file);
+        }
+        if (Table_Read(&rsTable, rfront_inner_file, 1) <= 0) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "ERROR: %s: Cannot read B-values file %s\n", 
+                        NAME_CURRENT_COMP, rfront_inner_file);
+            }
+            #ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            exit(1);
+            #endif
+        }
+        rsTable_loaded = 1;
+        nummirror = (int)rsTable.rows;
+        
+        rfront_inner = malloc(sizeof(double) * nummirror);
+        if (!rfront_inner) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "ERROR: %s: Memory allocation failed\n", NAME_CURRENT_COMP);
+            }
+            #ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            exit(1);
+            #endif
+        }
+        
+        for (i = 0; i < nummirror; i++) {
+            rfront_inner[i] = Table_Index(rsTable, i, 1);
+        }
+        if (mpi_node_rank == 0) {
+            printf("  Loaded %d mirror positions from file\n", nummirror);
+        }
+        
+    } else {
+        if (mpi_node_rank == 0) {
+            printf("  Calculating B-values automatically (nummirror=%d, r_0=%g m)\n", 
+                   nummirror, r_0);
+        }
+        rfront_inner = get_r_at_z0(nummirror, 0, r_0, lStart, sourceDist, LEnd, lStart, lEnd);
+        if (!rfront_inner) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "ERROR: %s: get_r_at_z0 failed\n", NAME_CURRENT_COMP);
+            }
+            #ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            exit(1);
+            #endif
+        }
+    }
+    
+    /* STEP 2: Load per-mirror m-values if provided */
+    if (mirror_mvalue_file && strlen(mirror_mvalue_file) && 
+        strcmp(mirror_mvalue_file, "NULL") && strcmp(mirror_mvalue_file, "0")) {
+        
+        if (mpi_node_rank == 0) {
+            printf("  Loading per-mirror m-values from file: %s\n", mirror_mvalue_file);
+        }
+        if (Table_Read(&mvalueTable, mirror_mvalue_file, 1) <= 0) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "ERROR: %s: Cannot read m-value file %s\n", 
+                        NAME_CURRENT_COMP, mirror_mvalue_file);
+            }
+            #ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            exit(1);
+            #endif
+        }
+        mvalueTable_loaded = 1;
+        
+        if ((int)mvalueTable.rows != nummirror) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "WARNING: %s: m-value file has %d rows but %d mirrors defined\n",
+                        NAME_CURRENT_COMP, (int)mvalueTable.rows, nummirror);
+            }
+        }
+        
+        mf_array = malloc(sizeof(double) * nummirror);
+        mb_array = malloc(sizeof(double) * nummirror);
+        if (!mf_array || !mb_array) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "ERROR: %s: Memory allocation failed\n", NAME_CURRENT_COMP);
+            }
+            #ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            exit(1);
+            #endif
+        }
+        
+        for (i = 0; i < nummirror; i++) {
+            mf_array[i] = Table_Index(mvalueTable, i, 1);
+            mb_array[i] = Table_Index(mvalueTable, i, 2);
+        }
+        use_mvalue_file = 1;
+        if (mpi_node_rank == 0) {
+            printf("  Loaded per-mirror m-values for %d mirrors\n", nummirror);
+        }
+        
+    } else {
+        mf_array = malloc(sizeof(double) * nummirror);
+        mb_array = malloc(sizeof(double) * nummirror);
+        if (!mf_array || !mb_array) {
+            if (mpi_node_rank == 0) {
+                fprintf(stderr, "ERROR: %s: Memory allocation failed\n", NAME_CURRENT_COMP);
+            }
+            #ifdef USE_MPI
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            #else
+            exit(1);
+            #endif
+        }
+        for (i = 0; i < nummirror; i++) {
+            mf_array[i] = mf;
+            mb_array[i] = mb;
+        }
+        if (mpi_node_rank == 0) {
+            printf("  Using uniform m-values: mf=%g, mb=%g\n", mf, mb);
+        }
+    }
+    
+    /* STEP 3: Pre-compute absolute mirror boundaries */
+    rfront_inner_abs = malloc(sizeof(double) * nummirror);
+    rfront_outer_abs = malloc(sizeof(double) * nummirror);
+    if (!rfront_inner_abs || !rfront_outer_abs) {
+        if (mpi_node_rank == 0) {
+            fprintf(stderr, "ERROR: %s: Memory allocation failed\n", NAME_CURRENT_COMP);
+        }
+        #ifdef USE_MPI
+        MPI_Abort(MPI_COMM_WORLD, 1);
+        #else
+        exit(1);
+        #endif
+    }
+    
+    for (i = 0; i < nummirror; i++) {
+        rfront_inner_abs[i] = fabs(rfront_inner[i]);
+        rfront_outer_abs[i] = rfront_inner_abs[i] + mirror_width;
+    }
+    
+    /* STEP 4: Set up silicon tracking mode */
+    if (mirror_width == 0) {
+        silicon_tracking = 0;
+        if (mpi_node_rank == 0) {
+            printf("  Silicon tracking: DISABLED (mirror_width=0)\n");
+        }
+    } else {
+        silicon_tracking = -1;
+        if (mpi_node_rank == 0) {
+            printf("  Silicon tracking: %s (mirror_width=%g m)\n", 
+                   enable_silicon_refraction ? "ENABLED" : "GEOMETRY ONLY", mirror_width);
+        }
+    }
+    
+    if (sourceDist == 0) {
+        sourceDist = LStart;
+    }
+    
+    /* STEP 5: Build the mirror geometry */
+    s = makeScene();
+    
+    if (mpi_node_rank == 0) {
+        printf("  Building mirror geometry:\n");
+    }
+    for (i = 0; i < nummirror; i++) {
+        p1 = makePoint(rfront_inner[i], 0, lStart);
+        addFlatEllipse(LStart, LEnd, p1, lStart, lEnd, 
+                      -mirror_sidelength/2, mirror_sidelength/2, 
+                      mf_array[i], doubleReflections, &s);
+        
+        if (mpi_node_rank == 0) {
+            if (i < 5 || i == nummirror-1) {
+                printf("    Mirror[%d]: b=%+.6f m, mf=%.2f", i, rfront_inner[i], mf_array[i]);
+                if (mirror_width > 0) printf(", mb=%.2f", mb_array[i]);
+                printf("\n");
+            } else if (i == 5) {
+                printf("    ... (%d more mirrors) ...\n", nummirror - 6);
+            }
+        }
+    }
+    
+    if (mirror_width > 0) {
+        for (i = 0; i < nummirror; i++) {
+            p1 = makePoint(rfront_inner[i] + mirror_width, 0, lStart);
+            addFlatEllipse(LStart, LEnd, p1, lStart, lEnd,
+                          -mirror_sidelength/2, mirror_sidelength/2,
+                          mb_array[i], doubleReflections, &s);
+        }
+        if (mpi_node_rank == 0) {
+            printf("  Added %d mirror backsides\n", nummirror);
+        }
+    }
+    
+    addDisk(lEnd, 0.0, 2000, &s);
+    
+    if (mpi_node_rank == 0) {
+        printf("  NMO initialization complete: %d mirrors, f1=%g m, f2=%g m\n",
+               nummirror, LStart, LEnd);
+    }
+    
+    /* MPI barrier to ensure all processes have completed initialization */
+    #ifdef USE_MPI
+    MPI_Barrier(MPI_COMM_WORLD);
+    #endif
+%}
+
+TRACE
+%{
+    double dt_prop;
+    double x_check;
+    int mirror_idx;
+    int neutron_in_silicon;
+    
+    dt_prop = (-z + lStart) / vz;
+    
+    if (dt_prop < 0) {
+        ABSORB;
+    }
+    
+    PROP_DT(dt_prop);
+    
+    neutron_in_silicon = silicon_tracking;
+    
+    if (mirror_width > 0) {
+        x_check = fabs(x);
+        
+        mirror_idx = find_mirror_channel_binary(x_check, rfront_inner_abs, 
+                                                 rfront_outer_abs, nummirror);
+        
+        if (mirror_idx >= 0) {
+            neutron_in_silicon = 1;
+        }
+    }
+    
+    Particle pa = makeParticle(x, y, z, vx, vy, vz, t, sx, sy, sz, neutron_in_silicon, p);
+    
+    if (neutron_in_silicon == 1 && enable_silicon_refraction) {
+        Vec nStart = makeVec(0, 0, 1);
+        refractNeutronFlat(&pa, nStart, 0, m_silicon);
+    }
+    
+    traceSingleNeutron(&pa, s);
+    
+    if (pa.silicon == 1 && enable_silicon_refraction) {
+        Vec nEnd = makeVec(0, 0, 1);
+        refractNeutronFlat(&pa, nEnd, m_silicon, 0);
+    }
+    
+    x = pa._x;
+    y = pa._y;
+    z = pa._z;
+    vx = pa._vx;
+    vy = pa._vy;
+    vz = pa._vz;
+    t = pa._t;
+    sx = pa._sx;
+    sy = pa._sy;
+    sz = pa._sz;
+    p = pa.w;
+    
+    if (pa.absorb)
+        ABSORB;
+    
+    SCATTER;
+%}
+
+FINALLY
+%{
+    int mpi_node_rank = 0;
+    
+    #ifdef USE_MPI
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_node_rank);
+    #endif
+    
+    if (mpi_node_rank == 0) {
+        printf("FlatEllipse_finite_mirror_optimized: Cleaning up\n");
+    }
+    
+    if (rfront_inner) free(rfront_inner);
+    if (rfront_inner_abs) free(rfront_inner_abs);
+    if (rfront_outer_abs) free(rfront_outer_abs);
+    if (mf_array) free(mf_array);
+    if (mb_array) free(mb_array);
+    
+    if (rsTable_loaded) Table_Free(&rsTable);
+    if (mvalueTable_loaded) Table_Free(&mvalueTable);
+    
+    finishSimulation(&s);
+%}
+
+MCDISPLAY
+%{
+    int i;
+    magnify("xy");
+    
+    for (i = 0; i < s.num_c; i++) {
+        double step = (s.c[i].ze - s.c[i].zs) / 100;
+        double cz;
+        for (cz = s.c[i].zs + step; cz <= s.c[i].ze; cz += step) {
+            double rp = rConic(cz - step, s.c[i]);
+            double rc = rConic(cz, s.c[i]);
+            
+            line(0, rp, cz - step, 0, rc, cz);
+            line(0, -rp, cz - step, 0, -rc, cz);
+            line(rp, 0, cz - step, rc, 0, cz);
+            line(-rp, 0, cz - step, -rc, 0, cz);
+        }
+    }
+    
+    for (i = 0; i < s.num_di; i++) {
+        line(s.di[i].r0, 0, s.di[i].z0, s.di[i].r1, 0, s.di[i].z0);
+        line(-s.di[i].r0, 0, s.di[i].z0, -s.di[i].r1, 0, s.di[i].z0);
+        line(0, s.di[i].r0, s.di[i].z0, 0, s.di[i].r1, s.di[i].z0);
+        line(0, -s.di[i].r0, s.di[i].z0, 0, -s.di[i].r1, s.di[i].z0);
+    }
+%}
+
+END
