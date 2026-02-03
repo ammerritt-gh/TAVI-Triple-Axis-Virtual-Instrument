@@ -2,12 +2,18 @@ from tracemalloc import take_snapshot
 import mcstasscript as ms
 import math
 import numpy as np
+import os
 
 N_MASS = 1.67492749804e-27 # neutron mass
 E_CHARGE = 1.602176634e-19 # electron charge
 K_B = 0.08617333262 # Boltzmann's constant in meV/K
 HBAR_meV = 6.582119569e-13 # H-bar in meV*s
 HBAR = 1.05459e-34  #H-bar in J*s
+
+# Get the directory containing this module, then find the components folder
+_module_dir = os.path.dirname(os.path.abspath(__file__))
+_project_dir = os.path.dirname(_module_dir)  # Go up one level from instruments/
+data_dir = os.path.join(_project_dir, "components")
 
 ##  some functions to convert between energies, angles and momenta ##
 def k2angle(k, d):
@@ -402,24 +408,30 @@ class PUMA_Instrument(TAS_Instrument):
         
     def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
         """Calculates the required bending for the monochromator and analyzer crystals based on their angles of rotation and the arm distances.
-        Note that the monochromator has particular trouble because the source is virtual."""
-        # These are the old focusing formulas, from the initial files
-        #rhm = rhmfac * 2 * (1 / self.L1 + 1 / self.L2) / math.sin(math.radians(mth))
-        #rvm = rvmfac * 2 * (1 / self.L1 + 1 / self.L2) * math.sin(math.radians(mth))
-        #rha = rhafac * 2 * (1 / self.L3 + 1 / self.L4) / math.sin(math.radians(ath))
-        # rva = 0.8 # 1.6  # Said to be fixed at 0.8 m ##TODO double check whether this radius is correct or if it should be doubled
         
+        Parameters:
+            mth: Monochromator theta angle (Bragg angle = A1/2, NOT the 2-theta)
+            ath: Analyzer theta angle (Bragg angle = A4/2, NOT the 2-theta)
+            
+        Note: The formulas follow McStas Monochromator_curved convention:
+            RV = 2*L*sin(theta) and RH = 2*L/sin(theta)
         
-        rhm = rhmfac * 2 / math.sin(math.radians(mth)) / (1/self.L1 + 1/self.L2)
-        rvm = rvmfac * 2 * math.sin(math.radians(mth)) / (1/self.L1 + 1/self.L2)
+        For monochromator: Uses parallel beam formula (L = L2 only) since the 
+        neutron guide produces a quasi-parallel beam (source effectively at infinity).
+        
+        For analyzer: Uses point-source formula with L = 1/(1/L3 + 1/L4) since
+        the sample is a real point source.
+        """
+        # Monochromator: parallel beam formula (source at infinity from guide)
+        # RH = 2*L2/sin(theta), RV = 2*L2*sin(theta)
+        rhm = rhmfac * 2 * self.L2 / math.sin(math.radians(mth))
+        rvm = rvmfac * 2 * self.L2 * math.sin(math.radians(mth))
+        
+        # Analyzer: point-source formula (sample is real source)
+        # RH = 2/sin(theta)/(1/L3 + 1/L4), RV = 2*sin(theta)/(1/L3 + 1/L4)
         rha = rhafac * 2 / math.sin(math.radians(ath)) / (1/self.L3 + 1/self.L4)
-        rva = 0.8 # Said to be fixed at 0.8 m ##TODO double check whether this radius is correct or if it should be doubled
-        
-        #rhm = rhmfac * 2 / math.sin(math.radians(mth)) / (1/self.L2)
-        #rvm = rvmfac * 2 * math.sin(math.radians(mth)) / (1/self.L2)
+        rva = 0.8 # Said to be fixed at 0.8 m
 
-        # print(f"\nOld rhm: {rhm_old:.2f}, rvm: {rvm_old:.2f}, New rhm: {rhm:.2f}, rvm: {rvm:.2f}")
-        
         print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
 
         if rhm < 2.0 and rhmfac != 0:
@@ -427,7 +439,7 @@ class PUMA_Instrument(TAS_Instrument):
             rhm = 2.0
 
         if rvm < 0.5 and rvmfac != 0:
-            print("\nRequeste d Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
+            print("\nRequested Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
             rvm = 0.5
 
         if rha < 2.0:
@@ -667,13 +679,6 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             sample_collimator_30.ymax = 69e-3
             sample_collimator_30.length = 0.202
             sample_collimator_30.divergence = 30
-            
-        # # This is the exit beam tube
-        # exit_beam_tube = instrument.add_component("exit_beam_tube", "Collimator_linear", AT=[0,0,0.9965], RELATIVE="sample_arm") 
-        # exit_beam_tube.xwidth = 0.105
-        # exit_beam_tube.yheight = 0.18
-        # exit_beam_tube.length = 0.142
-        # exit_beam_tube.divergence = 0
         
         # This is the exit beam tube
         exit_beam_tube = instrument.add_component("exit_beam_tube", "Slit", AT=[0,0,1.1385], RELATIVE="sample_arm") 
@@ -681,68 +686,188 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         exit_beam_tube.yheight = 0.18
 
         # There is no actual sample filter on PUMA
-        sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        sample_filter.length = 0.05
-        sample_filter.xwidth = 0.5
-        sample_filter.yheight = 0.5
+        # sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
+        # sample_filter.length = 0.05
+        # sample_filter.xwidth = 0.5
+        # sample_filter.yheight = 0.5
             
-        ## NMO
-        
-        b0 = 0.2076
-        mf = 100
-        mb = 0
-        mirror_width= 0.003
-        focal_length = 1
-        mirror_sidelength = 0.06
-        lStart = -0.075 * 0
-        lEnd = 0.075 * 2
-        rs_at_zero_str = '"NULL"'
-        vertical_mirror_array_str = '"C://NMO_McStas//PUMA_NMO_VerticalFocusing.txt"'
-        horizontal_mirror_array_str = '"C://NMO_McStas//PUMA_NMO_HorizontalFocusing.txt"'
-        focal_offset = -0.15
+        ##############################################################################
+        # NESTED MIRROR OPTICS (NMO) CONFIGURATION
+        ##############################################################################
+        #
+        # Physical NMO dimensions (in beam reference frame):
+        #   Length: 150mm (along beam, z-direction)
+        #   Width:  67mm  (horizontal, x-direction) 
+        #   Height: 79mm  (vertical, y-direction)
+        #
+        # Two NMO units are installed with DIFFERENT orientations:
+        #
+        # VERTICAL FOCUSING NMO:
+        #   - Rotated 90° so mirrors curve in vertical (y) direction
+        #   - Mirrors are 67mm wide in x (non-focusing) direction
+        #   - Focuses the 79mm vertical beam extent down to sample
+        #   - r_0 = 79mm/2 = 39.5mm (half the VERTICAL beam extent)
+        #   - mirror_sidelength = 67mm (horizontal extent, non-focusing)
+        #
+        # HORIZONTAL FOCUSING NMO:
+        #   - No rotation, mirrors curve in horizontal (x) direction
+        #   - Mirrors are 79mm tall in y (non-focusing) direction
+        #   - Focuses the 67mm horizontal beam extent down to sample
+        #   - r_0 = 67mm/2 = 33.5mm (half the HORIZONTAL beam extent)
+        #   - mirror_sidelength = 79mm (vertical extent, non-focusing)
+        #
+        ##############################################################################
 
-        numVerticalMirrors = 76
-        numHorizontalMirrors = 62
+        # === MIRROR OPTICAL PARAMETERS ===
         
+        # Focal length: distance from NMO exit to focal point (sample position)
+        focal_length = 1.0  # [m] Distance from NMO to sample
+        
+        # Focal offset: fine adjustment to move focal point relative to sample
+        #   = 0: focus exactly AT sample (optimal)
+        #   > 0: focus BEYOND sample (underfocused)
+        #   < 0: focus BEFORE sample (overfocused)
+        focal_offset = 0.0  # [m] Keep at 0 for optimal focusing
+        
+        # Source distance: large negative value for quasi-parallel input beam
+        source_distance = -1000  # [m] Effectively parallel beam from upstream
+        
+        # === MIRROR GEOMETRY (Physical Dimensions) ===
+        
+        # Mirror extent along beam (local z-coordinates)
+        lStart = 0.0    # [m] Mirrors start at component origin
+        lEnd = 0.150    # [m] Mirrors end 150mm downstream (mirror length)
+        
+        # Substrate thickness
+        mirror_width = 0.0003  # [m] 0.3mm silicon substrate
+        
+        # === ORIENTATION-SPECIFIC PARAMETERS ===
+        
+        # Vertical focusing NMO (rotated 90°):
+        #   - Focuses vertical extent (79mm) → r_0 = 39.5mm
+        #   - Non-focusing horizontal extent (67mm) → mirror_sidelength
+        b0_vertical = 0.0395           # [m] Half of 79mm vertical aperture
+        mirror_sidelength_vertical = 0.067  # [m] 67mm horizontal extent
+        
+        # Horizontal focusing NMO (no rotation):
+        #   - Focuses horizontal extent (67mm) → r_0 = 33.5mm
+        #   - Non-focusing vertical extent (79mm) → mirror_sidelength
+        b0_horizontal = 0.0335         # [m] Half of 67mm horizontal aperture
+        mirror_sidelength_horizontal = 0.079  # [m] 79mm vertical extent
+        
+        # === MIRROR COATING PARAMETERS ===
+        
+        mf = 100  # [1] Front surface m-value (100 ≈ perfect reflection for testing)
+        mb = 0    # [1] Back surface m-value (0 = no back reflection)
+        
+        # === NUMBER OF MIRROR SHELLS ===
+        # Must match rows in the corresponding m-value data files
+        
+        numVerticalMirrors = 38   # Rows in PUMA_NMO_VerticalFocusing.txt
+        numHorizontalMirrors = 31  # Rows in PUMA_NMO_HorizontalFocusing.txt
+        
+        # === FILE PATHS FOR PER-MIRROR M-VALUES ===
+        
+        vertical_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_VerticalFocusing.txt").replace('\\', '/') + '"'
+        horizontal_mirror_array_str = '"' + os.path.join(data_dir, "PUMA_NMO_HorizontalFocusing.txt").replace('\\', '/') + '"'
+        
+        ##############################################################################
+        # NMO COMPONENT PLACEMENT
+        ##############################################################################
+        
+        # Pre-NMO slit to match beam to NMO aperture
         if PUMA.NMO_installed != "None":
-            NMO_slit = instrument.add_component("NMO_slit", "Slit", AT=[0,0,PUMA.L2-focal_length-lStart-0.01], RELATIVE="sample_arm")
-            NMO_slit.xwidth = 0.06
-            NMO_slit.yheight = 0.06
+            NMO_slit = instrument.add_component("NMO_slit", "Slit", 
+                AT=[0, 0, PUMA.L2 - focal_length - lStart - 0.01], 
+                RELATIVE="sample_arm")
+            NMO_slit.xwidth = 0.067   # [m] Match horizontal NMO aperture (67mm)
+            NMO_slit.yheight = 0.079  # [m] Match vertical NMO aperture (79mm)
         
-        if PUMA.NMO_installed == "Vertical" or PUMA.NMO_installed == "Both": #FlatEllipse_finite_mirror_mVal
-            vertical_focusing_NMO = instrument.add_component("vertical_focusing_NMO", "FlatEllipse_finite_mirror", AT=[0, 0, PUMA.L2-focal_length], ROTATED=[0,0,90], RELATIVE="sample_arm")
-            vertical_focusing_NMO.sourceDist=-(1000)
-            vertical_focusing_NMO.LStart=-(1000)
-            vertical_focusing_NMO.LEnd=focal_length + focal_offset
-            vertical_focusing_NMO.lStart=lStart
-            vertical_focusing_NMO.lEnd=lEnd
-            vertical_focusing_NMO.r_0 = b0
+        # -------------------------------------------------------------------------
+        # VERTICAL FOCUSING NMO
+        # -------------------------------------------------------------------------
+        # Rotated 90° about z-axis: component x-axis → beam y-axis
+        # This makes the x-focusing of the component act in the vertical direction
+        #
+        # After rotation:
+        #   - Component focuses in beam's VERTICAL (y) direction
+        #   - r_0 corresponds to vertical beam half-height (79mm/2 = 39.5mm)
+        #   - mirror_sidelength is horizontal beam width (67mm)
+        #
+        if PUMA.NMO_installed == "Vertical" or PUMA.NMO_installed == "Both":
+            vertical_focusing_NMO = instrument.add_component(
+                "vertical_focusing_NMO", 
+                "FlatEllipse_finite_mirror_optimized", 
+                AT=[0, 0, PUMA.L2 - focal_length], 
+                ROTATED=[0, 0, 90],  # Rotate to focus vertically
+                RELATIVE="sample_arm"
+            )
+            
+            # Focal points
+            vertical_focusing_NMO.sourceDist = source_distance
+            vertical_focusing_NMO.LStart = source_distance
+            vertical_focusing_NMO.LEnd = focal_length + focal_offset
+            
+            # Mirror geometry - VERTICAL FOCUSING specific
+            vertical_focusing_NMO.lStart = lStart
+            vertical_focusing_NMO.lEnd = lEnd
+            vertical_focusing_NMO.r_0 = b0_vertical              # 39.5mm (half of 79mm height)
+            vertical_focusing_NMO.mirror_sidelength = mirror_sidelength_vertical  # 67mm width
             vertical_focusing_NMO.mirror_width = mirror_width
-            vertical_focusing_NMO.mirror_sidelength = mirror_sidelength
             vertical_focusing_NMO.nummirror = numVerticalMirrors
-            vertical_focusing_NMO.doubleReflections = 1
+            
+            # Reflection parameters
             vertical_focusing_NMO.mf = mf
             vertical_focusing_NMO.mb = mb
-            #vertical_focusing_NMO.rfront_inner_file = rs_at_zero_str
-            #vertical_focusing_NMO.mirror_mvalue_file = vertical_mirror_array_str
+            vertical_focusing_NMO.doubleReflections = 1
+            vertical_focusing_NMO.mirror_mvalue_file = vertical_mirror_array_str
+            vertical_focusing_NMO.enable_silicon_refraction = 1
 
-        
+        # -------------------------------------------------------------------------
+        # HORIZONTAL FOCUSING NMO  
+        # -------------------------------------------------------------------------
+        # No rotation: component x-axis = beam x-axis
+        # Focuses in beam's HORIZONTAL (x) direction
+        #
+        # Placement: downstream of vertical NMO by mirror_length + gap
+        # to avoid physical overlap when both are installed
+        #
         if PUMA.NMO_installed == "Horizontal" or PUMA.NMO_installed == "Both":
-            horizontal_focusing_NMO = instrument.add_component("horizontal_focusing_NMO", "FlatEllipse_finite_mirror", AT=[0, 0, PUMA.L2-(focal_length-(lEnd-lStart))+0.001], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            horizontal_focusing_NMO.sourceDist=-(1000)
-            horizontal_focusing_NMO.LStart=-(1000)
-            horizontal_focusing_NMO.LEnd=focal_length-(lEnd-lStart)+0.001 + focal_offset
-            horizontal_focusing_NMO.lStart=lStart
-            horizontal_focusing_NMO.lEnd=lEnd
-            horizontal_focusing_NMO.r_0 = b0
+            # Offset to place horizontal NMO after vertical NMO
+            mirror_length = lEnd - lStart  # 0.150m
+            h_nmo_offset = mirror_length + 0.001  # Small gap to prevent overlap
+            
+            horizontal_focusing_NMO = instrument.add_component(
+                "horizontal_focusing_NMO", 
+                "FlatEllipse_finite_mirror_optimized", 
+                AT=[0, 0, PUMA.L2 - focal_length + h_nmo_offset], 
+                ROTATED=[0, 0, 0],  # No rotation - focus horizontally
+                RELATIVE="sample_arm"
+            )
+            
+            # Focal points - LEnd adjusted for closer position to sample
+            horizontal_focusing_NMO.sourceDist = source_distance
+            horizontal_focusing_NMO.LStart = source_distance
+            horizontal_focusing_NMO.LEnd = focal_length - h_nmo_offset + focal_offset
+            
+            # Mirror geometry - HORIZONTAL FOCUSING specific
+            horizontal_focusing_NMO.lStart = lStart
+            horizontal_focusing_NMO.lEnd = lEnd
+            horizontal_focusing_NMO.r_0 = b0_horizontal          # 33.5mm (half of 67mm width)
+            horizontal_focusing_NMO.mirror_sidelength = mirror_sidelength_horizontal  # 79mm height
             horizontal_focusing_NMO.mirror_width = mirror_width
-            horizontal_focusing_NMO.mirror_sidelength = mirror_sidelength
             horizontal_focusing_NMO.nummirror = numHorizontalMirrors
-            horizontal_focusing_NMO.doubleReflections = 1
+            
+            # Reflection parameters
             horizontal_focusing_NMO.mf = mf
             horizontal_focusing_NMO.mb = mb
-            #horizontal_focusing_NMO.rfront_inner_file = rs_at_zero_str
-            #horizontal_focusing_NMO.mirror_mvalue_file = horizontal_mirror_array_str
+            horizontal_focusing_NMO.doubleReflections = 1
+            horizontal_focusing_NMO.mirror_mvalue_file = horizontal_mirror_array_str
+            horizontal_focusing_NMO.enable_silicon_refraction = 1
+
+        ##############################################################################
+        # END NMO CONFIGURATION
+        ##############################################################################
 
         ## sample table
         
@@ -880,7 +1005,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         sample_key = getattr(PUMA, 'sample_key', None)
         if sample_key == "Al_rod_phonon":
             Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
-            Al_rod_phonon.radius = 20e-3
+            Al_rod_phonon.radius = 5e-3
             Al_rod_phonon.yheight = 30e-3
             Al_rod_phonon.sigma_abs = 0*0.231
             Al_rod_phonon.sigma_inc = 0*0.0082
@@ -899,8 +1024,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
                 pass
         elif sample_key == "Al_rod_phonon_optic":
             Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
-            Al_rod_phonon_optic.radius = 2e-2
-            Al_rod_phonon_optic.yheight = 3e-2
+            Al_rod_phonon_optic.radius = 5e-3
+            Al_rod_phonon_optic.yheight = 30e-3
             Al_rod_phonon_optic.sigma_abs = 0
             Al_rod_phonon_optic.sigma_inc = 0
             Al_rod_phonon_optic.a = 3.14
@@ -921,7 +1046,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         elif sample_key == "Al_bragg":
             Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
             Al_Bragg.reflections = '"Al.lau"'
-            Al_Bragg.radius = 20e-3
+            Al_Bragg.radius = 5e-3
             Al_Bragg.yheight = 30e-3
             Al_Bragg.mosaic = 5
             Al_Bragg.sigma_inc = -1
@@ -1006,10 +1131,10 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         analyzer_collimator.length = 0.2
         analyzer_collimator.divergence = PUMA.alpha_3
 
-        # analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-        # analyzer_filter.length = 0.05
-        # analyzer_filter.xwidth = 0.5
-        # analyzer_filter.yheight = 0.5
+        analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
+        analyzer_filter.length = 0.05
+        analyzer_filter.xwidth = 0.5
+        analyzer_filter.yheight = 0.5
 
         if diagnostic_mode and diagnostic_settings.get('Pre-analyzer EMonitor'):
             preanalyzer_Emonitor = instrument.add_component("preanalyzer_Emonitor", "E_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
