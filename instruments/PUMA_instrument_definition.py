@@ -1005,7 +1005,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         sample_key = getattr(PUMA, 'sample_key', None)
         if sample_key == "Al_rod_phonon":
             Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
-            Al_rod_phonon.radius = 20e-3
+            Al_rod_phonon.radius = 5e-3
             Al_rod_phonon.yheight = 30e-3
             Al_rod_phonon.sigma_abs = 0*0.231
             Al_rod_phonon.sigma_inc = 0*0.0082
@@ -1024,8 +1024,8 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
                 pass
         elif sample_key == "Al_rod_phonon_optic":
             Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
-            Al_rod_phonon_optic.radius = 2e-2
-            Al_rod_phonon_optic.yheight = 3e-2
+            Al_rod_phonon_optic.radius = 5e-3
+            Al_rod_phonon_optic.yheight = 30e-3
             Al_rod_phonon_optic.sigma_abs = 0
             Al_rod_phonon_optic.sigma_inc = 0
             Al_rod_phonon_optic.a = 3.14
@@ -1046,7 +1046,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         elif sample_key == "Al_bragg":
             Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
             Al_Bragg.reflections = '"Al.lau"'
-            Al_Bragg.radius = 20e-3
+            Al_Bragg.radius = 5e-3
             Al_Bragg.yheight = 30e-3
             Al_Bragg.mosaic = 5
             Al_Bragg.sigma_inc = -1
