@@ -160,7 +160,6 @@ if "%VERBOSE%"=="1" echo [DEBUG] Working directory: %CD%
 :: Pin to specific version for reproducibility and security
 set "MAMBA_VERSION=2.5.0-1"
 set "MAMBA_URL=https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64"
-set "MAMBA_SHA256_URL=https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64.sha256"
 set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
 
 :: Function to verify SHA256 checksum
@@ -178,17 +177,7 @@ if not exist "%MICROMAMBA_DIR%\micromamba.exe" (
         echo [WARN] Failed to compute checksum. Will re-download micromamba.
         set "NEEDS_DOWNLOAD=1"
     ) else (
-        :: Extract hash from certutil output (hash is on second line)
-        set "ACTUAL_SHA256="
-        set "LINE_NUM=0"
-        for /f "skip=1 tokens=*" %%H in (%TEMP%\mamba_hash.txt) do (
-            if !LINE_NUM! equ 0 (
-                set "ACTUAL_SHA256=%%H"
-                set "LINE_NUM=1"
-            )
-        )
-        :: Remove spaces from hash
-        set "ACTUAL_SHA256=!ACTUAL_SHA256: =!"
+        call :extract_hash
         
         if "%VERBOSE%"=="1" echo [DEBUG] Expected: %EXPECTED_SHA256%
         if "%VERBOSE%"=="1" echo [DEBUG] Actual:   !ACTUAL_SHA256!
@@ -228,16 +217,7 @@ if "!NEEDS_DOWNLOAD!"=="1" (
         exit /b 1
     )
     
-    :: Extract and verify hash
-    set "ACTUAL_SHA256="
-    set "LINE_NUM=0"
-    for /f "skip=1 tokens=*" %%H in (%TEMP%\mamba_hash.txt) do (
-        if !LINE_NUM! equ 0 (
-            set "ACTUAL_SHA256=%%H"
-            set "LINE_NUM=1"
-        )
-    )
-    set "ACTUAL_SHA256=!ACTUAL_SHA256: =!"
+    call :extract_hash
     del "%TEMP%\mamba_hash.txt" 2>nul
     
     if "%VERBOSE%"=="1" echo [DEBUG] Expected: %EXPECTED_SHA256%
@@ -604,5 +584,26 @@ pause >nul
 :: Launch TAVI
 if "%VERBOSE%"=="1" echo [DEBUG] Launching TAVI...
 call "!LAUNCHER_SCRIPT!"
+goto :eof
+
+:: =============================================================================
+:: Subroutines
+:: =============================================================================
+
+:extract_hash
+:: Extract SHA256 hash from certutil output (hash is on second line)
+:: Input: %TEMP%\mamba_hash.txt
+:: Output: ACTUAL_SHA256 variable
+set "ACTUAL_SHA256="
+set "LINE_NUM=0"
+for /f "skip=1 tokens=*" %%H in (%TEMP%\mamba_hash.txt) do (
+    if !LINE_NUM! equ 0 (
+        set "ACTUAL_SHA256=%%H"
+        set "LINE_NUM=1"
+    )
+)
+:: Remove spaces from hash
+set "ACTUAL_SHA256=!ACTUAL_SHA256: =!"
+goto :eof
 
 endlocal
