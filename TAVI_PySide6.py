@@ -2216,13 +2216,13 @@ class TAVIController(QObject):
                 # Set GUI values from parameters
                 self.window.instrument_dock.monocris_combo.setCurrentText(parameters.get("monocris_var", "PG[002]"))
                 self.window.instrument_dock.anacris_combo.setCurrentText(parameters.get("anacris_var", "PG[002]"))
-                self.window.instrument_dock.mtt_edit.setText(str(parameters.get("mtt_var", "30")))
-                self.window.instrument_dock.stt_edit.setText(str(parameters.get("stt_var", "30")))
-                self.window.instrument_dock.omega_edit.setText(str(parameters.get("omega_var", 0)))
+                self.window.instrument_dock.mtt_edit.setText(str(parameters.get("mtt_var", "41.167")))
+                self.window.instrument_dock.stt_edit.setText(str(parameters.get("stt_var", "-71.2502")))
+                self.window.instrument_dock.omega_edit.setText(str(parameters.get("omega_var", "-35.6251")))
                 self.window.instrument_dock.chi_edit.setText(str(parameters.get("chi_var", 0)))
-                self.window.instrument_dock.att_edit.setText(str(parameters.get("att_var", 30)))
-                self.window.instrument_dock.Ki_edit.setText(str(parameters.get("Ki_var", "2.662")))
-                self.window.instrument_dock.Kf_edit.setText(str(parameters.get("Kf_var", "2.662")))
+                self.window.instrument_dock.att_edit.setText(str(parameters.get("att_var", "41.167")))
+                self.window.instrument_dock.Ki_edit.setText(str(parameters.get("Ki_var", "2.6634")))
+                self.window.instrument_dock.Kf_edit.setText(str(parameters.get("Kf_var", "2.6634")))
                 self.window.instrument_dock.Ei_edit.setText(str(parameters.get("Ei_var", "14.7")))
                 self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
                 self.window.instrument_dock.nmo_combo.setCurrentText(parameters.get("NMO_installed_var", "None"))
@@ -2251,27 +2251,28 @@ class TAVIController(QObject):
                     parameters.get("rha_ideal_locked", False),
                 )
                 
-                self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1e8))
+                self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
                 self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
                 self.window.scattering_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
-                self.window.scattering_dock.qx_edit.setText(str(parameters.get("qx_var", 2)))
+                self.window.scattering_dock.qx_edit.setText(str(parameters.get("qx_var", "3.1028")))
                 self.window.scattering_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
                 self.window.scattering_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
                 # HKL values
-                self.window.scattering_dock.H_edit.setText(str(parameters.get("H_var", 1)))
+                self.window.scattering_dock.H_edit.setText(str(parameters.get("H_var", 2)))
                 self.window.scattering_dock.K_edit.setText(str(parameters.get("K_var", 0)))
                 self.window.scattering_dock.L_edit.setText(str(parameters.get("L_var", 0)))
-                self.window.scattering_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 5.25)))
+                self.window.scattering_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 0)))
                 self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
-                self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", ""))
+                # Default scan: H-scan around Al (200) Bragg peak
+                self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
                 self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
                 
-                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", 4.05)))
-                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", 4.05)))
-                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", 4.05)))
-                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", 90)))
-                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", 90)))
-                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", 90)))
+                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", "4.05")))
+                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", "4.05")))
+                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", "4.05")))
+                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", "90")))
+                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", "90")))
+                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", "90")))
                 # Sample alignment offsets (kappa and psi)
                 self.window.sample_dock.kappa_edit.setText(str(parameters.get("kappa_var", 0)))
                 self.window.sample_dock.psi_edit.setText(str(parameters.get("psi_offset_var", 0)))
@@ -2295,11 +2296,11 @@ class TAVIController(QObject):
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
                 self.window.sample_dock.sample_frame_mode_check.setChecked(
-                    parameters.get("sample_frame_mode_var", False)
+                    parameters.get("sample_frame_mode_var", True)
                 )
-                # Restore sample selection if present
+                # Restore sample selection if present (default to Al: Bragg for easy testing)
                 try:
-                    sample_label = parameters.get("sample_label_var", "None")
+                    sample_label = parameters.get("sample_label_var", "AL: Bragg")
                     if hasattr(self.window.sample_dock, 'sample_combo'):
                         self.window.sample_dock.sample_combo.setCurrentText(sample_label)
                 except Exception:
@@ -2336,13 +2337,13 @@ class TAVIController(QObject):
         
         self.window.instrument_dock.monocris_combo.setCurrentText("PG[002]")
         self.window.instrument_dock.anacris_combo.setCurrentText("PG[002]")
-        self.window.instrument_dock.mtt_edit.setText("30")
-        self.window.instrument_dock.stt_edit.setText("30")
-        self.window.instrument_dock.omega_edit.setText("0")
+        self.window.instrument_dock.mtt_edit.setText("41.167")
+        self.window.instrument_dock.stt_edit.setText("-71.2502")
+        self.window.instrument_dock.omega_edit.setText("-35.6251")
         self.window.instrument_dock.chi_edit.setText("0")
-        self.window.instrument_dock.att_edit.setText("30")
-        self.window.instrument_dock.Ki_edit.setText("2.662")
-        self.window.instrument_dock.Kf_edit.setText("2.662")
+        self.window.instrument_dock.att_edit.setText("41.167")
+        self.window.instrument_dock.Ki_edit.setText("2.6634")
+        self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
         self.window.instrument_dock.Ef_edit.setText("14.7")
         self.window.instrument_dock.nmo_combo.setCurrentText("None")
@@ -2368,28 +2369,29 @@ class TAVIController(QObject):
         self.window.simulation_dock.set_number_neutrons(1000000)
         self.window.scattering_dock.K_fixed_combo.setCurrentText("Kf Fixed")
         self.window.scattering_dock.fixed_E_edit.setText("14.7")
-        self.window.scattering_dock.qx_edit.setText("2")
+        self.window.scattering_dock.qx_edit.setText("3.1028")
         self.window.scattering_dock.qy_edit.setText("0")
         self.window.scattering_dock.qz_edit.setText("0")
-        # Set HKL defaults (computed from Q and lattice)
-        self.window.scattering_dock.H_edit.setText("1")
+        # Set HKL defaults - Al (200) Bragg peak
+        self.window.scattering_dock.H_edit.setText("2")
         self.window.scattering_dock.K_edit.setText("0")
         self.window.scattering_dock.L_edit.setText("0")
-        self.window.scattering_dock.deltaE_edit.setText("5.25")
+        self.window.scattering_dock.deltaE_edit.setText("0")
         self.window.simulation_dock.diagnostic_mode_check.setChecked(True)
         
-        self.window.sample_dock.lattice_a_edit.setText("3.78")
-        self.window.sample_dock.lattice_b_edit.setText("3.78")
-        self.window.sample_dock.lattice_c_edit.setText("5.49")
+        self.window.sample_dock.lattice_a_edit.setText("4.05")
+        self.window.sample_dock.lattice_b_edit.setText("4.05")
+        self.window.sample_dock.lattice_c_edit.setText("4.05")
         self.window.sample_dock.lattice_alpha_edit.setText("90")
         self.window.sample_dock.lattice_beta_edit.setText("90")
         self.window.sample_dock.lattice_gamma_edit.setText("90")
         # Sample alignment offset defaults
         self.window.sample_dock.kappa_edit.setText("0")
         self.window.sample_dock.psi_edit.setText("0")
-        self.window.sample_dock.sample_frame_mode_check.setChecked(False)
-        self.window.simulation_dock.scan_command_1_edit.setText("qx 2 2.2 0.1")
-        self.window.simulation_dock.scan_command_2_edit.setText("deltaE 3 7 0.25")
+        self.window.sample_dock.sample_frame_mode_check.setChecked(True)
+        # Default scan: H-scan around Al (200) Bragg peak - quick 21 point scan
+        self.window.simulation_dock.scan_command_1_edit.setText("H 1.9 2.1 0.01")
+        self.window.simulation_dock.scan_command_2_edit.setText("")
         
         # Set default folder paths
         folder_suggestion = os.path.join(self.output_directory, "initial_testing")
@@ -2399,10 +2401,10 @@ class TAVIController(QObject):
         self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
         self.current_sample_settings = {}
         self.update_sample_frame_mode()
-        # Ensure sample defaults to None in GUI
+        # Default sample to Al: Bragg for easy testing
         try:
             if hasattr(self.window.sample_dock, 'sample_combo'):
-                self.window.sample_dock.sample_combo.setCurrentText("None")
+                self.window.sample_dock.sample_combo.setCurrentText("AL: Bragg")
         except Exception:
             pass
         
