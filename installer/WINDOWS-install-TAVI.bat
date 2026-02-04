@@ -471,9 +471,12 @@ if "%VERBOSE%"=="1" echo [DEBUG] Creating launcher script: !LAUNCHER_SCRIPT!
     echo endlocal
 )
 
-:: Create desktop shortcut using PowerShell (pass paths as arguments to avoid escaping issues)
+:: Create desktop shortcut using PowerShell
 echo [INFO] Creating desktop shortcut...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$desktop = Join-Path $env:USERPROFILE 'Desktop\TAVI Launcher.lnk'; $target = $args[0]; $workdir = $args[1]; try { $shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut($desktop); $shortcut.TargetPath = $target; $shortcut.WorkingDirectory = $workdir; $shortcut.Description = 'TAVI - Triple Axis Virtual Instrument'; $shortcut.Save(); exit 0 } catch { Write-Error $_.Exception.Message; exit 1 }" "!LAUNCHER_SCRIPT!" "!INSTALL_DIR!"
+set "PS_DESKTOP=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
+set "PS_TARGET=!LAUNCHER_SCRIPT!"
+set "PS_WORKDIR=!INSTALL_DIR!"
+powershell -NoProfile -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut([System.Environment]::ExpandEnvironmentVariables('!PS_DESKTOP!')); $Shortcut.TargetPath = '!PS_TARGET!'.Replace(\"'\", \"''\"); $Shortcut.WorkingDirectory = '!PS_WORKDIR!'.Replace(\"'\", \"''\"); $Shortcut.Description = 'TAVI - Triple Axis Virtual Instrument'; $Shortcut.Save()"
 
 if !errorlevel! equ 0 (
     echo [OK] Desktop shortcut created.
