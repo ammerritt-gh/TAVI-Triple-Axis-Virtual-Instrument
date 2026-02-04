@@ -191,9 +191,14 @@ echo.
 echo [Step 2/5] Creating Python environment with McStas...
 if "%VERBOSE%"=="1" echo [DEBUG] Checking if environment '%ENV_NAME%' exists...
 
-:: Check if environment exists
-"%MICROMAMBA_DIR%\micromamba.exe" env list 2>nul | findstr /C:"%ENV_NAME%" >nul
-if %errorlevel% equ 0 (
+:: Check if environment exists by matching the exact environment name
+set "ENV_EXISTS=0"
+for /f "tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" env list 2^>nul') do (
+    if /I "%%E"=="%ENV_NAME%" (
+        set "ENV_EXISTS=1"
+    )
+)
+if "%ENV_EXISTS%"=="1" (
     echo [INFO] Environment '%ENV_NAME%' already exists.
     
     choice /C YN /M "Do you want to recreate it (Y) or keep existing (N)"
