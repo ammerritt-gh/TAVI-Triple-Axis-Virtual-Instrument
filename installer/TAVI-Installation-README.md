@@ -30,12 +30,6 @@ McStas needs a C++ compiler to compile neutron instrument simulations. The easie
 
 **Alternative**: If you already have Visual Studio 2019 or 2022 installed with C++ tools, you're all set.
 
-### Recommended: Internet Connection
-
-- Required for initial installation (~1-2 GB download)
-- Required for updates
-- Not required to run simulations after installation
-
 ---
 
 ## What the Installer Does
@@ -183,7 +177,7 @@ To remove TAVI completely:
 
 - **TAVI Issues**: https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/issues
 - **McStas Documentation**: https://www.mcstas.org/
-- **McStasScript Docs**: https://github.com/PaNOSC-ViNYL/McStasScript
+- **McStasScript Docs**: https://github.com/PaNOSC-ViNYL/McStasScript or https://mads-bertelsen.github.io/getting_started/quick_start.html
 
 ---
 
