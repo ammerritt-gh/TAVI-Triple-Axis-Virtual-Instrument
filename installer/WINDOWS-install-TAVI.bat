@@ -156,23 +156,107 @@ if %errorlevel% neq 0 (
 )
 if "%VERBOSE%"=="1" echo [DEBUG] Working directory: %CD%
 
-:: Download micromamba if not present or if it's outdated
-:: Set URL before the if block to avoid variable expansion issues
-set "MAMBA_URL=https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-win-64"
+:: Download micromamba if not present or if checksum verification fails
+:: Pin to specific version for reproducibility and security
+set "MAMBA_VERSION=2.5.0-1"
+set "MAMBA_URL=https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64"
+set "MAMBA_SHA256_URL=https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64.sha256"
+set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
 
+:: Function to verify SHA256 checksum
+set "NEEDS_DOWNLOAD=0"
 if not exist "%MICROMAMBA_DIR%\micromamba.exe" (
-    echo [INFO] Downloading micromamba...
+    set "NEEDS_DOWNLOAD=1"
+    echo [INFO] Micromamba not found. Will download.
+) else (
+    echo [INFO] Verifying existing micromamba installation...
+    if "%VERBOSE%"=="1" echo [DEBUG] Computing SHA256 checksum...
+    
+    :: Compute SHA256 of existing file using certutil
+    certutil -hashfile "%MICROMAMBA_DIR%\micromamba.exe" SHA256 > "%TEMP%\mamba_hash.txt" 2>nul
+    if !errorlevel! neq 0 (
+        echo [WARN] Failed to compute checksum. Will re-download micromamba.
+        set "NEEDS_DOWNLOAD=1"
+    ) else (
+        :: Extract hash from certutil output (hash is on second line)
+        set "ACTUAL_SHA256="
+        set "LINE_NUM=0"
+        for /f "skip=1 tokens=*" %%H in (%TEMP%\mamba_hash.txt) do (
+            if !LINE_NUM! equ 0 (
+                set "ACTUAL_SHA256=%%H"
+                set "LINE_NUM=1"
+            )
+        )
+        :: Remove spaces from hash
+        set "ACTUAL_SHA256=!ACTUAL_SHA256: =!"
+        
+        if "%VERBOSE%"=="1" echo [DEBUG] Expected: %EXPECTED_SHA256%
+        if "%VERBOSE%"=="1" echo [DEBUG] Actual:   !ACTUAL_SHA256!
+        
+        if /I "!ACTUAL_SHA256!"=="%EXPECTED_SHA256%" (
+            echo [OK] Micromamba checksum verified.
+        ) else (
+            echo [WARN] Micromamba checksum mismatch. Will re-download.
+            set "NEEDS_DOWNLOAD=1"
+        )
+        del "%TEMP%\mamba_hash.txt" 2>nul
+    )
+)
+
+if "!NEEDS_DOWNLOAD!"=="1" (
+    echo [INFO] Downloading micromamba version %MAMBA_VERSION%...
     if "%VERBOSE%"=="1" echo [DEBUG] URL: !MAMBA_URL!
-    curl -L -o micromamba.exe "!MAMBA_URL!"
+    
+    :: Download micromamba binary
+    curl -L -o "%MICROMAMBA_DIR%\micromamba.exe.tmp" "!MAMBA_URL!"
     if !errorlevel! neq 0 (
         echo [ERROR] Failed to download micromamba.
         echo [INFO] Please check your internet connection and try again.
+        del "%MICROMAMBA_DIR%\micromamba.exe.tmp" 2>nul
         pause
         exit /b 1
     )
-    echo [OK] Micromamba downloaded successfully.
-) else (
-    echo [OK] Micromamba already installed.
+    
+    :: Verify checksum of downloaded file
+    echo [INFO] Verifying downloaded file...
+    certutil -hashfile "%MICROMAMBA_DIR%\micromamba.exe.tmp" SHA256 > "%TEMP%\mamba_hash.txt" 2>nul
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to compute checksum of downloaded file.
+        del "%MICROMAMBA_DIR%\micromamba.exe.tmp" 2>nul
+        del "%TEMP%\mamba_hash.txt" 2>nul
+        pause
+        exit /b 1
+    )
+    
+    :: Extract and verify hash
+    set "ACTUAL_SHA256="
+    set "LINE_NUM=0"
+    for /f "skip=1 tokens=*" %%H in (%TEMP%\mamba_hash.txt) do (
+        if !LINE_NUM! equ 0 (
+            set "ACTUAL_SHA256=%%H"
+            set "LINE_NUM=1"
+        )
+    )
+    set "ACTUAL_SHA256=!ACTUAL_SHA256: =!"
+    del "%TEMP%\mamba_hash.txt" 2>nul
+    
+    if "%VERBOSE%"=="1" echo [DEBUG] Expected: %EXPECTED_SHA256%
+    if "%VERBOSE%"=="1" echo [DEBUG] Actual:   !ACTUAL_SHA256!
+    
+    if /I "!ACTUAL_SHA256!"=="%EXPECTED_SHA256%" (
+        :: Checksum matches, replace old file with new one
+        del "%MICROMAMBA_DIR%\micromamba.exe" 2>nul
+        move /Y "%MICROMAMBA_DIR%\micromamba.exe.tmp" "%MICROMAMBA_DIR%\micromamba.exe" >nul
+        echo [OK] Micromamba downloaded and verified successfully.
+    ) else (
+        echo [ERROR] Downloaded file checksum mismatch!
+        echo [ERROR] Expected: %EXPECTED_SHA256%
+        echo [ERROR] Actual:   !ACTUAL_SHA256!
+        echo [ERROR] This could indicate a corrupted download or security issue.
+        del "%MICROMAMBA_DIR%\micromamba.exe.tmp" 2>nul
+        pause
+        exit /b 1
+    )
 )
 
 :: Initialize shell (if not already done)
