@@ -237,13 +237,9 @@ class TAVIController(QObject):
         # DeltaE - update energies
         self.window.scattering_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
         
-        # Lattice parameters - update HKL/Q conversions
-        self.window.sample_dock.lattice_a_edit.editingFinished.connect(self.on_lattice_changed)
-        self.window.sample_dock.lattice_b_edit.editingFinished.connect(self.on_lattice_changed)
-        self.window.sample_dock.lattice_c_edit.editingFinished.connect(self.on_lattice_changed)
-        self.window.sample_dock.lattice_alpha_edit.editingFinished.connect(self.on_lattice_changed)
-        self.window.sample_dock.lattice_beta_edit.editingFinished.connect(self.on_lattice_changed)
-        self.window.sample_dock.lattice_gamma_edit.editingFinished.connect(self.on_lattice_changed)
+        # Lattice parameters - only update via Save button (lock/unlock mechanism)
+        # Connect the lattice save signal from the sample dock
+        self.window.sample_dock.lattice_parameters_changed.connect(self.on_lattice_changed)
         # Sample alignment offsets (kappa and psi)
         self.window.sample_dock.kappa_edit.editingFinished.connect(self.on_alignment_offset_changed)
         self.window.sample_dock.psi_edit.editingFinished.connect(self.on_alignment_offset_changed)
@@ -311,14 +307,8 @@ class TAVIController(QObject):
             self.window.scattering_dock.deltaE_edit,
         ])
         
-        # Sample dock
+        # Sample dock - only alignment offsets, NOT lattice fields (those use lock/unlock)
         line_edits.extend([
-            self.window.sample_dock.lattice_a_edit,
-            self.window.sample_dock.lattice_b_edit,
-            self.window.sample_dock.lattice_c_edit,
-            self.window.sample_dock.lattice_alpha_edit,
-            self.window.sample_dock.lattice_beta_edit,
-            self.window.sample_dock.lattice_gamma_edit,
             self.window.sample_dock.kappa_edit,
             self.window.sample_dock.psi_edit,
         ])
@@ -1317,9 +1307,41 @@ class TAVIController(QObject):
             self.update_angles_from_q()
     
     def on_lattice_changed(self):
-        """Update Q/HKL conversion when lattice parameters change."""
-        # When lattice changes, recalculate Q from current HKL values
-        self.on_HKL_changed()
+        """Update HKL when lattice parameters change. Q stays constant (machine config)."""
+        if self.updating:
+            return
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        
+        try:
+            # Q is fixed (machine configuration), recalculate HKL for new lattice
+            qx = float(self.window.scattering_dock.qx_edit.text() or 0)
+            qy = float(self.window.scattering_dock.qy_edit.text() or 0)
+            qz = float(self.window.scattering_dock.qz_edit.text() or 0)
+            
+            self.updating = True
+            # Recalculate HKL from current Q with new lattice parameters
+            H, K, L = update_HKL_from_Q_direct(
+                qx, qy, qz,
+                vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+            )
+            self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
+            # Update tracked values for HKL since we just set them
+            self._update_tracked_value('H', H)
+            self._update_tracked_value('K', K)
+            self._update_tracked_value('L', L)
+            
+            self.print_to_message_center(
+                f"Lattice updated: HKL = ({H:.4f}, {K:.4f}, {L:.4f}) for Q = ({qx:.4f}, {qy:.4f}, {qz:.4f}) Å⁻¹"
+            )
+        except Exception as e:
+            self.print_to_message_center(f"Error updating HKL from lattice: {e}")
+        finally:
+            self.updating = False
 
     def update_angles_from_q(self):
         """Update instrument/sample angles based on current Q and deltaE."""
