@@ -26,9 +26,10 @@ McStas needs a C++ compiler to compile neutron instrument simulations. The easie
 3. Download **"Build Tools for Visual Studio 2022"**
 4. Run the installer
 5. Select **"Desktop development with C++"** workload
-6. Click Install (requires ~6 GB disk space)
+6. Select C++/CLI support (latest MSVC) and MSVC v143 plus MSVC v142
+7. Click Install (requires ~6 GB disk space)
 
-**Alternative**: If you already have Visual Studio 2019 or 2022 installed with C++ tools, you're all set.
+**Alternative**: If you already have Visual Studio installed with C++ tools, you're all set.
 
 ---
 
