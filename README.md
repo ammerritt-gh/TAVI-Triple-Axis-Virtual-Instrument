@@ -27,9 +27,19 @@ TAVI writes an instrument file at runtime through McStasScript, then calls McSta
 
 ## Installation
 
+### Batch file Installation
+1. **Install C++ compiler**
+
+Follow the instructions at [https://github.com/mccode-dev/McCode/blob/main/INSTALL-McStas/Windows/README.md](https://github.com/mccode-dev/McCode/blob/main/INSTALL-McStas/Windows/README.md) to install the C++ compiler through Visual Studio. Visual Studio 2026 is fine, but you must add the "Desktop development with C++", with "C++/CLI support (latest MSVC)" and MSVC v143 plus MSVC v142.
+
+2. **Batch file install**
+
+Download the [batch file installer here](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/blob/main/installer/WINDOWS-install-TAVI.bat) and run it. 
+
+### Standalone Installation
 1. **Install McStas**
    
-   Follow the instructions at [https://mcstas.org/](https://mcstas.org/) to install McStas for your operating system. Do NOT use the McStas package, but install the McStas metapackage (under legacy options). Be sure to add McStas to your system path.
+   Follow the instructions at [https://mcstas.org/](https://mcstas.org/) to install McStas for your operating system. Do NOT use the McStas package, but install the McStas metapackage (under legacy options). Be sure to add McStas to your system path. As well, you still need the C++ compiler here.
 
 2. **Install Python dependencies**
 
@@ -44,7 +54,7 @@ TAVI writes an instrument file at runtime through McStasScript, then calls McSta
 
 ## Running the Application
 
-To run TAVI, navigate to the folder containing the files and run:
+To run TAVI, either use the TAVI launcher that the installation placed, or navigate to the folder containing the files and run:
 
 ```bash
 python TAVI_PySide6.py
