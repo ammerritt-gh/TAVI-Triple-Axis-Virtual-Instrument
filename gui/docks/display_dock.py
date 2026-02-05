@@ -388,12 +388,10 @@ class SavePlotDialog(QDialog):
                 info_lines.append("Alignment: none")
         
         if self.info_q_hkl_check.isChecked():
-            if 'sample_frame_mode' in meta and meta['sample_frame_mode'] == 'HKL':
-                if all(k in meta for k in ['H', 'K', 'L']):
-                    info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
-            else:
-                if all(k in meta for k in ['qx', 'qy', 'qz']):
-                    info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
+            if all(k in meta for k in ['H', 'K', 'L']):
+                info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
+            if all(k in meta for k in ['qx', 'qy', 'qz']):
+                info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
             if 'deltaE' in meta:
                 info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
         
@@ -566,12 +564,10 @@ class SavePlotDialog(QDialog):
                 info_lines.append("Alignment: none")
         
         if self.info_q_hkl_check.isChecked():
-            if 'sample_frame_mode' in meta and meta['sample_frame_mode'] == 'HKL':
-                if all(k in meta for k in ['H', 'K', 'L']):
-                    info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
-            else:
-                if all(k in meta for k in ['qx', 'qy', 'qz']):
-                    info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
+            if all(k in meta for k in ['H', 'K', 'L']):
+                info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
+            if all(k in meta for k in ['qx', 'qy', 'qz']):
+                info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
             if 'deltaE' in meta:
                 info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
         
@@ -1193,12 +1189,10 @@ class DisplayDock(BaseDockWidget):
             info_lines.append("Alignment: none")
         
         # Q/HKL + ΔE
-        if 'sample_frame_mode' in meta and meta['sample_frame_mode'] == 'HKL':
-            if all(k in meta for k in ['H', 'K', 'L']):
-                info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
-        else:
-            if all(k in meta for k in ['qx', 'qy', 'qz']):
-                info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
+        if all(k in meta for k in ['H', 'K', 'L']):
+            info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
+        if all(k in meta for k in ['qx', 'qy', 'qz']):
+            info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
         if 'deltaE' in meta:
             info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
         
@@ -1322,7 +1316,6 @@ class DisplayDock(BaseDockWidget):
                 - qx, qy, qz: float (Q-space coordinates)
                 - H, K, L: float (HKL coordinates)
                 - deltaE: float (energy transfer in meV)
-                - sample_frame_mode: str ('HKL' or 'Q')
                 - NMO_installed: str
                 - V_selector_installed: bool
         """

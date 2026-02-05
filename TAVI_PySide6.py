@@ -107,9 +107,6 @@ class TAVIController(QObject):
 
         # Update ideal focusing buttons after initial load
         self.update_ideal_bending_buttons()
-
-        # Apply initial sample frame mode state
-        self.update_sample_frame_mode()
         
         # Set up visual feedback for all input fields
         self.setup_visual_feedback()
@@ -247,11 +244,6 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_beta_edit.editingFinished.connect(self.on_lattice_changed)
         self.window.sample_dock.lattice_gamma_edit.editingFinished.connect(self.on_lattice_changed)
-        # Sample frame mode toggle (HKL vs Q)
-        try:
-            self.window.sample_dock.sample_frame_mode_check.toggled.connect(self.on_sample_frame_mode_toggled)
-        except Exception:
-            pass
         # Sample alignment offsets (kappa and psi)
         self.window.sample_dock.kappa_edit.editingFinished.connect(self.on_alignment_offset_changed)
         self.window.sample_dock.psi_edit.editingFinished.connect(self.on_alignment_offset_changed)
@@ -545,12 +537,6 @@ class TAVIController(QObject):
         
         # Energy transfer
         metadata['deltaE'] = vals.get('deltaE', 0)
-        
-        # Sample frame mode
-        try:
-            metadata['sample_frame_mode'] = 'HKL' if self.window.sample_dock.sample_frame_mode_check.isChecked() else 'Q'
-        except:
-            metadata['sample_frame_mode'] = 'Q'
         
         # NMO and velocity selector
         metadata['NMO_installed'] = vals.get('NMO_installed', 'None')
@@ -1332,37 +1318,8 @@ class TAVIController(QObject):
     
     def on_lattice_changed(self):
         """Update Q/HKL conversion when lattice parameters change."""
-        # Recalculate based on sample frame mode
-        if self.window.sample_dock.sample_frame_mode_check.isChecked():
-            self.on_HKL_changed()
-        else:
-            self.on_Q_changed()
-
-    def on_sample_frame_mode_toggled(self, checked):
-        """Handle sample frame mode toggling to lock HKL or Q fields."""
-        self.update_sample_frame_mode(checked)
-
-    def update_sample_frame_mode(self, checked=None):
-        """Enable/disable HKL vs Q inputs based on sample frame mode."""
-        if checked is None:
-            checked = self.window.sample_dock.sample_frame_mode_check.isChecked()
-
-        hkl_enabled = bool(checked)
-        q_enabled = not hkl_enabled
-
-        self.window.scattering_dock.H_edit.setEnabled(hkl_enabled)
-        self.window.scattering_dock.K_edit.setEnabled(hkl_enabled)
-        self.window.scattering_dock.L_edit.setEnabled(hkl_enabled)
-
-        self.window.scattering_dock.qx_edit.setEnabled(q_enabled)
-        self.window.scattering_dock.qy_edit.setEnabled(q_enabled)
-        self.window.scattering_dock.qz_edit.setEnabled(q_enabled)
-
-        # Recalculate the dependent variables when mode changes
-        if hkl_enabled:
-            self.on_HKL_changed()
-        else:
-            self.on_Q_changed()
+        # When lattice changes, recalculate Q from current HKL values
+        self.on_HKL_changed()
 
     def update_angles_from_q(self):
         """Update instrument/sample angles based on current Q and deltaE."""
@@ -1883,13 +1840,8 @@ class TAVIController(QObject):
         elif vars_used & orientation_vars:
             return "orientation"
         else:
-            # Default based on sample frame mode
-            try:
-                if self.window.sample_dock.sample_frame_mode_check.isChecked():
-                    return "rlu"
-            except Exception:
-                pass
-            return "momentum"
+            # Default to rlu mode if no specific scan variables
+            return "rlu"
     
     def _check_current_point_validity(self) -> tuple:
         """Check if the current single point (no scan) is valid.
@@ -2118,10 +2070,6 @@ class TAVIController(QObject):
             except (ValueError, TypeError):
                 pass
         
-        # Sample frame mode
-        if 'sample_frame_mode' in params:
-            metadata['sample_frame_mode'] = params['sample_frame_mode']
-        
         # NMO and velocity selector
         if 'NMO_installed' in params:
             metadata['NMO_installed'] = params['NMO_installed']
@@ -2188,7 +2136,6 @@ class TAVIController(QObject):
             "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             # Misalignment hash only (keeps values hidden from students)
             "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
-            "sample_frame_mode_var": self.window.sample_dock.sample_frame_mode_check.isChecked(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
@@ -2295,9 +2242,6 @@ class TAVIController(QObject):
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
-                self.window.sample_dock.sample_frame_mode_check.setChecked(
-                    parameters.get("sample_frame_mode_var", True)
-                )
                 # Restore sample selection if present (default to Al: Bragg for easy testing)
                 try:
                     sample_label = parameters.get("sample_label_var", "AL: Bragg")
@@ -2316,8 +2260,6 @@ class TAVIController(QObject):
                 # Merge: use loaded value if present, else default
                 self.diagnostic_settings = {**default_diag, **loaded_diag}
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
-
-                self.update_sample_frame_mode()
 
                 self.update_ideal_bending_buttons()
                 
@@ -2388,7 +2330,6 @@ class TAVIController(QObject):
         # Sample alignment offset defaults
         self.window.sample_dock.kappa_edit.setText("0")
         self.window.sample_dock.psi_edit.setText("0")
-        self.window.sample_dock.sample_frame_mode_check.setChecked(True)
         # Default scan: H-scan around Al (200) Bragg peak - quick 21 point scan
         self.window.simulation_dock.scan_command_1_edit.setText("H 1.9 2.1 0.01")
         self.window.simulation_dock.scan_command_2_edit.setText("")
@@ -2400,7 +2341,6 @@ class TAVIController(QObject):
         
         self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
         self.current_sample_settings = {}
-        self.update_sample_frame_mode()
         # Default sample to Al: Bragg for easy testing
         try:
             if hasattr(self.window.sample_dock, 'sample_combo'):
