@@ -56,12 +56,46 @@ echo.
 :: =============================================================================
 :: Step 0: Check for C++ Compiler (Visual Studio)
 :: =============================================================================
-echo [Step 0/5] Checking for C++ compiler...
+echo [Step 0/5] Checking for Visual Studio installation...
 
 :: Check for Visual Studio Build Tools installation
 set "VS_FOUND=0"
 set "VCVARS="
 
+:: Visual Studio 2026 (check multiple editions - newest first)
+if exist "C:\Program Files\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+)
+if exist "C:\Program Files\Microsoft Visual Studio\2026\Community\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\Community\VC\Auxiliary\Build\vcvarsall.bat"
+)
+if exist "C:\Program Files\Microsoft Visual Studio\2026\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\Professional\VC\Auxiliary\Build\vcvarsall.bat"
+)
+if exist "C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
+)
+:: Visual Studio 2025 (check multiple editions)
+if exist "C:\Program Files\Microsoft Visual Studio\2025\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
+)
+if exist "C:\Program Files\Microsoft Visual Studio\2025\Community\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\Community\VC\Auxiliary\Build\vcvarsall.bat"
+)
+if exist "C:\Program Files\Microsoft Visual Studio\2025\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\Professional\VC\Auxiliary\Build\vcvarsall.bat"
+)
+if exist "C:\Program Files\Microsoft Visual Studio\2025\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" (
+    set "VS_FOUND=1"
+    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
+)
 :: Visual Studio 2022 (check multiple editions)
 if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
     set "VS_FOUND=1"
@@ -106,11 +140,11 @@ echo.
 echo Please install Visual Studio with C++ support:
 echo   1. Download from: https://visualstudio.microsoft.com/downloads/
 echo   2. Run the installer and select "Desktop development with C++"
-echo   3. Make sure to include MSVC v143 (VS 2022) build tools
+echo   3. Make sure to include MSVC build tools (C++/CLI support, MSVC v143, MSVC v142)
 echo.
 echo After installation, re-run this installer.
 echo.
-choice /C YN /M "Do you want to bypass this check and continue anyway (Y) or exit (N)"
+choice /C YN /M "Do you want to bypass this check and continue anyway (Y) or exit (N) (your installation may not have been found)"
 if errorlevel 2 goto :cpp_check_exit
 if errorlevel 1 goto :cpp_check_bypass
 goto :cpp_check_exit
