@@ -32,10 +32,6 @@ class UnifiedSampleDock(BaseDockWidget):
         sample_select_layout.setSpacing(5)
         sample_select_group.setLayout(sample_select_layout)
         
-        # Sample frame mode checkbox
-        self.sample_frame_mode_check = QCheckBox("Sample frame mode")
-        sample_select_layout.addWidget(self.sample_frame_mode_check)
-        
         # Sample selection combo box
         sample_combo_layout = QHBoxLayout()
         sample_combo_layout.setContentsMargins(0, 0, 0, 0)
