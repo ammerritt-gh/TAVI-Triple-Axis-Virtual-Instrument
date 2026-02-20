@@ -455,14 +455,14 @@ if "%VERBOSE%"=="1" echo [DEBUG] Detecting McStas installation paths...
 :: Use Python to find the actual McStas paths within the conda environment
 :: This is more reliable than guessing the path structure
 echo [INFO] Detecting McStas component paths...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys; env_prefix = os.path.dirname(os.path.dirname(sys.executable)); bin_path = os.path.join(env_prefix, 'bin'); mcstas_resources = os.path.join(env_prefix, 'share', 'mcstas', 'resources'); alt_resources = os.path.join(env_prefix, 'Library', 'share', 'mcstas', 'resources'); lib_path = mcstas_resources if os.path.exists(mcstas_resources) else (alt_resources if os.path.exists(alt_resources) else None); print(f'MCRUN_PATH={bin_path}'); print(f'MCSTAS_PATH={lib_path}')"
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys; env_prefix = sys.prefix; candidates = [os.path.join(env_prefix, d) for d in ['Library\\bin', 'bin']]; bin_path = next((d for d in candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), candidates[-1]); mcstas_resources = os.path.join(env_prefix, 'share', 'mcstas', 'resources'); alt_resources = os.path.join(env_prefix, 'Library', 'share', 'mcstas', 'resources'); lib_path = mcstas_resources if os.path.exists(mcstas_resources) else (alt_resources if os.path.exists(alt_resources) else None); print(f'MCRUN_PATH={bin_path}'); print(f'MCSTAS_PATH={lib_path}')"
 if !errorlevel! neq 0 (
     echo [WARNING] Could not detect McStas paths automatically.
 )
 
 :: Configure McStasScript using Python to find and set correct paths
 echo [INFO] Configuring McStasScript...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys, mcstasscript as ms; env_prefix = os.path.dirname(os.path.dirname(sys.executable)); bin_path = os.path.join(env_prefix, 'bin'); mcstas_resources = os.path.join(env_prefix, 'share', 'mcstas', 'resources'); alt_resources = os.path.join(env_prefix, 'Library', 'share', 'mcstas', 'resources'); lib_path = mcstas_resources if os.path.exists(mcstas_resources) else alt_resources; c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path); print('McStasScript configured successfully!'); print('  mcrun path:', bin_path); print('  mcstas path:', lib_path)"
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys, mcstasscript as ms; env_prefix = sys.prefix; candidates = [os.path.join(env_prefix, d) for d in ['Library\\bin', 'bin']]; bin_path = next((d for d in candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), candidates[-1]); mcstas_resources = os.path.join(env_prefix, 'share', 'mcstas', 'resources'); alt_resources = os.path.join(env_prefix, 'Library', 'share', 'mcstas', 'resources'); lib_path = mcstas_resources if os.path.exists(mcstas_resources) else alt_resources; c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path); print('McStasScript configured successfully!'); print('  mcrun path:', bin_path); print('  mcstas path:', lib_path)"
 if !errorlevel! neq 0 (
     echo [WARNING] McStasScript configuration may need manual adjustment.
     echo [INFO] You can manually configure using:
