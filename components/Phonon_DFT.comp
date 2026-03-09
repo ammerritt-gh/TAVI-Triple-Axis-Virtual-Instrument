@@ -1,0 +1,928 @@
+/*******************************************************************************
+*
+*  McStas, neutron ray-tracing package
+*  Copyright(C) 2025
+*
+* %I
+* Written by: Adrian / Claude (AI-assisted)
+* Date: 2025
+* Version: 1.0b
+* Origin: TUM
+*
+* A sample component for phonon and Bragg scattering from DFT-calculated
+* dispersions and CIF-derived structure factors.
+*
+* %D
+* Phase 1b: Bragg scattering kernel with incoherent channel.
+* Reads a CIF or LAU/LAZ reflection file (via cif2hkl) and scatters
+* neutrons elastically from Bragg reflections using a simplified Ewald
+* sphere model with Gaussian mosaic (delta_d_d).
+*
+* This component is designed as the foundation for a "universal sample"
+* that will later incorporate phonon scattering from DFT dispersion grids,
+* multi-BZ intensity variation, and magnetic excitations.
+*
+* The Bragg model is intentionally simpler than Single_crystal: we use
+* a single isotropic delta_d_d mosaic width rather than the full
+* anisotropic mosaic + Ewald tangent plane + Cholesky decomposition.
+* For precise mosaic modeling, use Single_crystal directly.
+*
+* Sample shape: cylinder, box, or sphere.
+*
+* Algorithm (Bragg channel):
+*   1. Intersect neutron with sample geometry
+*   2. Compute ki, find all reflections within Ewald sphere proximity
+*   3. Choose channel: Bragg vs incoherent (vs phonon in future)
+*   4. If Bragg: select reflection weighted by F2, compute kf = ki - tau
+*   5. Apply mosaic perturbation, normalize |kf| = |ki| (elastic)
+*   6. Compute weight corrections (absorption, cross section, path length)
+*
+* %P
+* INPUT PARAMETERS:
+* radius: [m]            Outer radius of cylindrical sample
+* yheight: [m]           Height of sample
+* xwidth: [m]            Width of box sample
+* zdepth: [m]            Depth of box sample
+* reflections: [string]  CIF, LAU, or LAZ reflection file (or "" for incoherent only)
+* sigma_abs: [barns]     Absorption cross section per unit cell at 2200 m/s
+* sigma_inc: [barns]     Incoherent scattering cross section per unit cell
+* a: [AA]                Lattice parameter a
+* b: [AA]                Lattice parameter b (default = a)
+* c: [AA]                Lattice parameter c (default = a)
+* alpha: [deg]           Lattice angle alpha (default = 90)
+* beta: [deg]            Lattice angle beta (default = 90)
+* gamma_l: [deg]         Lattice angle gamma (default = 90) ('gamma_l' to avoid conflict with McStas 'gamma')
+* ax: [AA]               Direct lattice vector a, x-component (overrides a,b,c if set)
+* ay: [AA]               Direct lattice vector a, y-component
+* az: [AA]               Direct lattice vector a, z-component
+* bx: [AA]               Direct lattice vector b, x-component
+* by: [AA]               Direct lattice vector b, y-component
+* bz_l: [AA]             Direct lattice vector b, z-component ('bz_l' avoids conflict)
+* cx: [AA]               Direct lattice vector c, x-component
+* cy: [AA]               Direct lattice vector c, y-component
+* cz: [AA]               Direct lattice vector c, z-component
+* delta_d_d: [1]         Relative d-spacing width (Gaussian RMS), for mosaic broadening
+* barns: [1]             Flag: 1 if F2 is in barns (laz files), 0 if in fm^2 (lau files)
+* debye_waller: [1]      Global Debye-Waller factor (1 = no DW correction)
+* T: [K]                 Temperature (for future phonon Bose factor; currently unused)
+* p_interact: [1]        MC probability for scattering (remainder is transmission)
+* target_x: [m]          Focusing target x
+* target_y: [m]          Focusing target y
+* target_z: [m]          Focusing target z
+* target_index: [1]      Relative index of component to focus at
+*
+* OUTPUT PARAMETERS:
+* (none - scattering modifies the neutron state in-place via SCATTER/ABSORB)
+*
+* %L
+* Designed for combined elastic/inelastic scattering. Phonon kernel coming in Phase 1a.
+*
+* %E
+******************************************************************************/
+
+DEFINE COMPONENT Phonon_DFT
+
+SETTING PARAMETERS (
+  string reflections="NULL",
+  radius=0, yheight=0, xwidth=0, zdepth=0,
+  sigma_abs=0, sigma_inc=0,
+  a=0, b=0, c=0, alpha=90, beta=90, gamma_l=90,
+  ax=0, ay=0, az=0,
+  bx=0, by=0, bz_l=0,
+  cx=0, cy=0, cz=0,
+  delta_d_d=1e-4, barns=1, debye_waller=1, T=300,
+  p_interact=0.8,
+  target_x=0, target_y=0, target_z=0,
+  target_index=0
+)
+
+SHARE
+%{
+%include "read_table-lib"
+
+/* MSVC compatibility: map POSIX names to Windows equivalents */
+#ifdef _MSC_VER
+  #define strcasecmp _stricmp
+  #define unlink _unlink
+  #define close _close
+#endif
+
+#ifndef PHONON_DFT_DECL
+#define PHONON_DFT_DECL
+
+/* Maximum number of reflections that can be active simultaneously */
+#define PDFT_MAX_TAU 256
+
+/* ======================================================================
+   Bragg reflection data (one per hkl)
+   ====================================================================== */
+typedef struct {
+  int    h, k, l;
+  double F2;                     /* |F|^2 in barns (or fm^2, see flag_barns) */
+  double tau_x, tau_y, tau_z;    /* Reciprocal lattice point in AA^-1 */
+  double tau;                    /* |tau| */
+} pdft_bragg_refl;
+
+/* Active reflection near Ewald sphere (runtime, per-neutron) */
+typedef struct {
+  int    index;     /* index into bragg_refl array */
+  double refl;      /* scattering probability for this reflection */
+  double xsect;     /* refl * F2 */
+} pdft_tau_data;
+
+/* ======================================================================
+   Lattice / reciprocal space info
+   ====================================================================== */
+typedef struct {
+  /* Direct space lattice vectors (AA) */
+  double m_ax, m_ay, m_az;
+  double m_bx, m_by, m_bz;
+  double m_cx, m_cy, m_cz;
+  /* Reciprocal space lattice vectors (AA^-1), include 2*PI */
+  double asx, asy, asz;
+  double bsx, bsy, bsz;
+  double csx, csy, csz;
+  /* Unit cell volume (AA^3) */
+  double V0;
+} pdft_lattice;
+
+/* ======================================================================
+   Main info struct for the component instance
+   ====================================================================== */
+typedef struct {
+  pdft_lattice lattice;
+  
+  /* Bragg reflections */
+  pdft_bragg_refl *bragg_list;
+  int    bragg_count;
+  int    flag_barns;
+  
+  /* Material properties */
+  double sigma_a;   /* absorption cross section per unit cell at 2200 m/s */
+  double sigma_i;   /* incoherent cross section per unit cell */
+  double DW;        /* Debye-Waller factor */
+  
+  /* Geometry */
+  int shape;        /* 0:cylinder, 1:box, 2:sphere */
+  
+  /* Diagnostics */
+  int flag_warning;
+} pdft_info;
+
+/* ======================================================================
+   Lattice computation: angles+lengths → vectors → reciprocal
+   Follows Single_crystal convention.
+   ====================================================================== */
+void pdft_compute_lattice(pdft_lattice *lat,
+                          double a, double b, double c,
+                          double aa, double bb, double cc,
+                          double ax, double ay, double az,
+                          double bx, double by, double bz,
+                          double cx, double cy, double cz)
+{
+  double tmp_x, tmp_y, tmp_z;
+  double sin_cc, cx_sq;
+  
+  /* If lattice vectors are given directly, use them */
+  if (ax || ay || az || bx || by || bz || cx || cy || cz) {
+    lat->m_ax = ax; lat->m_ay = ay; lat->m_az = az;
+    lat->m_bx = bx; lat->m_by = by; lat->m_bz = bz;
+    lat->m_cx = cx; lat->m_cy = cy; lat->m_cz = cz;
+  }
+  /* Otherwise compute from lengths + angles */
+  else if (a > 0) {
+    if (b <= 0) b = a;
+    if (c <= 0) c = a;
+    /* Convention: b along z, a in yz-plane, c has x-component */
+    /* (Same as Single_crystal) */
+    sin_cc = sin(cc*DEG2RAD);
+    if (fabs(sin_cc) < 1e-10) {
+      fprintf(stderr, "Phonon_DFT: ERROR: Lattice angle gamma=%g degrees is degenerate!\n", cc);
+      exit(-1);
+    }
+    lat->m_bx = 0;         lat->m_by = 0;         lat->m_bz = a;
+    lat->m_ax = 0;         lat->m_ay = b*sin_cc; lat->m_az = b*cos(cc*DEG2RAD);
+    lat->m_cz = c*cos(bb*DEG2RAD);
+    lat->m_cy = c*(cos(aa*DEG2RAD) - cos(cc*DEG2RAD)*cos(bb*DEG2RAD)) / sin_cc;
+    cx_sq = c*c - lat->m_cz*lat->m_cz - lat->m_cy*lat->m_cy;
+    lat->m_cx = (cx_sq > 0) ? sqrt(cx_sq) : 0;
+  } else {
+    fprintf(stderr, "Phonon_DFT: ERROR: No lattice parameters specified!\n");
+    exit(-1);
+  }
+  
+  /* Compute reciprocal lattice vectors: a* = 2*PI * (b x c) / V0 */
+  /* V0 = a . (b x c) */
+  vec_prod(tmp_x, tmp_y, tmp_z,
+           lat->m_bx, lat->m_by, lat->m_bz,
+           lat->m_cx, lat->m_cy, lat->m_cz);
+  lat->V0 = fabs(scalar_prod(lat->m_ax, lat->m_ay, lat->m_az,
+                              tmp_x, tmp_y, tmp_z));
+  
+  if (lat->V0 <= 0) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Unit cell volume is zero or negative!\n");
+    exit(-1);
+  }
+  
+  lat->asx = 2*PI/lat->V0 * tmp_x;
+  lat->asy = 2*PI/lat->V0 * tmp_y;
+  lat->asz = 2*PI/lat->V0 * tmp_z;
+  
+  vec_prod(tmp_x, tmp_y, tmp_z,
+           lat->m_cx, lat->m_cy, lat->m_cz,
+           lat->m_ax, lat->m_ay, lat->m_az);
+  lat->bsx = 2*PI/lat->V0 * tmp_x;
+  lat->bsy = 2*PI/lat->V0 * tmp_y;
+  lat->bsz = 2*PI/lat->V0 * tmp_z;
+  
+  vec_prod(tmp_x, tmp_y, tmp_z,
+           lat->m_ax, lat->m_ay, lat->m_az,
+           lat->m_bx, lat->m_by, lat->m_bz);
+  lat->csx = 2*PI/lat->V0 * tmp_x;
+  lat->csy = 2*PI/lat->V0 * tmp_y;
+  lat->csz = 2*PI/lat->V0 * tmp_z;
+}
+
+/* ======================================================================
+   Read Bragg reflections from file (CIF/LAU/LAZ via cif2hkl)
+   Simplified version of Single_crystal's read_hkl_data
+   ====================================================================== */
+
+#ifndef CIF2HKL
+#define CIF2HKL
+
+/* Validate filename contains no shell metacharacters.
+   Returns 1 if safe, 0 if potentially dangerous. */
+static int pdft_filename_is_safe(const char *path) {
+  const char *p;
+  if (!path) return 0;
+  for (p = path; *p; p++) {
+    /* Reject characters that could be used for shell injection */
+    if (*p == ';' || *p == '|' || *p == '&' || *p == '$' ||
+        *p == '`' || *p == '\'' || *p == '"' || *p == '\\' ||
+        *p == '\n' || *p == '\r' || *p == '(' || *p == ')' ||
+        *p == '{' || *p == '}' || *p == '<' || *p == '>') {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+char *cif2hkl(char *infile, char *options) {
+  char cmd[1024];
+  int  ret = 0;
+  int  found = 0;
+  char *OUTFILE;
+  char *inpath;
+  FILE *f_infile;
+  FILE *file;
+  const char *ext;
+  
+  ext = strrchr(infile, '.');
+  if (!ext || ext == infile) return infile;
+  else ext++;
+  
+  if (strcasecmp(ext, "cif")
+      && strcasecmp(ext, "pcr")
+      && strcasecmp(ext, "cfl")
+      && strcasecmp(ext, "shx")
+      && strcasecmp(ext, "ins")
+      && strcasecmp(ext, "res")) return infile;
+  
+  OUTFILE = malloc(1024);
+  if (!OUTFILE) return infile;
+  inpath = malloc(1024);
+  if (!inpath) { free(OUTFILE); return infile; }
+
+  f_infile = Open_File(infile, "r", inpath);
+  if (!f_infile) { free(OUTFILE); free(inpath); return infile; }
+  fclose(f_infile);
+  
+  /* Validate filenames before passing to system() */
+  if (!pdft_filename_is_safe(inpath)) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Filename contains unsafe characters: %s\n", inpath);
+    free(OUTFILE); free(inpath);
+    return NULL;
+  }
+  
+  /* Create a temporary filename (cross-platform: works on Windows and Linux) */
+  {
+    char *tmp = tmpnam(NULL);
+    if (!tmp) {
+      fprintf(stderr, "Phonon_DFT: ERROR: Could not create temporary filename\n");
+      free(OUTFILE); free(inpath);
+      return NULL;
+    }
+    strncpy(OUTFILE, tmp, 1023);
+    OUTFILE[1023] = '\0';
+  }
+  
+  if (!found && getenv("CIF2HKL")) {
+    snprintf(cmd, 1024, "%s -o %s %s %s",
+             getenv("CIF2HKL"), OUTFILE, options, inpath);
+    ret = system(cmd);
+    if (ret != -1 && ret != 127) found = 1;
+  }
+  if (!found) {
+    snprintf(cmd, 1024, "%s -o %s %s %s",
+             "cif2hkl", OUTFILE, options, inpath);
+    ret = system(cmd);
+    if (ret != -1 && ret != 127) found = 1;
+  }
+  if (!found) {
+    snprintf(cmd, 1024, "%s%c%s%c%s -o %s %s %s",
+             getenv(FLAVOR_UPPER) ? getenv(FLAVOR_UPPER) : MCSTAS,
+             MC_PATHSEP_C, "bin", MC_PATHSEP_C, "cif2hkl",
+             OUTFILE, options, inpath);
+    ret = system(cmd);
+  }
+  if (ret == -1 || ret == 127) { free(OUTFILE); free(inpath); return NULL; }
+  
+  file = fopen(OUTFILE, "r");
+  if (!file) { free(OUTFILE); free(inpath); return NULL; }
+  MPI_MASTER(
+    printf("Phonon_DFT: Converting %s into F2(HKL) list %s\n", inpath, OUTFILE);
+  );
+  fclose(file);
+  free(inpath);  /* inpath no longer needed after this point */
+  return OUTFILE;
+}
+#endif /* CIF2HKL */
+
+int pdft_read_bragg(char *SC_file, pdft_info *info)
+{
+  t_Table sTable;
+  int i, size, count;
+  char **parsing;
+  char *filename = NULL;
+  int col_h = 1, col_k = 2, col_l = 3, col_F = 0, col_F2 = 0;
+  pdft_lattice *lat;
+  double file_a, file_b, file_c;
+  double file_aa, file_bb, file_cc;
+  double h, k, l, F2, F_val;
+  pdft_bragg_refl sort_tmp;
+  int sort_j;
+  
+  lat = &(info->lattice);
+  
+  if (!SC_file || !strlen(SC_file) || !strcmp(SC_file, "NULL") || !strcmp(SC_file, "0")) {
+    info->bragg_count = 0;
+    return 0;
+  }
+  
+  filename = cif2hkl(SC_file, "--xtal --mode NUC");
+  if (filename != SC_file) info->flag_barns = 1; /* cif2hkl returns barns */
+  
+  if (Table_Read(&sTable, filename, 1) <= 0) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Could not read file %s\n", SC_file);
+    return -1;
+  }
+  
+  /* Parse header for metadata */
+  parsing = Table_ParseHeader(sTable.header,
+    "sigma_abs", "sigma_a ",
+    "sigma_inc", "sigma_i ",
+    "column_h", "column_k", "column_l",
+    "column_F ", "column_F2",
+    "lattice_a ", "lattice_b ", "lattice_c ",
+    "lattice_aa", "lattice_bb", "lattice_cc",
+    "Vc",
+    NULL);
+  
+  if (parsing) {
+    if (parsing[0] && !info->sigma_a)  info->sigma_a  = atof(parsing[0]);
+    if (parsing[1] && !info->sigma_a)  info->sigma_a  = atof(parsing[1]);
+    if (parsing[2] && !info->sigma_i)  info->sigma_i  = atof(parsing[2]);
+    if (parsing[3] && !info->sigma_i)  info->sigma_i  = atof(parsing[3]);
+    if (parsing[4])  col_h  = atoi(parsing[4]);
+    if (parsing[5])  col_k  = atoi(parsing[5]);
+    if (parsing[6])  col_l  = atoi(parsing[6]);
+    if (parsing[7])  col_F  = atoi(parsing[7]);
+    if (parsing[8])  col_F2 = atoi(parsing[8]);
+    /* Lattice parameters from file (only if not already set by user) */
+    file_a = 0; file_b = 0; file_c = 0;
+    file_aa = 0; file_bb = 0; file_cc = 0;
+    if (parsing[9])  file_a  = atof(parsing[9]);
+    if (parsing[10]) file_b  = atof(parsing[10]);
+    if (parsing[11]) file_c  = atof(parsing[11]);
+    if (parsing[12]) file_aa = atof(parsing[12]);
+    if (parsing[13]) file_bb = atof(parsing[13]);
+    if (parsing[14]) file_cc = atof(parsing[14]);
+    if (parsing[15] && lat->V0 <= 0) lat->V0 = atof(parsing[15]);
+    
+    /* If user hasn't set lattice and file has it, recompute */
+    if (file_a > 0 && lat->V0 <= 0) {
+      if (file_b <= 0) file_b = file_a;
+      if (file_c <= 0) file_c = file_a;
+      if (file_aa <= 0) file_aa = 90;
+      if (file_bb <= 0) file_bb = 90;
+      if (file_cc <= 0) file_cc = 90;
+      pdft_compute_lattice(lat, file_a, file_b, file_c,
+                           file_aa, file_bb, file_cc,
+                           0, 0, 0, 0, 0, 0, 0, 0, 0);
+      MPI_MASTER(
+        printf("Phonon_DFT: Lattice from file: a=%g b=%g c=%g  V0=%g AA^3\n",
+               file_a, file_b, file_c, lat->V0);
+      );
+    }
+    
+    for (i = 0; i <= 15; i++) if (parsing[i]) free(parsing[i]);
+    free(parsing);
+  }
+  
+  if (lat->V0 <= 0) {
+    fprintf(stderr, "Phonon_DFT: ERROR: No unit cell volume! Provide lattice parameters.\n");
+    Table_Free(&sTable);
+    return -1;
+  }
+  
+  size = sTable.rows;
+  if (!size) {
+    fprintf(stderr, "Phonon_DFT: ERROR: No reflections in %s\n", SC_file);
+    Table_Free(&sTable);
+    return -1;
+  }
+  
+  info->bragg_list = (pdft_bragg_refl *)malloc(size * sizeof(pdft_bragg_refl));
+  if (!info->bragg_list) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Memory allocation failed for reflections\n");
+    Table_Free(&sTable);
+    return -1;
+  }
+  
+  count = 0;
+  for (i = 0; i < size; i++) {
+    h = Table_Index(sTable, i, col_h - 1);
+    k = Table_Index(sTable, i, col_k - 1);
+    l = Table_Index(sTable, i, col_l - 1);
+    
+    if (col_F2) {
+      F2 = Table_Index(sTable, i, col_F2 - 1);
+    } else if (col_F) {
+      F_val = Table_Index(sTable, i, col_F - 1);
+      F2 = F_val * F_val;
+    } else {
+      /* Neither column_F nor column_F2 specified in header;
+         try column 7 as default F2 (Crystallographica format) */
+      if (sTable.columns >= 7)
+        F2 = Table_Index(sTable, i, 6);
+      else if (sTable.columns >= 4)
+        F2 = Table_Index(sTable, i, 3);  /* column 4 as fallback */
+      else
+        F2 = 0;
+    }
+    
+    if (F2 <= 0) continue;  /* skip zero-intensity reflections */
+    
+    info->bragg_list[count].h = (int)h;
+    info->bragg_list[count].k = (int)k;
+    info->bragg_list[count].l = (int)l;
+    info->bragg_list[count].F2 = F2;
+    
+    /* Compute tau = h*a* + k*b* + l*c* in AA^-1 */
+    info->bragg_list[count].tau_x = h * lat->asx + k * lat->bsx + l * lat->csx;
+    info->bragg_list[count].tau_y = h * lat->asy + k * lat->bsy + l * lat->csy;
+    info->bragg_list[count].tau_z = h * lat->asz + k * lat->bsz + l * lat->csz;
+    info->bragg_list[count].tau = sqrt(
+      info->bragg_list[count].tau_x * info->bragg_list[count].tau_x +
+      info->bragg_list[count].tau_y * info->bragg_list[count].tau_y +
+      info->bragg_list[count].tau_z * info->bragg_list[count].tau_z);
+    
+    count++;
+  }
+  
+  info->bragg_count = count;
+  
+  /* Sort by |tau| for early termination in Ewald search */
+  /* Simple insertion sort is fine for a few hundred reflections */
+  for (i = 1; i < count; i++) {
+    sort_tmp = info->bragg_list[i];
+    sort_j = i - 1;
+    while (sort_j >= 0 && info->bragg_list[sort_j].tau > sort_tmp.tau) {
+      info->bragg_list[sort_j + 1] = info->bragg_list[sort_j];
+      sort_j--;
+    }
+    info->bragg_list[sort_j + 1] = sort_tmp;
+  }
+  
+  Table_Free(&sTable);
+  
+  /* Clean up temporary cif2hkl output */
+  if (filename != SC_file) {
+    unlink(filename);
+    free(filename);
+  }
+  
+  return count;
+}
+
+/* ======================================================================
+   Bragg search: find reflections near the Ewald sphere
+   
+   Simplified version of Single_crystal's hkl_search.
+   Instead of the full tangent-plane + Cholesky model, we use a simple
+   Gaussian cutoff in |tau| - 2*ki*sin(theta)| space, parameterized
+   by delta_d_d.
+   
+   Returns: number of active reflections (tau_count)
+   Updates: coh_refl (total reflection probability), coh_xsect (total F2-weighted)
+   ====================================================================== */
+#ifndef _MSC_VER
+#pragma acc routine
+#endif
+int pdft_bragg_search(pdft_bragg_refl *L, pdft_tau_data *tlist,
+                      int count, double V0,
+                      double kix, double kiy, double kiz,
+                      double delta_d_d,
+                      double *coh_refl, double *coh_xsect)
+{
+  double ki, denom, tau_max;
+  int j, i;
+  double rho_x, rho_y, rho_z, rho, diff, sigma_tau, w;
+  
+  ki = sqrt(kix*kix + kiy*kiy + kiz*kiz);
+  denom = 1 - 5 * delta_d_d;
+  tau_max = (denom > 0.01) ? (2 * ki / denom) : (200 * ki);  /* clamp for large delta_d_d */
+  j = 0;
+  
+  *coh_refl = 0;
+  *coh_xsect = 0;
+  
+  for (i = 0; i < count; i++) {
+    if (L[i].tau > tau_max) break;  /* sorted by tau, so we can stop */
+    
+    /* Vector from reciprocal lattice point to tip of ki: rho = ki - tau */
+    rho_x = kix - L[i].tau_x;
+    rho_y = kiy - L[i].tau_y;
+    rho_z = kiz - L[i].tau_z;
+    rho = sqrt(rho_x*rho_x + rho_y*rho_y + rho_z*rho_z);
+    
+    /* For elastic scattering, |kf| = |ki|, so |rho| should equal |ki|.
+       The deviation from the Ewald sphere is |rho| - ki. */
+    diff = fabs(rho - ki);
+    
+    /* Gaussian mosaic width in reciprocal space: sigma = delta_d_d * |tau| */
+    sigma_tau = delta_d_d * L[i].tau;
+    if (sigma_tau <= 0) continue;
+    
+    /* Gaussian cutoff at 5 sigma */
+    if (diff > 5 * sigma_tau) continue;
+    
+    /* Gaussian weight */
+    w = exp(-0.5 * diff * diff / (sigma_tau * sigma_tau));
+    
+    /* Cross-section factor (simplified from Single_crystal) */
+    tlist[j].index = i;
+    tlist[j].refl = w / (V0 * ki * ki * sigma_tau);
+    tlist[j].xsect = tlist[j].refl * L[i].F2;
+    *coh_refl += tlist[j].refl;
+    *coh_xsect += tlist[j].xsect;
+    j++;
+    
+    if (j >= PDFT_MAX_TAU) break;  /* safety limit */
+  }
+  
+  return j;
+}
+
+#endif /* PHONON_DFT_DECL */
+%}
+
+DECLARE
+%{
+  pdft_info info;
+%}
+
+INITIALIZE
+%{
+  /* ALL declarations at top of block for MSVC C89 compatibility */
+  int nrefl;
+  Coords ToTarget;
+
+  /* Initialize info struct */
+  memset(&info, 0, sizeof(pdft_info));
+  info.sigma_a = sigma_abs;
+  info.sigma_i = sigma_inc;
+  info.DW = debye_waller;
+  info.flag_barns = barns;
+  
+  /* --- Geometry --- */
+  if (xwidth > 0 && yheight > 0 && zdepth > 0)      info.shape = 1;  /* box */
+  else if (radius > 0 && yheight > 0)                 info.shape = 0;  /* cylinder */
+  else if (radius > 0 && yheight == 0)                 info.shape = 2;  /* sphere */
+  else {
+    fprintf(stderr, "Phonon_DFT: %s: ERROR: Invalid sample dimensions.\n"
+            "  Specify radius+yheight (cylinder), xwidth+yheight+zdepth (box), "
+            "or radius alone (sphere).\n", NAME_CURRENT_COMP);
+    exit(-1);
+  }
+  
+  /* --- Lattice --- */
+  /* Compute lattice from user-specified parameters */
+  if (a > 0 || ax || ay || az || bx || by || bz_l || cx || cy || cz) {
+    pdft_compute_lattice(&info.lattice, a, b, c, alpha, beta, gamma_l,
+                         ax, ay, az, bx, by, bz_l, cx, cy, cz);
+    MPI_MASTER(
+      printf("Phonon_DFT: %s: User lattice: V0=%g AA^3\n",
+             NAME_CURRENT_COMP, info.lattice.V0);
+    );
+  }
+  /* else: lattice may come from the reflection file header */
+  
+  /* --- Read Bragg reflections --- */
+  if (reflections && strlen(reflections) && strcmp(reflections, "NULL")) {
+    nrefl = pdft_read_bragg(reflections, &info);
+    if (nrefl < 0) {
+      fprintf(stderr, "Phonon_DFT: %s: ERROR reading reflections. Aborting.\n",
+              NAME_CURRENT_COMP);
+      exit(-1);
+    }
+    MPI_MASTER(
+      printf("Phonon_DFT: %s: Loaded %d Bragg reflections from '%s'\n",
+             NAME_CURRENT_COMP, info.bragg_count, reflections);
+    );
+  } else {
+    MPI_MASTER(
+      printf("Phonon_DFT: %s: No reflections file. Incoherent scattering only.\n",
+             NAME_CURRENT_COMP);
+    );
+  }
+  
+  /* Validate lattice was set (either by user or file) */
+  if (info.lattice.V0 <= 0) {
+    fprintf(stderr, "Phonon_DFT: %s: ERROR: No lattice defined. "
+            "Provide a, b, c or ax/ay/az etc., or a CIF file with lattice info.\n",
+            NAME_CURRENT_COMP);
+    exit(-1);
+  }
+  
+  /* Validate cross sections */
+  if (info.sigma_a < 0) info.sigma_a = 0;
+  if (info.sigma_i < 0) info.sigma_i = 0;
+  
+  MPI_MASTER(
+    printf("Phonon_DFT: %s: V0=%g [AA^3]  sigma_abs=%g [barn]  sigma_inc=%g [barn]\n",
+           NAME_CURRENT_COMP, info.lattice.V0, info.sigma_a, info.sigma_i);
+    printf("  Direct lattice:     a=[%g, %g, %g]  b=[%g, %g, %g]  c=[%g, %g, %g]\n",
+           info.lattice.m_ax, info.lattice.m_ay, info.lattice.m_az,
+           info.lattice.m_bx, info.lattice.m_by, info.lattice.m_bz,
+           info.lattice.m_cx, info.lattice.m_cy, info.lattice.m_cz);
+    printf("  Reciprocal lattice: a*=[%g, %g, %g]  b*=[%g, %g, %g]  c*=[%g, %g, %g]\n",
+           info.lattice.asx, info.lattice.asy, info.lattice.asz,
+           info.lattice.bsx, info.lattice.bsy, info.lattice.bsz,
+           info.lattice.csx, info.lattice.csy, info.lattice.csz);
+  );
+  
+  /* --- Focusing target --- */
+  /* Note: target_index=0 with target_x/y/z=0 defaults to target_index=1
+     (next component). This matches the McStas convention in Phonon_simple,
+     Magnon_bcc, etc. To use explicit coordinates with no index-based
+     targeting, set target_index=-1 or provide nonzero target_x/y/z. */
+  if (target_index == 0 && target_x == 0 && target_y == 0 && target_z == 0)
+    target_index = 1;
+  if (target_index > 0) {
+    ToTarget = coords_sub(POS_A_COMP_INDEX(INDEX_CURRENT_COMP + (int)target_index),
+                          POS_A_CURRENT_COMP);
+    ToTarget = rot_apply(ROT_A_CURRENT_COMP, ToTarget);
+    coords_get(ToTarget, &target_x, &target_y, &target_z);
+  }
+  if (!(target_x || target_y || target_z)) {
+    printf("Phonon_DFT: %s: No target defined. Using direct beam (Z-axis).\n",
+           NAME_CURRENT_COMP);
+    target_z = 1;
+  }
+%}
+
+TRACE
+%{
+  /* ALL declarations at top of TRACE for MSVC C89 compatibility */
+  double t1, t2;                  /* Entry/exit times */
+  int    intersect;
+  double v_i, ki;                 /* Neutron speed and wavevector */
+  double kix, kiy, kiz;           /* Incoming wavevector components */
+  double l_full;                  /* Full path length through sample */
+  double l_i, l_o;                /* Path in/out to scattering point */
+  double dt0, dt;                 /* Flight times */
+  double V0;                      /* Unit cell volume */
+  double abs_xlen, inc_xlen, coh_xlen, tot_xlen;
+  double coh_refl, coh_xsect;
+  int    tau_count;
+  pdft_tau_data pdft_tlist[PDFT_MAX_TAU]; /* renamed from T to avoid McStas collision */
+  double p_trans, mc_trans, mc_interact;
+  double kfx, kfy, kfz;
+  char   type;
+  /* Variables used inside scattering blocks - declared here for C89 */
+  double l_scatter;
+  double bragg_r, bragg_sum;
+  int    bragg_j, bragg_idx;
+  double kf_len, kf_adjust;
+  double pmul;
+  double cos_theta, sin_theta, phi_rand;
+
+  intersect = 0;
+  type = 't';
+
+  /* --- Geometry intersection --- */
+  if (info.shape == 0)
+    intersect = cylinder_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius, yheight);
+  else if (info.shape == 1)
+    intersect = box_intersect(&t1, &t2, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
+  else if (info.shape == 2)
+    intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
+  
+  if (!intersect || t2 <= 0) {
+    /* Missed or already past */
+  }
+  else {
+    if (t1 > 0) PROP_DT(t1);  /* Move to sample surface */
+    
+    v_i = sqrt(vx*vx + vy*vy + vz*vz);
+    ki = V2K * v_i;
+    kix = V2K * vx;
+    kiy = V2K * vy;
+    kiz = V2K * vz;
+    V0 = info.lattice.V0;
+    
+    /* Recompute intersection from current position (now on surface) */
+    if (info.shape == 0)
+      intersect = cylinder_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius, yheight);
+    else if (info.shape == 1)
+      intersect = box_intersect(&t1, &t2, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
+    else if (info.shape == 2)
+      intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
+    
+    l_full = v_i * t2;
+    
+    /* --- Cross sections (all in m^-1) --- */
+    /* Absorption: sigma_a is at 2200 m/s, scales as 1/v */
+    abs_xlen = info.sigma_a * 2200 / v_i / V0 * 100;  /* barns/AA^3 -> m^-1 */
+    inc_xlen = info.sigma_i / V0 * 100;
+    
+    /* --- Bragg cross section --- */
+    tau_count = 0;
+    coh_refl = 0;
+    coh_xsect = 0;
+    
+    if (info.bragg_count > 0) {
+      tau_count = pdft_bragg_search(info.bragg_list, pdft_tlist,
+                                    info.bragg_count, V0,
+                                    kix, kiy, kiz,
+                                    delta_d_d,
+                                    &coh_refl, &coh_xsect);
+    }
+    
+    coh_xlen = coh_xsect / V0;
+    if (info.flag_barns) coh_xlen *= 100;
+    
+    tot_xlen = abs_xlen + inc_xlen + coh_xlen;
+    
+    /* --- Transmission decision --- */
+    if (tot_xlen <= 0) {
+      /* Nothing can happen, transmit */
+    }
+    else {
+      p_trans = exp(-tot_xlen * l_full);
+      mc_trans = 1.0 - p_interact;
+      if (mc_trans < 0) mc_trans = 0;
+      if (mc_trans > 1) mc_trans = 1;
+      mc_interact = 1.0 - mc_trans;
+      
+      if (mc_trans >= 1 || (mc_trans > 0 && rand01() < mc_trans)) {
+        /* Transmit */
+        p *= p_trans / mc_trans;
+        type = 't';
+      }
+      else {
+        /* --- Scattering --- */
+        p *= fabs(1.0 - p_trans) / mc_interact;
+        
+        /* Choose scattering point along path (following Single_crystal) */
+        if (tot_xlen * l_full < 1e-6)
+          l_scatter = rand0max(l_full);  /* weak scattering: uniform */
+        else
+          l_scatter = -log(1 - rand0max(1 - exp(-tot_xlen * l_full))) / tot_xlen;
+        
+        l_i = l_scatter;
+        dt = l_scatter / v_i;
+        PROP_DT(dt);
+        
+        /* Account for absorption probability (fraction that scatters vs absorbs) */
+        if (coh_xlen + inc_xlen > 0) {
+          p *= (coh_xlen + inc_xlen) / tot_xlen;
+        } else {
+          /* Only absorption, no scattering channels available */
+          ABSORB;
+        }
+        
+        /* --- Choose channel: coherent (Bragg) vs incoherent --- */
+        if (coh_xlen > 0 && rand0max(coh_xlen + inc_xlen) > inc_xlen) {
+          /* ============ BRAGG SCATTERING ============ */
+          
+          /* Select reflection, weighted by refl probability */
+          bragg_r = rand0max(coh_refl);
+          bragg_sum = 0;
+          for (bragg_j = 0; bragg_j < tau_count; bragg_j++) {
+            bragg_sum += pdft_tlist[bragg_j].refl;
+            if (bragg_sum > bragg_r) break;
+          }
+          if (bragg_j >= tau_count) bragg_j = tau_count - 1;
+          
+          bragg_idx = pdft_tlist[bragg_j].index;
+          
+          /* kf = ki - tau (elastic Bragg: momentum conservation) */
+          kfx = kix - info.bragg_list[bragg_idx].tau_x;
+          kfy = kiy - info.bragg_list[bragg_idx].tau_y;
+          kfz = kiz - info.bragg_list[bragg_idx].tau_z;
+          
+          /* Normalize |kf| = |ki| (elastic scattering, Ewald sphere) */
+          kf_len = sqrt(kfx*kfx + kfy*kfy + kfz*kfz);
+          if (kf_len > 0) {
+            kf_adjust = ki / kf_len;
+            kfx *= kf_adjust;
+            kfy *= kf_adjust;
+            kfz *= kf_adjust;
+          }
+          
+          /* Set final velocity */
+          vx = kfx * K2V;
+          vy = kfy * K2V;
+          vz = kfz * K2V;
+          
+          /* Weight adjustment: selected reflection vs total */
+          if (coh_xsect > 0 && pdft_tlist[bragg_j].refl > 0) {
+            pmul = pdft_tlist[bragg_j].xsect * coh_refl
+                   / (coh_xsect * pdft_tlist[bragg_j].refl);
+            if (!isnan(pmul) && pmul > 0) p *= pmul;
+          }
+          
+          /* Debye-Waller factor */
+          p *= info.DW;
+          
+          type = 'c';
+          SCATTER;
+        }
+        else {
+          /* ============ INCOHERENT SCATTERING ============ */
+          
+          /* Isotropic random direction over 4pi, same |v| (elastic) */
+          cos_theta = 2*rand01() - 1;  /* uniform in [-1, 1] */
+          sin_theta = sqrt(1 - cos_theta*cos_theta);
+          phi_rand = 2*PI*rand01();
+          vx = v_i * sin_theta * cos(phi_rand);
+          vy = v_i * sin_theta * sin(phi_rand);
+          vz = v_i * cos_theta;
+          
+          type = 'i';
+          SCATTER;
+        }
+        
+        /* --- Outgoing path length (for future use / diagnostics) --- */
+        /* Note: absorption is already accounted for by the 
+           (1-p_trans)/mc_interact weight factor above, which uses tot_xlen 
+           integrated over l_full. For single-scattering this is correct.
+           A per-path absorption correction would be needed for multiple
+           scattering (future Phase 2). */
+      }
+    }
+  }
+%}
+
+FINALLY
+%{
+  if (info.bragg_list) free(info.bragg_list);
+%}
+
+MCDISPLAY
+%{
+  if (info.shape == 0) {  /* cylinder */
+    circle("xz", 0,  yheight/2.0, 0, radius);
+    circle("xz", 0, -yheight/2.0, 0, radius);
+    line(-radius, -yheight/2.0, 0, -radius, +yheight/2.0, 0);
+    line(+radius, -yheight/2.0, 0, +radius, +yheight/2.0, 0);
+    line(0, -yheight/2.0, -radius, 0, +yheight/2.0, -radius);
+    line(0, -yheight/2.0, +radius, 0, +yheight/2.0, +radius);
+  }
+  else if (info.shape == 1) {  /* box */
+    double xmin = -0.5*xwidth;
+    double xmax =  0.5*xwidth;
+    double ymin = -0.5*yheight;
+    double ymax =  0.5*yheight;
+    double zmin = -0.5*zdepth;
+    double zmax =  0.5*zdepth;
+    multiline(5, xmin, ymin, zmin, xmax, ymin, zmin,
+                 xmax, ymax, zmin, xmin, ymax, zmin, xmin, ymin, zmin);
+    multiline(5, xmin, ymin, zmax, xmax, ymin, zmax,
+                 xmax, ymax, zmax, xmin, ymax, zmax, xmin, ymin, zmax);
+    line(xmin, ymin, zmin, xmin, ymin, zmax);
+    line(xmax, ymin, zmin, xmax, ymin, zmax);
+    line(xmin, ymax, zmin, xmin, ymax, zmax);
+    line(xmax, ymax, zmin, xmax, ymax, zmax);
+  }
+  else if (info.shape == 2) {  /* sphere */
+    circle("xy", 0, 0, 0, radius);
+    circle("xz", 0, 0, 0, radius);
+    circle("yz", 0, 0, 0, radius);
+  }
+%}
+
+END
