@@ -305,16 +305,22 @@ char *cif2hkl(char *infile, char *options) {
     return NULL;
   }
   
-  /* Create a temporary filename (cross-platform: works on Windows and Linux) */
+  /* Create a temporary filename securely using mkstemp */
   {
-    char *tmp = tmpnam(NULL);
-    if (!tmp) {
-      fprintf(stderr, "Phonon_DFT: ERROR: Could not create temporary filename\n");
+    int fd;
+
+    /* Template must end with XXXXXX for mkstemp */
+    strncpy(OUTFILE, "pdft_tmp_XXXXXX", 1023);
+    OUTFILE[1023] = '\0';
+
+    fd = mkstemp(OUTFILE);
+    if (fd == -1) {
+      fprintf(stderr, "Phonon_DFT: ERROR: Could not create temporary file\n");
       free(OUTFILE); free(inpath);
       return NULL;
     }
-    strncpy(OUTFILE, tmp, 1023);
-    OUTFILE[1023] = '\0';
+    /* We only need the unique filename; external tools will overwrite the file */
+    close(fd);
   }
   
   if (!found && getenv("CIF2HKL")) {
