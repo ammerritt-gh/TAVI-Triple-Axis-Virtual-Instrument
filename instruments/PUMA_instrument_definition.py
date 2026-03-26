@@ -622,6 +622,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         monochromator.reflect = monochromator_info['reflect']
         monochromator.transmit = monochromator_info['transmit']
         monochromator.append_EXTEND("if(!SCATTERED) ABSORB;")
+        monochromator.set_SPLIT(2)
 
         ## sample arm
 
@@ -1018,6 +1019,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             Al_rod_phonon.target_index = +2
             Al_rod_phonon.focus_aw = 5
             Al_rod_phonon.focus_ah = 15
+            Al_rod_phonon.set_SPLIT(100)
             try:
                 Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;")
             except Exception:
@@ -1039,6 +1041,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             Al_rod_phonon_optic.target_index = +2
             Al_rod_phonon_optic.focus_aw = 5
             Al_rod_phonon_optic.focus_ah = 15
+            Al_rod_phonon_optic.set_SPLIT(100)
             try:
                 Al_rod_phonon_optic.append_EXTEND("if(!SCATTERED) ABSORB;")
             except Exception:
@@ -1050,6 +1053,38 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             Al_Bragg.yheight = 30e-3
             Al_Bragg.mosaic = 5
             Al_Bragg.sigma_inc = -1
+            Al_Bragg.set_SPLIT(100)
+        elif sample_key == "Al_phonon_DFT":
+            Al_phonon_DFT = instrument.add_component(
+                "Al_phonon_DFT", "Phonon_DFT",
+                AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_cradle"
+            )
+            # --- Bragg scattering (pre-converted LAZ, avoids cif2hkl dependency) ---
+            Al_phonon_DFT.reflections = '"Al_mp-134_symmetrized.laz"'
+            Al_phonon_DFT.delta_d_d = 1.45e-3
+            Al_phonon_DFT.barns = 1
+            # --- Phonon scattering from dispersion file ---
+            Al_phonon_DFT.dispersion = '"Al_test_phonons.dat"'
+            Al_phonon_DFT.tessellate = 1
+            Al_phonon_DFT.phonon_e_steps = 50
+            # --- Sample geometry ---
+            Al_phonon_DFT.radius = 5e-3
+            Al_phonon_DFT.yheight = 30e-3
+            # --- Material parameters ---
+            Al_phonon_DFT.a = 4.03893
+            Al_phonon_DFT.sigma_abs = 0
+            Al_phonon_DFT.sigma_inc = 0.0
+            Al_phonon_DFT.debye_waller = 1
+            Al_phonon_DFT.T = 300
+            # --- Channel balance ---
+            Al_phonon_DFT.p_interact = 1.0
+            Al_phonon_DFT.p_phonon = 0.1
+            Al_phonon_DFT.phonon_gamma = 0.0
+            # --- Focusing ---
+            Al_phonon_DFT.target_index = +2
+            Al_phonon_DFT.focus_aw = 5.0
+            Al_phonon_DFT.focus_ah = 15.0
+            Al_phonon_DFT.set_SPLIT(100)
         else:
             # No sample selected; proceed without adding a sample component.
             print("Warning: No sample selected for instrument run; running without sample component.")
@@ -1170,6 +1205,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         analyzer.reflect = analyzer_info['reflect']
         analyzer.transmit = analyzer_info['transmit']
         analyzer.order = 0 # all orders
+        analyzer.set_SPLIT(5)
 
         ## detector
 
