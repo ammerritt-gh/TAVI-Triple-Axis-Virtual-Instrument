@@ -359,6 +359,9 @@ MigrationBackup/
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
 
+# VS Code files
+.vscode/*
+
 # TAVI-specific files
 # Output directory for simulation results
 output/
@@ -369,7 +372,6 @@ config/
 config/
 
 # McStas generated files
-*.dat
 *.html
 *.c
 *.out
