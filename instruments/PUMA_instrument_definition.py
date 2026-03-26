@@ -474,6 +474,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
     instrument.add_parameter("A2_param", comment="Sample 2-theta angle.")
     instrument.add_parameter("A3_param", comment="Sample phi angle.")
     instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
+    instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
     instrument.add_parameter("saz_param", comment="Sample azimuthal angle (out-of-plane).")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -511,17 +512,12 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         if PUMA.source_type == "Mono":
             source.energy_distribution = 0  # Uniform energy distribution
             source.dE = PUMA.source_dE  # User-configurable energy half-spread for Mono
-            # Match source E0 to the fixed energy (Ki or Kf mode)
-            if PUMA.K_fixed == "Ki Fixed":
-                source.E0 = PUMA.fixed_E
-            elif PUMA.K_fixed == "Kf Fixed":
-                source.E0 = PUMA.fixed_E + deltaE
-            else:
-                source.E0 = PUMA.fixed_E
+            # Use E0_param for source energy (allows runtime adjustment without recompilation)
+            source.E0 = "E0_param"
         else:  # Maxwellian
             source.energy_distribution = 2  # Maxwellian energy distribution
             source.dE = 3  # Default for Maxwellian (not used for sampling but affects weight)
-            source.E0 = 25  # Thermal peak energy for Maxwellian
+            source.E0 = "E0_param"  # Use E0_param for source energy (allows runtime adjustment without recompilation)
         source.divergence_distribution=0
 
         # hblende = instrument.add_component("hblende", "Slit", AT=[0, 0, 0.0001], RELATIVE="origin")
@@ -1078,7 +1074,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             Al_phonon_DFT.T = 300
             # --- Channel balance ---
             Al_phonon_DFT.p_interact = 1.0
-            Al_phonon_DFT.p_phonon = 0.1
+            Al_phonon_DFT.p_phonon = 0.95
             Al_phonon_DFT.phonon_gamma = 0.0
             # --- Focusing ---
             Al_phonon_DFT.target_index = +2
@@ -1259,11 +1255,22 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         if not error_flag_array: #check if the error flags are empty
             # Get individual sample angle components
             sample_angles = PUMA.get_sample_angle_components()
+            
+            # Calculate initial E0_param value based on source type and K_fixed mode
+            if PUMA.source_type == "Mono":
+                if PUMA.K_fixed == "Kf Fixed":
+                    E0_param_value = PUMA.fixed_E + deltaE
+                else:
+                    E0_param_value = PUMA.fixed_E
+            else:
+                E0_param_value = PUMA.fixed_E  # Thermal peak energy for Maxwellian
+            
             instrument.set_parameters(
                 A1_param=PUMA.A1,
                 A2_param=PUMA.A2,
                 A3_param=PUMA.A3,
                 A4_param=PUMA.A4,
+                E0_param=E0_param_value,
                 saz_param=PUMA.saz,
                 rhm_param=PUMA.rhm,
                 rvm_param=PUMA.rvm,
