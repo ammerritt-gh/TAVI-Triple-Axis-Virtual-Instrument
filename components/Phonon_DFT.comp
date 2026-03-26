@@ -70,6 +70,7 @@
 * target_y: [m]          Focusing target y
 * target_z: [m]          Focusing target z
 * target_index: [1]      Relative index of component to focus at
+* phonon_gamma: [meV]    Intrinsic phonon linewidth Gamma (Lorentzian FWHM). 0=delta function (root-finding), >0=Lorentzian spectral function. Per-point Gamma from column 7 of dispersion file overrides this value when present.
 *
 * OUTPUT PARAMETERS:
 * (none - scattering modifies the neutron state in-place via SCATTER/ABSORB)
@@ -84,6 +85,7 @@ DEFINE COMPONENT Phonon_DFT
 
 SETTING PARAMETERS (
   string reflections="NULL",
+  string dispersion="NULL",
   radius=0, yheight=0, xwidth=0, zdepth=0,
   sigma_abs=0, sigma_inc=0,
   a=0, b=0, c=0, alpha=90, beta=90, gamma_l=90,
@@ -92,8 +94,14 @@ SETTING PARAMETERS (
   cx=0, cy=0, cz=0,
   delta_d_d=1e-4, barns=1, debye_waller=1, T=300,
   p_interact=0.8,
+  p_phonon=0.5,
+  phonon_gamma=0,
+  int tessellate=1,
+  int phonon_e_steps=50,
   target_x=0, target_y=0, target_z=0,
-  target_index=0
+  target_index=0,
+  focus_r=0, focus_xw=0, focus_yh=0,
+  focus_aw=0, focus_ah=0
 )
 
 SHARE
@@ -147,6 +155,52 @@ typedef struct {
 } pdft_lattice;
 
 /* ======================================================================
+   PHONON KERNEL: typedefs needed before pdft_info
+   ====================================================================== */
+
+/* Maximum number of phonon branches */
+#define PDFT_MAX_BRANCHES 64
+
+/* Maximum number of phonon solutions (branches * 2 for Stokes/anti-Stokes) */
+#define PDFT_MAX_PHONON_ROOTS 128
+
+/* Phonon dispersion grid: regular grid in r.l.u., per-branch E and I */
+typedef struct {
+  int nx, ny, nz;           /* grid dimensions (number of nodes per axis) */
+  int num_branches;          /* number of phonon branches */
+  
+  /* Flattened 4D arrays: index = ((ix*ny + iy)*nz + iz)*num_branches + b */
+  double *E_data;            /* energy at each grid node, per branch (meV) */
+  double *I_data;            /* intensity at each grid node, per branch */
+  double *G_data;            /* linewidth Gamma at each grid node, per branch (meV FWHM), NULL if not in file */
+  
+  /* Grid range in r.l.u. (as given in file, not necessarily [-0.5,0.5]) */
+  double H_min, H_max;
+  double K_min, K_max;
+  double L_min, L_max;
+  
+  /* Grid spacing */
+  double dH, dK, dL;
+  
+  /* BZ extent (= max - min, used for tessellation) */
+  double H_span, K_span, L_span;
+  
+  /* Maximum phonon energy across all branches (meV) */
+  double E_max;
+  
+  /* Whether data was loaded */
+  int loaded;
+} pdft_phonon_grid;
+
+/* A single phonon scattering solution */
+typedef struct {
+  double v_f;         /* final neutron speed */
+  double omega;       /* energy transfer (meV), positive = neutron loses energy */
+  double intensity;   /* interpolated scattering weight */
+  int    branch;      /* branch index */
+} pdft_phonon_root;
+
+/* ======================================================================
    Main info struct for the component instance
    ====================================================================== */
 typedef struct {
@@ -156,6 +210,9 @@ typedef struct {
   pdft_bragg_refl *bragg_list;
   int    bragg_count;
   int    flag_barns;
+  
+  /* Phonon dispersion grid */
+  pdft_phonon_grid phonon_grid;
   
   /* Material properties */
   double sigma_a;   /* absorption cross section per unit cell at 2200 m/s */
@@ -257,9 +314,15 @@ static int pdft_filename_is_safe(const char *path) {
   const char *p;
   if (!path) return 0;
   for (p = path; *p; p++) {
-    /* Reject characters that could be used for shell injection */
+    /* Reject characters that could be used for shell injection.
+       Note: backslash is the path separator on Windows, so we
+       must allow it there. On Unix it's an escape character but
+       is extremely rare in real filenames from Open_File(). */
     if (*p == ';' || *p == '|' || *p == '&' || *p == '$' ||
-        *p == '`' || *p == '\'' || *p == '"' || *p == '\\' ||
+        *p == '`' || *p == '\'' || *p == '"' ||
+#ifndef _WIN32
+        *p == '\\' ||
+#endif
         *p == '\n' || *p == '\r' || *p == '(' || *p == ')' ||
         *p == '{' || *p == '}' || *p == '<' || *p == '>') {
       return 0;
@@ -305,22 +368,16 @@ char *cif2hkl(char *infile, char *options) {
     return NULL;
   }
   
-  /* Create a temporary filename securely using mkstemp */
+  /* Create a temporary filename (cross-platform: works on Windows and Linux) */
   {
-    int fd;
-
-    /* Template must end with XXXXXX for mkstemp */
-    strncpy(OUTFILE, "pdft_tmp_XXXXXX", 1023);
-    OUTFILE[1023] = '\0';
-
-    fd = mkstemp(OUTFILE);
-    if (fd == -1) {
-      fprintf(stderr, "Phonon_DFT: ERROR: Could not create temporary file\n");
+    char *tmp = tmpnam(NULL);
+    if (!tmp) {
+      fprintf(stderr, "Phonon_DFT: ERROR: Could not create temporary filename\n");
       free(OUTFILE); free(inpath);
       return NULL;
     }
-    /* We only need the unique filename; external tools will overwrite the file */
-    close(fd);
+    strncpy(OUTFILE, tmp, 1023);
+    OUTFILE[1023] = '\0';
   }
   
   if (!found && getenv("CIF2HKL")) {
@@ -342,10 +399,20 @@ char *cif2hkl(char *infile, char *options) {
              OUTFILE, options, inpath);
     ret = system(cmd);
   }
-  if (ret == -1 || ret == 127) { free(OUTFILE); free(inpath); return NULL; }
+  if (ret == -1 || ret == 127) {
+    fprintf(stderr, "Phonon_DFT: ERROR: cif2hkl tool not found. "
+            "Convert CIF to LAZ/LAU format manually, or install cif2hkl.\n");
+    free(OUTFILE); free(inpath); return NULL;
+  }
   
   file = fopen(OUTFILE, "r");
-  if (!file) { free(OUTFILE); free(inpath); return NULL; }
+  if (!file) {
+    fprintf(stderr, "Phonon_DFT: ERROR: cif2hkl failed to produce output for %s "
+            "(exit code %d). Check that cif2hkl and its dependencies (libgfortran) "
+            "are installed correctly, or use a pre-converted LAZ/LAU file.\n",
+            inpath, ret);
+    free(OUTFILE); free(inpath); return NULL;
+  }
   MPI_MASTER(
     printf("Phonon_DFT: Converting %s into F2(HKL) list %s\n", inpath, OUTFILE);
   );
@@ -377,6 +444,10 @@ int pdft_read_bragg(char *SC_file, pdft_info *info)
   }
   
   filename = cif2hkl(SC_file, "--xtal --mode NUC");
+  if (!filename) {
+    fprintf(stderr, "Phonon_DFT: ERROR: cif2hkl conversion failed for %s\n", SC_file);
+    return -1;
+  }
   if (filename != SC_file) info->flag_barns = 1; /* cif2hkl returns barns */
   
   if (Table_Read(&sTable, filename, 1) <= 0) {
@@ -591,12 +662,593 @@ int pdft_bragg_search(pdft_bragg_refl *L, pdft_tau_data *tlist,
   return j;
 }
 
+/* ======================================================================
+   PHONON KERNEL: dispersion grid data structures and functions
+   ====================================================================== */
+
+/* Kelvin to meV conversion */
+#define PDFT_T2E (1.0/11.605)
+
+/* ======================================================================
+   Bose factor: n(omega, T) 
+   For omega > 0 (Stokes, neutron loses energy): n+1
+   For omega < 0 (anti-Stokes, neutron gains energy): n
+   ====================================================================== */
+double pdft_nbose(double omega, double temp)
+{
+  double nb, arg;
+  if (temp <= 0) return (omega > 0) ? 1.0 : 0.0;
+  if (fabs(omega) < 1e-10) return temp * PDFT_T2E / fabs(omega + 1e-20);
+  arg = fabs(omega) / (temp * PDFT_T2E);
+  if (arg > 700) {
+    /* Avoid exp overflow: at high E/T, n->0 for anti-Stokes, n+1->1 for Stokes */
+    return (omega > 0) ? 1.0 : 0.0;
+  }
+  nb = (omega > 0) 
+    ? 1.0 + 1.0 / (exp(arg) - 1.0)
+    : 1.0 / (exp(arg) - 1.0);
+  return nb;
+}
+
+/* ======================================================================
+   Read phonon dispersion grid from file
+   
+   File format: columnar text, one row per (q-point, branch):
+     H(rlu) K(rlu) L(rlu) E(meV) Intensity Branch
+   
+   Header keywords (optional):
+     # grid_nx <int>
+     # grid_ny <int>
+     # grid_nz <int>
+     # num_branches <int>
+   
+   If grid dimensions are not in the header, they are auto-detected
+   from the unique sorted values in each column.
+   ====================================================================== */
+int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
+{
+  t_Table sTable;
+  int i, total_rows;
+  int nx_detected, ny_detected, nz_detected, nb_detected;
+  int ix, iy, iz, ib, flat_idx;
+  double h_val, k_val, l_val, e_val, i_val;
+  int b_val;
+  double g_val;
+  int has_gamma;
+  char **parsing;
+  double fH, fK, fL;
+  /* For auto-detection of grid dimensions */
+  double prev_h, prev_k, prev_l;
+  int count_h, count_k, count_l, max_branch;
+  
+  if (!filename || !strlen(filename) || !strcmp(filename, "NULL") || !strcmp(filename, "0")) {
+    grid->loaded = 0;
+    return 0;
+  }
+  
+  if (Table_Read(&sTable, filename, 1) <= 0) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Could not read phonon file %s\n", filename);
+    return -1;
+  }
+  
+  total_rows = sTable.rows;
+  if (total_rows < 2) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Phonon file %s has too few rows (%d)\n",
+            filename, total_rows);
+    Table_Free(&sTable);
+    return -1;
+  }
+  if (sTable.columns < 6) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Phonon file %s needs >= 6 columns "
+            "(H K L E Intensity Branch), got %d\n", filename, (int)sTable.columns);
+    Table_Free(&sTable);
+    return -1;
+  }
+  
+  /* Parse header for grid dimensions */
+  nx_detected = 0; ny_detected = 0; nz_detected = 0; nb_detected = 0;
+  parsing = Table_ParseHeader(sTable.header,
+    "grid_nx", "grid_ny", "grid_nz", "num_branches",
+    NULL);
+  if (parsing) {
+    if (parsing[0]) nx_detected = atoi(parsing[0]);
+    if (parsing[1]) ny_detected = atoi(parsing[1]);
+    if (parsing[2]) nz_detected = atoi(parsing[2]);
+    if (parsing[3]) nb_detected = atoi(parsing[3]);
+    for (i = 0; i <= 3; i++) if (parsing[i]) free(parsing[i]);
+    free(parsing);
+  }
+  
+  /* Auto-detect grid dimensions if not in header.
+     Strategy: scan the data sorted by H,K,L to count unique values.
+     Assumes the file is ordered: branch varies fastest, then L, then K, then H.
+     (This is the natural order from Phonopy/Euphonic mesh output.) */
+  if (!nb_detected) {
+    max_branch = 0;
+    for (i = 0; i < total_rows; i++) {
+      b_val = (int)Table_Index(sTable, i, 5);
+      if (b_val > max_branch) max_branch = b_val;
+    }
+    nb_detected = max_branch + 1;  /* 0-indexed */
+  }
+  
+  if (!nx_detected || !ny_detected || !nz_detected) {
+    /* Count unique H values (assumes data sorted by H first) */
+    count_h = 1;
+    prev_h = Table_Index(sTable, 0, 0);
+    for (i = nb_detected; i < total_rows; i += nb_detected) {
+      h_val = Table_Index(sTable, i, 0);
+      if (fabs(h_val - prev_h) > 1e-8) {
+        count_h++;
+        prev_h = h_val;
+      }
+    }
+    /* Total grid points = total_rows / num_branches */
+    /* nz = total / (nx * ny * nb), but we need to figure out ny too */
+    /* Count unique K values for the first H slice */
+    count_k = 1;
+    prev_k = Table_Index(sTable, 0, 1);
+    for (i = nb_detected; i < total_rows; i += nb_detected) {
+      h_val = Table_Index(sTable, i, 0);
+      if (fabs(h_val - Table_Index(sTable, 0, 0)) > 1e-8) break;
+      k_val = Table_Index(sTable, i, 1);
+      if (fabs(k_val - prev_k) > 1e-8) {
+        count_k++;
+        prev_k = k_val;
+      }
+    }
+    /* Count unique L values for first H,K slice */
+    count_l = 1;
+    prev_l = Table_Index(sTable, 0, 2);
+    for (i = nb_detected; i < total_rows; i += nb_detected) {
+      h_val = Table_Index(sTable, i, 0);
+      k_val = Table_Index(sTable, i, 1);
+      if (fabs(h_val - Table_Index(sTable, 0, 0)) > 1e-8) break;
+      if (fabs(k_val - Table_Index(sTable, 0, 1)) > 1e-8) break;
+      l_val = Table_Index(sTable, i, 2);
+      if (fabs(l_val - prev_l) > 1e-8) {
+        count_l++;
+        prev_l = l_val;
+      }
+    }
+    
+    if (!nx_detected) nx_detected = count_h;
+    if (!ny_detected) ny_detected = count_k;
+    if (!nz_detected) nz_detected = count_l;
+  }
+  
+  /* Validate */
+  if (nx_detected * ny_detected * nz_detected * nb_detected != total_rows) {
+    fprintf(stderr, "Phonon_DFT: WARNING: Grid dimensions %d x %d x %d x %d branches = %d "
+            "!= %d rows in file. Attempting to proceed anyway.\n",
+            nx_detected, ny_detected, nz_detected, nb_detected,
+            nx_detected * ny_detected * nz_detected * nb_detected, total_rows);
+  }
+  
+  grid->nx = nx_detected;
+  grid->ny = ny_detected;
+  grid->nz = nz_detected;
+  grid->num_branches = nb_detected;
+  
+  MPI_MASTER(
+    printf("Phonon_DFT: Phonon grid: %d x %d x %d, %d branches, %d total rows\n",
+           grid->nx, grid->ny, grid->nz, grid->num_branches, total_rows);
+  );
+  
+  /* Allocate grid arrays */
+  grid->E_data = (double *)calloc(nx_detected * ny_detected * nz_detected * nb_detected, sizeof(double));
+  grid->I_data = (double *)calloc(nx_detected * ny_detected * nz_detected * nb_detected, sizeof(double));
+  if (!grid->E_data || !grid->I_data) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Memory allocation failed for phonon grid\n");
+    Table_Free(&sTable);
+    return -1;
+  }
+  
+  /* Allocate per-point linewidth array if column 7 (Gamma) is present */
+  has_gamma = (sTable.columns >= 7);
+  grid->G_data = NULL;
+  if (has_gamma) {
+    grid->G_data = (double *)calloc(nx_detected * ny_detected * nz_detected * nb_detected, sizeof(double));
+    if (!grid->G_data) {
+      fprintf(stderr, "Phonon_DFT: WARNING: Memory allocation failed for Gamma grid, using global fallback\n");
+      has_gamma = 0;
+    } else {
+      MPI_MASTER(
+        printf("Phonon_DFT: Column 7 detected: reading per-point linewidth Gamma (meV FWHM)\n");
+      );
+    }
+  }
+  
+  /* Detect H,K,L range from first and last rows */
+  grid->H_min = Table_Index(sTable, 0, 0);
+  grid->K_min = Table_Index(sTable, 0, 1);
+  grid->L_min = Table_Index(sTable, 0, 2);
+  grid->H_max = grid->H_min;
+  grid->K_max = grid->K_min;
+  grid->L_max = grid->L_min;
+  
+  /* Scan for actual min/max and fill grid */
+  grid->E_max = 0;
+  for (i = 0; i < total_rows; i++) {
+    h_val = Table_Index(sTable, i, 0);
+    k_val = Table_Index(sTable, i, 1);
+    l_val = Table_Index(sTable, i, 2);
+    e_val = Table_Index(sTable, i, 3);
+    i_val = Table_Index(sTable, i, 4);
+    b_val = (int)Table_Index(sTable, i, 5);
+    
+    if (h_val < grid->H_min) grid->H_min = h_val;
+    if (h_val > grid->H_max) grid->H_max = h_val;
+    if (k_val < grid->K_min) grid->K_min = k_val;
+    if (k_val > grid->K_max) grid->K_max = k_val;
+    if (l_val < grid->L_min) grid->L_min = l_val;
+    if (l_val > grid->L_max) grid->L_max = l_val;
+    if (fabs(e_val) > grid->E_max) grid->E_max = fabs(e_val);
+  }
+  
+  grid->H_span = grid->H_max - grid->H_min;
+  grid->K_span = grid->K_max - grid->K_min;
+  grid->L_span = grid->L_max - grid->L_min;
+  
+  /* Compute grid spacing */
+  grid->dH = (nx_detected > 1) ? grid->H_span / (nx_detected - 1) : 1.0;
+  grid->dK = (ny_detected > 1) ? grid->K_span / (ny_detected - 1) : 1.0;
+  grid->dL = (nz_detected > 1) ? grid->L_span / (nz_detected - 1) : 1.0;
+  
+  /* Fill the grid arrays.
+     Assumed file ordering: rows are sorted by (H, K, L, branch) with
+     branch varying fastest. Map each row to grid index. */
+  for (i = 0; i < total_rows; i++) {
+    h_val = Table_Index(sTable, i, 0);
+    k_val = Table_Index(sTable, i, 1);
+    l_val = Table_Index(sTable, i, 2);
+    e_val = Table_Index(sTable, i, 3);
+    i_val = Table_Index(sTable, i, 4);
+    b_val = (int)Table_Index(sTable, i, 5);
+    
+    /* Map continuous r.l.u. to grid index */
+    fH = (h_val - grid->H_min) / grid->dH;
+    fK = (k_val - grid->K_min) / grid->dK;
+    fL = (l_val - grid->L_min) / grid->dL;
+    
+    ix = (int)(fH + 0.5);  /* round to nearest */
+    iy = (int)(fK + 0.5);
+    iz = (int)(fL + 0.5);
+    ib = b_val;
+    
+    /* Bounds check */
+    if (ix < 0 || ix >= nx_detected || iy < 0 || iy >= ny_detected ||
+        iz < 0 || iz >= nz_detected || ib < 0 || ib >= nb_detected) continue;
+    
+    flat_idx = ((ix * ny_detected + iy) * nz_detected + iz) * nb_detected + ib;
+    grid->E_data[flat_idx] = e_val;
+    grid->I_data[flat_idx] = i_val;
+    if (has_gamma) {
+      g_val = Table_Index(sTable, i, 6);
+      grid->G_data[flat_idx] = g_val;
+    }
+  }
+  
+  grid->loaded = 1;
+  
+  Table_Free(&sTable);
+  
+  MPI_MASTER(
+    printf("Phonon_DFT: Phonon grid range: H=[%g, %g] K=[%g, %g] L=[%g, %g]  E_max=%g meV\n",
+           grid->H_min, grid->H_max, grid->K_min, grid->K_max,
+           grid->L_min, grid->L_max, grid->E_max);
+  );
+  
+  return 0;
+}
+
+/* ======================================================================
+   Trilinear interpolation on the phonon grid for a single branch.
+   
+   q_rlu is in the file's coordinate system (already folded if tessellating).
+   Returns energy and intensity by pointer. Returns 0 on success, -1 if 
+   out of range.
+   ====================================================================== */
+int pdft_phonon_interp(pdft_phonon_grid *grid,
+                       double qH, double qK, double qL, int branch,
+                       double *E_out, double *I_out, double *G_out)
+{
+  double fH, fK, fL;
+  int ix, iy, iz;
+  double dx, dy, dz;
+  int ix1, iy1, iz1;
+  int nb, ny_loc, nz_loc;
+  double e000, e001, e010, e011, e100, e101, e110, e111;
+  double i000, i001, i010, i011, i100, i101, i110, i111;
+  double e00, e01, e10, e11, e0, e1;
+  double ii00, ii01, ii10, ii11, ii0, ii1;
+  int idx;
+  
+  nb = grid->num_branches;
+  ny_loc = grid->ny;
+  nz_loc = grid->nz;
+  
+  /* Map to fractional grid index */
+  fH = (qH - grid->H_min) / grid->dH;
+  fK = (qK - grid->K_min) / grid->dK;
+  fL = (qL - grid->L_min) / grid->dL;
+  
+  /* Integer part and fractional remainder */
+  ix = (int)floor(fH);
+  iy = (int)floor(fK);
+  iz = (int)floor(fL);
+  dx = fH - ix;
+  dy = fK - iy;
+  dz = fL - iz;
+  
+  /* Upper corner indices */
+  ix1 = ix + 1;
+  iy1 = iy + 1;
+  iz1 = iz + 1;
+  
+  /* Clamp to grid bounds. When tessellating, values near the upper edge
+     can land at ix = nx-1, needing ix1 = nx which is out of bounds.
+     Wrap ix1 back to 0 (periodic boundary). For non-tessellating, return OOR. */
+  if (ix < 0 || ix >= grid->nx ||
+      iy < 0 || iy >= grid->ny ||
+      iz < 0 || iz >= grid->nz) {
+    *E_out = 0;
+    *I_out = 0;
+    if (G_out) *G_out = 0;
+    return -1;
+  }
+  if (ix1 >= grid->nx) ix1 = 0;   /* periodic wrap */
+  if (iy1 >= grid->ny) iy1 = 0;
+  if (iz1 >= grid->nz) iz1 = 0;
+  
+  /* Fetch 8 corner values - energy */
+  #define PDFT_GRID_IDX(gx,gy,gz,gb) (((gx)*ny_loc + (gy))*nz_loc + (gz))*nb + (gb)
+  
+  e000 = grid->E_data[PDFT_GRID_IDX(ix,  iy,  iz,  branch)];
+  e001 = grid->E_data[PDFT_GRID_IDX(ix,  iy,  iz1, branch)];
+  e010 = grid->E_data[PDFT_GRID_IDX(ix,  iy1, iz,  branch)];
+  e011 = grid->E_data[PDFT_GRID_IDX(ix,  iy1, iz1, branch)];
+  e100 = grid->E_data[PDFT_GRID_IDX(ix1, iy,  iz,  branch)];
+  e101 = grid->E_data[PDFT_GRID_IDX(ix1, iy,  iz1, branch)];
+  e110 = grid->E_data[PDFT_GRID_IDX(ix1, iy1, iz,  branch)];
+  e111 = grid->E_data[PDFT_GRID_IDX(ix1, iy1, iz1, branch)];
+  
+  /* Trilinear interpolation for energy */
+  e00 = e000 * (1-dx) + e100 * dx;
+  e01 = e001 * (1-dx) + e101 * dx;
+  e10 = e010 * (1-dx) + e110 * dx;
+  e11 = e011 * (1-dx) + e111 * dx;
+  e0  = e00  * (1-dy) + e10  * dy;
+  e1  = e01  * (1-dy) + e11  * dy;
+  *E_out = e0 * (1-dz) + e1 * dz;
+  
+  /* Same for intensity */
+  i000 = grid->I_data[PDFT_GRID_IDX(ix,  iy,  iz,  branch)];
+  i001 = grid->I_data[PDFT_GRID_IDX(ix,  iy,  iz1, branch)];
+  i010 = grid->I_data[PDFT_GRID_IDX(ix,  iy1, iz,  branch)];
+  i011 = grid->I_data[PDFT_GRID_IDX(ix,  iy1, iz1, branch)];
+  i100 = grid->I_data[PDFT_GRID_IDX(ix1, iy,  iz,  branch)];
+  i101 = grid->I_data[PDFT_GRID_IDX(ix1, iy,  iz1, branch)];
+  i110 = grid->I_data[PDFT_GRID_IDX(ix1, iy1, iz,  branch)];
+  i111 = grid->I_data[PDFT_GRID_IDX(ix1, iy1, iz1, branch)];
+  
+  ii00 = i000 * (1-dx) + i100 * dx;
+  ii01 = i001 * (1-dx) + i101 * dx;
+  ii10 = i010 * (1-dx) + i110 * dx;
+  ii11 = i011 * (1-dx) + i111 * dx;
+  ii0  = ii00 * (1-dy) + ii10 * dy;
+  ii1  = ii01 * (1-dy) + ii11 * dy;
+  *I_out = ii0 * (1-dz) + ii1 * dz;
+  
+  /* Gamma (linewidth) interpolation, if per-point data exists */
+  if (G_out) {
+    if (grid->G_data) {
+      double g000, g001, g010, g011, g100, g101, g110, g111;
+      double g00, g01, g10, g11, g0, g1;
+      g000 = grid->G_data[PDFT_GRID_IDX(ix,  iy,  iz,  branch)];
+      g001 = grid->G_data[PDFT_GRID_IDX(ix,  iy,  iz1, branch)];
+      g010 = grid->G_data[PDFT_GRID_IDX(ix,  iy1, iz,  branch)];
+      g011 = grid->G_data[PDFT_GRID_IDX(ix,  iy1, iz1, branch)];
+      g100 = grid->G_data[PDFT_GRID_IDX(ix1, iy,  iz,  branch)];
+      g101 = grid->G_data[PDFT_GRID_IDX(ix1, iy,  iz1, branch)];
+      g110 = grid->G_data[PDFT_GRID_IDX(ix1, iy1, iz,  branch)];
+      g111 = grid->G_data[PDFT_GRID_IDX(ix1, iy1, iz1, branch)];
+      g00 = g000 * (1-dx) + g100 * dx;
+      g01 = g001 * (1-dx) + g101 * dx;
+      g10 = g010 * (1-dx) + g110 * dx;
+      g11 = g011 * (1-dx) + g111 * dx;
+      g0  = g00  * (1-dy) + g10  * dy;
+      g1  = g01  * (1-dy) + g11  * dy;
+      *G_out = g0 * (1-dz) + g1 * dz;
+    } else {
+      *G_out = 0;  /* caller will use global fallback */
+    }
+  }
+  
+  #undef PDFT_GRID_IDX
+  
+  return 0;
+}
+
+/* ======================================================================
+   Fold Q (in r.l.u.) into the grid's range for tessellation.
+   Modifies qH, qK, qL in place.
+   ====================================================================== */
+void pdft_fold_into_grid(pdft_phonon_grid *grid, double *qH, double *qK, double *qL)
+{
+  /* Shift so that grid minimum is at 0, then modulo by span, then shift back */
+  if (grid->H_span > 1e-10) {
+    *qH = *qH - grid->H_min;
+    *qH = fmod(*qH, grid->H_span);
+    if (*qH < 0) *qH += grid->H_span;
+    *qH = *qH + grid->H_min;
+  }
+  if (grid->K_span > 1e-10) {
+    *qK = *qK - grid->K_min;
+    *qK = fmod(*qK, grid->K_span);
+    if (*qK < 0) *qK += grid->K_span;
+    *qK = *qK + grid->K_min;
+  }
+  if (grid->L_span > 1e-10) {
+    *qL = *qL - grid->L_min;
+    *qL = fmod(*qL, grid->L_span);
+    if (*qL < 0) *qL += grid->L_span;
+    *qL = *qL + grid->L_min;
+  }
+}
+
+/* ======================================================================
+   Phonon omega function for root-finding.
+   
+   Given a trial v_f and a fixed scattered direction (unit vector),
+   compute Q = ki - kf, fold into the grid, interpolate E(q, branch),
+   and return E_phonon - E_neutron.
+   
+   parms layout (all doubles, 13 elements):
+     [0] = v_f (trial, modified by root finder)
+     [1] = v_i
+     [2..4] = vhat_fx, vhat_fy, vhat_fz (scattered direction, unit vector)
+     [5..7] = vi_x, vi_y, vi_z (initial velocity vector)
+     [8] = branch index (cast to int)
+     [9] = sign (+1 for Stokes, -1 for anti-Stokes)
+     [10] = tessellate flag
+     [11] = grid pointer (encoded as double via memcpy)
+     [12] = lattice pointer (encoded as double via memcpy)
+   ====================================================================== */
+
+double pdft_phonon_omega(double *parms)
+{
+  double v_f, v_i, vhat_fx, vhat_fy, vhat_fz, vi_x, vi_y, vi_z;
+  int branch, sign_flag, tessellate;
+  double qx, qy, qz;
+  double qH, qK, qL;
+  double E_phonon, I_phonon;
+  double E_neutron;
+  double Binv00, Binv01, Binv02, Binv10, Binv11, Binv12, Binv20, Binv21, Binv22;
+  double det;
+  int rc;
+  pdft_phonon_grid *grid;
+  pdft_lattice *lat;
+  double a11, a12, a13, a21, a22, a23, a31, a32, a33;
+  
+  /* Extract grid and lattice pointers from parms via memcpy */
+  memcpy(&grid, &parms[11], sizeof(pdft_phonon_grid *));
+  memcpy(&lat,  &parms[12], sizeof(pdft_lattice *));
+  
+  if (!grid || !lat) return 1e30;
+  
+  v_f      = parms[0];
+  v_i      = parms[1];
+  vhat_fx  = parms[2];
+  vhat_fy  = parms[3];
+  vhat_fz  = parms[4];
+  vi_x     = parms[5];
+  vi_y     = parms[6];
+  vi_z     = parms[7];
+  branch   = (int)parms[8];
+  sign_flag = (int)parms[9];
+  tessellate = (int)parms[10];
+  
+  /* Compute Q = ki - kf in AA^-1 */
+  qx = V2K * (vi_x - v_f * vhat_fx);
+  qy = V2K * (vi_y - v_f * vhat_fy);
+  qz = V2K * (vi_z - v_f * vhat_fz);
+  
+  /* Convert Q from AA^-1 to r.l.u.: invert B matrix */
+  a11 = lat->asx; a12 = lat->bsx; a13 = lat->csx;
+  a21 = lat->asy; a22 = lat->bsy; a23 = lat->csy;
+  a31 = lat->asz; a32 = lat->bsz; a33 = lat->csz;
+  
+  det = a11*(a22*a33 - a23*a32) - a12*(a21*a33 - a23*a31) + a13*(a21*a32 - a22*a31);
+  if (fabs(det) < 1e-30) return 1e30;
+  
+  Binv00 = (a22*a33 - a23*a32) / det;
+  Binv01 = (a13*a32 - a12*a33) / det;
+  Binv02 = (a12*a23 - a13*a22) / det;
+  Binv10 = (a23*a31 - a21*a33) / det;
+  Binv11 = (a11*a33 - a13*a31) / det;
+  Binv12 = (a13*a21 - a11*a23) / det;
+  Binv20 = (a21*a32 - a22*a31) / det;
+  Binv21 = (a12*a31 - a11*a32) / det;
+  Binv22 = (a11*a22 - a12*a21) / det;
+  
+  qH = Binv00 * qx + Binv01 * qy + Binv02 * qz;
+  qK = Binv10 * qx + Binv11 * qy + Binv12 * qz;
+  qL = Binv20 * qx + Binv21 * qy + Binv22 * qz;
+  
+  if (tessellate) {
+    pdft_fold_into_grid(grid, &qH, &qK, &qL);
+  }
+  
+  rc = pdft_phonon_interp(grid, qH, qK, qL, branch, &E_phonon, &I_phonon, NULL);
+  if (rc != 0) return 1e30;
+  
+  /* Energy conservation: E_i - E_f = sign * E_phonon */
+  E_neutron = VS2E * (v_i * v_i - v_f * v_f);
+  
+  return (sign_flag * E_phonon) - E_neutron;
+}
+
+/* ======================================================================
+   Ridders' root-finding method for the phonon dispersion.
+   Adapted from Phonon_simple's zridd, but calls pdft_phonon_omega.
+   ====================================================================== */
+#define PDFT_UNUSED (-1.11e30)
+#define PDFT_MAXRIDD 60
+#define PDFT_ROOTACC 1e-5
+
+double pdft_zridd(double x1, double x2, double *parms, double xacc)
+{
+  int j;
+  double ans, fh, fl, fm, fnew, s, xh, xl, xm, xnew;
+  
+  parms[0] = x1;
+  fl = pdft_phonon_omega(parms);
+  parms[0] = x2;
+  fh = pdft_phonon_omega(parms);
+  
+  if (fl * fh >= 0) {
+    if (fl == 0) return x1;
+    if (fh == 0) return x2;
+    return PDFT_UNUSED;
+  }
+  
+  xl = x1; xh = x2;
+  ans = PDFT_UNUSED;
+  
+  for (j = 0; j < PDFT_MAXRIDD; j++) {
+    xm = 0.5 * (xl + xh);
+    parms[0] = xm;
+    fm = pdft_phonon_omega(parms);
+    s = sqrt(fm * fm - fl * fh);
+    if (s == 0.0) return ans;
+    xnew = xm + (xm - xl) * ((fl >= fh ? 1.0 : -1.0) * fm / s);
+    if (fabs(xnew - ans) <= xacc) return ans;
+    ans = xnew;
+    parms[0] = ans;
+    fnew = pdft_phonon_omega(parms);
+    if (fnew == 0.0) return ans;
+    if (fm * fnew < 0) {
+      xl = xm; fl = fm; xh = ans; fh = fnew;
+    } else if (fl * fnew < 0) {
+      xh = ans; fh = fnew;
+    } else if (fh * fnew < 0) {
+      xl = ans; fl = fnew;
+    }
+    if (fabs(xh - xl) <= xacc) return ans;
+  }
+  return ans;  /* max iterations reached */
+}
+
 #endif /* PHONON_DFT_DECL */
 %}
 
 DECLARE
 %{
   pdft_info info;
+  int pdft_phonon_attempts;
+  int pdft_phonon_hits;
+  int pdft_diag_printed;
 %}
 
 INITIALIZE
@@ -607,6 +1259,9 @@ INITIALIZE
 
   /* Initialize info struct */
   memset(&info, 0, sizeof(pdft_info));
+  pdft_phonon_attempts = 0;
+  pdft_phonon_hits = 0;
+  pdft_diag_printed = 0;
   info.sigma_a = sigma_abs;
   info.sigma_i = sigma_inc;
   info.DW = debye_waller;
@@ -649,7 +1304,36 @@ INITIALIZE
     );
   } else {
     MPI_MASTER(
-      printf("Phonon_DFT: %s: No reflections file. Incoherent scattering only.\n",
+      printf("Phonon_DFT: %s: No reflections file. No Bragg scattering.\n",
+             NAME_CURRENT_COMP);
+    );
+  }
+  
+  /* --- Read phonon dispersion grid --- */
+  info.phonon_grid.loaded = 0;
+  if (dispersion && strlen(dispersion) && strcmp(dispersion, "NULL")) {
+    if (pdft_read_phonon_grid(dispersion, &info.phonon_grid) < 0) {
+      fprintf(stderr, "Phonon_DFT: %s: ERROR reading phonon dispersion. Aborting.\n",
+              NAME_CURRENT_COMP);
+      exit(-1);
+    }
+    if (info.phonon_grid.loaded) {
+      MPI_MASTER(
+        printf("Phonon_DFT: %s: Loaded phonon grid from '%s', tessellate=%d\n",
+               NAME_CURRENT_COMP, dispersion, (int)tessellate);
+        if (phonon_gamma > 0) {
+          printf("Phonon_DFT: %s: Lorentzian spectral function mode: global Gamma=%g meV (FWHM)%s\n",
+                 NAME_CURRENT_COMP, phonon_gamma,
+                 info.phonon_grid.G_data ? ", per-point Gamma from file column 7" : "");
+        } else {
+          printf("Phonon_DFT: %s: Delta-function mode (root-finding, phonon_gamma=0)\n",
+                 NAME_CURRENT_COMP);
+        }
+      );
+    }
+  } else {
+    MPI_MASTER(
+      printf("Phonon_DFT: %s: No dispersion file. No phonon scattering.\n",
              NAME_CURRENT_COMP);
     );
   }
@@ -697,197 +1381,524 @@ INITIALIZE
            NAME_CURRENT_COMP);
     target_z = 1;
   }
+  MPI_MASTER(
+    printf("Phonon_DFT: %s: Focusing target at (%g, %g, %g) m\n",
+           NAME_CURRENT_COMP, target_x, target_y, target_z);
+  );
 %}
 
 TRACE
 %{
   /* ALL declarations at top of TRACE for MSVC C89 compatibility */
-  double t1, t2;                  /* Entry/exit times */
+  double t1, t2;
   int    intersect;
-  double v_i, ki;                 /* Neutron speed and wavevector */
-  double kix, kiy, kiz;           /* Incoming wavevector components */
-  double l_full;                  /* Full path length through sample */
-  double l_i, l_o;                /* Path in/out to scattering point */
-  double dt0, dt;                 /* Flight times */
-  double V0;                      /* Unit cell volume */
+  double v_i, ki;
+  double kix, kiy, kiz;
+  double vx_i, vy_i, vz_i;
+  double l_full, l_i, l_o;
+  double dt0, dt;
+  double V0;
   double abs_xlen, inc_xlen, coh_xlen, tot_xlen;
   double coh_refl, coh_xsect;
   int    tau_count;
-  pdft_tau_data pdft_tlist[PDFT_MAX_TAU]; /* renamed from T to avoid McStas collision */
+  pdft_tau_data pdft_tlist[PDFT_MAX_TAU];
   double p_trans, mc_trans, mc_interact;
   double kfx, kfy, kfz;
   char   type;
-  /* Variables used inside scattering blocks - declared here for C89 */
   double l_scatter;
   double bragg_r, bragg_sum;
   int    bragg_j, bragg_idx;
   double kf_len, kf_adjust;
   double pmul;
   double cos_theta, sin_theta, phi_rand;
+  double ph_parms[13];
+  int    ph_branch, ph_sign, ph_nroots, ph_step, ph_sel, ph_i;
+  pdft_phonon_root ph_roots[PDFT_MAX_PHONON_ROOTS];
+  double ph_vf_max, ph_root_vf;
+  double ph_E_phonon, ph_I_phonon, ph_omega, ph_bose;
+  double ph_total_weight, ph_r_select, ph_weight_sum;
+  double ph_step_lo, ph_step_hi;
+  double solid_angle;
+  double aim_x, aim_y, aim_z;
+  double v_f;
+  double ph_kappa2, ph_jacobian, ph_f1, ph_f2;
+  double ph_p1, ph_p2, ph_p3, ph_p4;
+  double ph_my_a_i, ph_my_a_f, ph_bose_factor;
+  double scatt_channels;
+  double p_incoming;
+  /* Lorentzian spectral function mode variables */
+  double lor_vf_min, lor_vf_max, lor_vf_range;
+  double lor_qx, lor_qy, lor_qz, lor_qH, lor_qK, lor_qL;
+  double lor_det, lor_Binv00, lor_Binv01, lor_Binv02;
+  double lor_Binv10, lor_Binv11, lor_Binv12;
+  double lor_Binv20, lor_Binv21, lor_Binv22;
+  double lor_a11, lor_a12, lor_a13, lor_a21, lor_a22, lor_a23;
+  double lor_a31, lor_a32, lor_a33;
+  double lor_E_ph, lor_I_ph, lor_G_ph, lor_gamma_use;
+  double lor_omega, lor_S_total, lor_lorentz, lor_denom;
+  int    lor_b;
 
   intersect = 0;
   type = 't';
 
-  /* --- Geometry intersection --- */
   if (info.shape == 0)
     intersect = cylinder_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius, yheight);
   else if (info.shape == 1)
     intersect = box_intersect(&t1, &t2, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
   else if (info.shape == 2)
     intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
-  
+
   if (!intersect || t2 <= 0) {
     /* Missed or already past */
   }
+  else if (t1 < 0) {
+    ABSORB;
+  }
   else {
-    if (t1 > 0) PROP_DT(t1);  /* Move to sample surface */
-    
+    /* Neutron enters at t=t1 */
+    dt0 = t2 - t1;
     v_i = sqrt(vx*vx + vy*vy + vz*vz);
-    ki = V2K * v_i;
-    kix = V2K * vx;
-    kiy = V2K * vy;
-    kiz = V2K * vz;
+    l_full = v_i * dt0;
+    dt = rand01() * dt0;
+    l_i = v_i * dt;
+    vx_i = vx; vy_i = vy; vz_i = vz;
+    PROP_DT(dt + t1);
     V0 = info.lattice.V0;
-    
-    /* Recompute intersection from current position (now on surface) */
-    if (info.shape == 0)
-      intersect = cylinder_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius, yheight);
-    else if (info.shape == 1)
-      intersect = box_intersect(&t1, &t2, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
-    else if (info.shape == 2)
-      intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
-    
-    l_full = v_i * t2;
-    
-    /* --- Cross sections (all in m^-1) --- */
-    /* Absorption: sigma_a is at 2200 m/s, scales as 1/v */
-    abs_xlen = info.sigma_a * 2200 / v_i / V0 * 100;  /* barns/AA^3 -> m^-1 */
-    inc_xlen = info.sigma_i / V0 * 100;
-    
-    /* --- Bragg cross section --- */
-    tau_count = 0;
-    coh_refl = 0;
-    coh_xsect = 0;
-    
-    if (info.bragg_count > 0) {
-      tau_count = pdft_bragg_search(info.bragg_list, pdft_tlist,
-                                    info.bragg_count, V0,
-                                    kix, kiy, kiz,
-                                    delta_d_d,
-                                    &coh_refl, &coh_xsect);
-    }
-    
-    coh_xlen = coh_xsect / V0;
-    if (info.flag_barns) coh_xlen *= 100;
-    
-    tot_xlen = abs_xlen + inc_xlen + coh_xlen;
-    
-    /* --- Transmission decision --- */
-    if (tot_xlen <= 0) {
-      /* Nothing can happen, transmit */
-    }
-    else {
-      p_trans = exp(-tot_xlen * l_full);
-      mc_trans = 1.0 - p_interact;
-      if (mc_trans < 0) mc_trans = 0;
-      if (mc_trans > 1) mc_trans = 1;
-      mc_interact = 1.0 - mc_trans;
-      
-      if (mc_trans >= 1 || (mc_trans > 0 && rand01() < mc_trans)) {
-        /* Transmit */
-        p *= p_trans / mc_trans;
-        type = 't';
+    p_incoming = p;
+
+    /* === CHANNEL DECISION: simple coin flip === */
+
+    if (info.phonon_grid.loaded && p_phonon > 0 && rand01() < p_phonon) {
+      /* ============================================================
+         PHONON PATH: follows Phonon_simple algorithm exactly.
+         Weight is computed from scratch using p_incoming.
+         ============================================================ */
+
+      aim_x = target_x - x;
+      aim_y = target_y - y;
+      aim_z = target_z - z;
+
+      if (focus_aw > 0 && focus_ah > 0) {
+        randvec_target_rect_angular(&vx, &vy, &vz, &solid_angle,
+          aim_x, aim_y, aim_z, focus_aw, focus_ah, ROT_A_CURRENT_COMP);
+      } else if (focus_xw > 0 && focus_yh > 0) {
+        randvec_target_rect(&vx, &vy, &vz, &solid_angle,
+          aim_x, aim_y, aim_z, focus_xw, focus_yh, ROT_A_CURRENT_COMP);
+      } else if (focus_r > 0) {
+        randvec_target_sphere(&vx, &vy, &vz, &solid_angle,
+          aim_x, aim_y, aim_z, focus_r);
+      } else {
+        cos_theta = 2*rand01() - 1;
+        sin_theta = sqrt(1 - cos_theta*cos_theta);
+        phi_rand = 2*PI*rand01();
+        vx = sin_theta * cos(phi_rand);
+        vy = sin_theta * sin(phi_rand);
+        vz = cos_theta;
+        solid_angle = 4*PI;
+      }
+      NORM(vx, vy, vz);
+
+      if (phonon_gamma > 0) {
+        /* ============================================================
+           LORENTZIAN SPECTRAL FUNCTION MODE (Phase 2)
+           
+           Instead of root-finding, choose a random v_f, compute the
+           energy transfer omega, then evaluate S(Q,omega) as a sum
+           of Lorentzians over all branches.  Every neutron contributes
+           (no root-finding failures), weighted by the spectral function.
+           
+           S(Q,omega) = sum_s I_s(q) * (gamma_s/pi) / ((omega - omega_s)^2 + gamma_s^2)
+                        * [n(omega,T) + 1]
+           where gamma_s = FWHM/2 (HWHM) is used internally for the Lorentzian,
+           but the user-facing parameter phonon_gamma and file column 7 are FWHM.
+           
+           Weight = p_incoming * p1 * p2_lor * p3_lor / p_phonon
+           where:
+             p1     = absorption along path
+             p2_lor = solid_angle * l_full * V_rho / (4*PI)
+             p3_lor = (vf/vi) * DW * kappa2 * K2V^2 * vf_range * S(Q,omega)
+           
+           The vf_range factor accounts for the uniform sampling density
+           of v_f over [vf_min, vf_max].
+           ============================================================ */
+
+        /* v_f sampling range: from nearly zero to v_i + SE2V*sqrt(E_max)
+           (covers both Stokes and anti-Stokes) */
+        lor_vf_min = 1e-3;
+        lor_vf_max = v_i + SE2V * sqrt(info.phonon_grid.E_max);
+        lor_vf_range = lor_vf_max - lor_vf_min;
+
+        /* Choose random v_f uniformly */
+        v_f = lor_vf_min + rand01() * lor_vf_range;
+
+        /* Set final velocity */
+        vx *= v_f;
+        vy *= v_f;
+        vz *= v_f;
+
+        /* Energy transfer: omega = E_i - E_f (positive = neutron loses energy) */
+        lor_omega = VS2E * (v_i * v_i - v_f * v_f);
+
+        /* Compute Q = ki - kf in AA^-1 */
+        lor_qx = V2K * (vx_i - vx);
+        lor_qy = V2K * (vy_i - vy);
+        lor_qz = V2K * (vz_i - vz);
+
+        ph_kappa2 = lor_qx*lor_qx + lor_qy*lor_qy + lor_qz*lor_qz;
+
+        /* Convert Q to r.l.u. via B^-1 */
+        lor_a11 = info.lattice.asx; lor_a12 = info.lattice.bsx; lor_a13 = info.lattice.csx;
+        lor_a21 = info.lattice.asy; lor_a22 = info.lattice.bsy; lor_a23 = info.lattice.csy;
+        lor_a31 = info.lattice.asz; lor_a32 = info.lattice.bsz; lor_a33 = info.lattice.csz;
+
+        lor_det = lor_a11*(lor_a22*lor_a33 - lor_a23*lor_a32)
+                - lor_a12*(lor_a21*lor_a33 - lor_a23*lor_a31)
+                + lor_a13*(lor_a21*lor_a32 - lor_a22*lor_a31);
+
+        if (fabs(lor_det) < 1e-30) {
+          /* Degenerate lattice, skip */
+          vx = vx_i; vy = vy_i; vz = vz_i;
+        } else {
+          lor_Binv00 = (lor_a22*lor_a33 - lor_a23*lor_a32) / lor_det;
+          lor_Binv01 = (lor_a13*lor_a32 - lor_a12*lor_a33) / lor_det;
+          lor_Binv02 = (lor_a12*lor_a23 - lor_a13*lor_a22) / lor_det;
+          lor_Binv10 = (lor_a23*lor_a31 - lor_a21*lor_a33) / lor_det;
+          lor_Binv11 = (lor_a11*lor_a33 - lor_a13*lor_a31) / lor_det;
+          lor_Binv12 = (lor_a13*lor_a21 - lor_a11*lor_a23) / lor_det;
+          lor_Binv20 = (lor_a21*lor_a32 - lor_a22*lor_a31) / lor_det;
+          lor_Binv21 = (lor_a12*lor_a31 - lor_a11*lor_a32) / lor_det;
+          lor_Binv22 = (lor_a11*lor_a22 - lor_a12*lor_a21) / lor_det;
+
+          lor_qH = lor_Binv00*lor_qx + lor_Binv01*lor_qy + lor_Binv02*lor_qz;
+          lor_qK = lor_Binv10*lor_qx + lor_Binv11*lor_qy + lor_Binv12*lor_qz;
+          lor_qL = lor_Binv20*lor_qx + lor_Binv21*lor_qy + lor_Binv22*lor_qz;
+
+          if (tessellate) pdft_fold_into_grid(&info.phonon_grid, &lor_qH, &lor_qK, &lor_qL);
+
+          /* Sum Lorentzian spectral function over all branches */
+          lor_S_total = 0;
+          for (lor_b = 0; lor_b < info.phonon_grid.num_branches; lor_b++) {
+            if (pdft_phonon_interp(&info.phonon_grid, lor_qH, lor_qK, lor_qL, lor_b,
+                                   &lor_E_ph, &lor_I_ph, &lor_G_ph) != 0)
+              continue;
+            if (lor_I_ph <= 0) continue;
+            if (fabs(lor_E_ph) < 1e-10) continue;  /* skip acoustic at zone center */
+
+            /* Determine linewidth: per-point from file, or global fallback.
+               Both phonon_gamma and G_data store FWHM; convert to HWHM for the Lorentzian. */
+            lor_gamma_use = (lor_G_ph > 0) ? lor_G_ph : phonon_gamma;
+            if (lor_gamma_use <= 0) lor_gamma_use = phonon_gamma;  /* safety */
+            lor_gamma_use *= 0.5;  /* FWHM -> HWHM */
+
+            /* Lorentzian: L(omega, omega_s, Gamma) = (Gamma/pi) / ((omega - omega_s)^2 + Gamma^2)
+               Evaluate for both +omega_s (Stokes) and -omega_s (anti-Stokes) */
+            /* Stokes: neutron loses energy, creates phonon */
+            lor_denom = (lor_omega - lor_E_ph)*(lor_omega - lor_E_ph) + lor_gamma_use*lor_gamma_use;
+            lor_lorentz = (lor_gamma_use / PI) / lor_denom;
+            lor_S_total += lor_I_ph * lor_lorentz * pdft_nbose(lor_omega, T);
+
+            /* Anti-Stokes: neutron gains energy, absorbs phonon */
+            lor_denom = (lor_omega + lor_E_ph)*(lor_omega + lor_E_ph) + lor_gamma_use*lor_gamma_use;
+            lor_lorentz = (lor_gamma_use / PI) / lor_denom;
+            lor_S_total += lor_I_ph * lor_lorentz * pdft_nbose(-lor_omega, T);
+          }
+
+          /* Outgoing path length */
+          if (info.shape == 0)
+            intersect = cylinder_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius, yheight);
+          else if (info.shape == 1)
+            intersect = box_intersect(&t1, &t2, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
+          else if (info.shape == 2)
+            intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
+          l_o = (intersect && t2 > 0) ? v_f * t2 : 0;
+
+          /* Weight factors for Lorentzian mode:
+             p1 = exp(-mu_a,i * l_i - mu_a,f * l_o)  (absorption)
+             p2 = solid_angle * l_full * V_rho / (4*PI)  (geometry)
+             p3 = (vf/vi) * DW * kappa2 * K2V^2 * vf_range * S_total
+             
+             Note: compared to the root-finding mode, we replace:
+               - nroots (from p2)  -> absorbed into the continuous sum
+               - VS2E/|omega| * bose * intensity (from p3) -> S_total (Lorentzian sum includes bose)
+               - 2*VS2E*vf/J (p4) -> vf_range (uniform sampling Jacobian)
+             The product p3*p4 in root-finding mode is equivalent to
+             vf_range * S_total in Lorentzian mode, by construction. */
+          ph_my_a_i = info.sigma_a * 2200 / v_i * (4.0 / V0) * 100;
+          ph_my_a_f = info.sigma_a * 2200 / v_f * (4.0 / V0) * 100;
+          ph_p1 = exp(-(ph_my_a_i * l_i + ph_my_a_f * l_o));
+          ph_p2 = solid_angle * l_full * (4.0 / V0) / (4*PI);
+          ph_p3 = (v_f / v_i) * info.DW * (ph_kappa2 * K2V * K2V)
+                  * lor_vf_range * lor_S_total;
+
+          p = p_incoming * ph_p1 * ph_p2 * ph_p3 / p_phonon;
+
+          pdft_phonon_attempts++;
+          pdft_phonon_hits++;  /* every neutron contributes in Lorentzian mode */
+
+          if (pdft_phonon_attempts <= 5) {
+            printf("Phonon_DFT: LORENTZIAN p=%g (p_in=%g, p1=%g, p2=%g, p3=%g)\n",
+                   p, p_incoming, ph_p1, ph_p2, ph_p3);
+            printf("  omega=%g vf=%g vi=%g S_total=%g kappa2=%g solid=%g l_full=%g gamma=%g\n",
+                   lor_omega, v_f, v_i, lor_S_total, ph_kappa2, solid_angle, l_full, phonon_gamma);
+          }
+
+          type = 'p';
+          SCATTER;
+        }
       }
       else {
-        /* --- Scattering --- */
-        p *= fabs(1.0 - p_trans) / mc_interact;
-        
-        /* Choose scattering point along path (following Single_crystal) */
-        if (tot_xlen * l_full < 1e-6)
-          l_scatter = rand0max(l_full);  /* weak scattering: uniform */
-        else
-          l_scatter = -log(1 - rand0max(1 - exp(-tot_xlen * l_full))) / tot_xlen;
-        
-        l_i = l_scatter;
-        dt = l_scatter / v_i;
-        PROP_DT(dt);
-        
-        /* Account for absorption probability (fraction that scatters vs absorbs) */
-        if (coh_xlen + inc_xlen > 0) {
-          p *= (coh_xlen + inc_xlen) / tot_xlen;
-        } else {
-          /* Only absorption, no scattering channels available */
-          ABSORB;
+      /* ============================================================
+         ROOT-FINDING MODE (original Phonon_simple algorithm)
+         phonon_gamma == 0: delta-function phonons
+         ============================================================ */
+      ph_parms[1] = v_i;
+      ph_parms[2] = vx; ph_parms[3] = vy; ph_parms[4] = vz;
+      ph_parms[5] = vx_i; ph_parms[6] = vy_i; ph_parms[7] = vz_i;
+      ph_parms[10] = (double)tessellate;
+      {
+        pdft_phonon_grid *pg;
+        pdft_lattice *pl;
+        pg = &info.phonon_grid;
+        pl = &info.lattice;
+        memcpy(&ph_parms[11], &pg, sizeof(pdft_phonon_grid *));
+        memcpy(&ph_parms[12], &pl, sizeof(pdft_lattice *));
+      }
+
+      ph_vf_max = v_i + SE2V * sqrt(info.phonon_grid.E_max);
+
+      ph_nroots = 0;
+      for (ph_branch = 0; ph_branch < info.phonon_grid.num_branches && ph_nroots < PDFT_MAX_PHONON_ROOTS; ph_branch++) {
+        for (ph_sign = -1; ph_sign <= 1; ph_sign += 2) {
+          ph_parms[8] = (double)ph_branch;
+          ph_parms[9] = (double)ph_sign;
+          for (ph_step = 0; ph_step < phonon_e_steps && ph_nroots < PDFT_MAX_PHONON_ROOTS; ph_step++) {
+            if (ph_sign > 0) {
+              ph_step_lo = v_i * ph_step / phonon_e_steps;
+              ph_step_hi = v_i * (ph_step + 1) / phonon_e_steps;
+            } else {
+              ph_step_lo = v_i + (ph_vf_max - v_i) * ph_step / phonon_e_steps;
+              ph_step_hi = v_i + (ph_vf_max - v_i) * (ph_step + 1) / phonon_e_steps;
+            }
+            if (ph_step_lo < 1e-3) ph_step_lo = 1e-3;
+            ph_root_vf = pdft_zridd(ph_step_lo, ph_step_hi, ph_parms, PDFT_ROOTACC);
+            if (ph_root_vf != PDFT_UNUSED && ph_root_vf > 1e-3) {
+              double tmp_qH, tmp_qK, tmp_qL;
+              double root_E_ph, root_I_ph;
+              /* Evaluate intensity at the root q-point */
+              {
+                double root_qx, root_qy, root_qz;
+                double det_B, Binv00, Binv01, Binv02, Binv10, Binv11, Binv12, Binv20, Binv21, Binv22;
+                double a11l, a12l, a13l, a21l, a22l, a23l, a31l, a32l, a33l;
+                pdft_lattice *latptr = &info.lattice;
+                root_qx = V2K * (vx_i - ph_root_vf * vx);
+                root_qy = V2K * (vy_i - ph_root_vf * vy);
+                root_qz = V2K * (vz_i - ph_root_vf * vz);
+                a11l = latptr->asx; a12l = latptr->bsx; a13l = latptr->csx;
+                a21l = latptr->asy; a22l = latptr->bsy; a23l = latptr->csy;
+                a31l = latptr->asz; a32l = latptr->bsz; a33l = latptr->csz;
+                det_B = a11l*(a22l*a33l - a23l*a32l) - a12l*(a21l*a33l - a23l*a31l) + a13l*(a21l*a32l - a22l*a31l);
+                if (fabs(det_B) > 1e-30) {
+                  Binv00 = (a22l*a33l - a23l*a32l) / det_B;
+                  Binv01 = (a13l*a32l - a12l*a33l) / det_B;
+                  Binv02 = (a12l*a23l - a13l*a22l) / det_B;
+                  Binv10 = (a23l*a31l - a21l*a33l) / det_B;
+                  Binv11 = (a11l*a33l - a13l*a31l) / det_B;
+                  Binv12 = (a13l*a21l - a11l*a23l) / det_B;
+                  Binv20 = (a21l*a32l - a22l*a31l) / det_B;
+                  Binv21 = (a12l*a31l - a11l*a32l) / det_B;
+                  Binv22 = (a11l*a22l - a12l*a21l) / det_B;
+                  tmp_qH = Binv00*root_qx + Binv01*root_qy + Binv02*root_qz;
+                  tmp_qK = Binv10*root_qx + Binv11*root_qy + Binv12*root_qz;
+                  tmp_qL = Binv20*root_qx + Binv21*root_qy + Binv22*root_qz;
+                  if (tessellate) pdft_fold_into_grid(&info.phonon_grid, &tmp_qH, &tmp_qK, &tmp_qL);
+                  if (pdft_phonon_interp(&info.phonon_grid, tmp_qH, tmp_qK, tmp_qL, ph_branch, &root_E_ph, &root_I_ph, NULL) != 0)
+                    root_I_ph = 1.0;
+                } else {
+                  root_I_ph = 1.0;
+                }
+              }
+              ph_roots[ph_nroots].v_f = ph_root_vf;
+              ph_roots[ph_nroots].omega = VS2E * (v_i * v_i - ph_root_vf * ph_root_vf);
+              ph_roots[ph_nroots].branch = ph_branch;
+              ph_roots[ph_nroots].intensity = root_I_ph;
+              ph_nroots++;
+            }
+          }
         }
-        
-        /* --- Choose channel: coherent (Bragg) vs incoherent --- */
-        if (coh_xlen > 0 && rand0max(coh_xlen + inc_xlen) > inc_xlen) {
-          /* ============ BRAGG SCATTERING ============ */
-          
-          /* Select reflection, weighted by refl probability */
-          bragg_r = rand0max(coh_refl);
-          bragg_sum = 0;
-          for (bragg_j = 0; bragg_j < tau_count; bragg_j++) {
-            bragg_sum += pdft_tlist[bragg_j].refl;
-            if (bragg_sum > bragg_r) break;
-          }
-          if (bragg_j >= tau_count) bragg_j = tau_count - 1;
-          
-          bragg_idx = pdft_tlist[bragg_j].index;
-          
-          /* kf = ki - tau (elastic Bragg: momentum conservation) */
-          kfx = kix - info.bragg_list[bragg_idx].tau_x;
-          kfy = kiy - info.bragg_list[bragg_idx].tau_y;
-          kfz = kiz - info.bragg_list[bragg_idx].tau_z;
-          
-          /* Normalize |kf| = |ki| (elastic scattering, Ewald sphere) */
-          kf_len = sqrt(kfx*kfx + kfy*kfy + kfz*kfz);
-          if (kf_len > 0) {
-            kf_adjust = ki / kf_len;
-            kfx *= kf_adjust;
-            kfy *= kf_adjust;
-            kfz *= kf_adjust;
-          }
-          
-          /* Set final velocity */
-          vx = kfx * K2V;
-          vy = kfy * K2V;
-          vz = kfz * K2V;
-          
-          /* Weight adjustment: selected reflection vs total */
-          if (coh_xsect > 0 && pdft_tlist[bragg_j].refl > 0) {
-            pmul = pdft_tlist[bragg_j].xsect * coh_refl
-                   / (coh_xsect * pdft_tlist[bragg_j].refl);
-            if (!isnan(pmul) && pmul > 0) p *= pmul;
-          }
-          
-          /* Debye-Waller factor */
-          p *= info.DW;
-          
-          type = 'c';
-          SCATTER;
+      }
+
+      pdft_phonon_attempts++;
+      if (ph_nroots > 0) pdft_phonon_hits++;
+
+      if (ph_nroots == 0) {
+        /* No phonon roots found: restore original velocity so neutron
+           is not left with a unit-vector speed of 1 m/s.
+           Fall through to transmission (type='t' remains set). */
+        vx = vx_i; vy = vy_i; vz = vz_i;
+      }
+
+      if (ph_nroots > 0) {
+        /* Select one root randomly (uniform, like Phonon_simple) */
+        ph_sel = (int)floor(rand01() * ph_nroots);
+        if (ph_sel >= ph_nroots) ph_sel = ph_nroots - 1;
+        v_f = ph_roots[ph_sel].v_f;
+        ph_omega = ph_roots[ph_sel].omega;
+
+        /* Jacobian */
+        ph_parms[8] = (double)ph_roots[ph_sel].branch;
+        ph_parms[9] = (ph_omega > 0) ? 1.0 : -1.0;
+        ph_parms[0] = v_f - 1.0;
+        ph_f1 = pdft_phonon_omega(ph_parms);
+        ph_parms[0] = v_f + 1.0;
+        ph_f2 = pdft_phonon_omega(ph_parms);
+        ph_jacobian = fabs(ph_f2 - ph_f1) / 2.0;
+        if (ph_jacobian < 1e-10) ph_jacobian = 1e-10;
+
+        /* Set final velocity */
+        vx *= v_f;
+        vy *= v_f;
+        vz *= v_f;
+
+        ph_kappa2 = V2K*V2K * ((vx_i-vx)*(vx_i-vx) + (vy_i-vy)*(vy_i-vy) + (vz_i-vz)*(vz_i-vz));
+
+        /* Outgoing path length */
+        if (info.shape == 0)
+          intersect = cylinder_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius, yheight);
+        else if (info.shape == 1)
+          intersect = box_intersect(&t1, &t2, x, y, z, vx, vy, vz, xwidth, yheight, zdepth);
+        else if (info.shape == 2)
+          intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
+        l_o = (intersect && t2 > 0) ? v_f * t2 : 0;
+
+        ph_bose_factor = pdft_nbose(ph_omega, T);
+
+        /* Weight: follows Phonon_simple formula, with grid intensity included.
+           p1 = absorption
+           p2 = nf * solid_angle * l_full * V_rho / (4*PI)
+           p3 = (vf/vi) * DW * kappa2*K2V^2*VS2E / |omega| * bose * intensity
+           p4 = 2*VS2E*vf / J_factor 
+           We use V_rho = 4/V0 for the 4 atoms per fcc cell.
+           The grid intensity (ph_roots[].intensity) plays the role of b^2/M
+           from Phonon_simple; it encodes the DFT-calculated structure factor. */
+        ph_my_a_i = info.sigma_a * 2200 / v_i * (4.0 / V0) * 100;
+        ph_my_a_f = info.sigma_a * 2200 / v_f * (4.0 / V0) * 100;
+        ph_p1 = exp(-(ph_my_a_i * l_i + ph_my_a_f * l_o));
+        ph_p2 = ph_nroots * solid_angle * l_full * (4.0 / V0) / (4*PI);
+        ph_p3 = (fabs(ph_omega) > 1e-10) 
+          ? (v_f / v_i) * info.DW * (ph_kappa2 * K2V * K2V * VS2E) / fabs(ph_omega) * ph_bose_factor
+            * ph_roots[ph_sel].intensity
+          : 0;
+        ph_p4 = 2 * VS2E * v_f / ph_jacobian;
+
+        p = p_incoming * ph_p1 * ph_p2 * ph_p3 * ph_p4 / p_phonon;
+
+        if (pdft_phonon_attempts <= 5) {
+          printf("Phonon_DFT: PHONON p=%g (p_in=%g, p1=%g, p2=%g, p3=%g, p4=%g)\n",
+                 p, p_incoming, ph_p1, ph_p2, ph_p3, ph_p4);
+          printf("  omega=%g vf=%g vi=%g nroots=%d kappa2=%g bose=%g solid=%g l_full=%g\n",
+                 ph_omega, v_f, v_i, ph_nroots, ph_kappa2, ph_bose_factor, solid_angle, l_full);
+        }
+
+        type = 'p';
+        SCATTER;
+      }
+      /* else: no roots, neutron transmitted unchanged (velocity already restored above) */
+      } /* end root-finding (else) block */
+    }
+    else if (info.bragg_count > 0 || info.sigma_i > 0) {
+      /* ============================================================
+         BRAGG + INCOHERENT PATH (unchanged from working version)
+         ============================================================ */
+      kix = V2K * vx_i;
+      kiy = V2K * vy_i;
+      kiz = V2K * vz_i;
+      ki = V2K * v_i;
+
+      abs_xlen = info.sigma_a * 2200 / v_i / V0 * 100;
+      inc_xlen = info.sigma_i / V0 * 100;
+
+      tau_count = 0; coh_refl = 0; coh_xsect = 0;
+      if (info.bragg_count > 0) {
+        tau_count = pdft_bragg_search(info.bragg_list, pdft_tlist,
+                                      info.bragg_count, V0,
+                                      kix, kiy, kiz,
+                                      delta_d_d,
+                                      &coh_refl, &coh_xsect);
+      }
+      coh_xlen = coh_xsect / V0;
+      if (info.flag_barns) coh_xlen *= 100;
+
+      tot_xlen = abs_xlen + inc_xlen + coh_xlen;
+
+      if (tot_xlen > 0) {
+        p_trans = exp(-tot_xlen * l_full);
+        mc_trans = 1.0 - p_interact;
+        if (mc_trans < 0) mc_trans = 0;
+        if (mc_trans > 1) mc_trans = 1;
+        mc_interact = 1.0 - mc_trans;
+
+        if (mc_trans >= 1 || (mc_trans > 0 && rand01() < mc_trans)) {
+          p *= p_trans / mc_trans;
+          type = 't';
         }
         else {
-          /* ============ INCOHERENT SCATTERING ============ */
-          
-          /* Isotropic random direction over 4pi, same |v| (elastic) */
-          cos_theta = 2*rand01() - 1;  /* uniform in [-1, 1] */
-          sin_theta = sqrt(1 - cos_theta*cos_theta);
-          phi_rand = 2*PI*rand01();
-          vx = v_i * sin_theta * cos(phi_rand);
-          vy = v_i * sin_theta * sin(phi_rand);
-          vz = v_i * cos_theta;
-          
-          type = 'i';
-          SCATTER;
+          p *= fabs(1.0 - p_trans) / mc_interact;
+
+          if (tot_xlen * l_full < 1e-6)
+            l_scatter = rand0max(l_full);
+          else
+            l_scatter = -log(1 - rand0max(1 - exp(-tot_xlen * l_full))) / tot_xlen;
+
+          scatt_channels = coh_xlen + inc_xlen;
+          if (scatt_channels > 0) {
+            p *= scatt_channels / tot_xlen;
+          } else {
+            ABSORB;
+          }
+
+          /* Compensate for (1-p_phonon) probability */
+          if (p_phonon > 0 && p_phonon < 1.0) p /= (1.0 - p_phonon);
+
+          if (coh_xlen > 0 && rand0max(scatt_channels) > inc_xlen) {
+            /* BRAGG */
+            bragg_r = rand0max(coh_refl);
+            bragg_sum = 0;
+            for (bragg_j = 0; bragg_j < tau_count; bragg_j++) {
+              bragg_sum += pdft_tlist[bragg_j].refl;
+              if (bragg_sum > bragg_r) break;
+            }
+            if (bragg_j >= tau_count) bragg_j = tau_count - 1;
+            bragg_idx = pdft_tlist[bragg_j].index;
+            kfx = kix - info.bragg_list[bragg_idx].tau_x;
+            kfy = kiy - info.bragg_list[bragg_idx].tau_y;
+            kfz = kiz - info.bragg_list[bragg_idx].tau_z;
+            kf_len = sqrt(kfx*kfx + kfy*kfy + kfz*kfz);
+            if (kf_len > 0) {
+              kf_adjust = ki / kf_len;
+              kfx *= kf_adjust; kfy *= kf_adjust; kfz *= kf_adjust;
+            }
+            vx = kfx * K2V; vy = kfy * K2V; vz = kfz * K2V;
+            if (coh_xsect > 0 && pdft_tlist[bragg_j].refl > 0) {
+              pmul = pdft_tlist[bragg_j].xsect * coh_refl
+                     / (coh_xsect * pdft_tlist[bragg_j].refl);
+              if (!isnan(pmul) && pmul > 0) p *= pmul;
+            }
+            p *= info.DW;
+            type = 'c';
+            SCATTER;
+          }
+          else {
+            /* INCOHERENT */
+            cos_theta = 2*rand01() - 1;
+            sin_theta = sqrt(1 - cos_theta*cos_theta);
+            phi_rand = 2*PI*rand01();
+            vx = v_i * sin_theta * cos(phi_rand);
+            vy = v_i * sin_theta * sin(phi_rand);
+            vz = v_i * cos_theta;
+            type = 'i';
+            SCATTER;
+          }
         }
-        
-        /* --- Outgoing path length (for future use / diagnostics) --- */
-        /* Note: absorption is already accounted for by the 
-           (1-p_trans)/mc_interact weight factor above, which uses tot_xlen 
-           integrated over l_full. For single-scattering this is correct.
-           A per-path absorption correction would be needed for multiple
-           scattering (future Phase 2). */
       }
     }
   }
@@ -896,6 +1907,12 @@ TRACE
 FINALLY
 %{
   if (info.bragg_list) free(info.bragg_list);
+  if (info.phonon_grid.E_data) free(info.phonon_grid.E_data);
+  if (info.phonon_grid.I_data) free(info.phonon_grid.I_data);
+  if (info.phonon_grid.G_data) free(info.phonon_grid.G_data);
+  printf("Phonon_DFT: %s: SUMMARY: %d phonon attempts, %d found roots (%g%%)\n",
+         NAME_CURRENT_COMP, pdft_phonon_attempts, pdft_phonon_hits,
+         pdft_phonon_attempts > 0 ? 100.0*pdft_phonon_hits/pdft_phonon_attempts : 0.0);
 %}
 
 MCDISPLAY

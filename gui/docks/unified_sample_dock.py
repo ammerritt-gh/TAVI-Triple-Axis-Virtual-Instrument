@@ -101,6 +101,7 @@ class UnifiedSampleDock(BaseDockWidget):
             "AL: acoustic phonon": "Al_rod_phonon",
             "Al: optic phonon": "Al_rod_phonon_optic",
             "AL: Bragg": "Al_bragg",
+            "Al: Phonon DFT": "Al_phonon_DFT",
         }
         self.sample_combo.addItems(list(self.sample_map.keys()))
         sample_combo_layout.addWidget(self.sample_combo)
