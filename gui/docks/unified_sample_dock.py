@@ -4,9 +4,9 @@ Combines sample parameters and lattice configuration into a single dockable pane
 """
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
-                                QGridLayout, QCheckBox, QComboBox, QFrame,
+                                QGridLayout, QComboBox, QFrame,
                                 QCompleter, QDialog, QTextEdit, QDialogButtonBox)
-from PySide6.QtCore import Qt, Signal, QStringListModel
+from PySide6.QtCore import Qt, Signal
 
 from gui.docks.base_dock import BaseDockWidget
 from tavi.space_groups import (SPACE_GROUPS, CRYSTAL_SYSTEMS, EXTINCTION_RULES,
