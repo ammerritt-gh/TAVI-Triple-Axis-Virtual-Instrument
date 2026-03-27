@@ -1,6 +1,7 @@
 """Main application controller for TAVI with PySide6 GUI."""
 import sys
 import os
+import shutil
 import json
 import time
 import datetime
@@ -2164,7 +2165,8 @@ class TAVIController(QObject):
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
-            "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None"
+            "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None",
+            "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
         }
         # Ensure config directory exists
         os.makedirs("config", exist_ok=True)
@@ -2269,6 +2271,15 @@ class TAVIController(QObject):
                     sample_label = parameters.get("sample_label_var", "AL: Bragg")
                     if hasattr(self.window.sample_dock, 'sample_combo'):
                         self.window.sample_dock.sample_combo.setCurrentText(sample_label)
+                except Exception:
+                    pass
+                # Restore space group selection
+                try:
+                    sg_number = parameters.get("space_group_number_var")
+                    if sg_number is not None and hasattr(self.window.sample_dock, 'spacegroup_combo'):
+                        idx = self.window.sample_dock.spacegroup_combo.findData(int(sg_number))
+                        if idx >= 0:
+                            self.window.sample_dock.spacegroup_combo.setCurrentIndex(idx)
                 except Exception:
                     pass
                 # Set display and folder fields (use sensible defaults if missing)
@@ -2870,7 +2881,35 @@ class TAVIController(QObject):
             # Show instrument diagram if requested (via signal to main thread)
             if instrument_for_diagram is not None:
                 self.instrument_diagram_requested.emit(instrument_for_diagram)
-            
+
+            # On the first scan point, copy the .instr file to the parent folder
+            # (it's the same for every point since only parameters change, not the compiled
+            # instrument structure; rewriting it per-point would be redundant).
+            if i == 0:
+                instr_src = os.path.join(scan_folder, "PUMA_McScript.instr")
+                instr_dst = os.path.join(data_folder, "PUMA_McScript.instr")
+                if os.path.exists(instr_src):
+                    try:
+                        shutil.copy2(instr_src, instr_dst)
+                    except Exception as e:
+                        self.print_to_message_center(
+                            f"Warning: Failed to copy .instr file: {e}\n"
+                            f"  Source: {instr_src}\n  Dest: {instr_dst}"
+                        )
+
+            # Compact save mode: remove large intermediate files from the scan sub-folder.
+            # detector.dat and scan_parameters.txt are kept; everything else is transient.
+            if self.window.data_control_dock.compact_save_check.isChecked():
+                for _fname in ("PUMA_McScript.c", "PUMA_McScript.instr", "mccode.sim"):
+                    _fpath = os.path.join(scan_folder, _fname)
+                    if os.path.exists(_fpath):
+                        try:
+                            os.remove(_fpath)
+                        except Exception as e:
+                            self.print_to_message_center(
+                                f"Warning: Failed to delete {_fname}: {e}\n  Path: {_fpath}"
+                            )
+
             # Check for errors
             if error_flags:
                 message = f"Scan failed, error flags: {error_flags}"
