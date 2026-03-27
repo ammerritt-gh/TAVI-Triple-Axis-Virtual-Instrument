@@ -14,29 +14,37 @@ The component is designed as an extensible "universal sample" that will grow to 
 
 ## Current Architecture
 
-The phonon and Bragg scattering paths are **completely independent**, separated by a simple coin flip at the start of each neutron event. This avoids the weight-dilution problems that arise from unified cross-section frameworks, and allows each channel to compute its own neutron weight from scratch following the conventions of its respective reference component (`Phonon_simple` for phonons, `Single_crystal` for Bragg).
+The phonon and Bragg scattering paths are **completely independent**, each computing its own neutron weight from scratch following the conventions of its respective reference component (`Phonon_simple` for phonons, `Single_crystal` for Bragg).
+
+The channel decision is **physics-based**: the Bragg search (Ewald sphere proximity check) runs for every neutron to determine whether any Bragg reflections are active. The channel routing then follows:
 
 ```
 Neutron enters sample
          │
          ▼
-   rand01() < p_phonon?
+   Run Bragg search (cheap)
+   → coh_xsect, tau_count
+         │
+         ▼
+   Bragg active?  (coh_xsect > 1e-6 or sigma_inc > 0)
      ┌────┴────┐
-     │ YES     │ NO
+     │ NO      │ YES
      ▼         ▼
-  PHONON     BRAGG + INCOHERENT
-  (self-     (Single_crystal-style
-  contained,  channel framework with
-  Phonon_     transmission decision,
-  simple-     Ewald sphere search,
-  style       weight factors)
-  weight)
+  PHONON     rand01() < p_phonon?
+  (full        ┌────┴────┐
+  weight,      │ YES     │ NO
+  p_channel    ▼         ▼
+  = 1.0)     PHONON    BRAGG + INCOHERENT
+             (weight    (weight corrected
+             / p_phonon) / (1-p_phonon))
 ```
+
+This eliminates waste: phonon scans far from any Bragg peak get **100% of neutrons** with no weight penalty. The coin flip only activates in the narrow regions of Q-space where both Bragg and phonon channels compete — typically a tiny fraction of a scan. Since Bragg cross sections are orders of magnitude stronger than phonon, even a small fraction of neutrons (default `p_phonon = 0.95`, so 5% go to Bragg in overlap regions) produces strong Bragg statistics.
 
 Each path:
 - Saves the incoming neutron weight `p_incoming` before any modifications
 - Applies its own physics-based weight factors independently
-- Compensates for the `p_phonon` / `(1-p_phonon)` branching probability
+- Compensates for `p_channel` (= 1.0 when no competition, = `p_phonon` or `1-p_phonon` in overlap regions)
 
 ---
 
@@ -65,7 +73,9 @@ SETTING PARAMETERS (
   barns=1,                      // F² units: 1=barns, 0=fm²
 
   /* --- Phonon --- */
-  p_phonon=0.5,                 // MC probability for phonon channel
+  p_phonon=0.95,                // phonon channel probability (only used when
+                                //   Bragg is also active; otherwise phonon gets
+                                //   full weight automatically)
   int tessellate=1,             // 1=tile BZ over all Q-space, 0=single grid only
   int phonon_e_steps=50,        // root-finding bracket subdivisions per branch
 
