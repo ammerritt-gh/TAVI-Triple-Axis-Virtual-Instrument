@@ -1,7 +1,7 @@
 """Data Control Dock for TAVI application."""
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
-                                QWidget)
+                                QCheckBox, QWidget)
 from PySide6.QtCore import Qt
 
 from gui.docks.base_dock import BaseDockWidget
@@ -42,7 +42,17 @@ class DataControlDock(BaseDockWidget):
         self.actual_folder_label = QLabel("")
         self.actual_folder_label.setFrameStyle(QLabel.Panel | QLabel.Sunken)
         save_layout.addWidget(self.actual_folder_label)
-        
+
+        # Compact save mode toggle
+        self.compact_save_check = QCheckBox("Compact save mode")
+        self.compact_save_check.setChecked(True)
+        self.compact_save_check.setToolTip(
+            "Remove intermediate McStas files (.c, .instr, .sim) from each scan "
+            "sub-folder after it completes. The .instr is copied once to the parent "
+            "folder. Saves significant disk space."
+        )
+        save_layout.addWidget(self.compact_save_check)
+
         main_layout.addWidget(save_group)
         
         # Load folder section
