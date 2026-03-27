@@ -2876,9 +2876,38 @@ class TAVIController(QObject):
                 message = f"Scan failed, error flags: {error_flags}"
                 self.message_printed.emit(message)
             else:
+                # Compute per-scan-point energy values to accurately record what McStas ran with.
+                # vals['Ki'/'Ei'/'Kf'/'Ef'] are frozen from the GUI at scan start; we need the
+                # actual per-point values, especially for energy scans in Kf/Ki Fixed mode.
+                from instruments.PUMA_instrument_definition import energy2k
+                if self.PUMA.source_type == "Mono":
+                    if self.PUMA.K_fixed == "Kf Fixed":
+                        E0_param_record = self.PUMA.fixed_E + deltaE   # incident energy varies
+                        Ei_actual = E0_param_record
+                        Ki_actual = energy2k(Ei_actual)
+                        Ef_actual = self.PUMA.fixed_E                   # final energy is fixed
+                        Kf_actual = energy2k(Ef_actual)
+                    else:  # Ki Fixed
+                        E0_param_record = self.PUMA.fixed_E             # incident energy is fixed
+                        Ei_actual = self.PUMA.fixed_E
+                        Ki_actual = energy2k(Ei_actual)
+                        Ef_actual = self.PUMA.fixed_E - deltaE          # final energy varies
+                        Kf_actual = energy2k(max(Ef_actual, 1e-9))
+                else:  # Maxwellian source - fixed_E is the thermal peak energy
+                    E0_param_record = self.PUMA.fixed_E
+                    Ei_actual = self.PUMA.fixed_E
+                    Ki_actual = energy2k(Ei_actual)
+                    Ef_actual = self.PUMA.fixed_E - deltaE
+                    Kf_actual = energy2k(max(Ef_actual, 1e-9))
+
                 # Build scan-specific parameters for this point
                 scan_point_params = {
                     'scan_index': i,
+                    'E0_param': E0_param_record,
+                    'Ei': Ei_actual,
+                    'Ki': Ki_actual,
+                    'Ef': Ef_actual,
+                    'Kf': Kf_actual,
                     'qx': qx if scan_mode in ["momentum", "orientation"] else None,
                     'qy': qy if scan_mode in ["momentum", "orientation"] else None,
                     'qz': qz if scan_mode in ["momentum", "orientation"] else None,
@@ -2903,7 +2932,7 @@ class TAVIController(QObject):
                     'scan_command2': scan_command2,
                     'number_neutrons': number_neutrons,
                 }
-                # Merge with full GUI vals for completeness
+                # Merge with full GUI vals for completeness; scan_point_params overrides stale vals
                 full_params = {**vals, **scan_point_params}
                 write_parameters_to_file(scan_folder, full_params)
                 
