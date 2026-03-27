@@ -193,26 +193,26 @@ This is portable (sizeof(double) ≥ sizeof(void*) on all platforms) and avoids 
 
 ### Lattice convention
 
-The `pdft_compute_lattice()` function follows `Single_crystal`'s convention when given scalar lattice parameters (a, b, c, α, β, γ):
+The `pdft_compute_lattice()` function uses a TAS-friendly convention when given scalar lattice parameters (a, b, c, α, β, γ):
 
 ```
-b-vector along z,  a-vector in yz-plane,  c-vector has x-component
+a-vector along x,  b-vector in xz-plane,  c-vector has y-component
 ```
 
-This means for a cubic crystal with scalar `a`:
-- **a\*** points along y
+This puts **a\*** and **b\*** in the horizontal scattering plane (xz) and **c\*** along the vertical (y). For a cubic crystal with scalar `a`:
+- **a\*** points along x
 - **b\*** points along z
-- **c\*** points along x
+- **c\*** points along y
 
-For a TAS with its scattering plane in xz, the instrument's "H" direction maps to **b\*** and **c\*** (K and L in the file), not a\* (H in the file). The H axis in the file maps to the vertical (y) direction, which is out of the scattering plane.
+The (H,K,0) reciprocal plane is therefore the scattering plane, which is the standard TAS convention. A scan at Q = (2,0,0) in the file's coordinates maps directly to a Q vector in the scattering plane, and the phonon kernel sees the correct q-point.
 
-This is correct and consistent with `Single_crystal`, but **the user must be aware** that TAVI's H, K, L labels may not correspond directly to the file's H, K, L indices unless the lattice vectors are specified explicitly via `ax/ay/az` etc. to match the desired orientation.
+**Note:** this convention differs from `Single_crystal`, which uses `b along z, a in yz-plane`. The `Single_crystal` convention is fine for Bragg scattering (which matches |τ| regardless of direction) but places a\* out of the scattering plane, causing phonon scans to probe the wrong q-point. The `Phonon_DFT` convention is chosen specifically to make phonon scattering work correctly for horizontal-plane TAS.
 
-For explicit crystal orientation control, use the vector parameters:
+For explicit crystal orientation control (overrides the default convention), use the vector parameters:
 ```python
-Al_sample.ax = 4.039;  Al_sample.ay = 0;  Al_sample.az = 0   # a along x
-Al_sample.bx = 0;      Al_sample.by = 4.039; Al_sample.bz_l = 0  # b along y
-Al_sample.cx = 0;      Al_sample.cy = 0;  Al_sample.cz = 4.039   # c along z
+Al_sample.ax = 4.039;  Al_sample.ay = 0;     Al_sample.az = 0
+Al_sample.bx = 0;      Al_sample.by = 0;     Al_sample.bz_l = 4.039
+Al_sample.cx = 0;      Al_sample.cy = 4.039; Al_sample.cz = 0
 ```
 
 ### Validated behavior
@@ -249,7 +249,7 @@ The component compiles on Windows with MSVC (`cl.exe`) in C89 mode. Key constrai
 
 4. **Intrinsic phonon linewidth approximation.** The Lorentzian mode uses a simple Lorentzian lineshape (not the full damped harmonic oscillator). This is valid when Γ ≪ ω_s. For strongly damped modes (Γ ∼ ω_s), the DHO form should be used instead (future enhancement).
 
-5. **No UB matrix.** The crystal orientation is fixed by the lattice vector convention. There is no rotation matrix to align crystallographic axes with the instrument frame. Users must specify lattice vectors explicitly to control orientation.
+5. **No UB matrix.** The crystal orientation is determined by the lattice vector convention (a\* and b\* in-plane, c\* vertical). For the common (H,K,0) scattering plane this works out of the box with scalar parameters. For arbitrary crystal orientations or non-standard scattering planes, users must specify lattice vectors explicitly via `ax/ay/az` etc. A full UB matrix parameter is planned for future versions.
 
 ---
 
