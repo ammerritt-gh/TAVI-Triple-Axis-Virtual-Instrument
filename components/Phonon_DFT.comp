@@ -1437,6 +1437,17 @@ TRACE
   double lor_E_ph, lor_I_ph, lor_G_ph, lor_gamma_use;
   double lor_omega, lor_S_total, lor_lorentz, lor_denom;
   int    lor_b;
+  /* Importance sampling of v_f: mixture of Lorentzians at predicted branch crossings */
+  double imp_vf_targets[PDFT_MAX_BRANCHES * 2];  /* v_f targets for each (branch, sign) */
+  double imp_vf_sigmas[PDFT_MAX_BRANCHES * 2];   /* HWHM in v_f space */
+  int    imp_n_targets;
+  double imp_est_qx, imp_est_qy, imp_est_qz;
+  double imp_est_qH, imp_est_qK, imp_est_qL;
+  double imp_E_est, imp_I_est, imp_G_est;
+  double imp_vf_sq, imp_gamma_est, imp_sigma_vf;
+  double imp_pdf, imp_comp_pdf, imp_uniform_weight;
+  int    imp_sel, imp_j;
+  double imp_u, imp_t_sample;
 
   intersect = 0;
   type = 't';
@@ -1528,25 +1539,24 @@ TRACE
         lor_vf_max = v_i + SE2V * sqrt(info.phonon_grid.E_max);
         lor_vf_range = lor_vf_max - lor_vf_min;
 
-        /* Choose random v_f uniformly */
-        v_f = lor_vf_min + rand01() * lor_vf_range;
+        /* ============================================================
+           IMPORTANCE-SAMPLED v_f
+           
+           Estimate where each phonon branch crosses the energy
+           conservation surface for this scattered direction, then
+           sample v_f from a mixture of Lorentzians centered at
+           those crossings plus a uniform background.
+           
+           1. Compute Q at v_f = v_i (elastic approximation)
+           2. For each (branch, sign), get E_s(q) and compute
+              v_f_target = sqrt(v_i^2 -/+ E_s/VS2E)
+           3. Convert phonon linewidth Gamma to v_f space:
+              sigma_vf = Gamma / (2 * VS2E * v_f_target)
+           4. Sample from mixture: (1-w_uni)*Lorentzian_mix + w_uni*Uniform
+           5. Divide weight by pdf(v_f) from this mixture
+           ============================================================ */
 
-        /* Set final velocity */
-        vx *= v_f;
-        vy *= v_f;
-        vz *= v_f;
-
-        /* Energy transfer: omega = E_i - E_f (positive = neutron loses energy) */
-        lor_omega = VS2E * (v_i * v_i - v_f * v_f);
-
-        /* Compute Q = ki - kf in AA^-1 */
-        lor_qx = V2K * (vx_i - vx);
-        lor_qy = V2K * (vy_i - vy);
-        lor_qz = V2K * (vz_i - vz);
-
-        ph_kappa2 = lor_qx*lor_qx + lor_qy*lor_qy + lor_qz*lor_qz;
-
-        /* Convert Q to r.l.u. via B^-1 */
+        /* Compute B^-1 (needed for Q->rlu, shared by estimation and evaluation) */
         lor_a11 = info.lattice.asx; lor_a12 = info.lattice.bsx; lor_a13 = info.lattice.csx;
         lor_a21 = info.lattice.asy; lor_a22 = info.lattice.bsy; lor_a23 = info.lattice.csy;
         lor_a31 = info.lattice.asz; lor_a32 = info.lattice.bsz; lor_a33 = info.lattice.csz;
@@ -1569,6 +1579,110 @@ TRACE
           lor_Binv21 = (lor_a12*lor_a31 - lor_a11*lor_a32) / lor_det;
           lor_Binv22 = (lor_a11*lor_a22 - lor_a12*lor_a21) / lor_det;
 
+          /* Step 1: Estimate Q at elastic limit (v_f = v_i) in r.l.u. */
+          imp_est_qx = V2K * (vx_i - v_i * vx);
+          imp_est_qy = V2K * (vy_i - v_i * vy);
+          imp_est_qz = V2K * (vz_i - v_i * vz);
+          imp_est_qH = lor_Binv00*imp_est_qx + lor_Binv01*imp_est_qy + lor_Binv02*imp_est_qz;
+          imp_est_qK = lor_Binv10*imp_est_qx + lor_Binv11*imp_est_qy + lor_Binv12*imp_est_qz;
+          imp_est_qL = lor_Binv20*imp_est_qx + lor_Binv21*imp_est_qy + lor_Binv22*imp_est_qz;
+          if (tessellate) pdft_fold_into_grid(&info.phonon_grid, &imp_est_qH, &imp_est_qK, &imp_est_qL);
+
+          /* Step 2: Build importance-sampling targets for each (branch, sign) */
+          imp_n_targets = 0;
+          for (lor_b = 0; lor_b < info.phonon_grid.num_branches; lor_b++) {
+            if (pdft_phonon_interp(&info.phonon_grid, imp_est_qH, imp_est_qK, imp_est_qL, lor_b,
+                                   &imp_E_est, &imp_I_est, &imp_G_est) != 0)
+              continue;
+            if (fabs(imp_E_est) < 1e-10) continue;  /* skip acoustic at zone center */
+
+            /* Linewidth in energy: per-point or global, FWHM -> HWHM */
+            imp_gamma_est = (imp_G_est > 0) ? imp_G_est : phonon_gamma;
+            if (imp_gamma_est <= 0) imp_gamma_est = phonon_gamma;
+            imp_gamma_est *= 0.5;  /* FWHM -> HWHM */
+
+            /* Stokes: v_f^2 = v_i^2 - E_s/VS2E */
+            imp_vf_sq = v_i * v_i - imp_E_est / VS2E;
+            if (imp_vf_sq > 1e-6 && imp_n_targets < PDFT_MAX_BRANCHES * 2) {
+              imp_vf_targets[imp_n_targets] = sqrt(imp_vf_sq);
+              /* Transform HWHM from energy to v_f space: dE/dvf = 2*VS2E*vf */
+              imp_sigma_vf = imp_gamma_est / (2.0 * VS2E * imp_vf_targets[imp_n_targets]);
+              if (imp_sigma_vf < 10.0) imp_sigma_vf = 10.0;  /* floor: ~10 m/s min width */
+              imp_vf_sigmas[imp_n_targets] = imp_sigma_vf;
+              imp_n_targets++;
+            }
+
+            /* Anti-Stokes: v_f^2 = v_i^2 + E_s/VS2E */
+            imp_vf_sq = v_i * v_i + imp_E_est / VS2E;
+            if (imp_vf_sq > 1e-6 && imp_n_targets < PDFT_MAX_BRANCHES * 2) {
+              imp_vf_targets[imp_n_targets] = sqrt(imp_vf_sq);
+              imp_sigma_vf = imp_gamma_est / (2.0 * VS2E * imp_vf_targets[imp_n_targets]);
+              if (imp_sigma_vf < 10.0) imp_sigma_vf = 10.0;
+              imp_vf_sigmas[imp_n_targets] = imp_sigma_vf;
+              imp_n_targets++;
+            }
+          }
+
+          /* Step 3: Sample v_f from mixture.
+             PDF = (1-w_uni) * (1/N) * sum_j Lor(v_f; center_j, sigma_j) + w_uni / vf_range
+             where w_uni = 0.1 ensures coverage even far from branches.
+             If no targets found, fall back to pure uniform. */
+          imp_uniform_weight = 0.1;
+          if (imp_n_targets == 0) imp_uniform_weight = 1.0;
+
+          if (rand01() < imp_uniform_weight || imp_n_targets == 0) {
+            /* Uniform component */
+            v_f = lor_vf_min + rand01() * lor_vf_range;
+          } else {
+            /* Pick a random target, sample from its Cauchy (Lorentzian in v_f) */
+            imp_sel = (int)(rand01() * imp_n_targets);
+            if (imp_sel >= imp_n_targets) imp_sel = imp_n_targets - 1;
+            /* Cauchy sampling: v_f = center + sigma * tan(pi*(u - 0.5)) */
+            imp_u = rand01();
+            /* Clamp u away from 0 and 1 to avoid tan divergence */
+            if (imp_u < 1e-8) imp_u = 1e-8;
+            if (imp_u > 1.0 - 1e-8) imp_u = 1.0 - 1e-8;
+            imp_t_sample = imp_vf_targets[imp_sel]
+                         + imp_vf_sigmas[imp_sel] * tan(PI * (imp_u - 0.5));
+            /* Reject if outside valid range, fall back to uniform */
+            if (imp_t_sample < lor_vf_min || imp_t_sample > lor_vf_max) {
+              v_f = lor_vf_min + rand01() * lor_vf_range;
+            } else {
+              v_f = imp_t_sample;
+            }
+          }
+
+          /* Step 4: Compute the mixture PDF at the sampled v_f */
+          imp_pdf = imp_uniform_weight / lor_vf_range;
+          if (imp_n_targets > 0) {
+            imp_comp_pdf = 0;
+            for (imp_j = 0; imp_j < imp_n_targets; imp_j++) {
+              lor_denom = (v_f - imp_vf_targets[imp_j]) * (v_f - imp_vf_targets[imp_j])
+                        + imp_vf_sigmas[imp_j] * imp_vf_sigmas[imp_j];
+              imp_comp_pdf += (imp_vf_sigmas[imp_j] / PI) / lor_denom;
+            }
+            imp_comp_pdf /= imp_n_targets;  /* equal-weight mixture */
+            imp_pdf += (1.0 - imp_uniform_weight) * imp_comp_pdf;
+          }
+          /* Safety floor for pdf to avoid division by zero */
+          if (imp_pdf < 1e-30) imp_pdf = 1e-30;
+
+          /* Set final velocity */
+          vx *= v_f;
+          vy *= v_f;
+          vz *= v_f;
+
+          /* Energy transfer: omega = E_i - E_f (positive = neutron loses energy) */
+          lor_omega = VS2E * (v_i * v_i - v_f * v_f);
+
+          /* Compute Q = ki - kf in AA^-1 */
+          lor_qx = V2K * (vx_i - vx);
+          lor_qy = V2K * (vy_i - vy);
+          lor_qz = V2K * (vz_i - vz);
+
+          ph_kappa2 = lor_qx*lor_qx + lor_qy*lor_qy + lor_qz*lor_qz;
+
+          /* Convert Q to r.l.u. (reuse B^-1 computed above) */
           lor_qH = lor_Binv00*lor_qx + lor_Binv01*lor_qy + lor_Binv02*lor_qz;
           lor_qK = lor_Binv10*lor_qx + lor_Binv11*lor_qy + lor_Binv12*lor_qz;
           lor_qL = lor_Binv20*lor_qx + lor_Binv21*lor_qy + lor_Binv22*lor_qz;
@@ -1612,23 +1726,23 @@ TRACE
             intersect = sphere_intersect(&t1, &t2, x, y, z, vx, vy, vz, radius);
           l_o = (intersect && t2 > 0) ? v_f * t2 : 0;
 
-          /* Weight factors for Lorentzian mode:
+          /* Weight factors for Lorentzian mode with importance-sampled v_f:
              p1 = exp(-mu_a,i * l_i - mu_a,f * l_o)  (absorption)
              p2 = solid_angle * l_full * V_rho / (4*PI)  (geometry)
-             p3 = (vf/vi) * DW * kappa2 * K2V^2 * vf_range * S_total
+             p3 = (vf/vi) * DW * kappa2 * K2V^2 * S_total / pdf_mixture(v_f)
              
-             Note: compared to the root-finding mode, we replace:
-               - nroots (from p2)  -> absorbed into the continuous sum
-               - VS2E/|omega| * bose * intensity (from p3) -> S_total (Lorentzian sum includes bose)
-               - 2*VS2E*vf/J (p4) -> vf_range (uniform sampling Jacobian)
-             The product p3*p4 in root-finding mode is equivalent to
-             vf_range * S_total in Lorentzian mode, by construction. */
+             The importance sampling replaces the uniform-sampling Jacobian
+             (vf_range) with 1/pdf_mixture(v_f).  When v_f lands near a
+             phonon branch, both S_total and pdf are large; their ratio
+             is well-behaved and the weight variance is much smaller than
+             with uniform sampling where S_total alone can vary by orders
+             of magnitude. */
           ph_my_a_i = info.sigma_a * 2200 / v_i * (4.0 / V0) * 100;
           ph_my_a_f = info.sigma_a * 2200 / v_f * (4.0 / V0) * 100;
           ph_p1 = exp(-(ph_my_a_i * l_i + ph_my_a_f * l_o));
           ph_p2 = solid_angle * l_full * (4.0 / V0) / (4*PI);
           ph_p3 = (v_f / v_i) * info.DW * (ph_kappa2 * K2V * K2V)
-                  * lor_vf_range * lor_S_total;
+                  * lor_S_total / imp_pdf;
 
           p = p_incoming * ph_p1 * ph_p2 * ph_p3 / p_phonon;
 
@@ -1638,8 +1752,8 @@ TRACE
           if (pdft_phonon_attempts <= 5) {
             printf("Phonon_DFT: LORENTZIAN p=%g (p_in=%g, p1=%g, p2=%g, p3=%g)\n",
                    p, p_incoming, ph_p1, ph_p2, ph_p3);
-            printf("  omega=%g vf=%g vi=%g S_total=%g kappa2=%g solid=%g l_full=%g gamma=%g\n",
-                   lor_omega, v_f, v_i, lor_S_total, ph_kappa2, solid_angle, l_full, phonon_gamma);
+            printf("  omega=%g vf=%g vi=%g S_total=%g kappa2=%g pdf=%g n_tgt=%d\n",
+                   lor_omega, v_f, v_i, lor_S_total, ph_kappa2, imp_pdf, imp_n_targets);
           }
 
           type = 'p';
