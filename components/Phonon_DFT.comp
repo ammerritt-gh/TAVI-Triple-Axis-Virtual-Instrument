@@ -250,19 +250,22 @@ void pdft_compute_lattice(pdft_lattice *lat,
   else if (a > 0) {
     if (b <= 0) b = a;
     if (c <= 0) c = a;
-    /* Convention: b along z, a in yz-plane, c has x-component */
-    /* (Same as Single_crystal) */
+    /* Convention: a along x, b in xz-plane, c has y-component.
+       This puts a* and b* in the horizontal scattering plane (xz)
+       and c* along the vertical (y), so the (H,K,0) plane is 
+       directly accessible to a TAS.  Differs from Single_crystal
+       which uses b along z, a in yz-plane. */
     sin_cc = sin(cc*DEG2RAD);
     if (fabs(sin_cc) < 1e-10) {
       fprintf(stderr, "Phonon_DFT: ERROR: Lattice angle gamma=%g degrees is degenerate!\n", cc);
       exit(-1);
     }
-    lat->m_bx = 0;         lat->m_by = 0;         lat->m_bz = a;
-    lat->m_ax = 0;         lat->m_ay = b*sin_cc; lat->m_az = b*cos(cc*DEG2RAD);
-    lat->m_cz = c*cos(bb*DEG2RAD);
-    lat->m_cy = c*(cos(aa*DEG2RAD) - cos(cc*DEG2RAD)*cos(bb*DEG2RAD)) / sin_cc;
-    cx_sq = c*c - lat->m_cz*lat->m_cz - lat->m_cy*lat->m_cy;
-    lat->m_cx = (cx_sq > 0) ? sqrt(cx_sq) : 0;
+    lat->m_ax = a;          lat->m_ay = 0;          lat->m_az = 0;
+    lat->m_bx = b*cos(cc*DEG2RAD);  lat->m_by = 0;  lat->m_bz = b*sin_cc;
+    lat->m_cx = c*cos(bb*DEG2RAD);
+    lat->m_cz = c*(cos(aa*DEG2RAD) - cos(cc*DEG2RAD)*cos(bb*DEG2RAD)) / sin_cc;
+    cx_sq = c*c - lat->m_cx*lat->m_cx - lat->m_cz*lat->m_cz;
+    lat->m_cy = (cx_sq > 0) ? sqrt(cx_sq) : 0;
   } else {
     fprintf(stderr, "Phonon_DFT: ERROR: No lattice parameters specified!\n");
     exit(-1);
