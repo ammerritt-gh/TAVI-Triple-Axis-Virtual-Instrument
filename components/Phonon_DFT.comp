@@ -94,7 +94,7 @@ SETTING PARAMETERS (
   cx=0, cy=0, cz=0,
   delta_d_d=1e-4, barns=1, debye_waller=1, T=300,
   p_interact=0.8,
-  p_phonon=0.5,
+  p_phonon=0.95,
   phonon_gamma=0,
   int tessellate=1,
   int phonon_e_steps=50,
@@ -1429,6 +1429,8 @@ TRACE
   double ph_my_a_i, ph_my_a_f, ph_bose_factor;
   double scatt_channels;
   double p_incoming;
+  int    bragg_active;   /* whether Bragg reflections are near the Ewald sphere */
+  double p_channel;      /* effective channel probability for this neutron */
   /* Lorentzian spectral function mode variables */
   double lor_vf_min, lor_vf_max, lor_vf_range;
   double lor_qx, lor_qy, lor_qz, lor_qH, lor_qK, lor_qL;
@@ -1480,13 +1482,49 @@ TRACE
     V0 = info.lattice.V0;
     p_incoming = p;
 
-    /* === CHANNEL DECISION: simple coin flip === */
+    /* === CHANNEL DECISION: physics-based ===
+       Always run the Bragg search first (cheap) to determine whether
+       any Bragg reflections are active for this neutron.  If none are
+       active, phonon gets the full neutron with no weight penalty.
+       If Bragg IS active, use p_phonon as the coin-flip probability,
+       with weight compensation as before.
+       
+       This eliminates waste: phonon scans far from Bragg peaks get
+       100% of neutrons.  The coin flip only activates in the narrow
+       regions where both channels compete. */
 
-    if (info.phonon_grid.loaded && p_phonon > 0 && rand01() < p_phonon) {
+    /* --- Bragg search (always, regardless of channel) --- */
+    kix = V2K * vx_i;
+    kiy = V2K * vy_i;
+    kiz = V2K * vz_i;
+    ki = V2K * v_i;
+
+    tau_count = 0; coh_refl = 0; coh_xsect = 0;
+    bragg_active = 0;
+    if (info.bragg_count > 0) {
+      tau_count = pdft_bragg_search(info.bragg_list, pdft_tlist,
+                                    info.bragg_count, V0,
+                                    kix, kiy, kiz,
+                                    delta_d_d,
+                                    &coh_refl, &coh_xsect);
+    }
+    /* Bragg is "active" if there are significant reflections near the Ewald sphere,
+       or if incoherent scattering is present */
+    if (coh_xsect > 1e-6 || info.sigma_i > 0)
+      bragg_active = 1;
+
+    /* --- Determine channel --- */
+    if (info.phonon_grid.loaded && (!bragg_active || rand01() < p_phonon)) {
       /* ============================================================
-         PHONON PATH: follows Phonon_simple algorithm exactly.
-         Weight is computed from scratch using p_incoming.
+         PHONON PATH
+         
+         Entered when:
+         (a) phonon grid is loaded AND no Bragg active → always
+             (p_channel = 1, no weight correction)
+         (b) phonon grid is loaded AND Bragg active → with prob p_phonon
+             (weight corrected by 1/p_phonon)
          ============================================================ */
+      p_channel = bragg_active ? p_phonon : 1.0;
 
       aim_x = target_x - x;
       aim_y = target_y - y;
@@ -1526,7 +1564,7 @@ TRACE
            where gamma_s = FWHM/2 (HWHM) is used internally for the Lorentzian,
            but the user-facing parameter phonon_gamma and file column 7 are FWHM.
            
-           Weight = p_incoming * p1 * p2_lor * p3_lor / p_phonon
+           Weight = p_incoming * p1 * p2_lor * p3_lor / p_channel
            where:
              p1     = absorption along path
              p2_lor = solid_angle * l_full * V_rho / (4*PI)
@@ -1747,14 +1785,14 @@ TRACE
           ph_p3 = (v_f / v_i) * info.DW * (ph_kappa2 * K2V * K2V)
                   * lor_S_total / imp_pdf;
 
-          p = p_incoming * ph_p1 * ph_p2 * ph_p3 / p_phonon;
+          p = p_incoming * ph_p1 * ph_p2 * ph_p3 / p_channel;
 
           pdft_phonon_attempts++;
           pdft_phonon_hits++;  /* every neutron contributes in Lorentzian mode */
 
           if (pdft_phonon_attempts <= 5) {
-            printf("Phonon_DFT: LORENTZIAN p=%g (p_in=%g, p1=%g, p2=%g, p3=%g)\n",
-                   p, p_incoming, ph_p1, ph_p2, ph_p3);
+            printf("Phonon_DFT: LORENTZIAN p=%g (p_in=%g, p1=%g, p2=%g, p3=%g, p_ch=%g)\n",
+                   p, p_incoming, ph_p1, ph_p2, ph_p3, p_channel);
             printf("  omega=%g vf=%g vi=%g S_total=%g kappa2=%g pdf=%g n_tgt=%d\n",
                    lor_omega, v_f, v_i, lor_S_total, ph_kappa2, imp_pdf, imp_n_targets);
           }
@@ -1907,11 +1945,11 @@ TRACE
           : 0;
         ph_p4 = 2 * VS2E * v_f / ph_jacobian;
 
-        p = p_incoming * ph_p1 * ph_p2 * ph_p3 * ph_p4 / p_phonon;
+        p = p_incoming * ph_p1 * ph_p2 * ph_p3 * ph_p4 / p_channel;
 
         if (pdft_phonon_attempts <= 5) {
-          printf("Phonon_DFT: PHONON p=%g (p_in=%g, p1=%g, p2=%g, p3=%g, p4=%g)\n",
-                 p, p_incoming, ph_p1, ph_p2, ph_p3, ph_p4);
+          printf("Phonon_DFT: PHONON p=%g (p_in=%g, p1=%g, p2=%g, p3=%g, p4=%g, p_ch=%g)\n",
+                 p, p_incoming, ph_p1, ph_p2, ph_p3, ph_p4, p_channel);
           printf("  omega=%g vf=%g vi=%g nroots=%d kappa2=%g bose=%g solid=%g l_full=%g\n",
                  ph_omega, v_f, v_i, ph_nroots, ph_kappa2, ph_bose_factor, solid_angle, l_full);
         }
@@ -1922,26 +1960,24 @@ TRACE
       /* else: no roots, neutron transmitted unchanged (velocity already restored above) */
       } /* end root-finding (else) block */
     }
-    else if (info.bragg_count > 0 || info.sigma_i > 0) {
+    else if (bragg_active) {
       /* ============================================================
-         BRAGG + INCOHERENT PATH (unchanged from working version)
+         BRAGG + INCOHERENT PATH
+         
+         Entered when:
+         (a) no phonon grid loaded, but Bragg/incoherent active
+         (b) phonon grid loaded AND Bragg active, but coin flip
+             chose Bragg (with prob 1-p_phonon)
+         
+         The Bragg search (ki, pdft_bragg_search) was already run
+         above in the common path.  We reuse tau_count, coh_refl,
+         coh_xsect, pdft_tlist from there.
          ============================================================ */
-      kix = V2K * vx_i;
-      kiy = V2K * vy_i;
-      kiz = V2K * vz_i;
-      ki = V2K * v_i;
+      p_channel = info.phonon_grid.loaded ? (1.0 - p_phonon) : 1.0;
 
       abs_xlen = info.sigma_a * 2200 / v_i / V0 * 100;
       inc_xlen = info.sigma_i / V0 * 100;
 
-      tau_count = 0; coh_refl = 0; coh_xsect = 0;
-      if (info.bragg_count > 0) {
-        tau_count = pdft_bragg_search(info.bragg_list, pdft_tlist,
-                                      info.bragg_count, V0,
-                                      kix, kiy, kiz,
-                                      delta_d_d,
-                                      &coh_refl, &coh_xsect);
-      }
       coh_xlen = coh_xsect / V0;
       if (info.flag_barns) coh_xlen *= 100;
 
@@ -1973,8 +2009,8 @@ TRACE
             ABSORB;
           }
 
-          /* Compensate for (1-p_phonon) probability */
-          if (p_phonon > 0 && p_phonon < 1.0) p /= (1.0 - p_phonon);
+          /* Compensate for channel probability */
+          if (p_channel > 0 && p_channel < 1.0) p /= p_channel;
 
           if (coh_xlen > 0 && rand0max(scatt_channels) > inc_xlen) {
             /* BRAGG */
