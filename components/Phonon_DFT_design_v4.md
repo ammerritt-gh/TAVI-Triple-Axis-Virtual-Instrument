@@ -6,7 +6,7 @@
 
 The component is designed as an extensible "universal sample" that will grow to support multi-BZ intensity variation, magnetic excitations, and intrinsic phonon linewidths.
 
-**Current version:** 1.0 — Bragg kernel validated, phonon kernel functional with root-finding approach.
+**Current version:** 2.0 — Bragg kernel validated, phonon kernel functional with root-finding and Lorentzian spectral function modes.
 
 **Repository:** `ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument`
 
@@ -247,68 +247,95 @@ The component compiles on Windows with MSVC (`cl.exe`) in C89 mode. Key constrai
 
 3. **Phonon cross-section prefactor.** The `b²/M` factor from `Phonon_simple` is not included. The dispersion file's Intensity column should encode the full scattering cross section. With uniform `I=1.0` test files, phonon intensities are missing this scale factor (~0.44 fm²/amu for Al).
 
-4. **No intrinsic phonon linewidth.** Phonons are delta functions in energy. The observed peak width comes from instrumental Q-resolution only. See "Future: Lorentzian Spectral Function" below.
+4. **Intrinsic phonon linewidth approximation.** The Lorentzian mode uses a simple Lorentzian lineshape (not the full damped harmonic oscillator). This is valid when Γ ≪ ω_s. For strongly damped modes (Γ ∼ ω_s), the DHO form should be used instead (future enhancement).
 
 5. **No UB matrix.** The crystal orientation is fixed by the lattice vector convention. There is no rotation matrix to align crystallographic axes with the instrument frame. Users must specify lattice vectors explicitly to control orientation.
 
 ---
 
-## Future: Lorentzian Spectral Function (Phase 2)
+## Lorentzian Spectral Function (Phase 2) — Implemented
 
 ### Motivation
 
-The current root-finding approach treats phonons as delta functions: `S(Q,ω) ∝ δ(ω − ω_s(q))`. This has two consequences:
+The root-finding approach treats phonons as delta functions: `S(Q,ω) ∝ δ(ω − ω_s(q))`. This has two consequences:
 
-1. **No intrinsic linewidth.** Real phonons have finite lifetime Γ (typically 0.1–2 meV), producing a Lorentzian lineshape. The current component cannot model this.
+1. **No intrinsic linewidth.** Real phonons have finite lifetime Γ (typically 0.1–2 meV), producing a Lorentzian lineshape. The delta-function mode cannot model this.
 
 2. **Low efficiency.** The root-finder only produces signal when the Q-trajectory exactly crosses the dispersion surface. Many neutrons find roots but at energies the analyzer doesn't accept, wasting computational effort.
 
-### Proposed approach
+### Spectral function
 
-Replace the delta function with a damped harmonic oscillator (DHO) or Lorentzian spectral function:
-
-$$S(\mathbf{Q}, \omega) = \sum_{s} \frac{I_s(\mathbf{q})}{\omega_s(\mathbf{q})} \cdot \frac{4\omega_s \Gamma_s}{(\omega^2 - \omega_s^2)^2 + 4\omega^2\Gamma_s^2} \cdot [n(\omega,T) + 1]$$
-
-For small Γ (Γ ≪ ω_s), this simplifies to a Lorentzian:
+The Lorentzian mode replaces the delta function with a Lorentzian spectral function:
 
 $$S(\mathbf{Q}, \omega) \approx \sum_{s} I_s(\mathbf{q}) \cdot \frac{\Gamma_s / \pi}{(\omega - \omega_s(\mathbf{q}))^2 + \Gamma_s^2} \cdot [n(\omega,T) + 1]$$
 
-### Algorithm change
+where Γ_s is the HWHM (half-width at half-maximum) of the phonon line. Both Stokes (+ω_s) and anti-Stokes (−ω_s) terms are summed over all branches.
 
-Instead of root-finding:
+### Parameter
+
+```c
+phonon_gamma=0.5   // intrinsic phonon linewidth Γ (meV), Lorentzian FWHM
+                    // 0 = delta function (root-finding, backward compatible)
+                    // >0 = Lorentzian spectral function with importance-sampled v_f
+```
+
+Per-branch Γ values are supported via column 7 of the dispersion file (FWHM in meV). When present, the per-point value overrides the global `phonon_gamma` for that branch/q-point.
+
+### Algorithm: importance-sampled v_f
+
+The key challenge is efficient sampling of the final neutron speed v_f. Uniform v_f sampling wastes most neutrons far from the dispersion surface where S(Q,ω) ≈ 0. The implemented solution uses importance sampling from a Lorentzian mixture:
 
 ```
 1. Choose random scattered direction (focused toward target)
-2. Choose random v_f from a physically motivated distribution
-   (e.g. uniform in E_transfer, or importance-sampled near E_phonon)
-3. Compute Q = k_i − k_f, convert to r.l.u., fold into BZ
-4. For each branch: interpolate E_phonon(q) and I(q)
-5. Evaluate S(Q, ω) = Σ_s I_s × Lorentzian(ω, ω_s, Γ_s) × Bose
-6. Weight neutron by S(Q, ω) × kinematic factors
+2. Compute B^-1 (reciprocal-to-r.l.u. matrix)
+
+--- Importance sampling of v_f ---
+3. Estimate Q at elastic limit (v_f = v_i) for the chosen direction
+4. For each branch s, interpolate E_s(q) at the estimated Q
+5. For each (branch, sign=±1), compute target:
+     v_f_target = sqrt(v_i^2 ∓ E_s / VS2E)
+   and transform Γ to v_f space:
+     σ_vf = Γ_HWHM / (2 · VS2E · v_f_target)
+   with a floor of 10 m/s to prevent infinitely narrow sampling peaks.
+6. Sample v_f from mixture PDF:
+     pdf(v_f) = 0.1/vf_range + 0.9 · (1/N) · Σ_j Lor(v_f; target_j, σ_j)
+   10% uniform background ensures coverage far from branches.
+   Cauchy sampling: pick component j, then v_f = target_j + σ_j · tan(π(u-0.5))
+   Reject if outside [vf_min, vf_max], resample uniformly.
+7. Evaluate mixture PDF at sampled v_f (for importance weight)
+
+--- Spectral function evaluation ---
+8. Compute Q = k_i − k_f at the sampled v_f, convert to r.l.u., fold
+9. For each branch: interpolate E_s, I_s, Γ_s; sum Lorentzian × Bose
+10. Weight = p_incoming × p1 × p2 × p3 / p_phonon
+    where:
+      p1 = exp(−μ_a,i·l_i − μ_a,f·l_o)          (absorption)
+      p2 = solid_angle · l_full · V_rho / (4π)    (geometry)
+      p3 = (v_f/v_i) · DW · κ² · K2V² · S_total / pdf(v_f)
 ```
 
-This approach:
-- **Every neutron contributes.** No root-finding failure. Every scattered neutron has nonzero weight (though it may be small far from the dispersion surface).
-- **Natural linewidth.** The Lorentzian gives physical broadening controlled by Γ.
-- **Simpler code.** No Ridders root-finder needed. The omega function becomes a simple evaluation rather than an iterative solver.
-- **Better TAS efficiency.** Importance sampling of v_f near the expected phonon energies concentrates computational effort where the signal is.
+### Why this works
 
-### New parameter
+The weight per neutron is proportional to `S_total / pdf(v_f)`. When v_f lands near a phonon branch:
+- `S_total` is large (Lorentzian peak)
+- `pdf(v_f)` is also large (importance distribution peaks there too)
+- Their ratio is well-behaved → low weight variance
 
-```c
-phonon_gamma=0.5   // intrinsic phonon linewidth Γ (meV), Lorentzian HWHM
-                    // 0 = delta function (current behavior, via root-finding)
-                    // >0 = Lorentzian spectral function
-```
+With uniform sampling, `pdf = 1/vf_range` is constant, so the weight variance is dominated by the enormous dynamic range of `S_total` (orders of magnitude between on-peak and off-peak). The importance sampling concentrates samples where the signal is, dramatically reducing the number of neutrons needed for convergence.
 
-Per-branch Γ values could be supported via an additional column in the dispersion file (column 7: Gamma).
+### Fallbacks and edge cases
 
-### Implementation considerations
+- **No valid targets** (all branches give E_s > E_i for Stokes, or lattice issues): falls back to pure uniform sampling (imp_uniform_weight = 1.0).
+- **Cauchy tail extends outside [vf_min, vf_max]**: rejected sample is replaced by a uniform draw.
+- **σ_vf floor of 10 m/s**: prevents the sampling Lorentzian from becoming a near-delta function when Γ is tiny, which would cause numerical issues in the Cauchy CDF inversion.
+- **phonon_gamma = 0**: entire Lorentzian block is skipped; root-finding mode runs as before.
 
-- **v_f sampling distribution:** Uniform sampling in v_f wastes many neutrons far from the dispersion. Importance sampling from a Gaussian centered on the expected v_f (computed from E_i and E_max) would improve efficiency dramatically.
-- **Normalization:** The Lorentzian must be normalized so that in the limit Γ→0, the result matches the current root-finding approach. The integral of the Lorentzian over all ω is 1, so the weight at the peak is `1/(πΓ)`.
-- **Multiple branches:** When Γ is comparable to branch separations, the Lorentzians of different branches overlap. The sum over branches handles this naturally.
-- **Compatibility:** When `phonon_gamma=0`, fall back to the current root-finding algorithm. This preserves backward compatibility and allows comparison.
+### Normalization consistency
+
+In the limit Γ → 0, the Lorentzian `(Γ/π) / ((ω−ω_s)² + Γ²)` → δ(ω−ω_s). The weight formula reduces to the root-finding formula because:
+- `S_total` → `I_s × δ(ω−ω_s) × Bose`
+- `1/pdf(v_f)` → the v_f-space Jacobian `dv_f/dω = 1/(2·VS2E·v_f)`
+- The product reproduces `VS2E/|ω| × Bose × I × 2·VS2E·v_f / J` from the root-finding p3×p4.
 
 ---
 
@@ -353,7 +380,7 @@ Magnon scattering uses the same grid infrastructure but with different cross-sec
 | Cylinder/box/sphere geometry | ✅ Implemented | |
 | Incoherent channel | ✅ Implemented | Isotropic elastic, proper 4π sampling |
 | Diagnostic output | ✅ Implemented | Weight breakdown, root-finding statistics |
-| Lorentzian linewidth | ⬜ Planned | Phase 2 |
+| Lorentzian linewidth | ✅ Implemented | Importance-sampled v_f, per-point or global Γ |
 | Multi-BZ intensity | ⬜ Planned | Phase 3 |
 | Magnon kernel | ⬜ Planned | Phase 4 |
 | Multiple scattering | ⬜ Not started | |
@@ -365,10 +392,10 @@ Magnon scattering uses the same grid infrastructure but with different cross-sec
 ## File Structure
 
 ```
-Phonon_DFT.comp                    ← main component file (~1700 lines)
+Phonon_DFT.comp                    ← main component file (~2060 lines)
 Al_mp-134_symmetrized.cif          ← test CIF (Al, Fm-3m)
 Al_test_phonons.dat                ← test dispersion (isotropic toy model, 2 branches)
-Phonon_DFT_design_v3.md            ← this document
+Phonon_DFT_design_v4.md            ← this document
 ```
 
 ---
