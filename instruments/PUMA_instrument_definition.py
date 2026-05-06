@@ -1247,10 +1247,10 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         detector.yheight = 1.0
 
         if run_number==0:
-            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=10, force_compile=True)
+            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=True)
             print("Compiled")
         else:
-            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=10, force_compile=False)
+            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=False)
             print("Not compiled")
         if not error_flag_array: #check if the error flags are empty
             # Get individual sample angle components

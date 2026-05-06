@@ -68,6 +68,9 @@ class UnifiedSampleDock(BaseDockWidget):
     # Signal to request opening the misalignment dock
     open_misalignment_dock_requested = Signal()
     
+    # Signal to request opening the UB matrix dock
+    open_ub_matrix_dock_requested = Signal()
+    
     # Signal emitted when lattice parameters are saved
     lattice_parameters_changed = Signal()
     
@@ -264,6 +267,25 @@ class UnifiedSampleDock(BaseDockWidget):
         
         main_layout.addWidget(orientation_group)
         
+        # ===== UB Matrix Section =====
+        ub_group = QGroupBox("UB Matrix")
+        ub_layout = QVBoxLayout()
+        ub_layout.setSpacing(8)
+        ub_group.setLayout(ub_layout)
+        
+        # Button to open UB matrix dock
+        self.open_ub_matrix_button = QPushButton("Open UB Matrix...")
+        self.open_ub_matrix_button.setMinimumHeight(30)
+        ub_layout.addWidget(self.open_ub_matrix_button)
+        
+        # Status indicator
+        self.ub_indicator_label = QLabel("\u26aa UB not set (identity)")
+        self.ub_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
+        self.ub_indicator_label.setAlignment(Qt.AlignCenter)
+        ub_layout.addWidget(self.ub_indicator_label)
+        
+        main_layout.addWidget(ub_group)
+        
         # ===== Separator =====
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
@@ -294,6 +316,7 @@ class UnifiedSampleDock(BaseDockWidget):
         
         # Connect internal signals
         self.open_misalignment_button.clicked.connect(self._on_open_misalignment_dock)
+        self.open_ub_matrix_button.clicked.connect(self._on_open_ub_matrix_dock)
         self.lattice_lock_button.clicked.connect(self._on_lattice_lock_toggled)
         self.lattice_save_button.clicked.connect(self._on_lattice_save)
         self.lattice_discard_button.clicked.connect(self._on_lattice_discard)
@@ -317,6 +340,23 @@ class UnifiedSampleDock(BaseDockWidget):
     def _on_open_misalignment_dock(self):
         """Handle button click to open misalignment dock."""
         self.open_misalignment_dock_requested.emit()
+    
+    def _on_open_ub_matrix_dock(self):
+        """Handle button click to open UB matrix dock."""
+        self.open_ub_matrix_dock_requested.emit()
+    
+    def update_ub_indicator(self, has_ub: bool):
+        """Update the UB matrix status indicator.
+        
+        Args:
+            has_ub: True if UB is non-identity, False otherwise
+        """
+        if has_ub:
+            self.ub_indicator_label.setText("\U0001f7e2 UB matrix active")
+            self.ub_indicator_label.setStyleSheet("color: green; font-weight: bold; font-size: 11px;")
+        else:
+            self.ub_indicator_label.setText("\u26aa UB not set (identity)")
+            self.ub_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
     
     def update_misalignment_indicator(self, has_misalignment: bool):
         """Update the indicator to show if misalignment is loaded.
