@@ -180,7 +180,8 @@ class PeakEntryWidget(QFrame):
         for field in [self.h_edit, self.k_edit, self.l_edit,
                       self.omega_edit, self.chi_edit, self.stt_edit,
                       self.ki_edit, self.kf_edit]:
-            field.textChanged.connect(lambda: self.peak_data_changed.emit(self.index))
+            field.textChanged.connect(lambda _: self.peak_data_changed.emit(self.index))
+        self.peak_data_changed.connect(lambda _: self._validate_self())
 
     def _on_lock_toggled(self, locked):
         self._locked = locked
@@ -194,6 +195,18 @@ class PeakEntryWidget(QFrame):
                 field.setStyleSheet("")
         self.take_position_button.setEnabled(not locked)
         self.remove_button.setEnabled(not locked)
+
+    def _validate_self(self):
+        """Validate own fields and update the validity indicator."""
+        data = self.get_peak_data()
+        if data is None:
+            self.update_valid_indicator(False)
+            return
+        h, k, l = data['hkl']
+        ki, kf = data['ki'], data['kf']
+        self.update_valid_indicator(
+            not (h == 0 and k == 0 and l == 0) and ki > 0 and kf > 0
+        )
 
     def get_peak_data(self) -> dict:
         """Return peak data from UI fields."""
@@ -524,8 +537,12 @@ class UBMatrixDock(BaseDockWidget):
         self._ub_locked = True
         self._apply_ub_lock_state()
         self._saved_ub_values = {}
-        # Signal that UB was manually edited
-        self.ub_matrix_changed.emit(True)
+        try:
+            UB = self.get_ub_matrix_from_fields()
+            is_non_identity = not np.allclose(UB, np.eye(3), atol=1e-6)
+        except ValueError:
+            is_non_identity = False
+        self.ub_matrix_changed.emit(is_non_identity)
 
     def _on_ub_discard(self):
         if self._saved_ub_values:
@@ -565,15 +582,22 @@ class UBMatrixDock(BaseDockWidget):
                 self.ub_edits[i][j].setText(values.get(f'{i}{j}', '0'))
 
     def get_ub_matrix_from_fields(self) -> np.ndarray:
-        """Read UB matrix from the 3x3 grid fields."""
-        try:
-            UB = np.zeros((3, 3))
-            for i in range(3):
-                for j in range(3):
-                    UB[i, j] = float(self.ub_edits[i][j].text() or 0)
-            return UB
-        except ValueError:
-            return np.eye(3)
+        """Read UB matrix from the 3x3 grid fields.
+
+        Raises:
+            ValueError: If any field contains a non-numeric value.
+        """
+        UB = np.zeros((3, 3))
+        for i in range(3):
+            for j in range(3):
+                text = self.ub_edits[i][j].text() or "0"
+                try:
+                    UB[i, j] = float(text)
+                except ValueError:
+                    raise ValueError(
+                        f"Non-numeric value at row {i} col {j}: '{text}'"
+                    )
+        return UB
 
     # ===== UB Display Update =====
 
