@@ -15,6 +15,7 @@ from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
 from gui.docks.display_dock import DisplayDock
 from gui.docks.misalignment_dock import MisalignmentDock
+from gui.docks.ub_matrix_dock import UBMatrixDock
 
 
 class TAVIMainWindow(QMainWindow):
@@ -78,6 +79,14 @@ class TAVIMainWindow(QMainWindow):
         except Exception:
             pass
         
+        # UB Matrix Panel (initially hidden, opened from Sample panel)
+        self.ub_matrix_dock = UBMatrixDock(self)
+        try:
+            self.ub_matrix_dock.setFloating(True)
+            self.ub_matrix_dock.setVisible(False)
+        except Exception:
+            pass
+        
         # Simulation Panel (column 2, bottom)
         self.simulation_dock = UnifiedSimulationDock(self)
         
@@ -96,6 +105,7 @@ class TAVIMainWindow(QMainWindow):
             self.scattering_dock,
             self.sample_dock,
             self.misalignment_dock,
+            self.ub_matrix_dock,
             self.simulation_dock,
             self.display_dock,
             self.output_dock,
@@ -113,6 +123,16 @@ class TAVIMainWindow(QMainWindow):
         self.misalignment_dock.misalignment_changed.connect(
             self.sample_dock.update_misalignment_indicator
         )
+        
+        # Connect sample dock button to open UB matrix dock
+        self.sample_dock.open_ub_matrix_dock_requested.connect(
+            self._on_open_ub_matrix_dock
+        )
+        
+        # Connect UB matrix dock signal to update sample dock indicator
+        self.ub_matrix_dock.ub_matrix_changed.connect(
+            self.sample_dock.update_ub_indicator
+        )
     
     def _on_open_misalignment_dock(self):
         """Handle request to open the misalignment dock."""
@@ -120,6 +140,12 @@ class TAVIMainWindow(QMainWindow):
         self.misalignment_dock.setVisible(True)
         self.misalignment_dock.raise_()
         self.misalignment_dock.activateWindow()
+    
+    def _on_open_ub_matrix_dock(self):
+        """Handle request to open the UB matrix dock."""
+        self.ub_matrix_dock.setVisible(True)
+        self.ub_matrix_dock.raise_()
+        self.ub_matrix_dock.activateWindow()
     
     def _setup_central_widget(self):
         """Set up a minimal central widget."""

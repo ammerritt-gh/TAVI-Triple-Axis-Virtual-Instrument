@@ -22,6 +22,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file, write_1D_scan, write_2D_scan)
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
+from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
+                            decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
 
 # Import GUI
@@ -67,6 +69,9 @@ class TAVIController(QObject):
         super().__init__()
         self.window = window
         self.PUMA = PUMA_Instrument()
+        
+        # UB matrix for crystal orientation
+        self.ub_matrix = UBMatrix()
         
         # Global variables
         self.stop_flag = False
@@ -144,6 +149,19 @@ class TAVIController(QObject):
         self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
         self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
         self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
+        
+        # UB Matrix dock
+        self.window.ub_matrix_dock.calculate_ub_button.clicked.connect(self.on_calculate_ub)
+        self.window.ub_matrix_dock.refine_lattice_button.clicked.connect(self.on_refine_lattice)
+        self.window.ub_matrix_dock.reset_ub_button.clicked.connect(self.on_reset_ub)
+        self.window.ub_matrix_dock.ub_matrix_changed.connect(self.on_ub_matrix_edited)
+        self.window.ub_matrix_dock.generate_training_button.clicked.connect(self.on_generate_training)
+        self.window.ub_matrix_dock.load_training_button.clicked.connect(self.on_load_training)
+        self.window.ub_matrix_dock.clear_training_button.clicked.connect(self.on_clear_training)
+        self.window.ub_matrix_dock.check_training_button.clicked.connect(self.on_check_training)
+        # Connect peak Take Position and Remove buttons
+        self._reconnect_peak_signals()
+        self.window.ub_matrix_dock.add_peak_button.clicked.connect(self._on_peak_added)
         
         # Data control buttons
         self.window.data_control_dock.save_browse_button.clicked.connect(
@@ -1245,11 +1263,14 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            H, K, L = update_HKL_from_Q_direct(
-                vals['qx'], vals['qy'], vals['qz'],
-                vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
-            )
+            if not self.ub_matrix.is_identity:
+                H, K, L = self.ub_matrix.q_to_hkl(vals['qx'], vals['qy'], vals['qz'])
+            else:
+                H, K, L = update_HKL_from_Q_direct(
+                    vals['qx'], vals['qy'], vals['qz'],
+                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                )
             self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
@@ -1288,11 +1309,14 @@ class TAVIController(QObject):
                 return
             
             self.updating = True
-            qx, qy, qz = update_Q_from_HKL_direct(
-                H, K, L,
-                vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
-            )
+            if not self.ub_matrix.is_identity:
+                qx, qy, qz = self.ub_matrix.hkl_to_q(H, K, L)
+            else:
+                qx, qy, qz = update_Q_from_HKL_direct(
+                    H, K, L,
+                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                )
             self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
@@ -1322,12 +1346,20 @@ class TAVIController(QObject):
             qz = float(self.window.scattering_dock.qz_edit.text() or 0)
             
             self.updating = True
-            # Recalculate HKL from current Q with new lattice parameters
-            H, K, L = update_HKL_from_Q_direct(
-                qx, qy, qz,
+            # Update UB matrix B when lattice changes
+            self.ub_matrix.set_lattice(
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
+            # Recalculate HKL from current Q with new lattice parameters
+            if not self.ub_matrix.is_identity:
+                H, K, L = self.ub_matrix.q_to_hkl(qx, qy, qz)
+            else:
+                H, K, L = update_HKL_from_Q_direct(
+                    qx, qy, qz,
+                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                )
             self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
@@ -1961,7 +1993,254 @@ class TAVIController(QObject):
             self.window.misalignment_dock.update_alignment_feedback(psi, kappa)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
-    
+
+    # ===== UB Matrix Controller Methods =====
+
+    def on_calculate_ub(self):
+        """Calculate UB matrix from observed peaks in the UB dock."""
+        try:
+            peaks_data = self.window.ub_matrix_dock.get_all_peak_data()
+            # Build ObservedPeak list
+            self.ub_matrix.peaks = []
+            for pd in peaks_data:
+                if pd is None:
+                    continue
+                peak = ObservedPeak(
+                    hkl=pd['hkl'],
+                    angles=pd['angles'],
+                    ki=pd['ki'],
+                    kf=pd['kf'],
+                    locked=pd.get('locked', False),
+                )
+                self.ub_matrix.peaks.append(peak)
+
+            # Sync lattice from GUI
+            vals = self.get_gui_values()
+            if vals:
+                self.ub_matrix.set_lattice(
+                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
+                )
+
+            U = self.ub_matrix.calculate_U_from_peaks()
+            self._update_ub_display()
+            self.print_to_message_center(
+                f"UB matrix calculated from {len([p for p in self.ub_matrix.peaks if p.is_valid])} peaks"
+            )
+            # Refresh HKL/angles for current Q
+            self.on_Q_changed()
+        except Exception as e:
+            self.print_to_message_center(f"UB calculation failed: {e}")
+
+    def on_refine_lattice(self):
+        """Refine lattice parameters from observed peaks."""
+        try:
+            peaks_data = self.window.ub_matrix_dock.get_all_peak_data()
+            self.ub_matrix.peaks = []
+            for pd in peaks_data:
+                if pd is None:
+                    continue
+                peak = ObservedPeak(
+                    hkl=pd['hkl'],
+                    angles=pd['angles'],
+                    ki=pd['ki'],
+                    kf=pd['kf'],
+                    locked=pd.get('locked', False),
+                )
+                self.ub_matrix.peaks.append(peak)
+
+            result = self.ub_matrix.refine_lattice()
+            refined = result['lattice']
+
+            # Show refinement dialog
+            from gui.docks.ub_matrix_dock import LatticeRefinementDialog
+            vals = self.get_gui_values()
+            current = (
+                vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
+            )
+            dlg = LatticeRefinementDialog(current, refined, result['residuals'], result['rms_error'], self.window)
+            if dlg.exec():
+                # Apply refined lattice to sample dock
+                a, b, c, alpha, beta, gamma = refined
+                self.window.sample_dock.lattice_a_edit.setText(f"{a:.4f}".rstrip('0').rstrip('.'))
+                self.window.sample_dock.lattice_b_edit.setText(f"{b:.4f}".rstrip('0').rstrip('.'))
+                self.window.sample_dock.lattice_c_edit.setText(f"{c:.4f}".rstrip('0').rstrip('.'))
+                self.window.sample_dock.lattice_alpha_edit.setText(f"{alpha:.4f}".rstrip('0').rstrip('.'))
+                self.window.sample_dock.lattice_beta_edit.setText(f"{beta:.4f}".rstrip('0').rstrip('.'))
+                self.window.sample_dock.lattice_gamma_edit.setText(f"{gamma:.4f}".rstrip('0').rstrip('.'))
+                self.on_lattice_changed()
+                self.print_to_message_center(
+                    f"Refined lattice applied: a={a:.4f}, b={b:.4f}, c={c:.4f}, "
+                    f"α={alpha:.2f}, β={beta:.2f}, γ={gamma:.2f}"
+                )
+            else:
+                self.print_to_message_center("Lattice refinement not applied")
+        except Exception as e:
+            self.print_to_message_center(f"Lattice refinement failed: {e}")
+
+    def on_reset_ub(self):
+        """Reset UB matrix to identity (clear orientation)."""
+        self.ub_matrix.reset_U()
+        self._update_ub_display()
+        self.print_to_message_center("UB matrix reset to identity")
+        # Refresh HKL from current Q using direct method
+        self.on_Q_changed()
+
+    def on_ub_matrix_edited(self, is_non_identity: bool):
+        """Handle manual editing of UB matrix in the dock."""
+        try:
+            UB = self.window.ub_matrix_dock.get_ub_matrix_from_fields()
+            self.ub_matrix.set_UB(UB)
+            self._update_ub_display()
+            self.print_to_message_center("UB matrix updated from manual edit")
+            self.on_Q_changed()
+        except Exception as e:
+            self.print_to_message_center(f"Invalid UB matrix: {e}")
+
+    def on_take_peak_position(self, peak_index: int):
+        """Fill peak angle fields from current instrument position."""
+        vals = self.get_gui_values()
+        if not vals:
+            return
+        pw = self.window.ub_matrix_dock.get_peak_widget(peak_index)
+        if pw:
+            pw.set_angles_from_position(
+                vals['omega'], vals['chi'], vals['stt'],
+                vals['Ki'], vals['Kf'],
+            )
+            self.print_to_message_center(
+                f"Peak {peak_index + 1}: position taken "
+                f"(ω={vals['omega']:.2f}°, χ={vals['chi']:.2f}°, 2θ={vals['stt']:.2f}°, "
+                f"ki={vals['Ki']:.4f}, kf={vals['Kf']:.4f})"
+            )
+
+    def _on_peak_added(self):
+        """Connect signals for newly added peak widget."""
+        self._reconnect_peak_signals()
+
+    def _on_peak_removed(self, index: int):
+        """Handle peak removal."""
+        self.window.ub_matrix_dock.remove_peak_entry(index)
+        self._reconnect_peak_signals()
+
+    def _reconnect_peak_signals(self):
+        """Reconnect take_position and remove signals for all peak widgets."""
+        for pw in self.window.ub_matrix_dock._peak_widgets:
+            try:
+                pw.take_position_requested.disconnect()
+            except RuntimeError:
+                pass
+            try:
+                pw.remove_requested.disconnect()
+            except RuntimeError:
+                pass
+            pw.take_position_requested.connect(self.on_take_peak_position)
+            pw.remove_requested.connect(self._on_peak_removed)
+
+    def _update_ub_display(self):
+        """Update UB matrix display and scattering plane info in the dock."""
+        self.window.ub_matrix_dock.update_ub_display(
+            self.ub_matrix.UB, self.ub_matrix.is_identity
+        )
+        try:
+            plane_info = self.ub_matrix.get_plane_info()
+            self.window.ub_matrix_dock.update_plane_info(plane_info)
+        except Exception:
+            pass
+        # Update sample dock indicator
+        if hasattr(self.window, 'sample_dock'):
+            self.window.sample_dock.update_ub_indicator(not self.ub_matrix.is_identity)
+        # Refresh angles from Q since UB affects the mapping
+        self.update_angles_from_q()
+
+    # ===== UB Training Methods =====
+
+    def on_generate_training(self):
+        """Generate a training exercise hash with hidden orientation + misalignment."""
+        try:
+            max_ori = self.window.ub_matrix_dock.max_ori_spin.value()
+            max_mis = self.window.ub_matrix_dock.max_mis_spin.value()
+            include_ori = self.window.ub_matrix_dock.include_orientation_check.isChecked()
+            include_mis = self.window.ub_matrix_dock.include_misalignment_check.isChecked()
+
+            hash_str = generate_training_exercise(
+                max_ori_angle=max_ori,
+                max_mis_angle=max_mis,
+                include_orientation=include_ori,
+                include_misalignment=include_mis,
+            )
+            self.window.ub_matrix_dock.training_hash_display.setText(hash_str)
+            self.print_to_message_center("Training exercise generated - share the hash with students")
+        except Exception as e:
+            self.print_to_message_center(f"Failed to generate training: {e}")
+
+    def on_load_training(self):
+        """Load a training exercise from hash, apply hidden orientation + misalignment."""
+        try:
+            hash_str = self.window.ub_matrix_dock.load_hash_edit.text().strip()
+            if not hash_str:
+                self.print_to_message_center("No training hash entered")
+                return
+
+            U, mis_omega, mis_chi = decode_training(hash_str)
+
+            # Store the training exercise
+            self.window.ub_matrix_dock._loaded_training = (U, mis_omega, mis_chi)
+
+            # Apply hidden orientation to UB matrix
+            self.ub_matrix.set_U(U)
+            # Apply hidden misalignment to instrument
+            self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+
+            # Update displays
+            self._update_ub_display()
+            self.window.ub_matrix_dock.update_training_status(True)
+
+            self.print_to_message_center("Training exercise loaded - hidden orientation and misalignment applied")
+        except ValueError as e:
+            self.print_to_message_center(f"Invalid training hash: {e}")
+        except Exception as e:
+            self.print_to_message_center(f"Failed to load training: {e}")
+
+    def on_clear_training(self):
+        """Clear training exercise, reset orientation and misalignment."""
+        self.window.ub_matrix_dock._loaded_training = None
+        self.ub_matrix.reset_U()
+        self.PUMA.set_misalignment(mis_omega=0, mis_chi=0)
+        self._update_ub_display()
+        self.window.ub_matrix_dock.update_training_status(False)
+        self.print_to_message_center("Training exercise cleared")
+
+    def on_check_training(self):
+        """Check student alignment against loaded training exercise."""
+        try:
+            training = self.window.ub_matrix_dock._loaded_training
+            if training is None:
+                self.print_to_message_center("No training exercise loaded")
+                return
+
+            teacher_U, mis_omega, mis_chi = training
+
+            # Get student's current state
+            student_U = self.ub_matrix.U
+            vals = self.get_gui_values()
+            student_psi = vals.get('psi', 0) if vals else 0
+            student_kappa = vals.get('kappa', 0) if vals else 0
+
+            results = check_training_quality(
+                student_U, teacher_U,
+                student_psi, student_kappa,
+                mis_omega, mis_chi,
+            )
+            self.window.ub_matrix_dock.update_check_results(results)
+            self.print_to_message_center(
+                f"Alignment check: orientation {results['orientation']}, "
+                f"in-plane {results['in_plane']}, out-of-plane {results['out_of_plane']}"
+            )
+        except Exception as e:
+            self.print_to_message_center(f"Training check failed: {e}")
+
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
         dialog = DiagnosticConfigDialog(self.window, self.diagnostic_settings)
@@ -2167,6 +2446,9 @@ class TAVIController(QObject):
             "current_sample_settings": self.current_sample_settings,
             "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None",
             "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
+            # UB matrix state
+            "ub_matrix_state": self.ub_matrix.to_dict(),
+            "ub_training_hash": self.window.ub_matrix_dock.load_hash_edit.text() if hasattr(self.window, 'ub_matrix_dock') else "",
         }
         # Ensure config directory exists
         os.makedirs("config", exist_ok=True)
@@ -2282,6 +2564,37 @@ class TAVIController(QObject):
                             self.window.sample_dock.spacegroup_combo.setCurrentIndex(idx)
                 except Exception:
                     pass
+                # Restore UB matrix state
+                ub_state = parameters.get("ub_matrix_state")
+                if ub_state:
+                    try:
+                        self.ub_matrix = UBMatrix.from_dict(ub_state)
+                        self._update_ub_display()
+                        # Restore peak entries in dock
+                        peaks_data = []
+                        for p in self.ub_matrix.peaks:
+                            peaks_data.append(p.to_dict())
+                        if peaks_data:
+                            self.window.ub_matrix_dock.set_peak_entries(peaks_data)
+                        self._reconnect_peak_signals()
+                        self.print_to_message_center("UB matrix state restored")
+                    except Exception as e:
+                        self.print_to_message_center(f"Failed to restore UB matrix: {e}")
+                # Restore UB training hash
+                ub_hash = str(parameters.get("ub_training_hash", ""))
+                if ub_hash and ub_hash != "None" and ub_hash != "":
+                    try:
+                        self.window.ub_matrix_dock.load_hash_edit.setText(ub_hash)
+                        U, mis_omega, mis_chi = decode_training(ub_hash)
+                        self.window.ub_matrix_dock._loaded_training = (U, mis_omega, mis_chi)
+                        self.ub_matrix.set_U(U)
+                        self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+                        self._update_ub_display()
+                        self.window.ub_matrix_dock.update_training_status(True)
+                    except Exception as e:
+                        self.print_to_message_center(
+                            f"Failed to restore UB training hash '{ub_hash[:20]}...': {e}"
+                        )
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
@@ -2374,6 +2687,13 @@ class TAVIController(QObject):
         
         self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
         self.current_sample_settings = {}
+        # Reset UB matrix to identity
+        self.ub_matrix = UBMatrix()
+        if hasattr(self.window, 'ub_matrix_dock'):
+            self._update_ub_display()
+            self.window.ub_matrix_dock._loaded_training = None
+            self.window.ub_matrix_dock.update_training_status(False)
+            self._reconnect_peak_signals()
         # Default sample to Al: Bragg for easy testing
         try:
             if hasattr(self.window.sample_dock, 'sample_combo'):
