@@ -378,3 +378,6 @@ config/
 mcstas_*
 PUMA_McScript.exe
 PUMA_McScript.instr
+
+# Virtual environments for Python projects
+.venv/

@@ -2059,7 +2059,7 @@ class TAVIController(QObject):
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
             )
-            dlg = LatticeRefinementDialog(current, refined, self.window)
+            dlg = LatticeRefinementDialog(current, refined, result['residuals'], result['rms_error'], self.window)
             if dlg.exec():
                 # Apply refined lattice to sample dock
                 a, b, c, alpha, beta, gamma = refined
@@ -2587,6 +2587,9 @@ class TAVIController(QObject):
                         self.window.ub_matrix_dock.load_hash_edit.setText(ub_hash)
                         U, mis_omega, mis_chi = decode_training(ub_hash)
                         self.window.ub_matrix_dock._loaded_training = (U, mis_omega, mis_chi)
+                        self.ub_matrix.set_U(U)
+                        self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+                        self._update_ub_display()
                         self.window.ub_matrix_dock.update_training_status(True)
                     except Exception as e:
                         self.print_to_message_center(

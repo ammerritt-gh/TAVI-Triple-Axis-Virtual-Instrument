@@ -52,6 +52,12 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
     ca, cb, cg = math.cos(alpha_r), math.cos(beta_r), math.cos(gamma_r)
     sa, sb, sg = math.sin(alpha_r), math.sin(beta_r), math.sin(gamma_r)
 
+    _EPS = 1e-12
+    if abs(sa) < _EPS or abs(sb) < _EPS or abs(sg) < _EPS:
+        raise ValueError(
+            "Invalid lattice angles: angles of 0° or 180° produce a degenerate cell."
+        )
+
     # Unit cell volume
     V = a * b * c * math.sqrt(1 - ca**2 - cb**2 - cg**2 + 2*ca*cb*cg)
     if V <= 0:
@@ -331,29 +337,30 @@ def refine_lattice_from_peaks(peaks: list, initial_lattice: tuple,
     # Average scale factor
     avg_scale = np.mean(scale_ratios)
 
-    # Apply constraints based on crystal system
+    # Apply constraints based on crystal system.
+    # |Q| ∝ 1/a, so avg_scale = mean(q_obs/q_calc) > 1 means observed |Q| is
+    # larger → real-space lattice constants are smaller → divide by avg_scale.
     if crystal_system in ("cubic",):
-        # Scale all equally, keep angles fixed
-        a_new = a0 * avg_scale
+        a_new = a0 / avg_scale
         refined = (a_new, a_new, a_new, 90.0, 90.0, 90.0)
     elif crystal_system in ("tetragonal",):
-        a_new = a0 * avg_scale
-        c_new = c0 * avg_scale
+        a_new = a0 / avg_scale
+        c_new = c0 / avg_scale
         refined = (a_new, a_new, c_new, 90.0, 90.0, 90.0)
     elif crystal_system in ("hexagonal",):
-        a_new = a0 * avg_scale
-        c_new = c0 * avg_scale
+        a_new = a0 / avg_scale
+        c_new = c0 / avg_scale
         refined = (a_new, a_new, c_new, 90.0, 90.0, 120.0)
     elif crystal_system in ("orthorhombic",):
-        a_new = a0 * avg_scale
-        b_new = b0 * avg_scale
-        c_new = c0 * avg_scale
+        a_new = a0 / avg_scale
+        b_new = b0 / avg_scale
+        c_new = c0 / avg_scale
         refined = (a_new, b_new, c_new, 90.0, 90.0, 90.0)
     else:
         # General: uniform scaling of lengths
-        a_new = a0 * avg_scale
-        b_new = b0 * avg_scale
-        c_new = c0 * avg_scale
+        a_new = a0 / avg_scale
+        b_new = b0 / avg_scale
+        c_new = c0 / avg_scale
         refined = (a_new, b_new, c_new, al0, be0, ga0)
 
     # Compute residuals with refined lattice
@@ -602,7 +609,11 @@ def _random_rotation_matrix(max_angle_deg: float) -> np.ndarray:
     """
     # Random rotation axis (unit vector on sphere)
     axis = np.random.randn(3)
-    axis = axis / np.linalg.norm(axis)
+    norm = np.linalg.norm(axis)
+    while norm < 1e-10:
+        axis = np.random.randn(3)
+        norm = np.linalg.norm(axis)
+    axis = axis / norm
 
     # Random angle uniformly in [0, max_angle_deg]
     angle = math.radians(np.random.uniform(0, max_angle_deg))
