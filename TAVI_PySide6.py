@@ -3098,6 +3098,14 @@ class TAVIController(QObject):
         
         # Track if this is a 2D scan
         is_2d_scan = scan_command2 and scan_command1
+
+        if is_2d_scan:
+            estimated_runtime_points = int(sum(sum(1 for value in row if value) for row in valid_mask_2d))
+        elif is_single_point_scan:
+            estimated_runtime_points = 1
+        else:
+            estimated_runtime_points = int(sum(1 for value in valid_mask_1d if value))
+        estimated_runtime_points = max(estimated_runtime_points, 1)
         
         # Run the scans
         start_time = time.time()
@@ -3107,7 +3115,7 @@ class TAVIController(QObject):
         # Show pre-scan estimate based on historical data
         instrument_name = "PUMA"
         total_est, compile_est, _ = self.runtime_tracker.estimate_total_time(
-            instrument_name, total_scans, number_neutrons
+            instrument_name, estimated_runtime_points, number_neutrons
         )
         if total_est is not None:
             est_str = RuntimeTracker.format_time(total_est)
@@ -3118,7 +3126,7 @@ class TAVIController(QObject):
         max_counts = 0
         
         # Track individual scan times for runtime recording
-        scan_times = []  # List of (scan_index, elapsed_time_for_this_scan)
+        executed_scan_times = []
         
         # Data collection for output files
         import numpy as np
@@ -3162,6 +3170,7 @@ class TAVIController(QObject):
         prep_thread.start()
 
         processed_points = 0
+        remaining_runtime_points = estimated_runtime_points
         data = None
         simulation_stopped = False
         simulation_error_message = None
@@ -3229,9 +3238,11 @@ class TAVIController(QObject):
                         scan_folder,
                         number_neutrons,
                     )
+                    simulated_point = True
                 else:
                     data = math.nan
                     self.message_printed.emit(f"Point {i}: skipped, error flags: {error_flags}")
+                    simulated_point = False
 
                 # On the first scan point, copy the .instr file to the parent folder
                 # (it's the same for every point since only parameters change, not the compiled
@@ -3311,7 +3322,10 @@ class TAVIController(QObject):
                 
                 # Record scan time for this point
                 scan_elapsed = time.time() - scan_start_time
-                scan_times.append(scan_elapsed)
+                if simulated_point and not error_flags:
+                    executed_scan_times.append(scan_elapsed)
+                    if remaining_runtime_points > 0:
+                        remaining_runtime_points -= 1
                 processed_points += 1
                 
                 # Emit progress signals
@@ -3326,19 +3340,20 @@ class TAVIController(QObject):
                     self.elapsed_time_updated.emit(elapsed_str)
                 except Exception:
                     pass
-                if processed_points == 1:
+                if len(executed_scan_times) <= 1:
                     # After first scan, use historical data for estimation if available
                     _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
-                    if run_time_per_point is not None and total_scans > 1:
-                        remaining_time = run_time_per_point * (total_scans - 1)
+                    if run_time_per_point is not None and remaining_runtime_points > 0:
+                        remaining_time = run_time_per_point * remaining_runtime_points
+                    elif executed_scan_times and remaining_runtime_points > 0:
+                        remaining_time = executed_scan_times[0] * remaining_runtime_points
                     else:
-                        remaining_time = scan_elapsed * (total_scans - 1)
+                        remaining_time = 0
                 else:
                     # For subsequent scans, use average of scans 2+ (excluding first/compile scan)
-                    subsequent_times = scan_times[1:]  # Exclude first scan
+                    subsequent_times = executed_scan_times[1:]  # Exclude first executed/compile scan
                     avg_time_per_scan = sum(subsequent_times) / len(subsequent_times)
-                    remaining_scans = total_scans - (i + 1)
-                    remaining_time = avg_time_per_scan * remaining_scans
+                    remaining_time = avg_time_per_scan * remaining_runtime_points
                 
                 hours = int(remaining_time // 3600)
                 minutes = int((remaining_time % 3600) // 60)
@@ -3358,13 +3373,13 @@ class TAVIController(QObject):
             self.message_printed.emit("Simulation stopped by user.")
         
         # Record runtime data for future estimates (only if scan completed normally)
-        if scan_times and simulation_error_message is None and not self.stop_event.is_set():
+        if executed_scan_times and simulation_error_message is None and not self.stop_event.is_set():
             total_time = time.time() - start_time
-            first_scan_time = scan_times[0] if scan_times else 0
+            first_scan_time = executed_scan_times[0]
             
             # Calculate average time for subsequent scans (excluding first)
-            if len(scan_times) > 1:
-                avg_subsequent_time = sum(scan_times[1:]) / len(scan_times[1:])
+            if len(executed_scan_times) > 1:
+                avg_subsequent_time = sum(executed_scan_times[1:]) / len(executed_scan_times[1:])
                 compilation_time = max(0.0, first_scan_time - avg_subsequent_time)
             else:
                 # Only one scan point - use first scan time as both
@@ -3373,14 +3388,16 @@ class TAVIController(QObject):
             
             self.runtime_tracker.add_record(
                 instrument_name=instrument_name,
-                num_points=total_scans,
+                num_points=len(executed_scan_times),
                 num_neutrons=number_neutrons,
                 first_scan_time=first_scan_time,
                 avg_subsequent_time=avg_subsequent_time,
                 total_time=total_time,
                 compilation_time=compilation_time,
             )
-            self.message_printed.emit(f"Timing data recorded: {total_scans} points in {RuntimeTracker.format_time(total_time)}")
+            self.message_printed.emit(
+                f"Timing data recorded: {len(executed_scan_times)} simulated points in {RuntimeTracker.format_time(total_time)}"
+            )
             # Trigger update of scan time estimates on main thread
             self.runtime_data_updated.emit()
         
