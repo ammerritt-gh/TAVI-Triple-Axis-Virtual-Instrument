@@ -22,6 +22,7 @@ class ScanRecord:
     avg_subsequent_time: float  # Average time per point for points 2+
     total_time: float  # Total scan time
     timestamp: str  # ISO format timestamp
+    compilation_time: float = 0.0  # Explicit compile-time estimate when available
 
 
 class RuntimeTracker:
@@ -90,12 +91,9 @@ class RuntimeTracker:
                    num_neutrons: int,
                    first_scan_time: float,
                    avg_subsequent_time: float,
-                   total_time: float) -> None:
+                   total_time: float,
+                   compilation_time: float = 0.0) -> None:
         """Add a new scan record.
-        
-        Single-point scans (num_points == 1) are not saved since they cannot
-        reliably separate compile time from run time, and thus cannot contribute
-        to runtime estimation.
         
         Args:
             instrument_name: Name of the instrument (e.g., 'PUMA')
@@ -104,12 +102,9 @@ class RuntimeTracker:
             first_scan_time: Time for first point (compile + run)
             avg_subsequent_time: Average time for subsequent points (run only)
             total_time: Total scan time
+            compilation_time: Explicit compile-time estimate for this run
         """
         from datetime import datetime
-        
-        # Skip single-point scans - they can't separate compile from run time
-        if num_points == 1:
-            return
         
         record = ScanRecord(
             instrument_name=instrument_name,
@@ -118,7 +113,8 @@ class RuntimeTracker:
             first_scan_time=first_scan_time,
             avg_subsequent_time=avg_subsequent_time,
             total_time=total_time,
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            compilation_time=compilation_time,
         )
         
         if instrument_name not in self.records:
@@ -157,21 +153,19 @@ class RuntimeTracker:
         
         for rec in records:
             if rec.num_neutrons > 0 and rec.num_points > 0:
-                # Skip single-point scans for estimation - they cannot reliably
-                # separate compile time from run time since first_scan_time
-                # equals avg_subsequent_time, polluting the run time estimates
-                if rec.num_points == 1:
-                    continue
-                
-                # Compile time = first scan time - average subsequent time
-                # This is the overhead of first compilation
-                compile_time = rec.first_scan_time - rec.avg_subsequent_time
+                if rec.compilation_time > 0:
+                    compile_time = rec.compilation_time
+                elif rec.num_points > 1:
+                    compile_time = rec.first_scan_time - rec.avg_subsequent_time
+                else:
+                    compile_time = 0.0
+
                 if compile_time > 0:  # Only use positive compile times
                     compile_times.append(compile_time)
-                
+
                 # Normalize run time by neutron count
-                # run_time_per_neutron = avg_subsequent_time / num_neutrons
-                normalized_run_time = rec.avg_subsequent_time / rec.num_neutrons
+                run_time_source = rec.avg_subsequent_time if rec.num_points > 1 else rec.first_scan_time
+                normalized_run_time = run_time_source / rec.num_neutrons
                 normalized_run_times.append(normalized_run_time)
         
         if not compile_times and not normalized_run_times:

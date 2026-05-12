@@ -548,6 +548,11 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
         scans, idx_1d = scan_item
         idx_x, idx_y = -1, -1
 
+    if len(scans) < 11:
+        raise ValueError(
+            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
+        )
+
     error_flags = []
     qx = qy = qz = None
     H = K = L = None
@@ -603,11 +608,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
         omega_scan = sth if not error_flags else vals.get('omega', 0)
     else:
         omega_scan = 0
-
-    if len(scans) < 11:
-        raise ValueError(
-            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
-        )
 
     if 'rhm' not in [variable_name1, variable_name2]:
         rhm = point_puma.rhm

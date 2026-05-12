@@ -1,7 +1,7 @@
 # Pipelined Scan Execution — Design Document
 
 *Date: 2026-05-12*
-*Status: Ready to implement*
+*Status: Partially implemented; steps 1-4 and the stop-event conversion are in code, and explicit compile-time measurement remains future work*
 
 ---
 
@@ -64,20 +64,20 @@ Two buffered snapshots. The prep thread runs freely, computing as fast as it can
 
 Split into two functions in `instruments/PUMA_instrument_definition.py`:
 
-**`build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings)`**
+**`build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons)`**
 
 - Takes PUMA instrument configuration (arm lengths, crystal types, NMO setting, sample type, collimator selection, source type, diagnostic settings) — everything that affects which components are included.
-- Calls `ms.McStas_instr(...)`, adds all parameters via `add_parameter()`, adds all components via `add_component()`, calls `instrument.settings(..., force_compile=True, increment_folder_name=False)`.
-- Emits `self.message_printed.emit("Compiling PUMA instrument...")` before compilation and `self.message_printed.emit("Compilation complete.")` after.
-- Returns the compiled instrument object. If diagnostic settings include "Show Instrument Diagram", the caller emits `instrument_diagram_requested` with the instrument object once after this function returns.
+- Calls `ms.McStas_instr(...)`, adds all parameters via `add_parameter()`, adds all components via `add_component()`, and returns the reusable instrument object.
+- The current implementation does not force a standalone compile step here; McStasScript still writes and compiles lazily on the first `backengine()` call.
+- If diagnostic settings include "Show Instrument Diagram", the caller emits `instrument_diagram_requested` with the instrument object once after this function returns.
 - Called **once** at scan start, before any simulation.
 
-**`run_PUMA_point(instrument, params_snapshot, output_folder, run_number)`**
+**`run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons)`**
 
-- Takes the compiled instrument object, a params dict (the `set_parameters()` kwargs), the output folder path, and the run number.
+- Takes the reusable instrument object, the per-point snapshot dict, the output folder path, and the neutron count.
 - Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=False, increment_folder_name=False)`.
     - **Critical**: `increment_folder_name=False` is required because `ManagedMcrun` defaults to `True`, which would silently create `scan_0000_0` instead of `scan_0000` if the folder already exists, resulting in postprocessing reading from the wrong folder.
-- Calls `instrument.set_parameters(**params_snapshot)`.
+- Calls `instrument.set_parameters(**params_snapshot['params'])`.
 - Calls `instrument.backengine()`.
 - Returns `(data, error_flag_array)`. Does **not** return the instrument object (diagram emission is a one-time event after `build_PUMA_instrument()`).
 - Called **once per scan point** by the simulation thread.
@@ -109,10 +109,10 @@ This classification already exists implicitly — `add_parameter()` calls define
 
 ### Step 2: Define the params snapshot
 
-A function (method on TAVIController or a standalone helper) that takes the current scan point data and returns a dict:
+A function in `instruments/PUMA_instrument_definition.py` that takes the current scan point data and returns a dict:
 
 ```python
-def compute_scan_snapshot(scan_point, scan_mode, puma, vals):
+def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder, ...):
     """Compute the complete params snapshot for one scan point.
     
     Returns:
@@ -120,11 +120,12 @@ def compute_scan_snapshot(scan_point, scan_mode, puma, vals):
             'params': dict — the set_parameters() kwargs (set to None for error sentinels)
             'output_folder': str — scan folder path
             'deltaE': float — energy transfer for this point
-            'scan_indices': tuple — (idx_1d,) or (idx_x, idx_y)
+            'scan_index': int — position in the filtered scan list
             'error_flags': list — from calculate_angles(), empty if OK
             'metadata': dict — scan_mode, qx/qy/qz or H/K/L, angles, 
                                 bending, orientation values for logging
                                 and scan_parameters.txt
+            'indices': dict — idx_1d / idx_x / idx_y for display updates
             'log_message': str — human-readable scan parameter summary
     """
 ```
@@ -135,9 +136,9 @@ The prep thread calls this function in a loop, one call per scan point, and puts
 
 **Error sentinels**: If `calculate_angles()` returns non-empty `error_flags`, the snapshot is still produced but with `params` set to `None`. The simulation thread checks `if snapshot['params'] is None` to skip `backengine()` and record the point as failed. This preserves the current behavior where unreachable scan points appear as NaN/zero in results.
 
-**Log message emission**: The prep thread emits `self.message_printed.emit(snapshot['log_message'])` after computing each snapshot. This means log messages arrive in **preparation order**, which may be ahead of simulation progress. This is intentional — users see what is being prepared for upcoming points — but differs from the current behavior where log messages arrive in sync with simulation.
+**Log message emission**: `compute_scan_snapshot()` prepares `snapshot['log_message']`, but the simulation thread emits it immediately after dequeuing the snapshot and before running the current point. Messages therefore stay aligned with the point that is starting simulation, not with prep-thread lead time.
 
-**rva handling**: `rva` is hardcoded to 0.8 and is never a scanned variable. `compute_scan_snapshot()` should always set `params['rva_param'] = 0.8`.
+**rva handling**: `rva` defaults to `self.PUMA.rva` for ordinary scans, but the snapshot logic still honors `rva` when it is one of the active scan variables.
 
 **GUI access boundary**: ALL GUI reads must complete before the prep thread starts. Store local variables from `self.window.*` accessors — including `compact_save_check.isChecked()`, `relative_1_button.isChecked()`, `relative_2_button.isChecked()` — before calling `prep_thread.start()`. The prep thread must never access `self.window` or any Qt widget.
 
@@ -217,9 +218,6 @@ def _prep_worker(self, scan_parameter_input, scan_mode, puma, vals,
             scan_item, scan_mode, puma, vals, data_folder, i
         )
         
-        # Log scan parameters (thread-safe signal emission)
-        self.message_printed.emit(snapshot['log_message'])
-        
         # Blocks if queue is full (maxsize=2); resumes when
         # simulation thread pulls a snapshot
         snapshot_queue.put(snapshot)
@@ -230,17 +228,17 @@ def _prep_worker(self, scan_parameter_input, scan_mode, puma, vals,
 
 ### Step 4: Adapt progress and timing
 
-The simulation loop already owns progress emission (it runs after each point's postprocessing). The only change: the first-point timing now reflects `run_PUMA_point()` without compilation overhead, since `build_PUMA_instrument()` happens before the loop. Compilation time should be reported separately ("Compiling instrument..." message before the loop starts).
+The simulation loop already owns progress emission (it runs after each point's postprocessing). In the current implementation, first-point timing still includes the lazy McStas compile that occurs on the first `run_PUMA_point()` call. Compilation time is therefore still inferred from first-point timing rather than measured independently.
 
-The `RuntimeTracker` (`tavi/runtime_tracker.py`) records must separate compilation time from per-point time. Specific changes:
+The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compilation_time` field for new records, derived from `first_scan_time - avg_subsequent_time` on multi-point scans. The live code still relies on first-point timing because McStas compilation occurs lazily inside the first `run_PUMA_point()` call. Current behavior:
 
-1. **Add `compilation_time` field** to the `ScanRecord` dataclass: `compilation_time: float = 0.0`. Default is 0.0 for backward compatibility with existing `runtimes.json` records (which use `first_scan_time` for compile+run).
+1. **`compilation_time` field** exists on `ScanRecord` with a default of `0.0` for backward compatibility with existing `runtimes.json` records.
 
-2. **Update `add_record()`** to accept a new optional `compilation_time: float = 0.0` parameter and store it in the record.
+2. **`add_record()`** accepts an optional `compilation_time` parameter and stores it in new records.
 
-3. **Update `get_estimates()`**: when a record has `compilation_time > 0`, use it directly as the compile time estimate. When `compilation_time == 0` (pre-pipeline records), fall back to the existing heuristic: `compile_time = rec.first_scan_time - rec.avg_subsequent_time`.
+3. **`get_estimates()`** uses `compilation_time` directly when it is present and positive. Older records still fall back to `first_scan_time - avg_subsequent_time`.
 
-4. **Remove the single-point scan skip**: currently `add_record()` returns early if `num_points == 1`. After pipelining, single-point scans have a separately measured compilation time, so they can contribute to estimates. Remove the `if num_points == 1: return` guard.
+4. **Single-point scans** are recorded in the simple Option A model with `compilation_time = 0.0` and use first-point timing as their run-time contribution. This keeps the current setup simple, but it is still heuristic rather than a true compile/run separation.
 
 5. **Per-point progress timing improvement**: after pipelining, per-point elapsed time (used for remaining-time estimates) no longer includes prep overhead — only simulation + postprocessing. This makes the progress bar advance more uniformly and remaining-time estimates slightly more accurate. This is a behavioral improvement, not a breaking change.
 
@@ -406,9 +404,9 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 
 | File | Changes |
 |------|---------|
-| `instruments/PUMA_instrument_definition.py` | Split `run_PUMA_instrument()` into `build_PUMA_instrument()` + `run_PUMA_point()`. Add `compute_scan_snapshot()`. Clean up `add_parameter` default values on lines 925–934. |
-| `TAVI_PySide6.py` | Refactor `run_simulation()` to use pipeline (build once, prep thread, snapshot queue, simulation loop). Replace `stop_flag` bool with `threading.Event`. Extract prep logic from the scan loop into snapshot computation. Update timing to separate compilation from per-point. Add `_prep_worker()` method. |
-| `tavi/runtime_tracker.py` | Add `compilation_time` field to `ScanRecord` and `add_record()`. Update `get_estimates()` to use explicit compilation time when available. Remove single-point scan skip. |
+| `instruments/PUMA_instrument_definition.py` | Split `run_PUMA_instrument()` into `build_PUMA_instrument()` + `run_PUMA_point()`. Add `compute_scan_snapshot()` and the per-point snapshot contract used by the queue. |
+| `TAVI_PySide6.py` | Refactor `run_simulation()` to use the prep thread, snapshot queue, and simulation loop. Replace `stop_flag` bool with `threading.Event`. Add `_prep_worker()` and emit per-point log messages from the simulation thread when each point starts. |
+| `tavi/runtime_tracker.py` | Add a heuristic `compilation_time` field to `ScanRecord` and `add_record()`, and update `get_estimates()` to prefer it when present. |
 | `CLAUDE.md` | Update architecture section to document pipeline pattern, snapshot contract, threading model. |
 
 ## 10. What This Does NOT Change
@@ -422,19 +420,22 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 
 ## 11. Sequencing
 
-1. Split `run_PUMA_instrument()` → `build_PUMA_instrument()` + `run_PUMA_point()`. Test that sequential (non-pipelined) scans still work with the new functions.
-2. Implement `compute_scan_snapshot()`. Test that it produces correct params dicts by comparing against the current inline computation.
-3. Replace `stop_flag` with `threading.Event`. Verify stop behavior unchanged.
-4. Implement the pipeline (prep thread, queue, modified simulation loop). Test with short and long scans.
-5. Update `RuntimeTracker` to separate compilation time.
-6. Update `CLAUDE.md`.
+1. Split `run_PUMA_instrument()` → `build_PUMA_instrument()` + `run_PUMA_point()`. Implemented.
+2. Implement `compute_scan_snapshot()`. Implemented.
+3. Replace `stop_flag` with `threading.Event`. Implemented.
+4. Implement the pipeline (prep thread, queue, modified simulation loop). Implemented.
+5. Update `RuntimeTracker` to separate compilation time. Implemented in heuristic Option A form.
+6. Update `CLAUDE.md`. Implemented.
 
 ## Implementation Notes
 
 ### 2026-05-12
 
 - `build_PUMA_instrument()` and `run_PUMA_point()` are now implemented in code, and `TAVIController.run_simulation()` uses a prep thread plus `Queue(maxsize=2)` to overlap snapshot preparation with simulation.
+- `compute_scan_snapshot()` is now the active per-point API for snapshot generation, and `self.stop_flag` has been replaced by `self.stop_event` (`threading.Event`) in the simulation control path.
+- Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
+- The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
 - McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
-- Because compile remains bundled into the first executed point, `tavi/runtime_tracker.py` has not been updated yet to record a separate `compilation_time`. The existing first-point timing heuristic remains in place until compile can be measured independently.
+- `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
 
-Steps 1–3 are independently testable and low-risk. Step 4 is the integration point. Each step should leave the codebase in a working state.
+Steps 1–4 plus the stop-event conversion are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement would still require a broader follow-up.
