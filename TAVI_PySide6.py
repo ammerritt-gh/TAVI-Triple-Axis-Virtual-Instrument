@@ -74,6 +74,8 @@ class TAVIController(QObject):
     
     # Signal for runtime data updates (triggers re-estimation of scan times)
     runtime_data_updated = Signal()
+    actual_output_folder_updated = Signal(str)
+    pre_scan_estimate_updated = Signal(str)
     
     def __init__(self, window):
         super().__init__()
@@ -207,6 +209,8 @@ class TAVIController(QObject):
         
         # Connect runtime data update signal to refresh scan time estimates
         self.runtime_data_updated.connect(self._update_scan_estimates)
+        self.actual_output_folder_updated.connect(self._on_actual_output_folder_updated)
+        self.pre_scan_estimate_updated.connect(self.window.simulation_dock.update_pre_scan_estimate)
         
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
@@ -460,19 +464,12 @@ class TAVIController(QObject):
             self.window.display_dock.initialize_scan(mode, values1, valid_mask1, var1)
         else:
             self.window.display_dock.initialize_scan(mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d)
-        
-        # Set data folder and metadata
-        data_folder = self.window.data_control_dock.save_folder_edit.text()
-        actual_folder = self.window.data_control_dock.actual_folder_label.text()
-        if actual_folder:
-            self.window.display_dock.set_data_folder(actual_folder)
-        elif data_folder:
-            self.window.display_dock.set_data_folder(
-                os.path.join(self.output_directory, data_folder) if self.output_directory else data_folder
-            )
-        
-        # Set scan metadata from current GUI values
-        self.window.display_dock.set_scan_metadata(self._build_current_scan_metadata())
+
+    @Slot(str)
+    def _on_actual_output_folder_updated(self, folder):
+        """Update the resolved output folder on the main thread."""
+        self.window.data_control_dock.actual_folder_label.setText(folder)
+        self.window.display_dock.set_data_folder(folder)
     
     @Slot(object)
     def _show_diagnostic_plots(self, data):
@@ -506,12 +503,8 @@ class TAVIController(QObject):
         except Exception as e:
             self.print_to_message_center(f"Could not display instrument diagram: {e}")
     
-    def _build_current_scan_metadata(self):
-        """Build scan metadata from current GUI values."""
-        vals = self.get_gui_values()
-        if not vals:
-            return {}
-        
+    def _build_scan_metadata(self, vals):
+        """Build display metadata from a frozen values snapshot."""
         metadata = {}
         
         # Number of neutrons
@@ -563,6 +556,14 @@ class TAVIController(QObject):
         metadata['V_selector_installed'] = vals.get('V_selector_installed', False)
         
         return metadata
+
+    def _build_current_scan_metadata(self):
+        """Build scan metadata from current GUI values."""
+        vals = self.get_gui_values()
+        if not vals:
+            return {}
+
+        return self._build_scan_metadata(vals)
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
@@ -634,6 +635,64 @@ class TAVIController(QObject):
             }
         except ValueError:
             return None
+
+    def _build_scan_puma_config(self, vals, sample_key, diagnostic_settings):
+        """Create a scan-local PUMA configuration from frozen launch state."""
+        scan_puma_config = copy.deepcopy(self.PUMA)
+        scan_puma_config.K_fixed = vals['K_fixed']
+        scan_puma_config.NMO_installed = vals['NMO_installed']
+        scan_puma_config.V_selector_installed = vals['V_selector_installed']
+        scan_puma_config.source_type = vals['source_type']
+        scan_puma_config.source_dE = vals['source_dE']
+        scan_puma_config.rhm = vals['rhm']
+        scan_puma_config.rvm = vals['rvm']
+        scan_puma_config.rha = vals['rha']
+        scan_puma_config.rva = 0.8
+        if scan_puma_config.NMO_installed != "None":
+            scan_puma_config.rhm = 0
+            scan_puma_config.rvm = 0
+        scan_puma_config.fixed_E = vals['fixed_E']
+        scan_puma_config.monocris = vals['monocris']
+        scan_puma_config.anacris = vals['anacris']
+        scan_puma_config.sample_key = sample_key
+        scan_puma_config.alpha_1 = float(vals['alpha_1'])
+        scan_puma_config.alpha_2 = [
+            30 if vals['alpha_2_30'] else 0,
+            40 if vals['alpha_2_40'] else 0,
+            60 if vals['alpha_2_60'] else 0,
+        ]
+        scan_puma_config.alpha_3 = float(vals['alpha_3'])
+        scan_puma_config.alpha_4 = float(vals['alpha_4'])
+        scan_puma_config.vbl_hgap = vals['vbl_hgap']
+        scan_puma_config.pbl_hgap = vals['pbl_hgap']
+        scan_puma_config.pbl_vgap = vals['pbl_vgap']
+        scan_puma_config.dbl_hgap = vals['dbl_hgap']
+        scan_puma_config.update_diagnostic_settings(diagnostic_settings)
+        return scan_puma_config
+
+    def _collect_simulation_launch_state(self):
+        """Freeze GUI state before starting the simulation worker thread."""
+        vals = self.get_gui_values()
+        if not vals:
+            return None
+
+        try:
+            sample_key = self.window.sample_dock.get_selected_sample_key()
+        except Exception:
+            sample_key = None
+
+        diagnostic_settings = copy.deepcopy(self.diagnostic_settings)
+
+        return {
+            'vals': vals,
+            'save_folder_input': self.window.data_control_dock.save_folder_edit.text(),
+            'sample_key': sample_key,
+            'scan_puma_config': self._build_scan_puma_config(vals, sample_key, diagnostic_settings),
+            'diagnostic_settings': diagnostic_settings,
+            'relative_mode_1': self.window.simulation_dock.relative_1_button.isChecked(),
+            'relative_mode_2': self.window.simulation_dock.relative_2_button.isChecked(),
+            'compact_save_enabled': self.window.data_control_dock.compact_save_check.isChecked(),
+        }
     
     def set_gui_value(self, widget, value, precision=4):
         """Helper to set GUI value with proper formatting."""
@@ -1613,13 +1672,13 @@ class TAVIController(QObject):
             return vals.get('L', 0)
         # Instrument angles (omega = A3, 2theta = A2)
         elif var == 'a1':
-            return float(self.window.instrument_dock.mtt_edit.text() or 0)
+            return vals.get('mtt', 0)
         elif var == 'a2' or var == '2theta':
-            return float(self.window.instrument_dock.stt_edit.text() or 0)
+            return vals.get('stt', 0)
         elif var == 'a3' or var == 'omega':
-            return float(self.window.instrument_dock.omega_edit.text() or 0)
+            return vals.get('omega', 0)
         elif var == 'a4':
-            return float(self.window.instrument_dock.att_edit.text() or 0)
+            return vals.get('att', 0)
         # Sample orientation (chi, kappa, psi)
         elif var == 'chi':
             return scan_point_template[8] if len(scan_point_template) > 8 else 0
@@ -2741,9 +2800,16 @@ class TAVIController(QObject):
         self.window.simulation_dock.progress_bar.setValue(0)
         self.window.simulation_dock.progress_label.setText("Initializing...")
         self.window.simulation_dock.remaining_time_label.setText("Estimated Remaining Time: calculating...")
+        self.pre_scan_estimate_updated.emit("")
+
+        self.save_parameters()
+        launch_state = self._collect_simulation_launch_state()
+        if not launch_state:
+            self.print_to_message_center("Error: Could not get GUI values")
+            return
+        self.window.display_dock.set_scan_metadata(self._build_scan_metadata(launch_state['vals']))
         
-        data_folder = self.window.data_control_dock.save_folder_edit.text()
-        simulation_thread = threading.Thread(target=self.run_simulation, args=(data_folder,))
+        simulation_thread = threading.Thread(target=self.run_simulation, args=(launch_state,))
         simulation_thread.start()
     
     def _preflight_scan_validation(self) -> str:
@@ -2845,70 +2911,27 @@ class TAVIController(QObject):
                         break
                     continue
     
-    def run_simulation(self, data_folder):
+    def run_simulation(self, launch_state):
         """Run the full simulation."""
         self.message_printed.emit("Starting simulation...")
-        self.save_parameters()
-        
-        # Get the output folder from the text box
-        data_folder = self.window.data_control_dock.save_folder_edit.text()
-        # If the folder already exists, increment instead
-        new_data_folder = incremented_path_writing(self.output_directory, data_folder)
-        # Update actual folder label
-        self.window.data_control_dock.actual_folder_label.setText(new_data_folder)
-        data_folder = new_data_folder
-        
-        # Get all parameters from GUI
-        vals = self.get_gui_values()
-        if not vals:
-            self.message_printed.emit("Error: Could not get GUI values")
-            return
-        
-        # Configure PUMA instrument
-        self.PUMA.K_fixed = vals['K_fixed']
-        self.PUMA.NMO_installed = vals['NMO_installed']
-        self.PUMA.V_selector_installed = vals['V_selector_installed']
-        self.PUMA.source_type = vals['source_type']
-        self.PUMA.source_dE = vals['source_dE']
-        self.PUMA.rhm = vals['rhm']
-        self.PUMA.rvm = vals['rvm']
-        self.PUMA.rha = vals['rha']
-        self.PUMA.rva = 0.8
-        if self.PUMA.NMO_installed != "None":
-            self.PUMA.rhm = 0
-            self.PUMA.rvm = 0
-        self.PUMA.fixed_E = vals['fixed_E']
-        self.PUMA.monocris = vals['monocris']
-        self.PUMA.anacris = vals['anacris']
-        # Set selected sample key from GUI sample dropdown (internal instrument name)
-        try:
-            self.PUMA.sample_key = self.window.sample_dock.get_selected_sample_key()
-        except Exception:
-            self.PUMA.sample_key = None
-        self.PUMA.alpha_1 = float(vals['alpha_1'])
-        self.PUMA.alpha_2 = [
-            30 if vals['alpha_2_30'] else 0,
-            40 if vals['alpha_2_40'] else 0,
-            60 if vals['alpha_2_60'] else 0
-        ]
-        self.PUMA.alpha_3 = float(vals['alpha_3'])
-        self.PUMA.alpha_4 = float(vals['alpha_4'])
-        # Slit apertures (already in meters from get_gui_values)
-        self.PUMA.vbl_hgap = vals['vbl_hgap']
-        self.PUMA.pbl_hgap = vals['pbl_hgap']
-        self.PUMA.pbl_vgap = vals['pbl_vgap']
-        self.PUMA.dbl_hgap = vals['dbl_hgap']
-        scan_puma_config = copy.deepcopy(self.PUMA)
-        
+
+        vals = launch_state['vals']
+        scan_puma_config = launch_state['scan_puma_config']
+        diagnostic_settings = launch_state['diagnostic_settings']
         number_neutrons = vals['number_neutrons']
         scan_command1 = vals['scan_command1']
         scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
-        
-        # Check if relative scan mode is enabled for each command
-        relative_mode_1 = self.window.simulation_dock.relative_1_button.isChecked()
-        relative_mode_2 = self.window.simulation_dock.relative_2_button.isChecked()
-        compact_save_enabled = self.window.data_control_dock.compact_save_check.isChecked()
+        relative_mode_1 = launch_state['relative_mode_1']
+        relative_mode_2 = launch_state['relative_mode_2']
+        compact_save_enabled = launch_state['compact_save_enabled']
+
+        data_folder = launch_state['save_folder_input']
+        # If the folder already exists, increment instead
+        new_data_folder = incremented_path_writing(self.output_directory, data_folder)
+        data_folder = new_data_folder
+
+        self.actual_output_folder_updated.emit(data_folder)
         
         # Write parameters to file
         write_parameters_to_file(data_folder, vals)
@@ -2954,27 +2977,16 @@ class TAVIController(QObject):
         elif scan_mode == "rlu":
             scan_point_template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
         elif scan_mode == "angle":
-            # For angle scans, use current instrument angles from GUI
-            try:
-                A1_current = float(self.window.instrument_dock.mtt_edit.text() or 0)
-                A2_current = float(self.window.instrument_dock.stt_edit.text() or 0)
-                A3_current = float(self.window.instrument_dock.omega_edit.text() or 0)
-                A4_current = float(self.window.instrument_dock.att_edit.text() or 0)
-                scan_point_template[:4] = [A1_current, A2_current, A3_current, A4_current]
-            except ValueError:
-                scan_point_template[:4] = [0, 0, 0, 0]
+            scan_point_template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
         elif scan_mode == "orientation":
             # For orientation scans, use current Q values but scan chi/kappa/psi
             # Note: omega is normalized to A3, so omega scans work via angle mode
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         # Set default chi from instrument_dock, kappa/psi from sample_dock
         # Note: omega is same as A3, no separate storage needed
-        try:
-            scan_point_template[8] = float(self.window.instrument_dock.chi_edit.text() or 0)
-            scan_point_template[9] = float(self.window.sample_dock.kappa_edit.text() or 0)
-            scan_point_template[10] = float(self.window.sample_dock.psi_edit.text() or 0)
-        except ValueError:
-            pass
+        scan_point_template[8] = vals['chi']
+        scan_point_template[9] = vals['kappa']
+        scan_point_template[10] = vals['psi']
         
         # Track if this is a single-point scan (no scan commands)
         is_single_point_scan = not scan_command1 and not scan_command2
@@ -3119,8 +3131,10 @@ class TAVIController(QObject):
         )
         if total_est is not None:
             est_str = RuntimeTracker.format_time(total_est)
-            self.window.simulation_dock.update_pre_scan_estimate(est_str)
+            self.pre_scan_estimate_updated.emit(est_str)
             self.message_printed.emit(f"Estimated total time: {est_str}")
+        else:
+            self.pre_scan_estimate_updated.emit("")
         
         total_counts = 0
         max_counts = 0
@@ -3141,11 +3155,11 @@ class TAVIController(QObject):
         instrument = build_PUMA_instrument(
             scan_puma_config,
             diagnostic_mode,
-            self.diagnostic_settings if diagnostic_mode else {},
+            diagnostic_settings if diagnostic_mode else {},
             number_neutrons,
         )
 
-        if diagnostic_mode and self.diagnostic_settings.get('Show Instrument Diagram', False):
+        if diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False):
             self.instrument_diagram_requested.emit(instrument)
 
         snapshot_queue = queue.Queue(maxsize=2)
@@ -3451,7 +3465,7 @@ class TAVIController(QObject):
         if diagnostic_mode and simulation_error_message is None and not self.stop_event.is_set():
             # Check if any diagnostic monitors were enabled (excluding Show Instrument Diagram)
             monitors_enabled = any(
-                enabled for key, enabled in self.diagnostic_settings.items() 
+                enabled for key, enabled in diagnostic_settings.items() 
                 if key != "Show Instrument Diagram" and enabled
             )
             if monitors_enabled and data is not None and data is not math.nan:
