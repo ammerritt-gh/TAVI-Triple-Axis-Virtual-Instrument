@@ -1,7 +1,7 @@
 # Pipelined Scan Execution — Design Document
 
 *Date: 2026-05-12*
-*Status: Partially implemented; steps 1-4 and the stop-event conversion are in code, and explicit compile-time measurement remains future work*
+*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, and the stop-event conversion; explicit compile-time measurement remains future work*
 
 ---
 
@@ -142,15 +142,23 @@ The prep thread calls this function in a loop, one call per scan point, and puts
 
 **GUI access boundary**: ALL GUI reads must complete before the prep thread starts. Store local variables from `self.window.*` accessors — including `compact_save_check.isChecked()`, `relative_1_button.isChecked()`, `relative_2_button.isChecked()` — before calling `prep_thread.start()`. The prep thread must never access `self.window` or any Qt widget.
 
+**Current status**: `run_simulation_thread()` now calls `save_parameters()` on the GUI thread, freezes launch state via `_collect_simulation_launch_state()`, and sets display scan metadata from the frozen launch values before starting the worker. `run_simulation()` consumes that frozen `launch_state`, uses the scan-local `scan_puma_config` instead of mutating `self.PUMA` during startup, no longer reads live Qt widgets for scan setup, and no longer depends on live `self.diagnostic_settings` during the run. Actual output-folder updates and pre-scan estimate updates are routed back to the main thread through `actual_output_folder_updated` and `pre_scan_estimate_updated`.
+
 ### Step 3: Implement the pipeline
 
-Modifications to `TAVIController.run_simulation()`:
+Modifications to `TAVIController.run_simulation_thread()` and `run_simulation()`:
 
 ```
-run_simulation(data_folder):
-    # --- Existing setup (unchanged) ---
-    # get_gui_values(), configure PUMA, parse scan commands,
-    # build scan_parameter_input list, initialize display dock, etc.
+run_simulation_thread():
+    # --- GUI-thread launch freeze ---
+    # save_parameters(), get_gui_values(), copy diagnostic settings,
+    # build scan-local PUMA config, set display metadata, start worker
+    # with frozen launch_state
+
+run_simulation(launch_state):
+    # --- Worker-thread setup from frozen launch state ---
+    # choose output folder, write parameters, parse scan commands from
+    # launch_state['vals'], build scan_parameter_input list, etc.
     
     # --- NEW: Build instrument once ---
     instrument = build_PUMA_instrument(self.PUMA, diagnostic_mode, 
@@ -257,6 +265,7 @@ Replace `self.stop_flag` (bool) with `self.stop_event` (threading.Event):
 Main Thread (Qt event loop)
 │
 ├── Simulation Thread (existing threading.Thread from run_simulation_thread)
+│   ├── Starts with frozen launch_state captured on the GUI thread
 │   ├── Owns the instrument object after build_PUMA_instrument()
 │   ├── Pulls snapshots from queue
 │   ├── Calls run_PUMA_point() → subprocess.run() (GIL released)
@@ -276,13 +285,18 @@ Three threads total (main + simulation + prep). The prep thread is a daemon star
 ```
 Scan start
 │
-├─ GUI thread: get_gui_values() → frozen vals dict
-├─ GUI thread: parse scan commands → scan_parameter_input list
+├─ GUI thread: save_parameters()
+├─ GUI thread: _collect_simulation_launch_state() → frozen vals,
+│               diagnostic settings, scan-local PUMA config,
+│               relative-mode flags, compact-save flag
+├─ GUI thread: set display metadata from frozen launch values
 │
-▼ (enters simulation thread)
+▼ (enters simulation thread with launch_state)
 │
-├─ build_PUMA_instrument(PUMA, diag, settings) → compiled instrument
-│  (one-time, includes compilation, ~10-30s)
+├─ parse scan commands from frozen launch values → scan_parameter_input list
+│
+├─ build_PUMA_instrument(PUMA, diag, settings) → reusable instrument object
+│  (one-time; McStas compilation remains lazy and occurs on the first run_PUMA_point()/backengine() call)
 │
 ├─ Start prep thread
 │
@@ -435,9 +449,10 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - `compute_scan_snapshot()` is now the active per-point API for snapshot generation, and `self.stop_flag` has been replaced by `self.stop_event` (`threading.Event`) in the simulation control path.
 - Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
 - The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
+- `run_simulation_thread()` now freezes launch state on the GUI thread before the worker starts, calls `save_parameters()` before thread launch, and sets display scan metadata from the frozen launch values. Main-thread folder-label and pre-scan-estimate updates are routed through controller signals during the run.
 - The live run path now enqueues every requested scan point in command order. The display is initialized optimistically, and impossible points are marked invalid dynamically when the simulation thread processes a snapshot with error flags.
 - Queue progress and timing estimates now diverge by design: `processed_points / total_scans` still reflects all queued snapshots, while the pre-scan estimate, remaining-time estimate, and stored runtime history are driven by executable-point counts (`estimated_runtime_points`, `remaining_runtime_points`, and `executed_scan_times`).
 - McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
 - `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
 
-Steps 1–4 plus the stop-event conversion are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement would still require a broader follow-up.
+Steps 1–4, the controller GUI-state freeze boundary, and the stop-event conversion are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement would still require a broader follow-up.
