@@ -381,3 +381,8 @@ PUMA_McScript.instr
 
 # Virtual environments for Python projects
 .venv/
+
+# agent files
+.github/
+CLAUDE.md
+CODEX.md
