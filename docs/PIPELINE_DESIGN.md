@@ -429,4 +429,12 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 5. Update `RuntimeTracker` to separate compilation time.
 6. Update `CLAUDE.md`.
 
+## Implementation Notes
+
+### 2026-05-12
+
+- `build_PUMA_instrument()` and `run_PUMA_point()` are now implemented in code, and `TAVIController.run_simulation()` uses a prep thread plus `Queue(maxsize=2)` to overlap snapshot preparation with simulation.
+- McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
+- Because compile remains bundled into the first executed point, `tavi/runtime_tracker.py` has not been updated yet to record a separate `compilation_time`. The existing first-point timing heuristic remains in place until compile can be measured independently.
+
 Steps 1–3 are independently testable and low-risk. Step 4 is the integration point. Each step should leave the codebase in a working state.
