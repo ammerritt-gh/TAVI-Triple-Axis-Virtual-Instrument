@@ -60,6 +60,8 @@ class TAVIController(QObject):
     scan_initialized = Signal(str, list, list, str, str, list, list)  # mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d
     scan_point_updated_1d = Signal(int, float)  # index, counts
     scan_point_updated_2d = Signal(int, int, float)  # idx_x, idx_y, counts
+    scan_point_invalid_1d = Signal(int)  # index
+    scan_point_invalid_2d = Signal(int, int)  # idx_x, idx_y
     scan_current_index_1d = Signal(int)  # current index
     scan_current_index_2d = Signal(int, int)  # idx_x, idx_y
     scan_completed = Signal()  # scan finished
@@ -191,6 +193,8 @@ class TAVIController(QObject):
         self.scan_initialized.connect(self._on_scan_initialized)
         self.scan_point_updated_1d.connect(self.window.display_dock.update_1d_point)
         self.scan_point_updated_2d.connect(self.window.display_dock.update_2d_point)
+        self.scan_point_invalid_1d.connect(self.window.display_dock.mark_1d_point_invalid)
+        self.scan_point_invalid_2d.connect(self.window.display_dock.mark_2d_point_invalid)
         self.scan_current_index_1d.connect(self.window.display_dock.set_current_scan_index)
         self.scan_current_index_2d.connect(self.window.display_dock.set_current_scan_index_2d)
         self.scan_completed.connect(self.window.display_dock.scan_complete)
@@ -2985,15 +2989,19 @@ class TAVIController(QObject):
             scan_command1 = scan_command2
             scan_command2 = None
         
-        puma_instance = PUMA_Instrument()
         variable_name1 = ""
         variable_name2 = ""
         
-        # Arrays to track valid/invalid points for display
-        valid_mask_1d = []  # For 1D: bool list - True if point is valid
-        valid_mask_2d = None  # For 2D: 2D list of bools
+        # Arrays to track requested scan geometry for display
+        valid_mask_1d = []
+        valid_mask_2d = None
         array_values1 = []
         array_values2 = []
+        puma_instance = PUMA_Instrument()
+        puma_instance.monocris = scan_puma_config.monocris
+        puma_instance.anacris = scan_puma_config.anacris
+        puma_instance.K_fixed = scan_puma_config.K_fixed
+        puma_instance.fixed_E = scan_puma_config.fixed_E
         
         # Single scan command
         if scan_command1 and not scan_command2:
@@ -3011,7 +3019,9 @@ class TAVIController(QObject):
             for idx, value1 in enumerate(array_values1):
                 scan_point = scan_point_template[:]
                 scan_point[variable_to_index[variable_name1]] = value1
-                if scan_mode == "momentum":
+                scan_parameter_input.append((scan_point, idx))
+
+                if scan_mode in ("momentum", "orientation"):
                     _, error_flags = puma_instance.calculate_angles(
                         *scan_point[:4], scan_puma_config.fixed_E, scan_puma_config.K_fixed,
                         scan_puma_config.monocris, scan_puma_config.anacris
@@ -3028,10 +3038,8 @@ class TAVIController(QObject):
                     )
                 else:
                     error_flags = []
-                if not error_flags:
-                    valid_mask_1d[idx] = True
-                    # Store as tuple (scan_point, idx_1d) for consistency with 2D
-                    scan_parameter_input.append((scan_point, idx))
+
+                valid_mask_1d[idx] = not error_flags
             
             # Initialize display dock for 1D scan
             self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d, 
@@ -3054,7 +3062,7 @@ class TAVIController(QObject):
                 array_values2 = array_values2 + base_value2
                 self.message_printed.emit(f"Relative scan 2: {variable_name2} base = {base_value2}")
             
-            # Initialize 2D valid mask
+            # Build a full validity mask for display, but still enqueue every requested point.
             valid_mask_2d = [[False] * len(array_values1) for _ in range(len(array_values2))]
             
             for idx_y, value2 in enumerate(array_values2):
@@ -3062,7 +3070,9 @@ class TAVIController(QObject):
                     scan_point = scan_point_template[:]
                     scan_point[variable_to_index[variable_name1]] = value1
                     scan_point[variable_to_index[variable_name2]] = value2
-                    if scan_mode == "momentum":
+                    scan_parameter_input.append((scan_point, idx_x, idx_y))
+
+                    if scan_mode in ("momentum", "orientation"):
                         _, error_flags = puma_instance.calculate_angles(
                             *scan_point[:4], scan_puma_config.fixed_E, scan_puma_config.K_fixed,
                             scan_puma_config.monocris, scan_puma_config.anacris
@@ -3079,9 +3089,8 @@ class TAVIController(QObject):
                         )
                     else:
                         error_flags = []
-                    if not error_flags:
-                        valid_mask_2d[idx_y][idx_x] = True
-                        scan_parameter_input.append((scan_point, idx_x, idx_y))
+
+                    valid_mask_2d[idx_y][idx_x] = not error_flags
             
             # Initialize display dock for 2D scan
             self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
@@ -3256,6 +3265,11 @@ class TAVIController(QObject):
                 if error_flags:
                     message = f"Scan failed, error flags: {error_flags}"
                     self.message_printed.emit(message)
+                    if is_2d_scan:
+                        self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                    elif not is_single_point_scan and idx_1d >= 0:
+                        self.scan_point_invalid_1d.emit(idx_1d)
+
                     if not is_2d_scan and not is_single_point_scan and idx_1d >= 0 and idx_1d < len(array_values1):
                         scan_x_values.append(array_values1[idx_1d])
                         scan_counts.append(np.nan)
