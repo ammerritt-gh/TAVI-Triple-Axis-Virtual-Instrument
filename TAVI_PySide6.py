@@ -5,7 +5,6 @@ import shutil
 import json
 import time
 import datetime
-import copy
 import threading
 import queue
 import math
@@ -18,7 +17,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from instruments.PUMA_instrument_definition import (
     PUMA_Instrument,
     build_PUMA_instrument,
-    build_puma_point_params,
+    compute_scan_snapshot,
     run_PUMA_point,
     validate_angles,
     mono_ana_crystals_setup,
@@ -480,7 +479,6 @@ class TAVIController(QObject):
         if data is None or data is math.nan:
             self.print_to_message_center("No diagnostic data to display")
             return
-        
         try:
             self.print_to_message_center("Displaying diagnostic monitor plots...")
             ms.make_sub_plot(data, log=False)
@@ -582,11 +580,15 @@ class TAVIController(QObject):
                 'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
+
+                        if len(scans) < 11:
+                            raise ValueError(
+                                f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
+                            )
                 'chi': float(self.window.instrument_dock.chi_edit.text() or 0),
                 'att': float(self.window.instrument_dock.att_edit.text() or 0),
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
-                'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
                 'Ef': float(self.window.instrument_dock.Ef_edit.text() or 0),
                 'K_fixed': self.window.scattering_dock.K_fixed_combo.currentText(),
                 'fixed_E': float(self.window.scattering_dock.fixed_E_edit.text() or 0),
@@ -2796,161 +2798,6 @@ class TAVIController(QObject):
         self.stop_event.set()
         self.print_to_message_center("Stop requested...")
 
-    def _clone_puma_for_scan(self):
-        """Create a per-point PUMA copy so prep work never mutates shared scan state."""
-        return copy.deepcopy(self.PUMA)
-
-    def _build_scan_snapshot(self, scan_item, scan_index, scan_mode, is_2d_scan,
-                             variable_name1, variable_name2, vals, data_folder,
-                             scan_command1, scan_command2):
-        """Compute the runtime snapshot for one scan point without GUI access."""
-        point_puma = self._clone_puma_for_scan()
-        angle_solver = PUMA_Instrument()
-
-        if is_2d_scan:
-            scans, idx_x, idx_y = scan_item
-            idx_1d = -1
-        else:
-            scans, idx_1d = scan_item
-            idx_x, idx_y = -1, -1
-
-        error_flags = []
-        qx = qy = qz = None
-        H = K = L = None
-        deltaE = 0.0
-        mtt = stt = sth = att = saz = 0.0
-
-        if scan_mode == "momentum":
-            qx, qy, qz, deltaE = scans[:4]
-            angles_array, error_flags = angle_solver.calculate_angles(
-                qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
-                point_puma.monocris, point_puma.anacris
-            )
-            if not error_flags:
-                mtt, stt, sth, saz, att = angles_array
-                point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
-        elif scan_mode == "rlu":
-            H, K, L, deltaE = scans[:4]
-            qx, qy, qz = update_Q_from_HKL_direct(
-                H, K, L, vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
-            )
-            angles_array, error_flags = angle_solver.calculate_angles(
-                qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
-                point_puma.monocris, point_puma.anacris
-            )
-            if not error_flags:
-                mtt, stt, sth, saz, att = angles_array
-                point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
-        elif scan_mode == "orientation":
-            qx, qy, qz, deltaE = scans[:4]
-            angles_array, error_flags = angle_solver.calculate_angles(
-                qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
-                point_puma.monocris, point_puma.anacris
-            )
-            if not error_flags:
-                mtt, stt, sth, saz, att = angles_array
-                point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
-        else:
-            A1, A2, A3, A4 = scans[:4]
-            point_puma.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
-            deltaE = vals['deltaE']
-            mtt, stt, sth, att = A1, A2, A3, A4
-            saz = 0
-
-        rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-        chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10]
-
-        if scan_mode == "angle":
-            omega_scan = scans[2]
-        elif scan_mode in ["momentum", "rlu"] and not error_flags:
-            omega_scan = sth
-        elif scan_mode == "orientation":
-            omega_scan = sth if not error_flags else vals.get('omega', 0)
-        else:
-            omega_scan = 0
-
-        if 'rhm' not in [variable_name1, variable_name2]:
-            rhm = point_puma.rhm
-        if 'rvm' not in [variable_name1, variable_name2]:
-            rvm = point_puma.rvm
-        if 'rha' not in [variable_name1, variable_name2]:
-            rha = point_puma.rha
-        if 'rva' not in [variable_name1, variable_name2]:
-            rva = point_puma.rva
-
-        point_puma.omega = omega_scan
-        point_puma.chi = chi_scan
-        point_puma.kappa = kappa_scan
-        point_puma.psi = psi_scan
-        point_puma.saz = saz
-        point_puma.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
-
-        scan_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
-        orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
-        if scan_mode == "momentum":
-            message = (
-                f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
-                f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
-                f"Orientation: {orientation_info}"
-            )
-        elif scan_mode == "rlu":
-            message = (
-                f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
-                f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
-                f"Orientation: {orientation_info}"
-            )
-        elif scan_mode == "orientation":
-            message = (
-                f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
-                f"Orientation: {orientation_info}\n"
-                f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}"
-            )
-        else:
-            message = (
-                f"Scan parameters - A1: {point_puma.A1}, A2: {point_puma.A2}, A3: {point_puma.A3}, A4: {point_puma.A4}\n"
-                f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}\n"
-                f"Orientation: {orientation_info}"
-            )
-
-        scan_point_params = {
-            'scan_index': scan_index,
-            'deltaE': deltaE,
-            'qx': qx if scan_mode in ["momentum", "orientation"] else None,
-            'qy': qy if scan_mode in ["momentum", "orientation"] else None,
-            'qz': qz if scan_mode in ["momentum", "orientation"] else None,
-            'H': H if scan_mode == "rlu" else None,
-            'K': K if scan_mode == "rlu" else None,
-            'L': L if scan_mode == "rlu" else None,
-            'mtt': mtt,
-            'stt': stt,
-            'sth': sth,
-            'att': att,
-            'rhm': rhm,
-            'rvm': rvm,
-            'rha': rha,
-            'rva': rva,
-            'omega': omega_scan,
-            'chi': chi_scan,
-            'psi': psi_scan,
-            'kappa': kappa_scan,
-            'scan_mode': scan_mode,
-            'scan_command1': scan_command1,
-            'scan_command2': scan_command2,
-        }
-
-        return {
-            'scan_index': scan_index,
-            'idx_1d': idx_1d,
-            'idx_x': idx_x,
-            'idx_y': idx_y,
-            'scan_folder': scan_folder,
-            'error_flags': error_flags,
-            'log_message': message,
-            'params': None if error_flags else build_puma_point_params(point_puma, deltaE),
-            'point_params': scan_point_params,
-        }
-
     def _prep_worker(self, scan_parameter_input, scan_mode, is_2d_scan,
                      variable_name1, variable_name2, vals, data_folder,
                      scan_command1, scan_command2, snapshot_queue, stop_event):
@@ -2960,19 +2807,19 @@ class TAVIController(QObject):
                 if stop_event.is_set():
                     break
 
-                snapshot = self._build_scan_snapshot(
+                snapshot = compute_scan_snapshot(
                     scan_item,
                     scan_index,
                     scan_mode,
-                    is_2d_scan,
-                    variable_name1,
-                    variable_name2,
+                    self.PUMA,
                     vals,
                     data_folder,
-                    scan_command1,
-                    scan_command2,
+                    is_2d_scan=is_2d_scan,
+                    variable_name1=variable_name1,
+                    variable_name2=variable_name2,
+                    scan_command1=scan_command1,
+                    scan_command2=scan_command2,
                 )
-                self.message_printed.emit(snapshot['log_message'])
 
                 while not stop_event.is_set():
                     try:
@@ -3281,11 +3128,8 @@ class TAVIController(QObject):
             self.PUMA,
             diagnostic_mode,
             self.diagnostic_settings if diagnostic_mode else {},
+            number_neutrons,
         )
-        if instrument is None:
-            self.message_printed.emit("Error: Failed to build PUMA instrument")
-            self.scan_completed.emit()
-            return data_folder
 
         if diagnostic_mode and self.diagnostic_settings.get('Show Instrument Diagram', False):
             self.instrument_diagram_requested.emit(instrument)
@@ -3311,241 +3155,198 @@ class TAVIController(QObject):
         prep_thread.start()
 
         processed_points = 0
-        force_compile = True
         data = None
         simulation_stopped = False
+        simulation_error_message = None
 
-        while True:
-            if self.stop_event.is_set():
-                simulation_stopped = True
-                break
+        try:
+            while True:
+                if self.stop_event.is_set():
+                    simulation_stopped = True
+                    break
 
-            try:
-                snapshot = snapshot_queue.get(timeout=0.1)
-            except queue.Empty:
-                if prep_thread.is_alive():
-                    continue
-                break
+                try:
+                    snapshot = snapshot_queue.get(timeout=0.1)
+                except queue.Empty:
+                    if prep_thread.is_alive():
+                        continue
+                    break
 
-            if snapshot is None:
-                break
+                if snapshot is None:
+                    break
 
-            if snapshot.get('fatal_error'):
-                self.message_printed.emit(f"Preparation thread failed: {snapshot['fatal_error']}")
-                break
+                if snapshot.get('fatal_error'):
+                    simulation_error_message = f"Preparation thread failed: {snapshot['fatal_error']}"
+                    self.message_printed.emit(simulation_error_message)
+                    break
 
-            scan_start_time = time.time()
-            i = snapshot['scan_index']
-            idx_1d = snapshot['idx_1d']
-            idx_x = snapshot['idx_x']
-            idx_y = snapshot['idx_y']
-            scan_folder = snapshot['scan_folder']
-            error_flags = list(snapshot['error_flags'])
-            point_params = snapshot['point_params']
-            deltaE = point_params['deltaE']
-            qx = point_params['qx']
-            qy = point_params['qy']
-            qz = point_params['qz']
-            H = point_params['H']
-            K = point_params['K']
-            L = point_params['L']
-            mtt = point_params['mtt']
-            stt = point_params['stt']
-            sth = point_params['sth']
-            att = point_params['att']
-            rhm = point_params['rhm']
-            rvm = point_params['rvm']
-            rha = point_params['rha']
-            rva = point_params['rva']
-            omega_scan = point_params['omega']
-            chi_scan = point_params['chi']
-            psi_scan = point_params['psi']
-            kappa_scan = point_params['kappa']
+                scan_start_time = time.time()
+                i = snapshot['scan_index']
+                self.message_printed.emit(snapshot['log_message'])
+                indices = snapshot['indices']
+                idx_1d = indices['idx_1d']
+                idx_x = indices['idx_x']
+                idx_y = indices['idx_y']
+                scan_folder = snapshot['output_folder']
+                error_flags = list(snapshot['error_flags'])
+                metadata = snapshot['metadata']
+                deltaE = snapshot['deltaE']
+                qx = metadata['qx']
+                qy = metadata['qy']
+                qz = metadata['qz']
+                H = metadata['H']
+                K = metadata['K']
+                L = metadata['L']
+                mtt = metadata['mtt']
+                stt = metadata['stt']
+                sth = metadata['sth']
+                att = metadata['att']
+                rhm = metadata['rhm']
+                rvm = metadata['rvm']
+                rha = metadata['rha']
+                rva = metadata['rva']
+                omega_scan = metadata['omega']
+                chi_scan = metadata['chi']
+                psi_scan = metadata['psi']
+                kappa_scan = metadata['kappa']
 
-            if is_2d_scan:
-                self.scan_current_index_2d.emit(idx_x, idx_y)
-            else:
-                self.scan_current_index_1d.emit(idx_1d)
+                if is_2d_scan:
+                    self.scan_current_index_2d.emit(idx_x, idx_y)
+                else:
+                    self.scan_current_index_1d.emit(idx_1d)
 
-            if not error_flags and snapshot['params'] is not None:
-                data, error_flags = run_PUMA_point(
-                    instrument,
-                    snapshot['params'],
-                    scan_folder,
-                    number_neutrons,
-                    force_compile=force_compile,
-                )
-                force_compile = False
-            else:
-                data = math.nan
-                if force_compile:
-                    force_compile = False
-                self.message_printed.emit(f"Point {i}: skipped, error flags: {error_flags}")
+                if not error_flags and snapshot['params'] is not None:
+                    data, error_flags = run_PUMA_point(
+                        instrument,
+                        snapshot,
+                        scan_folder,
+                        number_neutrons,
+                    )
+                else:
+                    data = math.nan
+                    self.message_printed.emit(f"Point {i}: skipped, error flags: {error_flags}")
 
-            # On the first scan point, copy the .instr file to the parent folder
-            # (it's the same for every point since only parameters change, not the compiled
-            # instrument structure; rewriting it per-point would be redundant).
-            if i == 0:
-                instr_src = os.path.join(scan_folder, "PUMA_McScript.instr")
-                instr_dst = os.path.join(data_folder, "PUMA_McScript.instr")
-                if os.path.exists(instr_src):
-                    try:
-                        shutil.copy2(instr_src, instr_dst)
-                    except Exception as e:
-                        self.print_to_message_center(
-                            f"Warning: Failed to copy .instr file: {e}\n"
-                            f"  Source: {instr_src}\n  Dest: {instr_dst}"
-                        )
-
-            # Compact save mode: remove large intermediate files from the scan sub-folder.
-            # detector.dat and scan_parameters.txt are kept; everything else is transient.
-            if compact_save_enabled:
-                for _fname in ("PUMA_McScript.c", "PUMA_McScript.instr", "mccode.sim"):
-                    _fpath = os.path.join(scan_folder, _fname)
-                    if os.path.exists(_fpath):
+                # On the first scan point, copy the .instr file to the parent folder
+                # (it's the same for every point since only parameters change, not the compiled
+                # instrument structure; rewriting it per-point would be redundant).
+                if i == 0:
+                    instr_src = os.path.join(scan_folder, "PUMA_McScript.instr")
+                    instr_dst = os.path.join(data_folder, "PUMA_McScript.instr")
+                    if os.path.exists(instr_src):
                         try:
-                            os.remove(_fpath)
+                            shutil.copy2(instr_src, instr_dst)
                         except Exception as e:
                             self.print_to_message_center(
-                                f"Warning: Failed to delete {_fname}: {e}\n  Path: {_fpath}"
+                                f"Warning: Failed to copy .instr file: {e}\n"
+                                f"  Source: {instr_src}\n  Dest: {instr_dst}"
                             )
 
-            # Check for errors
-            if error_flags:
-                message = f"Scan failed, error flags: {error_flags}"
-                self.message_printed.emit(message)
-                if not is_2d_scan and not is_single_point_scan and idx_1d >= 0 and idx_1d < len(array_values1):
-                    scan_x_values.append(array_values1[idx_1d])
-                    scan_counts.append(np.nan)
-            else:
-                # Compute per-scan-point energy values to accurately record what McStas ran with.
-                # vals['Ki'/'Ei'/'Kf'/'Ef'] are frozen from the GUI at scan start; we need the
-                # actual per-point values, especially for energy scans in Kf/Ki Fixed mode.
-                from instruments.PUMA_instrument_definition import energy2k
-                if self.PUMA.source_type == "Mono":
-                    if self.PUMA.K_fixed == "Kf Fixed":
-                        E0_param_record = self.PUMA.fixed_E + deltaE   # incident energy varies
-                        Ei_actual = E0_param_record
-                        Ki_actual = energy2k(Ei_actual)
-                        Ef_actual = self.PUMA.fixed_E                   # final energy is fixed
-                        Kf_actual = energy2k(Ef_actual)
-                    else:  # Ki Fixed
-                        E0_param_record = self.PUMA.fixed_E             # incident energy is fixed
-                        Ei_actual = self.PUMA.fixed_E
-                        Ki_actual = energy2k(Ei_actual)
-                        Ef_actual = self.PUMA.fixed_E - deltaE          # final energy varies
-                        Kf_actual = energy2k(max(Ef_actual, 1e-9))
-                else:  # Maxwellian source - fixed_E is the thermal peak energy
-                    E0_param_record = self.PUMA.fixed_E
-                    Ei_actual = self.PUMA.fixed_E
-                    Ki_actual = energy2k(Ei_actual)
-                    Ef_actual = self.PUMA.fixed_E - deltaE
-                    Kf_actual = energy2k(max(Ef_actual, 1e-9))
+                # Compact save mode: remove large intermediate files from the scan sub-folder.
+                # detector.dat and scan_parameters.txt are kept; everything else is transient.
+                if compact_save_enabled:
+                    for _fname in ("PUMA_McScript.c", "PUMA_McScript.instr", "mccode.sim"):
+                        _fpath = os.path.join(scan_folder, _fname)
+                        if os.path.exists(_fpath):
+                            try:
+                                os.remove(_fpath)
+                            except Exception as e:
+                                self.print_to_message_center(
+                                    f"Warning: Failed to delete {_fname}: {e}\n  Path: {_fpath}"
+                                )
 
-                # Build scan-specific parameters for this point
-                scan_point_params = {
-                    'scan_index': i,
-                    'E0_param': E0_param_record,
-                    'Ei': Ei_actual,
-                    'Ki': Ki_actual,
-                    'Ef': Ef_actual,
-                    'Kf': Kf_actual,
-                    'qx': qx,
-                    'qy': qy,
-                    'qz': qz,
-                    'deltaE': deltaE,
-                    'H': H,
-                    'K': K,
-                    'L': L,
-                    'mtt': mtt,
-                    'stt': stt,
-                    'sth': sth,
-                    'att': att,
-                    'rhm': rhm,
-                    'rvm': rvm,
-                    'rha': rha,
-                    'rva': rva,
-                    'omega': omega_scan,
-                    'chi': chi_scan,
-                    'psi': psi_scan,
-                    'kappa': kappa_scan,
-                    'scan_mode': scan_mode,
-                    'scan_command1': scan_command1,
-                    'scan_command2': scan_command2,
-                    'number_neutrons': number_neutrons,
-                }
-                # Merge with full GUI vals for completeness; scan_point_params overrides stale vals
-                full_params = {**vals, **scan_point_params}
-                write_parameters_to_file(scan_folder, full_params)
-                
-                # Read detector file to get counts
-                intensity, intensity_error, counts = read_1Ddetector_file(scan_folder)
-                message = f"Final counts at detector: {int(counts)}"
-                self.message_printed.emit(message)
-                
-                # Update counts
-                total_counts += counts
-                max_counts = max(max_counts, counts)
-                
-                # Emit display update signal
-                if is_2d_scan:
-                    self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
-                    # Store in grid for output file
-                    counts_grid[idx_y, idx_x] = counts
-                elif not is_single_point_scan:
-                    # 1D scan with actual scan values
-                    if idx_1d >= 0:
-                        self.scan_point_updated_1d.emit(idx_1d, counts)
-                    # Store in arrays for output file
-                    if idx_1d >= 0 and idx_1d < len(array_values1):
+                # Check for errors
+                if error_flags:
+                    message = f"Scan failed, error flags: {error_flags}"
+                    self.message_printed.emit(message)
+                    if not is_2d_scan and not is_single_point_scan and idx_1d >= 0 and idx_1d < len(array_values1):
                         scan_x_values.append(array_values1[idx_1d])
-                    scan_counts.append(counts)
-                # For single-point scans, we don't update scan arrays (handled separately)
-            
-            # Record scan time for this point
-            scan_elapsed = time.time() - scan_start_time
-            scan_times.append(scan_elapsed)
-            processed_points += 1
-            
-            # Emit progress signals
-            self.progress_updated.emit(processed_points, total_scans)
-            self.counts_updated.emit(max_counts, total_counts)
-            
-            # Calculate elapsed time and remaining time - ignore first scan (compilation overhead)
-            elapsed_time = time.time() - start_time
-            # Emit elapsed time for UI
-            try:
-                elapsed_str = RuntimeTracker.format_time(elapsed_time)
-                self.elapsed_time_updated.emit(elapsed_str)
-            except Exception:
-                pass
-            if processed_points == 1:
-                # After first scan, use historical data for estimation if available
-                _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
-                if run_time_per_point is not None and total_scans > 1:
-                    remaining_time = run_time_per_point * (total_scans - 1)
+                        scan_counts.append(np.nan)
                 else:
-                    remaining_time = scan_elapsed * (total_scans - 1)
-            else:
-                # For subsequent scans, use average of scans 2+ (excluding first/compile scan)
-                subsequent_times = scan_times[1:]  # Exclude first scan
-                avg_time_per_scan = sum(subsequent_times) / len(subsequent_times)
-                remaining_scans = total_scans - (i + 1)
-                remaining_time = avg_time_per_scan * remaining_scans
-            
-            hours = int(remaining_time // 3600)
-            minutes = int((remaining_time % 3600) // 60)
-            seconds = int(remaining_time % 60)
-            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            self.remaining_time_updated.emit(time_str)
-
-        prep_thread.join(timeout=1)
+                    # Build scan-specific parameters for this point
+                    scan_point_params = {
+                        **metadata,
+                        'scan_index': i,
+                        'deltaE': deltaE,
+                        'number_neutrons': number_neutrons,
+                    }
+                    # Merge with full GUI vals for completeness; scan_point_params overrides stale vals
+                    full_params = {**vals, **scan_point_params}
+                    write_parameters_to_file(scan_folder, full_params)
+                    
+                    # Read detector file to get counts
+                    intensity, intensity_error, counts = read_1Ddetector_file(scan_folder)
+                    message = f"Final counts at detector: {int(counts)}"
+                    self.message_printed.emit(message)
+                    
+                    # Update counts
+                    total_counts += counts
+                    max_counts = max(max_counts, counts)
+                    
+                    # Emit display update signal
+                    if is_2d_scan:
+                        self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                        # Store in grid for output file
+                        counts_grid[idx_y, idx_x] = counts
+                    elif not is_single_point_scan:
+                        # 1D scan with actual scan values
+                        if idx_1d >= 0:
+                            self.scan_point_updated_1d.emit(idx_1d, counts)
+                        # Store in arrays for output file
+                        if idx_1d >= 0 and idx_1d < len(array_values1):
+                            scan_x_values.append(array_values1[idx_1d])
+                        scan_counts.append(counts)
+                    # For single-point scans, we don't update scan arrays (handled separately)
+                
+                # Record scan time for this point
+                scan_elapsed = time.time() - scan_start_time
+                scan_times.append(scan_elapsed)
+                processed_points += 1
+                
+                # Emit progress signals
+                self.progress_updated.emit(processed_points, total_scans)
+                self.counts_updated.emit(max_counts, total_counts)
+                
+                # Calculate elapsed time and remaining time - ignore first scan (compilation overhead)
+                elapsed_time = time.time() - start_time
+                # Emit elapsed time for UI
+                try:
+                    elapsed_str = RuntimeTracker.format_time(elapsed_time)
+                    self.elapsed_time_updated.emit(elapsed_str)
+                except Exception:
+                    pass
+                if processed_points == 1:
+                    # After first scan, use historical data for estimation if available
+                    _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
+                    if run_time_per_point is not None and total_scans > 1:
+                        remaining_time = run_time_per_point * (total_scans - 1)
+                    else:
+                        remaining_time = scan_elapsed * (total_scans - 1)
+                else:
+                    # For subsequent scans, use average of scans 2+ (excluding first/compile scan)
+                    subsequent_times = scan_times[1:]  # Exclude first scan
+                    avg_time_per_scan = sum(subsequent_times) / len(subsequent_times)
+                    remaining_scans = total_scans - (i + 1)
+                    remaining_time = avg_time_per_scan * remaining_scans
+                
+                hours = int(remaining_time // 3600)
+                minutes = int((remaining_time % 3600) // 60)
+                seconds = int(remaining_time % 60)
+                time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                self.remaining_time_updated.emit(time_str)
+        except Exception as e:
+            simulation_error_message = f"Simulation failed: {e}"
+            self.message_printed.emit(simulation_error_message)
+            self.stop_event.set()
+        finally:
+            if simulation_error_message is not None:
+                self.stop_event.set()
+            prep_thread.join(timeout=1)
 
         if simulation_stopped:
             self.message_printed.emit("Simulation stopped by user.")
         
         # Record runtime data for future estimates (only if scan completed normally)
-        if scan_times and not self.stop_event.is_set():
+        if scan_times and simulation_error_message is None and not self.stop_event.is_set():
             total_time = time.time() - start_time
             first_scan_time = scan_times[0] if scan_times else 0
             
@@ -3569,12 +3370,12 @@ class TAVIController(QObject):
             self.runtime_data_updated.emit()
         
         # Simulation complete
-        if not self.stop_event.is_set():
+        if simulation_error_message is None and not self.stop_event.is_set():
             self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
             self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
         # Write scan data to output files
-        if not is_single_point_scan and not self.stop_event.is_set():
+        if not is_single_point_scan and simulation_error_message is None and not self.stop_event.is_set():
             try:
                 if is_2d_scan:
                     # Write 2D scan data (include parameter labels if available)
@@ -3604,7 +3405,7 @@ class TAVIController(QObject):
                 self.message_printed.emit(f"Warning: Failed to write scan data file: {e}")
         
         # Handle display based on scan type
-        if self.stop_event.is_set():
+        if simulation_error_message is not None or self.stop_event.is_set():
             self.scan_completed.emit()
         elif is_single_point_scan:
             # For single-point scans, show results as text instead of plot
@@ -3615,7 +3416,7 @@ class TAVIController(QObject):
             self.scan_auto_save.emit()
         
         # Display diagnostic subplots if in diagnostic mode and any monitors were enabled
-        if diagnostic_mode and not self.stop_event.is_set():
+        if diagnostic_mode and simulation_error_message is None and not self.stop_event.is_set():
             # Check if any diagnostic monitors were enabled (excluding Show Instrument Diagram)
             monitors_enabled = any(
                 enabled for key, enabled in self.diagnostic_settings.items() 

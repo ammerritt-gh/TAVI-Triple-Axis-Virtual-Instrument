@@ -1,8 +1,10 @@
-from tracemalloc import take_snapshot
+import copy
 import mcstasscript as ms
 import math
 import numpy as np
 import os
+
+from tavi.reciprocal_space import update_Q_from_HKL_direct
 
 N_MASS = 1.67492749804e-27 # neutron mass
 E_CHARGE = 1.602176634e-19 # electron charge
@@ -473,6 +475,37 @@ def _get_v_selector_frequency(PUMA, deltaE):
     return 3956 * selector_alpha_rad / 2 / math.pi / selector_length / energy2lambda(selector_energy)
 
 
+def _get_point_energy_metadata(PUMA, deltaE):
+    """Return the per-point energy values recorded with the scan output."""
+    if PUMA.source_type == "Mono":
+        if PUMA.K_fixed == "Kf Fixed":
+            E0_param = PUMA.fixed_E + deltaE
+            Ei = E0_param
+            Ki = energy2k(Ei)
+            Ef = PUMA.fixed_E
+            Kf = energy2k(Ef)
+        else:
+            E0_param = PUMA.fixed_E
+            Ei = PUMA.fixed_E
+            Ki = energy2k(Ei)
+            Ef = PUMA.fixed_E - deltaE
+            Kf = energy2k(max(Ef, 1e-9))
+    else:
+        E0_param = PUMA.fixed_E
+        Ei = PUMA.fixed_E
+        Ki = energy2k(Ei)
+        Ef = PUMA.fixed_E - deltaE
+        Kf = energy2k(max(Ef, 1e-9))
+
+    return {
+        "E0_param": E0_param,
+        "Ei": Ei,
+        "Ki": Ki,
+        "Ef": Ef,
+        "Kf": Kf,
+    }
+
+
 def build_puma_point_params(PUMA, deltaE):
     """Build the runtime parameter snapshot for one instrument point."""
     sample_angles = PUMA.get_sample_angle_components()
@@ -502,28 +535,193 @@ def build_puma_point_params(PUMA, deltaE):
     }
 
 
-def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, force_compile=False):
+def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder,
+                          is_2d_scan=False, variable_name1="", variable_name2="",
+                          scan_command1="", scan_command2=""):
+    """Compute the complete runtime snapshot for one scan point."""
+    point_puma = copy.deepcopy(puma)
+
+    if is_2d_scan:
+        scans, idx_x, idx_y = scan_item
+        idx_1d = -1
+    else:
+        scans, idx_1d = scan_item
+        idx_x, idx_y = -1, -1
+
+    error_flags = []
+    qx = qy = qz = None
+    H = K = L = None
+    deltaE = 0.0
+    mtt = stt = sth = att = saz = 0.0
+
+    if scan_mode == "momentum":
+        qx, qy, qz, deltaE = scans[:4]
+        angles_array, error_flags = point_puma.calculate_angles(
+            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
+            point_puma.monocris, point_puma.anacris
+        )
+        if not error_flags:
+            mtt, stt, sth, saz, att = angles_array
+            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+    elif scan_mode == "rlu":
+        H, K, L, deltaE = scans[:4]
+        qx, qy, qz = update_Q_from_HKL_direct(
+            H, K, L, vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+            vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+        )
+        angles_array, error_flags = point_puma.calculate_angles(
+            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
+            point_puma.monocris, point_puma.anacris
+        )
+        if not error_flags:
+            mtt, stt, sth, saz, att = angles_array
+            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+    elif scan_mode == "orientation":
+        qx, qy, qz, deltaE = scans[:4]
+        angles_array, error_flags = point_puma.calculate_angles(
+            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
+            point_puma.monocris, point_puma.anacris
+        )
+        if not error_flags:
+            mtt, stt, sth, saz, att = angles_array
+            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+    else:
+        A1, A2, A3, A4 = scans[:4]
+        point_puma.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
+        deltaE = vals['deltaE']
+        mtt, stt, sth, att = A1, A2, A3, A4
+        saz = 0.0
+
+    rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
+    chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10]
+
+    if scan_mode == "angle":
+        omega_scan = scans[2]
+    elif scan_mode in ["momentum", "rlu"] and not error_flags:
+        omega_scan = sth
+    elif scan_mode == "orientation":
+        omega_scan = sth if not error_flags else vals.get('omega', 0)
+    else:
+        omega_scan = 0
+
+    if len(scans) < 11:
+        raise ValueError(
+            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
+        )
+
+    if 'rhm' not in [variable_name1, variable_name2]:
+        rhm = point_puma.rhm
+    if 'rvm' not in [variable_name1, variable_name2]:
+        rvm = point_puma.rvm
+    if 'rha' not in [variable_name1, variable_name2]:
+        rha = point_puma.rha
+    if 'rva' not in [variable_name1, variable_name2]:
+        rva = point_puma.rva
+
+    point_puma.omega = omega_scan
+    point_puma.chi = chi_scan
+    point_puma.kappa = kappa_scan
+    point_puma.psi = psi_scan
+    point_puma.saz = saz
+    point_puma.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
+
+    output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
+    orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
+    if scan_mode == "momentum":
+        log_message = (
+            f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
+            f"Orientation: {orientation_info}"
+        )
+    elif scan_mode == "rlu":
+        log_message = (
+            f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
+            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
+            f"Orientation: {orientation_info}"
+        )
+    elif scan_mode == "orientation":
+        log_message = (
+            f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+            f"Orientation: {orientation_info}\n"
+            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}"
+        )
+    else:
+        log_message = (
+            f"Scan parameters - A1: {point_puma.A1}, A2: {point_puma.A2}, A3: {point_puma.A3}, A4: {point_puma.A4}\n"
+            f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}\n"
+            f"Orientation: {orientation_info}"
+        )
+
+    metadata = {
+        'scan_mode': scan_mode,
+        'scan_command1': scan_command1,
+        'scan_command2': scan_command2,
+        'deltaE': deltaE,
+        'qx': qx if scan_mode in ["momentum", "orientation"] else None,
+        'qy': qy if scan_mode in ["momentum", "orientation"] else None,
+        'qz': qz if scan_mode in ["momentum", "orientation"] else None,
+        'H': H if scan_mode == "rlu" else None,
+        'K': K if scan_mode == "rlu" else None,
+        'L': L if scan_mode == "rlu" else None,
+        'mtt': mtt,
+        'stt': stt,
+        'sth': sth,
+        'att': att,
+        'rhm': rhm,
+        'rvm': rvm,
+        'rha': rha,
+        'rva': rva,
+        'omega': omega_scan,
+        'chi': chi_scan,
+        'psi': psi_scan,
+        'kappa': kappa_scan,
+    }
+    metadata.update(_get_point_energy_metadata(point_puma, deltaE))
+
+    return {
+        'params': None if error_flags else build_puma_point_params(point_puma, deltaE),
+        'output_folder': output_folder,
+        'scan_index': scan_index,
+        'deltaE': deltaE,
+        'error_flags': error_flags,
+        'metadata': metadata,
+        'indices': {
+            'idx_1d': idx_1d,
+            'idx_x': idx_x,
+            'idx_y': idx_y,
+        },
+        'log_message': log_message,
+    }
+
+
+def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons):
     """Run one point on an already-built PUMA instrument."""
+    error_flag_array = list(params_snapshot.get("error_flags", []))
+
     instrument.settings(
         output_path=output_folder,
         ncount=number_neutrons,
         mpi=30,
-        force_compile=force_compile,
+        force_compile=False,
         increment_folder_name=False,
     )
-    instrument.set_parameters(**params_snapshot)
-    data = instrument.backengine()
-    return data, []
+
+    if not error_flag_array:
+        instrument.set_parameters(**params_snapshot["params"])
+        data = instrument.backengine()
+    else:
+        data = math.nan
+
+    return data, error_flag_array
 
 
-def build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings):
+def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons):
     """Build a PUMA instrument object for repeated per-point execution."""
 
     #QE_parameter_array = [qx, qy, qz, deltaE]
     #instrument_parameter_array = [number_neutrons, K_fixed, NMO_installed, fixed_E, monocris, anacris, alpha_1, alpha_2, alpha_3, alpha_4]
 
-    # error flag array
-    error_flag_array = []
+    PUMA = puma_config
 
     # focusing; use 1 for optimal focusing, 0 for flat monochromator
     if PUMA.NMO_installed != "None":
@@ -559,7 +757,7 @@ def build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings):
 
     #rhm, rvm, rha, rva = PUMA.calculate_crystal_bending(PUMA.rhmfac, PUMA.rvmfac, PUMA.rhafac, PUMA.A1/2, PUMA.A4/2, )
 
-    if not error_flag_array: #check if the error flags are empty before running
+    def configure_component_tree():
 
         ## start adding components
 
@@ -982,13 +1180,13 @@ def build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings):
         # 2. sample_chi_arm: applies user chi + kappa (chi offset) + hidden chi misalignment
         # 3. sample_cradle: applies A3 (calculated sample theta) + psi (omega offset) + hidden omega/psi misalignment
         #
-        instrument.add_parameter("chi_param", comment="User chi - out-of-plane tilt")
-        instrument.add_parameter("kappa_param", comment="Kappa - chi alignment offset")
-        instrument.add_parameter("mis_chi_param", comment="Hidden chi misalignment (training)")
-        instrument.add_parameter("psi_param", comment="Psi - omega alignment offset")
-        instrument.add_parameter("mis_omega_param", comment="Hidden omega misalignment (training)")
-        instrument.add_parameter("chi_total", comment="Total chi = chi + kappa + mis_chi")
-        instrument.add_parameter("omega_offset_total", comment="Total omega offset = psi + mis_omega")
+        instrument.add_parameter("chi_param", value=0, comment="User chi - out-of-plane tilt")
+        instrument.add_parameter("kappa_param", value=0, comment="Kappa - chi alignment offset")
+        instrument.add_parameter("mis_chi_param", value=0, comment="Hidden chi misalignment (training)")
+        instrument.add_parameter("psi_param", value=0, comment="Psi - omega alignment offset")
+        instrument.add_parameter("mis_omega_param", value=0, comment="Hidden omega misalignment (training)")
+        instrument.add_parameter("chi_total", value=0, comment="Total chi = chi + kappa + mis_chi")
+        instrument.add_parameter("omega_offset_total", value=0, comment="Total omega offset = psi + mis_omega")
         
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
         instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
@@ -1302,27 +1500,18 @@ def build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings):
         detector.xwidth = 0.0254
         detector.yheight = 1.0
 
-        return instrument
-
-
-def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnostic_settings, output_folder, run_number):
-    """Compatibility wrapper that builds and runs a single PUMA point."""
-    instrument = build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings)
-    if instrument is None:
-        data = math.nan
-        error_flag_array = ["instrument_build_failed"]
-    else:
-        params_snapshot = build_puma_point_params(PUMA, deltaE)
-        data, error_flag_array = run_PUMA_point(
-            instrument,
-            params_snapshot,
-            output_folder,
-            number_neutrons,
-            force_compile=(run_number == 0),
+        instrument.settings(
+            output_path="./output",
+            ncount=number_neutrons,
+            mpi=30,
+            force_compile=True,
+            increment_folder_name=False,
+            openacc=False,
         )
 
-    show_diagram = diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False)
-    return (data, error_flag_array, instrument if show_diagram else None)
+        return instrument
+
+    return configure_component_tree()
 
 def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
 
