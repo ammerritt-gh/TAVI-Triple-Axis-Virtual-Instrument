@@ -5,6 +5,7 @@ import shutil
 import json
 import time
 import datetime
+import copy
 import threading
 import queue
 import math
@@ -580,11 +581,6 @@ class TAVIController(QObject):
                 'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
-
-                        if len(scans) < 11:
-                            raise ValueError(
-                                f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
-                            )
                 'chi': float(self.window.instrument_dock.chi_edit.text() or 0),
                 'att': float(self.window.instrument_dock.att_edit.text() or 0),
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
@@ -2798,7 +2794,7 @@ class TAVIController(QObject):
         self.stop_event.set()
         self.print_to_message_center("Stop requested...")
 
-    def _prep_worker(self, scan_parameter_input, scan_mode, is_2d_scan,
+    def _prep_worker(self, scan_parameter_input, scan_mode, scan_puma_config, is_2d_scan,
                      variable_name1, variable_name2, vals, data_folder,
                      scan_command1, scan_command2, snapshot_queue, stop_event):
         """Compute per-point snapshots ahead of the simulation thread."""
@@ -2811,7 +2807,7 @@ class TAVIController(QObject):
                     scan_item,
                     scan_index,
                     scan_mode,
-                    self.PUMA,
+                    scan_puma_config,
                     vals,
                     data_folder,
                     is_2d_scan=is_2d_scan,
@@ -2898,6 +2894,7 @@ class TAVIController(QObject):
         self.PUMA.pbl_hgap = vals['pbl_hgap']
         self.PUMA.pbl_vgap = vals['pbl_vgap']
         self.PUMA.dbl_hgap = vals['dbl_hgap']
+        scan_puma_config = copy.deepcopy(self.PUMA)
         
         number_neutrons = vals['number_neutrons']
         scan_command1 = vals['scan_command1']
@@ -3016,8 +3013,8 @@ class TAVIController(QObject):
                 scan_point[variable_to_index[variable_name1]] = value1
                 if scan_mode == "momentum":
                     _, error_flags = puma_instance.calculate_angles(
-                        *scan_point[:4], self.PUMA.fixed_E, self.PUMA.K_fixed, 
-                        self.PUMA.monocris, self.PUMA.anacris
+                        *scan_point[:4], scan_puma_config.fixed_E, scan_puma_config.K_fixed,
+                        scan_puma_config.monocris, scan_puma_config.anacris
                     )
                 elif scan_mode == "rlu":
                     qx, qy, qz = update_Q_from_HKL_direct(
@@ -3026,8 +3023,8 @@ class TAVIController(QObject):
                         vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
                     )
                     _, error_flags = puma_instance.calculate_angles(
-                        qx, qy, qz, scan_point[3], self.PUMA.fixed_E, 
-                        self.PUMA.K_fixed, self.PUMA.monocris, self.PUMA.anacris
+                        qx, qy, qz, scan_point[3], scan_puma_config.fixed_E,
+                        scan_puma_config.K_fixed, scan_puma_config.monocris, scan_puma_config.anacris
                     )
                 else:
                     error_flags = []
@@ -3067,8 +3064,8 @@ class TAVIController(QObject):
                     scan_point[variable_to_index[variable_name2]] = value2
                     if scan_mode == "momentum":
                         _, error_flags = puma_instance.calculate_angles(
-                            *scan_point[:4], self.PUMA.fixed_E, self.PUMA.K_fixed,
-                            self.PUMA.monocris, self.PUMA.anacris
+                            *scan_point[:4], scan_puma_config.fixed_E, scan_puma_config.K_fixed,
+                            scan_puma_config.monocris, scan_puma_config.anacris
                         )
                     elif scan_mode == "rlu":
                         qx, qy, qz = update_Q_from_HKL_direct(
@@ -3077,8 +3074,8 @@ class TAVIController(QObject):
                             vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
                         )
                         _, error_flags = puma_instance.calculate_angles(
-                            qx, qy, qz, scan_point[3], self.PUMA.fixed_E,
-                            self.PUMA.K_fixed, self.PUMA.monocris, self.PUMA.anacris
+                            qx, qy, qz, scan_point[3], scan_puma_config.fixed_E,
+                            scan_puma_config.K_fixed, scan_puma_config.monocris, scan_puma_config.anacris
                         )
                     else:
                         error_flags = []
@@ -3125,7 +3122,7 @@ class TAVIController(QObject):
             scan_counts = []
         
         instrument = build_PUMA_instrument(
-            self.PUMA,
+            scan_puma_config,
             diagnostic_mode,
             self.diagnostic_settings if diagnostic_mode else {},
             number_neutrons,
@@ -3140,6 +3137,7 @@ class TAVIController(QObject):
             args=(
                 scan_parameter_input,
                 scan_mode,
+                scan_puma_config,
                 is_2d_scan,
                 variable_name1,
                 variable_name2,
@@ -3353,9 +3351,11 @@ class TAVIController(QObject):
             # Calculate average time for subsequent scans (excluding first)
             if len(scan_times) > 1:
                 avg_subsequent_time = sum(scan_times[1:]) / len(scan_times[1:])
+                compilation_time = max(0.0, first_scan_time - avg_subsequent_time)
             else:
                 # Only one scan point - use first scan time as both
                 avg_subsequent_time = first_scan_time
+                compilation_time = 0.0
             
             self.runtime_tracker.add_record(
                 instrument_name=instrument_name,
@@ -3363,7 +3363,8 @@ class TAVIController(QObject):
                 num_neutrons=number_neutrons,
                 first_scan_time=first_scan_time,
                 avg_subsequent_time=avg_subsequent_time,
-                total_time=total_time
+                total_time=total_time,
+                compilation_time=compilation_time,
             )
             self.message_printed.emit(f"Timing data recorded: {total_scans} points in {RuntimeTracker.format_time(total_time)}")
             # Trigger update of scan time estimates on main thread
