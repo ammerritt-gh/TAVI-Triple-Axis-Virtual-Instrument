@@ -450,8 +450,74 @@ class PUMA_Instrument(TAS_Instrument):
 
 
 
-def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnostic_settings, output_folder, run_number):
-    """Runs a simulation using a PUMA instrument, needing only simulation parameters; the configuration of the instrument is passed to it automatically"""
+def _get_E0_param_value(PUMA, deltaE):
+    """Return the runtime source-energy parameter for the current point."""
+    if PUMA.source_type == "Mono":
+        if PUMA.K_fixed == "Kf Fixed":
+            return PUMA.fixed_E + deltaE
+        return PUMA.fixed_E
+
+    return PUMA.fixed_E
+
+
+def _get_v_selector_frequency(PUMA, deltaE):
+    """Return the runtime velocity-selector frequency for the current point."""
+    selector_alpha_rad = math.radians(48.3)
+    selector_length = 0.25
+    if PUMA.K_fixed == "Ki Fixed":
+        selector_energy = PUMA.fixed_E
+    else:
+        selector_energy = PUMA.fixed_E + deltaE
+
+    selector_energy = max(selector_energy, 1e-9)
+    return 3956 * selector_alpha_rad / 2 / math.pi / selector_length / energy2lambda(selector_energy)
+
+
+def build_puma_point_params(PUMA, deltaE):
+    """Build the runtime parameter snapshot for one instrument point."""
+    sample_angles = PUMA.get_sample_angle_components()
+    return {
+        "A1_param": PUMA.A1,
+        "A2_param": PUMA.A2,
+        "A3_param": PUMA.A3,
+        "A4_param": PUMA.A4,
+        "E0_param": _get_E0_param_value(PUMA, deltaE),
+        "nu_param": _get_v_selector_frequency(PUMA, deltaE),
+        "saz_param": PUMA.saz,
+        "rhm_param": PUMA.rhm,
+        "rvm_param": PUMA.rvm,
+        "rha_param": PUMA.rha,
+        "rva_param": PUMA.rva,
+        "vbl_hgap_param": PUMA.vbl_hgap,
+        "pbl_hgap_param": PUMA.pbl_hgap,
+        "pbl_vgap_param": PUMA.pbl_vgap,
+        "dbl_hgap_param": PUMA.dbl_hgap,
+        "chi_param": sample_angles["chi"],
+        "kappa_param": sample_angles["kappa"],
+        "mis_chi_param": sample_angles["mis_chi"],
+        "psi_param": sample_angles["psi"],
+        "mis_omega_param": sample_angles["mis_omega"],
+        "chi_total": sample_angles["effective_chi"],
+        "omega_offset_total": sample_angles["effective_omega_offset"],
+    }
+
+
+def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, force_compile=False):
+    """Run one point on an already-built PUMA instrument."""
+    instrument.settings(
+        output_path=output_folder,
+        ncount=number_neutrons,
+        mpi=30,
+        force_compile=force_compile,
+        increment_folder_name=False,
+    )
+    instrument.set_parameters(**params_snapshot)
+    data = instrument.backengine()
+    return data, []
+
+
+def build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings):
+    """Build a PUMA instrument object for repeated per-point execution."""
 
     #QE_parameter_array = [qx, qy, qz, deltaE]
     #instrument_parameter_array = [number_neutrons, K_fixed, NMO_installed, fixed_E, monocris, anacris, alpha_1, alpha_2, alpha_3, alpha_4]
@@ -475,6 +541,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
     instrument.add_parameter("A3_param", comment="Sample phi angle.")
     instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("saz_param", comment="Sample azimuthal angle (out-of-plane).")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -551,10 +618,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             V_selector.d = .004 #
             V_selector.nslit = 72 #
             V_selector.alpha = 	48.3 #
-            if PUMA.K_fixed == "Ki Fixed":
-                V_selector.nu =  3956*math.radians(V_selector.alpha)/2/math.pi/V_selector.length/energy2lambda(PUMA.fixed_E)
-            if PUMA.K_fixed == "Kf Fixed":
-                V_selector.nu =  3956*math.radians(V_selector.alpha)/2/math.pi/V_selector.length/energy2lambda(PUMA.fixed_E + deltaE)
+            V_selector.nu = "nu_param"
         
             
         if diagnostic_mode and diagnostic_settings.get('Source DSD'):
@@ -918,21 +982,13 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # 2. sample_chi_arm: applies user chi + kappa (chi offset) + hidden chi misalignment
         # 3. sample_cradle: applies A3 (calculated sample theta) + psi (omega offset) + hidden omega/psi misalignment
         #
-        # Get individual angle components for clarity
-        sample_angles = PUMA.get_sample_angle_components()
-        
-        # Add individual parameters for each angle component (for debugging/inspection)
-        instrument.add_parameter("chi_param", value=sample_angles['chi'], comment="User chi - out-of-plane tilt")
-        instrument.add_parameter("kappa_param", value=sample_angles['kappa'], comment="Kappa - chi alignment offset")
-        instrument.add_parameter("mis_chi_param", value=sample_angles['mis_chi'], comment="Hidden chi misalignment (training)")
-        instrument.add_parameter("psi_param", value=sample_angles['psi'], comment="Psi - omega alignment offset")
-        instrument.add_parameter("mis_omega_param", value=sample_angles['mis_omega'], comment="Hidden omega misalignment (training)")
-        
-        # Combined effective angles (these are actually used in the geometry)
-        instrument.add_parameter("chi_total", value=sample_angles['effective_chi'], 
-                                 comment="Total chi = chi + kappa + mis_chi")
-        instrument.add_parameter("omega_offset_total", value=sample_angles['effective_omega_offset'],
-                                 comment="Total omega offset = psi + mis_omega")
+        instrument.add_parameter("chi_param", comment="User chi - out-of-plane tilt")
+        instrument.add_parameter("kappa_param", comment="Kappa - chi alignment offset")
+        instrument.add_parameter("mis_chi_param", comment="Hidden chi misalignment (training)")
+        instrument.add_parameter("psi_param", comment="Psi - omega alignment offset")
+        instrument.add_parameter("mis_omega_param", comment="Hidden omega misalignment (training)")
+        instrument.add_parameter("chi_total", comment="Total chi = chi + kappa + mis_chi")
+        instrument.add_parameter("omega_offset_total", comment="Total omega offset = psi + mis_omega")
         
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
         instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
@@ -1246,65 +1302,25 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         detector.xwidth = 0.0254
         detector.yheight = 1.0
 
-        if run_number==0:
-            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=True)
-            print("Compiled")
-        else:
-            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=False)
-            print("Not compiled")
-        if not error_flag_array: #check if the error flags are empty
-            # Get individual sample angle components
-            sample_angles = PUMA.get_sample_angle_components()
-            
-            # Calculate initial E0_param value based on source type and K_fixed mode
-            if PUMA.source_type == "Mono":
-                if PUMA.K_fixed == "Kf Fixed":
-                    E0_param_value = PUMA.fixed_E + deltaE
-                else:
-                    E0_param_value = PUMA.fixed_E
-            else:
-                E0_param_value = PUMA.fixed_E  # Thermal peak energy for Maxwellian
-            
-            instrument.set_parameters(
-                A1_param=PUMA.A1,
-                A2_param=PUMA.A2,
-                A3_param=PUMA.A3,
-                A4_param=PUMA.A4,
-                E0_param=E0_param_value,
-                saz_param=PUMA.saz,
-                rhm_param=PUMA.rhm,
-                rvm_param=PUMA.rvm,
-                rha_param=PUMA.rha,
-                rva_param=PUMA.rva,
-                # Slit apertures
-                vbl_hgap_param=PUMA.vbl_hgap,
-                pbl_hgap_param=PUMA.pbl_hgap,
-                pbl_vgap_param=PUMA.pbl_vgap,
-                dbl_hgap_param=PUMA.dbl_hgap,
-                # Individual sample angle components (for inspection/debugging)
-                chi_param=sample_angles['chi'],
-                kappa_param=sample_angles['kappa'],
-                mis_chi_param=sample_angles['mis_chi'],
-                psi_param=sample_angles['psi'],
-                mis_omega_param=sample_angles['mis_omega'],
-                # Combined effective angles (used in geometry)
-                chi_total=sample_angles['effective_chi'],
-                omega_offset_total=sample_angles['effective_omega_offset']
-            )
-            data = instrument.backengine()
-        else:
-            data = math.nan
-        
-        # Note: Show Instrument Diagram is handled by the GUI controller
-        # to ensure matplotlib runs on the main thread
+        return instrument
 
-        #print(parameter_array)
-        #print("\n")
-        #print(parameter_array_header)
-    else:
+
+def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnostic_settings, output_folder, run_number):
+    """Compatibility wrapper that builds and runs a single PUMA point."""
+    instrument = build_PUMA_instrument(PUMA, diagnostic_mode, diagnostic_settings)
+    if instrument is None:
         data = math.nan
-    
-    # Return instrument object as well if diagram display is requested
+        error_flag_array = ["instrument_build_failed"]
+    else:
+        params_snapshot = build_puma_point_params(PUMA, deltaE)
+        data, error_flag_array = run_PUMA_point(
+            instrument,
+            params_snapshot,
+            output_folder,
+            number_neutrons,
+            force_compile=(run_number == 0),
+        )
+
     show_diagram = diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False)
     return (data, error_flag_array, instrument if show_diagram else None)
 
