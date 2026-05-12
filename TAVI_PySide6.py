@@ -564,6 +564,13 @@ class TAVIController(QObject):
             return {}
 
         return self._build_scan_metadata(vals)
+
+    def _write_stage_timing_summary(self, data_folder, stage_summary):
+        """Persist per-run stage timing data under the scan output folder."""
+        summary_path = os.path.join(data_folder, "stage_timing_summary.json")
+        with open(summary_path, "w", encoding="utf-8") as handle:
+            json.dump(stage_summary, handle, indent=2)
+        return summary_path
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
@@ -2873,6 +2880,7 @@ class TAVIController(QObject):
                 if stop_event.is_set():
                     break
 
+                prep_stage_start = time.perf_counter()
                 snapshot = compute_scan_snapshot(
                     scan_item,
                     scan_index,
@@ -2886,10 +2894,17 @@ class TAVIController(QObject):
                     scan_command1=scan_command1,
                     scan_command2=scan_command2,
                 )
+                prep_compute_duration = time.perf_counter() - prep_stage_start
+                queue_wait_start = time.perf_counter()
 
                 while not stop_event.is_set():
                     try:
                         snapshot_queue.put(snapshot, timeout=0.1)
+                        queue_wait_duration = time.perf_counter() - queue_wait_start
+                        timing = snapshot.setdefault('timing', {})
+                        timing['prep_compute_duration_s'] = prep_compute_duration
+                        timing['prep_queue_wait_duration_s'] = queue_wait_duration
+                        timing['prep_duration_s'] = prep_compute_duration + queue_wait_duration
                         break
                     except queue.Full:
                         continue
@@ -3141,6 +3156,9 @@ class TAVIController(QObject):
         
         # Track individual scan times for runtime recording
         executed_scan_times = []
+        simulation_stage_durations = []
+        point_stage_timings = []
+        first_successful_stage_record_index = None
         
         # Data collection for output files
         import numpy as np
@@ -3162,7 +3180,7 @@ class TAVIController(QObject):
         if diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False):
             self.instrument_diagram_requested.emit(instrument)
 
-        snapshot_queue = queue.Queue(maxsize=2)
+        snapshot_queue = queue.Queue()
         prep_thread = threading.Thread(
             target=self._prep_worker,
             args=(
@@ -3239,6 +3257,11 @@ class TAVIController(QObject):
                 chi_scan = metadata['chi']
                 psi_scan = metadata['psi']
                 kappa_scan = metadata['kappa']
+                timing = snapshot.get('timing', {})
+                prep_duration = float(timing.get('prep_duration_s', 0.0))
+                prep_compute_duration = float(timing.get('prep_compute_duration_s', 0.0))
+                prep_queue_wait_duration = float(timing.get('prep_queue_wait_duration_s', 0.0))
+                simulation_duration = 0.0
 
                 if is_2d_scan:
                     self.scan_current_index_2d.emit(idx_x, idx_y)
@@ -3246,17 +3269,21 @@ class TAVIController(QObject):
                     self.scan_current_index_1d.emit(idx_1d)
 
                 if not error_flags and snapshot['params'] is not None:
+                    simulation_stage_start = time.perf_counter()
                     data, error_flags = run_PUMA_point(
                         instrument,
                         snapshot,
                         scan_folder,
                         number_neutrons,
                     )
+                    simulation_duration = time.perf_counter() - simulation_stage_start
                     simulated_point = True
                 else:
                     data = math.nan
                     self.message_printed.emit(f"Point {i}: skipped, error flags: {error_flags}")
                     simulated_point = False
+
+                postprocessing_stage_start = time.perf_counter()
 
                 # On the first scan point, copy the .instr file to the parent folder
                 # (it's the same for every point since only parameters change, not the compiled
@@ -3374,6 +3401,23 @@ class TAVIController(QObject):
                 seconds = int(remaining_time % 60)
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                 self.remaining_time_updated.emit(time_str)
+
+                postprocessing_duration = time.perf_counter() - postprocessing_stage_start
+                if simulated_point and not error_flags:
+                    simulation_stage_durations.append(simulation_duration)
+
+                point_stage_timings.append({
+                    'scan_index': i,
+                    'prep_duration_s': prep_duration,
+                    'prep_compute_duration_s': prep_compute_duration,
+                    'prep_queue_wait_duration_s': prep_queue_wait_duration,
+                    'simulation_duration_s': simulation_duration,
+                    'postprocessing_duration_s': postprocessing_duration,
+                    'simulated': bool(simulated_point and not error_flags),
+                    'error_flags': list(error_flags),
+                })
+                if simulated_point and not error_flags and first_successful_stage_record_index is None:
+                    first_successful_stage_record_index = len(point_stage_timings) - 1
         except Exception as e:
             simulation_error_message = f"Simulation failed: {e}"
             self.message_printed.emit(simulation_error_message)
@@ -3385,6 +3429,54 @@ class TAVIController(QObject):
 
         if simulation_stopped:
             self.message_printed.emit("Simulation stopped by user.")
+
+        inferred_compile_duration = None
+        if len(simulation_stage_durations) > 1:
+            avg_subsequent_simulation_duration = sum(simulation_stage_durations[1:]) / len(simulation_stage_durations[1:])
+            inferred_compile_duration = max(0.0, simulation_stage_durations[0] - avg_subsequent_simulation_duration)
+        if inferred_compile_duration is not None and first_successful_stage_record_index is not None:
+            point_stage_timings[first_successful_stage_record_index]['inferred_compile_duration_s'] = inferred_compile_duration
+
+        if point_stage_timings:
+            prep_durations = [record['prep_duration_s'] for record in point_stage_timings]
+            prep_compute_durations = [record['prep_compute_duration_s'] for record in point_stage_timings]
+            prep_queue_wait_durations = [record['prep_queue_wait_duration_s'] for record in point_stage_timings]
+            postprocessing_durations = [record['postprocessing_duration_s'] for record in point_stage_timings]
+            stage_summary = {
+                'completed_normally': simulation_error_message is None and not self.stop_event.is_set(),
+                'stopped': simulation_stopped or self.stop_event.is_set(),
+                'simulation_error_message': simulation_error_message,
+                'total_requested_points': total_scans,
+                'total_simulated_points': len(executed_scan_times),
+                'compile_duration_s': inferred_compile_duration,
+                'compile_duration_inferred': inferred_compile_duration is not None,
+                'avg_prep_duration_s': sum(prep_durations) / len(prep_durations),
+                'avg_prep_compute_duration_s': sum(prep_compute_durations) / len(prep_compute_durations),
+                'avg_prep_queue_wait_duration_s': sum(prep_queue_wait_durations) / len(prep_queue_wait_durations),
+                'avg_simulation_duration_s': (
+                    sum(simulation_stage_durations) / len(simulation_stage_durations)
+                    if simulation_stage_durations else 0.0
+                ),
+                'avg_postprocessing_duration_s': sum(postprocessing_durations) / len(postprocessing_durations),
+                'point_timings': point_stage_timings,
+            }
+            try:
+                summary_path = self._write_stage_timing_summary(data_folder, stage_summary)
+                compile_message = (
+                    f"compile={inferred_compile_duration:.3f}s"
+                    if inferred_compile_duration is not None else "compile=unavailable"
+                )
+                self.message_printed.emit(
+                    "Stage timings recorded: "
+                    f"{compile_message}, avg prep={stage_summary['avg_prep_duration_s']:.3f}s "
+                    f"(compute={stage_summary['avg_prep_compute_duration_s']:.3f}s, "
+                    f"queue_wait={stage_summary['avg_prep_queue_wait_duration_s']:.3f}s), "
+                    f"avg sim={stage_summary['avg_simulation_duration_s']:.3f}s, "
+                    f"avg post={stage_summary['avg_postprocessing_duration_s']:.3f}s"
+                )
+                self.message_printed.emit(f"Stage timing summary written to: {summary_path}")
+            except Exception as e:
+                self.message_printed.emit(f"Warning: Failed to write stage timing summary: {e}")
         
         # Record runtime data for future estimates (only if scan completed normally)
         if executed_scan_times and simulation_error_message is None and not self.stop_event.is_set():
@@ -3394,7 +3486,7 @@ class TAVIController(QObject):
             # Calculate average time for subsequent scans (excluding first)
             if len(executed_scan_times) > 1:
                 avg_subsequent_time = sum(executed_scan_times[1:]) / len(executed_scan_times[1:])
-                compilation_time = max(0.0, first_scan_time - avg_subsequent_time)
+                compilation_time = inferred_compile_duration if inferred_compile_duration is not None else max(0.0, first_scan_time - avg_subsequent_time)
             else:
                 # Only one scan point - use first scan time as both
                 avg_subsequent_time = first_scan_time

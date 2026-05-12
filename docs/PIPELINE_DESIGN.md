@@ -1,7 +1,7 @@
 # Pipelined Scan Execution — Design Document
 
 *Date: 2026-05-12*
-*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, and the stop-event conversion; explicit compile-time measurement remains future work*
+*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, and per-stage timing capture; direct compile-time measurement still remains future work and is inferred from execution timings*
 
 ---
 
@@ -14,14 +14,14 @@ Keep the McStas simulation binary running at near-100% CPU utilization throughou
 Two threads, one queue:
 
 ```
-                    Queue(maxsize=2)
+                    Queue(unbounded)
   [Prep Thread] ──────────────────────► [Simulation Thread]
   produces snapshots                    consumes snapshots
   (pure Python, GIL-bound)              calls backengine() (subprocess, GIL released)
                                         does inline postprocessing after each point
 ```
 
-The prep thread runs continuously, computing parameter snapshots and pushing them onto a bounded queue. The simulation thread pulls snapshots and executes them. `Queue(maxsize=2)` provides natural backpressure — the prep thread blocks when two snapshots are buffered, which is fine; it resumes as soon as the simulation thread pulls one. With 30 MPI threads for McStas and 32 CPU threads available, the prep thread borrowing one core intermittently has negligible impact.
+The prep thread runs continuously, computing parameter snapshots and pushing them onto an unbounded queue. The simulation thread pulls snapshots and executes them. This lets prep run as far ahead as it can without waiting for buffer space, so the queue can hold the full scan if prep outruns simulation. With 30 MPI threads for McStas and 32 CPU threads available, the prep thread borrowing one core intermittently has negligible impact.
 
 Postprocessing stays inline in the simulation thread (no third stage). Postprocessing is lightweight — reading a small detector file, writing a small parameter file, emitting Qt signals — and separating it would add a thread, a second queue, and out-of-order handling complexity for negligible gain.
 
@@ -54,9 +54,9 @@ The drain model means: stop accepting new prep work, finish the in-flight simula
 
 `run_PUMA_instrument()` is split into two functions as part of this change, not deferred. This eliminates ~780 lines of redundant per-point component tree construction and makes the params-dict interface natural.
 
-### 3.5 Queue size: maxsize=2
+### 3.5 Queue size: unbounded
 
-Two buffered snapshots. The prep thread runs freely, computing as fast as it can; the queue blocks it when two snapshots are waiting. This ensures the simulation thread always has a snapshot ready when it finishes a point, even if one prep cycle is unusually slow. Memory cost is negligible (two small dicts).
+No artificial queue cap. The prep thread can compute and enqueue the full scan ahead of the simulation thread, which removes queue backpressure from prep timing. Memory cost is still modest for the current snapshot payloads, and the code keeps the existing stop-event drain behavior if cancellation is requested.
 
 ## 4. Refactoring Plan
 
@@ -165,7 +165,7 @@ run_simulation(launch_state):
                                        self.diagnostic_settings)
     
     # --- NEW: Create pipeline primitives ---
-    snapshot_queue = queue.Queue(maxsize=2)
+    snapshot_queue = queue.Queue()
     stop_event = threading.Event()
     
     # --- NEW: Start prep thread ---
@@ -226,8 +226,8 @@ def _prep_worker(self, scan_parameter_input, scan_mode, puma, vals,
             scan_item, scan_mode, puma, vals, data_folder, i
         )
         
-        # Blocks if queue is full (maxsize=2); resumes when
-        # simulation thread pulls a snapshot
+        # Enqueues without waiting so prep can run ahead of simulation
+        # and fill the queue with the full scan if it finishes first
         snapshot_queue.put(snapshot)
     
     # Signal end-of-input
@@ -249,6 +249,8 @@ The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compi
 4. **Single-point scans** are recorded in the simple Option A model with `compilation_time = 0.0` and use first-point timing as their run-time contribution. This keeps the current setup simple, but it is still heuristic rather than a true compile/run separation.
 
 5. **Queue progress vs runtime estimates are now tracked separately**: `progress_updated(processed_points, total_scans)` still reports controller progress across all queued snapshots, including invalid/skipped points. Runtime-facing estimates use the executable subset instead: the pre-scan historical estimate is based on the validated `estimated_runtime_points` count, the live remaining-time label is driven by `remaining_runtime_points` plus `executed_scan_times`, and `RuntimeTracker.add_record()` stores `num_points=len(executed_scan_times)`. Queued-invalid points still appear in progress, but they no longer inflate remaining-time estimates or stored runtime history.
+
+6. **Per-stage timing capture is now recorded for each run**: the prep thread records `prep_duration_s` from snapshot preparation start until the snapshot is successfully queued; the simulation thread records `simulation_duration_s` around `run_PUMA_point()`; and the controller records `postprocessing_duration_s` from the end of `run_PUMA_point()` until point bookkeeping, file writes, and UI signal emission complete. These per-point records are written to `stage_timing_summary.json` in the run output folder, along with run-level averages. Compile timing is still inferred rather than directly measured: when there are at least two successful simulated points, the summary records `compile_duration_s = first_simulation_duration - avg(subsequent_simulation_durations)`.
 
 ### Step 5: Update stop mechanism
 
@@ -274,7 +276,7 @@ Main Thread (Qt event loop)
 │
 └── Prep Thread (new, daemon, started by simulation thread)
     ├── Computes param snapshots from scan_parameter_input
-    ├── Pushes snapshots onto Queue(maxsize=2)
+    ├── Pushes snapshots onto an unbounded Queue()
     └── Exits when all points computed or stop_event set
 ```
 
@@ -445,13 +447,14 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 
 ### 2026-05-12
 
-- `build_PUMA_instrument()` and `run_PUMA_point()` are now implemented in code, and `TAVIController.run_simulation()` uses a prep thread plus `Queue(maxsize=2)` to overlap snapshot preparation with simulation.
+- `build_PUMA_instrument()` and `run_PUMA_point()` are now implemented in code, and `TAVIController.run_simulation()` uses a prep thread plus an unbounded `Queue()` to overlap snapshot preparation with simulation.
 - `compute_scan_snapshot()` is now the active per-point API for snapshot generation, and `self.stop_flag` has been replaced by `self.stop_event` (`threading.Event`) in the simulation control path.
 - Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
 - The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
 - `run_simulation_thread()` now freezes launch state on the GUI thread before the worker starts, calls `save_parameters()` before thread launch, and sets display scan metadata from the frozen launch values. Main-thread folder-label and pre-scan-estimate updates are routed through controller signals during the run.
 - The live run path now enqueues every requested scan point in command order. The display is initialized optimistically, and impossible points are marked invalid dynamically when the simulation thread processes a snapshot with error flags.
 - Queue progress and timing estimates now diverge by design: `processed_points / total_scans` still reflects all queued snapshots, while the pre-scan estimate, remaining-time estimate, and stored runtime history are driven by executable-point counts (`estimated_runtime_points`, `remaining_runtime_points`, and `executed_scan_times`).
+- Stage timing data is now captured per run: prep time is measured in `_prep_worker()`, simulation time is measured around `run_PUMA_point()`, postprocessing time is measured in the simulation thread after `run_PUMA_point()` returns, and a `stage_timing_summary.json` file is written under the output folder with per-point timings plus run-level averages. Compile timing in that summary remains inferred from first-versus-steady-state simulation durations rather than directly observed from a separate compile callback.
 - McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
 - `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
 
