@@ -1,10 +1,13 @@
 import copy
+from dataclasses import dataclass
 import mcstasscript as ms
 import math
 import numpy as np
 import os
+import subprocess
 
 from tavi.reciprocal_space import update_Q_from_HKL_direct
+from tavi.mcstas_config import resolve_mpi_launcher_argv
 
 N_MASS = 1.67492749804e-27 # neutron mass
 E_CHARGE = 1.602176634e-19 # electron charge
@@ -16,6 +19,18 @@ HBAR = 1.05459e-34  #H-bar in J*s
 _module_dir = os.path.dirname(os.path.abspath(__file__))
 _project_dir = os.path.dirname(_module_dir)  # Go up one level from instruments/
 data_dir = os.path.join(_project_dir, "components")
+
+
+@dataclass
+class PUMARunExecutionState:
+    """Track when the compiled PUMA binary is ready for direct invocation."""
+
+    first_backengine_succeeded: bool = False
+    direct_run_ready: bool = False
+    binary_path: str | None = None
+    binary_cwd: str | None = None
+    mpi_launcher_argv: list[str] | None = None
+    last_execution_mode: str | None = None
 
 ##  some functions to convert between energies, angles and momenta ##
 def k2angle(k, d):
@@ -694,25 +709,144 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
     }
 
 
-def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons):
+def _resolve_materialized_binary_path(instrument):
+    """Resolve the compiled McStas binary path for the built PUMA instrument."""
+    instrument_input_path = getattr(instrument, "input_path", None)
+    instrument_name = getattr(instrument, "name", None)
+    if instrument_input_path and instrument_name:
+        return os.path.abspath(os.path.join(instrument_input_path, f"{instrument_name}.exe"))
+
+    return os.path.abspath(os.path.join(data_dir, "PUMA_McScript.exe"))
+
+
+def _run_puma_point_direct(execution_state, params_snapshot, output_folder, number_neutrons, mpi_count):
+    """Run the already-materialized PUMA binary directly without mcrun.py."""
+    os.makedirs(output_folder, exist_ok=True)
+    args = [
+        *(execution_state.mpi_launcher_argv or []),
+        "-np",
+        str(mpi_count),
+        execution_state.binary_path,
+        f"--ncount={number_neutrons}",
+        f"--dir={output_folder}",
+    ]
+    for key, value in params_snapshot["params"].items():
+        args.append(f"{key}={value}")
+
+    return subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=execution_state.binary_cwd,
+    )
+
+
+def _build_execution_info(mode, output_folder, binary_path=None, returncode=None, stdout=None, error_message=None,
+                          launcher_argv=None, armed_direct_run=False):
+    """Build execution metadata consumed by the controller for logging and timing."""
+    return {
+        "mode": mode,
+        "returncode": returncode,
+        "stdout": stdout,
+        "binary_path": binary_path,
+        "output_folder": output_folder,
+        "error_message": error_message,
+        "launcher_argv": list(launcher_argv or []),
+        "armed_direct_run": armed_direct_run,
+    }
+
+
+def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=10):
     """Run one point on an already-built PUMA instrument."""
     error_flag_array = list(params_snapshot.get("error_flags", []))
+
+    if error_flag_array:
+        execution_state.last_execution_mode = "skipped"
+        return math.nan, error_flag_array, _build_execution_info("skipped", output_folder)
+
+    can_run_direct = bool(
+        execution_state.direct_run_ready
+        and execution_state.binary_path
+        and execution_state.binary_cwd
+        and execution_state.mpi_launcher_argv
+        and os.path.isfile(execution_state.binary_path)
+    )
+
+    if can_run_direct:
+        result = _run_puma_point_direct(
+            execution_state,
+            params_snapshot,
+            output_folder,
+            number_neutrons,
+            mpi_count,
+        )
+        execution_state.last_execution_mode = "direct"
+        execution_info = _build_execution_info(
+            "direct",
+            output_folder,
+            binary_path=execution_state.binary_path,
+            returncode=result.returncode,
+            stdout=result.stdout,
+            launcher_argv=execution_state.mpi_launcher_argv,
+        )
+        if result.returncode != 0:
+            error_flag_array.append("direct_run_failed")
+            execution_info["error_message"] = (
+                f"Direct McStas run failed with return code {result.returncode}."
+            )
+            return math.nan, error_flag_array, execution_info
+
+        detector_path = os.path.join(output_folder, "detector.dat")
+        if not os.path.exists(detector_path):
+            error_flag_array.append("detector_output_missing")
+            execution_info["error_message"] = (
+                "Direct McStas run completed without writing detector.dat."
+            )
+            return math.nan, error_flag_array, execution_info
+
+        return None, error_flag_array, execution_info
 
     instrument.settings(
         output_path=output_folder,
         ncount=number_neutrons,
-        mpi=30,
+        mpi=mpi_count,
         force_compile=False,
         increment_folder_name=False,
     )
 
-    if not error_flag_array:
-        instrument.set_parameters(**params_snapshot["params"])
-        data = instrument.backengine()
-    else:
-        data = math.nan
+    instrument.set_parameters(**params_snapshot["params"])
+    data = instrument.backengine()
+    execution_state.last_execution_mode = "backengine"
 
-    return data, error_flag_array
+    was_direct_run_ready = execution_state.direct_run_ready
+    resolved_binary_path = _resolve_materialized_binary_path(instrument)
+    execution_state.first_backengine_succeeded = True
+    execution_state.binary_path = resolved_binary_path
+    execution_state.binary_cwd = os.path.dirname(resolved_binary_path)
+    if not execution_state.mpi_launcher_argv:
+        execution_state.mpi_launcher_argv = resolve_mpi_launcher_argv()
+    execution_state.direct_run_ready = bool(
+        execution_state.mpi_launcher_argv and os.path.isfile(resolved_binary_path)
+    )
+
+    execution_info = _build_execution_info(
+        "backengine",
+        output_folder,
+        binary_path=resolved_binary_path,
+        launcher_argv=execution_state.mpi_launcher_argv,
+        armed_direct_run=not was_direct_run_ready and execution_state.direct_run_ready,
+    )
+
+    if not execution_state.direct_run_ready and execution_state.first_backengine_succeeded:
+        if not os.path.isfile(resolved_binary_path):
+            execution_info["error_message"] = (
+                f"Compiled PUMA binary not found after backengine materialization: {resolved_binary_path}"
+            )
+        elif not execution_state.mpi_launcher_argv:
+            execution_info["error_message"] = "MPI launcher could not be resolved for direct PUMA execution."
+
+    return data, error_flag_array, execution_info
 
 
 def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons):
