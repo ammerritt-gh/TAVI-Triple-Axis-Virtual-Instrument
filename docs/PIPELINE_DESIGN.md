@@ -240,7 +240,7 @@ The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compi
 
 4. **Single-point scans** are recorded in the simple Option A model with `compilation_time = 0.0` and use first-point timing as their run-time contribution. This keeps the current setup simple, but it is still heuristic rather than a true compile/run separation.
 
-5. **Per-point progress timing improvement**: after pipelining, per-point elapsed time (used for remaining-time estimates) no longer includes prep overhead — only simulation + postprocessing. This makes the progress bar advance more uniformly and remaining-time estimates slightly more accurate. This is a behavioral improvement, not a breaking change.
+5. **Queue progress vs runtime estimates are now tracked separately**: `progress_updated(processed_points, total_scans)` still reports controller progress across all queued snapshots, including invalid/skipped points. Runtime-facing estimates use the executable subset instead: the pre-scan historical estimate is based on the validated `estimated_runtime_points` count, the live remaining-time label is driven by `remaining_runtime_points` plus `executed_scan_times`, and `RuntimeTracker.add_record()` stores `num_points=len(executed_scan_times)`. Queued-invalid points still appear in progress, but they no longer inflate remaining-time estimates or stored runtime history.
 
 ### Step 5: Update stop mechanism
 
@@ -416,7 +416,7 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - **Output file format**: `scan_parameters.txt`, detector files, `.instr` copy — all unchanged.
 - **Diagnostic mode**: instrument diagram request is emitted once after `build_PUMA_instrument()` (instead of on the first point). Diagnostic monitors are build-time decisions, frozen at `build_PUMA_instrument()`.
 - **Single-point scans**: work identically; the prep thread computes one snapshot and exits.
-- **Progress timing improvement**: per-point elapsed time no longer includes prep overhead — only simulation + postprocessing. This makes the progress bar advance more uniformly and remaining-time estimates slightly more accurate. This is a behavioral improvement, not a breaking change.
+- **Progress signal semantics**: `progress_updated` still reports queued controller progress in command order, including skipped points. The timing labels and runtime history now use only executable points, so queue progress and runtime estimates are intentionally distinct.
 
 ## 11. Sequencing
 
@@ -436,6 +436,7 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
 - The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
 - The live run path now enqueues every requested scan point in command order. The display is initialized optimistically, and impossible points are marked invalid dynamically when the simulation thread processes a snapshot with error flags.
+- Queue progress and timing estimates now diverge by design: `processed_points / total_scans` still reflects all queued snapshots, while the pre-scan estimate, remaining-time estimate, and stored runtime history are driven by executable-point counts (`estimated_runtime_points`, `remaining_runtime_points`, and `executed_scan_times`).
 - McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
 - `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
 
