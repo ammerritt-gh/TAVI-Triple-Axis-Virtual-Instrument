@@ -893,6 +893,32 @@ class DisplayDock(BaseDockWidget):
             self._measured_mask[idx_y, idx_x] = True
             self._current_index = (idx_x, idx_y)
             self._update_2d_display()
+
+    @Slot(int)
+    def mark_1d_point_invalid(self, index):
+        """Mark a 1D scan point as impossible after scan initialization."""
+        if self._mode != '1D' or self._counts is None or self._valid_mask is None:
+            return
+
+        if 0 <= index < len(self._counts):
+            self._valid_mask[index] = False
+            self._measured_mask[index] = False
+            self._counts[index] = np.nan
+            self._setup_1d_plot()
+            self._update_1d_display()
+
+    @Slot(int, int)
+    def mark_2d_point_invalid(self, idx_x, idx_y):
+        """Mark a 2D scan point as impossible after scan initialization."""
+        if self._mode != '2D' or self._counts is None or self._valid_mask is None:
+            return
+
+        if 0 <= idx_y < self._counts.shape[0] and 0 <= idx_x < self._counts.shape[1]:
+            self._valid_mask[idx_y, idx_x] = False
+            self._measured_mask[idx_y, idx_x] = False
+            self._counts[idx_y, idx_x] = np.nan
+            self._setup_2d_plot()
+            self._update_2d_display()
     
     @Slot(int)
     def set_current_scan_index(self, index):

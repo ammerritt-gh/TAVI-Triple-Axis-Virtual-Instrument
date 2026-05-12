@@ -435,6 +435,7 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - `compute_scan_snapshot()` is now the active per-point API for snapshot generation, and `self.stop_flag` has been replaced by `self.stop_event` (`threading.Event`) in the simulation control path.
 - Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
 - The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
+- The live run path now enqueues every requested scan point in command order. The display is initialized optimistically, and impossible points are marked invalid dynamically when the simulation thread processes a snapshot with error flags.
 - McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
 - `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
 
