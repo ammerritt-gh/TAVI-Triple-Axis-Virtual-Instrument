@@ -1,7 +1,7 @@
 # Pipelined Scan Execution — Design Document
 
 *Date: 2026-05-12*
-*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, and per-stage timing capture; direct compile-time measurement still remains future work and is inferred from execution timings*
+*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, per-stage timing capture, and the first direct-binary invocation slice behind `run_PUMA_point()`; direct compile-time measurement still remains future work and is inferred from execution timings, and the direct path has not yet been integration-validated in a live McStas environment*
 
 ---
 
@@ -33,7 +33,7 @@ McStasScript's `backengine()` calls `ManagedMcrun.run_simulation()`, which calls
 
 ### 3.1 Params dict, not PUMA clone
 
-The prep thread produces an immutable params dict — the exact kwargs for `instrument.set_parameters()` — plus metadata (output folder, scan indices, deltaE, error flags). The simulation thread never reads from the shared `self.PUMA` object during execution; it consumes only what the prep thread put on the queue.
+The prep thread produces an immutable params dict — the exact kwargs for `instrument.set_parameters()` — plus metadata (output folder, scan indices, deltaE, error flags). Those parameter keys are already the exact McStas runtime names, so the same dict also backs the current direct CLI `name=value` path once direct execution is armed. The simulation thread never reads from the shared `self.PUMA` object during execution; it consumes only what the prep thread put on the queue.
 
 Rationale: makes the prep↔sim interface contract explicit. Eliminates any possibility of the PUMA mutation race (Section 2.1 of the assessment). `copy.deepcopy(self.PUMA)` would also work but preserves an implicit contract and makes PUMA do double duty as both instrument config and per-point state carrier.
 
@@ -72,14 +72,17 @@ Split into two functions in `instruments/PUMA_instrument_definition.py`:
 - If diagnostic settings include "Show Instrument Diagram", the caller emits `instrument_diagram_requested` with the instrument object once after this function returns.
 - Called **once** at scan start, before any simulation.
 
-**`run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons)`**
+**`run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=30)`**
 
 - Takes the reusable instrument object, the per-point snapshot dict, the output folder path, and the neutron count.
+- This is the active per-point execution seam, called from `TAVIController.run_simulation()`.
+- The live code also passes a scan-local `PUMARunExecutionState` that tracks whether direct execution is armed, the resolved binary path/cwd, and the resolved MPI launcher argv.
 - Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=False, increment_folder_name=False)`.
     - **Critical**: `increment_folder_name=False` is required because `ManagedMcrun` defaults to `True`, which would silently create `scan_0000_0` instead of `scan_0000` if the folder already exists, resulting in postprocessing reading from the wrong folder.
 - Calls `instrument.set_parameters(**params_snapshot['params'])`.
-- Calls `instrument.backengine()`.
-- Returns `(data, error_flag_array)`. Does **not** return the instrument object (diagram emission is a one-time event after `build_PUMA_instrument()`).
+- Calls `instrument.backengine()`. The first executed point still relies on this path to materialize the executable and preserve McStasData behavior used elsewhere in the controller.
+- The landed direct-binary fast path also lives behind this seam and only activates after the first `backengine()` call succeeded, the execution state is armed, and the expected binary exists on disk.
+- Returns `(data, error_flag_array, execution_info)`. `execution_info` carries controller-facing logging/timing metadata including execution mode, direct return code, binary path, launcher argv, and whether the previous `backengine()` point armed direct execution. The instrument object is still not returned.
 - Called **once per scan point** by the simulation thread.
 
 **Classification of PUMA attributes:**
@@ -307,7 +310,7 @@ Scan start
 │   for each scan_item:                  for i in range(total_scans):
 │     snapshot = compute_scan_snapshot()    snapshot = queue.get()  ◄── blocks until ready
 │     queue.put(snapshot)  ──────────►     run_PUMA_point(instrument, snapshot)
-│       (blocks if queue full)             postprocess(snapshot, data)
+│                                         postprocess(snapshot, data)
 │                                          emit signals
 │   queue.put(None)  ──── sentinel ──►   break on None
 │
@@ -406,11 +409,11 @@ Mitigation: wrap the simulation loop in try/except/finally. In the finally block
 
 ### 8.3 Queue deadlock
 
-Could occur if: prep thread waits on `queue.put()` (queue full) while simulation thread waits on something the prep thread holds. This cannot happen in this design — the simulation thread only waits on `queue.get()`, and the prep thread holds no locks. The queue itself is the only synchronization primitive.
+With the current unbounded `Queue()`, there is no queue-full backpressure path to deadlock on. The simulation thread only waits on `queue.get()`, and the prep thread holds no locks while preparing snapshots, so the queue remains the only synchronization primitive.
 
 ### 8.4 Subprocess failure (McStas crash)
 
-`subprocess.run()` returns a non-zero exit code or the output folder doesn't contain detector files. This is already handled by the current code (error flags, NaN data). No change needed — `run_PUMA_point()` returns the error, postprocessing records it.
+Per-point execution now runs through a mixed path behind `run_PUMA_point()`: first-point materialization still goes through `instrument.backengine()`, while later eligible points may run the compiled binary directly. A non-zero direct process return code or missing `detector.dat` is treated as a per-point execution failure, and stdout/stderr is surfaced through the existing message-center logging path before the point is marked failed. Live integration validation of this direct path is still pending.
 
 ### 8.5 Stale instrument object
 
@@ -422,6 +425,7 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 |------|---------|
 | `instruments/PUMA_instrument_definition.py` | Split `run_PUMA_instrument()` into `build_PUMA_instrument()` + `run_PUMA_point()`. Add `compute_scan_snapshot()` and the per-point snapshot contract used by the queue. |
 | `TAVI_PySide6.py` | Refactor `run_simulation()` to use the prep thread, snapshot queue, and simulation loop. Replace `stop_flag` bool with `threading.Event`. Add `_prep_worker()` and emit per-point log messages from the simulation thread when each point starts. |
+| `tavi/mcstas_config.py` | Add centralized MPI launcher resolution for direct execution, with McStasScript configuration / `mccode_config.json` fallback and preference for a direct `mpiexec` binary over wrapper batch launchers when available. |
 | `tavi/runtime_tracker.py` | Add a heuristic `compilation_time` field to `ScanRecord` and `add_record()`, and update `get_estimates()` to prefer it when present. |
 | `CLAUDE.md` | Update architecture section to document pipeline pattern, snapshot contract, threading model. |
 
@@ -430,7 +434,7 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - **DisplayDock**: results still arrive in order (simulation thread processes points sequentially). No out-of-order handling needed.
 - **Signal semantics**: `scan_point_updated_1d/2d`, `scan_completed`, `progress_updated` are emitted from the simulation thread exactly as before, at the same logical points.
 - **Output file format**: `scan_parameters.txt`, detector files, `.instr` copy — all unchanged.
-- **Diagnostic mode**: instrument diagram request is emitted once after `build_PUMA_instrument()` (instead of on the first point). Diagnostic monitors are build-time decisions, frozen at `build_PUMA_instrument()`.
+- **Diagnostic mode**: instrument diagram request is emitted once after `build_PUMA_instrument()`. Diagnostic monitors are build-time decisions, frozen at `build_PUMA_instrument()`. The direct-binary slice keeps diagnostic plotting on the retained first-point `backengine()` McStasData; later direct-invocation points do not replace that retained diagnostic data.
 - **Single-point scans**: work identically; the prep thread computes one snapshot and exits.
 - **Progress signal semantics**: `progress_updated` still reports queued controller progress in command order, including skipped points. The timing labels and runtime history now use only executable points, so queue progress and runtime estimates are intentionally distinct.
 
@@ -441,7 +445,8 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 3. Replace `stop_flag` with `threading.Event`. Implemented.
 4. Implement the pipeline (prep thread, queue, modified simulation loop). Implemented.
 5. Update `RuntimeTracker` to separate compilation time. Implemented in heuristic Option A form.
-6. Update `CLAUDE.md`. Implemented.
+6. Land the first direct-binary invocation slice behind `run_PUMA_point()`. Implemented in code, pending live-environment validation.
+7. Update `CLAUDE.md`. Implemented.
 
 ## Implementation Notes
 
@@ -455,7 +460,11 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - The live run path now enqueues every requested scan point in command order. The display is initialized optimistically, and impossible points are marked invalid dynamically when the simulation thread processes a snapshot with error flags.
 - Queue progress and timing estimates now diverge by design: `processed_points / total_scans` still reflects all queued snapshots, while the pre-scan estimate, remaining-time estimate, and stored runtime history are driven by executable-point counts (`estimated_runtime_points`, `remaining_runtime_points`, and `executed_scan_times`).
 - Stage timing data is now captured per run: prep time is measured in `_prep_worker()`, simulation time is measured around `run_PUMA_point()`, postprocessing time is measured in the simulation thread after `run_PUMA_point()` returns, and a `stage_timing_summary.json` file is written under the output folder with per-point timings plus run-level averages. Compile timing in that summary remains inferred from first-versus-steady-state simulation durations rather than directly observed from a separate compile callback.
+- Controller logging now records when a first successful `backengine()` point arms direct execution and when later points run in direct mode.
+- The per-point timing records written to `stage_timing_summary.json` now include `execution_mode`, `direct_returncode`, and `direct_binary_path` alongside the stage durations.
 - McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
 - `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
+- The first direct-binary slice is now live behind `run_PUMA_point()`: it reuses `params_snapshot['params']` for CLI `name=value` arguments, resolves the MPI launcher from McStasScript's configured McStas state after setup with fallback to the same `mccode_config.json` used by `mcrun.py`, resolves the binary to an absolute path after first successful materialization, uses the binary directory as subprocess `cwd`, switches only when first-point `backengine()` succeeded and the direct-run-ready state plus binary-exists check are both satisfied, retains first-point diagnostic McStasData for diagnostic mode, and treats non-zero direct exits or missing `detector.dat` as ordinary per-point failures while surfacing stdout/stderr through the message center.
+- This direct-execution path is documented from the code, but it has not yet been integration-validated in a live McStas environment, so runtime behavior should still be treated as provisional until that smoke test is completed.
 
-Steps 1–4, the controller GUI-state freeze boundary, and the stop-event conversion are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement would still require a broader follow-up.
+Steps 1–4, the controller GUI-state freeze boundary, the stop-event conversion, and the first direct-binary execution slice are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement and live-environment validation of the direct path still require follow-up.

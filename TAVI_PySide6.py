@@ -17,6 +17,7 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 # Import existing backend modules
 from instruments.PUMA_instrument_definition import (
     PUMA_Instrument,
+    PUMARunExecutionState,
     build_PUMA_instrument,
     compute_scan_snapshot,
     run_PUMA_point,
@@ -3176,6 +3177,8 @@ class TAVIController(QObject):
             diagnostic_settings if diagnostic_mode else {},
             number_neutrons,
         )
+        execution_state = PUMARunExecutionState()
+        retained_diagnostic_data = None
 
         if diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False):
             self.instrument_diagram_requested.emit(instrument)
@@ -3268,13 +3271,25 @@ class TAVIController(QObject):
                 else:
                     self.scan_current_index_1d.emit(idx_1d)
 
+                execution_info = {
+                    'mode': 'skipped',
+                    'returncode': None,
+                    'stdout': None,
+                    'binary_path': execution_state.binary_path,
+                    'output_folder': scan_folder,
+                    'error_message': None,
+                    'launcher_argv': list(execution_state.mpi_launcher_argv or []),
+                    'armed_direct_run': False,
+                }
+
                 if not error_flags and snapshot['params'] is not None:
                     simulation_stage_start = time.perf_counter()
-                    data, error_flags = run_PUMA_point(
+                    data, error_flags, execution_info = run_PUMA_point(
                         instrument,
                         snapshot,
                         scan_folder,
                         number_neutrons,
+                        execution_state,
                     )
                     simulation_duration = time.perf_counter() - simulation_stage_start
                     simulated_point = True
@@ -3282,6 +3297,19 @@ class TAVIController(QObject):
                     data = math.nan
                     self.message_printed.emit(f"Point {i}: skipped, error flags: {error_flags}")
                     simulated_point = False
+
+                if execution_info.get('armed_direct_run'):
+                    launcher_text = " ".join(execution_info.get('launcher_argv', [])) or "unresolved"
+                    self.message_printed.emit(
+                        f"Direct run armed: binary={execution_info.get('binary_path')}, "
+                        f"launcher={launcher_text}, point={i}"
+                    )
+
+                if execution_info.get('mode') == 'direct' and not error_flags:
+                    self.message_printed.emit(f"Point {i} executed via direct binary")
+
+                if retained_diagnostic_data is None and data is not None and data is not math.nan:
+                    retained_diagnostic_data = data
 
                 postprocessing_stage_start = time.perf_counter()
 
@@ -3315,6 +3343,16 @@ class TAVIController(QObject):
 
                 # Check for errors
                 if error_flags:
+                    if execution_info.get('error_message'):
+                        self.message_printed.emit(
+                            f"Point {i} {execution_info.get('mode')} error: {execution_info['error_message']}"
+                        )
+                    if execution_info.get('stdout'):
+                        stdout_text = execution_info['stdout'].strip()
+                        if stdout_text:
+                            self.message_printed.emit(
+                                f"Point {i} direct output:\n{stdout_text}"
+                            )
                     message = f"Scan failed, error flags: {error_flags}"
                     self.message_printed.emit(message)
                     if is_2d_scan:
@@ -3413,6 +3451,9 @@ class TAVIController(QObject):
                     'prep_queue_wait_duration_s': prep_queue_wait_duration,
                     'simulation_duration_s': simulation_duration,
                     'postprocessing_duration_s': postprocessing_duration,
+                    'execution_mode': execution_info.get('mode'),
+                    'direct_returncode': execution_info.get('returncode'),
+                    'direct_binary_path': execution_info.get('binary_path'),
                     'simulated': bool(simulated_point and not error_flags),
                     'error_flags': list(error_flags),
                 })
@@ -3448,6 +3489,15 @@ class TAVIController(QObject):
                 'simulation_error_message': simulation_error_message,
                 'total_requested_points': total_scans,
                 'total_simulated_points': len(executed_scan_times),
+                'num_backengine_points': sum(
+                    1 for record in point_stage_timings if record.get('execution_mode') == 'backengine'
+                ),
+                'num_direct_points': sum(
+                    1 for record in point_stage_timings if record.get('execution_mode') == 'direct'
+                ),
+                'num_skipped_points': sum(
+                    1 for record in point_stage_timings if record.get('execution_mode') == 'skipped'
+                ),
                 'compile_duration_s': inferred_compile_duration,
                 'compile_duration_inferred': inferred_compile_duration is not None,
                 'avg_prep_duration_s': sum(prep_durations) / len(prep_durations),
@@ -3560,9 +3610,9 @@ class TAVIController(QObject):
                 enabled for key, enabled in diagnostic_settings.items() 
                 if key != "Show Instrument Diagram" and enabled
             )
-            if monitors_enabled and data is not None and data is not math.nan:
+            if monitors_enabled and retained_diagnostic_data is not None and retained_diagnostic_data is not math.nan:
                 # Emit signal to display plots on main thread (matplotlib requires this)
-                self.diagnostic_plot_requested.emit(data)
+                self.diagnostic_plot_requested.emit(retained_diagnostic_data)
         
         return data_folder
 
