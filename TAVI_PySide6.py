@@ -599,6 +599,7 @@ class TAVIController(QObject):
                 'att': float(self.window.instrument_dock.att_edit.text() or 0),
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
+                'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
                 'Ef': float(self.window.instrument_dock.Ef_edit.text() or 0),
                 'K_fixed': self.window.scattering_dock.K_fixed_combo.currentText(),
                 'fixed_E': float(self.window.scattering_dock.fixed_E_edit.text() or 0),

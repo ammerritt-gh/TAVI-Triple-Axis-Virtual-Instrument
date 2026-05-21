@@ -51,58 +51,6 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
     """
     return reciprocal_basis_tas(a, b, c, alpha, beta, gamma)
 
-    alpha_r = math.radians(alpha)
-    beta_r = math.radians(beta)
-    gamma_r = math.radians(gamma)
-
-    ca, cb, cg = math.cos(alpha_r), math.cos(beta_r), math.cos(gamma_r)
-    sa, sb, sg = math.sin(alpha_r), math.sin(beta_r), math.sin(gamma_r)
-
-    _EPS = 1e-12
-    if abs(sa) < _EPS or abs(sb) < _EPS or abs(sg) < _EPS:
-        raise ValueError(
-            "Invalid lattice angles: angles of 0° or 180° produce a degenerate cell."
-        )
-
-    # Unit cell volume
-    V = a * b * c * math.sqrt(1 - ca**2 - cb**2 - cg**2 + 2*ca*cb*cg)
-    if V <= 0:
-        raise ValueError("Invalid lattice parameters: unit cell volume is zero or negative.")
-
-    # Reciprocal lattice parameters
-    two_pi = 2.0 * math.pi
-    a_star = two_pi * b * c * sa / V
-    b_star = two_pi * a * c * sb / V
-    c_star = two_pi * a * b * sg / V
-
-    # Reciprocal lattice angles
-    ca_star = (cb*cg - ca) / (sb*sg)
-    cb_star = (ca*cg - cb) / (sa*sg)
-    cg_star = (ca*cb - cg) / (sa*sb)
-
-    sa_star = math.sqrt(max(0.0, 1 - ca_star**2))
-    sb_star = math.sqrt(max(0.0, 1 - cb_star**2))
-    sg_star = math.sqrt(max(0.0, 1 - cg_star**2))
-
-    _EPS = 1e-12
-    if sg_star < _EPS:
-        raise ValueError(
-            f"Degenerate reciprocal lattice: sg_star={sg_star:.3e} (cg_star={cg_star:.6f}). "
-            "The B matrix cannot be constructed because gamma* is 0° or 180°. "
-            "Check that the lattice angles do not produce a degenerate reciprocal cell."
-        )
-
-    # B matrix: a* along x, b* in xy-plane
-    B = np.array([
-        [a_star, b_star * cg_star, c_star * cb_star],
-        [0.0,    b_star * sg_star, c_star * (ca_star - cb_star*cg_star) / sg_star],
-        [0.0,    0.0,              c_star * math.sqrt(
-            max(0.0, 1 - ca_star**2 - cb_star**2 - cg_star**2 + 2*ca_star*cb_star*cg_star)
-        ) / sg_star],
-    ])
-
-    return B
-
 
 def angles_to_q_lab(sth, saz, stt, ki, kf):
     """Convert instrument angles to Q vector in lab frame.
