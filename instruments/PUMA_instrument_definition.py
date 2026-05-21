@@ -1,8 +1,18 @@
-from tracemalloc import take_snapshot
+import copy
+from dataclasses import dataclass
 import mcstasscript as ms
 import math
 import numpy as np
 import os
+import subprocess
+
+from tavi.mcstas_config import resolve_mpi_launcher_argv
+from tavi.sample_mount import SampleMount
+from tavi.tas_geometry import (
+    component_q_to_instrument_q,
+    q_instrument_from_angles,
+    solve_instrument_angles,
+)
 
 N_MASS = 1.67492749804e-27 # neutron mass
 E_CHARGE = 1.602176634e-19 # electron charge
@@ -14,6 +24,18 @@ HBAR = 1.05459e-34  #H-bar in J*s
 _module_dir = os.path.dirname(os.path.abspath(__file__))
 _project_dir = os.path.dirname(_module_dir)  # Go up one level from instruments/
 data_dir = os.path.join(_project_dir, "components")
+
+
+@dataclass
+class PUMARunExecutionState:
+    """Track when the compiled PUMA binary is ready for direct invocation."""
+
+    first_backengine_succeeded: bool = False
+    direct_run_ready: bool = False
+    binary_path: str | None = None
+    binary_cwd: str | None = None
+    mpi_launcher_argv: list[str] | None = None
+    last_execution_mode: str | None = None
 
 ##  some functions to convert between energies, angles and momenta ##
 def k2angle(k, d):
@@ -121,7 +143,7 @@ class TAS_Instrument:
         self.saz = saz # sample z-angle
         # Sample orientation angles (user-controllable)
         self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
-        self.chi = 0    # out-of-plane sample tilt (about horizontal X axis) - actual instrument angle
+        self.chi = 0    # static out-of-plane sample orientation offset
         # Sample alignment offsets (user-controllable)
         self.psi = 0    # omega alignment offset (in-plane) - set during alignment
         self.kappa = 0  # chi alignment offset (out-of-plane) - set during alignment
@@ -132,6 +154,7 @@ class TAS_Instrument:
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
         self.fixed_E = 0 # The fixed energy to work with, for the source.
+        self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
  
     def set_parameters(self, **kwargs):
         """Method to set general parameters."""
@@ -277,24 +300,22 @@ class TAS_Instrument:
                 print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
                 error_flags.append("att")
 
-        if -1 <= ((q**2 - ki**2 - kf**2) / (-2 * ki * kf)) <= 1:
-            stt = -math.degrees(math.acos((q**2 - ki**2 - kf**2) / (-2 * ki * kf))) # This comes from the ki-kf-q triangle and law of cosines
-        else:
+        try:
+            sample_angles = solve_instrument_angles(np.array([qx, qy, qz], dtype=float), ki, kf)
+            stt = sample_angles.stt
+        except ValueError as exc:
             print("\nSample two theta angle invalid")
             stt = 0
             error_flags.append("stt")
+            sample_angles = None
 
         if "stt" in error_flags:
             print("\nCannot compute sample theta angle as sample two theta angle invalid")
             sth = 0
+            saz = 0
         else:
-            # For Bragg condition (deltaE=0, qy=0), omega = stt/2
-            # The formula: sth = stt/2 + atan2(qy, qx)
-            # This gives sth = stt/2 when Q is along the reference direction (qy=0)
-            sth = stt / 2 + math.degrees(math.atan2(qy, qx))
-        
-        ## TODO: error if qx=qy=0
-        saz = -math.degrees(math.atan2(qz, math.sqrt(qx**2 + qy**2)))
+            sth = sample_angles.sth
+            saz = sample_angles.saz
 
 
         print(f"\nmtt: {mtt:.2f} ki: {ki:.3f} Ei: {Ei:.3f} stt: {stt:.3f} sth: {sth:.3f} saz: {saz:.3f} Q: {q:.2f} kf: {kf:.3f} Ef: {Ef:.3f} att: {att:.2f}")
@@ -327,18 +348,14 @@ class TAS_Instrument:
             print("Invalid K_fixed value")
             return [0, 0, 0, 0], error_flags
 
-        # Compute Q components
-        # For the Bragg condition (elastic, deltaE=0), omega = stt/2 should give Q along the reference axis (qy=0)
-        # Q magnitude from the scattering triangle: |Q|^2 = ki^2 + kf^2 - 2*ki*kf*cos(stt)
-        # Q direction in sample frame: angle = (sth - stt/2) from the reference
-        stt_rad = math.radians(stt)
-        sth_rad = math.radians(sth)
-        saz_rad = math.radians(saz)
-        
-        Q_mag = math.sqrt(ki**2 + kf**2 - 2*ki*kf*math.cos(stt_rad))
-        qx = Q_mag * math.cos(sth_rad - stt_rad/2)
-        qy = Q_mag * math.sin(sth_rad - stt_rad/2)
-        qz = -kf * math.tan(saz_rad)  # Out-of-plane component from azimuthal angle
+        # Compute Q in the public instrument/GUI convention:
+        # qx and qy span the horizontal scattering plane; qz is vertical.
+        try:
+            qx, qy, qz = q_instrument_from_angles(sth, saz, stt, ki, kf)
+        except Exception as exc:
+            error_flags.append("q")
+            print(f"Invalid Q from sample angles: {exc}")
+            qx = qy = qz = 0.0
 
         # Validate Q magnitude
         q = math.sqrt(qx**2 + qy**2 + qz**2)
@@ -450,14 +467,402 @@ class PUMA_Instrument(TAS_Instrument):
 
 
 
-def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnostic_settings, output_folder, run_number):
-    """Runs a simulation using a PUMA instrument, needing only simulation parameters; the configuration of the instrument is passed to it automatically"""
+def _get_E0_param_value(PUMA, deltaE):
+    """Return the runtime source-energy parameter for the current point."""
+    if PUMA.source_type == "Mono":
+        if PUMA.K_fixed == "Kf Fixed":
+            return PUMA.fixed_E + deltaE
+        return PUMA.fixed_E
+
+    return PUMA.fixed_E
+
+
+def _get_v_selector_frequency(PUMA, deltaE):
+    """Return the runtime velocity-selector frequency for the current point."""
+    selector_alpha_rad = math.radians(48.3)
+    selector_length = 0.25
+    if PUMA.K_fixed == "Ki Fixed":
+        selector_energy = PUMA.fixed_E
+    else:
+        selector_energy = PUMA.fixed_E + deltaE
+
+    selector_energy = max(selector_energy, 1e-9)
+    return 3956 * selector_alpha_rad / 2 / math.pi / selector_length / energy2lambda(selector_energy)
+
+
+def _get_point_energy_metadata(PUMA, deltaE):
+    """Return the per-point energy values recorded with the scan output."""
+    if PUMA.source_type == "Mono":
+        if PUMA.K_fixed == "Kf Fixed":
+            E0_param = PUMA.fixed_E + deltaE
+            Ei = E0_param
+            Ki = energy2k(Ei)
+            Ef = PUMA.fixed_E
+            Kf = energy2k(Ef)
+        else:
+            E0_param = PUMA.fixed_E
+            Ei = PUMA.fixed_E
+            Ki = energy2k(Ei)
+            Ef = PUMA.fixed_E - deltaE
+            Kf = energy2k(max(Ef, 1e-9))
+    else:
+        E0_param = PUMA.fixed_E
+        Ei = PUMA.fixed_E
+        Ki = energy2k(Ei)
+        Ef = PUMA.fixed_E - deltaE
+        Kf = energy2k(max(Ef, 1e-9))
+
+    return {
+        "E0_param": E0_param,
+        "Ei": Ei,
+        "Ki": Ki,
+        "Ef": Ef,
+        "Kf": Kf,
+    }
+
+
+def build_puma_point_params(PUMA, deltaE):
+    """Build the runtime parameter snapshot for one instrument point."""
+    sample_angles = PUMA.get_sample_angle_components()
+    mount_rx, mount_ry, mount_rz = PUMA.sample_mount.mount_euler_deg
+    return {
+        "A1_param": PUMA.A1,
+        "A2_param": PUMA.A2,
+        "A3_param": PUMA.A3,
+        "A4_param": PUMA.A4,
+        "E0_param": _get_E0_param_value(PUMA, deltaE),
+        "nu_param": _get_v_selector_frequency(PUMA, deltaE),
+        "saz_param": PUMA.saz,
+        "rhm_param": PUMA.rhm,
+        "rvm_param": PUMA.rvm,
+        "rha_param": PUMA.rha,
+        "rva_param": PUMA.rva,
+        "vbl_hgap_param": PUMA.vbl_hgap,
+        "pbl_hgap_param": PUMA.pbl_hgap,
+        "pbl_vgap_param": PUMA.pbl_vgap,
+        "dbl_hgap_param": PUMA.dbl_hgap,
+        "chi_param": sample_angles["chi"],
+        "kappa_param": sample_angles["kappa"],
+        "mis_chi_param": sample_angles["mis_chi"],
+        "psi_param": sample_angles["psi"],
+        "mis_omega_param": sample_angles["mis_omega"],
+        "chi_total": sample_angles["effective_chi"],
+        "omega_offset_total": sample_angles["effective_omega_offset"],
+        "mount_rx_param": mount_rx,
+        "mount_ry_param": mount_ry,
+        "mount_rz_param": mount_rz,
+    }
+
+
+def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder,
+                          is_2d_scan=False, variable_name1="", variable_name2="",
+                          scan_command1="", scan_command2=""):
+    """Compute the complete runtime snapshot for one scan point."""
+    point_puma = copy.deepcopy(puma)
+
+    if is_2d_scan:
+        scans, idx_x, idx_y = scan_item
+        idx_1d = -1
+    else:
+        scans, idx_1d = scan_item
+        idx_x, idx_y = -1, -1
+
+    if len(scans) < 11:
+        raise ValueError(
+            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
+        )
+
+    error_flags = []
+    qx = qy = qz = None
+    H = K = L = None
+    deltaE = 0.0
+    mtt = stt = sth = att = saz = 0.0
+
+    if scan_mode == "momentum":
+        qx, qy, qz, deltaE = scans[:4]
+        angles_array, error_flags = point_puma.calculate_angles(
+            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
+            point_puma.monocris, point_puma.anacris
+        )
+        if not error_flags:
+            mtt, stt, sth, saz, att = angles_array
+            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+    elif scan_mode == "rlu":
+        H, K, L, deltaE = scans[:4]
+        q_component = point_puma.sample_mount.hkl_to_q(H, K, L)
+        qx, qy, qz = component_q_to_instrument_q(np.array(q_component, dtype=float))
+        angles_array, error_flags = point_puma.calculate_angles(
+            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
+            point_puma.monocris, point_puma.anacris
+        )
+        if not error_flags:
+            mtt, stt, sth, saz, att = angles_array
+            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+    elif scan_mode == "orientation":
+        qx, qy, qz, deltaE = scans[:4]
+        angles_array, error_flags = point_puma.calculate_angles(
+            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
+            point_puma.monocris, point_puma.anacris
+        )
+        if not error_flags:
+            mtt, stt, sth, saz, att = angles_array
+            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+    else:
+        A1, A2, A3, A4 = scans[:4]
+        point_puma.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
+        deltaE = vals['deltaE']
+        mtt, stt, sth, att = A1, A2, A3, A4
+        saz = vals.get('chi', 0.0)
+
+    q_vector = (qx, qy, qz) if qx is not None and qy is not None and qz is not None else None
+
+    rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
+    chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10]
+
+    if scan_mode == "angle":
+        omega_scan = scans[2]
+    elif scan_mode in ["momentum", "rlu"] and not error_flags:
+        omega_scan = sth
+    elif scan_mode == "orientation":
+        omega_scan = sth if not error_flags else vals.get('omega', 0)
+    else:
+        omega_scan = 0
+
+    if 'rhm' not in [variable_name1, variable_name2]:
+        rhm = point_puma.rhm
+    if 'rvm' not in [variable_name1, variable_name2]:
+        rvm = point_puma.rvm
+    if 'rha' not in [variable_name1, variable_name2]:
+        rha = point_puma.rha
+    if 'rva' not in [variable_name1, variable_name2]:
+        rva = point_puma.rva
+
+    point_puma.omega = omega_scan
+    point_puma.chi = chi_scan
+    point_puma.kappa = kappa_scan
+    point_puma.psi = psi_scan
+    point_puma.saz = saz
+    point_puma.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
+
+    output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
+    orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
+    if scan_mode == "momentum":
+        log_message = (
+            f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
+            f"Orientation: {orientation_info}"
+        )
+    elif scan_mode == "rlu":
+        log_message = (
+            f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
+            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
+            f"Orientation: {orientation_info}"
+        )
+    elif scan_mode == "orientation":
+        log_message = (
+            f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
+            f"Orientation: {orientation_info}\n"
+            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}"
+        )
+    else:
+        log_message = (
+            f"Scan parameters - A1: {point_puma.A1}, A2: {point_puma.A2}, A3: {point_puma.A3}, A4: {point_puma.A4}\n"
+            f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}\n"
+            f"Orientation: {orientation_info}"
+        )
+
+    metadata = {
+        'scan_mode': scan_mode,
+        'scan_command1': scan_command1,
+        'scan_command2': scan_command2,
+        'deltaE': deltaE,
+        'qx': qx if scan_mode in ["momentum", "orientation", "rlu"] else None,
+        'qy': qy if scan_mode in ["momentum", "orientation", "rlu"] else None,
+        'qz': qz if scan_mode in ["momentum", "orientation", "rlu"] else None,
+        'q_vector': q_vector if scan_mode in ["momentum", "orientation", "rlu"] else None,
+        'H': H if scan_mode == "rlu" else None,
+        'K': K if scan_mode == "rlu" else None,
+        'L': L if scan_mode == "rlu" else None,
+        'mtt': mtt,
+        'stt': stt,
+        'sth': sth,
+        'att': att,
+        'rhm': rhm,
+        'rvm': rvm,
+        'rha': rha,
+        'rva': rva,
+        'omega': omega_scan,
+        'chi': chi_scan,
+        'psi': psi_scan,
+        'kappa': kappa_scan,
+    }
+    metadata.update(_get_point_energy_metadata(point_puma, deltaE))
+
+    return {
+        'params': None if error_flags else build_puma_point_params(point_puma, deltaE),
+        'output_folder': output_folder,
+        'scan_index': scan_index,
+        'deltaE': deltaE,
+        'error_flags': error_flags,
+        'metadata': metadata,
+        'indices': {
+            'idx_1d': idx_1d,
+            'idx_x': idx_x,
+            'idx_y': idx_y,
+        },
+        'log_message': log_message,
+    }
+
+
+def _resolve_materialized_binary_path(instrument):
+    """Resolve the compiled McStas binary path for the built PUMA instrument."""
+    instrument_input_path = getattr(instrument, "input_path", None)
+    instrument_name = getattr(instrument, "name", None)
+    if instrument_input_path and instrument_name:
+        return os.path.abspath(os.path.join(instrument_input_path, f"{instrument_name}.exe"))
+
+    return os.path.abspath(os.path.join(data_dir, "PUMA_McScript.exe"))
+
+
+def _run_puma_point_direct(execution_state, params_snapshot, output_folder, number_neutrons, mpi_count):
+    """Run the already-materialized PUMA binary directly without mcrun.py."""
+    os.makedirs(output_folder, exist_ok=True)
+    args = [
+        *(execution_state.mpi_launcher_argv or []),
+        "-np",
+        str(mpi_count),
+        execution_state.binary_path,
+        f"--ncount={number_neutrons}",
+        f"--dir={output_folder}",
+    ]
+    for key, value in params_snapshot["params"].items():
+        args.append(f"{key}={value}")
+
+    return subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=execution_state.binary_cwd,
+    )
+
+
+def _build_execution_info(mode, output_folder, binary_path=None, returncode=None, stdout=None, error_message=None,
+                          launcher_argv=None, armed_direct_run=False):
+    """Build execution metadata consumed by the controller for logging and timing."""
+    return {
+        "mode": mode,
+        "returncode": returncode,
+        "stdout": stdout,
+        "binary_path": binary_path,
+        "output_folder": output_folder,
+        "error_message": error_message,
+        "launcher_argv": list(launcher_argv or []),
+        "armed_direct_run": armed_direct_run,
+    }
+
+
+def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=30):
+    """Run one point on an already-built PUMA instrument."""
+    error_flag_array = list(params_snapshot.get("error_flags", []))
+
+    if error_flag_array:
+        execution_state.last_execution_mode = "skipped"
+        return math.nan, error_flag_array, _build_execution_info("skipped", output_folder)
+
+    can_run_direct = bool(
+        execution_state.direct_run_ready
+        and execution_state.binary_path
+        and execution_state.binary_cwd
+        and execution_state.mpi_launcher_argv
+        and os.path.isfile(execution_state.binary_path)
+    )
+
+    if can_run_direct:
+        result = _run_puma_point_direct(
+            execution_state,
+            params_snapshot,
+            output_folder,
+            number_neutrons,
+            mpi_count,
+        )
+        execution_state.last_execution_mode = "direct"
+        execution_info = _build_execution_info(
+            "direct",
+            output_folder,
+            binary_path=execution_state.binary_path,
+            returncode=result.returncode,
+            stdout=result.stdout,
+            launcher_argv=execution_state.mpi_launcher_argv,
+        )
+        if result.returncode != 0:
+            error_flag_array.append("direct_run_failed")
+            execution_info["error_message"] = (
+                f"Direct McStas run failed with return code {result.returncode}."
+            )
+            return math.nan, error_flag_array, execution_info
+
+        detector_path = os.path.join(output_folder, "detector.dat")
+        if not os.path.exists(detector_path):
+            error_flag_array.append("detector_output_missing")
+            execution_info["error_message"] = (
+                "Direct McStas run completed without writing detector.dat."
+            )
+            return math.nan, error_flag_array, execution_info
+
+        return None, error_flag_array, execution_info
+
+    force_compile = not execution_state.first_backengine_succeeded
+
+    instrument.settings(
+        output_path=output_folder,
+        ncount=number_neutrons,
+        mpi=mpi_count,
+        force_compile=force_compile,
+        increment_folder_name=False,
+    )
+
+    instrument.set_parameters(**params_snapshot["params"])
+    data = instrument.backengine()
+    execution_state.last_execution_mode = "backengine"
+
+    was_direct_run_ready = execution_state.direct_run_ready
+    resolved_binary_path = _resolve_materialized_binary_path(instrument)
+    execution_state.first_backengine_succeeded = True
+    execution_state.binary_path = resolved_binary_path
+    execution_state.binary_cwd = os.path.dirname(resolved_binary_path)
+    if not execution_state.mpi_launcher_argv:
+        execution_state.mpi_launcher_argv = resolve_mpi_launcher_argv()
+    execution_state.direct_run_ready = bool(
+        execution_state.mpi_launcher_argv and os.path.isfile(resolved_binary_path)
+    )
+
+    execution_info = _build_execution_info(
+        "backengine",
+        output_folder,
+        binary_path=resolved_binary_path,
+        launcher_argv=execution_state.mpi_launcher_argv,
+        armed_direct_run=not was_direct_run_ready and execution_state.direct_run_ready,
+    )
+
+    if not execution_state.direct_run_ready and execution_state.first_backengine_succeeded:
+        if not os.path.isfile(resolved_binary_path):
+            execution_info["error_message"] = (
+                f"Compiled PUMA binary not found after backengine materialization: {resolved_binary_path}"
+            )
+        elif not execution_state.mpi_launcher_argv:
+            execution_info["error_message"] = "MPI launcher could not be resolved for direct PUMA execution."
+
+    return data, error_flag_array, execution_info
+
+
+def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons):
+    """Build a PUMA instrument object for repeated per-point execution."""
 
     #QE_parameter_array = [qx, qy, qz, deltaE]
     #instrument_parameter_array = [number_neutrons, K_fixed, NMO_installed, fixed_E, monocris, anacris, alpha_1, alpha_2, alpha_3, alpha_4]
 
-    # error flag array
-    error_flag_array = []
+    PUMA = puma_config
 
     # focusing; use 1 for optimal focusing, 0 for flat monochromator
     if PUMA.NMO_installed != "None":
@@ -466,7 +871,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
 
     ## start the instrument
 
-    instrument = ms.McStas_instr("PUMA_McScript", input_path="./components", )
+    instrument = ms.McStas_instr("PUMA_McScript", input_path=data_dir)
     instrument.settings(output_path="./output", openacc=False) #uses nvc, must be set up on linux
     
     ## Add parameters
@@ -475,6 +880,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
     instrument.add_parameter("A3_param", comment="Sample phi angle.")
     instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("saz_param", comment="Sample azimuthal angle (out-of-plane).")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -492,7 +898,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
 
     #rhm, rvm, rha, rva = PUMA.calculate_crystal_bending(PUMA.rhmfac, PUMA.rvmfac, PUMA.rhafac, PUMA.A1/2, PUMA.A4/2, )
 
-    if not error_flag_array: #check if the error flags are empty before running
+    def configure_component_tree():
 
         ## start adding components
 
@@ -551,10 +957,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             V_selector.d = .004 #
             V_selector.nslit = 72 #
             V_selector.alpha = 	48.3 #
-            if PUMA.K_fixed == "Ki Fixed":
-                V_selector.nu =  3956*math.radians(V_selector.alpha)/2/math.pi/V_selector.length/energy2lambda(PUMA.fixed_E)
-            if PUMA.K_fixed == "Kf Fixed":
-                V_selector.nu =  3956*math.radians(V_selector.alpha)/2/math.pi/V_selector.length/energy2lambda(PUMA.fixed_E + deltaE)
+            V_selector.nu = "nu_param"
         
             
         if diagnostic_mode and diagnostic_settings.get('Source DSD'):
@@ -918,25 +1321,21 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # 2. sample_chi_arm: applies user chi + kappa (chi offset) + hidden chi misalignment
         # 3. sample_cradle: applies A3 (calculated sample theta) + psi (omega offset) + hidden omega/psi misalignment
         #
-        # Get individual angle components for clarity
-        sample_angles = PUMA.get_sample_angle_components()
-        
-        # Add individual parameters for each angle component (for debugging/inspection)
-        instrument.add_parameter("chi_param", value=sample_angles['chi'], comment="User chi - out-of-plane tilt")
-        instrument.add_parameter("kappa_param", value=sample_angles['kappa'], comment="Kappa - chi alignment offset")
-        instrument.add_parameter("mis_chi_param", value=sample_angles['mis_chi'], comment="Hidden chi misalignment (training)")
-        instrument.add_parameter("psi_param", value=sample_angles['psi'], comment="Psi - omega alignment offset")
-        instrument.add_parameter("mis_omega_param", value=sample_angles['mis_omega'], comment="Hidden omega misalignment (training)")
-        
-        # Combined effective angles (these are actually used in the geometry)
-        instrument.add_parameter("chi_total", value=sample_angles['effective_chi'], 
-                                 comment="Total chi = chi + kappa + mis_chi")
-        instrument.add_parameter("omega_offset_total", value=sample_angles['effective_omega_offset'],
-                                 comment="Total omega offset = psi + mis_omega")
+        instrument.add_parameter("chi_param", value=0, comment="User chi - out-of-plane tilt")
+        instrument.add_parameter("kappa_param", value=0, comment="Kappa - chi alignment offset")
+        instrument.add_parameter("mis_chi_param", value=0, comment="Hidden chi misalignment (training)")
+        instrument.add_parameter("psi_param", value=0, comment="Psi - omega alignment offset")
+        instrument.add_parameter("mis_omega_param", value=0, comment="Hidden omega misalignment (training)")
+        instrument.add_parameter("chi_total", value=0, comment="Total chi = chi + kappa + mis_chi")
+        instrument.add_parameter("omega_offset_total", value=0, comment="Total omega offset = psi + mis_omega")
+        instrument.add_parameter("mount_rx_param", value=0, comment="Static sample mount rotation about x")
+        instrument.add_parameter("mount_ry_param", value=0, comment="Static sample mount rotation about y")
+        instrument.add_parameter("mount_rz_param", value=0, comment="Static sample mount rotation about z")
         
         instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
         instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
         instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset_total",0], RELATIVE="sample_chi_arm")
+        instrument.add_component("sample_mount", "Arm", AT=[0,0,0], ROTATED=["mount_rx_param","mount_ry_param","mount_rz_param"], RELATIVE="sample_cradle")
 
 
         
@@ -1001,7 +1400,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         # Add sample component according to selected sample_key on PUMA (if set)
         sample_key = getattr(PUMA, 'sample_key', None)
         if sample_key == "Al_rod_phonon":
-            Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
+            Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
             Al_rod_phonon.radius = 5e-3
             Al_rod_phonon.yheight = 30e-3
             Al_rod_phonon.sigma_abs = 0*0.231
@@ -1021,7 +1420,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             except Exception:
                 pass
         elif sample_key == "Al_rod_phonon_optic":
-            Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
+            Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
             Al_rod_phonon_optic.radius = 5e-3
             Al_rod_phonon_optic.yheight = 30e-3
             Al_rod_phonon_optic.sigma_abs = 0
@@ -1043,7 +1442,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             except Exception:
                 pass
         elif sample_key == "Al_bragg":
-            Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
+            Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
             Al_Bragg.reflections = '"Al.lau"'
             Al_Bragg.radius = 5e-3
             Al_Bragg.yheight = 30e-3
@@ -1053,14 +1452,14 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         elif sample_key == "Al_phonon_DFT":
             Al_phonon_DFT = instrument.add_component(
                 "Al_phonon_DFT", "Phonon_DFT",
-                AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_cradle"
+                AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_mount"
             )
             # --- Bragg scattering (pre-converted LAZ, avoids cif2hkl dependency) ---
             Al_phonon_DFT.reflections = '"Al_mp-134_symmetrized.laz"'
             Al_phonon_DFT.delta_d_d = 1.45e-3
             Al_phonon_DFT.barns = 1
             # --- Phonon scattering from dispersion file ---
-            Al_phonon_DFT.dispersion = '"Al_test_phonons.dat"'
+            Al_phonon_DFT.dispersion = '"Al_test_phonons_centered.dat"'
             Al_phonon_DFT.tessellate = 1
             Al_phonon_DFT.phonon_e_steps = 50
             # --- Sample geometry ---
@@ -1071,7 +1470,7 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
             Al_phonon_DFT.sigma_abs = 0
             Al_phonon_DFT.sigma_inc = 0.0
             Al_phonon_DFT.debye_waller = 1
-            Al_phonon_DFT.T = 300
+            Al_phonon_DFT.T = 200
             # --- Channel balance ---
             Al_phonon_DFT.p_interact = 1.0
             Al_phonon_DFT.p_phonon = 0.95
@@ -1246,67 +1645,18 @@ def run_PUMA_instrument(PUMA, number_neutrons, deltaE, diagnostic_mode, diagnost
         detector.xwidth = 0.0254
         detector.yheight = 1.0
 
-        if run_number==0:
-            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=True)
-            print("Compiled")
-        else:
-            instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=False)
-            print("Not compiled")
-        if not error_flag_array: #check if the error flags are empty
-            # Get individual sample angle components
-            sample_angles = PUMA.get_sample_angle_components()
-            
-            # Calculate initial E0_param value based on source type and K_fixed mode
-            if PUMA.source_type == "Mono":
-                if PUMA.K_fixed == "Kf Fixed":
-                    E0_param_value = PUMA.fixed_E + deltaE
-                else:
-                    E0_param_value = PUMA.fixed_E
-            else:
-                E0_param_value = PUMA.fixed_E  # Thermal peak energy for Maxwellian
-            
-            instrument.set_parameters(
-                A1_param=PUMA.A1,
-                A2_param=PUMA.A2,
-                A3_param=PUMA.A3,
-                A4_param=PUMA.A4,
-                E0_param=E0_param_value,
-                saz_param=PUMA.saz,
-                rhm_param=PUMA.rhm,
-                rvm_param=PUMA.rvm,
-                rha_param=PUMA.rha,
-                rva_param=PUMA.rva,
-                # Slit apertures
-                vbl_hgap_param=PUMA.vbl_hgap,
-                pbl_hgap_param=PUMA.pbl_hgap,
-                pbl_vgap_param=PUMA.pbl_vgap,
-                dbl_hgap_param=PUMA.dbl_hgap,
-                # Individual sample angle components (for inspection/debugging)
-                chi_param=sample_angles['chi'],
-                kappa_param=sample_angles['kappa'],
-                mis_chi_param=sample_angles['mis_chi'],
-                psi_param=sample_angles['psi'],
-                mis_omega_param=sample_angles['mis_omega'],
-                # Combined effective angles (used in geometry)
-                chi_total=sample_angles['effective_chi'],
-                omega_offset_total=sample_angles['effective_omega_offset']
-            )
-            data = instrument.backengine()
-        else:
-            data = math.nan
-        
-        # Note: Show Instrument Diagram is handled by the GUI controller
-        # to ensure matplotlib runs on the main thread
+        instrument.settings(
+            output_path="./output",
+            ncount=number_neutrons,
+            mpi=30,
+            force_compile=True,
+            increment_folder_name=False,
+            openacc=False,
+        )
 
-        #print(parameter_array)
-        #print("\n")
-        #print(parameter_array_header)
-    else:
-        data = math.nan
-    
-    # Return instrument object as well if diagram display is requested
-    show_diagram = diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False)
-    return (data, error_flag_array, instrument if show_diagram else None)
+        return instrument
+
+    return configure_component_tree()
 
 def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
 
@@ -1391,24 +1741,22 @@ def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
             #print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
             error_flag_array.append("att")
 
-    if -1 <= ((q * q - ki * ki - kf * kf) / (-2 * ki * kf)) <= 1:
-        stt = -math.degrees(math.acos((q * q - ki * ki - kf * kf) / (-2 * ki * kf)))
-    else:
+    try:
+        sample_angles = solve_instrument_angles(np.array([qx, qy, qz], dtype=float), ki, kf)
+        stt = sample_angles.stt
+    except ValueError:
         print("\nSample two theta angle invalid")
         stt = 0
         error_flag_array.append("stt")
+        sample_angles = None
 
     if "stt" in error_flag_array:
         #print("\nCannot compute sample theta angle as sample two theta angle invalid")
         sth = 0
+        saz = 0
     else:
-        if qx == 0:
-            sth = stt / 2 + math.degrees(math.pi / 2)
-        else:
-            sth = stt / 2 + math.degrees(math.atan(qy/qx))
-    
-    # TODO: set check for qx, qy=0
-    saz = -math.degrees(math.atan(qz/math.sqrt(qx*qx + qy*qy)))
+        sth = sample_angles.sth
+        saz = sample_angles.saz
 
     # set crystal rotations
     mth = mtt/2
