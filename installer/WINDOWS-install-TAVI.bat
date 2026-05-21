@@ -4,23 +4,44 @@ setlocal EnableDelayedExpansion
 :: =============================================================================
 :: TAVI (Triple Axis Virtual Instrument) Installer for Windows
 :: =============================================================================
-:: This script installs TAVI along with McStas for neutron scattering simulations.
-:: 
 :: Prerequisites that must be installed manually:
-::   - Visual Studio with C++ support (for McStas compilation)
+::   - Visual Studio Build Tools with "Desktop development with C++"
+::     (C++/CLI support, MSVC v143, MSVC v142)
 ::
 :: What this script does:
-::   1. Checks for Visual Studio C++ compiler
-::   2. Installs micromamba (lightweight conda package manager)
-::   3. Creates a 'tavi' environment with McStas and Python dependencies
-::   4. Downloads the latest TAVI from GitHub
-::   5. Configures McStasScript and default settings
-::   6. Creates desktop shortcut for running TAVI
+::   1.  Detects Visual Studio C++ compiler via vswhere.exe
+::   2.  Detects Microsoft MPI SDK (optional; required for NMO/MPI workflows)
+::   3.  Installs micromamba (pinned version with checksum verification)
+::   4.  Creates or fully reconciles the 'tavi' conda environment
+::   5.  Clones TAVI at a pinned release tag, or checks out that tag on update
+::   6.  Configures McStasScript
+::   7.  Creates launcher scripts that bootstrap the compiler environment,
+::       and a desktop shortcut
 ::
-:: Usage: install-TAVI.bat [--verbose]
+:: Usage: WINDOWS-install-TAVI.bat [--verbose]
 :: =============================================================================
 
-:: Check for verbose mode
+:: ---------------------------------------------------------------------------
+:: RELEASE PINS  — update these when cutting a new installer release
+:: ---------------------------------------------------------------------------
+::
+:: TAVI_VERSION: the GitHub tag to install.
+::   Set to "main" only during active development; published installers should
+::   always pin a release tag such as "v1.0.0".
+::
+:: PYTHON_VERSION: must match the version used in run-tavi-dev.bat.
+::   Confirm with: micromamba run -n tavi-dev python --version
+::
+:: MAMBA_VERSION / EXPECTED_SHA256: micromamba release to pin.
+::   Find the correct SHA256 at:
+::   https://github.com/mamba-org/micromamba-releases/releases
+::
+set "TAVI_VERSION=main"
+set "PYTHON_VERSION=3.11"
+set "MAMBA_VERSION=2.5.0-1"
+set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
+:: ---------------------------------------------------------------------------
+
 set "VERBOSE=0"
 if "%1"=="--verbose" set "VERBOSE=1"
 if "%1"=="-v" set "VERBOSE=1"
@@ -30,196 +51,141 @@ title TAVI Installer
 echo ============================================================================
 echo                    TAVI Installation Script
 echo                 Triple Axis Virtual Instrument
+echo                 Release: %TAVI_VERSION%
 echo ============================================================================
 echo.
 if "%VERBOSE%"=="1" echo [DEBUG] Verbose mode enabled.
 
-:: Check for administrator privileges (recommended but not required)
-if "%VERBOSE%"=="1" echo [DEBUG] Checking administrator privileges...
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [INFO] Running without administrator privileges.
-    echo [INFO] This should work fine for a user-local installation.
+    echo [INFO] This is fine for a user-local installation.
     echo.
 )
 
-:: Set installation directories
 set "INSTALL_DIR=%USERPROFILE%\TAVI"
 set "MICROMAMBA_DIR=%USERPROFILE%\AppData\Local\micromamba"
 set "ENV_NAME=tavi"
 
-echo Installation directory: %INSTALL_DIR%
-echo Micromamba directory: %MICROMAMBA_DIR%
-echo Environment name: %ENV_NAME%
+echo Installation directory : %INSTALL_DIR%
+echo Micromamba directory   : %MICROMAMBA_DIR%
+echo Environment name       : %ENV_NAME%
+echo Python version         : %PYTHON_VERSION%
+echo TAVI release           : %TAVI_VERSION%
 echo.
 
 :: =============================================================================
-:: Step 0: Check for C++ Compiler (Visual Studio)
+:: Step 0: Check prerequisites
 :: =============================================================================
-echo [Step 0/5] Checking for Visual Studio installation...
+echo [Step 0/6] Checking prerequisites...
 
-:: Check for Visual Studio Build Tools installation
+:: ---------------------------------------------------------------------------
+:: 0a: Visual Studio — detect via vswhere.exe
+::     vswhere ships with VS 2017+ and handles non-year directory names
+::     (e.g. VS 2026 installs to \18\ rather than \2026\).
+:: ---------------------------------------------------------------------------
 set "VS_FOUND=0"
 set "VCVARS="
 
-:: Visual Studio 2026 (check multiple editions - newest first)
-if exist "C:\Program Files\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2026\Community\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\Community\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2026\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\Professional\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2026\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
-)
-:: Visual Studio 2025 (check multiple editions)
-if exist "C:\Program Files\Microsoft Visual Studio\2025\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2025\Community\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\Community\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2025\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\Professional\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2025\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2025\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
-)
-:: Visual Studio 2022 (check multiple editions)
-if exist "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
-)
-:: Visual Studio 2019
-if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvarsall.bat"
-)
-if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" (
-    set "VS_FOUND=1"
-    set "VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat"
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "!VSWHERE!" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
+
+if exist "!VSWHERE!" (
+    if "%VERBOSE%"=="1" echo [DEBUG] Using vswhere: !VSWHERE!
+    for /f "usebackq tokens=*" %%I in (
+        `"!VSWHERE!" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul`
+    ) do set "VS_INSTALL=%%I"
+    if defined VS_INSTALL (
+        set "VCVARS=!VS_INSTALL!\VC\Auxiliary\Build\vcvarsall.bat"
+        if exist "!VCVARS!" set "VS_FOUND=1"
+    )
+) else (
+    echo [WARN] vswhere.exe not found. Falling back to fixed-path search.
+    for %%Y in (2026 2025 2022 2019) do (
+        for %%E in (Community Professional Enterprise BuildTools) do (
+            if "!VS_FOUND!"=="0" (
+                set "_C=C:\Program Files\Microsoft Visual Studio\%%Y\%%E\VC\Auxiliary\Build\vcvarsall.bat"
+                if exist "!_C!" ( set "VCVARS=!_C!" & set "VS_FOUND=1" )
+            )
+            if "!VS_FOUND!"=="0" (
+                set "_C=C:\Program Files (x86)\Microsoft Visual Studio\%%Y\%%E\VC\Auxiliary\Build\vcvarsall.bat"
+                if exist "!_C!" ( set "VCVARS=!_C!" & set "VS_FOUND=1" )
+            )
+        )
+    )
 )
 
 if "!VS_FOUND!"=="1" (
-    echo [OK] Visual Studio with C++ support found.
-    if "%VERBOSE%"=="1" echo [DEBUG] vcvarsall.bat: !VCVARS!
-    goto :cpp_check_done
+    echo [OK] Visual Studio C++ compiler found.
+    echo [INFO] vcvarsall.bat  : !VCVARS!
+    echo [INFO] Generated launchers will call vcvarsall.bat x64 before starting TAVI.
+) else (
+    echo.
+    echo ============================================================================
+    echo [WARNING] Visual Studio C++ compiler not found!
+    echo ============================================================================
+    echo.
+    echo McStas requires Visual Studio with C++ support to compile simulations.
+    echo Install Visual Studio Build Tools and select "Desktop development with C++"
+    echo including C++/CLI support, MSVC v143, and MSVC v142.
+    echo Download: https://visualstudio.microsoft.com/downloads/
+    echo.
+    choice /C YN /M "Continue anyway (Y) or exit and install VS first (N)"
+    if errorlevel 2 (
+        start https://visualstudio.microsoft.com/downloads/
+        pause
+        exit /b 1
+    )
+    echo [INFO] Bypassing compiler check. McStas compilation may fail later.
 )
+echo.
 
-:: No compiler found - inform user
-echo.
-echo ============================================================================
-echo [WARNING] Visual Studio C++ compiler not found!
-echo ============================================================================
-echo.
-echo McStas requires Visual Studio with C++ support to compile simulations.
-echo.
-echo Please install Visual Studio with C++ support:
-echo   1. Download from: https://visualstudio.microsoft.com/downloads/
-echo   2. Run the installer and select "Desktop development with C++"
-echo   3. Make sure to include MSVC build tools (C++/CLI support, MSVC v143, MSVC v142)
-echo.
-echo After installation, re-run this installer.
-echo.
-choice /C YN /M "Do you want to bypass this check and continue anyway (Y) or exit (N) (your installation may not have been found)"
-if errorlevel 2 goto :cpp_check_exit
-if errorlevel 1 goto :cpp_check_bypass
-goto :cpp_check_exit
+:: ---------------------------------------------------------------------------
+:: 0b: Microsoft MPI SDK — optional, required for NMO/MPI workflows
+:: ---------------------------------------------------------------------------
+set "MPI_FOUND=0"
+set "MPI_INCLUDE=C:\Program Files (x86)\Microsoft SDKs\MPI\Include"
+set "MPI_LIB=C:\Program Files (x86)\Microsoft SDKs\MPI\Lib\x64"
 
-:cpp_check_bypass
-echo.
-echo [INFO] Bypassing C++ compiler check. McStas compilation may fail later.
-echo [INFO] Continuing with installation...
-goto :cpp_check_done
-
-:cpp_check_exit
-echo [INFO] Opening download page...
-start https://visualstudio.microsoft.com/downloads/
-echo.
-echo [INFO] Please install Visual Studio with C++ support and re-run this installer.
-pause
-exit /b 1
-
-:cpp_check_done
+if exist "!MPI_INCLUDE!\mpi.h" (
+    if exist "!MPI_LIB!\msmpi.lib" (
+        set "MPI_FOUND=1"
+        echo [OK] Microsoft MPI SDK found. MPI/NMO workflows will be enabled in launchers.
+    )
+)
+if "!MPI_FOUND!"=="0" (
+    echo [WARN] Microsoft MPI SDK not found.
+    echo [WARN] Basic simulations will work. NMO/MPI workflows will be unavailable.
+    echo [WARN] To enable MPI: https://learn.microsoft.com/en-us/message-passing-interface/microsoft-mpi
+)
 echo.
 
 :: =============================================================================
 :: Step 1: Install Micromamba
 :: =============================================================================
-echo [Step 1/5] Setting up micromamba package manager...
+echo [Step 1/6] Setting up micromamba...
 
-:: Create micromamba directory
-if "%VERBOSE%"=="1" echo [DEBUG] Creating micromamba directory: %MICROMAMBA_DIR%
-if not exist "%MICROMAMBA_DIR%" (
-    mkdir "%MICROMAMBA_DIR%"
-    if !errorlevel! neq 0 (
-        echo [ERROR] Failed to create micromamba directory: %MICROMAMBA_DIR%
-        echo [INFO] Please check you have write permissions to this location.
-        pause
-        exit /b 1
-    )
-)
+if not exist "%MICROMAMBA_DIR%" mkdir "%MICROMAMBA_DIR%"
 cd /d "%MICROMAMBA_DIR%"
-if %errorlevel% neq 0 (
-    echo [ERROR] Failed to change to micromamba directory: %MICROMAMBA_DIR%
-    pause
-    exit /b 1
-)
-if "%VERBOSE%"=="1" echo [DEBUG] Working directory: %CD%
 
-:: Download micromamba if not present or if checksum verification fails
-:: Pin to specific version for reproducibility and security
-set "MAMBA_VERSION=2.5.0-1"
 set "MAMBA_URL=https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64"
-set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
-
-:: Function to verify SHA256 checksum
 set "NEEDS_DOWNLOAD=0"
+
 if not exist "%MICROMAMBA_DIR%\micromamba.exe" (
     set "NEEDS_DOWNLOAD=1"
-    echo [INFO] Micromamba not found. Will download.
+    echo [INFO] Micromamba not found. Will download version %MAMBA_VERSION%.
 ) else (
-    echo [INFO] Verifying existing micromamba installation...
-    if "%VERBOSE%"=="1" echo [DEBUG] Computing SHA256 checksum...
-    
-    :: Compute SHA256 of existing file using certutil
+    echo [INFO] Verifying existing micromamba...
     certutil -hashfile "%MICROMAMBA_DIR%\micromamba.exe" SHA256 > "%TEMP%\mamba_hash.txt" 2>nul
     if !errorlevel! neq 0 (
-        echo [WARN] Failed to compute checksum. Will re-download micromamba.
+        echo [WARN] Could not verify checksum. Will re-download.
         set "NEEDS_DOWNLOAD=1"
     ) else (
         call :extract_hash
-        
-        if "%VERBOSE%"=="1" echo [DEBUG] Expected: %EXPECTED_SHA256%
-        if "%VERBOSE%"=="1" echo [DEBUG] Actual:   !ACTUAL_SHA256!
-        
         if /I "!ACTUAL_SHA256!"=="%EXPECTED_SHA256%" (
-            echo [OK] Micromamba checksum verified.
+            echo [OK] Micromamba %MAMBA_VERSION% verified.
         ) else (
-            echo [WARN] Micromamba checksum mismatch. Will re-download.
+            echo [WARN] Checksum mismatch. Will re-download.
             set "NEEDS_DOWNLOAD=1"
         )
         del "%TEMP%\mamba_hash.txt" 2>nul
@@ -227,306 +193,286 @@ if not exist "%MICROMAMBA_DIR%\micromamba.exe" (
 )
 
 if "!NEEDS_DOWNLOAD!"=="1" (
-    echo [INFO] Downloading micromamba version %MAMBA_VERSION%...
-    if "%VERBOSE%"=="1" echo [DEBUG] URL: !MAMBA_URL!
-    
-    :: Download micromamba binary
-    curl -L -o "%MICROMAMBA_DIR%\micromamba.exe.tmp" "!MAMBA_URL!"
+    echo [INFO] Downloading micromamba %MAMBA_VERSION%...
+    curl -L -o "%MICROMAMBA_DIR%\micromamba.exe.tmp" "%MAMBA_URL%"
     if !errorlevel! neq 0 (
-        echo [ERROR] Failed to download micromamba.
-        echo [INFO] Please check your internet connection and try again.
+        echo [ERROR] Download failed. Check internet connection.
         del "%MICROMAMBA_DIR%\micromamba.exe.tmp" 2>nul
         pause
         exit /b 1
     )
-    
-    :: Verify checksum of downloaded file
-    echo [INFO] Verifying downloaded file...
     certutil -hashfile "%MICROMAMBA_DIR%\micromamba.exe.tmp" SHA256 > "%TEMP%\mamba_hash.txt" 2>nul
-    if !errorlevel! neq 0 (
-        echo [ERROR] Failed to compute checksum of downloaded file.
-        del "%MICROMAMBA_DIR%\micromamba.exe.tmp" 2>nul
-        del "%TEMP%\mamba_hash.txt" 2>nul
-        pause
-        exit /b 1
-    )
-    
     call :extract_hash
     del "%TEMP%\mamba_hash.txt" 2>nul
-    
-    if "%VERBOSE%"=="1" echo [DEBUG] Expected: %EXPECTED_SHA256%
-    if "%VERBOSE%"=="1" echo [DEBUG] Actual:   !ACTUAL_SHA256!
-    
     if /I "!ACTUAL_SHA256!"=="%EXPECTED_SHA256%" (
-        :: Checksum matches, replace old file with new one
         del "%MICROMAMBA_DIR%\micromamba.exe" 2>nul
         move /Y "%MICROMAMBA_DIR%\micromamba.exe.tmp" "%MICROMAMBA_DIR%\micromamba.exe" >nul
-        echo [OK] Micromamba downloaded and verified successfully.
+        echo [OK] Micromamba %MAMBA_VERSION% downloaded and verified.
     ) else (
-        echo [ERROR] Downloaded file checksum mismatch!
-        echo [ERROR] Expected: %EXPECTED_SHA256%
-        echo [ERROR] Actual:   !ACTUAL_SHA256!
-        echo [ERROR] This could indicate a corrupted download or security issue.
+        echo [ERROR] Checksum mismatch on downloaded file.
+        echo [ERROR] Expected : %EXPECTED_SHA256%
+        echo [ERROR] Actual   : !ACTUAL_SHA256!
         del "%MICROMAMBA_DIR%\micromamba.exe.tmp" 2>nul
         pause
         exit /b 1
     )
 )
 
-:: Initialize shell (if not already done)
-echo [INFO] Initializing micromamba for command prompt...
 "%MICROMAMBA_DIR%\micromamba.exe" shell init --shell cmd.exe -p "%MICROMAMBA_DIR%" >nul 2>&1
-
-:: Configure conda-forge channel
 "%MICROMAMBA_DIR%\micromamba.exe" config append channels conda-forge 2>nul
 "%MICROMAMBA_DIR%\micromamba.exe" config set channel_priority strict 2>nul
-echo [OK] Micromamba configured.
+echo [OK] Micromamba ready.
 echo.
 
 :: =============================================================================
-:: Step 2: Create/Update TAVI Environment
+:: Step 2: Create or fully reconcile the 'tavi' conda environment
 :: =============================================================================
-echo [Step 2/5] Creating Python environment with McStas...
-if "%VERBOSE%"=="1" echo [DEBUG] Checking if environment '%ENV_NAME%' exists...
+:: The CONDA_PACKAGES list is the single source of truth for the environment.
+:: Both fresh creates and in-place reconciles use the same list, so re-running
+:: this installer on an existing environment converges to the same state.
+:: =============================================================================
+echo [Step 2/6] Setting up Python environment with McStas...
 
-:: Check if environment exists by matching the exact environment name
+set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas mcstas-core numpy scipy matplotlib h5py pyyaml git"
+
 set "ENV_EXISTS=0"
 for /f "tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" env list 2^>nul') do (
-    if /I "%%E"=="%ENV_NAME%" (
-        set "ENV_EXISTS=1"
-    )
+    if /I "%%E"=="%ENV_NAME%" set "ENV_EXISTS=1"
 )
+
 if "%ENV_EXISTS%"=="1" (
     echo [INFO] Environment '%ENV_NAME%' already exists.
-    
-    choice /C YN /M "Do you want to recreate it (Y) or keep existing (N)"
-    if errorlevel 2 goto :update_env
+    choice /C YN /M "Recreate from scratch (Y) or reconcile/update in place (N)"
+    if errorlevel 2 goto :reconcile_env
     if errorlevel 1 goto :remove_env
-    goto :update_env
+    goto :reconcile_env
 )
 goto :create_env
 
 :remove_env
 echo [INFO] Removing existing environment...
 "%MICROMAMBA_DIR%\micromamba.exe" env remove -n %ENV_NAME% -y >nul 2>&1
-if "%VERBOSE%"=="1" echo [DEBUG] Environment removed.
-goto :create_env
+echo [OK] Environment removed.
 
 :create_env
-echo [INFO] Creating new environment with McStas and dependencies...
-echo [INFO] This may take 5-15 minutes depending on your internet connection...
-echo.
-if "%VERBOSE%"=="1" echo [DEBUG] Running micromamba create...
-
-:: Create environment with McStas and essential packages
-:: Note: We install mcstasscript via pip because conda-forge version may conflict with PySide6
-"%MICROMAMBA_DIR%\micromamba.exe" create -n %ENV_NAME% ^
-    python=3.11 ^
-    mcstas ^
-    mcstas-core ^
-    numpy ^
-    scipy ^
-    matplotlib ^
-    h5py ^
-    pyyaml ^
-    git ^
-    -c conda-forge -c nodefaults -y
-
+echo [INFO] Creating new environment...
+echo [INFO] Packages: %CONDA_PACKAGES%
+echo [INFO] This may take 5-15 minutes...
+"%MICROMAMBA_DIR%\micromamba.exe" create -n %ENV_NAME% %CONDA_PACKAGES% -c conda-forge -c nodefaults -y
 if !errorlevel! neq 0 (
-    echo [ERROR] Failed to create environment.
-    echo [INFO] Check if you have sufficient disk space and internet connection.
+    echo [ERROR] Failed to create environment. Check disk space and internet connection.
     pause
     exit /b 1
 )
+echo [OK] Conda environment created.
+goto :install_pip
 
-echo [OK] Conda environment created successfully.
-if "%VERBOSE%"=="1" echo [DEBUG] Environment creation complete.
-
-:update_env
-if "%VERBOSE%"=="1" echo [DEBUG] Starting pip package installation...
-:: Install pip packages (PySide6 and mcstasscript)
-echo [INFO] Installing PySide6 and mcstasscript via pip...
-echo [INFO] Upgrading pip...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% pip install --upgrade pip
+:reconcile_env
+echo [INFO] Reconciling environment to current package manifest...
+echo [INFO] Packages: %CONDA_PACKAGES%
+"%MICROMAMBA_DIR%\micromamba.exe" install -n %ENV_NAME% %CONDA_PACKAGES% -c conda-forge -c nodefaults -y
 if !errorlevel! neq 0 (
-    echo [WARNING] Failed to upgrade pip, continuing anyway...
-)
-echo [INFO] Installing PySide6...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% pip install PySide6
-if !errorlevel! neq 0 (
-    echo [WARNING] Failed to install PySide6.
-)
-echo [INFO] Installing mcstasscript...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% pip install mcstasscript
-
-if !errorlevel! neq 0 (
-    echo [WARNING] mcstasscript may not have installed correctly.
-    echo [INFO] You can try installing it manually later.
+    echo [WARN] Conda reconcile reported errors. Continuing with pip packages...
 )
 
-echo [OK] Python packages installed.
-if "%VERBOSE%"=="1" echo [DEBUG] Step 2 complete.
+:install_pip
+echo [INFO] Installing/upgrading pip packages...
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% pip install --upgrade pip >nul
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% pip install --upgrade PySide6
+if !errorlevel! neq 0 echo [WARN] PySide6 install reported errors.
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% pip install --upgrade mcstasscript
+if !errorlevel! neq 0 echo [WARN] mcstasscript install reported errors.
+echo [OK] Python packages ready.
 echo.
 
 :: =============================================================================
-:: Step 3: Download/Update TAVI
+:: Step 3: Clone TAVI at the pinned release, or update to it
 :: =============================================================================
-echo [Step 3/5] Downloading TAVI from GitHub...
-if "%VERBOSE%"=="1" echo [DEBUG] Install directory: %INSTALL_DIR%
+echo [Step 3/6] Setting up TAVI (release: %TAVI_VERSION%)...
 
-:: Create TAVI directory
-if not exist "%INSTALL_DIR%" (
-    if "%VERBOSE%"=="1" echo [DEBUG] Creating install directory...
-    mkdir "%INSTALL_DIR%"
-    if !errorlevel! neq 0 (
-        echo [ERROR] Failed to create install directory: %INSTALL_DIR%
-        pause
-        exit /b 1
-    )
-)
+if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 cd /d "%INSTALL_DIR%"
-if !errorlevel! neq 0 (
-    echo [ERROR] Failed to change to install directory: %INSTALL_DIR%
-    pause
-    exit /b 1
-)
-if "%VERBOSE%"=="1" echo [DEBUG] Working directory: %CD%
 
-:: Check if TAVI is already cloned
 if exist "%INSTALL_DIR%\.git" (
-    echo [INFO] TAVI repository already exists. Updating...
-    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git pull origin main
+    echo [INFO] Existing repository found. Fetching and checking out %TAVI_VERSION%...
+    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git fetch origin
     if !errorlevel! neq 0 (
-        echo [WARNING] Could not update TAVI. Will use existing version.
-    ) else (
-        echo [OK] TAVI updated to latest version.
+        echo [WARN] Could not fetch from remote. Keeping existing local version.
+        goto :step3_done
     )
+    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git checkout %TAVI_VERSION%
+    if !errorlevel! neq 0 (
+        echo [WARN] Could not check out %TAVI_VERSION%. Keeping current state.
+        goto :step3_done
+    )
+    :: For a branch (e.g. main), pull latest; for a tag, this is a no-op
+    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git pull origin %TAVI_VERSION% >nul 2>&1
+    echo [OK] TAVI updated to %TAVI_VERSION%.
     goto :step3_done
 )
 
-:: Check if directory is empty (git clone requires empty directory)
-if "%VERBOSE%"=="1" echo [DEBUG] Checking if directory is empty...
+:: Fresh clone
 set "DIR_EMPTY=1"
 for /f %%a in ('dir /b "%INSTALL_DIR%" 2^>nul') do set "DIR_EMPTY=0"
 
 if "!DIR_EMPTY!"=="0" (
-    echo [WARNING] Installation directory is not empty.
-    echo [INFO] Cloning to temporary folder and moving files...
+    echo [INFO] Install directory is not empty. Cloning to temp folder first...
     set "TEMP_CLONE=%TEMP%\TAVI_clone_%RANDOM%"
-    if "%VERBOSE%"=="1" echo [DEBUG] Temp clone directory: !TEMP_CLONE!
-    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git "!TEMP_CLONE!"
-    if !errorlevel! neq 0 (
-        echo [ERROR] Failed to clone TAVI repository.
-        echo [INFO] Please check your internet connection and try again.
-        echo [INFO] You can also manually download from:
-        echo        https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument
-        pause
-        exit /b 1
-    )
-    :: Move files from temp to install dir
-    if "%VERBOSE%"=="1" echo [DEBUG] Moving files from temp to install directory...
+    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone --branch %TAVI_VERSION% https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git "!TEMP_CLONE!"
+    if !errorlevel! neq 0 goto :clone_failed
     xcopy /E /Y /Q "!TEMP_CLONE!\*" "%INSTALL_DIR%\" >nul 2>&1
     rd /s /q "!TEMP_CLONE!" >nul 2>&1
-    echo [OK] TAVI downloaded successfully.
 ) else (
-    echo [INFO] Cloning TAVI repository...
-    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git .
-    if !errorlevel! neq 0 (
-        echo [ERROR] Failed to clone TAVI repository.
-        echo [INFO] Please check your internet connection and try again.
-        echo [INFO] You can also manually download from:
-        echo        https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument
-        pause
-        exit /b 1
-    )
-    echo [OK] TAVI downloaded successfully.
+    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone --branch %TAVI_VERSION% https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git .
+    if !errorlevel! neq 0 goto :clone_failed
 )
+echo [OK] TAVI %TAVI_VERSION% cloned.
+goto :step3_done
+
+:clone_failed
+echo [ERROR] Failed to clone TAVI from GitHub.
+echo [INFO] Check your internet connection, or download manually from:
+echo        https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument
+pause
+exit /b 1
 
 :step3_done
-if "%VERBOSE%"=="1" echo [DEBUG] Step 3 complete.
 echo.
 
 :: =============================================================================
 :: Step 4: Configure McStasScript
 :: =============================================================================
-echo [Step 4/5] Configuring McStasScript...
-if "%VERBOSE%"=="1" echo [DEBUG] Detecting McStas installation paths...
+echo [Step 4/6] Configuring McStasScript...
 
-:: Use Python to find the actual McStas paths within the conda environment
-:: This is more reliable than guessing the path structure
-echo [INFO] Detecting McStas component paths...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys; env_prefix = sys.prefix; candidates = [os.path.join(env_prefix, d) for d in ['Library\\bin', 'bin']]; bin_path = next((d for d in candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), candidates[-1]); lib_path = None; [lib_path := next((os.path.join(base, v) for v in sorted(os.listdir(base), reverse=True) if os.path.isdir(os.path.join(base, v))), base) for base in [os.path.join(env_prefix, 'Library', 'share', 'mcstas'), os.path.join(env_prefix, 'share', 'mcstas')] if os.path.isdir(base) and lib_path is None]; print(f'MCRUN_PATH={bin_path}'); print(f'MCSTAS_PATH={lib_path}')"
-if !errorlevel! neq 0 (
-    echo [WARNING] Could not detect McStas paths automatically.
-)
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c ^
+"import os, sys, mcstasscript as ms;" ^
+"env = sys.prefix;" ^
+"bin_candidates = [os.path.join(env, d) for d in ['Library\\bin', 'bin']];" ^
+"bin_path = next((d for d in bin_candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), bin_candidates[-1]);" ^
+"lib_path = None;" ^
+"[lib_path := next((os.path.join(base, v) for v in sorted(os.listdir(base), reverse=True) if os.path.isdir(os.path.join(base, v))), base) for base in [os.path.join(env, 'Library', 'share', 'mcstas'), os.path.join(env, 'share', 'mcstas')] if os.path.isdir(base) and lib_path is None];" ^
+"c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path);" ^
+"print('[TAVI] McStasScript configured:'); print('[TAVI]   mcrun: ', bin_path); print('[TAVI]   mcstas:', lib_path)"
 
-:: Configure McStasScript using Python to find and set correct paths
-echo [INFO] Configuring McStasScript...
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys, mcstasscript as ms; env_prefix = sys.prefix; candidates = [os.path.join(env_prefix, d) for d in ['Library\\bin', 'bin']]; bin_path = next((d for d in candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), candidates[-1]); lib_path = None; [lib_path := next((os.path.join(base, v) for v in sorted(os.listdir(base), reverse=True) if os.path.isdir(os.path.join(base, v))), base) for base in [os.path.join(env_prefix, 'Library', 'share', 'mcstas'), os.path.join(env_prefix, 'share', 'mcstas')] if os.path.isdir(base) and lib_path is None]; c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path); print('McStasScript configured successfully!'); print('  mcrun path:', bin_path); print('  mcstas path:', lib_path)"
 if !errorlevel! neq 0 (
-    echo [WARNING] McStasScript configuration may need manual adjustment.
-    echo [INFO] You can manually configure using:
-    echo        python -c "import mcstasscript as ms; c = ms.Configurator(); c.set_mcrun_path('PATH_TO_BIN'); c.set_mcstas_path('PATH_TO_COMPONENTS')"
+    echo [WARN] McStasScript auto-configuration failed.
+    echo [INFO] Configure manually after launch:
+    echo        python -c "import mcstasscript as ms; c = ms.Configurator(); c.set_mcrun_path('...'); c.set_mcstas_path('...')"
 )
-if "%VERBOSE%"=="1" echo [DEBUG] Step 4 complete.
 echo.
 
 :: =============================================================================
-:: Step 5: Configure Default Settings and Create Shortcuts
+:: Step 5: Output directory
 :: =============================================================================
-echo [Step 5/5] Creating launcher and configuring defaults...
-if "%VERBOSE%"=="1" echo [DEBUG] Creating launcher scripts...
+if not exist "%INSTALL_DIR%\output" mkdir "%INSTALL_DIR%\output"
 
-:: Ensure output directory exists
-echo [INFO] Creating output directory...
-if not exist "!INSTALL_DIR!\output" mkdir "!INSTALL_DIR!\output"
+:: =============================================================================
+:: Step 6: Generate launcher scripts with compiler + MPI bootstrap
+:: =============================================================================
+:: All generated launchers share a common bootstrap helper (tavi-bootstrap.bat)
+:: that calls vcvarsall.bat x64 and injects MPI paths before launching TAVI.
+:: This means compile-on-first-run works correctly from any entry point.
+:: =============================================================================
+echo [Step 6/6] Creating launcher scripts...
 
-:: Create the run script
+set "BOOTSTRAP_SCRIPT=%INSTALL_DIR%\tavi-bootstrap.bat"
 set "RUN_SCRIPT=%INSTALL_DIR%\run-tavi.bat"
-if "%VERBOSE%"=="1" echo [DEBUG] Creating run script: !RUN_SCRIPT!
+set "UPDATE_SCRIPT=%INSTALL_DIR%\update-tavi.bat"
+set "LAUNCHER_SCRIPT=%INSTALL_DIR%\TAVI-Launcher.bat"
+
+:: ------------------------------------------------------------------
+:: tavi-bootstrap.bat  — shared compiler + MPI setup helper
+:: Called as: tavi-bootstrap.bat python TAVI_PySide6.py
+::            tavi-bootstrap.bat git fetch origin
+:: ------------------------------------------------------------------
+>"!BOOTSTRAP_SCRIPT!" (
+    echo @echo off
+    echo :: tavi-bootstrap.bat
+    echo :: Shared bootstrap helper for all TAVI launcher scripts.
+    echo :: Calls vcvarsall.bat, injects MPI paths, then runs the command in %%*.
+    echo :: Do not run this script directly.
+    echo setlocal
+    echo.
+)
+if "!VS_FOUND!"=="1" (
+    >>"!BOOTSTRAP_SCRIPT!" (
+        echo :: Bootstrap Visual Studio compiler environment
+        echo call "!VCVARS!" x64 ^>nul
+        echo if errorlevel 1 echo [WARN] vcvarsall.bat returned an error. Compilation may fail.
+        echo.
+    )
+) else (
+    >>"!BOOTSTRAP_SCRIPT!" (
+        echo :: No Visual Studio compiler was detected at install time.
+        echo :: Re-run WINDOWS-install-TAVI.bat after installing Visual Studio Build Tools.
+        echo.
+    )
+)
+if "!MPI_FOUND!"=="1" (
+    >>"!BOOTSTRAP_SCRIPT!" (
+        echo :: Append Microsoft MPI SDK paths for NMO/MPI workflows
+        echo set "INCLUDE=%%INCLUDE%%;!MPI_INCLUDE!"
+        echo set "LIB=%%LIB%%;!MPI_LIB!"
+        echo.
+    )
+) else (
+    >>"!BOOTSTRAP_SCRIPT!" (
+        echo :: Microsoft MPI SDK was not found at install time.
+        echo :: NMO/MPI workflows will be unavailable.
+        echo.
+    )
+)
+>>"!BOOTSTRAP_SCRIPT!" (
+    echo :: Run the requested command inside the tavi conda environment
+    echo cd /d "!INSTALL_DIR!"
+    echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! %%*
+    echo endlocal
+)
+
+:: ------------------------------------------------------------------
+:: run-tavi.bat
+:: ------------------------------------------------------------------
 >"!RUN_SCRIPT!" (
     echo @echo off
     echo setlocal
-    echo.
-    echo :: Activate the TAVI environment and run
-    echo cd /d "!INSTALL_DIR!"
-    echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! python TAVI_PySide6.py
-    echo.
-    echo :: Keep window open if there was an error
+    echo call "!BOOTSTRAP_SCRIPT!" python TAVI_PySide6.py
     echo if errorlevel 1 pause
     echo endlocal
 )
 
-:: Create the update script
-set "UPDATE_SCRIPT=%INSTALL_DIR%\update-tavi.bat"
-if "%VERBOSE%"=="1" echo [DEBUG] Creating update script: !UPDATE_SCRIPT!
+:: ------------------------------------------------------------------
+:: update-tavi.bat
+:: ------------------------------------------------------------------
 >"!UPDATE_SCRIPT!" (
     echo @echo off
     echo setlocal
     echo echo ============================================================================
     echo echo                       TAVI Update Script
+    echo echo                       Pinned release: %TAVI_VERSION%
     echo echo ============================================================================
     echo echo.
-    echo cd /d "!INSTALL_DIR!"
-    echo echo [INFO] Updating TAVI from GitHub...
-    echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! git pull origin main
+    echo echo [INFO] Fetching from GitHub...
+    echo call "!BOOTSTRAP_SCRIPT!" git fetch origin
+    echo echo [INFO] Checking out %TAVI_VERSION%...
+    echo call "!BOOTSTRAP_SCRIPT!" git checkout %TAVI_VERSION%
+    echo call "!BOOTSTRAP_SCRIPT!" git pull origin %TAVI_VERSION%
     echo if errorlevel 1 ^(
-    echo     echo [ERROR] Update failed. Please check your internet connection.
+    echo     echo [ERROR] Update failed. Check your internet connection.
     echo ^) else ^(
-    echo     echo [OK] TAVI updated successfully!
+    echo     echo [OK] TAVI updated to %TAVI_VERSION%.
     echo ^)
     echo echo.
-    echo echo [INFO] Updating Python packages...
-    echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! pip install --upgrade PySide6 mcstasscript
+    echo echo [INFO] Updating pip packages...
+    echo call "!BOOTSTRAP_SCRIPT!" pip install --upgrade PySide6 mcstasscript
     echo echo.
-    echo echo Update complete!
-    echo pause
+    echo echo Update complete. Press any key to exit.
+    echo pause ^>nul
     echo endlocal
 )
 
-:: Create the launcher script (menu with options)
-set "LAUNCHER_SCRIPT=%INSTALL_DIR%\TAVI-Launcher.bat"
-if "%VERBOSE%"=="1" echo [DEBUG] Creating launcher script: !LAUNCHER_SCRIPT!
+:: ------------------------------------------------------------------
+:: TAVI-Launcher.bat
+:: ------------------------------------------------------------------
 >"!LAUNCHER_SCRIPT!" (
     echo @echo off
     echo setlocal
@@ -536,15 +482,14 @@ if "%VERBOSE%"=="1" echo [DEBUG] Creating launcher script: !LAUNCHER_SCRIPT!
     echo echo ============================================================================
     echo echo                         TAVI Launcher
     echo echo                  Triple Axis Virtual Instrument
+    echo echo                  Release: %TAVI_VERSION%
     echo echo ============================================================================
     echo echo.
     echo echo   [1] Run TAVI
-    echo echo   [2] Update TAVI ^(download latest version^)
+    echo echo   [2] Update TAVI
     echo echo   [3] Open TAVI folder
     echo echo   [4] Open TAVI shell ^(for debugging^)
     echo echo   [5] Exit
-    echo echo.
-    echo echo ============================================================================
     echo echo.
     echo choice /C 12345 /M "Select option"
     echo.
@@ -568,27 +513,19 @@ if "%VERBOSE%"=="1" echo [DEBUG] Creating launcher script: !LAUNCHER_SCRIPT!
     echo goto :menu
     echo.
     echo :shell
-    echo cd /d "!INSTALL_DIR!"
-    echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! cmd /k "echo TAVI Shell Ready && echo Type 'python TAVI_PySide6.py' to run TAVI"
+    echo call "!BOOTSTRAP_SCRIPT!" cmd /k "echo TAVI Shell Ready ^&^& echo Type 'python TAVI_PySide6.py' to run TAVI"
     echo goto :menu
     echo endlocal
 )
 
-:: Create desktop shortcut using PowerShell
-echo [INFO] Creating desktop shortcut...
-set "PS_DESKTOP=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
-set "PS_TARGET=!LAUNCHER_SCRIPT!"
-set "PS_WORKDIR=!INSTALL_DIR!"
-powershell -NoProfile -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut([System.Environment]::ExpandEnvironmentVariables('!PS_DESKTOP!')); $Shortcut.TargetPath = '!PS_TARGET!'.Replace(\"'\", \"''\"); $Shortcut.WorkingDirectory = '!PS_WORKDIR!'.Replace(\"'\", \"''\"); $Shortcut.Description = 'TAVI - Triple Axis Virtual Instrument'; $Shortcut.Save()"
-
+:: Desktop shortcut
+powershell -NoProfile -Command "$s = (New-Object -Com WScript.Shell).CreateShortcut([System.Environment]::ExpandEnvironmentVariables('%USERPROFILE%\Desktop\TAVI Launcher.lnk')); $s.TargetPath = '!LAUNCHER_SCRIPT!'; $s.WorkingDirectory = '!INSTALL_DIR!'; $s.Description = 'TAVI - Triple Axis Virtual Instrument'; $s.Save()"
 if !errorlevel! equ 0 (
     echo [OK] Desktop shortcut created.
 ) else (
-    echo [INFO] Desktop shortcut not created. You can run TAVI from: !LAUNCHER_SCRIPT!
+    echo [INFO] Desktop shortcut not created. Run TAVI from: !LAUNCHER_SCRIPT!
 )
-
 echo [OK] Launcher scripts created.
-if "%VERBOSE%"=="1" echo [DEBUG] Step 5 complete.
 echo.
 
 :: =============================================================================
@@ -598,25 +535,30 @@ echo ===========================================================================
 echo                    Installation Complete!
 echo ============================================================================
 echo.
-echo TAVI has been installed to: %INSTALL_DIR%
+echo TAVI %TAVI_VERSION% installed to: %INSTALL_DIR%
+echo.
+echo Compiler bootstrap : !VCVARS!
+if "!VS_FOUND!"=="0" echo                  : [NOT FOUND - simulations may fail to compile]
+echo MPI SDK            : !MPI_INCLUDE!
+if "!MPI_FOUND!"=="0" echo                  : [NOT FOUND - NMO/MPI workflows unavailable]
 echo.
 echo To run TAVI:
 echo   - Double-click "TAVI Launcher" on your desktop
 echo   - Or run: !LAUNCHER_SCRIPT!
 echo.
-echo The launcher provides options to:
-echo   [1] Run TAVI
-echo   [2] Update to the latest version
-echo   [3] Open the TAVI folder
-echo   [4] Open a debugging shell
+echo First-run note:
+echo   The first simulation point compiles the McStas instrument (~10-30s).
+echo   Later points in a multi-point scan reuse the compiled binary and are
+echo   significantly faster.
+echo.
+echo Validation note:
+echo   Run at least one 2-point scan after installation to confirm both the
+echo   first-point compile and subsequent direct-binary execution work correctly.
 echo.
 echo ============================================================================
 echo.
 echo Press any key to launch TAVI now, or close this window to exit...
 pause >nul
-
-:: Launch TAVI
-if "%VERBOSE%"=="1" echo [DEBUG] Launching TAVI...
 call "!LAUNCHER_SCRIPT!"
 goto :eof
 
@@ -625,18 +567,14 @@ goto :eof
 :: =============================================================================
 
 :extract_hash
-:: Extract SHA256 hash from certutil output (hash is on second line)
-:: Input: %TEMP%\mamba_hash.txt
-:: Output: ACTUAL_SHA256 variable
 set "ACTUAL_SHA256="
-set "LINE_NUM=0"
+set "_LN=0"
 for /f "skip=1 tokens=*" %%H in (%TEMP%\mamba_hash.txt) do (
-    if !LINE_NUM! equ 0 (
+    if !_LN! equ 0 (
         set "ACTUAL_SHA256=%%H"
-        set "LINE_NUM=1"
+        set /a _LN+=1
     )
 )
-:: Remove spaces from hash
 set "ACTUAL_SHA256=!ACTUAL_SHA256: =!"
 goto :eof
 
