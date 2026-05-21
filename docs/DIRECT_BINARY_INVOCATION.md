@@ -1,6 +1,6 @@
 # Direct McStas Binary Invocation — Bypassing mcrun.py
 
-*Date: 2026-05-12*
+*Date: 2026-05-20*
 *Status: First implementation slice landed. `TAVIController.run_simulation()` still executes through `run_PUMA_point()`, but that seam now arms and uses a direct-binary path after the first successful `backengine()` materializes the executable. This has not yet been integration-validated in a live McStas environment.*
 
 ## Problem
@@ -23,11 +23,11 @@ Two Python interpreters, two cmd.exe shells, full module import chain — all re
 
 ## Solution
 
-Keep `run_PUMA_point()` in `instruments/PUMA_instrument_definition.py` as the execution seam called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`. The landed slice keeps the first point on `backengine()` so the executable is materialized and diagnostic `McStasData` is retained, then uses direct process invocation with `subprocess.run` and a list (no shell) for later eligible points.
+Keep `run_PUMA_point()` in `instruments/PUMA_instrument_definition.py` as the execution seam called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`. The landed slice keeps the first point that reaches `backengine()` on a forced compile/materialization path so build-time settings are refreshed and diagnostic `McStasData` is retained, then uses direct process invocation with `subprocess.run` and a list (no shell) for later eligible points.
 
 ## Key Facts
 
-- The compiled binary lives in the instrument `input_path` directory passed to `ms.McStas_instr("PUMA_McScript", input_path="./components")`
+- The compiled binary lives in the instrument `input_path` directory passed to `ms.McStas_instr("PUMA_McScript", input_path=data_dir)`, where `data_dir` resolves the repository `components/` directory to an absolute path from the module location
 - `run_PUMA_point()` now takes a scan-local `PUMARunExecutionState` that tracks first-point materialization, whether direct execution is armed, the resolved binary path/cwd, and the MPI launcher argv
 - After the first successful `backengine()` call materializes the executable, the code resolves and retains its absolute path from `instrument.input_path` + instrument name + `.exe`
 - The direct path is not keyed off run number alone; it only activates once the first `backengine()` succeeded, direct execution is armed, the expected binary exists on disk, and MPI launcher resolution succeeded
@@ -50,7 +50,7 @@ The params snapshot dict already carries the exact McStas runtime parameter name
 Current implementation in `run_PUMA_point()`:
 
 - Invalid snapshots still return through the existing skipped-point path.
-- The first successful point uses `instrument.settings(...)`, `instrument.set_parameters(...)`, and `instrument.backengine()`, then records the binary path, binary cwd, MPI launcher argv, and whether direct execution became armed.
+- The first point that reaches `backengine()` in a scan uses `instrument.settings(... force_compile=not execution_state.first_backengine_succeeded ...)`, `instrument.set_parameters(...)`, and `instrument.backengine()` to force initial compile/materialization, then records the binary path, binary cwd, MPI launcher argv, and whether direct execution became armed.
 - Later eligible points build `args` as `[*launcher_argv, '-np', str(mpi_count), binary_path, f'--ncount={ncount}', f'--dir={output_folder}', ...params]` and call `subprocess.run(..., stdout=PIPE, stderr=STDOUT, text=True, cwd=binary_cwd)`.
 - A non-zero direct return code or missing `detector.dat` is mapped into the existing per-point failure path through `execution_info` and `error_flags`.
 

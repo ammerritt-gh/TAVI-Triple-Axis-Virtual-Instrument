@@ -15,16 +15,11 @@ from gui.docks.base_dock import BaseDockWidget
 # Define linked parameter groups - parameters within a group control the same thing
 # and should not be scanned together
 LINKED_PARAMETER_GROUPS = {
-    # Q components - qx, qy, qz are the same as H, K, L (in transformed coordinates)
-    # Scanning qx AND H together is a conflict (both set the x-component of Q)
-    "q_x_component": {"qx", "h"},
-    "q_y_component": {"qy", "k"},
-    "q_z_component": {"qz", "l"},
     # Sample 2theta - A2 and 2theta are the same angle
     "sample_2theta": {"a2", "2theta"},
-    # Sample theta - omega and A3 are the same angle; psi is the alignment offset
+    # Sample theta - A3 is the calculated angle; omega/psi are in-plane offsets
     "sample_theta": {"omega", "a3"},
-    # Omega/psi both affect in-plane rotation
+    # A3, omega, and psi all affect in-plane sample rotation
     "sample_in_plane_offset": {"omega", "a3", "psi"},
     # Sample orientation - chi/kappa both control out-of-plane tilt
     "sample_out_plane": {"chi", "kappa"},

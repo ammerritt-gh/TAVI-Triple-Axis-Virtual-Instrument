@@ -1,6 +1,6 @@
 # Pipelined Scan Execution — Design Document
 
-*Date: 2026-05-12*
+*Date: 2026-05-20*
 *Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, per-stage timing capture, and the first direct-binary invocation slice behind `run_PUMA_point()`; direct compile-time measurement still remains future work and is inferred from execution timings, and the direct path has not yet been integration-validated in a live McStas environment*
 
 ---
@@ -77,7 +77,8 @@ Split into two functions in `instruments/PUMA_instrument_definition.py`:
 - Takes the reusable instrument object, the per-point snapshot dict, the output folder path, and the neutron count.
 - This is the active per-point execution seam, called from `TAVIController.run_simulation()`.
 - The live code also passes a scan-local `PUMARunExecutionState` that tracks whether direct execution is armed, the resolved binary path/cwd, and the resolved MPI launcher argv.
-- Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=False, increment_folder_name=False)`.
+- Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=not execution_state.first_backengine_succeeded, increment_folder_name=False)`.
+    - The first point that reaches `backengine()` in a scan therefore forces compilation/materialization so build-time settings are refreshed before later points reuse the materialized binary/direct path.
     - **Critical**: `increment_folder_name=False` is required because `ManagedMcrun` defaults to `True`, which would silently create `scan_0000_0` instead of `scan_0000` if the folder already exists, resulting in postprocessing reading from the wrong folder.
 - Calls `instrument.set_parameters(**params_snapshot['params'])`.
 - Calls `instrument.backengine()`. The first executed point still relies on this path to materialize the executable and preserve McStasData behavior used elsewhere in the controller.

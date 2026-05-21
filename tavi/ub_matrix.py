@@ -3,15 +3,16 @@
 Implements the Busing-Levy (1967) UB matrix formalism for crystal orientation
 on a triple-axis neutron spectrometer.
 
-The UB matrix transforms Miller indices (HKL) to lab-frame Q vectors:
-    Q_lab = UB @ [H, K, L]
+The UB matrix transforms Miller indices (HKL) to mounted-sample Q vectors:
+    Q_sample = UB @ [H, K, L]
 
 where:
-    B = reciprocal lattice metric matrix (from lattice parameters)
-    U = crystal orientation matrix (orthogonal rotation, determined from Bragg peaks)
-    UB = U @ B (combined transformation)
+    B = reciprocal lattice metric matrix in the component's local sample frame
+    U = static mount orientation matrix, determined from Bragg peaks
+    UB = U @ B (combined transformation into the mounted sample frame)
 
-Convention: a* along x, b* in xy-plane, c* general (matching reciprocal_space.py).
+Convention: scalar lattice parameters use the TAS component frame:
+a* along x, b* in the horizontal xz-plane, c* vertical-ish along y.
 """
 import math
 import base64
@@ -19,6 +20,9 @@ import struct
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
+
+from tavi.sample_mount import reciprocal_basis_tas
+from tavi.tas_geometry import instrument_q_to_component_q, q_instrument_from_angles
 
 
 # Obfuscation key for training hash encoding (not cryptographic security)
@@ -36,7 +40,7 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
     The B matrix transforms Miller indices to Cartesian reciprocal-space coordinates:
         Q_crystal = B @ [H, K, L]
 
-    Convention: a* along x, b* in xy-plane, c* general.
+    Convention: a* along x, b* in the horizontal xz-plane, c* general.
 
     Args:
         a, b, c: Lattice parameters in Angstroms.
@@ -45,6 +49,8 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
     Returns:
         np.ndarray: 3x3 B matrix.
     """
+    return reciprocal_basis_tas(a, b, c, alpha, beta, gamma)
+
     alpha_r = math.radians(alpha)
     beta_r = math.radians(beta)
     gamma_r = math.radians(gamma)
@@ -101,7 +107,8 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
 def angles_to_q_lab(sth, saz, stt, ki, kf):
     """Convert instrument angles to Q vector in lab frame.
 
-    Uses the same formulas as PUMA_instrument_definition.calculate_q_and_deltaE.
+    Uses the same public Q convention as PUMA_instrument_definition, then
+    converts into mounted component coordinates for UB fitting.
 
     Args:
         sth: Sample theta (omega) in degrees.
@@ -113,16 +120,23 @@ def angles_to_q_lab(sth, saz, stt, ki, kf):
     Returns:
         np.ndarray: [qx, qy, qz] in inverse Angstroms.
     """
-    stt_r = math.radians(stt)
-    sth_r = math.radians(sth)
-    saz_r = math.radians(saz)
+    q_instrument = q_instrument_from_angles(sth, saz, stt, ki, kf)
+    return instrument_q_to_component_q(q_instrument)
 
-    Q_mag = math.sqrt(ki**2 + kf**2 - 2*ki*kf*math.cos(stt_r))
-    qx = Q_mag * math.cos(sth_r - stt_r / 2)
-    qy = Q_mag * math.sin(sth_r - stt_r / 2)
-    qz = -kf * math.tan(saz_r)
 
-    return np.array([qx, qy, qz])
+def validate_rotation_matrix(matrix: np.ndarray, atol: float = 1e-3) -> np.ndarray:
+    """Return matrix as float array if it is a proper 3D rotation."""
+    rotation = np.asarray(matrix, dtype=float)
+    if rotation.shape != (3, 3):
+        raise ValueError("Rotation matrix must be 3x3.")
+    if not np.all(np.isfinite(rotation)):
+        raise ValueError("Rotation matrix contains non-finite values.")
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=atol):
+        raise ValueError("Derived U is not orthogonal; UB does not describe a physical mount rotation.")
+    det = float(np.linalg.det(rotation))
+    if not math.isclose(det, 1.0, abs_tol=atol):
+        raise ValueError(f"Derived U must be a proper rotation with det=+1; got det={det:.6g}.")
+    return rotation
 
 
 @dataclass
@@ -144,7 +158,7 @@ class ObservedPeak:
 
     @property
     def q_lab(self) -> np.ndarray:
-        """Compute Q in lab frame from stored angles and wavevectors."""
+        """Compute Q in mounted sample frame from stored angles and wavevectors."""
         sth, saz, stt = self.angles
         if self.ki <= 0 or self.kf <= 0:
             return np.array([0.0, 0.0, 0.0])
@@ -389,8 +403,8 @@ def refine_lattice_from_peaks(peaks: list, initial_lattice: tuple,
 def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
     """Analyze the scattering plane defined by the current UB matrix.
 
-    The instrument scattering plane is the xy-plane (qz=0).
-    With U applied, crystal directions map to lab frame via U @ B.
+    The instrument scattering plane is the mounted sample xz-plane (qy=0).
+    With U applied, crystal directions map to mounted sample frame via U @ B.
 
     Args:
         U: 3x3 orientation matrix.
@@ -401,8 +415,7 @@ def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
     """
     UB = U @ B
 
-    # The lab z-axis (out of scattering plane) in crystal HKL coordinates
-    # Q_lab = UB @ hkl => hkl = UB^{-1} @ Q_lab
+    # The mounted sample y-axis (out of scattering plane) in crystal HKL coordinates.
     try:
         UB_inv = np.linalg.inv(UB)
     except np.linalg.LinAlgError:
@@ -414,29 +427,28 @@ def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
             'omega_offset_deg': 0.0,
         }
 
-    # The lab z direction in HKL space (plane normal)
-    z_lab = np.array([0.0, 0.0, 1.0])
-    plane_normal_hkl = UB_inv @ z_lab
+    y_sample = np.array([0.0, 1.0, 0.0])
+    plane_normal_hkl = UB_inv @ y_sample
 
-    # In-plane vectors: lab x and y in HKL space
-    x_lab = np.array([1.0, 0.0, 0.0])
-    y_lab = np.array([0.0, 1.0, 0.0])
-    in_plane_v1 = UB_inv @ x_lab
-    in_plane_v2 = UB_inv @ y_lab
+    # In-plane vectors: mounted sample x and z in HKL space.
+    x_sample = np.array([1.0, 0.0, 0.0])
+    z_sample = np.array([0.0, 0.0, 1.0])
+    in_plane_v1 = UB_inv @ x_sample
+    in_plane_v2 = UB_inv @ z_sample
 
-    # Chi misalignment: angle between crystal c* axis and lab z
+    # Chi misalignment: angle between crystal c* axis and vertical sample y.
     # c* direction in crystal frame = B @ [0,0,1]
     c_star_crystal = B @ np.array([0.0, 0.0, 1.0])
     c_star_lab = U @ c_star_crystal
     c_star_lab_norm = c_star_lab / np.linalg.norm(c_star_lab)
 
     # Angle from horizontal plane (complement of angle with z)
-    chi_mis = math.degrees(math.asin(np.clip(c_star_lab_norm[2], -1, 1)))
+    chi_mis = math.degrees(math.asin(np.clip(c_star_lab_norm[1], -1, 1)))
 
-    # Omega offset: rotation of a* from lab x in the xy-plane
+    # Omega offset: rotation of a* from sample x in the horizontal xz-plane.
     a_star_crystal = B @ np.array([1.0, 0.0, 0.0])
     a_star_lab = U @ a_star_crystal
-    omega_offset = math.degrees(math.atan2(a_star_lab[1], a_star_lab[0]))
+    omega_offset = math.degrees(math.atan2(a_star_lab[2], a_star_lab[0]))
 
     return {
         'plane_normal_hkl': tuple(plane_normal_hkl),
@@ -450,8 +462,8 @@ def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
 class UBMatrix:
     """Manages the UB matrix for crystal orientation on a TAS.
 
-    The UB matrix transforms Miller indices to lab-frame Q:
-        Q_lab = UB @ [H, K, L]
+    The UB matrix transforms Miller indices to mounted-sample Q:
+        Q_sample = UB @ [H, K, L]
 
     where B encodes the lattice and U encodes the crystal orientation.
     """
@@ -499,9 +511,7 @@ class UBMatrix:
 
     def set_U(self, U: np.ndarray):
         """Set the U orientation matrix directly."""
-        U = np.asarray(U, dtype=float)
-        if U.shape != (3, 3):
-            raise ValueError("U must be a 3x3 matrix.")
+        U = validate_rotation_matrix(U)
         self._U = U.copy()
         self._UB = self._U @ self._B
 
@@ -510,12 +520,13 @@ class UBMatrix:
         UB = np.asarray(UB, dtype=float)
         if UB.shape != (3, 3):
             raise ValueError("UB must be a 3x3 matrix.")
-        self._UB = UB.copy()
         try:
             B_inv = np.linalg.inv(self._B)
-            self._U = self._UB @ B_inv
-        except np.linalg.LinAlgError:
-            self._U = np.eye(3)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("Cannot extract U because the B matrix is singular.") from exc
+        U = validate_rotation_matrix(UB @ B_inv)
+        self._U = U.copy()
+        self._UB = UB.copy()
 
     def reset_U(self):
         """Reset U to identity (no orientation)."""
