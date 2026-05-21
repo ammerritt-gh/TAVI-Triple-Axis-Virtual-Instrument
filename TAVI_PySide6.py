@@ -30,7 +30,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    simple_plot_scan_commands, display_existing_data,
                                    read_parameters_from_file, write_1D_scan, write_2D_scan)
 from tavi.utilities import parse_scan_steps, incremented_path_writing
-from tavi.reciprocal_space import update_Q_from_HKL_direct, update_HKL_from_Q_direct
+from tavi.sample_mount import SampleMount
+from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_component_q
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
@@ -675,8 +676,33 @@ class TAVIController(QObject):
         scan_puma_config.pbl_hgap = vals['pbl_hgap']
         scan_puma_config.pbl_vgap = vals['pbl_vgap']
         scan_puma_config.dbl_hgap = vals['dbl_hgap']
+        scan_puma_config.sample_mount = self._build_sample_mount(vals)
         scan_puma_config.update_diagnostic_settings(diagnostic_settings)
         return scan_puma_config
+
+    def _build_sample_mount(self, vals):
+        """Build the current component-agnostic sample mount from GUI lattice + UB."""
+        local_ub_matrix = copy.deepcopy(self.ub_matrix)
+        local_ub_matrix.set_lattice(
+            vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+            vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
+        )
+        return SampleMount.from_lattice_tas(
+            vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+            vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
+            R_mount=local_ub_matrix.U,
+        )
+
+    def _hkl_to_sample_q(self, H, K, L, vals):
+        """Convert HKL to public instrument/GUI Q using the current sample mount."""
+        q_component = self._build_sample_mount(vals).hkl_to_q(H, K, L)
+        q = component_q_to_instrument_q(q_component)
+        return float(q[0]), float(q[1]), float(q[2])
+
+    def _sample_q_to_hkl(self, qx, qy, qz, vals):
+        """Convert public instrument/GUI Q to HKL using the current sample mount."""
+        q_component = instrument_q_to_component_q([qx, qy, qz])
+        return self._build_sample_mount(vals).q_to_hkl(*q_component)
 
     def _collect_simulation_launch_state(self):
         """Freeze GUI state before starting the simulation worker thread."""
@@ -1340,14 +1366,7 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            if not self.ub_matrix.is_identity:
-                H, K, L = self.ub_matrix.q_to_hkl(vals['qx'], vals['qy'], vals['qz'])
-            else:
-                H, K, L = update_HKL_from_Q_direct(
-                    vals['qx'], vals['qy'], vals['qz'],
-                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
-                )
+            H, K, L = self._sample_q_to_hkl(vals['qx'], vals['qy'], vals['qz'], vals)
             self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
@@ -1386,14 +1405,7 @@ class TAVIController(QObject):
                 return
             
             self.updating = True
-            if not self.ub_matrix.is_identity:
-                qx, qy, qz = self.ub_matrix.hkl_to_q(H, K, L)
-            else:
-                qx, qy, qz = update_Q_from_HKL_direct(
-                    H, K, L,
-                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
-                )
+            qx, qy, qz = self._hkl_to_sample_q(H, K, L, vals)
             self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
@@ -1428,15 +1440,7 @@ class TAVIController(QObject):
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
-            # Recalculate HKL from current Q with new lattice parameters
-            if not self.ub_matrix.is_identity:
-                H, K, L = self.ub_matrix.q_to_hkl(qx, qy, qz)
-            else:
-                H, K, L = update_HKL_from_Q_direct(
-                    qx, qy, qz,
-                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
-                )
+            H, K, L = self._sample_q_to_hkl(qx, qy, qz, vals)
             self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
             self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
@@ -1637,6 +1641,11 @@ class TAVIController(QObject):
         if v1 == v2:
             return f"⚠ Both commands scan '{v1}' - use different parameters"
         
+        q_vars = {"qx", "qy", "qz"}
+        hkl_vars = {"h", "k", "l"}
+        if (v1 in q_vars and v2 in hkl_vars) or (v1 in hkl_vars and v2 in q_vars):
+            return "Conflict: Q and HKL scans describe the same target momentum under the current sample mount"
+
         # Check linked parameter groups (parameters that control the same thing)
         for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
             if v1 in group_vars and v2 in group_vars:
@@ -1678,12 +1687,12 @@ class TAVIController(QObject):
             return vals.get('K', 0)
         elif var == 'l':
             return vals.get('L', 0)
-        # Instrument angles (omega = A3, 2theta = A2)
+        # Instrument angles (A3 is calculated sample angle; omega is an offset scan)
         elif var == 'a1':
             return vals.get('mtt', 0)
         elif var == 'a2' or var == '2theta':
             return vals.get('stt', 0)
-        elif var == 'a3' or var == 'omega':
+        elif var == 'a3':
             return vals.get('omega', 0)
         elif var == 'a4':
             return vals.get('att', 0)
@@ -1692,7 +1701,7 @@ class TAVIController(QObject):
             return scan_point_template[8] if len(scan_point_template) > 8 else 0
         elif var == 'kappa':
             return scan_point_template[9] if len(scan_point_template) > 9 else 0
-        elif var == 'psi':
+        elif var == 'psi' or var == 'omega':
             return scan_point_template[10] if len(scan_point_template) > 10 else 0
         # Crystal bending
         elif var == 'rhm':
@@ -1832,17 +1841,17 @@ class TAVIController(QObject):
         scan_point_template = [
             vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
             vals['rhm'], vals['rvm'], vals['rha'], vals.get('rva', 0.8),
-            vals.get('chi', 0), vals.get('kappa', 0), vals.get('psi', 0),
+            0, vals.get('kappa', 0), vals.get('psi', 0),
             vals.get('H', 0), vals.get('K', 0), vals.get('L', 0)
         ]
         
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltae': 3,
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-            'chi': 8, 'kappa': 9, 'psi': 10,
+            'chi': 8, 'kappa': 9, 'psi': 10, 'omega': 10,
             'h': 11, 'k': 12, 'l': 13,
             'a1': 0, 'a2': 1, 'a3': 2, 'a4': 3,  # Angle mode
-            '2theta': 1, 'omega': 2,
+            '2theta': 1,
         }
         
         # Determine scan mode
@@ -1855,6 +1864,7 @@ class TAVIController(QObject):
         puma_instance.anacris = vals.get('anacris', 'PG[002]')
         puma_instance.K_fixed = vals.get('K_fixed', 'Kf Fixed')
         puma_instance.fixed_E = vals.get('fixed_E', 14.7)
+        puma_instance.sample_mount = self._build_sample_mount(vals)
         
         valid_count = 0
         invalid_count = 0
@@ -1925,10 +1935,8 @@ class TAVIController(QObject):
             elif scan_mode == "rlu":
                 H, K, L = scan_point[11], scan_point[12], scan_point[13]
                 deltaE = scan_point[3]
-                qx, qy, qz = update_Q_from_HKL_direct(
-                    H, K, L,
-                    vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                    vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                qx, qy, qz = component_q_to_instrument_q(
+                    puma_instance.sample_mount.hkl_to_q(H, K, L)
                 )
                 _, error_flags = puma_instance.calculate_angles(
                     qx, qy, qz, deltaE, puma_instance.fixed_E, puma_instance.K_fixed,
@@ -2027,9 +2035,9 @@ class TAVIController(QObject):
             # Only update if value actually changed (avoid spurious editingFinished signals)
             if not self._field_value_changed('chi', chi):
                 return
-            self.PUMA.chi = chi
+            self.PUMA.saz = chi
             self.print_to_message_center(f"Sample χ updated: {chi}° (out-of-plane)")
-            # Chi affects qz - trigger recalculation
+            # Calculated chi/saz affects qz - trigger recalculation
             self.on_angles_changed()
         except ValueError:
             self.print_to_message_center("Invalid chi value")
@@ -2955,31 +2963,16 @@ class TAVIController(QObject):
         # Initialize scan arrays
         scan_parameter_input = []
         
-        # Determine scan mode
-        scan_mode = "momentum"  # Default
-        if scan_command1:
-            try:
-                var_name_probe, _ = parse_scan_steps(scan_command1)
-                var_name_probe = self.normalize_scan_variable(var_name_probe)
-                if var_name_probe in ["qx", "qy", "qz"]:
-                    scan_mode = "momentum"
-                elif var_name_probe in ["H", "K", "L"]:
-                    scan_mode = "rlu"
-                elif var_name_probe in ["A1", "A2", "A3", "A4", "omega", "2theta"]:
-                    scan_mode = "angle"
-                elif var_name_probe in ["chi"]:
-                    scan_mode = "orientation"
-            except Exception:
-                pass
+        scan_mode = self._determine_scan_mode(scan_command1, scan_command2)
         
         # Mapping for scannable parameters
         # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-10: sample orientation (chi, kappa, psi)
-        # Note: omega maps to same index as A3, 2theta maps to same index as A2
+        # A3 is the calculated sample angle.  omega/psi are in-plane orientation offsets.
         variable_to_index = {
             'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
             'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
             'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
-            'omega': 2, '2theta': 1,  # omega = A3 (index 2), 2theta = A2 (index 1)
+            'omega': 10, '2theta': 1,
             'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
             'chi': 8, 'kappa': 9, 'psi': 10
         }
@@ -2995,12 +2988,10 @@ class TAVIController(QObject):
         elif scan_mode == "angle":
             scan_point_template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
         elif scan_mode == "orientation":
-            # For orientation scans, use current Q values but scan chi/kappa/psi
-            # Note: omega is normalized to A3, so omega scans work via angle mode
+            # For orientation scans, use current Q values but scan static offsets.
             scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        # Set default chi from instrument_dock, kappa/psi from sample_dock
-        # Note: omega is same as A3, no separate storage needed
-        scan_point_template[8] = vals['chi']
+        # Static chi offset is not the visible calculated chi/saz instrument angle.
+        scan_point_template[8] = 0
         scan_point_template[9] = vals['kappa']
         scan_point_template[10] = vals['psi']
         
@@ -3055,10 +3046,10 @@ class TAVIController(QObject):
                         scan_puma_config.monocris, scan_puma_config.anacris
                     )
                 elif scan_mode == "rlu":
-                    qx, qy, qz = update_Q_from_HKL_direct(
-                        scan_point[0], scan_point[1], scan_point[2],
-                        vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                        vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                    qx, qy, qz = component_q_to_instrument_q(
+                        scan_puma_config.sample_mount.hkl_to_q(
+                            scan_point[0], scan_point[1], scan_point[2]
+                        )
                     )
                     _, error_flags = puma_instance.calculate_angles(
                         qx, qy, qz, scan_point[3], scan_puma_config.fixed_E,
@@ -3106,10 +3097,10 @@ class TAVIController(QObject):
                             scan_puma_config.monocris, scan_puma_config.anacris
                         )
                     elif scan_mode == "rlu":
-                        qx, qy, qz = update_Q_from_HKL_direct(
-                            scan_point[0], scan_point[1], scan_point[2],
-                            vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                            vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
+                        qx, qy, qz = component_q_to_instrument_q(
+                            scan_puma_config.sample_mount.hkl_to_q(
+                                scan_point[0], scan_point[1], scan_point[2]
+                            )
                         )
                         _, error_flags = puma_instance.calculate_angles(
                             qx, qy, qz, scan_point[3], scan_puma_config.fixed_E,
