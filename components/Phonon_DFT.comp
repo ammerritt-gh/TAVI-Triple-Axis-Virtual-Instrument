@@ -1,13 +1,13 @@
 /*******************************************************************************
 *
 *  McStas, neutron ray-tracing package
-*  Copyright(C) 2025
+*  Copyright(C) 2026
 *
 * %I
-* Written by: Adrian / Claude (AI-assisted)
-* Date: 2025
-* Version: 1.0b
-* Origin: TUM
+* Written by: Adrian Merritt
+* Date: 2026
+* Version: 2.5
+* Origin: KIT
 *
 * A sample component for phonon and Bragg scattering from DFT-calculated
 * dispersions and CIF-derived structure factors.
@@ -238,6 +238,7 @@ void pdft_compute_lattice(pdft_lattice *lat,
                           double cx, double cy, double cz)
 {
   double tmp_x, tmp_y, tmp_z;
+  double oriented_V0;
   double sin_cc, cx_sq;
   
   /* If lattice vectors are given directly, use them */
@@ -276,31 +277,32 @@ void pdft_compute_lattice(pdft_lattice *lat,
   vec_prod(tmp_x, tmp_y, tmp_z,
            lat->m_bx, lat->m_by, lat->m_bz,
            lat->m_cx, lat->m_cy, lat->m_cz);
-  lat->V0 = fabs(scalar_prod(lat->m_ax, lat->m_ay, lat->m_az,
-                              tmp_x, tmp_y, tmp_z));
+  oriented_V0 = scalar_prod(lat->m_ax, lat->m_ay, lat->m_az,
+                            tmp_x, tmp_y, tmp_z);
+  lat->V0 = fabs(oriented_V0);
   
   if (lat->V0 <= 0) {
     fprintf(stderr, "Phonon_DFT: ERROR: Unit cell volume is zero or negative!\n");
     exit(-1);
   }
   
-  lat->asx = 2*PI/lat->V0 * tmp_x;
-  lat->asy = 2*PI/lat->V0 * tmp_y;
-  lat->asz = 2*PI/lat->V0 * tmp_z;
+  lat->asx = 2*PI/oriented_V0 * tmp_x;
+  lat->asy = 2*PI/oriented_V0 * tmp_y;
+  lat->asz = 2*PI/oriented_V0 * tmp_z;
   
   vec_prod(tmp_x, tmp_y, tmp_z,
            lat->m_cx, lat->m_cy, lat->m_cz,
            lat->m_ax, lat->m_ay, lat->m_az);
-  lat->bsx = 2*PI/lat->V0 * tmp_x;
-  lat->bsy = 2*PI/lat->V0 * tmp_y;
-  lat->bsz = 2*PI/lat->V0 * tmp_z;
+  lat->bsx = 2*PI/oriented_V0 * tmp_x;
+  lat->bsy = 2*PI/oriented_V0 * tmp_y;
+  lat->bsz = 2*PI/oriented_V0 * tmp_z;
   
   vec_prod(tmp_x, tmp_y, tmp_z,
            lat->m_ax, lat->m_ay, lat->m_az,
            lat->m_bx, lat->m_by, lat->m_bz);
-  lat->csx = 2*PI/lat->V0 * tmp_x;
-  lat->csy = 2*PI/lat->V0 * tmp_y;
-  lat->csz = 2*PI/lat->V0 * tmp_z;
+  lat->csx = 2*PI/oriented_V0 * tmp_x;
+  lat->csy = 2*PI/oriented_V0 * tmp_y;
+  lat->csz = 2*PI/oriented_V0 * tmp_z;
 }
 
 /* ======================================================================
@@ -1620,51 +1622,64 @@ TRACE
           lor_Binv21 = (lor_a12*lor_a31 - lor_a11*lor_a32) / lor_det;
           lor_Binv22 = (lor_a11*lor_a22 - lor_a12*lor_a21) / lor_det;
 
-          /* Step 1: Estimate Q at elastic limit (v_f = v_i) in r.l.u. */
-          imp_est_qx = V2K * (vx_i - v_i * vx);
-          imp_est_qy = V2K * (vy_i - v_i * vy);
-          imp_est_qz = V2K * (vz_i - v_i * vz);
-          imp_est_qH = lor_Binv00*imp_est_qx + lor_Binv01*imp_est_qy + lor_Binv02*imp_est_qz;
-          imp_est_qK = lor_Binv10*imp_est_qx + lor_Binv11*imp_est_qy + lor_Binv12*imp_est_qz;
-          imp_est_qL = lor_Binv20*imp_est_qx + lor_Binv21*imp_est_qy + lor_Binv22*imp_est_qz;
-          if (tessellate) pdft_fold_into_grid(&info.phonon_grid, &imp_est_qH, &imp_est_qK, &imp_est_qL);
-
-          /* Step 2: Build importance-sampling targets for each (branch, sign) */
+          /* Step 1: Build importance-sampling targets for each real phonon root.
+             The older elastic-Q estimate is asymmetric around large reciprocal
+             lattice vectors after tessellation.  Root-based centers cost more
+             up front, but keep the Lorentzian sampler centered on the same
+             energy-conservation surface that the spectral function evaluates. */
           imp_n_targets = 0;
+          ph_parms[1] = v_i;
+          ph_parms[2] = vx; ph_parms[3] = vy; ph_parms[4] = vz;
+          ph_parms[5] = vx_i; ph_parms[6] = vy_i; ph_parms[7] = vz_i;
+          ph_parms[10] = (double)tessellate;
+          {
+            pdft_phonon_grid *pg;
+            pdft_lattice *pl;
+            pg = &info.phonon_grid;
+            pl = &info.lattice;
+            memcpy(&ph_parms[11], &pg, sizeof(pdft_phonon_grid *));
+            memcpy(&ph_parms[12], &pl, sizeof(pdft_lattice *));
+          }
+
           for (lor_b = 0; lor_b < info.phonon_grid.num_branches; lor_b++) {
-            if (pdft_phonon_interp(&info.phonon_grid, imp_est_qH, imp_est_qK, imp_est_qL, lor_b,
-                                   &imp_E_est, &imp_I_est, &imp_G_est) != 0)
-              continue;
-            if (fabs(imp_E_est) < 1e-10) continue;  /* skip acoustic at zone center */
-
-            /* Linewidth in energy: per-point or global, FWHM -> HWHM */
-            imp_gamma_est = (imp_G_est > 0) ? imp_G_est : phonon_gamma;
-            if (imp_gamma_est <= 0) imp_gamma_est = phonon_gamma;
-            imp_gamma_est *= 0.5;  /* FWHM -> HWHM */
-
-            /* Stokes: v_f^2 = v_i^2 - E_s/VS2E */
-            imp_vf_sq = v_i * v_i - imp_E_est / VS2E;
-            if (imp_vf_sq > 1e-6 && imp_n_targets < PDFT_MAX_BRANCHES * 2) {
-              imp_vf_targets[imp_n_targets] = sqrt(imp_vf_sq);
-              /* Transform HWHM from energy to v_f space: dE/dvf = 2*VS2E*vf */
-              imp_sigma_vf = imp_gamma_est / (2.0 * VS2E * imp_vf_targets[imp_n_targets]);
-              if (imp_sigma_vf < 10.0) imp_sigma_vf = 10.0;  /* floor: ~10 m/s min width */
-              imp_vf_sigmas[imp_n_targets] = imp_sigma_vf;
-              imp_n_targets++;
-            }
-
-            /* Anti-Stokes: v_f^2 = v_i^2 + E_s/VS2E */
-            imp_vf_sq = v_i * v_i + imp_E_est / VS2E;
-            if (imp_vf_sq > 1e-6 && imp_n_targets < PDFT_MAX_BRANCHES * 2) {
-              imp_vf_targets[imp_n_targets] = sqrt(imp_vf_sq);
-              imp_sigma_vf = imp_gamma_est / (2.0 * VS2E * imp_vf_targets[imp_n_targets]);
-              if (imp_sigma_vf < 10.0) imp_sigma_vf = 10.0;
-              imp_vf_sigmas[imp_n_targets] = imp_sigma_vf;
-              imp_n_targets++;
+            for (ph_sign = -1; ph_sign <= 1 && imp_n_targets < PDFT_MAX_BRANCHES * 2; ph_sign += 2) {
+              ph_parms[8] = (double)lor_b;
+              ph_parms[9] = (double)ph_sign;
+              for (ph_step = 0; ph_step < phonon_e_steps && imp_n_targets < PDFT_MAX_BRANCHES * 2; ph_step++) {
+                if (ph_sign > 0) {
+                  ph_step_lo = v_i * ph_step / phonon_e_steps;
+                  ph_step_hi = v_i * (ph_step + 1) / phonon_e_steps;
+                } else {
+                  ph_step_lo = v_i + (lor_vf_max - v_i) * ph_step / phonon_e_steps;
+                  ph_step_hi = v_i + (lor_vf_max - v_i) * (ph_step + 1) / phonon_e_steps;
+                }
+                if (ph_step_lo < 1e-3) ph_step_lo = 1e-3;
+                ph_root_vf = pdft_zridd(ph_step_lo, ph_step_hi, ph_parms, PDFT_ROOTACC);
+                if (ph_root_vf != PDFT_UNUSED && ph_root_vf > 1e-3) {
+                  imp_est_qx = V2K * (vx_i - ph_root_vf * vx);
+                  imp_est_qy = V2K * (vy_i - ph_root_vf * vy);
+                  imp_est_qz = V2K * (vz_i - ph_root_vf * vz);
+                  imp_est_qH = lor_Binv00*imp_est_qx + lor_Binv01*imp_est_qy + lor_Binv02*imp_est_qz;
+                  imp_est_qK = lor_Binv10*imp_est_qx + lor_Binv11*imp_est_qy + lor_Binv12*imp_est_qz;
+                  imp_est_qL = lor_Binv20*imp_est_qx + lor_Binv21*imp_est_qy + lor_Binv22*imp_est_qz;
+                  if (tessellate) pdft_fold_into_grid(&info.phonon_grid, &imp_est_qH, &imp_est_qK, &imp_est_qL);
+                  imp_G_est = 0;
+                  pdft_phonon_interp(&info.phonon_grid, imp_est_qH, imp_est_qK, imp_est_qL, lor_b,
+                                     &imp_E_est, &imp_I_est, &imp_G_est);
+                  imp_gamma_est = (imp_G_est > 0) ? imp_G_est : phonon_gamma;
+                  if (imp_gamma_est <= 0) imp_gamma_est = phonon_gamma;
+                  imp_gamma_est *= 0.5;  /* FWHM -> HWHM */
+                  imp_vf_targets[imp_n_targets] = ph_root_vf;
+                  imp_sigma_vf = imp_gamma_est / (2.0 * VS2E * ph_root_vf);
+                  if (imp_sigma_vf < 10.0) imp_sigma_vf = 10.0;
+                  imp_vf_sigmas[imp_n_targets] = imp_sigma_vf;
+                  imp_n_targets++;
+                }
+              }
             }
           }
 
-          /* Step 3: Sample v_f from mixture.
+          /* Step 2: Sample v_f from mixture.
              PDF = (1-w_uni) * (1/N) * sum_j Lor(v_f; center_j, sigma_j) + w_uni / vf_range
              where w_uni = 0.1 ensures coverage even far from branches.
              If no targets found, fall back to pure uniform. */
@@ -1747,15 +1762,15 @@ TRACE
 
             /* Lorentzian: L(omega, omega_s, Gamma) = (Gamma/pi) / ((omega - omega_s)^2 + Gamma^2)
                Evaluate for both +omega_s (Stokes) and -omega_s (anti-Stokes) */
-            /* Stokes: neutron loses energy, creates phonon */
-            lor_denom = (lor_omega - lor_E_ph)*(lor_omega - lor_E_ph) + lor_gamma_use*lor_gamma_use;
-            lor_lorentz = (lor_gamma_use / PI) / lor_denom;
-            lor_S_total += lor_I_ph * lor_lorentz * pdft_nbose(lor_omega, T);
+			/* Stokes: omega_neutron = +omega_s → Bose = n(omega_s) + 1 */
+			lor_denom = (lor_omega - lor_E_ph)*(lor_omega - lor_E_ph) + lor_gamma_use*lor_gamma_use;
+			lor_lorentz = (lor_gamma_use / PI) / lor_denom;
+			lor_S_total += lor_I_ph * lor_lorentz * pdft_nbose(lor_E_ph, T);  // E_ph > 0 → n+1
 
-            /* Anti-Stokes: neutron gains energy, absorbs phonon */
-            lor_denom = (lor_omega + lor_E_ph)*(lor_omega + lor_E_ph) + lor_gamma_use*lor_gamma_use;
-            lor_lorentz = (lor_gamma_use / PI) / lor_denom;
-            lor_S_total += lor_I_ph * lor_lorentz * pdft_nbose(-lor_omega, T);
+			/* Anti-Stokes: omega_neutron = -omega_s → Bose = n(omega_s) */
+			lor_denom = (lor_omega + lor_E_ph)*(lor_omega + lor_E_ph) + lor_gamma_use*lor_gamma_use;
+			lor_lorentz = (lor_gamma_use / PI) / lor_denom;
+			lor_S_total += lor_I_ph * lor_lorentz * pdft_nbose(-lor_E_ph, T); // -E_ph < 0 → n
           }
 
           /* Outgoing path length */
