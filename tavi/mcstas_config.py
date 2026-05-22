@@ -250,29 +250,34 @@ def resolve_mpi_launcher_argv():
 
 
 def _probe_standalone_install(base_dir):
-    """Given a McStas base directory (e.g. C:/mcstas-3.5.16), find mcrun and resources.
+    """Given a McStas base directory (e.g. C:/mcstas-3.5.16 or a conda env), find mcrun and resources.
 
     Returns (mcrun_path, mcstas_path) or (None, None).
 
     Handles several Windows McStas layouts:
         base/bin/mcrun.bat
-        base/lib/              (components directly here — misc/ present)
-        base/lib/mcstas/<ver>/ (versioned subdirectory — misc/ present)
-        base/share/mcstas/resources/  (conda-style)
-        base/Library/share/mcstas/resources/  (Windows conda variant)
+        base/Library/bin/mcrun.bat  (Windows conda/micromamba)
+        base/Scripts/mcrun.bat      (some Python/conda layouts)
+        base/lib/                   (components directly here — misc/ present)
+        base/lib/mcstas/<ver>/      (versioned subdirectory — misc/ present)
+        base/share/mcstas/resources/
+        base/Library/share/mcstas/resources/
     """
     base = Path(base_dir)
     if not base.is_dir():
         return None, None
 
     # --- Find mcrun ---
-    bin_dir = base / "bin"
     mcrun = None
-    if bin_dir.is_dir():
+    for bin_dir in (base / "Library" / "bin", base / "Scripts", base / "bin"):
+        if not bin_dir.is_dir():
+            continue
         for candidate in ["mcrun.bat", "mcrun.exe", "mcrun", "mcrun.pl"]:
             if (bin_dir / candidate).exists():
                 mcrun = str(bin_dir)
                 break
+        if mcrun:
+            break
 
     # --- Find component resources ---
     mcstas_resources = None
@@ -339,6 +344,34 @@ def _search_windows_default_locations():
     return candidates
 
 
+def _normalize_mcstas_resources_path(path):
+    """Return the actual component resources directory for a McStas path-like value."""
+    if not path:
+        return None
+    p = Path(path)
+    candidates = [
+        p,
+        p / "resources",
+        p / "share" / "mcstas" / "resources",
+        p / "Library" / "share" / "mcstas" / "resources",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and ((candidate / "misc").exists() or (candidate / "monitors").exists() or (candidate / "sources").exists()):
+            return str(candidate)
+    return str(p) if p.is_dir() else None
+
+
+def _has_mcstas_component(mcstas_path, component_name):
+    """Check whether a McStas component .comp file is visible under a resources path."""
+    root = _normalize_mcstas_resources_path(mcstas_path)
+    if not root:
+        return False
+    try:
+        return any(Path(root).rglob(component_name + ".comp"))
+    except OSError:
+        return False
+
+
 def detect_mcstas():
     """Detect McStas installation and return (mcrun_path, mcstas_path).
 
@@ -346,9 +379,18 @@ def detect_mcstas():
     """
     config = _load_local_config()
 
+    # Strategy 0: Explicit environment variable from launcher/user.
+    env_mcstas = os.environ.get("MCSTAS") or os.environ.get("MCSTAS_COMPONENT_PATH")
+    env_mcstas = _normalize_mcstas_resources_path(env_mcstas)
+    if env_mcstas:
+        mcrun, _ = _probe_conda_env()
+        if mcrun:
+            print(f"[TAVI] Using McStas from environment: {env_mcstas}")
+            return mcrun, env_mcstas
+
     # Strategy 1: Explicit paths from config file
     explicit_mcrun = config.get("mcrun_path")
-    explicit_mcstas = config.get("mcstas_path")
+    explicit_mcstas = _normalize_mcstas_resources_path(config.get("mcstas_path"))
     if explicit_mcrun and explicit_mcstas:
         if Path(explicit_mcrun).is_dir() and Path(explicit_mcstas).is_dir():
             print(f"[TAVI] Using explicit McStas config: mcrun={explicit_mcrun}, lib={explicit_mcstas}")
@@ -398,18 +440,25 @@ def configure_mcstasscript(mcrun_path=None, mcstas_path=None):
 
     Call this once at application startup, before any ms.McStas_instr() calls.
     """
-    try:
-        import mcstasscript as ms
-    except ImportError:
-        print("[TAVI] Error: mcstasscript is not installed")
-        return False
-
     if mcrun_path is None or mcstas_path is None:
         mcrun_path, mcstas_path = detect_mcstas()
+
+    mcstas_path = _normalize_mcstas_resources_path(mcstas_path)
 
     if mcrun_path is None or mcstas_path is None:
         print("[TAVI] Error: Cannot configure McStasScript — McStas not found")
         print("[TAVI]   Edit config/mcstas_config.json with your McStas paths")
+        return False
+
+    # Set environment variables before importing/using McStasScript. Some McStasScript
+    # internals read these directly when constructing component readers.
+    os.environ["MCSTAS"] = str(mcstas_path)
+    os.environ["MCSTAS_COMPONENT_PATH"] = str(mcstas_path)
+
+    try:
+        import mcstasscript as ms
+    except ImportError:
+        print("[TAVI] Error: mcstasscript is not installed")
         return False
 
     try:
@@ -419,6 +468,8 @@ def configure_mcstasscript(mcrun_path=None, mcstas_path=None):
         print(f"[TAVI] McStasScript configured:")
         print(f"[TAVI]   mcrun:  {mcrun_path}")
         print(f"[TAVI]   mcstas: {mcstas_path}")
+        if not _has_mcstas_component(mcstas_path, "Progress_bar"):
+            print(f"[TAVI] Warning: Progress_bar.comp was not found under {mcstas_path}")
         return True
     except Exception as e:
         print(f"[TAVI] Error configuring McStasScript: {e}")
