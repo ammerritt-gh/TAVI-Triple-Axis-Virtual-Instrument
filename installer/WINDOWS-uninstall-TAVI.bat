@@ -68,13 +68,13 @@ if not exist "%MICROMAMBA_DIR%\micromamba.exe" (
 
 :: Check whether the tavi env exists before trying to remove it
 set "ENV_EXISTS=0"
-for /f "tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" env list 2^>nul') do (
+for /f "tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" -r "%MICROMAMBA_DIR%" env list 2^>nul') do (
     if /I "%%E"=="%ENV_NAME%" set "ENV_EXISTS=1"
 )
 
 if "%ENV_EXISTS%"=="1" (
     echo [INFO] Removing environment '%ENV_NAME%'...
-    "%MICROMAMBA_DIR%\micromamba.exe" env remove -n %ENV_NAME% -y
+    "%MICROMAMBA_DIR%\micromamba.exe" -r "%MICROMAMBA_DIR%" env remove -n %ENV_NAME% -y
     if !errorlevel! neq 0 (
         echo [WARN] Environment removal reported errors. Continuing...
     ) else (
@@ -99,13 +99,13 @@ if not exist "%MICROMAMBA_DIR%" (
 
 :: Check whether any other environments exist
 set "OTHER_ENVS=0"
-for /f "skip=2 tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" env list 2^>nul') do (
+for /f "skip=2 tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" -r "%MICROMAMBA_DIR%" env list 2^>nul') do (
     if /I not "%%E"=="base" set "OTHER_ENVS=1"
 )
 
 if "%OTHER_ENVS%"=="1" (
     echo [INFO] Other micromamba environments were found:
-    "%MICROMAMBA_DIR%\micromamba.exe" env list 2>nul
+    "%MICROMAMBA_DIR%\micromamba.exe" -r "%MICROMAMBA_DIR%" env list 2>nul
     echo.
     echo [INFO] Removing micromamba would also delete the environments listed above.
 )

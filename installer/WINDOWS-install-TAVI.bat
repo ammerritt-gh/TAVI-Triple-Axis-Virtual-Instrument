@@ -15,8 +15,7 @@ setlocal EnableDelayedExpansion
 ::   4.  Creates or fully reconciles the 'tavi' conda environment
 ::   5.  Clones TAVI at a pinned release tag, or checks out that tag on update
 ::   6.  Configures McStasScript
-::   7.  Creates launcher scripts that bootstrap the compiler environment,
-::       and a desktop shortcut
+::   7.  Creates launcher scripts and a desktop shortcut
 ::
 :: Usage: WINDOWS-install-TAVI.bat [--verbose]
 :: =============================================================================
@@ -24,18 +23,6 @@ setlocal EnableDelayedExpansion
 :: ---------------------------------------------------------------------------
 :: RELEASE PINS  — update these when cutting a new installer release
 :: ---------------------------------------------------------------------------
-::
-:: TAVI_VERSION: the GitHub tag to install.
-::   Set to "main" only during active development; published installers should
-::   always pin a release tag such as "v1.0.0".
-::
-:: PYTHON_VERSION: must match the version used in run-tavi-dev.bat.
-::   Confirm with: micromamba run -n tavi-dev python --version
-::
-:: MAMBA_VERSION / EXPECTED_SHA256: micromamba release to pin.
-::   Find the correct SHA256 at:
-::   https://github.com/mamba-org/micromamba-releases/releases
-::
 set "TAVI_VERSION=main"
 set "PYTHON_VERSION=3.11"
 set "MAMBA_VERSION=2.5.0-1"
@@ -73,17 +60,30 @@ echo Environment name       : %ENV_NAME%
 echo Python version         : %PYTHON_VERSION%
 echo TAVI release           : %TAVI_VERSION%
 echo.
+echo This installer will:
+echo   1. Check for Visual Studio C++ compiler and Microsoft MPI SDK
+echo   2. Install micromamba package manager to:
+echo        %MICROMAMBA_DIR%
+echo   3. Create a 'tavi' conda environment with McStas and Python
+echo   4. Download TAVI to:
+echo        %INSTALL_DIR%
+echo   5. Configure McStasScript
+echo   6. Create launcher scripts in %INSTALL_DIR%
+echo   7. Place a "TAVI Launcher" shortcut on your desktop
+echo.
+choice /C YN /M "Proceed with installation"
+if errorlevel 2 (
+    echo [INFO] Installation cancelled.
+    pause
+    exit /b 0
+)
+echo.
 
 :: =============================================================================
 :: Step 0: Check prerequisites
 :: =============================================================================
 echo [Step 0/6] Checking prerequisites...
 
-:: ---------------------------------------------------------------------------
-:: 0a: Visual Studio — detect via vswhere.exe
-::     vswhere ships with VS 2017+ and handles non-year directory names
-::     (e.g. VS 2026 installs to \18\ rather than \2026\).
-:: ---------------------------------------------------------------------------
 set "VS_FOUND=0"
 set "VCVARS="
 
@@ -117,8 +117,8 @@ if exist "!VSWHERE!" (
 
 if "!VS_FOUND!"=="1" (
     echo [OK] Visual Studio C++ compiler found.
-    echo [INFO] vcvarsall.bat  : !VCVARS!
-    echo [INFO] Generated launchers will call vcvarsall.bat x64 before starting TAVI.
+    echo [INFO] vcvarsall.bat : !VCVARS!
+    echo [INFO] Launchers will call vcvarsall.bat x64 before starting TAVI.
 ) else (
     echo.
     echo ============================================================================
@@ -140,9 +140,6 @@ if "!VS_FOUND!"=="1" (
 )
 echo.
 
-:: ---------------------------------------------------------------------------
-:: 0b: Microsoft MPI SDK — optional, required for NMO/MPI workflows
-:: ---------------------------------------------------------------------------
 set "MPI_FOUND=0"
 set "MPI_INCLUDE=C:\Program Files (x86)\Microsoft SDKs\MPI\Include"
 set "MPI_LIB=C:\Program Files (x86)\Microsoft SDKs\MPI\Lib\x64"
@@ -218,7 +215,10 @@ if "!NEEDS_DOWNLOAD!"=="1" (
     )
 )
 
-"%MICROMAMBA_DIR%\micromamba.exe" shell init --shell cmd.exe -p "%MICROMAMBA_DIR%" >nul 2>&1
+:: Run shell init in a subprocess — it registers the root prefix for future
+:: micromamba calls, but modifies cmd.exe hooks in ways that break the current
+:: session if run inline. The subprocess isolates us from that side effect.
+cmd /c ""%MICROMAMBA_DIR%\micromamba.exe" shell init --shell cmd.exe -p "%MICROMAMBA_DIR%"" >nul 2>&1
 "%MICROMAMBA_DIR%\micromamba.exe" config append channels conda-forge 2>nul
 "%MICROMAMBA_DIR%\micromamba.exe" config set channel_priority strict 2>nul
 echo [OK] Micromamba ready.
@@ -226,10 +226,6 @@ echo.
 
 :: =============================================================================
 :: Step 2: Create or fully reconcile the 'tavi' conda environment
-:: =============================================================================
-:: The CONDA_PACKAGES list is the single source of truth for the environment.
-:: Both fresh creates and in-place reconciles use the same list, so re-running
-:: this installer on an existing environment converges to the same state.
 :: =============================================================================
 echo [Step 2/6] Setting up Python environment with McStas...
 
@@ -290,10 +286,22 @@ echo.
 :: =============================================================================
 echo [Step 3/6] Setting up TAVI (release: %TAVI_VERSION%)...
 
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-cd /d "%INSTALL_DIR%"
+if not exist "%INSTALL_DIR%" (
+    mkdir "%INSTALL_DIR%"
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to create install directory: %INSTALL_DIR%
+        pause
+        exit /b 1
+    )
+)
 
 if exist "%INSTALL_DIR%\.git" (
+    cd /d "%INSTALL_DIR%"
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to change to install directory: %INSTALL_DIR%
+        pause
+        exit /b 1
+    )
     echo [INFO] Existing repository found. Fetching and checking out %TAVI_VERSION%...
     "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git fetch origin
     if !errorlevel! neq 0 (
@@ -305,27 +313,55 @@ if exist "%INSTALL_DIR%\.git" (
         echo [WARN] Could not check out %TAVI_VERSION%. Keeping current state.
         goto :step3_done
     )
-    :: For a branch (e.g. main), pull latest; for a tag, this is a no-op
-    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git pull origin %TAVI_VERSION% >nul 2>&1
-    echo [OK] TAVI updated to %TAVI_VERSION%.
+    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git pull --ff-only origin %TAVI_VERSION%
+    if !errorlevel! neq 0 (
+        echo [WARN] Fast-forward pull failed. Keeping checked-out local state.
+    ) else (
+        echo [OK] TAVI updated to %TAVI_VERSION%.
+    )
     goto :step3_done
 )
 
-:: Fresh clone
 set "DIR_EMPTY=1"
 for /f %%a in ('dir /b "%INSTALL_DIR%" 2^>nul') do set "DIR_EMPTY=0"
 
 if "!DIR_EMPTY!"=="0" (
-    echo [INFO] Install directory is not empty. Cloning to temp folder first...
-    set "TEMP_CLONE=%TEMP%\TAVI_clone_%RANDOM%"
-    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone --branch %TAVI_VERSION% https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git "!TEMP_CLONE!"
-    if !errorlevel! neq 0 goto :clone_failed
-    xcopy /E /Y /Q "!TEMP_CLONE!\*" "%INSTALL_DIR%\" >nul 2>&1
-    rd /s /q "!TEMP_CLONE!" >nul 2>&1
-) else (
-    "%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone --branch %TAVI_VERSION% https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git .
-    if !errorlevel! neq 0 goto :clone_failed
+    echo [WARN] %INSTALL_DIR% exists but is not a Git repository.
+    set "BACKUP_NAME=TAVI_backup_%RANDOM%_%RANDOM%"
+    echo [INFO] Moving existing folder to: %USERPROFILE%\!BACKUP_NAME!
+    cd /d "%USERPROFILE%"
+    ren "TAVI" "!BACKUP_NAME!"
+    if !errorlevel! neq 0 (
+        echo [ERROR] Could not move existing TAVI folder out of the way.
+        echo [INFO] Close any Explorer, editor, or terminal window using %INSTALL_DIR% and retry.
+        pause
+        exit /b 1
+    )
+    mkdir "%INSTALL_DIR%"
+    if !errorlevel! neq 0 (
+        echo [ERROR] Failed to recreate install directory: %INSTALL_DIR%
+        pause
+        exit /b 1
+    )
 )
+
+cd /d "%INSTALL_DIR%"
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to change to install directory: %INSTALL_DIR%
+    pause
+    exit /b 1
+)
+
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% git clone --branch %TAVI_VERSION% --single-branch https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git .
+if !errorlevel! neq 0 goto :clone_failed
+
+if not exist "%INSTALL_DIR%\TAVI_PySide6.py" (
+    echo [ERROR] Clone completed, but TAVI_PySide6.py was not found.
+    echo [INFO] The repository layout may have changed or the checkout failed.
+    pause
+    exit /b 1
+)
+
 echo [OK] TAVI %TAVI_VERSION% cloned.
 goto :step3_done
 
@@ -344,16 +380,7 @@ echo.
 :: =============================================================================
 echo [Step 4/6] Configuring McStasScript...
 
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c ^
-"import os, sys, mcstasscript as ms;" ^
-"env = sys.prefix;" ^
-"bin_candidates = [os.path.join(env, d) for d in ['Library\\bin', 'bin']];" ^
-"bin_path = next((d for d in bin_candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), bin_candidates[-1]);" ^
-"lib_path = None;" ^
-"[lib_path := next((os.path.join(base, v) for v in sorted(os.listdir(base), reverse=True) if os.path.isdir(os.path.join(base, v))), base) for base in [os.path.join(env, 'Library', 'share', 'mcstas'), os.path.join(env, 'share', 'mcstas')] if os.path.isdir(base) and lib_path is None];" ^
-"c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path);" ^
-"print('[TAVI] McStasScript configured:'); print('[TAVI]   mcrun: ', bin_path); print('[TAVI]   mcstas:', lib_path)"
-
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys, mcstasscript as ms; env = sys.prefix; bin_candidates = [os.path.join(env, d) for d in ['Library\\bin', 'bin']]; bin_path = next((d for d in bin_candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), bin_candidates[-1]); lib_path = None; [lib_path := next((os.path.join(base, v) for v in sorted(os.listdir(base), reverse=True) if os.path.isdir(os.path.join(base, v))), base) for base in [os.path.join(env, 'Library', 'share', 'mcstas'), os.path.join(env, 'share', 'mcstas')] if os.path.isdir(base) and lib_path is None]; c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path); print('[TAVI] McStasScript configured:'); print('[TAVI]   mcrun: ', bin_path); print('[TAVI]   mcstas:', lib_path)"
 if !errorlevel! neq 0 (
     echo [WARN] McStasScript auto-configuration failed.
     echo [INFO] Configure manually after launch:
@@ -367,159 +394,131 @@ echo.
 if not exist "%INSTALL_DIR%\output" mkdir "%INSTALL_DIR%\output"
 
 :: =============================================================================
-:: Step 6: Generate launcher scripts with compiler + MPI bootstrap
+:: Step 6: Create launcher scripts and desktop shortcut
 :: =============================================================================
-:: All generated launchers share a common bootstrap helper (tavi-bootstrap.bat)
-:: that calls vcvarsall.bat x64 and injects MPI paths before launching TAVI.
-:: This means compile-on-first-run works correctly from any entry point.
+:: NOTE: Launcher scripts are written line-by-line instead of with one large
+:: parenthesized echo block. This prevents cmd.exe from mis-parsing generated
+:: text containing parentheses, quoted Program Files paths, or &&.
 :: =============================================================================
 echo [Step 6/6] Creating launcher scripts...
 
-set "BOOTSTRAP_SCRIPT=%INSTALL_DIR%\tavi-bootstrap.bat"
 set "RUN_SCRIPT=%INSTALL_DIR%\run-tavi.bat"
 set "UPDATE_SCRIPT=%INSTALL_DIR%\update-tavi.bat"
 set "LAUNCHER_SCRIPT=%INSTALL_DIR%\TAVI-Launcher.bat"
 
 :: ------------------------------------------------------------------
-:: tavi-bootstrap.bat  — shared compiler + MPI setup helper
-:: Called as: tavi-bootstrap.bat python TAVI_PySide6.py
-::            tavi-bootstrap.bat git fetch origin
+:: run-tavi.bat — write line-by-line, not with one parenthesized echo block.
+:: This avoids cmd.exe parsing failures from paths like "Program Files (x86)"
+:: and from generated commands containing &&, (, or ).
 :: ------------------------------------------------------------------
->"!BOOTSTRAP_SCRIPT!" (
-    echo @echo off
-    echo :: tavi-bootstrap.bat
-    echo :: Shared bootstrap helper for all TAVI launcher scripts.
-    echo :: Calls vcvarsall.bat, injects MPI paths, then runs the command in %%*.
-    echo :: Do not run this script directly.
-    echo setlocal
-    echo.
-)
-if "!VS_FOUND!"=="1" (
-    >>"!BOOTSTRAP_SCRIPT!" (
-        echo :: Bootstrap Visual Studio compiler environment
-        echo call "!VCVARS!" x64 ^>nul
-        echo if errorlevel 1 echo [WARN] vcvarsall.bat returned an error. Compilation may fail.
-        echo.
-    )
-) else (
-    >>"!BOOTSTRAP_SCRIPT!" (
-        echo :: No Visual Studio compiler was detected at install time.
-        echo :: Re-run WINDOWS-install-TAVI.bat after installing Visual Studio Build Tools.
-        echo.
-    )
-)
-if "!MPI_FOUND!"=="1" (
-    >>"!BOOTSTRAP_SCRIPT!" (
-        echo :: Append Microsoft MPI SDK paths for NMO/MPI workflows
-        echo set "INCLUDE=%%INCLUDE%%;!MPI_INCLUDE!"
-        echo set "LIB=%%LIB%%;!MPI_LIB!"
-        echo.
-    )
-) else (
-    >>"!BOOTSTRAP_SCRIPT!" (
-        echo :: Microsoft MPI SDK was not found at install time.
-        echo :: NMO/MPI workflows will be unavailable.
-        echo.
-    )
-)
->>"!BOOTSTRAP_SCRIPT!" (
-    echo :: Run the requested command inside the tavi conda environment
-    echo cd /d "!INSTALL_DIR!"
-    echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! %%*
-    echo endlocal
-)
+type nul > "!RUN_SCRIPT!"
+>>"!RUN_SCRIPT!" echo @echo off
+>>"!RUN_SCRIPT!" echo setlocal
+>>"!RUN_SCRIPT!" echo cd /d "!INSTALL_DIR!"
+>>"!RUN_SCRIPT!" echo.
 
-:: ------------------------------------------------------------------
-:: run-tavi.bat
-:: ------------------------------------------------------------------
->"!RUN_SCRIPT!" (
-    echo @echo off
-    echo setlocal
-    echo call "!BOOTSTRAP_SCRIPT!" python TAVI_PySide6.py
-    echo if errorlevel 1 pause
-    echo endlocal
-)
+if not "!VS_FOUND!"=="1" goto :skip_run_vs_write
+>>"!RUN_SCRIPT!" echo :: Bootstrap Visual Studio compiler environment
+>>"!RUN_SCRIPT!" echo call "!VCVARS!" x64
+:skip_run_vs_write
+
+if not "!MPI_FOUND!"=="1" goto :skip_run_mpi_write
+>>"!RUN_SCRIPT!" echo :: Append Microsoft MPI SDK paths
+>>"!RUN_SCRIPT!" echo set "INCLUDE=%%INCLUDE%%;!MPI_INCLUDE!"
+>>"!RUN_SCRIPT!" echo set "LIB=%%LIB%%;!MPI_LIB!"
+:skip_run_mpi_write
+
+>>"!RUN_SCRIPT!" echo.
+>>"!RUN_SCRIPT!" echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! python TAVI_PySide6.py
+>>"!RUN_SCRIPT!" echo if errorlevel 1 pause
+>>"!RUN_SCRIPT!" echo endlocal
 
 :: ------------------------------------------------------------------
 :: update-tavi.bat
 :: ------------------------------------------------------------------
->"!UPDATE_SCRIPT!" (
-    echo @echo off
-    echo setlocal
-    echo echo ============================================================================
-    echo echo                       TAVI Update Script
-    echo echo                       Pinned release: %TAVI_VERSION%
-    echo echo ============================================================================
-    echo echo.
-    echo echo [INFO] Fetching from GitHub...
-    echo call "!BOOTSTRAP_SCRIPT!" git fetch origin
-    echo echo [INFO] Checking out %TAVI_VERSION%...
-    echo call "!BOOTSTRAP_SCRIPT!" git checkout %TAVI_VERSION%
-    echo call "!BOOTSTRAP_SCRIPT!" git pull origin %TAVI_VERSION%
-    echo if errorlevel 1 ^(
-    echo     echo [ERROR] Update failed. Check your internet connection.
-    echo ^) else ^(
-    echo     echo [OK] TAVI updated to %TAVI_VERSION%.
-    echo ^)
-    echo echo.
-    echo echo [INFO] Updating pip packages...
-    echo call "!BOOTSTRAP_SCRIPT!" pip install --upgrade PySide6 mcstasscript
-    echo echo.
-    echo echo Update complete. Press any key to exit.
-    echo pause ^>nul
-    echo endlocal
-)
+type nul > "!UPDATE_SCRIPT!"
+>>"!UPDATE_SCRIPT!" echo @echo off
+>>"!UPDATE_SCRIPT!" echo setlocal
+>>"!UPDATE_SCRIPT!" echo echo ============================================================================
+>>"!UPDATE_SCRIPT!" echo echo                       TAVI Update Script
+>>"!UPDATE_SCRIPT!" echo echo                       Pinned release: %TAVI_VERSION%
+>>"!UPDATE_SCRIPT!" echo echo ============================================================================
+>>"!UPDATE_SCRIPT!" echo echo.
+>>"!UPDATE_SCRIPT!" echo cd /d "!INSTALL_DIR!"
+>>"!UPDATE_SCRIPT!" echo echo [INFO] Fetching from GitHub...
+>>"!UPDATE_SCRIPT!" echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! git fetch origin
+>>"!UPDATE_SCRIPT!" echo echo [INFO] Checking out %TAVI_VERSION%...
+>>"!UPDATE_SCRIPT!" echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! git checkout %TAVI_VERSION%
+>>"!UPDATE_SCRIPT!" echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! git pull --ff-only origin %TAVI_VERSION%
+>>"!UPDATE_SCRIPT!" echo if errorlevel 1 ^(
+>>"!UPDATE_SCRIPT!" echo     echo [ERROR] Update failed. Check your internet connection or local changes.
+>>"!UPDATE_SCRIPT!" echo ^) else ^(
+>>"!UPDATE_SCRIPT!" echo     echo [OK] TAVI updated to %TAVI_VERSION%.
+>>"!UPDATE_SCRIPT!" echo ^)
+>>"!UPDATE_SCRIPT!" echo echo.
+>>"!UPDATE_SCRIPT!" echo echo [INFO] Updating pip packages...
+>>"!UPDATE_SCRIPT!" echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! pip install --upgrade PySide6 mcstasscript
+>>"!UPDATE_SCRIPT!" echo echo.
+>>"!UPDATE_SCRIPT!" echo echo Update complete. Press any key to exit.
+>>"!UPDATE_SCRIPT!" echo pause
+>>"!UPDATE_SCRIPT!" echo endlocal
 
 :: ------------------------------------------------------------------
 :: TAVI-Launcher.bat
 :: ------------------------------------------------------------------
->"!LAUNCHER_SCRIPT!" (
-    echo @echo off
-    echo setlocal
-    echo title TAVI Launcher
-    echo :menu
-    echo cls
-    echo echo ============================================================================
-    echo echo                         TAVI Launcher
-    echo echo                  Triple Axis Virtual Instrument
-    echo echo                  Release: %TAVI_VERSION%
-    echo echo ============================================================================
-    echo echo.
-    echo echo   [1] Run TAVI
-    echo echo   [2] Update TAVI
-    echo echo   [3] Open TAVI folder
-    echo echo   [4] Open TAVI shell ^(for debugging^)
-    echo echo   [5] Exit
-    echo echo.
-    echo choice /C 12345 /M "Select option"
-    echo.
-    echo if errorlevel 5 exit /b 0
-    echo if errorlevel 4 goto :shell
-    echo if errorlevel 3 goto :folder
-    echo if errorlevel 2 goto :update
-    echo if errorlevel 1 goto :run
-    echo goto :menu
-    echo.
-    echo :run
-    echo call "!RUN_SCRIPT!"
-    echo goto :menu
-    echo.
-    echo :update
-    echo call "!UPDATE_SCRIPT!"
-    echo goto :menu
-    echo.
-    echo :folder
-    echo explorer "!INSTALL_DIR!"
-    echo goto :menu
-    echo.
-    echo :shell
-    echo call "!BOOTSTRAP_SCRIPT!" cmd /k "echo TAVI Shell Ready ^&^& echo Type 'python TAVI_PySide6.py' to run TAVI"
-    echo goto :menu
-    echo endlocal
-)
+type nul > "!LAUNCHER_SCRIPT!"
+>>"!LAUNCHER_SCRIPT!" echo @echo off
+>>"!LAUNCHER_SCRIPT!" echo setlocal
+>>"!LAUNCHER_SCRIPT!" echo title TAVI Launcher
+>>"!LAUNCHER_SCRIPT!" echo :menu
+>>"!LAUNCHER_SCRIPT!" echo cls
+>>"!LAUNCHER_SCRIPT!" echo echo ============================================================================
+>>"!LAUNCHER_SCRIPT!" echo echo                         TAVI Launcher
+>>"!LAUNCHER_SCRIPT!" echo echo                  Triple Axis Virtual Instrument
+>>"!LAUNCHER_SCRIPT!" echo echo                  Release: %TAVI_VERSION%
+>>"!LAUNCHER_SCRIPT!" echo echo ============================================================================
+>>"!LAUNCHER_SCRIPT!" echo echo.
+>>"!LAUNCHER_SCRIPT!" echo echo   [1] Run TAVI
+>>"!LAUNCHER_SCRIPT!" echo echo   [2] Update TAVI
+>>"!LAUNCHER_SCRIPT!" echo echo   [3] Open TAVI folder
+>>"!LAUNCHER_SCRIPT!" echo echo   [4] Open TAVI shell ^(for debugging^)
+>>"!LAUNCHER_SCRIPT!" echo echo   [5] Exit
+>>"!LAUNCHER_SCRIPT!" echo echo.
+>>"!LAUNCHER_SCRIPT!" echo choice /C 12345 /M "Select option"
+>>"!LAUNCHER_SCRIPT!" echo.
+>>"!LAUNCHER_SCRIPT!" echo if errorlevel 5 exit /b 0
+>>"!LAUNCHER_SCRIPT!" echo if errorlevel 4 goto :shell
+>>"!LAUNCHER_SCRIPT!" echo if errorlevel 3 goto :folder
+>>"!LAUNCHER_SCRIPT!" echo if errorlevel 2 goto :update
+>>"!LAUNCHER_SCRIPT!" echo if errorlevel 1 goto :run
+>>"!LAUNCHER_SCRIPT!" echo goto :menu
+>>"!LAUNCHER_SCRIPT!" echo.
+>>"!LAUNCHER_SCRIPT!" echo :run
+>>"!LAUNCHER_SCRIPT!" echo call "!RUN_SCRIPT!"
+>>"!LAUNCHER_SCRIPT!" echo goto :menu
+>>"!LAUNCHER_SCRIPT!" echo.
+>>"!LAUNCHER_SCRIPT!" echo :update
+>>"!LAUNCHER_SCRIPT!" echo call "!UPDATE_SCRIPT!"
+>>"!LAUNCHER_SCRIPT!" echo goto :menu
+>>"!LAUNCHER_SCRIPT!" echo.
+>>"!LAUNCHER_SCRIPT!" echo :folder
+>>"!LAUNCHER_SCRIPT!" echo explorer "!INSTALL_DIR!"
+>>"!LAUNCHER_SCRIPT!" echo goto :menu
+>>"!LAUNCHER_SCRIPT!" echo.
+>>"!LAUNCHER_SCRIPT!" echo :shell
+>>"!LAUNCHER_SCRIPT!" echo cd /d "!INSTALL_DIR!"
+>>"!LAUNCHER_SCRIPT!" echo "!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! cmd /k "echo TAVI Shell Ready ^&^& echo Type 'python TAVI_PySide6.py' to run TAVI"
+>>"!LAUNCHER_SCRIPT!" echo goto :menu
+>>"!LAUNCHER_SCRIPT!" echo endlocal
 
-:: Desktop shortcut
-powershell -NoProfile -Command "$s = (New-Object -Com WScript.Shell).CreateShortcut([System.Environment]::ExpandEnvironmentVariables('%USERPROFILE%\Desktop\TAVI Launcher.lnk')); $s.TargetPath = '!LAUNCHER_SCRIPT!'; $s.WorkingDirectory = '!INSTALL_DIR!'; $s.Description = 'TAVI - Triple Axis Virtual Instrument'; $s.Save()"
+:: ------------------------------------------------------------------
+:: Desktop shortcut — use the same approach as the original installer
+:: ------------------------------------------------------------------
+echo [INFO] Creating desktop shortcut...
+set "PS_DESKTOP=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
+set "PS_TARGET=!LAUNCHER_SCRIPT!"
+set "PS_WORKDIR=!INSTALL_DIR!"
+powershell -NoProfile -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut([System.Environment]::ExpandEnvironmentVariables('!PS_DESKTOP!')); $Shortcut.TargetPath = '!PS_TARGET!'; $Shortcut.WorkingDirectory = '!PS_WORKDIR!'; $Shortcut.Description = 'TAVI - Triple Axis Virtual Instrument'; $Shortcut.Save()"
 if !errorlevel! equ 0 (
     echo [OK] Desktop shortcut created.
 ) else (
@@ -537,10 +536,16 @@ echo ===========================================================================
 echo.
 echo TAVI %TAVI_VERSION% installed to: %INSTALL_DIR%
 echo.
-echo Compiler bootstrap : !VCVARS!
-if "!VS_FOUND!"=="0" echo                  : [NOT FOUND - simulations may fail to compile]
-echo MPI SDK            : !MPI_INCLUDE!
-if "!MPI_FOUND!"=="0" echo                  : [NOT FOUND - NMO/MPI workflows unavailable]
+if "!VS_FOUND!"=="1" (
+    echo Compiler bootstrap : !VCVARS!
+) else (
+    echo Compiler bootstrap : [NOT FOUND - simulations may fail to compile]
+)
+if "!MPI_FOUND!"=="1" (
+    echo MPI SDK            : !MPI_INCLUDE!
+) else (
+    echo MPI SDK            : [NOT FOUND - NMO/MPI workflows unavailable]
+)
 echo.
 echo To run TAVI:
 echo   - Double-click "TAVI Launcher" on your desktop
@@ -548,12 +553,7 @@ echo   - Or run: !LAUNCHER_SCRIPT!
 echo.
 echo First-run note:
 echo   The first simulation point compiles the McStas instrument (~10-30s).
-echo   Later points in a multi-point scan reuse the compiled binary and are
-echo   significantly faster.
-echo.
-echo Validation note:
-echo   Run at least one 2-point scan after installation to confirm both the
-echo   first-point compile and subsequent direct-binary execution work correctly.
+echo   Later points reuse the compiled binary and are significantly faster.
 echo.
 echo ============================================================================
 echo.
