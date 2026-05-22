@@ -25,6 +25,7 @@ setlocal EnableDelayedExpansion
 :: ---------------------------------------------------------------------------
 set "TAVI_VERSION=main"
 set "PYTHON_VERSION=3.11"
+set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
 set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
 :: ---------------------------------------------------------------------------
@@ -34,6 +35,11 @@ if "%1"=="--verbose" set "VERBOSE=1"
 if "%1"=="-v" set "VERBOSE=1"
 
 title TAVI Installer
+
+:: Clean up broken micromamba/mamba cmd.exe AutoRun hooks left by earlier installers.
+:: AutoRun is executed by every nested cmd.exe. If it is malformed, FOR /F command
+:: substitutions and cmd /c calls can print garbage commands and corrupt installer flow.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='HKCU:\Software\Microsoft\Command Processor'; $v=(Get-ItemProperty -Path $p -Name AutoRun -ErrorAction SilentlyContinue).AutoRun; if ($v -and ($v -match 'micromamba|mamba')) { Remove-ItemProperty -Path $p -Name AutoRun -ErrorAction SilentlyContinue; Write-Host '[INFO] Removed stale micromamba cmd AutoRun hook.' }" 2>nul
 
 echo ============================================================================
 echo                    TAVI Installation Script
@@ -58,6 +64,7 @@ echo Installation directory : %INSTALL_DIR%
 echo Micromamba directory   : %MICROMAMBA_DIR%
 echo Environment name       : %ENV_NAME%
 echo Python version         : %PYTHON_VERSION%
+echo McStas version         : %MCSTAS_VERSION%
 echo TAVI release           : %TAVI_VERSION%
 echo.
 echo This installer will:
@@ -215,10 +222,10 @@ if "!NEEDS_DOWNLOAD!"=="1" (
     )
 )
 
-:: Run shell init in a subprocess — it registers the root prefix for future
-:: micromamba calls, but modifies cmd.exe hooks in ways that break the current
-:: session if run inline. The subprocess isolates us from that side effect.
-cmd /c ""%MICROMAMBA_DIR%\micromamba.exe" shell init --shell cmd.exe -p "%MICROMAMBA_DIR%"" >nul 2>&1
+:: Do NOT run `micromamba shell init` here.
+:: It writes a cmd.exe AutoRun hook, and malformed AutoRun hooks cause later
+:: nested cmd.exe commands to spew fragments such as 'ho', 'et', and 'Step'.
+:: The installer uses explicit `micromamba run` calls and does not need shell init.
 "%MICROMAMBA_DIR%\micromamba.exe" config append channels conda-forge 2>nul
 "%MICROMAMBA_DIR%\micromamba.exe" config set channel_priority strict 2>nul
 echo [OK] Micromamba ready.
@@ -229,7 +236,7 @@ echo.
 :: =============================================================================
 echo [Step 2/6] Setting up Python environment with McStas...
 
-set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas mcstas-core numpy scipy matplotlib h5py pyyaml git"
+set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git"
 
 set "ENV_EXISTS=0"
 for /f "tokens=1" %%E in ('"%MICROMAMBA_DIR%\micromamba.exe" env list 2^>nul') do (
@@ -380,7 +387,7 @@ echo.
 :: =============================================================================
 echo [Step 4/6] Configuring McStasScript...
 
-"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys, mcstasscript as ms; env = sys.prefix; bin_candidates = [os.path.join(env, d) for d in ['Library\\bin', 'bin']]; bin_path = next((d for d in bin_candidates if any(os.path.exists(os.path.join(d, e)) for e in ['mcrun.exe', 'mcrun.bat', 'mcrun'])), bin_candidates[-1]); lib_path = None; [lib_path := next((os.path.join(base, v) for v in sorted(os.listdir(base), reverse=True) if os.path.isdir(os.path.join(base, v))), base) for base in [os.path.join(env, 'Library', 'share', 'mcstas'), os.path.join(env, 'share', 'mcstas')] if os.path.isdir(base) and lib_path is None]; c = ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path); print('[TAVI] McStasScript configured:'); print('[TAVI]   mcrun: ', bin_path); print('[TAVI]   mcstas:', lib_path)"
+"%MICROMAMBA_DIR%\micromamba.exe" run -n %ENV_NAME% python -c "import os, sys, mcstasscript as ms; env=sys.prefix; bin_candidates=[os.path.join(env,d) for d in ['Library\\bin','Scripts','bin']]; bin_path=next((d for d in bin_candidates if any(os.path.exists(os.path.join(d,e)) for e in ['mcrun.exe','mcrun.bat','mcrun','mcrun.pl'])), None); res_candidates=[os.path.join(env,'share','mcstas','resources'), os.path.join(env,'Library','share','mcstas','resources')]; lib_path=next((d for d in res_candidates if os.path.isdir(d)), None); assert bin_path, 'Could not find mcrun directory in '+env; assert lib_path, 'Could not find McStas resources directory in '+env; progress=[]; import pathlib; progress=list(pathlib.Path(lib_path).rglob('Progress_bar.comp')); print('[TAVI] Progress_bar candidates:', progress[:3]); assert progress, 'Progress_bar.comp was not found under '+lib_path; c=ms.Configurator(); c.set_mcrun_path(bin_path); c.set_mcstas_path(lib_path); print('[TAVI] McStasScript configured:'); print('[TAVI]   mcrun: ', bin_path); print('[TAVI]   mcstas:', lib_path)"
 if !errorlevel! neq 0 (
     echo [WARN] McStasScript auto-configuration failed.
     echo [INFO] Configure manually after launch:
@@ -415,6 +422,16 @@ type nul > "!RUN_SCRIPT!"
 >>"!RUN_SCRIPT!" echo @echo off
 >>"!RUN_SCRIPT!" echo setlocal
 >>"!RUN_SCRIPT!" echo cd /d "!INSTALL_DIR!"
+>>"!RUN_SCRIPT!" echo.
+>>"!RUN_SCRIPT!" echo :: Detect McStas resources inside the micromamba environment
+>>"!RUN_SCRIPT!" echo for /f "usebackq delims=" %%%%I in ^(`"!MICROMAMBA_DIR!\micromamba.exe" run -n !ENV_NAME! python -c "from pathlib import Path; import sys; p=Path(sys.prefix); candidates=[p/'share'/'mcstas'/'resources', p/'Library'/'share'/'mcstas'/'resources']; print(next((str(c) for c in candidates if c.exists()), ''))"`^) do set "MCSTAS=%%%%I"
+>>"!RUN_SCRIPT!" echo if not defined MCSTAS ^(
+>>"!RUN_SCRIPT!" echo     echo [ERROR] Could not find McStas resources in the !ENV_NAME! environment.
+>>"!RUN_SCRIPT!" echo     pause
+>>"!RUN_SCRIPT!" echo     exit /b 1
+>>"!RUN_SCRIPT!" echo ^)
+>>"!RUN_SCRIPT!" echo set "MCSTAS_COMPONENT_PATH=%%MCSTAS%%"
+>>"!RUN_SCRIPT!" echo echo [TAVI] MCSTAS=%%MCSTAS%%
 >>"!RUN_SCRIPT!" echo.
 
 if not "!VS_FOUND!"=="1" goto :skip_run_vs_write
@@ -535,6 +552,7 @@ echo                    Installation Complete!
 echo ============================================================================
 echo.
 echo TAVI %TAVI_VERSION% installed to: %INSTALL_DIR%
+echo McStas %MCSTAS_VERSION% installed in environment: %ENV_NAME%
 echo.
 if "!VS_FOUND!"=="1" (
     echo Compiler bootstrap : !VCVARS!
