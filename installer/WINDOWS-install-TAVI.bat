@@ -5,7 +5,7 @@ setlocal DisableDelayedExpansion
 :: Conservative batch style: no micromamba shell init, no generated echo blocks,
 :: no delayed expansion, and no nested cmd AutoRun dependency except where unavoidable.
 
-set "TAVI_VERSION=main"
+set "TAVI_VERSION=v1.1.0"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
