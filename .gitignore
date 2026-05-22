@@ -368,14 +368,12 @@ output/
 # Config files
 config/
 
-# Configuration directory (user-specific settings)
-config/
-
 # McStas generated files
 *.html
 *.c
 *.out
 mcstas_*
+!tavi/mcstas_config.py
 PUMA_McScript.exe
 PUMA_McScript.instr
 
