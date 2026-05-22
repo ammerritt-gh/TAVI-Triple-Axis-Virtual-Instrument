@@ -1,11 +1,12 @@
 @echo off
 setlocal DisableDelayedExpansion
 
-:: TAVI Windows installer - fixed8
+:: TAVI Windows installer - release-pinned v1.1.0
 :: Conservative batch style: no micromamba shell init, no generated echo blocks,
 :: no delayed expansion, and no nested cmd AutoRun dependency except where unavoidable.
 
-set "TAVI_VERSION=main"
+set "TAVI_VERSION=v1.1.0"
+set "INSTALLER_VERSION=v1.1.0"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
@@ -26,6 +27,11 @@ echo                    TAVI Installation Script
 echo                 Triple Axis Virtual Instrument
 echo                 Release: %TAVI_VERSION%
 echo ============================================================================
+echo Installer version: %INSTALLER_VERSION%
+echo TAVI version:      %TAVI_VERSION%
+echo Python version:    %PYTHON_VERSION%
+echo McStas version:    %MCSTAS_VERSION%
+echo Micromamba:        %MAMBA_VERSION%
 echo.
 
 echo This installer will set up TAVI for this Windows user account.
@@ -240,12 +246,22 @@ if exist "%INSTALL_DIR%" (
 goto clone_repo
 
 :update_repo
-echo [INFO] Existing TAVI Git repository found. Updating...
+echo [INFO] Existing TAVI Git repository found.
+echo [INFO] Pinning checkout to release tag %TAVI_VERSION%...
 cd /d "%INSTALL_DIR%"
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% git fetch origin
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% git checkout %TAVI_VERSION%
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% git pull --ff-only origin %TAVI_VERSION%
-if errorlevel 1 echo [WARN] Git update reported an error; continuing with current checkout.
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% git fetch --tags origin
+if errorlevel 1 (
+    echo [ERROR] Failed to fetch tags from GitHub.
+    pause
+    exit /b 1
+)
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% git checkout "%TAVI_VERSION%"
+if errorlevel 1 (
+    echo [ERROR] Failed to check out release tag %TAVI_VERSION%.
+    echo [INFO] Confirm the tag exists on GitHub before running this installer.
+    pause
+    exit /b 1
+)
 goto verify_repo
 
 :clone_repo
@@ -256,7 +272,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% git clone --branch %TAVI_VERSION% --single-branch https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git .
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% git clone --branch "%TAVI_VERSION%" --depth 1 --single-branch https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git .
 if errorlevel 1 (
     echo [ERROR] Failed to clone TAVI.
     pause
@@ -266,6 +282,12 @@ if errorlevel 1 (
 :verify_repo
 if not exist "%INSTALL_DIR%\TAVI_PySide6.py" (
     echo [ERROR] TAVI_PySide6.py not found after clone/update.
+    pause
+    exit /b 1
+)
+if not exist "%INSTALL_DIR%\tavi\mcstas_config.py" (
+    echo [ERROR] tavi\mcstas_config.py not found after clone/update.
+    echo [INFO] This release tag is incomplete or the file was not committed.
     pause
     exit /b 1
 )
@@ -326,17 +348,28 @@ set "UPDATE_SCRIPT=%INSTALL_DIR%\update-tavi.bat"
 set "LAUNCHER_SCRIPT=%INSTALL_DIR%\TAVI-Launcher.bat"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCnNldCAiTUNTVEFTPV9fTUNTVEFTX1JFU09VUkNFU19fIgpzZXQgIk1DU1RBU19DT01QT05FTlRfUEFUSD0lTUNTVEFTJSIKZWNobyBbVEFWSV0gTUNTVEFTPSVNQ1NUQVMlCgppZiBub3QgZXhpc3QgIiVNQ1NUQVMlIiAoCiAgICBlY2hvIFtFUlJPUl0gTWNTdGFzIHJlc291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6CiAgICBlY2hvICAgICAgICAgJU1DU1RBUyUKICAgIHBhdXNlCiAgICBleGl0IC9iIDEKKQoKaWYgbm90ICJfX1ZDVkFSU19fIj09IiIgKAogICAgY2FsbCAiX19WQ1ZBUlNfXyIgeDY0CikKCmlmIG5vdCAiX19NUElfSU5DTFVERV9fIj09IiIgc2V0ICJJTkNMVURFPSVJTkNMVURFJTtfX01QSV9JTkNMVURFX18iCmlmIG5vdCAiX19NUElfTElCX18iPT0iIiBzZXQgIkxJQj0lTElCJTtfX01QSV9MSUJfXyIKCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gcHl0aG9uIFRBVklfUHlTaWRlNi5weQppZiBlcnJvcmxldmVsIDEgcGF1c2UKZW5kbG9jYWwK')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__MCSTAS_RESOURCES__',$env:MCSTAS_RESOURCES).Replace('__VCVARS__',$env:VCVARS).Replace('__MPI_INCLUDE__',$env:MPI_INCLUDE).Replace('__MPI_LIB__',$env:MPI_LIB); Set-Content -Path $env:RUN_SCRIPT -Value $s -Encoding ASCII"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCmVjaG8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQplY2hvICAgICAgICAgICAgICAgICAgICAgICBUQVZJIFVwZGF0ZSBTY3JpcHQKZWNobyAgICAgICAgICAgICAgICAgICAgICAgUmVsZWFzZTogX19UQVZJX1ZFUlNJT05fXwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNoby4KZWNobyBbSU5GT10gRmV0Y2hpbmcgZnJvbSBHaXRIdWIuLi4KIl9fTUlDUk9NQU1CQV9FWEVfXyIgcnVuIC1uIF9fRU5WX05BTUVfXyBnaXQgZmV0Y2ggb3JpZ2luCmlmIGVycm9ybGV2ZWwgMSBnb3RvIDpmYWlsCgplY2hvIFtJTkZPXSBDaGVja2luZyBvdXQgX19UQVZJX1ZFUlNJT05fXy4uLgoiX19NSUNST01BTUJBX0VYRV9fIiBydW4gLW4gX19FTlZfTkFNRV9fIGdpdCBjaGVja291dCBfX1RBVklfVkVSU0lPTl9fCmlmIGVycm9ybGV2ZWwgMSBnb3RvIDpmYWlsCgoiX19NSUNST01BTUJBX0VYRV9fIiBydW4gLW4gX19FTlZfTkFNRV9fIGdpdCBwdWxsIC0tZmYtb25seSBvcmlnaW4gX19UQVZJX1ZFUlNJT05fXwppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNobyBbSU5GT10gVXBkYXRpbmcgcGlwIHBhY2thZ2VzLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gcGlwIGluc3RhbGwgLS11cGdyYWRlIFB5U2lkZTYgbWNzdGFzc2NyaXB0CgplY2hvLgplY2hvIFtPS10gVXBkYXRlIGNvbXBsZXRlLgpwYXVzZQpleGl0IC9iIDAKCjpmYWlsCmVjaG8gW0VSUk9SXSBVcGRhdGUgZmFpbGVkLiBDaGVjayB5b3VyIGludGVybmV0IGNvbm5lY3Rpb24gb3IgbG9jYWwgY2hhbmdlcy4KcGF1c2UKZXhpdCAvYiAxCg==')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION); Set-Content -Path $env:UPDATE_SCRIPT -Value $s -Encoding ASCII"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCmVjaG8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQplY2hvICAgICAgICAgICAgICAgICAgICAgICBUQVZJIFJlcGFpciBTY3JpcHQKZWNobyAgICAgICAgICAgICAgICAgICAgICAgUmVsZWFzZTogX19UQVZJX1ZFUlNJT05fXwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNoby4KZWNobyBUaGlzIGluc3RhbGxhdGlvbiBpcyBwaW5uZWQgdG8gcmVsZWFzZSB0YWcgX19UQVZJX1ZFUlNJT05fXy4KZWNobyBUaGlzIHNjcmlwdCByZXBhaXJzL3JlLWNoZWNrcyB0aGF0IGV4YWN0IHRhZy4gSXQgZG9lcyBub3QgcHVsbCBtYWluLgplY2hvLgplY2hvIFtJTkZPXSBGZXRjaGluZyB0YWdzIGZyb20gR2l0SHViLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGZldGNoIC0tdGFncyBvcmlnaW4KaWYgZXJyb3JsZXZlbCAxIGdvdG8gOmZhaWwKCmVjaG8gW0lORk9dIENoZWNraW5nIG91dCBfX1RBVklfVkVSU0lPTl9fLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGNoZWNrb3V0ICJfX1RBVklfVkVSU0lPTl9fIgppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNobyBbSU5GT10gVXBkYXRpbmcgcGlwIHBhY2thZ2VzIHdpdGhpbiB0aGUgcGlubmVkIGluc3RhbGxhdGlvbiBlbnZpcm9ubWVudC4uLgoiX19NSUNST01BTUJBX0VYRV9fIiBydW4gLW4gX19FTlZfTkFNRV9fIHBpcCBpbnN0YWxsIC0tdXBncmFkZSBQeVNpZGU2IG1jc3Rhc3NjcmlwdAppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNoby4KZWNobyBbT0tdIFJlcGFpciBjb21wbGV0ZS4gSW5zdGFsbGVkIHNvdXJjZSByZW1haW5zIHBpbm5lZCB0byBfX1RBVklfVkVSU0lPTl9fLgplY2hvIFRvIHVwZ3JhZGUgdG8gYSBuZXdlciBUQVZJIHJlbGVhc2UsIGRvd25sb2FkIHRoYXQgcmVsZWFzZSdzIGluc3RhbGxlci4KcGF1c2UKZXhpdCAvYiAwCgo6ZmFpbAplY2hvIFtFUlJPUl0gUmVwYWlyIGZhaWxlZC4gQ2hlY2sgeW91ciBpbnRlcm5ldCBjb25uZWN0aW9uLCBsb2NhbCBjaGFuZ2VzLCBvciB3aGV0aGVyIHRoZSB0YWcgZXhpc3RzIG9uIEdpdEh1Yi4KcGF1c2UKZXhpdCAvYiAxCg==')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION); Set-Content -Path $env:UPDATE_SCRIPT -Value $s -Encoding ASCII"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCnRpdGxlIFRBVkkgTGF1bmNoZXIKCjptZW51CmNscwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNobyAgICAgICAgICAgICAgICAgICAgICAgICBUQVZJIExhdW5jaGVyCmVjaG8gICAgICAgICAgICAgICAgICBUcmlwbGUgQXhpcyBWaXJ0dWFsIEluc3RydW1lbnQKZWNobyAgICAgICAgICAgICAgICAgIFJlbGVhc2U6IF9fVEFWSV9WRVJTSU9OX18KZWNobyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CmVjaG8uCmVjaG8gICBbMV0gUnVuIFRBVkkKZWNobyAgIFsyXSBVcGRhdGUgVEFWSQplY2hvICAgWzNdIE9wZW4gVEFWSSBmb2xkZXIKZWNobyAgIFs0XSBPcGVuIFRBVkkgc2hlbGwKZWNobyAgIFs1XSBFeGl0CmVjaG8uCmNob2ljZSAvQyAxMjM0NSAvTSAiU2VsZWN0IG9wdGlvbiIKaWYgZXJyb3JsZXZlbCA1IGV4aXQgL2IgMAppZiBlcnJvcmxldmVsIDQgZ290byA6c2hlbGwKaWYgZXJyb3JsZXZlbCAzIGdvdG8gOmZvbGRlcgppZiBlcnJvcmxldmVsIDIgZ290byA6dXBkYXRlCmlmIGVycm9ybGV2ZWwgMSBnb3RvIDpydW4KZ290byA6bWVudQoKOnJ1bgpjYWxsICJfX1JVTl9TQ1JJUFRfXyIKZ290byA6bWVudQoKOnVwZGF0ZQpjYWxsICJfX1VQREFURV9TQ1JJUFRfXyIKZ290byA6bWVudQoKOmZvbGRlcgpleHBsb3JlciAiX19JTlNUQUxMX0RJUl9fIgpnb3RvIDptZW51Cgo6c2hlbGwKY2QgL2QgIl9fSU5TVEFMTF9ESVJfXyIKIl9fTUlDUk9NQU1CQV9FWEVfXyIgcnVuIC1uIF9fRU5WX05BTUVfXyBjbWQgL2sKZ290byA6bWVudQo=')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION).Replace('__RUN_SCRIPT__',$env:RUN_SCRIPT).Replace('__UPDATE_SCRIPT__',$env:UPDATE_SCRIPT); Set-Content -Path $env:LAUNCHER_SCRIPT -Value $s -Encoding ASCII"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($env:SHORTCUT); $s.TargetPath=$env:LAUNCHER_SCRIPT; $s.WorkingDirectory=$env:INSTALL_DIR; $s.Description='TAVI Launcher'; $s.Save()" 2>nul
 
 echo [OK] Launcher scripts created.
+echo TAVI_VERSION=%TAVI_VERSION%> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo INSTALLER_VERSION=%INSTALLER_VERSION%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo PYTHON_VERSION=%PYTHON_VERSION%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo MCSTAS_VERSION=%MCSTAS_VERSION%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo MAMBA_VERSION=%MAMBA_VERSION%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo ENV_NAME=%ENV_NAME%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo ENV_PREFIX=%ENV_PREFIX%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo REPO_URL=https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo [OK] Wrote install metadata to %INSTALL_DIR%\INSTALL_INFO.txt
 echo.
 echo ============================================================================
 echo Installation complete.
 echo Installed to: %INSTALL_DIR%
 echo Environment : %ENV_NAME%
+echo TAVI version: %TAVI_VERSION%
+echo Installer   : %INSTALLER_VERSION%
 echo McStas      : %MCSTAS_VERSION%
 echo ============================================================================
 echo.
