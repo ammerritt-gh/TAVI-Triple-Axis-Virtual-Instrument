@@ -3,7 +3,7 @@
 TAVI is a graphical user interface for simulating triple-axis spectrometer (TAS) experiments using McStas, a neutron experiment simulation package. It is a Python-based GUI that runs the Pyton-based McStasScript, to call McStas, then save and display the results. Currently, it simulates the PUMA TAS at the MLZ.
 
 ## Why use TAVI?
-TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users who are not as familiar with McStas and/or neutron scattering; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan.
+TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users who are not as familiar with McStas and/or neutron scattering; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan. We see the clear optic and acoustic phonon branches dispersing away from the zone center at (2,0,0) along (H,0,0).
 
 <img width="2555" height="1389" alt="TAVI_usage_screenshot" src="https://github.com/user-attachments/assets/8d407749-adb3-4a4f-ae0a-f857e18ec29b" />
 
