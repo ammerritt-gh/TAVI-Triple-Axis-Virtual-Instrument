@@ -112,3 +112,23 @@ def test_monitor_gating_is_per_monitor():
 
 def test_descriptor_monitor_order_matches_module_table():
     assert tuple(puma_descriptor().monitors) == tuple(_PUMA_MONITORS)
+
+
+def test_alpha2_collimators_follow_selection(diag_all_instrument, plain_instrument):
+    all_names = _component_names(diag_all_instrument)   # alpha_2 = {30, 40, 60}
+    emitted = [n for n in all_names if n.startswith("sample_collimator_")
+               and n != "sample_collimator_dia"]
+    assert emitted == ["sample_collimator_40", "sample_collimator_60",
+                       "sample_collimator_30"]  # physical beam order
+
+    default_names = _component_names(plain_instrument)  # alpha_2 = {40}
+    assert "sample_collimator_40" in default_names
+    assert "sample_collimator_60" not in default_names
+    assert "sample_collimator_30" not in default_names
+
+
+def test_alpha2_table_matches_descriptor_slot():
+    from instruments.PUMA_instrument_definition import _ALPHA2_COLLIMATORS
+
+    slot = next(s for s in puma_descriptor().collimation if s.id == "alpha_2")
+    assert {d for d, *_ in _ALPHA2_COLLIMATORS} == {int(v) for v in slot.allowed}

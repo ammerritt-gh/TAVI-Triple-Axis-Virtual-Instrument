@@ -826,6 +826,17 @@ def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, 
     return data, error_flag_array, execution_info
 
 
+# alpha_2 stacked collimators: (divergence_arcmin, component_name, at_z, ymax, length).
+# Shared geometry: xwidth = 39e-3, ymin = -70e-3. Tuple order = physical beam order.
+# Divergences mirror the descriptor's alpha_2 slot values
+# (tests/test_puma_build_tree.py keeps them in sync).
+_ALPHA2_COLLIMATORS = (
+    (40, "sample_collimator_40", 0.550, 84e-3, 0.152),
+    (60, "sample_collimator_60", 0.6520, 78e-3, 0.102),
+    (30, "sample_collimator_30", 0.854, 69e-3, 0.202),
+)
+
+
 def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons):
     """Build a PUMA instrument object for repeated per-point execution."""
 
@@ -869,7 +880,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     # their sizes are computed here and override the descriptor's precomputed
     # defaults (identical for the current crystals).
     from instruments.puma_plugin import _PUMA_MONITORS
-    from tavi.instrument_helpers import emit_monitors
+    from tavi.instrument_helpers import emit_collimator, emit_monitors, emit_slit
 
     monitor = {m.id: m for m in _PUMA_MONITORS}
     enabled_monitors = diagnostic_settings if diagnostic_mode else {}
@@ -934,13 +945,9 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_monitor_group(instrument, 'Source DSD')
 
-        mono_collimator = instrument.add_component("mono_collimator", "Collimator_linear", AT=[0,0,0.925], RELATIVE="origin")
-        mono_collimator.xwidth = 40e-3
-        mono_collimator.yheight = 220e-3
-        mono_collimator.length = 0.2
-        mono_collimator.divergence = PUMA.alpha_1
-        
-        
+        emit_collimator(instrument, "mono_collimator", relative="origin",
+                        at=(0, 0, 0.925), divergence=PUMA.alpha_1, length=0.2,
+                        xwidth=40e-3, yheight=220e-3)
 
         emit_monitor_group(instrument, 'Postcollimation PSD', 'Postcollimation DSD',
                            'Premono Emonitor')
@@ -972,48 +979,27 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_monitor_group(instrument, 'Postmono Emonitor')
 
-        postmono_slit = instrument.add_component("postmono_slit", "Slit", AT=[0,0,0.286], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        postmono_slit.xwidth = "vbl_hgap_param"
-        postmono_slit.yheight = 0.142
+        emit_slit(instrument, "postmono_slit", relative="sample_arm",
+                  at=(0, 0, 0.286), rotated=(0, 0, 0),
+                  xwidth="vbl_hgap_param", yheight=0.142)
 
-        # # This is just an entrance slit
-        sample_collimator_dia = instrument.add_component("sample_collimator_dia", "Collimator_linear", AT=[0,0,0.398], RELATIVE="sample_arm")
-        sample_collimator_dia.xwidth = 39e-3
-        sample_collimator_dia.ymin = -70e-3
-        sample_collimator_dia.ymax = 77e-3
-        sample_collimator_dia.length = 0.112
-        sample_collimator_dia.divergence = 0
-        
+        # Entrance slit of the alpha_2 collimator housing
+        emit_collimator(instrument, "sample_collimator_dia", relative="sample_arm",
+                        at=(0, 0, 0.398), divergence=0, length=0.112,
+                        xwidth=39e-3, ymin=-70e-3, ymax=77e-3)
+
         emit_monitor_group(instrument, 'Pre-sample collimation PSD')
 
-        if 40 in PUMA.alpha_2:
-            sample_collimator_40 = instrument.add_component("sample_collimator_40", "Collimator_linear", AT=[0,0,0.550], RELATIVE="sample_arm")
-            sample_collimator_40.xwidth = 39e-3
-            sample_collimator_40.ymin = -70e-3
-            sample_collimator_40.ymax = 84e-3
-            sample_collimator_40.length = 0.152
-            sample_collimator_40.divergence = 40
-            
-        if 60 in PUMA.alpha_2:
-            sample_collimator_60 = instrument.add_component("sample_collimator_60", "Collimator_linear", AT=[0,0,0.6520], RELATIVE="sample_arm")
-            sample_collimator_60.xwidth = 39e-3
-            sample_collimator_60.ymin = -70e-3
-            sample_collimator_60.ymax = 78e-3
-            sample_collimator_60.length = 0.102
-            sample_collimator_60.divergence = 60
-        
-        if 30 in PUMA.alpha_2:
-            sample_collimator_30 = instrument.add_component("sample_collimator_30", "Collimator_linear", AT=[0,0,0.854], RELATIVE="sample_arm")
-            sample_collimator_30.xwidth = 39e-3
-            sample_collimator_30.ymin = -70e-3
-            sample_collimator_30.ymax = 69e-3
-            sample_collimator_30.length = 0.202
-            sample_collimator_30.divergence = 30
-        
+        for divergence, name, at_z, ymax, length in _ALPHA2_COLLIMATORS:
+            if divergence in PUMA.alpha_2:
+                emit_collimator(instrument, name, relative="sample_arm",
+                                at=(0, 0, at_z), divergence=divergence,
+                                length=length, xwidth=39e-3, ymin=-70e-3,
+                                ymax=ymax)
+
         # This is the exit beam tube
-        exit_beam_tube = instrument.add_component("exit_beam_tube", "Slit", AT=[0,0,1.1385], RELATIVE="sample_arm") 
-        exit_beam_tube.xwidth = 0.105
-        exit_beam_tube.yheight = 0.18
+        emit_slit(instrument, "exit_beam_tube", relative="sample_arm",
+                  at=(0, 0, 1.1385), xwidth=0.105, yheight=0.18)
 
         # There is no actual sample filter on PUMA.
 
@@ -1197,9 +1183,9 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         ## sample table
         
-        sample_slit = instrument.add_component("sample_slit", "Slit", AT=[0,0,PUMA.L2-0.674], RELATIVE="sample_arm")
-        sample_slit.xwidth = "pbl_hgap_param"
-        sample_slit.yheight = "pbl_vgap_param"
+        emit_slit(instrument, "sample_slit", relative="sample_arm",
+                  at=(0, 0, PUMA.L2 - 0.674),
+                  xwidth="pbl_hgap_param", yheight="pbl_vgap_param")
            
         emit_monitor_group(instrument, 'Sample PSD @ L2-0.5', 'Sample PSD @ L2-0.3',
                            'Sample PSD @ Sample', 'Sample DSD @ Sample',
@@ -1319,11 +1305,9 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         
         emit_monitor_group(instrument, 'Pre-analyzer collimation PSD')
 
-        analyzer_collimator = instrument.add_component("analyzer_collimator", "Collimator_linear", AT=[0,0,0.497], RELATIVE="analyzer_arm")
-        analyzer_collimator.xwidth = 0.05 #38e-3
-        analyzer_collimator.yheight = 1.28 #128.5e-3
-        analyzer_collimator.length = 0.2
-        analyzer_collimator.divergence = PUMA.alpha_3
+        emit_collimator(instrument, "analyzer_collimator", relative="analyzer_arm",
+                        at=(0, 0, 0.497), divergence=PUMA.alpha_3, length=0.2,
+                        xwidth=0.05, yheight=1.28)
 
         analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
         analyzer_filter.length = 0.05
@@ -1357,15 +1341,13 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_monitor_group(instrument, 'Post-analyzer EMonitor', 'Post-analyzer PSD')
 
-        detector_collimator = instrument.add_component("detector_collimator", "Collimator_linear", AT=[0,0,0.509], RELATIVE="detector_arm")
-        detector_collimator.xwidth = 30e-3
-        detector_collimator.yheight = 79e-3
-        detector_collimator.length = 0.2
-        detector_collimator.divergence = PUMA.alpha_4
+        emit_collimator(instrument, "detector_collimator", relative="detector_arm",
+                        at=(0, 0, 0.509), divergence=PUMA.alpha_4, length=0.2,
+                        xwidth=30e-3, yheight=79e-3)
 
-        detector_slit = instrument.add_component("detector_slit", "Slit", AT=[0,0,PUMA.L4-0.03], ROTATED=[0,0,0], RELATIVE="detector_arm")
-        detector_slit.xwidth = "dbl_hgap_param"
-        detector_slit.yheight = 0.07
+        emit_slit(instrument, "detector_slit", relative="detector_arm",
+                  at=(0, 0, PUMA.L4 - 0.03), rotated=(0, 0, 0),
+                  xwidth="dbl_hgap_param", yheight=0.07)
 
         emit_monitor_group(instrument, 'Detector PSD')
 
