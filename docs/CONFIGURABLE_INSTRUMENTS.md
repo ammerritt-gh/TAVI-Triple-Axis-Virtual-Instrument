@@ -1,10 +1,13 @@
 # Configurable Instruments — Research & Plan
 
 **Status:** Design decided; Phase-0 drafted; review §15 folded in (§16);
-pre-implementation audit done and Phase 1 + 1.5 fully specified (§17). Ready to
-implement.
+pre-implementation audit + spec in §17. **Phase 1 + 1.5 IMPLEMENTED
+(2026-07-02):** PUMA runs through the registry/`InstrumentPlugin` contract, the
+controller contains no "PUMA" literal, the descriptor validator gates startup,
+and 42 contract tests pass (54 total with the geometry suite). Next: Phase 2.
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
-incorporated 2026-06-18; audit + implementation spec 2026-07-02.
+incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
+2026-07-02.
 **Decision summary:** Instruments are Python modules (imperative `build()` +
 structured GUI descriptor + physics hooks), selected at startup and fixed per
 session. Per-instrument libraries. First two instruments: PUMA, then IN8 (ILL).
@@ -482,12 +485,18 @@ the draft, then Phase 1 wires PUMA behind it.
 > widget-from-descriptor work into the first de-PUMA pass, or a PUMA regression
 > becomes hard to attribute.
 
-**Phase 1 — Registry + contract, PUMA as a plugin (routing only).**
+**Phase 1 — Registry + contract, PUMA as a plugin (routing only). ✅ IMPLEMENTED 2026-07-02.**
 > **Fully specified in §17** (2026-07-02): file-by-file change list, controller
 > edit groups, commit sequencing, and verification checklist. The bullets below
 > remain the intent; §17 is the executable spec and supersedes them where they
 > differ (notably: `new_state` split per §5, and the Phase-0 example descriptor
 > must gain 8 missing sample-orientation/mount parameters).
+> **Implementation verified** (§17.8): 54 pytest tests pass; the `.instr`
+> generated through the full plugin path (`default_state` → `scan_config` →
+> `build`) is byte-identical to the pre-change baseline modulo McStasScript's
+> `* Date:` header stamp; the GUI launch matrix (no flag / `--instrument puma` /
+> `--instrument nope`) behaves as specified; the real `config/runtimes.json`
+> (63 "PUMA" records) migrates to `"puma"` on load.
 - Introduce `instruments/registry.py` + `InstrumentPlugin` contract.
 - Wrap PUMA's existing `build/compute_snapshot/run_point` behind the contract;
   rename `PUMARunExecutionState`→`RunExecutionState` and de-hardcode the binary
@@ -505,7 +514,7 @@ the draft, then Phase 1 wires PUMA behind it.
 - **Exit criterion:** PUMA runs identically; nothing in the controller says
   "PUMA" except the plugin id.
 
-**Phase 1.5 — Descriptor validator (review §16.2, do alongside Phase 1).**
+**Phase 1.5 — Descriptor validator (review §16.2, do alongside Phase 1). ✅ IMPLEMENTED 2026-07-02.**
 - Add `validate_descriptor(d)` checking: unique ids across each list; ids match
   `[a-z0-9_]`; no duplicate McStas parameter names; `primary_detector` present;
   module/collimation defaults are within their options; runnable instruments have
@@ -926,10 +935,14 @@ recorded here so later phases pick them up deliberately.
 3. `update_monocris_info`/`update_anacris_info` are each defined **twice** in
    the controller (`:577`/`:584` and `:1494`/`:1501`; the later definitions win
    at runtime). Route all four through `crystal_info`; do not dedupe.
-4. Environment: `run-tavi-dev.bat` targets micromamba env `tavi-dev`, which does
-   not exist on the dev machine (envs: `base`, `mcstas`, `tavi`). Verification
-   uses `micromamba run -n tavi …`. Fixing the launcher is out of scope except
-   an optional `%*` passthrough for `--instrument`.
+4. Environment: at audit time (2026-07-02, morning) `run-tavi-dev.bat` targeted a
+   nonexistent env. *Superseded during implementation:* the dev machine was
+   rebuilt — the working micromamba env is now **`tavi-dev`** (Python 3.11,
+   mcstasscript, PySide6; McStas resources at
+   `%USERPROFILE%\AppData\Roaming\mamba\envs\tavi-dev\share\mcstas\resources`,
+   which the launcher exports as `MCSTAS`), so the launcher is correct again.
+   Verification uses `micromamba run -n tavi-dev …`. The launcher gained a `%*`
+   passthrough so `run-tavi-dev.bat --instrument puma` works.
 
 ### 17.4 New files
 
@@ -1009,13 +1022,20 @@ recorded here so later phases pick them up deliberately.
 
 **Structural (always — examples must pass):** instrument id slug
 (`^[a-z0-9_]+$`) + non-empty display name; slug ids for crystals, modules,
-collimation, slits, source types (**exceptions:** `SampleSpec.id` and
-`MonitorSpec.id` keep legacy strings — non-empty + unique only); per-list id
+collimation, slits (**exceptions:** `SampleSpec.id`, `MonitorSpec.id`, and
+`SourceType.id` keep legacy strings — non-empty + unique only); per-list id
 uniqueness; parameter names unique and valid C identifiers; `primary_detector`
 non-empty; v1 detector contract exactly `detector.dat`/`1d_monitor`; module
 `CHOICE` default ∈ options / `TOGGLE` default is bool; collimation default ∈
 allowed; L2/L3/L4 finite > 0 (`l1_source_mono` exempt — vTAS omits it);
 axis limits `lower ≤ default ≤ upper`, finite; senses are `Sense` members.
+
+*Amendments found during implementation (2026-07-02):* (a) `SourceType.id`
+joined the legacy-string exceptions — PUMA's ids are the GUI combo strings
+`"Maxwellian"`/`"Mono"`, wired 1:1 like sample keys; Phase 2 revisits. (b) a
+`multi_select` collimation slot may default to `""` = nothing pre-selected
+(PUMA's `alpha_2` checkboxes); single-select slots must default to an allowed
+value.
 
 **Runnable-only (registered instruments must pass; examples may fail):** no
 `nan`/`inf` anywhere (incl. `l1_source_mono` > 0); crystal specs complete (all
@@ -1069,13 +1089,14 @@ One commit per step; the app launches and scans identically after each:
 5. Remaining tests (controller scan, tracker migration) + docs +
    `requirements-dev.txt`.
 
-Verification checklist:
+Verification checklist (env is `tavi-dev` — see §17.3.4):
 
-1. `micromamba run -n tavi python -m py_compile <all changed .py files>`.
-2. `micromamba run -n tavi python -m pip install pytest` (once), then
-   `micromamba run -n tavi python -m pytest tests -q` from the repo root.
-3. `micromamba run -n tavi python -m instruments._descriptor_examples` — PUMA
-   runnable-valid; IN8 example-valid / runnable-invalid.
+1. `micromamba run -n tavi-dev python -m py_compile <all changed .py files>`.
+2. `micromamba run -n tavi-dev python -m pip install -r requirements-dev.txt`
+   (once), then `micromamba run -n tavi-dev python -m pytest tests -q` from the
+   repo root.
+3. `micromamba run -n tavi-dev python -m instruments._descriptor_examples` —
+   PUMA runnable-valid; IN8 example-valid / runnable-invalid.
 4. Launch matrix: no flag → no picker, identical startup; `--instrument puma` →
    identical; `--instrument nope` → stderr lists `puma`, exit 2, no window.
 5. **Byte-identical scan check:** rerun the Step-0 scan;
@@ -1085,3 +1106,21 @@ Verification checklist:
    armed" still appears on point 2 (direct-invocation path intact).
 6. `config/runtimes.json`: records under `"puma"` with legacy `"PUMA"` merged;
    pre-scan estimate non-empty (history survived the migration).
+
+**Executed 2026-07-02.** All checks ran green, with two practical adaptations:
+
+- The baseline/regression `.instr` was generated deterministically via
+  `McStas_instr.write_full_instrument()` (a script driving
+  `default_state → scan_config → build` through the registry) rather than a
+  live GUI scan — that is the same file a scan's first point writes, without a
+  McStas run. McStasScript stamps a `* Date:` line in the header, so
+  "byte-identical" is asserted modulo that single line; everything else matched
+  byte-for-byte both after the mechanical Steps 1–2 and after the full
+  switch-over.
+- Results: 54 pytest tests pass (42 new); descriptor examples validate as
+  specified; launch matrix verified by starting the real GUI (process up, no
+  traceback) for the no-flag and `--instrument puma` cases and exit-2 for
+  `nope`; the real `runtimes.json` (63 `"PUMA"` records) migrates to `"puma"`
+  on load. A live multi-point McStas scan (checklist item 5's "Direct run
+  armed" console check and `scan_parameters.txt` diff) has not been re-run in
+  this pass — recommended as a final manual smoke test.
