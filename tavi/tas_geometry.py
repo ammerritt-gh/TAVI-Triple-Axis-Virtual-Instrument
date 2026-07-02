@@ -95,15 +95,19 @@ def sample_tilt_matrix(saz_deg: float) -> np.ndarray:
     return mccode_rotation_matrix(saz_deg, 0.0, 0.0)
 
 
-def stt_from_q_norm(q_norm: float, ki: float, kf: float) -> float:
-    """Compute sample two-theta from |Q|, ki, and kf."""
+def stt_from_q_norm(q_norm: float, ki: float, kf: float, sense_sample: int = -1) -> float:
+    """Compute sample two-theta from |Q|, ki, and kf.
+
+    ``sense_sample`` selects the scattering branch: the returned angle carries
+    its sign (vTAS ss convention; the historical baked value is -1).
+    """
     if ki <= 0 or kf <= 0:
         raise ValueError("ki and kf must be positive.")
     cos_stt = (q_norm * q_norm - ki * ki - kf * kf) / (-2.0 * ki * kf)
     if cos_stt < -1.0 - 1e-10 or cos_stt > 1.0 + 1e-10:
         raise ValueError("Sample two-theta angle invalid for Q, ki, and kf.")
     cos_stt = float(np.clip(cos_stt, -1.0, 1.0))
-    return -math.degrees(math.acos(cos_stt))
+    return sense_sample * math.degrees(math.acos(cos_stt))
 
 
 def lab_q_from_stt(ki: float, kf: float, stt_deg: float) -> np.ndarray:
@@ -116,8 +120,10 @@ def lab_q_from_stt(ki: float, kf: float, stt_deg: float) -> np.ndarray:
     ], dtype=float)
 
 
-def solve_sample_angles(q_sample: np.ndarray, ki: float, kf: float) -> TASAngles:
-    """Solve PUMA sample angles for a target Q in mounted sample coordinates."""
+def solve_sample_angles(
+    q_sample: np.ndarray, ki: float, kf: float, *, sense_sample: int = -1
+) -> TASAngles:
+    """Solve TAS sample angles for a target Q in mounted sample coordinates."""
     q = np.asarray(q_sample, dtype=float)
     if q.shape != (3,):
         raise ValueError("q_sample must be a 3-vector.")
@@ -125,7 +131,7 @@ def solve_sample_angles(q_sample: np.ndarray, ki: float, kf: float) -> TASAngles
     if q_norm <= EPS:
         raise ValueError("Zero momentum transfer is invalid.")
 
-    stt = stt_from_q_norm(q_norm, ki, kf)
+    stt = stt_from_q_norm(q_norm, ki, kf, sense_sample)
     q_lab = lab_q_from_stt(ki, kf, stt)
     phi_lab = math.atan2(q_lab[2], q_lab[0])
 
@@ -145,8 +151,10 @@ def solve_sample_angles(q_sample: np.ndarray, ki: float, kf: float) -> TASAngles
     return TASAngles(stt=stt, sth=sth, saz=saz)
 
 
-def solve_instrument_angles(q_instrument: np.ndarray, ki: float, kf: float) -> TASAngles:
-    """Solve PUMA sample angles for Q in the public instrument/GUI convention."""
+def solve_instrument_angles(
+    q_instrument: np.ndarray, ki: float, kf: float, *, sense_sample: int = -1
+) -> TASAngles:
+    """Solve TAS sample angles for Q in the public instrument/GUI convention."""
     q = np.asarray(q_instrument, dtype=float)
     if q.shape != (3,):
         raise ValueError("q_instrument must be a 3-vector.")
@@ -154,7 +162,7 @@ def solve_instrument_angles(q_instrument: np.ndarray, ki: float, kf: float) -> T
     if q_norm <= EPS:
         raise ValueError("Zero momentum transfer is invalid.")
 
-    stt = stt_from_q_norm(q_norm, ki, kf)
+    stt = stt_from_q_norm(q_norm, ki, kf, sense_sample)
     q_lab = lab_q_from_stt(ki, kf, stt)
     phi_lab = math.atan2(q_lab[2], q_lab[0])
     phi_target = math.atan2(q[1], q[0])

@@ -32,9 +32,13 @@ from enum import Enum
 class Sense(int, Enum):
     """Scattering sense (handedness) at an axis. vTAS records these as sm/ss/sa.
 
-    PUMA bakes a fixed handedness into its arm rotations; IN8 differs
-    (sample sense = RIGHT). Carrying this per-axis in the descriptor is what keeps
-    the angle solve / build() from assuming PUMA's signs. See §12.5 / §14.
+    The value IS the numeric sign of that axis' two-theta readout: LEFT = +1
+    means a positive angle (McStas +y rotation, beam deflecting toward +x when
+    looking downstream), RIGHT = -1 a negative one. This matches vTAS's
+    sm/ss/sa convention exactly. The angle solvers consume these through
+    ``TAS_Instrument.sense_mono/sense_sample/sense_ana``; TAVI-PUMA's
+    historical behavior is (+1, -1, +1), IN8's verified senses are
+    (+1, +1, -1). See §12.5 / §14 / §20.
     """
 
     LEFT = 1

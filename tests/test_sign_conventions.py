@@ -62,6 +62,31 @@ def test_solver_roundtrip_recovers_q():
 
 
 # ---------------------------------------------------------------------------
+# Sense threading (Phase 4): defaults must be bit-identical to the baked
+# convention; explicit senses must flip signs AND stay physical.
+# ---------------------------------------------------------------------------
+
+def test_solver_default_equals_explicit_baked_sense():
+    for q in ([2 * TAU, 0.0, 0.0], [TAU, TAU, 0.0], [1.55, 0.0, 0.3]):
+        implicit = solve_instrument_angles(np.array(q), KI_14P7, KI_14P7)
+        explicit = solve_instrument_angles(
+            np.array(q), KI_14P7, KI_14P7, sense_sample=-1
+        )
+        assert implicit == explicit  # bit-for-bit, not approx
+
+
+def test_solver_positive_sample_sense_flips_stt_and_roundtrips():
+    q_target = np.array([TAU, TAU, 0.0])
+    left = solve_instrument_angles(q_target, KI_14P7, KI_14P7, sense_sample=1)
+    right = solve_instrument_angles(q_target, KI_14P7, KI_14P7, sense_sample=-1)
+    assert left.stt == pytest.approx(-right.stt, abs=1e-12)
+    assert left.stt > 0
+    # A flipped branch is still real physics: the angles must reproduce Q.
+    q_back = q_instrument_from_angles(left.sth, left.saz, left.stt, KI_14P7, KI_14P7)
+    assert q_back == pytest.approx(q_target, abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
 # TAS_Instrument goldens (full angle pipeline through crystal lookup)
 # ---------------------------------------------------------------------------
 
@@ -134,6 +159,46 @@ def test_p5_reverse_recovers_q_and_deltaE(tas):
     assert qy == pytest.approx(0.0, abs=1e-6)
     assert qz == pytest.approx(0.0, abs=1e-6)
     assert deltaE == pytest.approx(0.0, abs=1e-6)
+
+
+def test_instrument_senses_flip_mtt_att_and_recover_q():
+    """A TAS state with IN8-style senses (+1, +1, -1) negates the affected
+    angles and the reverse path still recovers (Q, deltaE)."""
+    from instruments.PUMA_instrument_definition import TAS_Instrument
+
+    flipped = TAS_Instrument()
+    flipped.sense_mono = 1
+    flipped.sense_sample = 1
+    flipped.sense_ana = -1
+    angles, error_flags = flipped.calculate_angles(
+        2 * TAU, 0.0, 0.0, 0.0, 14.7, "Ki Fixed", "pg002", "pg002"
+    )
+    assert error_flags == []
+    mtt, stt, sth, saz, att = angles
+    assert mtt == pytest.approx(41.166977, abs=1e-3)
+    assert stt == pytest.approx(+71.250440, abs=1e-3)
+    # NOT the mirror of the baked -35.63: the sample rotation axis does not
+    # flip with the scattering side, so sth = phi_target - (180 - phi_lab),
+    # i.e. -144.37 (== +215.63 mod 360). The round-trip below is the proof
+    # that this branch is physical.
+    assert sth == pytest.approx(-144.374780, abs=1e-3)
+    assert att == pytest.approx(-41.166977, abs=1e-3)
+
+    q_and_e, error_flags = flipped.calculate_q_and_deltaE(
+        mtt, stt, sth, saz, att, 14.7, "Ki Fixed", "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert q_and_e[0] == pytest.approx(2 * TAU, abs=1e-6)
+    assert q_and_e[1] == pytest.approx(0.0, abs=1e-6)
+    assert q_and_e[2] == pytest.approx(0.0, abs=1e-6)
+    assert q_and_e[3] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_default_instrument_senses_are_baked_convention():
+    from instruments.PUMA_instrument_definition import PUMA_Instrument, TAS_Instrument
+
+    for state in (TAS_Instrument(), PUMA_Instrument()):
+        assert (state.sense_mono, state.sense_sample, state.sense_ana) == (1, -1, 1)
 
 
 def test_crystal_info_dict_shape_frozen():

@@ -189,10 +189,13 @@ def puma_descriptor() -> InstrumentDescriptor:
             l2_mono_sample=2.290,
             l3_sample_ana=0.880,
             l4_ana_det=0.750,
-            # PUMA's handedness is implicit in its arm rotations; encoded here
-            # explicitly so the contract treats it uniformly with IN8.
+            # TAVI-PUMA's solver branch produces mtt > 0, stt < 0, att > 0
+            # (locked by tests/test_sign_conventions.py), i.e. senses
+            # (+1, -1, +1). Whether the physical PUMA hall matches is an open
+            # instrument-scientist question; TAVI's existing behavior is the
+            # contract here.
             sense_mono=Sense.LEFT,
-            sense_sample=Sense.LEFT,
+            sense_sample=Sense.RIGHT,
             sense_ana=Sense.LEFT,
         ),
         mono_crystals=(
