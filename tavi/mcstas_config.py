@@ -178,9 +178,15 @@ def _read_mpirun_from_mccode_config(mcrun_path, mcstas_path):
             continue
 
         if isinstance(payload, dict):
-            command = payload.get("MPIRUN")
-            if isinstance(command, str) and command.strip():
-                return command.strip()
+            # Conda-packaged McStas (3.4.65+) nests MPIRUN under a section
+            # (e.g. {"run": {"MPIRUN": "mpiexec"}}); older configs are flat.
+            sections = [payload] + [
+                value for value in payload.values() if isinstance(value, dict)
+            ]
+            for section in sections:
+                command = section.get("MPIRUN")
+                if isinstance(command, str) and command.strip():
+                    return command.strip()
     return None
 
 
@@ -210,6 +216,13 @@ def _prefer_direct_mpi_binary(argv, mcrun_path):
 
     if mpiexec_path and not Path(argv[0]).is_absolute() and launcher_name.startswith("mpiexec"):
         return [mpiexec_path, *argv[1:]]
+
+    if not Path(argv[0]).is_absolute():
+        # Direct execution bypasses the shell, so resolve a bare launcher name
+        # (e.g. "mpiexec" from mccode_config.json) against PATH.
+        resolved = shutil.which(argv[0])
+        if resolved:
+            return [resolved, *argv[1:]]
 
     return argv
 

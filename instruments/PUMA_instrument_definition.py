@@ -693,7 +693,10 @@ def _resolve_materialized_binary_path(instrument):
 
 def _run_puma_point_direct(execution_state, params_snapshot, output_folder, number_neutrons, mpi_count):
     """Run the already-materialized PUMA binary directly without mcrun.py."""
-    os.makedirs(output_folder, exist_ok=True)
+    # McStas --dir creates the leaf folder itself and aborts if it already
+    # exists (mcuse_dir), so only ensure the parent is present.
+    parent_folder = os.path.dirname(os.path.abspath(output_folder))
+    os.makedirs(parent_folder, exist_ok=True)
     args = [
         *(execution_state.mpi_launcher_argv or []),
         "-np",
