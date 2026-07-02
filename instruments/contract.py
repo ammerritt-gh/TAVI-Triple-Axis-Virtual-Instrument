@@ -157,6 +157,21 @@ class InstrumentPlugin(Protocol):
         """One-time imperative construction of the McStasScript instrument."""
         ...
 
+    def build_fingerprint(
+        self,
+        config: InstrumentState,
+        diagnostic_mode: bool = False,
+        diagnostic_settings: dict | None = None,
+    ) -> str:
+        """Stable hash of everything that affects the compiled binary.
+
+        Must cover the same effective inputs as ``build``. The controller
+        reuses the previous scan's compiled binary when this matches the
+        fingerprint captured at the last compile and the binary still exists
+        (design record §18.5); diagnostic-mode scans always rebuild.
+        """
+        ...
+
     def compute_snapshot(
         self,
         scan_item: Any,
