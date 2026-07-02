@@ -829,9 +829,6 @@ def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, 
 def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons):
     """Build a PUMA instrument object for repeated per-point execution."""
 
-    #QE_parameter_array = [qx, qy, qz, deltaE]
-    #instrument_parameter_array = [number_neutrons, K_fixed, NMO_installed, fixed_E, monocris, anacris, alpha_1, alpha_2, alpha_3, alpha_4]
-
     PUMA = puma_config
 
     # focusing; use 1 for optimal focusing, 0 for flat monochromator
@@ -864,9 +861,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     
 
     # Monochromator crystal
-    monochromator_info, analyzer_info = mono_ana_crystals_setup(PUMA.monocris, PUMA.anacris)    
-
-    #rhm, rvm, rha, rva = PUMA.calculate_crystal_bending(PUMA.rhmfac, PUMA.rvmfac, PUMA.rhafac, PUMA.A1/2, PUMA.A4/2, )
+    monochromator_info, analyzer_info = mono_ana_crystals_setup(PUMA.monocris, PUMA.anacris)
 
     def configure_component_tree():
 
@@ -895,10 +890,6 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
             source.dE = 3  # Default for Maxwellian (not used for sampling but affects weight)
             source.E0 = "E0_param"  # Use E0_param for source energy (allows runtime adjustment without recompilation)
         source.divergence_distribution=0
-
-        # hblende = instrument.add_component("hblende", "Slit", AT=[0, 0, 0.0001], RELATIVE="origin")
-        # hblende.xwidth=PUMA.hbl_hgap
-        # hblende.yheight=PUMA.hbl_vgap
 
         if diagnostic_mode and diagnostic_settings.get('Source EMonitor'):
             source_Emonitor = instrument.add_component("source_Emonitor", "E_monitor", AT=[0,0,0.144], ROTATED=[0,0,0], RELATIVE="origin")
@@ -1055,12 +1046,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         exit_beam_tube.xwidth = 0.105
         exit_beam_tube.yheight = 0.18
 
-        # There is no actual sample filter on PUMA
-        # sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        # sample_filter.length = 0.05
-        # sample_filter.xwidth = 0.5
-        # sample_filter.yheight = 0.5
-            
+        # There is no actual sample filter on PUMA.
+
         ##############################################################################
         # NESTED MIRROR OPTICS (NMO) CONFIGURATION
         ##############################################################################
@@ -1307,66 +1294,6 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset_total",0], RELATIVE="sample_chi_arm")
         instrument.add_component("sample_mount", "Arm", AT=[0,0,0], ROTATED=["mount_rx_param","mount_ry_param","mount_rz_param"], RELATIVE="sample_cradle")
 
-
-        
-        # # Union Initialization
-        # init = instrument.add_component("init", "Union_init")
-        # #instrument.component_help("PhononSimple_process")
-
-        # # Define Phonon Scattering Process
-        # Al_phonon = instrument.add_component("Al_phonon", "PhononSimple_process")
-        # Al_phonon.a = 4.05
-        # Al_phonon.b = 345
-        # Al_phonon.M = 27
-        # Al_phonon.c = 4
-        # Al_phonon.DW = 1
-        # Al_phonon.T = 200
-        
-        # # Add incoherent scattering
-        # Al_incoherent = instrument.add_component("Al_incoherent", "Incoherent_process")
-        # Al_incoherent.sigma = 4.0*0.0082
-        # Al_incoherent.unit_cell_volume = 66.4
-
-        # # Define Bragg Scattering Process
-        # Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal_process")
-        # Al_Bragg.reflections = '"Al.lau"'
-        # Al_Bragg.mosaic = 5
-
-        # # Combine Processes into a Material
-        # Al_crystal = instrument.add_component("Al_crystal", "Union_make_material")
-        # Al_crystal.my_absorption = 0 #100.0*4.0*0.231/100
-        # Al_crystal.process_string = '"Al_incoherent,Al_Bragg,Al_phonon"'
-
-        # # Define Geometry and Attach Material
-        # Al_rod = instrument.add_component("Al_rod", "Union_cylinder", AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_cradle")
-        # Al_rod.radius = 20e-3
-        # Al_rod.yheight = 30e-3
-        # Al_rod.material_string = '"Al_crystal"'
-        # Al_rod.priority = 10
-        # Al_rod.p_interact = 0.4
-
-        # # Union Master and Stop
-        # master = instrument.add_component("master", "Union_master")
-        # stop = instrument.add_component("stop", "Union_stop")
-
-         
-
-        # Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # Al_rod_phonon.radius = 20e-3
-        # Al_rod_phonon.yheight = 30e-3
-        # Al_rod_phonon.sigma_abs = 0*0.231 #0.23 for Al
-        # Al_rod_phonon.sigma_inc = 0*0.0082 #0.0082 for Al
-        # Al_rod_phonon.a = 4.05 #4.05 for Al
-        # Al_rod_phonon.b = 345 #3.45 for Al
-        # Al_rod_phonon.M = 27 #atomic mass of Al
-        # Al_rod_phonon.c = 4
-        # Al_rod_phonon.DW = 1
-        # Al_rod_phonon.T = 200
-        # Al_rod_phonon.target_index = +2
-        # Al_rod_phonon.focus_aw = 5 #horizontal focus region in degrees, 5
-        # Al_rod_phonon.focus_ah = 15 #vertical focus region in degrees, 15
-        # Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-
         # Add sample component according to selected sample_key on PUMA (if set)
         sample_key = getattr(PUMA, 'sample_key', None)
         if sample_key == "Al_rod_phonon":
@@ -1453,65 +1380,6 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         else:
             # No sample selected; proceed without adding a sample component.
             print("Warning: No sample selected for instrument run; running without sample component.")
-
-
-        # powder_test = instrument.add_component("powder_test", "Powder1", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # powder_test.radius = 20e-3
-        # powder_test.yheight = 30e-3
-        # powder_test.d_phi = 0.07
-        # powder_test.sigma_abs = 0.231 #0.23 for Al
-        # powder_test.Vc = 30.96
-        # powder_test.pack = 1
-        # powder_test.q = 2
-        # powder_test.j = 6
-        # powder_test.F2 = 100
-        # powder_test.DW = 1
-        # powder_test.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-        
-        # Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # Al_rod_phonon_optic.radius = 2e-2
-        # Al_rod_phonon_optic.yheight = 3e-2
-        # Al_rod_phonon_optic.sigma_abs = 0 #0.23 for Al
-        # Al_rod_phonon_optic.sigma_inc = 0 #0.0082 for Al
-        # Al_rod_phonon_optic.a = 3.14 #4.05 for Al
-        # Al_rod_phonon_optic.b = 345 #3.45 for Al
-        # Al_rod_phonon_optic.M = 27 #atomic mass of Al
-        # Al_rod_phonon_optic.c = 4
-        # Al_rod_phonon_optic.DW = 1
-        # Al_rod_phonon_optic.T = 300
-        # Al_rod_phonon_optic.zero_energy = 4
-        # Al_rod_phonon_optic.maximum_energy = 1
-        # Al_rod_phonon_optic.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-        # Al_rod_phonon_optic.target_index = +2	#relative index of component to focus at, e.g. next is +1	#set for the analyzer collimator
-        # Al_rod_phonon_optic.focus_aw = 5 #horizontal focus region in degrees, 5
-        # Al_rod_phonon_optic.focus_ah = 15 #vertical focus region in degrees, 15
-        
-        # Al_ball = instrument.add_component("Al_ball", "PowderN", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
-        # Al_ball.reflections = '"Al.laz"'
-        # Al_ball.radius = 20E-3
-        # Al_ball.append_EXTEND("if(!SCATTERED) ABSORB;")
-
-        ## All commented out, example of union sample with multiple powders available.
-        # def add_union_powder(name, data_name, sigma_inc, sigma_abs, unit_V, instr):
-        #     """
-        #     This function adds a Union material with incoherent scattering and powder lines
-        #     """
-        #     material_incoherent = instr.add_component(name + "_inc", "Incoherent_process")
-        #     material_incoherent.sigma = sigma_inc
-        #     material_incoherent.unit_cell_volume = unit_V
-        #     material_powder = instr.add_component(name + "_pow", "Powder_process")
-        #     material_powder.reflections = '"' + data_name + '"'  # Need quotes when describing a filename
-        #     material = instr.add_component(name, "Union_make_material")
-        #     material.my_absorption = 100*sigma_abs/unit_V
-        #     material.process_string = '"' + name + "_inc," + name + "_pow" + '"'
-    
-        # # Add a number of standard powders to our instrument (datafiles included with McStas)
-        # add_union_powder("Al", "Al.laz", 4*0.0082, 4*0.231, 66.4, instr)
-        # add_union_powder("Cu", "Cu.laz", 4*0.55, 4*3.78, 47.24, instr)
-        # add_union_powder("Ni", "Ni.laz", 4*5.2, 4*4.49, 43.76, instr)
-        # add_union_powder("Ti", "Ti.laz", 2*2.87, 2*6.09, 35.33, instr)
-        # add_union_powder("Pb", "Pb.laz", 4*0.003, 4*0.17, 121.29, instr)
-        # add_union_powder("Fe", "Fe.laz", 2*0.4, 2*2.56, 24.04, instr)
 
         ## analyzer
 
