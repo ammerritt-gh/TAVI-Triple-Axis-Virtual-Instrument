@@ -108,6 +108,13 @@ class TAS_Instrument:
         self.A3 = A3 # sample theta angle (psi)
         self.A4 = A4 # ana two-theta angle
         self.saz = saz # sample z-angle
+        # Scattering senses (vTAS sm/ss/sa convention): the numeric sign of the
+        # mono/sample/analyzer two-theta readout. Defaults are TAVI's historical
+        # baked convention (locked by tests/test_sign_conventions.py); each
+        # instrument subclass sets its own from its descriptor Geometry.
+        self.sense_mono = 1
+        self.sense_sample = -1
+        self.sense_ana = 1
         # Sample orientation angles (user-controllable)
         self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
         self.chi = 0    # static out-of-plane sample orientation offset
@@ -241,34 +248,37 @@ class TAS_Instrument:
         K = energy2k(fixed_E)
 
         if K_fixed == "Ki Fixed":
-            mtt = 2 * k2angle(K, monochromator_info['dm'])
+            mtt = self.sense_mono * 2 * k2angle(K, monochromator_info['dm'])
             Ei = fixed_E
             ki = energy2k(Ei)
             Ef = Ei - deltaE
             kf = energy2k(Ef)
-            att = 2 * k2angle(kf, analyzer_info['da'])
-            if mtt == math.inf:
+            att = self.sense_ana * 2 * k2angle(kf, analyzer_info['da'])
+            if math.isinf(mtt):
                 print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
                 error_flags.append("mtt")
-            if att == math.inf:
+            if math.isinf(att):
                 print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
                 error_flags.append("att")
         elif K_fixed == "Kf Fixed":
-            att = 2 * k2angle(K, analyzer_info['da'])
+            att = self.sense_ana * 2 * k2angle(K, analyzer_info['da'])
             Ef = fixed_E
             kf = energy2k(Ef)
             Ei = Ef + deltaE
             ki = energy2k(Ei)
-            mtt = 2 * k2angle(ki, monochromator_info['dm'])
-            if mtt == math.inf:
+            mtt = self.sense_mono * 2 * k2angle(ki, monochromator_info['dm'])
+            if math.isinf(mtt):
                 print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
                 error_flags.append("mtt")
-            if att == math.inf:
+            if math.isinf(att):
                 print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
                 error_flags.append("att")
 
         try:
-            sample_angles = solve_instrument_angles(np.array([qx, qy, qz], dtype=float), ki, kf)
+            sample_angles = solve_instrument_angles(
+                np.array([qx, qy, qz], dtype=float), ki, kf,
+                sense_sample=self.sense_sample,
+            )
             stt = sample_angles.stt
         except ValueError as exc:
             print("\nSample two theta angle invalid")
