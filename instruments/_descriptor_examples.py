@@ -24,10 +24,10 @@ from instruments.descriptor import (
     Geometry,
     InstrumentDescriptor,
     ParameterSpec,
-    SampleSpec,
     Sense,
 )
 from instruments.puma_plugin import puma_descriptor  # noqa: F401  (re-export)
+from tavi.sample_library import default_sample_library
 
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
 # (slits, bending, selector) are appended per instrument. The sample-orientation /
@@ -79,7 +79,7 @@ def in8_descriptor() -> InstrumentDescriptor:
         # d-spacing known (PG[002]); slab geometry TODO -> kinematic-only is valid.
         mono_crystals=(CrystalSpec("pg002", "PG[002]", 3.355),),
         ana_crystals=(CrystalSpec("pg002", "PG[002]", 3.355),),
-        samples=(SampleSpec("none", "No sample", None),),   # TODO: IN8 sample environment
+        samples=default_sample_library(),   # shared library: samples move between instruments
         scannable_parameters=_CORE_PARAMS,                  # shared core; extras TODO
         primary_detector="detector",
         mcstas_name="IN8_McScript",

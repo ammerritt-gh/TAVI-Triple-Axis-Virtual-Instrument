@@ -117,7 +117,10 @@ class SampleSpec:
     """A selectable sample component: id -> McStas component type + properties.
 
     ``component_type=None`` represents the "no sample" path (run without a sample
-    component). Owned per-instrument.
+    component). Samples are physical objects moved between instruments, so the
+    shared table lives in ``tavi/sample_library.py`` and instruments mount it
+    (``samples=default_sample_library()``) rather than owning their own copies;
+    an instrument may still filter or extend the tuple (design record §19).
     """
 
     id: str
@@ -126,6 +129,11 @@ class SampleSpec:
     properties: dict = field(default_factory=dict)
     split: int | None = None        # McStas SPLIT
     extend: str | None = None       # McStas EXTEND snippet
+    component_name: str | None = None   # McStas instance name (None -> use id)
+    # Sample's own lattice (a, b, c, alpha, beta, gamma); the GUI adopts it into
+    # the lattice fields on user sample selection so instrument angles match the
+    # component's internal crystal (e.g. Phonon_DFT bakes a=4.03893).
+    lattice: tuple[float, float, float, float, float, float] | None = None
     change_impact: ChangeImpact = ChangeImpact.BUILD  # sample choice changes the tree
 
 
