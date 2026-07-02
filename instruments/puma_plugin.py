@@ -29,11 +29,11 @@ from instruments.descriptor import (
     ModuleSpec,
     MonitorSpec,
     ParameterSpec,
-    SampleSpec,
     Sense,
     SlitSpec,
     SourceType,
 )
+from tavi.sample_library import default_sample_library
 
 PUMA_ID = "puma"
 PUMA_DISPLAY_NAME = "PUMA (FRM-II)"
@@ -219,55 +219,9 @@ def puma_descriptor() -> InstrumentDescriptor:
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
             ),
         ),
-        # Sample specs mirror the build() ladder exactly (properties complete;
-        # anti-drift test: tests/test_descriptor_validation.py).
-        samples=(
-            SampleSpec("none", "No sample", None),
-            SampleSpec(
-                "Al_rod_phonon", "AL: acoustic phonon", "Phonon_simple_SCATTER",
-                properties={
-                    "radius": 5e-3, "yheight": 30e-3,
-                    "sigma_abs": 0.0, "sigma_inc": 0.0,
-                    "a": 4.05, "b": 345, "M": 27, "c": 4, "DW": 1, "T": 200,
-                    "target_index": 2, "focus_aw": 5, "focus_ah": 15,
-                },
-                split=10, extend="if(!SCATTERED) ABSORB;",
-            ),
-            SampleSpec(
-                "Al_rod_phonon_optic", "Al: optic phonon", "Optic_Phonon_simple",
-                properties={
-                    "radius": 5e-3, "yheight": 30e-3,
-                    "sigma_abs": 0, "sigma_inc": 0,
-                    "a": 3.14, "b": 345, "M": 27, "c": 4, "DW": 1, "T": 300,
-                    "zero_energy": 4, "maximum_energy": 1,
-                    "target_index": 2, "focus_aw": 5, "focus_ah": 15,
-                },
-                split=10, extend="if(!SCATTERED) ABSORB;",
-            ),
-            SampleSpec(
-                "Al_bragg", "AL: Bragg", "Single_crystal",
-                properties={
-                    "reflections": '"Al.lau"', "radius": 5e-3, "yheight": 30e-3,
-                    "mosaic": 5, "sigma_inc": -1,
-                },
-                split=10,
-            ),
-            SampleSpec(
-                "Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
-                properties={
-                    "reflections": '"Al_mp-134_symmetrized.laz"',
-                    "delta_d_d": 1.45e-3, "barns": 1,
-                    "dispersion": '"Al_test_phonons_centered.dat"',
-                    "tessellate": 1, "phonon_e_steps": 50,
-                    "radius": 5e-3, "yheight": 30e-3,
-                    "a": 4.03893, "sigma_abs": 0, "sigma_inc": 0.0,
-                    "debye_waller": 1, "T": 200,
-                    "p_interact": 1.0, "p_phonon": 0.95, "phonon_gamma": 0.2,
-                    "target_index": 2, "focus_aw": 5.0, "focus_ah": 15.0,
-                },
-                split=10,
-            ),
-        ),
+        # Samples come from the shared, instrument-independent library --
+        # samples move between instruments (tavi/sample_library.py, §19).
+        samples=default_sample_library(),
         scannable_parameters=_PUMA_PARAMS,
         primary_detector="detector",
         mcstas_name=PUMA_MCSTAS_NAME,
