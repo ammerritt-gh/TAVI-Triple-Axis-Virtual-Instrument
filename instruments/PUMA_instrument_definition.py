@@ -1,11 +1,11 @@
 import copy
-from dataclasses import dataclass
 import mcstasscript as ms
 import math
 import numpy as np
 import os
 import subprocess
 
+from instruments.contract import RunExecutionState
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
@@ -25,45 +25,22 @@ _module_dir = os.path.dirname(os.path.abspath(__file__))
 _project_dir = os.path.dirname(_module_dir)  # Go up one level from instruments/
 data_dir = os.path.join(_project_dir, "components")
 
+# McStas instrument name: drives the generated .instr/.c/.exe filenames and must
+# match the descriptor's mcstas_name (instruments/puma_plugin.py).
+MCSTAS_NAME = "PUMA_McScript"
 
-@dataclass
-class PUMARunExecutionState:
-    """Track when the compiled PUMA binary is ready for direct invocation."""
+# Backward-compatible alias for the shared run-execution state (remove in Phase 3).
+PUMARunExecutionState = RunExecutionState
 
-    first_backengine_succeeded: bool = False
-    direct_run_ready: bool = False
-    binary_path: str | None = None
-    binary_cwd: str | None = None
-    mpi_launcher_argv: list[str] | None = None
-    last_execution_mode: str | None = None
-
-##  some functions to convert between energies, angles and momenta ##
-def k2angle(k, d):
-    """Converts a k value to a Bragg scattering 2-theta angle"""
-    if 2*math.pi/(2*k*d)<-1 or 2*math.pi/(2*k*d)>1: #check if the angle is valid
-        return(math.inf)
-    else:
-        return(math.degrees(math.asin(2*math.pi/(2*k*d))))
-
-def angle2k(angle, d):
-    """Converts a Bragg scattering 2-theta angle to a k value"""
-    if d*math.sin(math.radians(angle)) != 0:
-        return(abs(math.pi/(d*math.sin(math.radians(angle)))))
-    else:
-        return(0)
-
-# neutron momentum, in A/s, is converted to meV
-def k2energy(k):
-    """Converts a momentum k in A/s to energy in meV"""
-    return(1e3*math.pow((k * 1e10 * HBAR), 2) / (2 * N_MASS * E_CHARGE))
-
-def energy2k(energy):
-    """Converts an energy in meV to a momentum k in A/s"""
-    return(np.sqrt(energy * 1e-3 * E_CHARGE * 2 * N_MASS) * 1e-10/HBAR)
-
-def energy2lambda(energy):
-    """Converts an energy in meV to a wavelength lambda in A"""
-    return(9.044567/math.sqrt(energy))
+# Energy/angle/momentum conversions live in tavi.neutron_conversions; re-exported
+# here so existing `from instruments.PUMA_instrument_definition import ...` works.
+from tavi.neutron_conversions import (  # noqa: F401  (re-export)
+    angle2k,
+    energy2k,
+    energy2lambda,
+    k2angle,
+    k2energy,
+)
 
 def mono_ana_crystals_setup(monocris, anacris):
     """Holds the available monochromator and analyzer crystals to recall"""
@@ -721,7 +698,7 @@ def _resolve_materialized_binary_path(instrument):
     if instrument_input_path and instrument_name:
         return os.path.abspath(os.path.join(instrument_input_path, f"{instrument_name}.exe"))
 
-    return os.path.abspath(os.path.join(data_dir, "PUMA_McScript.exe"))
+    return os.path.abspath(os.path.join(data_dir, f"{MCSTAS_NAME}.exe"))
 
 
 def _run_puma_point_direct(execution_state, params_snapshot, output_folder, number_neutrons, mpi_count):
@@ -871,7 +848,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
     ## start the instrument
 
-    instrument = ms.McStas_instr("PUMA_McScript", input_path=data_dir)
+    instrument = ms.McStas_instr(MCSTAS_NAME, input_path=data_dir)
     instrument.settings(output_path="./output", openacc=False) #uses nvc, must be set up on linux
     
     ## Add parameters
