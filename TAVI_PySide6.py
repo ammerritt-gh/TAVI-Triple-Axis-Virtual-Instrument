@@ -88,6 +88,10 @@ class TAVIController(QObject):
         self.stop_event = threading.Event()
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
+        # Cross-scan binary reuse (design record §18.5): the last compiled
+        # instrument, its execution state, and the build fingerprint it was
+        # compiled from. Populated after a scan that actually compiled.
+        self._binary_reuse_cache = None
         
         # Flag to prevent recursive updates
         self.updating = False
@@ -2513,6 +2517,53 @@ class TAVIController(QObject):
         block = document.get(self.instrument.id, {})
         return block if isinstance(block, dict) else {}
 
+    @staticmethod
+    def _can_reuse_binary(cache, fingerprint, diagnostic_mode):
+        """Whether the previous scan's compiled binary satisfies this scan.
+
+        Diagnostic-mode scans always rebuild: their first point must run
+        ``backengine()`` so McStasData is available for the diagnostic plots
+        (design record §18.5).
+        """
+        if diagnostic_mode or not cache:
+            return False
+        execution_state = cache.get("execution_state")
+        return bool(
+            cache.get("fingerprint") == fingerprint
+            and execution_state is not None
+            and execution_state.first_backengine_succeeded
+            and execution_state.binary_path
+            and os.path.isfile(execution_state.binary_path)
+        )
+
+    @staticmethod
+    def _updated_binary_cache(cache, reused, fingerprint, instrument,
+                              execution_state, instr_archive_path):
+        """Next value of the cross-scan binary cache after a scan finishes.
+
+        A scan that compiled (first backengine succeeded) owns the on-disk
+        binary and replaces the cache. A reused or aborted-before-compile scan
+        leaves the previous entry in place -- the binary on disk is unchanged.
+        """
+        if reused:
+            return cache
+        if (
+            execution_state.first_backengine_succeeded
+            and execution_state.binary_path
+            and os.path.isfile(execution_state.binary_path)
+        ):
+            return {
+                "fingerprint": fingerprint,
+                "instrument": instrument,
+                "execution_state": execution_state,
+                "instr_path": (
+                    instr_archive_path
+                    if instr_archive_path and os.path.isfile(instr_archive_path)
+                    else None
+                ),
+            }
+        return cache
+
     def load_parameters(self):
         """Load parameters from JSON file."""
         if os.path.exists("config/parameters.json"):
@@ -3147,13 +3198,27 @@ class TAVIController(QObject):
             scan_x_values = []
             scan_counts = []
         
-        instrument = self.instrument.build(
-            scan_config,
-            diagnostic_mode,
-            diagnostic_settings if diagnostic_mode else {},
-            number_neutrons,
+        effective_diagnostic_settings = diagnostic_settings if diagnostic_mode else {}
+        build_fingerprint = self.instrument.build_fingerprint(
+            scan_config, diagnostic_mode, effective_diagnostic_settings
         )
-        execution_state = RunExecutionState()
+        reuse_binary = self._can_reuse_binary(
+            self._binary_reuse_cache, build_fingerprint, diagnostic_mode
+        )
+        if reuse_binary:
+            instrument = self._binary_reuse_cache["instrument"]
+            execution_state = self._binary_reuse_cache["execution_state"]
+            self.message_printed.emit(
+                "Build settings unchanged; reusing compiled instrument from previous scan"
+            )
+        else:
+            instrument = self.instrument.build(
+                scan_config,
+                diagnostic_mode,
+                effective_diagnostic_settings,
+                number_neutrons,
+            )
+            execution_state = RunExecutionState()
         retained_diagnostic_data = None
 
         if diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False):
@@ -3295,6 +3360,12 @@ class TAVIController(QObject):
                 if i == 0:
                     instr_src = os.path.join(scan_folder, f"{self._mcstas_name}.instr")
                     instr_dst = os.path.join(data_folder, f"{self._mcstas_name}.instr")
+                    # Direct binary runs write no .instr into the scan folder;
+                    # a reused-binary scan archives the compiling scan's copy.
+                    if not os.path.exists(instr_src) and reuse_binary:
+                        cached_instr = self._binary_reuse_cache.get("instr_path")
+                        if cached_instr and os.path.isfile(cached_instr):
+                            instr_src = cached_instr
                     if os.path.exists(instr_src):
                         try:
                             shutil.copy2(instr_src, instr_dst)
@@ -3446,6 +3517,15 @@ class TAVIController(QObject):
 
         if simulation_stopped:
             self.message_printed.emit("Simulation stopped by user.")
+
+        self._binary_reuse_cache = self._updated_binary_cache(
+            self._binary_reuse_cache,
+            reuse_binary,
+            build_fingerprint,
+            instrument,
+            execution_state,
+            os.path.join(data_folder, f"{self._mcstas_name}.instr"),
+        )
 
         inferred_compile_duration = None
         if len(simulation_stage_durations) > 1:

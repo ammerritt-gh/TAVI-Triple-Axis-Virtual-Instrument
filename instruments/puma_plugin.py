@@ -370,13 +370,13 @@ class PUMAPlugin:
 
         return mono_ana_crystals_setup(mono_label, ana_label)
 
-    def build_fingerprint(self, config):
+    def build_fingerprint(self, config, diagnostic_mode=False, diagnostic_settings=None):
         """Stable hash of the build-time (ChangeImpact.BUILD) state.
 
-        Groundwork for cross-scan binary reuse: when this fingerprint matches
-        the one captured at the last compile and the compiled binary still
-        exists, a new scan's first point can skip force_compile and go straight
-        to direct invocation. No consumer is wired yet (follow-up task).
+        Hashes the same effective inputs as ``build``: the config's build-time
+        fields plus the diagnostic mode/settings the controller would pass.
+        The controller reuses the previous scan's compiled binary when this
+        matches and the binary still exists (design record §18.5).
         """
         import hashlib
         import json
@@ -393,10 +393,10 @@ class PUMAPlugin:
             "alpha_2": list(config.alpha_2),
             "alpha_3": config.alpha_3,
             "alpha_4": config.alpha_4,
-            "diagnostic_mode": bool(getattr(config, "diagnostic_mode", False)),
+            "diagnostic_mode": bool(diagnostic_mode),
             "diagnostic_settings": sorted(
                 (key, bool(value))
-                for key, value in getattr(config, "diagnostic_settings", {}).items()
+                for key, value in (diagnostic_settings or {}).items()
             ),
         }
         payload = json.dumps(build_state, sort_keys=True).encode("utf-8")

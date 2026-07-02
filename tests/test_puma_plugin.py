@@ -229,3 +229,10 @@ def test_build_fingerprint_stable_and_sensitive():
     changed.monocris = changed.anacris = "pg002"
     changed.NMO_installed = "Vertical"
     assert plugin.build_fingerprint(changed) != fp1  # build-time change detected
+
+    # Diagnostic mode/settings are build inputs (monitors compile in/out),
+    # so they must be part of the fingerprint.
+    assert plugin.build_fingerprint(base, True, {}) != fp1
+    assert plugin.build_fingerprint(base, True, {"Source PSD": True}) != \
+        plugin.build_fingerprint(base, True, {})
+    assert plugin.build_fingerprint(base, False, None) == fp1
