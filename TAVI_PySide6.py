@@ -979,30 +979,10 @@ class TAVIController(QObject):
         QTimer.singleShot(150, _bold_then_reset)
 
     def _load_bending_parameters(self, parameters):
-        """Load bending parameters from file (supports old factor-based values)."""
-        ideal = self._compute_ideal_bending_values()
-
-        if any(key in parameters for key in ("rhm_var", "rvm_var", "rha_var")):
-            self.window.instrument_dock.rhm_edit.setText(str(parameters.get("rhm_var", "")))
-            self.window.instrument_dock.rvm_edit.setText(str(parameters.get("rvm_var", "")))
-            self.window.instrument_dock.rha_edit.setText(str(parameters.get("rha_var", "")))
-            return
-
-        if ideal:
-            try:
-                rhmfac = float(parameters.get("rhmfac_var", 1) or 1)
-                rvmfac = float(parameters.get("rvmfac_var", 1) or 1)
-                rhafac = float(parameters.get("rhafac_var", 1) or 1)
-                self.window.instrument_dock.rhm_edit.setText(f"{ideal['rhm'] * rhmfac:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.rvm_edit.setText(f"{ideal['rvm'] * rvmfac:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.rha_edit.setText(f"{ideal['rha'] * rhafac:.4f}".rstrip('0').rstrip('.'))
-                return
-            except Exception:
-                pass
-
-        self.window.instrument_dock.rhm_edit.setText("0")
-        self.window.instrument_dock.rvm_edit.setText("0")
-        self.window.instrument_dock.rha_edit.setText("0")
+        """Load absolute bending radii from the saved parameter block."""
+        self.window.instrument_dock.rhm_edit.setText(str(parameters.get("rhm_var", "0")))
+        self.window.instrument_dock.rvm_edit.setText(str(parameters.get("rvm_var", "0")))
+        self.window.instrument_dock.rha_edit.setText(str(parameters.get("rha_var", "0")))
 
     def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked):
         """Apply lock state for ideal bending buttons."""
@@ -2391,70 +2371,34 @@ class TAVIController(QObject):
         
         return metadata
 
-    # -------- persistence helpers (descriptor-driven categories + legacy keys)
-
-    @staticmethod
-    def _float_or(value, default):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
+    # -------- persistence helpers (descriptor-driven categories)
 
     @staticmethod
     def _saved_crystal_id(saved, crystals):
-        """Resolve a saved crystal value (id or legacy display label) to an id."""
+        """Resolve a saved crystal id, falling back to the instrument default."""
         for spec in crystals:
-            if saved in (spec.id, spec.display_name):
+            if saved == spec.id:
                 return spec.id
         return crystals[0].id
 
-    def _saved_module_values(self, parameters):
-        modules = parameters.get("modules")
-        if modules is not None:
-            return modules
-        # Legacy flat keys from pre-Phase-2 parameter files
+    @staticmethod
+    def _saved_module_values(parameters):
+        return parameters.get("modules", {})
+
+    @staticmethod
+    def _saved_collimation_values(parameters):
+        # JSON round-trips multi-select sets as lists
         return {
-            "nmo": parameters.get("NMO_installed_var", "None"),
-            "v_selector": parameters.get("V_selector_installed_var", False),
+            slot_id: set(value) if isinstance(value, list) else value
+            for slot_id, value in parameters.get("collimation", {}).items()
         }
 
-    def _saved_collimation_values(self, parameters):
-        collimation = parameters.get("collimation")
-        if collimation is not None:
-            # JSON round-trips multi-select sets as lists
-            return {
-                slot_id: set(value) if isinstance(value, list) else value
-                for slot_id, value in collimation.items()
-            }
-        # Legacy flat keys from pre-Phase-2 parameter files
-        legacy_alpha_2 = {
-            value for value, key in (
-                ("30", "alpha_2_30_var"), ("40", "alpha_2_40_var"), ("60", "alpha_2_60_var")
-            ) if parameters.get(key, key == "alpha_2_40_var")
-        }
+    @staticmethod
+    def _saved_slit_values(parameters):
+        # JSON round-trips (width, height) tuples as lists
         return {
-            "alpha_1": str(parameters.get("alpha_1_var", 40)),
-            "alpha_2": legacy_alpha_2,
-            "alpha_3": str(parameters.get("alpha_3_var", 30)),
-            "alpha_4": str(parameters.get("alpha_4_var", 30)),
-        }
-
-    def _saved_slit_values(self, parameters):
-        slits = parameters.get("slits_mm")
-        if slits is not None:
-            # JSON round-trips (width, height) tuples as lists
-            return {
-                slit_id: tuple(value) if isinstance(value, list) else value
-                for slit_id, value in slits.items()
-            }
-        # Legacy flat keys from pre-Phase-2 parameter files
-        return {
-            "vbl_hgap": self._float_or(parameters.get("vbl_hgap_var"), 88.0),
-            "pbl": (
-                self._float_or(parameters.get("pbl_hgap_var"), 100.0),
-                self._float_or(parameters.get("pbl_vgap_var"), 100.0),
-            ),
-            "dbl_hgap": self._float_or(parameters.get("dbl_hgap_var"), 50.0),
+            slit_id: tuple(value) if isinstance(value, list) else value
+            for slit_id, value in parameters.get("slits_mm", {}).items()
         }
 
     def _slit_values_for_save(self):
@@ -2528,24 +2472,53 @@ class TAVIController(QObject):
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
-            "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None",
             "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
             # UB matrix state
             "ub_matrix_state": self.ub_matrix.to_dict(),
             "ub_training_hash": self.window.ub_matrix_dock.load_hash_edit.text() if hasattr(self.window, 'ub_matrix_dock') else "",
         }
+        # Namespace by instrument id with a schema version (design record §9,
+        # §16.8): {"<instrument_id>": {"_schema": 1, ...}}. Other instruments'
+        # blocks in the file are preserved; anything else is discarded.
+        parameters["_schema"] = self.PARAMETERS_SCHEMA_VERSION
+        document = {}
+        if os.path.exists("config/parameters.json"):
+            try:
+                with open("config/parameters.json", "r") as file:
+                    existing = json.load(file)
+                if isinstance(existing, dict):
+                    document = {
+                        block_id: block for block_id, block in existing.items()
+                        if isinstance(block, dict) and "_schema" in block
+                    }
+            except (json.JSONDecodeError, OSError):
+                document = {}
+        document[self.instrument.id] = parameters
         # Ensure config directory exists
         os.makedirs("config", exist_ok=True)
         with open("config/parameters.json", "w") as file:
-            json.dump(parameters, file)
+            json.dump(document, file)
         self.print_to_message_center("Parameters saved successfully")
-    
+
+    PARAMETERS_SCHEMA_VERSION = 1
+
+    def _parameters_block(self, document):
+        """This instrument's block from ``{"<id>": {"_schema": N, ...}}``.
+
+        Missing/malformed block -> empty dict (every field read falls back to
+        its default).
+        """
+        if not isinstance(document, dict):
+            return {}
+        block = document.get(self.instrument.id, {})
+        return block if isinstance(block, dict) else {}
+
     def load_parameters(self):
         """Load parameters from JSON file."""
         if os.path.exists("config/parameters.json"):
             with open("config/parameters.json", "r") as file:
-                parameters = json.load(file)
-                
+                parameters = self._parameters_block(json.load(file))
+
                 # Block signals during loading to prevent premature validation
                 self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
                 self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
@@ -2637,18 +2610,13 @@ class TAVIController(QObject):
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
-                # Restore sample selection: prefer the persisted sample id (labels
-                # can change); fall back to the label (default Al: Bragg).
+                # Restore sample selection by persisted sample id (default Al Bragg)
                 try:
                     saved_sample = parameters.get("current_sample_settings", {})
-                    restored = False
-                    if "sample_key" in saved_sample:
-                        restored = self.window.sample_dock.set_sample_by_key(
-                            saved_sample.get("sample_key")
-                        )
-                    if not restored:
-                        sample_label = parameters.get("sample_label_var", "AL: Bragg")
-                        self.window.sample_dock.sample_combo.setCurrentText(sample_label)
+                    if not self.window.sample_dock.set_sample_by_key(
+                        saved_sample.get("sample_key", "Al_bragg")
+                    ):
+                        self.window.sample_dock.set_sample_by_key("Al_bragg")
                 except Exception:
                     pass
                 # Restore space group selection
@@ -2788,8 +2756,7 @@ class TAVIController(QObject):
             self._reconnect_peak_signals()
         # Default sample to Al: Bragg for easy testing
         try:
-            if hasattr(self.window.sample_dock, 'sample_combo'):
-                self.window.sample_dock.sample_combo.setCurrentText("AL: Bragg")
+            self.window.sample_dock.set_sample_by_key("Al_bragg")
         except Exception:
             pass
         

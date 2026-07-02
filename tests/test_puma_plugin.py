@@ -123,8 +123,8 @@ def test_snapshot_params_match_descriptor(tmp_path):
     pytest.importorskip("mcstasscript")
     plugin = PUMAPlugin()
     state = plugin.default_state()
-    state.monocris = "PG[002]"
-    state.anacris = "PG[002]"
+    state.monocris = "pg002"
+    state.anacris = "pg002"
     state.K_fixed = "Ki Fixed"
     state.fixed_E = 14.7
 
@@ -147,9 +147,11 @@ def test_snapshot_params_match_descriptor(tmp_path):
 
 def test_run_execution_state_is_shared():
     pytest.importorskip("mcstasscript")
-    from instruments.PUMA_instrument_definition import PUMARunExecutionState
+    import instruments.PUMA_instrument_definition as pid
 
-    assert PUMARunExecutionState is RunExecutionState
+    # No instrument-specific execution-state type: the shared contract class is it.
+    assert not hasattr(pid, "PUMARunExecutionState")
+    assert RunExecutionState is not None
 
 
 def test_binary_fallback_uses_mcstas_name(tmp_path):
@@ -190,35 +192,26 @@ def test_crystal_adapter_matches_golden_dicts():
     pytest.importorskip("mcstasscript")
     from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
 
-    mono, ana = mono_ana_crystals_setup("PG[002]", "PG[002]")
+    mono, ana = mono_ana_crystals_setup("pg002", "pg002")
     assert mono == _GOLDEN_PG002_MONO
     assert ana == _GOLDEN_PG002_ANA
 
     # Test variant: PG[002] geometry, d-spacing 2.355, mono-only.
-    mono_test, ana_test = mono_ana_crystals_setup("PG[002] test", "PG[002]")
+    mono_test, ana_test = mono_ana_crystals_setup("pg002_test", "pg002")
     assert mono_test == {**_GOLDEN_PG002_MONO, 'dm': 2.355}
     assert ana_test == _GOLDEN_PG002_ANA
 
-
-def test_crystal_adapter_accepts_ids_and_labels():
-    pytest.importorskip("mcstasscript")
-    from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
-
-    assert mono_ana_crystals_setup("pg002", "pg002") == mono_ana_crystals_setup(
-        "PG[002]", "PG[002]"
-    )
-    assert mono_ana_crystals_setup("pg002_test", "pg002")[0]['dm'] == 2.355
-    # Unknown keys keep the legacy empty-dict behavior.
+    # Unknown ids keep the legacy empty-dict behavior.
     assert mono_ana_crystals_setup("nope", "nope") == ({}, {})
 
 
-def test_crystal_info_matches_legacy():
+def test_crystal_info_matches_adapter():
     pytest.importorskip("mcstasscript")
     from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
 
     plugin = PUMAPlugin()
-    assert plugin.crystal_info("PG[002]", "PG[002]") == mono_ana_crystals_setup(
-        "PG[002]", "PG[002]"
+    assert plugin.crystal_info("pg002", "pg002") == mono_ana_crystals_setup(
+        "pg002", "pg002"
     )
 
 
