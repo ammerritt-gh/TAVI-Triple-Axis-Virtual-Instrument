@@ -78,7 +78,8 @@ class TAVIController(QObject):
         # The active instrument plugin (fixed for the session) and its live state.
         self.instrument = instrument
         self.instrument_state = instrument.default_state()
-        self._mcstas_name = instrument.descriptor().mcstas_name
+        self.descriptor = instrument.descriptor()
+        self._mcstas_name = self.descriptor.mcstas_name
 
         # UB matrix for crystal orientation
         self.ub_matrix = UBMatrix()
@@ -103,8 +104,10 @@ class TAVIController(QObject):
         self._scan_update_timer.setInterval(300)  # 300ms debounce
         self._scan_update_timer.timeout.connect(self._update_scan_estimates)
         
-        # Initialize crystal info with default values
-        self.monocris_info, self.anacris_info = self.instrument.crystal_info("PG[002]", "PG[002]")
+        # Initialize crystal info with the descriptor's first mono/ana crystals
+        self.monocris_info, self.anacris_info = self.instrument.crystal_info(
+            self.descriptor.mono_crystals[0].id, self.descriptor.ana_crystals[0].id
+        )
         
         # Initialize output directory
         self.output_directory = os.path.join(os.getcwd(), "output")
@@ -214,8 +217,10 @@ class TAVIController(QObject):
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
 
-        # Connect NMO selection change to update ideal bending values
-        self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
+        # Connect NMO selection change to update ideal bending values (instrument-
+        # specific coupling; the module widget only exists when declared)
+        if getattr(self.window.instrument_dock, "nmo_combo", None) is not None:
+            self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
 
         # Ideal focusing buttons
         self.window.instrument_dock.rhm_ideal_button.clicked.connect(
@@ -309,25 +314,8 @@ class TAVIController(QObject):
         # Collect all QLineEdit widgets from all docks
         line_edits = []
         
-        # Instrument dock
-        line_edits.extend([
-            self.window.instrument_dock.mtt_edit,
-            self.window.instrument_dock.stt_edit,
-            self.window.instrument_dock.omega_edit,
-            self.window.instrument_dock.chi_edit,
-            self.window.instrument_dock.att_edit,
-            self.window.instrument_dock.Ki_edit,
-            self.window.instrument_dock.Ei_edit,
-            self.window.instrument_dock.Kf_edit,
-            self.window.instrument_dock.Ef_edit,
-            self.window.instrument_dock.rhm_edit,
-            self.window.instrument_dock.rvm_edit,
-            self.window.instrument_dock.rha_edit,
-            self.window.instrument_dock.vbl_hgap_edit,
-            self.window.instrument_dock.pbl_hgap_edit,
-            self.window.instrument_dock.pbl_vgap_edit,
-            self.window.instrument_dock.dbl_hgap_edit,
-        ])
+        # Instrument dock (incl. the descriptor-generated slit edits)
+        line_edits.extend(self.window.instrument_dock.line_edits_for_feedback())
         
         # Reciprocal space dock
         line_edits.extend([
@@ -514,23 +502,21 @@ class TAVIController(QObject):
         # Fixed E
         metadata['fixed_E'] = vals.get('fixed_E', 0)
         
-        # Collimations
-        metadata['alpha_1'] = vals.get('alpha_1', 'open')
-        # Build alpha_2 string from checkboxes
-        alpha_2_parts = []
-        if vals.get('alpha_2_30'):
-            alpha_2_parts.append("30'")
-        if vals.get('alpha_2_40'):
-            alpha_2_parts.append("40'")
-        if vals.get('alpha_2_60'):
-            alpha_2_parts.append("60'")
-        metadata['alpha_2'] = "+".join(alpha_2_parts) if alpha_2_parts else "open"
-        metadata['alpha_3'] = vals.get('alpha_3', 'open')
-        metadata['alpha_4'] = vals.get('alpha_4', 'open')
+        # Collimations (descriptor-driven container: str or set[str] per slot)
+        collimation = vals.get('collimation', {})
+        for slot in self.descriptor.collimation:
+            value = collimation.get(slot.id)
+            if slot.multi_select:
+                selected = [v for v in slot.allowed if v in (value or ())]
+                metadata[slot.id] = (
+                    "+".join(f"{v}'" for v in selected) if selected else "open"
+                )
+            else:
+                metadata[slot.id] = value if value is not None else 'open'
         
         # Crystals
-        metadata['monocris'] = vals.get('monocris', 'PG[002]')
-        metadata['anacris'] = vals.get('anacris', 'PG[002]')
+        metadata['monocris'] = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+        metadata['anacris'] = vals.get('anacris', self.descriptor.ana_crystals[0].id)
         
         # Alignment offsets
         metadata['kappa'] = vals.get('kappa', 0)
@@ -549,10 +535,11 @@ class TAVIController(QObject):
         # Energy transfer
         metadata['deltaE'] = vals.get('deltaE', 0)
         
-        # NMO and velocity selector
-        metadata['NMO_installed'] = vals.get('NMO_installed', 'None')
-        metadata['V_selector_installed'] = vals.get('V_selector_installed', False)
-        
+        # Optional modules (legacy display keys kept for the display dock)
+        modules = vals.get('modules', {})
+        metadata['NMO_installed'] = modules.get('nmo', 'None')
+        metadata['V_selector_installed'] = modules.get('v_selector', False)
+
         return metadata
 
     def _build_current_scan_metadata(self):
@@ -569,20 +556,6 @@ class TAVIController(QObject):
         with open(summary_path, "w", encoding="utf-8") as handle:
             json.dump(stage_summary, handle, indent=2)
         return summary_path
-    
-    def update_monocris_info(self):
-        """Update monochromator crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        self.monocris_info, _ = self.instrument.crystal_info(monocris, anacris)
-        self.update_all_variables()
-    
-    def update_anacris_info(self):
-        """Update analyzer crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        _, self.anacris_info = self.instrument.crystal_info(monocris, anacris)
-        self.update_all_variables()
     
     def get_gui_values(self):
         """Helper to get all GUI values as a dict."""
@@ -614,26 +587,18 @@ class TAVIController(QObject):
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
                 'kappa': float(self.window.sample_dock.kappa_edit.text() or 0),
                 'psi': float(self.window.sample_dock.psi_edit.text() or 0),
-                'monocris': self.window.instrument_dock.monocris_combo.currentText(),
-                'anacris': self.window.instrument_dock.anacris_combo.currentText(),
+                'monocris': self.window.instrument_dock.selected_mono_id(),
+                'anacris': self.window.instrument_dock.selected_ana_id(),
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
                 'rvm': float(self.window.instrument_dock.rvm_edit.text() or 0),
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
-                'NMO_installed': self.window.instrument_dock.nmo_combo.currentText(),
-                'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked(),
-                'source_type': self.window.instrument_dock.source_type_combo.currentText(),
+                'source_type': self.window.instrument_dock.selected_source_id(),
                 'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
-                'alpha_1': self.window.instrument_dock.alpha_1_combo.currentText(),
-                'alpha_2_30': self.window.instrument_dock.alpha_2_30_check.isChecked(),
-                'alpha_2_40': self.window.instrument_dock.alpha_2_40_check.isChecked(),
-                'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
-                'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
-                'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
-                # Slit apertures (in mm, converted to m for the instrument)
-                'vbl_hgap': float(self.window.instrument_dock.vbl_hgap_edit.text() or 88) / 1000,
-                'pbl_hgap': float(self.window.instrument_dock.pbl_hgap_edit.text() or 100) / 1000,
-                'pbl_vgap': float(self.window.instrument_dock.pbl_vgap_edit.text() or 100) / 1000,
-                'dbl_hgap': float(self.window.instrument_dock.dbl_hgap_edit.text() or 50) / 1000,
+                # Descriptor-driven categories (the plugin's scan_config owns the
+                # mapping from these containers to its instrument state fields).
+                'modules': self.window.instrument_dock.module_values(),
+                'collimation': self.window.instrument_dock.collimation_values(),
+                'slits_mm': self.window.instrument_dock.slit_values_mm(),
                 'number_neutrons': self.window.simulation_dock.get_number_neutrons(),
                 'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
@@ -832,7 +797,8 @@ class TAVIController(QObject):
                 att = float(self.window.instrument_dock.att_edit.text() or 0)
 
             # Check if NMO is installed - if so, ideal monochromator bending is flat (0)
-            nmo_installed = self.window.instrument_dock.nmo_combo.currentText()
+            nmo_combo = getattr(self.window.instrument_dock, "nmo_combo", None)
+            nmo_installed = nmo_combo.currentText() if nmo_combo is not None else "None"
             if nmo_installed != "None":
                 # NMO provides focusing, so ideal monochromator bending is flat
                 rhm = 0
@@ -1450,15 +1416,15 @@ class TAVIController(QObject):
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
+        monocris = self.window.instrument_dock.selected_mono_id()
+        anacris = self.window.instrument_dock.selected_ana_id()
         self.monocris_info, _ = self.instrument.crystal_info(monocris, anacris)
         self.update_all_variables()
-    
+
     def update_anacris_info(self):
         """Update analyzer crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
+        monocris = self.window.instrument_dock.selected_mono_id()
+        anacris = self.window.instrument_dock.selected_ana_id()
         _, self.anacris_info = self.instrument.crystal_info(monocris, anacris)
         self.update_all_variables()
     
@@ -1818,8 +1784,8 @@ class TAVIController(QObject):
         # Create a throwaway instrument state for validation - use GUI values, not
         # the live state (it may not be updated until run_simulation is called)
         check_state = self.instrument.default_state()
-        check_state.monocris = vals.get('monocris', 'PG[002]')
-        check_state.anacris = vals.get('anacris', 'PG[002]')
+        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
         check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
         check_state.fixed_E = vals.get('fixed_E', 14.7)
         check_state.sample_mount = self._build_sample_mount(vals)
@@ -1954,8 +1920,8 @@ class TAVIController(QObject):
             
             # Use GUI values directly, not the live state (may not be updated)
             check_state = self.instrument.default_state()
-            check_state.monocris = vals.get('monocris', 'PG[002]')
-            check_state.anacris = vals.get('anacris', 'PG[002]')
+            check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+            check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
             check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
             check_state.fixed_E = vals.get('fixed_E', 14.7)
             
@@ -2286,7 +2252,9 @@ class TAVIController(QObject):
 
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
-        dialog = DiagnosticConfigDialog(self.window, self.diagnostic_settings)
+        dialog = DiagnosticConfigDialog(
+            self.window, self.diagnostic_settings, monitors=self.descriptor.monitors
+        )
         if dialog.exec():
             # User clicked Save and Close
             self.diagnostic_settings = dialog.get_settings()
@@ -2422,7 +2390,85 @@ class TAVIController(QObject):
             metadata['V_selector_installed'] = params.get('V_selector_installed', False)
         
         return metadata
-    
+
+    # -------- persistence helpers (descriptor-driven categories + legacy keys)
+
+    @staticmethod
+    def _float_or(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _saved_crystal_id(saved, crystals):
+        """Resolve a saved crystal value (id or legacy display label) to an id."""
+        for spec in crystals:
+            if saved in (spec.id, spec.display_name):
+                return spec.id
+        return crystals[0].id
+
+    def _saved_module_values(self, parameters):
+        modules = parameters.get("modules")
+        if modules is not None:
+            return modules
+        # Legacy flat keys from pre-Phase-2 parameter files
+        return {
+            "nmo": parameters.get("NMO_installed_var", "None"),
+            "v_selector": parameters.get("V_selector_installed_var", False),
+        }
+
+    def _saved_collimation_values(self, parameters):
+        collimation = parameters.get("collimation")
+        if collimation is not None:
+            # JSON round-trips multi-select sets as lists
+            return {
+                slot_id: set(value) if isinstance(value, list) else value
+                for slot_id, value in collimation.items()
+            }
+        # Legacy flat keys from pre-Phase-2 parameter files
+        legacy_alpha_2 = {
+            value for value, key in (
+                ("30", "alpha_2_30_var"), ("40", "alpha_2_40_var"), ("60", "alpha_2_60_var")
+            ) if parameters.get(key, key == "alpha_2_40_var")
+        }
+        return {
+            "alpha_1": str(parameters.get("alpha_1_var", 40)),
+            "alpha_2": legacy_alpha_2,
+            "alpha_3": str(parameters.get("alpha_3_var", 30)),
+            "alpha_4": str(parameters.get("alpha_4_var", 30)),
+        }
+
+    def _saved_slit_values(self, parameters):
+        slits = parameters.get("slits_mm")
+        if slits is not None:
+            # JSON round-trips (width, height) tuples as lists
+            return {
+                slit_id: tuple(value) if isinstance(value, list) else value
+                for slit_id, value in slits.items()
+            }
+        # Legacy flat keys from pre-Phase-2 parameter files
+        return {
+            "vbl_hgap": self._float_or(parameters.get("vbl_hgap_var"), 88.0),
+            "pbl": (
+                self._float_or(parameters.get("pbl_hgap_var"), 100.0),
+                self._float_or(parameters.get("pbl_vgap_var"), 100.0),
+            ),
+            "dbl_hgap": self._float_or(parameters.get("dbl_hgap_var"), 50.0),
+        }
+
+    def _slit_values_for_save(self):
+        try:
+            slit_values = self.window.instrument_dock.slit_values_mm()
+        except ValueError:
+            # Malformed text in a slit field; persist nothing so load falls
+            # back to the descriptor defaults.
+            return {}
+        return {
+            slit_id: list(value) if isinstance(value, tuple) else value
+            for slit_id, value in slit_values.items()
+        }
+
     def save_parameters(self):
         """Save all parameters to JSON file."""
         parameters = {
@@ -2437,10 +2483,9 @@ class TAVIController(QObject):
             "Ef_var": self.window.instrument_dock.Ef_edit.text(),
             "number_neutrons_var": self.window.simulation_dock.get_number_neutrons(),
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
-            "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
-            "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
-            "source_type_var": self.window.instrument_dock.source_type_combo.currentText(),
+            "source_type_var": self.window.instrument_dock.selected_source_id(),
             "source_dE_var": self.window.instrument_dock.source_dE_edit.text(),
+            "modules": self.window.instrument_dock.module_values(),
             "rhm_var": self.window.instrument_dock.rhm_edit.text(),
             "rvm_var": self.window.instrument_dock.rvm_edit.text(),
             "rha_var": self.window.instrument_dock.rha_edit.text(),
@@ -2456,19 +2501,15 @@ class TAVIController(QObject):
             "K_var": self.window.scattering_dock.K_edit.text(),
             "L_var": self.window.scattering_dock.L_edit.text(),
             "deltaE_var": self.window.scattering_dock.deltaE_edit.text(),
-            "monocris_var": self.window.instrument_dock.monocris_combo.currentText(),
-            "anacris_var": self.window.instrument_dock.anacris_combo.currentText(),
-            "alpha_1_var": self.window.instrument_dock.alpha_1_combo.currentText(),
-            "alpha_2_30_var": self.window.instrument_dock.alpha_2_30_check.isChecked(),
-            "alpha_2_40_var": self.window.instrument_dock.alpha_2_40_check.isChecked(),
-            "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked(),
-            "alpha_3_var": self.window.instrument_dock.alpha_3_combo.currentText(),
-            "alpha_4_var": self.window.instrument_dock.alpha_4_combo.currentText(),
+            "monocris_var": self.window.instrument_dock.selected_mono_id(),
+            "anacris_var": self.window.instrument_dock.selected_ana_id(),
+            "collimation": {
+                slot_id: sorted(value) if isinstance(value, set) else value
+                for slot_id, value in
+                self.window.instrument_dock.collimation_values().items()
+            },
             # Slit apertures (stored in mm)
-            "vbl_hgap_var": self.window.instrument_dock.vbl_hgap_edit.text(),
-            "pbl_hgap_var": self.window.instrument_dock.pbl_hgap_edit.text(),
-            "pbl_vgap_var": self.window.instrument_dock.pbl_vgap_edit.text(),
-            "dbl_hgap_var": self.window.instrument_dock.dbl_hgap_edit.text(),
+            "slits_mm": self._slit_values_for_save(),
             "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             "lattice_a_var": self.window.sample_dock.lattice_a_edit.text(),
             "lattice_b_var": self.window.sample_dock.lattice_b_edit.text(),
@@ -2509,9 +2550,14 @@ class TAVIController(QObject):
                 self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
                 self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
                 
-                # Set GUI values from parameters
-                self.window.instrument_dock.monocris_combo.setCurrentText(parameters.get("monocris_var", "PG[002]"))
-                self.window.instrument_dock.anacris_combo.setCurrentText(parameters.get("anacris_var", "PG[002]"))
+                # Set GUI values from parameters (saved crystal values may be
+                # legacy display labels or CrystalSpec ids; both resolve)
+                self.window.instrument_dock.set_mono_id(self._saved_crystal_id(
+                    parameters.get("monocris_var"), self.descriptor.mono_crystals
+                ))
+                self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
+                    parameters.get("anacris_var"), self.descriptor.ana_crystals
+                ))
                 self.window.instrument_dock.mtt_edit.setText(str(parameters.get("mtt_var", "41.167")))
                 self.window.instrument_dock.stt_edit.setText(str(parameters.get("stt_var", "-71.2502")))
                 self.window.instrument_dock.omega_edit.setText(str(parameters.get("omega_var", "-35.6251")))
@@ -2521,21 +2567,21 @@ class TAVIController(QObject):
                 self.window.instrument_dock.Kf_edit.setText(str(parameters.get("Kf_var", "2.6634")))
                 self.window.instrument_dock.Ei_edit.setText(str(parameters.get("Ei_var", "14.7")))
                 self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
-                self.window.instrument_dock.nmo_combo.setCurrentText(parameters.get("NMO_installed_var", "None"))
-                self.window.instrument_dock.v_selector_check.setChecked(parameters.get("V_selector_installed_var", False))
-                self.window.instrument_dock.source_type_combo.setCurrentText(parameters.get("source_type_var", "Maxwellian"))
+                self.window.instrument_dock.set_source_id(
+                    parameters.get("source_type_var", self.descriptor.source_types[0].id)
+                )
                 self.window.instrument_dock.source_dE_edit.setText(str(parameters.get("source_dE_var", "2")))
-                self.window.instrument_dock.alpha_1_combo.setCurrentText(str(parameters.get("alpha_1_var", 40)))
-                self.window.instrument_dock.alpha_2_30_check.setChecked(parameters.get("alpha_2_30_var", False))
-                self.window.instrument_dock.alpha_2_40_check.setChecked(parameters.get("alpha_2_40_var", True))
-                self.window.instrument_dock.alpha_2_60_check.setChecked(parameters.get("alpha_2_60_var", False))
-                self.window.instrument_dock.alpha_3_combo.setCurrentText(str(parameters.get("alpha_3_var", 30)))
-                self.window.instrument_dock.alpha_4_combo.setCurrentText(str(parameters.get("alpha_4_var", 30)))
-                # Slit apertures (in mm)
-                self.window.instrument_dock.vbl_hgap_edit.setText(str(parameters.get("vbl_hgap_var", "88")))
-                self.window.instrument_dock.pbl_hgap_edit.setText(str(parameters.get("pbl_hgap_var", "100")))
-                self.window.instrument_dock.pbl_vgap_edit.setText(str(parameters.get("pbl_vgap_var", "100")))
-                self.window.instrument_dock.dbl_hgap_edit.setText(str(parameters.get("dbl_hgap_var", "50")))
+                # Descriptor-driven categories (nested containers; legacy flat
+                # keys from pre-Phase-2 files migrate through the fallbacks)
+                self.window.instrument_dock.set_module_values(
+                    self._saved_module_values(parameters)
+                )
+                self.window.instrument_dock.set_collimation_values(
+                    self._saved_collimation_values(parameters)
+                )
+                self.window.instrument_dock.set_slit_values_mm(
+                    self._saved_slit_values(parameters)
+                )
 
                 # Load absolute bending values (backward-compatible with factor-based params)
                 self._load_bending_parameters(parameters)
@@ -2591,10 +2637,17 @@ class TAVIController(QObject):
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
-                # Restore sample selection if present (default to Al: Bragg for easy testing)
+                # Restore sample selection: prefer the persisted sample id (labels
+                # can change); fall back to the label (default Al: Bragg).
                 try:
-                    sample_label = parameters.get("sample_label_var", "AL: Bragg")
-                    if hasattr(self.window.sample_dock, 'sample_combo'):
+                    saved_sample = parameters.get("current_sample_settings", {})
+                    restored = False
+                    if "sample_key" in saved_sample:
+                        restored = self.window.sample_dock.set_sample_by_key(
+                            saved_sample.get("sample_key")
+                        )
+                    if not restored:
+                        sample_label = parameters.get("sample_label_var", "AL: Bragg")
                         self.window.sample_dock.sample_combo.setCurrentText(sample_label)
                 except Exception:
                     pass
@@ -2644,7 +2697,9 @@ class TAVIController(QObject):
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
                 # Load diagnostic settings with defaults for any missing keys
-                default_diag = DiagnosticConfigDialog.get_default_settings()
+                default_diag = DiagnosticConfigDialog.get_default_settings(
+                    self.descriptor.monitors
+                )
                 loaded_diag = parameters.get("diagnostic_settings", {})
                 # Merge: use loaded value if present, else default
                 self.diagnostic_settings = {**default_diag, **loaded_diag}
@@ -2666,8 +2721,8 @@ class TAVIController(QObject):
         self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
         self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
         
-        self.window.instrument_dock.monocris_combo.setCurrentText("PG[002]")
-        self.window.instrument_dock.anacris_combo.setCurrentText("PG[002]")
+        self.window.instrument_dock.set_mono_id(self.descriptor.mono_crystals[0].id)
+        self.window.instrument_dock.set_ana_id(self.descriptor.ana_crystals[0].id)
         self.window.instrument_dock.mtt_edit.setText("41.167")
         self.window.instrument_dock.stt_edit.setText("-71.2502")
         self.window.instrument_dock.omega_edit.setText("-35.6251")
@@ -2677,21 +2732,13 @@ class TAVIController(QObject):
         self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
         self.window.instrument_dock.Ef_edit.setText("14.7")
-        self.window.instrument_dock.nmo_combo.setCurrentText("None")
-        self.window.instrument_dock.v_selector_check.setChecked(False)
-        self.window.instrument_dock.source_type_combo.setCurrentText("Maxwellian")
+        # Descriptor defaults for modules/collimation/slits (empty dict = defaults)
+        self.window.instrument_dock.set_module_values({})
+        self.window.instrument_dock.set_source_id(self.descriptor.source_types[0].id)
         self.window.instrument_dock.source_dE_edit.setText("2")
-        self.window.instrument_dock.alpha_1_combo.setCurrentText("40")
-        self.window.instrument_dock.alpha_2_30_check.setChecked(False)
-        self.window.instrument_dock.alpha_2_40_check.setChecked(True)
-        self.window.instrument_dock.alpha_2_60_check.setChecked(False)
-        self.window.instrument_dock.alpha_3_combo.setCurrentText("30")
-        self.window.instrument_dock.alpha_4_combo.setCurrentText("30")
-        # Slit apertures (in mm) - instrument defaults
-        self.window.instrument_dock.vbl_hgap_edit.setText("88")
-        self.window.instrument_dock.pbl_hgap_edit.setText("100")
-        self.window.instrument_dock.pbl_vgap_edit.setText("100")
-        self.window.instrument_dock.dbl_hgap_edit.setText("50")
+        self.window.instrument_dock.set_collimation_values({})
+        # Slit apertures - descriptor defaults (SlitSpec.default_*_mm)
+        self.window.instrument_dock.set_slit_values_mm({})
 
         # Set default absolute bending to ideal values
         self.update_ideal_bending_buttons()
@@ -2728,7 +2775,9 @@ class TAVIController(QObject):
         self.window.data_control_dock.save_folder_edit.setText(folder_suggestion)
         self.window.data_control_dock.load_folder_edit.setText(folder_suggestion)
         
-        self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
+        self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings(
+            self.descriptor.monitors
+        )
         self.current_sample_settings = {}
         # Reset UB matrix to identity
         self.ub_matrix = UBMatrix()
@@ -3617,7 +3666,7 @@ def main():
     from instruments.validation import assert_valid_descriptor
     assert_valid_descriptor(instrument.descriptor(), runnable=True)
 
-    window = TAVIMainWindow()
+    window = TAVIMainWindow(instrument.descriptor())
     controller = TAVIController(window, instrument)
     # Store controller reference on window so closeEvent can access it
     window.controller = controller

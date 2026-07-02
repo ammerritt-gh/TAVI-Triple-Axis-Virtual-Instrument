@@ -99,8 +99,15 @@ def test_structural_negative_cases(mutate, expected_substring):
 def test_multi_select_collimation_may_default_to_empty():
     d = puma_descriptor()
     alpha_2 = next(slot for slot in d.collimation if slot.id == "alpha_2")
-    assert alpha_2.multi_select and alpha_2.default == ""
-    assert validate_descriptor(d) == []
+    assert alpha_2.multi_select and alpha_2.default == "40"
+    # An empty multi-select default ("nothing pre-selected") is also valid.
+    empty_default = dataclasses.replace(alpha_2, default="")
+    mutated = dataclasses.replace(
+        d, collimation=tuple(
+            empty_default if slot.id == "alpha_2" else slot for slot in d.collimation
+        )
+    )
+    assert validate_descriptor(mutated) == []
 
 
 def test_puma_build_declares_descriptor_params():

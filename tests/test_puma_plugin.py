@@ -43,26 +43,22 @@ def _gui_vals(**overrides):
     """The instrument-config subset of get_gui_values() the scan config maps."""
     vals = {
         "K_fixed": "Ki Fixed",
-        "NMO_installed": "None",
-        "V_selector_installed": False,
         "source_type": "Maxwellian",
         "source_dE": 2.0,
         "rhm": 2.5,
         "rvm": 1.2,
         "rha": 2.5,
         "fixed_E": 14.7,
-        "monocris": "PG[002]",
-        "anacris": "PG[002]",
-        "alpha_1": "0",
-        "alpha_2_30": True,
-        "alpha_2_40": False,
-        "alpha_2_60": True,
-        "alpha_3": "30",
-        "alpha_4": "0",
-        "vbl_hgap": 0.088,
-        "pbl_hgap": 0.1,
-        "pbl_vgap": 0.1,
-        "dbl_hgap": 0.05,
+        "monocris": "pg002",
+        "anacris": "pg002",
+        "modules": {"nmo": "None", "v_selector": False},
+        "collimation": {
+            "alpha_1": "0",
+            "alpha_2": {"30", "60"},
+            "alpha_3": "30",
+            "alpha_4": "0",
+        },
+        "slits_mm": {"vbl_hgap": 88.0, "pbl": (100.0, 100.0), "dbl_hgap": 50.0},
     }
     vals.update(overrides)
     return vals
@@ -97,7 +93,7 @@ def test_scan_config_applies_gui_mapping():
     assert config.mis_omega == 1.5                      # hidden state propagates
     assert config.K_fixed == "Ki Fixed"
     assert (config.rhm, config.rvm, config.rha, config.rva) == (2.5, 1.2, 2.5, 0.8)
-    assert config.monocris == config.anacris == "PG[002]"
+    assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     assert config.alpha_1 == 0.0
     assert config.alpha_2 == [30, 0, 60]
@@ -113,7 +109,9 @@ def test_scan_config_nmo_zeroes_mono_bending():
     pytest.importorskip("mcstasscript")
     plugin = PUMAPlugin()
     config = plugin.scan_config(
-        plugin.default_state(), _gui_vals(NMO_installed="Vertical"), None, {}, object()
+        plugin.default_state(),
+        _gui_vals(modules={"nmo": "Vertical", "v_selector": False}),
+        None, {}, object(),
     )
     assert config.NMO_installed == "Vertical"
     assert config.rhm == 0 and config.rvm == 0
