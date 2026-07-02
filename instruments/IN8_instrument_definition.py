@@ -95,12 +95,15 @@ class IN8_Instrument(TAS_Instrument):
         RV = 2*sin(theta)/(1/Lin + 1/Lout). IN8's analyzer is double-focusing,
         so rva is computed too (PUMA fixes it at 0.8).
 
-        Angles arrive signed (IN8's A4 is negative); the radius is a magnitude.
-        No minimum-radius clamps: IN8's mechanical limits are unknown
-        (PLACEHOLDER; design record §20).
+        The radii are SIGNED: theta arrives signed (IN8's A4 is negative), and
+        Monochromator_curved needs the curvature center on the scattering side
+        -- feeding a positive radius to the negative take-off branch defocuses
+        by ~7 orders of magnitude in peak intensity (measured in the Phase-4
+        smoke run). No minimum-radius clamps: IN8's mechanical limits are
+        unknown (PLACEHOLDER; design record §20).
         """
-        sin_mth = abs(math.sin(math.radians(mth)))
-        sin_ath = abs(math.sin(math.radians(ath)))
+        sin_mth = math.sin(math.radians(mth))
+        sin_ath = math.sin(math.radians(ath))
         mono_focus = 1 / (1 / self.L1 + 1 / self.L2)
         ana_focus = 1 / (1 / self.L3 + 1 / self.L4)
 

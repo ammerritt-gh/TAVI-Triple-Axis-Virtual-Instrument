@@ -56,7 +56,7 @@ def test_get_unknown_id_error_lists_available():
     assert "dummy" in str(excinfo.value)
 
 
-def test_builtin_registers_puma():
+def test_builtin_registers_puma_and_in8():
     import instruments.builtin  # noqa: F401  (registration side effect)
 
     if "puma" not in {i.id for i in available_instruments()}:
@@ -67,19 +67,22 @@ def test_builtin_registers_puma():
         importlib.reload(instruments.builtin)
     infos = available_instruments()
     assert InstrumentInfo("puma", "PUMA (FRM-II)") in infos
+    assert InstrumentInfo("in8", "IN8 (ILL)") in infos
 
 
 def test_listing_is_lazy_no_mcstas_import():
     """Listing instruments must not import mcstasscript, PySide6, or the heavy
-    PUMA module (docs/CONFIGURABLE_INSTRUMENTS.md §16.10/§16.11)."""
+    instrument modules (docs/CONFIGURABLE_INSTRUMENTS.md §16.10/§16.11)."""
     code = (
         "import sys\n"
         "import instruments.builtin\n"
         "from instruments.registry import available_instruments\n"
         "infos = available_instruments()\n"
         "assert any(i.id == 'puma' for i in infos), infos\n"
+        "assert any(i.id == 'in8' for i in infos), infos\n"
         "for banned in ('mcstasscript', 'PySide6',\n"
-        "               'instruments.PUMA_instrument_definition'):\n"
+        "               'instruments.PUMA_instrument_definition',\n"
+        "               'instruments.IN8_instrument_definition'):\n"
         "    assert banned not in sys.modules, f'{banned} was imported'\n"
         "print('lazy-ok')\n"
     )

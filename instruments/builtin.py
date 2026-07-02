@@ -10,7 +10,9 @@ and importing this module must stay cheap: no mcstasscript, no PySide6, no
 To add an instrument: write its plugin module (see ``instruments/puma_plugin.py``
 and ``docs/CONFIGURABLE_INSTRUMENTS.md`` §5), then register it here.
 """
+from instruments.in8_plugin import IN8_DISPLAY_NAME, IN8_ID, IN8Plugin
 from instruments.puma_plugin import PUMA_DISPLAY_NAME, PUMA_ID, PUMAPlugin
 from instruments.registry import register
 
 register(PUMA_ID, PUMA_DISPLAY_NAME, PUMAPlugin)  # the class itself is the factory
+register(IN8_ID, IN8_DISPLAY_NAME, IN8Plugin)

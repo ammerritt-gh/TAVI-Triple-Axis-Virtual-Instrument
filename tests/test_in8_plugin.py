@@ -109,7 +109,9 @@ def test_scan_config_applies_gui_mapping():
     assert config is not base and base.alpha_3 == 0   # base not mutated
     assert config.mis_omega == 1.5                    # hidden state propagates
     assert config.K_fixed == "Kf Fixed"
-    assert (config.rhm, config.rvm, config.rha, config.rva) == (3.0, 1.2, 1.5, 0.31)
+    # Branch-signed curvature: GUI magnitudes; analyzer take-off is the -1
+    # branch so rha/rva come out negative.
+    assert (config.rhm, config.rvm, config.rha, config.rva) == (3.0, 1.2, -1.5, -0.31)
     assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     # Single-select collimation slots -- floats, not PUMA's stacked list.
@@ -162,7 +164,7 @@ def test_snapshot_params_match_descriptor(tmp_path):
     assert "vbl_hgap_param" not in snapshot.params
 
 
-def test_crystal_bending_is_point_source_both_sides():
+def test_crystal_bending_is_point_source_and_branch_signed():
     pytest.importorskip("mcstasscript")
     import math
 
@@ -175,9 +177,10 @@ def test_crystal_bending_is_point_source_both_sides():
     ana_focus = 1 / (1 / 1.05 + 1 / 0.70)
     assert rhm == pytest.approx(2 * mono_focus / sin_th)
     assert rvm == pytest.approx(2 * mono_focus * sin_th)
-    assert rha == pytest.approx(2 * ana_focus / sin_th)
-    assert rva == pytest.approx(2 * ana_focus * sin_th)  # computed, not fixed
-    assert rha > 0 and rva > 0                           # sign-safe
+    # Analyzer radii carry the branch sign: curvature center on the take-off
+    # side (wrong sign defocuses by ~1e7 in peak intensity).
+    assert rha == pytest.approx(-2 * ana_focus / sin_th)
+    assert rva == pytest.approx(-2 * ana_focus * sin_th)  # computed, not fixed
 
 
 def test_build_fingerprint_stable_and_sensitive():
