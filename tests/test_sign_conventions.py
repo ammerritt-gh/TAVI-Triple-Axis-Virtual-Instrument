@@ -203,6 +203,82 @@ def test_default_instrument_senses_are_baked_convention():
         assert (state.sense_mono, state.sense_sample, state.sense_ana) == (1, -1, 1)
 
 
+# ---------------------------------------------------------------------------
+# IN8 goldens -- vTAS-verified 2026-07-02 (live run; magnitudes within 0.02
+# deg, signs exact: a2 +, a4 +, a6 -, i.e. senses (+1, +1, -1)). Setup: cubic
+# a=4.05, plane (1,0,0)/(0,1,0); kf fixed 2.662 (V1-V3), ki fixed 4.1 (V4).
+# Mapping: TAVI A1 = vTAS a2, A2 = a4, A4 = a6. The sth (a3) values are TAVI's
+# own convention -- the V3-V1 difference (+33.689) is still PENDING vTAS
+# re-verification (the sample-sense flip moves sth to the other branch).
+# ---------------------------------------------------------------------------
+
+E_KF_2P662 = 14.684089   # k2energy(2.662)
+E_KI_4P1 = 34.833620     # k2energy(4.1)
+
+
+@pytest.fixture(scope="module")
+def in8():
+    from instruments.IN8_instrument_definition import IN8_Instrument
+
+    return IN8_Instrument()
+
+
+def _in8_angles(in8, qx, qy, qz, deltaE, fixed_E, k_fixed, mono="pg002"):
+    angles, error_flags = in8.calculate_angles(
+        qx, qy, qz, deltaE, fixed_E, k_fixed, mono, "pg002"
+    )
+    assert error_flags == []
+    return angles
+
+
+def test_in8_v1_elastic_200(in8):
+    mtt, stt, sth, saz, att = _in8_angles(in8, 2 * TAU, 0.0, 0.0, 0.0,
+                                          E_KF_2P662, "Kf Fixed")
+    # vTAS live run: a2 = +41.19, a4 = +71.30, a6 = -41.19.
+    assert mtt == pytest.approx(41.190287, abs=1e-3)
+    assert stt == pytest.approx(71.294923, abs=1e-3)
+    assert att == pytest.approx(-41.190287, abs=1e-3)
+    assert mtt > 0 and stt > 0 and att < 0
+    assert sth == pytest.approx(-144.352538, abs=1e-3)
+
+
+def test_in8_v2_inelastic_kf_fixed(in8):
+    mtt, stt, sth, saz, att = _in8_angles(in8, 2 * TAU, 0.0, 0.0, 5.0,
+                                          E_KF_2P662, "Kf Fixed")
+    # vTAS live run: a2 = +35.37, a4 = +64.92, a6 = -41.19.
+    assert mtt == pytest.approx(35.374270, abs=1e-3)
+    assert stt == pytest.approx(64.910358, abs=1e-3)
+    assert att == pytest.approx(-41.190287, abs=1e-3)
+
+
+def test_in8_v3_skew_q(in8):
+    mtt, stt, sth, saz, att = _in8_angles(in8, TAU, TAU, 0.0, 0.0,
+                                          E_KF_2P662, "Kf Fixed")
+    # vTAS live run: a4 = +48.69 (within 0.02 of the computed +48.674).
+    assert stt == pytest.approx(48.673546, abs=1e-3)
+    assert sth == pytest.approx(-110.663227, abs=1e-3)
+
+
+def test_in8_v4_cu200_ki_fixed(in8):
+    mtt, stt, sth, saz, att = _in8_angles(in8, 2 * TAU, 0.0, 0.0, 10.0,
+                                          E_KI_4P1, "Ki Fixed", mono="cu200")
+    # vTAS live run: a2 = +50.18, a4 = +47.53, a6 = -31.39.
+    assert mtt == pytest.approx(50.179956, abs=1e-3)
+    assert stt == pytest.approx(47.530501, abs=1e-3)
+    assert att == pytest.approx(-31.386970, abs=1e-3)
+
+
+def test_in8_v1_reverse_recovers_q(in8):
+    mtt, stt, sth, saz, att = _in8_angles(in8, 2 * TAU, 0.0, 0.0, 0.0,
+                                          E_KF_2P662, "Kf Fixed")
+    q_and_e, error_flags = in8.calculate_q_and_deltaE(
+        mtt, stt, sth, saz, att, E_KF_2P662, "Kf Fixed", "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert q_and_e[0] == pytest.approx(2 * TAU, abs=1e-6)
+    assert q_and_e[3] == pytest.approx(0.0, abs=1e-6)
+
+
 def test_base_state_requires_instrument_dispatch():
     """The TAS base class must not silently resolve crystals against PUMA."""
     from instruments.PUMA_instrument_definition import TAS_Instrument
