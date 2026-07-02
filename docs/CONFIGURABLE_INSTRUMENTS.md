@@ -19,9 +19,10 @@ angle solvers (vTAS-verified for IN8: +1/+1/−1), crystal/point-param dispatch
 through the instrument state, `instruments/in8_plugin.py` +
 `instruments/IN8_instrument_definition.py` built on the shared helpers,
 branch-signed crystal bending, startup picker active, end-to-end McStas smoke
-produces a real Bragg peak. 143 tests pass. `docs/INSTRUMENT_AUTHORING.md` is
-the authoring guide; the IN8 modules are the living template. Open: vTAS
-re-check of the a3 difference (§20.5).
+produces a real Bragg peak. 144 tests pass. `docs/INSTRUMENT_AUTHORING.md` is
+the authoring guide; the IN8 modules are the living template. The a3
+convention for the flipped sample sense is vTAS-verified too (Friedel/-Q
+branch; §20.5).
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -1387,11 +1388,17 @@ smoke before registration was declared done.
   a6 negative. This OVERRIDES the vTAS repository XML (`ss="-1" sa="1"`) and
   the §14 table derived from it — the live readout wins. Locked as goldens in
   `tests/test_sign_conventions.py`.
-- A flipped sample sense does NOT mirror sth: the sample rotation axis does
-  not flip with the scattering side, so sth lands on the other atan2 branch
-  (elastic (2,0,0): −144.35° instead of +35.63°; same Bragg planes mod 180°).
-  The round-trip through `q_instrument_from_angles` is exact — locked by
-  tests.
+- **Flipped-branch sample rotation follows the Friedel/vTAS convention**
+  (second live vTAS check, same day): for `sense_sample=+1` the solvers align
+  the Friedel partner −Q with the scattered-side Q_lab (implemented as
+  solving for −q on the positive-stt branch, sth normalized to (−180, 180],
+  saz flipping with −q). The user's live a3(V3) = 69.337 matches TAVI's sth
+  to three decimals; their a3(V1) = 125.647 is TAVI's +35.647 plus exactly
+  90.000 — vTAS displayed the cubic-equivalent (0,2,0) setting for that
+  point. The raw inverse of a +1-branch solution recovers −Q;
+  `calculate_q_and_deltaE` negates it back, so instrument-level round trips
+  return +Q exactly. Same Bragg planes either way (verified in the McStas
+  smoke: the −Q branch gives an equally real peak).
 
 ### 20.2 Shared-code generalization
 
@@ -1459,10 +1466,13 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
   parallel-beam mono formula and unsigned magnitudes for the advisory "Ideal:"
   labels — mildly wrong for IN8 (point-source + signed). Follow-up: route
   through `state.calculate_crystal_bending`.
-- **Open verification:** the a3(V3)−a3(V1) sample-rotation difference computes
-  to +33.69° under IN8's flipped sample sense (not the ±56.31° a PUMA-sense
-  instrument gives). Needs a vTAS re-check; if vTAS disagrees, TAVI's sth
-  convention for the +1 branch needs a mapping (data stays, solver branch
-  choice is the question).
+- **a3 convention: RESOLVED** (user's second live vTAS run). The raw readings
+  a3(V1)=125.647 / a3(V3)=69.337 initially suggested a −56.31° difference
+  (mirror of the baked branch), but decode exactly as TAVI's Friedel-branch
+  values +35.647/+69.337 with vTAS showing the cubic-equivalent +90° setting
+  for V1 — in one symmetry setting the difference is +33.69°, as computed.
+  The solvers now implement this convention for `sense_sample=+1` (§20.1);
+  goldens updated. When comparing a3 against vTAS on cubic samples, expect
+  ±90° symmetry-setting jumps between points.
 - Si bent-perfect crystals, FlatCone/IMPS, and the §20.3 placeholders await
   instrument-scientist input.

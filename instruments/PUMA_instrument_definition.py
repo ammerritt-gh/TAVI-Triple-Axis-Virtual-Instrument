@@ -363,6 +363,11 @@ class TAS_Instrument:
         # qx and qy span the horizontal scattering plane; qz is vertical.
         try:
             qx, qy, qz = q_instrument_from_angles(sth, saz, stt, ki, kf)
+            if self.sense_sample > 0:
+                # Flipped-branch solutions align the Friedel partner -Q with
+                # the beam (vTAS convention; see solve_instrument_angles), so
+                # the raw inverse recovers -Q.
+                qx, qy, qz = -qx, -qy, -qz
         except Exception as exc:
             error_flags.append("q")
             print(f"Invalid Q from sample angles: {exc}")
