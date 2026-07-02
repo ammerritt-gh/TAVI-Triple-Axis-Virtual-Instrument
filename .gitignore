@@ -379,6 +379,9 @@ PUMA_McScript.instr
 IN8_McScript.exe
 IN8_McScript.instr
 
+# Local-only third-party reference material (see examples/vTAS-README.md)
+examples/vTAS/
+
 # Virtual environments for Python projects
 .venv/
 
