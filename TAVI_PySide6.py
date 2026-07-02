@@ -2643,12 +2643,6 @@ class TAVIController(QObject):
                 self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
                 self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
                 
-                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", "4.05")))
-                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", "4.05")))
-                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", "4.05")))
-                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", "90")))
-                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", "90")))
-                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", "90")))
                 # Sample alignment offsets (kappa and psi)
                 self.window.sample_dock.kappa_edit.setText(str(parameters.get("kappa_var", 0)))
                 self.window.sample_dock.psi_edit.setText(str(parameters.get("psi_offset_var", 0)))
@@ -2680,6 +2674,15 @@ class TAVIController(QObject):
                         self.window.sample_dock.set_sample_by_key("Al_bragg")
                 except Exception:
                     pass
+                # Saved lattice values are applied AFTER the sample restore: the
+                # sample-change handler adopts the sample's own lattice, and the
+                # user's saved (possibly hand-edited) values must win on reload.
+                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", "4.05")))
+                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", "4.05")))
+                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", "4.05")))
+                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", "90")))
+                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", "90")))
+                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", "90")))
                 # Restore space group selection
                 try:
                     sg_number = parameters.get("space_group_number_var")
@@ -2907,8 +2910,32 @@ class TAVIController(QObject):
             self.instrument_state.sample_key = key
             self.current_sample_settings = {"sample_label": label, "sample_key": key}
             self.print_to_message_center(f"Sample selection changed: {label} ({key})")
+            self._adopt_sample_lattice(key)
         except Exception as e:
             self.print_to_message_center(f"Sample selection change failed: {e}")
+
+    def _adopt_sample_lattice(self, sample_key):
+        """Set the lattice fields from the selected sample's own lattice.
+
+        Samples carry their lattice constants (SampleSpec.lattice) because the
+        McStas components bake them in -- driving e.g. Phonon_DFT (a=4.03893)
+        with a mismatched GUI lattice misses its Bragg condition entirely.
+        The parameter-restore path re-applies saved lattice values afterwards,
+        so hand-edited lattices survive a reload.
+        """
+        spec = next((s for s in self.descriptor.samples if s.id == sample_key), None)
+        if spec is None or spec.lattice is None:
+            return
+        a, b, c, alpha, beta, gamma = spec.lattice
+        dock = self.window.sample_dock
+        for edit, value in ((dock.lattice_a_edit, a), (dock.lattice_b_edit, b),
+                            (dock.lattice_c_edit, c), (dock.lattice_alpha_edit, alpha),
+                            (dock.lattice_beta_edit, beta), (dock.lattice_gamma_edit, gamma)):
+            edit.setText(f"{value:g}")
+        self.print_to_message_center(
+            f"Lattice set from sample '{spec.display_name}': "
+            f"a={a:g}, b={b:g}, c={c:g}"
+        )
     
     def stop_simulation(self):
         """Stop the running simulation."""
