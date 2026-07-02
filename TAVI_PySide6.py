@@ -2519,6 +2519,16 @@ class TAVIController(QObject):
             with open("config/parameters.json", "r") as file:
                 parameters = self._parameters_block(json.load(file))
 
+                # No saved block for this instrument (fresh install or a
+                # pre-namespacing file): use the full default path so derived
+                # values like ideal bending radii are applied, not left at 0.
+                if not parameters:
+                    self.set_default_parameters()
+                    self.print_to_message_center(
+                        f"No saved parameters for '{self.instrument.id}'; defaults loaded"
+                    )
+                    return
+
                 # Block signals during loading to prevent premature validation
                 self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
                 self.window.simulation_dock.scan_command_2_edit.blockSignals(True)

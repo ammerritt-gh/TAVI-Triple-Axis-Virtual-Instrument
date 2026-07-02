@@ -64,6 +64,26 @@ def test_saved_slit_values_container_roundtrip():
     assert controller_module.TAVIController._saved_slit_values({}) == {}
 
 
+def test_empty_block_falls_back_to_full_defaults():
+    """A legacy flat file (or fresh instrument) must take the defaults path.
+
+    Loading an empty block through the normal path would leave derived values
+    like the ideal bending radii at 0 (flat crystals -> low intensity), so
+    load_parameters must delegate to set_default_parameters before touching
+    any widgets.
+    """
+    import inspect
+
+    controller = _controller_stub()
+    legacy_flat = {"mtt_var": "41.167", "rhm_var": "13.0272"}
+    assert controller._parameters_block(legacy_flat) == {}
+
+    source = inspect.getsource(controller_module.TAVIController.load_parameters)
+    prelude = source.split("blockSignals", 1)[0]
+    assert "if not parameters:" in prelude
+    assert "self.set_default_parameters()" in prelude
+
+
 def test_saved_module_values_container():
     values = controller_module.TAVIController._saved_module_values(
         {"modules": {"nmo": "Both", "v_selector": True}}
