@@ -77,10 +77,13 @@ class UnifiedSampleDock(BaseDockWidget):
     # Signal emitted when space group changes
     space_group_changed = Signal(int)  # emits space group number
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, descriptor=None):
         super().__init__("Sample", parent, use_scroll_area=True)
         self.setObjectName("SampleDock")
-        
+        if descriptor is None:
+            raise ValueError("UnifiedSampleDock requires the active InstrumentDescriptor")
+        self.descriptor = descriptor
+
         # Track lock state (always start locked)
         self._lattice_locked = True
         self._saved_lattice_values = {}  # Store values when unlocking        
@@ -98,13 +101,13 @@ class UnifiedSampleDock(BaseDockWidget):
         sample_combo_layout.setContentsMargins(0, 0, 0, 0)
         sample_combo_layout.setSpacing(6)
         sample_combo_layout.addWidget(QLabel("Sample:"))
+        # Samples come from the descriptor; the id "none" means "no sample
+        # component" and maps to key None for the legacy sample_key contract.
         self.sample_combo = QComboBox()
+        self.sample_combo.setObjectName("sample_combo")
         self.sample_map = {
-            "None": None,
-            "AL: acoustic phonon": "Al_rod_phonon",
-            "Al: optic phonon": "Al_rod_phonon_optic",
-            "AL: Bragg": "Al_bragg",
-            "Al: Phonon DFT": "Al_phonon_DFT",
+            sample.display_name: (None if sample.id == "none" else sample.id)
+            for sample in descriptor.samples
         }
         self.sample_combo.addItems(list(self.sample_map.keys()))
         sample_combo_layout.addWidget(self.sample_combo)
@@ -336,6 +339,17 @@ class UnifiedSampleDock(BaseDockWidget):
         """Return the internal sample key for the currently selected sample."""
         label = self.sample_combo.currentText()
         return self.sample_map.get(label, None)
+
+    def set_sample_by_key(self, sample_key):
+        """Select the sample whose id matches ``sample_key`` (None = no sample).
+
+        Returns True when a matching entry was found.
+        """
+        for label, key in self.sample_map.items():
+            if key == sample_key:
+                self.sample_combo.setCurrentText(label)
+                return True
+        return False
     
     def _on_open_misalignment_dock(self):
         """Handle button click to open misalignment dock."""

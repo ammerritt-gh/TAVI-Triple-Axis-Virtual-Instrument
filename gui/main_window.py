@@ -24,10 +24,15 @@ class TAVIMainWindow(QMainWindow):
     # Layout config file path
     LAYOUT_CONFIG_FILE = "config/view_layout.json"
     
-    def __init__(self):
+    def __init__(self, descriptor=None):
         super().__init__()
-        self.setWindowTitle("TAVI - Triple-Axis Virtual Instrument")
-        
+        if descriptor is None:
+            raise ValueError("TAVIMainWindow requires the active InstrumentDescriptor")
+        self.descriptor = descriptor
+        self.setWindowTitle(
+            f"TAVI - Triple-Axis Virtual Instrument - {descriptor.display_name}"
+        )
+
         # Enable dock nesting for more flexible layouts
         self.setDockNestingEnabled(True)
         
@@ -62,13 +67,13 @@ class TAVIMainWindow(QMainWindow):
     def _create_docks(self):
         """Create all dock widgets."""
         # Instrument Panel (column 1, top)
-        self.instrument_dock = InstrumentDock(self)
-        
+        self.instrument_dock = InstrumentDock(self, descriptor=self.descriptor)
+
         # Scattering Panel (column 1, bottom)
         self.scattering_dock = UnifiedScatteringDock(self)
-        
+
         # Sample Panel (column 2, top)
-        self.sample_dock = UnifiedSampleDock(self)
+        self.sample_dock = UnifiedSampleDock(self, descriptor=self.descriptor)
         
         # Misalignment Training Panel (initially hidden, opened from Sample panel)
         self.misalignment_dock = MisalignmentDock(self)
@@ -376,7 +381,8 @@ class TAVIMainWindow(QMainWindow):
     def _show_about(self):
         """Show the About dialog."""
         QMessageBox.about(self, "About TAVI",
-                         "TAVI - Triple-Axis Virtual Instrument\n\n"
+                         "TAVI - Triple-Axis Virtual Instrument\n"
+                         "Version v1.2.0\n\n"
                          "A virtual instrument simulator for triple-axis neutron "
                          "spectrometry experiments.\n\n"
                          "Panels can be undocked, moved, and rearranged.\n"

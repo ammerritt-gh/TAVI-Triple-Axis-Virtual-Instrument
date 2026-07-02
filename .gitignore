@@ -376,6 +376,11 @@ mcstas_*
 !tavi/mcstas_config.py
 PUMA_McScript.exe
 PUMA_McScript.instr
+IN8_McScript.exe
+IN8_McScript.instr
+
+# Local-only third-party reference material (see examples/vTAS-README.md)
+examples/vTAS/
 
 # Virtual environments for Python projects
 .venv/

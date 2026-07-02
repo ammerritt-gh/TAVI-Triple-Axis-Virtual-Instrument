@@ -14,21 +14,14 @@ import mcstasscript as ms
 from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
-# Import existing backend modules
-from instruments.PUMA_instrument_definition import (
-    PUMA_Instrument,
-    PUMARunExecutionState,
-    build_PUMA_instrument,
-    compute_scan_snapshot,
-    run_PUMA_point,
-    validate_angles,
-    mono_ana_crystals_setup,
-)
+# Import the instrument contract (the concrete instrument arrives via main())
+from instruments.contract import PrepFailure, RunExecutionState
 
 # Import TAVI core modules
-from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file, 
+from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
                                    simple_plot_scan_commands, display_existing_data,
                                    read_parameters_from_file, write_1D_scan, write_2D_scan)
+from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_component_q
@@ -79,11 +72,15 @@ class TAVIController(QObject):
     actual_output_folder_updated = Signal(str)
     pre_scan_estimate_updated = Signal(str)
     
-    def __init__(self, window):
+    def __init__(self, window, instrument):
         super().__init__()
         self.window = window
-        self.PUMA = PUMA_Instrument()
-        
+        # The active instrument plugin (fixed for the session) and its live state.
+        self.instrument = instrument
+        self.instrument_state = instrument.default_state()
+        self.descriptor = instrument.descriptor()
+        self._mcstas_name = self.descriptor.mcstas_name
+
         # UB matrix for crystal orientation
         self.ub_matrix = UBMatrix()
         
@@ -91,6 +88,10 @@ class TAVIController(QObject):
         self.stop_event = threading.Event()
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
+        # Cross-scan binary reuse (design record §18.5): the last compiled
+        # instrument, its execution state, and the build fingerprint it was
+        # compiled from. Populated after a scan that actually compiled.
+        self._binary_reuse_cache = None
         
         # Flag to prevent recursive updates
         self.updating = False
@@ -107,8 +108,10 @@ class TAVIController(QObject):
         self._scan_update_timer.setInterval(300)  # 300ms debounce
         self._scan_update_timer.timeout.connect(self._update_scan_estimates)
         
-        # Initialize crystal info with default values
-        self.monocris_info, self.anacris_info = mono_ana_crystals_setup("PG[002]", "PG[002]")
+        # Initialize crystal info with the descriptor's first mono/ana crystals
+        self.monocris_info, self.anacris_info = self.instrument.crystal_info(
+            self.descriptor.mono_crystals[0].id, self.descriptor.ana_crystals[0].id
+        )
         
         # Initialize output directory
         self.output_directory = os.path.join(os.getcwd(), "output")
@@ -218,8 +221,10 @@ class TAVIController(QObject):
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
 
-        # Connect NMO selection change to update ideal bending values
-        self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
+        # Connect NMO selection change to update ideal bending values (instrument-
+        # specific coupling; the module widget only exists when declared)
+        if getattr(self.window.instrument_dock, "nmo_combo", None) is not None:
+            self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
 
         # Ideal focusing buttons
         self.window.instrument_dock.rhm_ideal_button.clicked.connect(
@@ -280,7 +285,7 @@ class TAVIController(QObject):
         # Sample alignment offsets (kappa and psi)
         self.window.sample_dock.kappa_edit.editingFinished.connect(self.on_alignment_offset_changed)
         self.window.sample_dock.psi_edit.editingFinished.connect(self.on_alignment_offset_changed)
-        # Sample selection change -> update PUMA and show status
+        # Sample selection change -> update the instrument state and show status
         try:
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
         except Exception:
@@ -313,25 +318,8 @@ class TAVIController(QObject):
         # Collect all QLineEdit widgets from all docks
         line_edits = []
         
-        # Instrument dock
-        line_edits.extend([
-            self.window.instrument_dock.mtt_edit,
-            self.window.instrument_dock.stt_edit,
-            self.window.instrument_dock.omega_edit,
-            self.window.instrument_dock.chi_edit,
-            self.window.instrument_dock.att_edit,
-            self.window.instrument_dock.Ki_edit,
-            self.window.instrument_dock.Ei_edit,
-            self.window.instrument_dock.Kf_edit,
-            self.window.instrument_dock.Ef_edit,
-            self.window.instrument_dock.rhm_edit,
-            self.window.instrument_dock.rvm_edit,
-            self.window.instrument_dock.rha_edit,
-            self.window.instrument_dock.vbl_hgap_edit,
-            self.window.instrument_dock.pbl_hgap_edit,
-            self.window.instrument_dock.pbl_vgap_edit,
-            self.window.instrument_dock.dbl_hgap_edit,
-        ])
+        # Instrument dock (incl. the descriptor-generated slit edits)
+        line_edits.extend(self.window.instrument_dock.line_edits_for_feedback())
         
         # Reciprocal space dock
         line_edits.extend([
@@ -518,23 +506,21 @@ class TAVIController(QObject):
         # Fixed E
         metadata['fixed_E'] = vals.get('fixed_E', 0)
         
-        # Collimations
-        metadata['alpha_1'] = vals.get('alpha_1', 'open')
-        # Build alpha_2 string from checkboxes
-        alpha_2_parts = []
-        if vals.get('alpha_2_30'):
-            alpha_2_parts.append("30'")
-        if vals.get('alpha_2_40'):
-            alpha_2_parts.append("40'")
-        if vals.get('alpha_2_60'):
-            alpha_2_parts.append("60'")
-        metadata['alpha_2'] = "+".join(alpha_2_parts) if alpha_2_parts else "open"
-        metadata['alpha_3'] = vals.get('alpha_3', 'open')
-        metadata['alpha_4'] = vals.get('alpha_4', 'open')
+        # Collimations (descriptor-driven container: str or set[str] per slot)
+        collimation = vals.get('collimation', {})
+        for slot in self.descriptor.collimation:
+            value = collimation.get(slot.id)
+            if slot.multi_select:
+                selected = [v for v in slot.allowed if v in (value or ())]
+                metadata[slot.id] = (
+                    "+".join(f"{v}'" for v in selected) if selected else "open"
+                )
+            else:
+                metadata[slot.id] = value if value is not None else 'open'
         
         # Crystals
-        metadata['monocris'] = vals.get('monocris', 'PG[002]')
-        metadata['anacris'] = vals.get('anacris', 'PG[002]')
+        metadata['monocris'] = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+        metadata['anacris'] = vals.get('anacris', self.descriptor.ana_crystals[0].id)
         
         # Alignment offsets
         metadata['kappa'] = vals.get('kappa', 0)
@@ -553,10 +539,11 @@ class TAVIController(QObject):
         # Energy transfer
         metadata['deltaE'] = vals.get('deltaE', 0)
         
-        # NMO and velocity selector
-        metadata['NMO_installed'] = vals.get('NMO_installed', 'None')
-        metadata['V_selector_installed'] = vals.get('V_selector_installed', False)
-        
+        # Optional modules (legacy display keys kept for the display dock)
+        modules = vals.get('modules', {})
+        metadata['NMO_installed'] = modules.get('nmo', 'None')
+        metadata['V_selector_installed'] = modules.get('v_selector', False)
+
         return metadata
 
     def _build_current_scan_metadata(self):
@@ -573,20 +560,6 @@ class TAVIController(QObject):
         with open(summary_path, "w", encoding="utf-8") as handle:
             json.dump(stage_summary, handle, indent=2)
         return summary_path
-    
-    def update_monocris_info(self):
-        """Update monochromator crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_variables()
-    
-    def update_anacris_info(self):
-        """Update analyzer crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
-        self.update_all_variables()
     
     def get_gui_values(self):
         """Helper to get all GUI values as a dict."""
@@ -618,26 +591,18 @@ class TAVIController(QObject):
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
                 'kappa': float(self.window.sample_dock.kappa_edit.text() or 0),
                 'psi': float(self.window.sample_dock.psi_edit.text() or 0),
-                'monocris': self.window.instrument_dock.monocris_combo.currentText(),
-                'anacris': self.window.instrument_dock.anacris_combo.currentText(),
+                'monocris': self.window.instrument_dock.selected_mono_id(),
+                'anacris': self.window.instrument_dock.selected_ana_id(),
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
                 'rvm': float(self.window.instrument_dock.rvm_edit.text() or 0),
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
-                'NMO_installed': self.window.instrument_dock.nmo_combo.currentText(),
-                'V_selector_installed': self.window.instrument_dock.v_selector_check.isChecked(),
-                'source_type': self.window.instrument_dock.source_type_combo.currentText(),
+                'source_type': self.window.instrument_dock.selected_source_id(),
                 'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
-                'alpha_1': self.window.instrument_dock.alpha_1_combo.currentText(),
-                'alpha_2_30': self.window.instrument_dock.alpha_2_30_check.isChecked(),
-                'alpha_2_40': self.window.instrument_dock.alpha_2_40_check.isChecked(),
-                'alpha_2_60': self.window.instrument_dock.alpha_2_60_check.isChecked(),
-                'alpha_3': self.window.instrument_dock.alpha_3_combo.currentText(),
-                'alpha_4': self.window.instrument_dock.alpha_4_combo.currentText(),
-                # Slit apertures (in mm, convert to m for PUMA)
-                'vbl_hgap': float(self.window.instrument_dock.vbl_hgap_edit.text() or 88) / 1000,
-                'pbl_hgap': float(self.window.instrument_dock.pbl_hgap_edit.text() or 100) / 1000,
-                'pbl_vgap': float(self.window.instrument_dock.pbl_vgap_edit.text() or 100) / 1000,
-                'dbl_hgap': float(self.window.instrument_dock.dbl_hgap_edit.text() or 50) / 1000,
+                # Descriptor-driven categories (the plugin's scan_config owns the
+                # mapping from these containers to its instrument state fields).
+                'modules': self.window.instrument_dock.module_values(),
+                'collimation': self.window.instrument_dock.collimation_values(),
+                'slits_mm': self.window.instrument_dock.slit_values_mm(),
                 'number_neutrons': self.window.simulation_dock.get_number_neutrons(),
                 'scan_command1': self.window.simulation_dock.scan_command_1_edit.text(),
                 'scan_command2': self.window.simulation_dock.scan_command_2_edit.text(),
@@ -645,41 +610,6 @@ class TAVIController(QObject):
             }
         except ValueError:
             return None
-
-    def _build_scan_puma_config(self, vals, sample_key, diagnostic_settings):
-        """Create a scan-local PUMA configuration from frozen launch state."""
-        scan_puma_config = copy.deepcopy(self.PUMA)
-        scan_puma_config.K_fixed = vals['K_fixed']
-        scan_puma_config.NMO_installed = vals['NMO_installed']
-        scan_puma_config.V_selector_installed = vals['V_selector_installed']
-        scan_puma_config.source_type = vals['source_type']
-        scan_puma_config.source_dE = vals['source_dE']
-        scan_puma_config.rhm = vals['rhm']
-        scan_puma_config.rvm = vals['rvm']
-        scan_puma_config.rha = vals['rha']
-        scan_puma_config.rva = 0.8
-        if scan_puma_config.NMO_installed != "None":
-            scan_puma_config.rhm = 0
-            scan_puma_config.rvm = 0
-        scan_puma_config.fixed_E = vals['fixed_E']
-        scan_puma_config.monocris = vals['monocris']
-        scan_puma_config.anacris = vals['anacris']
-        scan_puma_config.sample_key = sample_key
-        scan_puma_config.alpha_1 = float(vals['alpha_1'])
-        scan_puma_config.alpha_2 = [
-            30 if vals['alpha_2_30'] else 0,
-            40 if vals['alpha_2_40'] else 0,
-            60 if vals['alpha_2_60'] else 0,
-        ]
-        scan_puma_config.alpha_3 = float(vals['alpha_3'])
-        scan_puma_config.alpha_4 = float(vals['alpha_4'])
-        scan_puma_config.vbl_hgap = vals['vbl_hgap']
-        scan_puma_config.pbl_hgap = vals['pbl_hgap']
-        scan_puma_config.pbl_vgap = vals['pbl_vgap']
-        scan_puma_config.dbl_hgap = vals['dbl_hgap']
-        scan_puma_config.sample_mount = self._build_sample_mount(vals)
-        scan_puma_config.update_diagnostic_settings(diagnostic_settings)
-        return scan_puma_config
 
     def _build_sample_mount(self, vals):
         """Build the current component-agnostic sample mount from GUI lattice + UB."""
@@ -722,7 +652,10 @@ class TAVIController(QObject):
             'vals': vals,
             'save_folder_input': self.window.data_control_dock.save_folder_edit.text(),
             'sample_key': sample_key,
-            'scan_puma_config': self._build_scan_puma_config(vals, sample_key, diagnostic_settings),
+            'scan_config': self.instrument.scan_config(
+                self.instrument_state, vals, sample_key, diagnostic_settings,
+                self._build_sample_mount(vals),
+            ),
             'diagnostic_settings': diagnostic_settings,
             'relative_mode_1': self.window.simulation_dock.relative_1_button.isChecked(),
             'relative_mode_2': self.window.simulation_dock.relative_2_button.isChecked(),
@@ -807,7 +740,6 @@ class TAVIController(QObject):
         try:
             self.updating = True
             
-            from instruments.PUMA_instrument_definition import energy2k, k2angle
             
             # Update Ei and Ef based on K_fixed mode
             if vals['K_fixed'] == "Ki Fixed":
@@ -869,7 +801,8 @@ class TAVIController(QObject):
                 att = float(self.window.instrument_dock.att_edit.text() or 0)
 
             # Check if NMO is installed - if so, ideal monochromator bending is flat (0)
-            nmo_installed = self.window.instrument_dock.nmo_combo.currentText()
+            nmo_combo = getattr(self.window.instrument_dock, "nmo_combo", None)
+            nmo_installed = nmo_combo.currentText() if nmo_combo is not None else "None"
             if nmo_installed != "None":
                 # NMO provides focusing, so ideal monochromator bending is flat
                 rhm = 0
@@ -884,8 +817,8 @@ class TAVIController(QObject):
 
                 # Parallel beam formula: source effectively at infinity (guide output)
                 # Focus from monochromator to sample at distance L2
-                rhm = 2 * self.PUMA.L2 / sin_m
-                rvm = 2 * self.PUMA.L2 * sin_m
+                rhm = 2 * self.instrument_state.L2 / sin_m
+                rvm = 2 * self.instrument_state.L2 * sin_m
 
                 if rhm < 2.0:
                     rhm = 2.0
@@ -893,7 +826,7 @@ class TAVIController(QObject):
                     rvm = 0.5
 
             # Analyzer: point-source formula (sample is real point source)
-            denom_a = (1 / self.PUMA.L3 + 1 / self.PUMA.L4)
+            denom_a = (1 / self.instrument_state.L3 + 1 / self.instrument_state.L4)
             # Use theta (att/2) not 2-theta (att) per McStas documentation
             sin_a = math.sin(math.radians(att / 2))
 
@@ -1050,30 +983,10 @@ class TAVIController(QObject):
         QTimer.singleShot(150, _bold_then_reset)
 
     def _load_bending_parameters(self, parameters):
-        """Load bending parameters from file (supports old factor-based values)."""
-        ideal = self._compute_ideal_bending_values()
-
-        if any(key in parameters for key in ("rhm_var", "rvm_var", "rha_var")):
-            self.window.instrument_dock.rhm_edit.setText(str(parameters.get("rhm_var", "")))
-            self.window.instrument_dock.rvm_edit.setText(str(parameters.get("rvm_var", "")))
-            self.window.instrument_dock.rha_edit.setText(str(parameters.get("rha_var", "")))
-            return
-
-        if ideal:
-            try:
-                rhmfac = float(parameters.get("rhmfac_var", 1) or 1)
-                rvmfac = float(parameters.get("rvmfac_var", 1) or 1)
-                rhafac = float(parameters.get("rhafac_var", 1) or 1)
-                self.window.instrument_dock.rhm_edit.setText(f"{ideal['rhm'] * rhmfac:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.rvm_edit.setText(f"{ideal['rvm'] * rvmfac:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.rha_edit.setText(f"{ideal['rha'] * rhafac:.4f}".rstrip('0').rstrip('.'))
-                return
-            except Exception:
-                pass
-
-        self.window.instrument_dock.rhm_edit.setText("0")
-        self.window.instrument_dock.rvm_edit.setText("0")
-        self.window.instrument_dock.rha_edit.setText("0")
+        """Load absolute bending radii from the saved parameter block."""
+        self.window.instrument_dock.rhm_edit.setText(str(parameters.get("rhm_var", "0")))
+        self.window.instrument_dock.rvm_edit.setText(str(parameters.get("rvm_var", "0")))
+        self.window.instrument_dock.rha_edit.setText(str(parameters.get("rha_var", "0")))
 
     def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked):
         """Apply lock state for ideal bending buttons."""
@@ -1102,7 +1015,6 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Ki and Ei from mtt
-            from instruments.PUMA_instrument_definition import angle2k, k2energy
             Ki = angle2k(vals['mtt'] / 2, self.monocris_info['dm'])
             Ei = k2energy(Ki)
             
@@ -1136,7 +1048,6 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Kf and Ef from att
-            from instruments.PUMA_instrument_definition import angle2k, k2energy
             Kf = angle2k(vals['att'] / 2, self.anacris_info['da'])
             Ef = k2energy(Kf)
             
@@ -1165,7 +1076,6 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from instruments.PUMA_instrument_definition import k2energy, k2angle
             Ei = k2energy(vals['Ki'])
             mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
             
@@ -1194,7 +1104,6 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from instruments.PUMA_instrument_definition import energy2k, k2angle
             Ki = energy2k(vals['Ei'])
             mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
             
@@ -1223,7 +1132,6 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from instruments.PUMA_instrument_definition import k2energy, k2angle
             Ef = k2energy(vals['Kf'])
             att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
             
@@ -1252,7 +1160,6 @@ class TAVIController(QObject):
         
         try:
             self.updating = True
-            from instruments.PUMA_instrument_definition import energy2k, k2angle
             Kf = energy2k(vals['Ef'])
             att = 2 * k2angle(Kf, self.anacris_info['da'])
             
@@ -1317,7 +1224,7 @@ class TAVIController(QObject):
             att = float(self.window.instrument_dock.att_edit.text() or 0)
             saz = float(self.window.instrument_dock.chi_edit.text() or 0)
 
-            q_vals, error_flags = self.PUMA.calculate_q_and_deltaE(
+            q_vals, error_flags = self.instrument_state.calculate_q_and_deltaE(
                 mtt, stt, sth, saz, att,
                 vals['fixed_E'], vals['K_fixed'],
                 vals['monocris'], vals['anacris']
@@ -1467,7 +1374,7 @@ class TAVIController(QObject):
             return
         try:
             self.updating = True
-            angles_array, error_flags = self.PUMA.calculate_angles(
+            angles_array, error_flags = self.instrument_state.calculate_angles(
                 vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
                 vals['fixed_E'], vals['K_fixed'],
                 vals['monocris'], vals['anacris']
@@ -1493,16 +1400,16 @@ class TAVIController(QObject):
     
     def update_monocris_info(self):
         """Update monochromator crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        self.monocris_info, _ = mono_ana_crystals_setup(monocris, anacris)
+        monocris = self.window.instrument_dock.selected_mono_id()
+        anacris = self.window.instrument_dock.selected_ana_id()
+        self.monocris_info, _ = self.instrument.crystal_info(monocris, anacris)
         self.update_all_variables()
-    
+
     def update_anacris_info(self):
         """Update analyzer crystal information."""
-        monocris = self.window.instrument_dock.monocris_combo.currentText()
-        anacris = self.window.instrument_dock.anacris_combo.currentText()
-        _, self.anacris_info = mono_ana_crystals_setup(monocris, anacris)
+        monocris = self.window.instrument_dock.selected_mono_id()
+        anacris = self.window.instrument_dock.selected_ana_id()
+        _, self.anacris_info = self.instrument.crystal_info(monocris, anacris)
         self.update_all_variables()
     
     def on_alignment_offset_changed(self):
@@ -1512,8 +1419,8 @@ class TAVIController(QObject):
         try:
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.PUMA.kappa = kappa
-            self.PUMA.psi = psi
+            self.instrument_state.kappa = kappa
+            self.instrument_state.psi = psi
             self.print_to_message_center(f"Alignment offsets updated: κ={kappa}° (chi offset), ψ={psi}° (omega offset)")
         except ValueError:
             self.print_to_message_center("Invalid alignment offset value")
@@ -1741,7 +1648,7 @@ class TAVIController(QObject):
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         
         # Get instrument name
-        instrument_name = "PUMA"  # Currently only PUMA is supported
+        instrument_name = self.instrument.id
         
         # Update time per point estimate
         _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, num_neutrons)
@@ -1858,14 +1765,14 @@ class TAVIController(QObject):
         # Determine scan mode
         scan_mode = self._determine_scan_mode(cmd1, cmd2)
         
-        # Create temp PUMA for validation - use GUI values, not self.PUMA
-        # (self.PUMA may not be updated until run_simulation is called)
-        puma_instance = PUMA_Instrument()
-        puma_instance.monocris = vals.get('monocris', 'PG[002]')
-        puma_instance.anacris = vals.get('anacris', 'PG[002]')
-        puma_instance.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-        puma_instance.fixed_E = vals.get('fixed_E', 14.7)
-        puma_instance.sample_mount = self._build_sample_mount(vals)
+        # Create a throwaway instrument state for validation - use GUI values, not
+        # the live state (it may not be updated until run_simulation is called)
+        check_state = self.instrument.default_state()
+        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
+        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+        check_state.fixed_E = vals.get('fixed_E', 14.7)
+        check_state.sample_mount = self._build_sample_mount(vals)
         
         valid_count = 0
         invalid_count = 0
@@ -1886,7 +1793,7 @@ class TAVIController(QObject):
                     if variable_name1 in variable_to_index:
                         scan_point[variable_to_index[variable_name1]] = value1
                     
-                    valid = self._validate_scan_point(scan_point, scan_mode, vals, puma_instance)
+                    valid = self._validate_scan_point(scan_point, scan_mode, vals, check_state)
                     if valid:
                         valid_count += 1
                     else:
@@ -1902,7 +1809,7 @@ class TAVIController(QObject):
                         if variable_name2 in variable_to_index:
                             scan_point[variable_to_index[variable_name2]] = value2
                         
-                        valid = self._validate_scan_point(scan_point, scan_mode, vals, puma_instance)
+                        valid = self._validate_scan_point(scan_point, scan_mode, vals, check_state)
                         if valid:
                             valid_count += 1
                         else:
@@ -1913,14 +1820,14 @@ class TAVIController(QObject):
         
         return (valid_count, invalid_count)
     
-    def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, puma_instance) -> bool:
+    def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, check_state) -> bool:
         """Validate a single scan point.
         
         Args:
             scan_point: List of scan parameters
             scan_mode: One of 'momentum', 'rlu', 'angle', 'orientation'
             vals: GUI values dictionary
-            puma_instance: PUMA instrument instance (configured with GUI values)
+            check_state: throwaway instrument state (configured with GUI values)
             
         Returns:
             True if point is valid, False otherwise
@@ -1928,20 +1835,20 @@ class TAVIController(QObject):
         try:
             if scan_mode == "momentum":
                 qx, qy, qz, deltaE = scan_point[:4]
-                _, error_flags = puma_instance.calculate_angles(
-                    qx, qy, qz, deltaE, puma_instance.fixed_E, puma_instance.K_fixed,
-                    puma_instance.monocris, puma_instance.anacris
+                _, error_flags = check_state.calculate_angles(
+                    qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
+                    check_state.monocris, check_state.anacris
                 )
                 return not error_flags
             elif scan_mode == "rlu":
                 H, K, L = scan_point[11], scan_point[12], scan_point[13]
                 deltaE = scan_point[3]
                 qx, qy, qz = component_q_to_instrument_q(
-                    puma_instance.sample_mount.hkl_to_q(H, K, L)
+                    check_state.sample_mount.hkl_to_q(H, K, L)
                 )
-                _, error_flags = puma_instance.calculate_angles(
-                    qx, qy, qz, deltaE, puma_instance.fixed_E, puma_instance.K_fixed,
-                    puma_instance.monocris, puma_instance.anacris
+                _, error_flags = check_state.calculate_angles(
+                    qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
+                    check_state.monocris, check_state.anacris
                 )
                 return not error_flags
             else:
@@ -1995,17 +1902,17 @@ class TAVIController(QObject):
             if not vals:
                 return (False, "Could not get GUI values")
             
-            # Use GUI values directly, not self.PUMA (may not be updated)
-            puma_instance = PUMA_Instrument()
-            puma_instance.monocris = vals.get('monocris', 'PG[002]')
-            puma_instance.anacris = vals.get('anacris', 'PG[002]')
-            puma_instance.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-            puma_instance.fixed_E = vals.get('fixed_E', 14.7)
+            # Use GUI values directly, not the live state (may not be updated)
+            check_state = self.instrument.default_state()
+            check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+            check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
+            check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+            check_state.fixed_E = vals.get('fixed_E', 14.7)
             
-            _, error_flags = puma_instance.calculate_angles(
+            _, error_flags = check_state.calculate_angles(
                 vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
-                puma_instance.fixed_E, puma_instance.K_fixed,
-                puma_instance.monocris, puma_instance.anacris
+                check_state.fixed_E, check_state.K_fixed,
+                check_state.monocris, check_state.anacris
             )
             return (not error_flags, error_flags if error_flags else "")
         except Exception as e:
@@ -2020,7 +1927,7 @@ class TAVIController(QObject):
             # Only update if value actually changed (avoid spurious editingFinished signals)
             if not self._field_value_changed('omega', omega):
                 return
-            self.PUMA.omega = omega
+            self.instrument_state.omega = omega
             self.print_to_message_center(f"Sample ω updated: {omega}°")
             # Trigger angle-based updates
             self.on_angles_changed()
@@ -2036,7 +1943,7 @@ class TAVIController(QObject):
             # Only update if value actually changed (avoid spurious editingFinished signals)
             if not self._field_value_changed('chi', chi):
                 return
-            self.PUMA.saz = chi
+            self.instrument_state.saz = chi
             self.print_to_message_center(f"Sample χ updated: {chi}° (out-of-plane)")
             # Calculated chi/saz affects qz - trigger recalculation
             self.on_angles_changed()
@@ -2047,12 +1954,12 @@ class TAVIController(QObject):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
         if self.window.misalignment_dock.has_misalignment():
             mis_omega, mis_chi = self.window.misalignment_dock.get_loaded_misalignment()
-            self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+            self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
             self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
     
     def on_clear_misalignment(self):
         """Handle clearing misalignment - reset hidden values on instrument."""
-        self.PUMA.set_misalignment(mis_omega=0, mis_chi=0)
+        self.instrument_state.set_misalignment(mis_omega=0, mis_chi=0)
         self.print_to_message_center("Misalignment cleared")
         # Also clear any stored hash in the sample dock so it won't be reloaded
         try:
@@ -2277,7 +2184,7 @@ class TAVIController(QObject):
             # Apply hidden orientation to UB matrix
             self.ub_matrix.set_U(U)
             # Apply hidden misalignment to instrument
-            self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+            self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
 
             # Update displays
             self._update_ub_display()
@@ -2293,7 +2200,7 @@ class TAVIController(QObject):
         """Clear training exercise, reset orientation and misalignment."""
         self.window.ub_matrix_dock._loaded_training = None
         self.ub_matrix.reset_U()
-        self.PUMA.set_misalignment(mis_omega=0, mis_chi=0)
+        self.instrument_state.set_misalignment(mis_omega=0, mis_chi=0)
         self._update_ub_display()
         self.window.ub_matrix_dock.update_training_status(False)
         self.print_to_message_center("Training exercise cleared")
@@ -2329,12 +2236,14 @@ class TAVIController(QObject):
 
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""
-        dialog = DiagnosticConfigDialog(self.window, self.diagnostic_settings)
+        dialog = DiagnosticConfigDialog(
+            self.window, self.diagnostic_settings, monitors=self.descriptor.monitors
+        )
         if dialog.exec():
             # User clicked Save and Close
             self.diagnostic_settings = dialog.get_settings()
-            # Update PUMA instrument with new settings
-            self.PUMA.update_diagnostic_settings(self.diagnostic_settings)
+            # Update the live instrument state with new settings
+            self.instrument_state.update_diagnostic_settings(self.diagnostic_settings)
             # Save parameters to persist the settings
             self.save_parameters()
             self.print_to_message_center("Diagnostic settings saved")
@@ -2351,7 +2260,7 @@ class TAVIController(QObject):
         from PySide6.QtWidgets import QMessageBox
         
         # Get current record count for the message
-        record_count = self.runtime_tracker.get_record_count("PUMA")
+        record_count = self.runtime_tracker.get_record_count(self.instrument.id)
         
         reply = QMessageBox.question(
             self.window,
@@ -2465,7 +2374,49 @@ class TAVIController(QObject):
             metadata['V_selector_installed'] = params.get('V_selector_installed', False)
         
         return metadata
-    
+
+    # -------- persistence helpers (descriptor-driven categories)
+
+    @staticmethod
+    def _saved_crystal_id(saved, crystals):
+        """Resolve a saved crystal id, falling back to the instrument default."""
+        for spec in crystals:
+            if saved == spec.id:
+                return spec.id
+        return crystals[0].id
+
+    @staticmethod
+    def _saved_module_values(parameters):
+        return parameters.get("modules", {})
+
+    @staticmethod
+    def _saved_collimation_values(parameters):
+        # JSON round-trips multi-select sets as lists
+        return {
+            slot_id: set(value) if isinstance(value, list) else value
+            for slot_id, value in parameters.get("collimation", {}).items()
+        }
+
+    @staticmethod
+    def _saved_slit_values(parameters):
+        # JSON round-trips (width, height) tuples as lists
+        return {
+            slit_id: tuple(value) if isinstance(value, list) else value
+            for slit_id, value in parameters.get("slits_mm", {}).items()
+        }
+
+    def _slit_values_for_save(self):
+        try:
+            slit_values = self.window.instrument_dock.slit_values_mm()
+        except ValueError:
+            # Malformed text in a slit field; persist nothing so load falls
+            # back to the descriptor defaults.
+            return {}
+        return {
+            slit_id: list(value) if isinstance(value, tuple) else value
+            for slit_id, value in slit_values.items()
+        }
+
     def save_parameters(self):
         """Save all parameters to JSON file."""
         parameters = {
@@ -2480,10 +2431,9 @@ class TAVIController(QObject):
             "Ef_var": self.window.instrument_dock.Ef_edit.text(),
             "number_neutrons_var": self.window.simulation_dock.get_number_neutrons(),
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
-            "NMO_installed_var": self.window.instrument_dock.nmo_combo.currentText(),
-            "V_selector_installed_var": self.window.instrument_dock.v_selector_check.isChecked(),
-            "source_type_var": self.window.instrument_dock.source_type_combo.currentText(),
+            "source_type_var": self.window.instrument_dock.selected_source_id(),
             "source_dE_var": self.window.instrument_dock.source_dE_edit.text(),
+            "modules": self.window.instrument_dock.module_values(),
             "rhm_var": self.window.instrument_dock.rhm_edit.text(),
             "rvm_var": self.window.instrument_dock.rvm_edit.text(),
             "rha_var": self.window.instrument_dock.rha_edit.text(),
@@ -2499,19 +2449,15 @@ class TAVIController(QObject):
             "K_var": self.window.scattering_dock.K_edit.text(),
             "L_var": self.window.scattering_dock.L_edit.text(),
             "deltaE_var": self.window.scattering_dock.deltaE_edit.text(),
-            "monocris_var": self.window.instrument_dock.monocris_combo.currentText(),
-            "anacris_var": self.window.instrument_dock.anacris_combo.currentText(),
-            "alpha_1_var": self.window.instrument_dock.alpha_1_combo.currentText(),
-            "alpha_2_30_var": self.window.instrument_dock.alpha_2_30_check.isChecked(),
-            "alpha_2_40_var": self.window.instrument_dock.alpha_2_40_check.isChecked(),
-            "alpha_2_60_var": self.window.instrument_dock.alpha_2_60_check.isChecked(),
-            "alpha_3_var": self.window.instrument_dock.alpha_3_combo.currentText(),
-            "alpha_4_var": self.window.instrument_dock.alpha_4_combo.currentText(),
+            "monocris_var": self.window.instrument_dock.selected_mono_id(),
+            "anacris_var": self.window.instrument_dock.selected_ana_id(),
+            "collimation": {
+                slot_id: sorted(value) if isinstance(value, set) else value
+                for slot_id, value in
+                self.window.instrument_dock.collimation_values().items()
+            },
             # Slit apertures (stored in mm)
-            "vbl_hgap_var": self.window.instrument_dock.vbl_hgap_edit.text(),
-            "pbl_hgap_var": self.window.instrument_dock.pbl_hgap_edit.text(),
-            "pbl_vgap_var": self.window.instrument_dock.pbl_vgap_edit.text(),
-            "dbl_hgap_var": self.window.instrument_dock.dbl_hgap_edit.text(),
+            "slits_mm": self._slit_values_for_save(),
             "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             "lattice_a_var": self.window.sample_dock.lattice_a_edit.text(),
             "lattice_b_var": self.window.sample_dock.lattice_b_edit.text(),
@@ -2530,31 +2476,122 @@ class TAVIController(QObject):
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
-            "sample_label_var": self.window.sample_dock.sample_combo.currentText() if hasattr(self.window.sample_dock, 'sample_combo') else "None",
             "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
             # UB matrix state
             "ub_matrix_state": self.ub_matrix.to_dict(),
             "ub_training_hash": self.window.ub_matrix_dock.load_hash_edit.text() if hasattr(self.window, 'ub_matrix_dock') else "",
         }
+        # Namespace by instrument id with a schema version (design record §9,
+        # §16.8): {"<instrument_id>": {"_schema": 1, ...}}. Other instruments'
+        # blocks in the file are preserved; anything else is discarded.
+        parameters["_schema"] = self.PARAMETERS_SCHEMA_VERSION
+        document = {}
+        if os.path.exists("config/parameters.json"):
+            try:
+                with open("config/parameters.json", "r") as file:
+                    existing = json.load(file)
+                if isinstance(existing, dict):
+                    document = {
+                        block_id: block for block_id, block in existing.items()
+                        if isinstance(block, dict) and "_schema" in block
+                    }
+            except (json.JSONDecodeError, OSError):
+                document = {}
+        document[self.instrument.id] = parameters
         # Ensure config directory exists
         os.makedirs("config", exist_ok=True)
         with open("config/parameters.json", "w") as file:
-            json.dump(parameters, file)
+            json.dump(document, file)
         self.print_to_message_center("Parameters saved successfully")
-    
+
+    PARAMETERS_SCHEMA_VERSION = 1
+
+    def _parameters_block(self, document):
+        """This instrument's block from ``{"<id>": {"_schema": N, ...}}``.
+
+        Missing/malformed block -> empty dict (every field read falls back to
+        its default).
+        """
+        if not isinstance(document, dict):
+            return {}
+        block = document.get(self.instrument.id, {})
+        return block if isinstance(block, dict) else {}
+
+    @staticmethod
+    def _can_reuse_binary(cache, fingerprint, diagnostic_mode):
+        """Whether the previous scan's compiled binary satisfies this scan.
+
+        Diagnostic-mode scans always rebuild: their first point must run
+        ``backengine()`` so McStasData is available for the diagnostic plots
+        (design record §18.5).
+        """
+        if diagnostic_mode or not cache:
+            return False
+        execution_state = cache.get("execution_state")
+        return bool(
+            cache.get("fingerprint") == fingerprint
+            and execution_state is not None
+            and execution_state.first_backengine_succeeded
+            and execution_state.binary_path
+            and os.path.isfile(execution_state.binary_path)
+        )
+
+    @staticmethod
+    def _updated_binary_cache(cache, reused, fingerprint, instrument,
+                              execution_state, instr_archive_path):
+        """Next value of the cross-scan binary cache after a scan finishes.
+
+        A scan that compiled (first backengine succeeded) owns the on-disk
+        binary and replaces the cache. A reused or aborted-before-compile scan
+        leaves the previous entry in place -- the binary on disk is unchanged.
+        """
+        if reused:
+            return cache
+        if (
+            execution_state.first_backengine_succeeded
+            and execution_state.binary_path
+            and os.path.isfile(execution_state.binary_path)
+        ):
+            return {
+                "fingerprint": fingerprint,
+                "instrument": instrument,
+                "execution_state": execution_state,
+                "instr_path": (
+                    instr_archive_path
+                    if instr_archive_path and os.path.isfile(instr_archive_path)
+                    else None
+                ),
+            }
+        return cache
+
     def load_parameters(self):
         """Load parameters from JSON file."""
         if os.path.exists("config/parameters.json"):
             with open("config/parameters.json", "r") as file:
-                parameters = json.load(file)
-                
+                parameters = self._parameters_block(json.load(file))
+
+                # No saved block for this instrument (fresh install or a
+                # pre-namespacing file): use the full default path so derived
+                # values like ideal bending radii are applied, not left at 0.
+                if not parameters:
+                    self.set_default_parameters()
+                    self.print_to_message_center(
+                        f"No saved parameters for '{self.instrument.id}'; defaults loaded"
+                    )
+                    return
+
                 # Block signals during loading to prevent premature validation
                 self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
                 self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
                 
-                # Set GUI values from parameters
-                self.window.instrument_dock.monocris_combo.setCurrentText(parameters.get("monocris_var", "PG[002]"))
-                self.window.instrument_dock.anacris_combo.setCurrentText(parameters.get("anacris_var", "PG[002]"))
+                # Set GUI values from parameters (saved crystal values may be
+                # legacy display labels or CrystalSpec ids; both resolve)
+                self.window.instrument_dock.set_mono_id(self._saved_crystal_id(
+                    parameters.get("monocris_var"), self.descriptor.mono_crystals
+                ))
+                self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
+                    parameters.get("anacris_var"), self.descriptor.ana_crystals
+                ))
                 self.window.instrument_dock.mtt_edit.setText(str(parameters.get("mtt_var", "41.167")))
                 self.window.instrument_dock.stt_edit.setText(str(parameters.get("stt_var", "-71.2502")))
                 self.window.instrument_dock.omega_edit.setText(str(parameters.get("omega_var", "-35.6251")))
@@ -2564,21 +2601,21 @@ class TAVIController(QObject):
                 self.window.instrument_dock.Kf_edit.setText(str(parameters.get("Kf_var", "2.6634")))
                 self.window.instrument_dock.Ei_edit.setText(str(parameters.get("Ei_var", "14.7")))
                 self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
-                self.window.instrument_dock.nmo_combo.setCurrentText(parameters.get("NMO_installed_var", "None"))
-                self.window.instrument_dock.v_selector_check.setChecked(parameters.get("V_selector_installed_var", False))
-                self.window.instrument_dock.source_type_combo.setCurrentText(parameters.get("source_type_var", "Maxwellian"))
+                self.window.instrument_dock.set_source_id(
+                    parameters.get("source_type_var", self.descriptor.source_types[0].id)
+                )
                 self.window.instrument_dock.source_dE_edit.setText(str(parameters.get("source_dE_var", "2")))
-                self.window.instrument_dock.alpha_1_combo.setCurrentText(str(parameters.get("alpha_1_var", 40)))
-                self.window.instrument_dock.alpha_2_30_check.setChecked(parameters.get("alpha_2_30_var", False))
-                self.window.instrument_dock.alpha_2_40_check.setChecked(parameters.get("alpha_2_40_var", True))
-                self.window.instrument_dock.alpha_2_60_check.setChecked(parameters.get("alpha_2_60_var", False))
-                self.window.instrument_dock.alpha_3_combo.setCurrentText(str(parameters.get("alpha_3_var", 30)))
-                self.window.instrument_dock.alpha_4_combo.setCurrentText(str(parameters.get("alpha_4_var", 30)))
-                # Slit apertures (in mm)
-                self.window.instrument_dock.vbl_hgap_edit.setText(str(parameters.get("vbl_hgap_var", "88")))
-                self.window.instrument_dock.pbl_hgap_edit.setText(str(parameters.get("pbl_hgap_var", "100")))
-                self.window.instrument_dock.pbl_vgap_edit.setText(str(parameters.get("pbl_vgap_var", "100")))
-                self.window.instrument_dock.dbl_hgap_edit.setText(str(parameters.get("dbl_hgap_var", "50")))
+                # Descriptor-driven categories (nested containers; legacy flat
+                # keys from pre-Phase-2 files migrate through the fallbacks)
+                self.window.instrument_dock.set_module_values(
+                    self._saved_module_values(parameters)
+                )
+                self.window.instrument_dock.set_collimation_values(
+                    self._saved_collimation_values(parameters)
+                )
+                self.window.instrument_dock.set_slit_values_mm(
+                    self._saved_slit_values(parameters)
+                )
 
                 # Load absolute bending values (backward-compatible with factor-based params)
                 self._load_bending_parameters(parameters)
@@ -2606,12 +2643,6 @@ class TAVIController(QObject):
                 self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
                 self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
                 
-                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", "4.05")))
-                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", "4.05")))
-                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", "4.05")))
-                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", "90")))
-                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", "90")))
-                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", "90")))
                 # Sample alignment offsets (kappa and psi)
                 self.window.sample_dock.kappa_edit.setText(str(parameters.get("kappa_var", 0)))
                 self.window.sample_dock.psi_edit.setText(str(parameters.get("psi_offset_var", 0)))
@@ -2623,7 +2654,7 @@ class TAVIController(QObject):
                     try:
                         from gui.docks.misalignment_dock import decode_misalignment
                         omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
-                        self.PUMA.set_misalignment(omega_m, chi_m, psi_m)
+                        self.instrument_state.set_misalignment(omega_m, chi_m, psi_m)
                         # Store in dock and update UI to show it's loaded
                         self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
                         self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
@@ -2634,13 +2665,24 @@ class TAVIController(QObject):
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
-                # Restore sample selection if present (default to Al: Bragg for easy testing)
+                # Restore sample selection by persisted sample id (default Al Bragg)
                 try:
-                    sample_label = parameters.get("sample_label_var", "AL: Bragg")
-                    if hasattr(self.window.sample_dock, 'sample_combo'):
-                        self.window.sample_dock.sample_combo.setCurrentText(sample_label)
+                    saved_sample = parameters.get("current_sample_settings", {})
+                    if not self.window.sample_dock.set_sample_by_key(
+                        saved_sample.get("sample_key", "Al_bragg")
+                    ):
+                        self.window.sample_dock.set_sample_by_key("Al_bragg")
                 except Exception:
                     pass
+                # Saved lattice values are applied AFTER the sample restore: the
+                # sample-change handler adopts the sample's own lattice, and the
+                # user's saved (possibly hand-edited) values must win on reload.
+                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", "4.05")))
+                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", "4.05")))
+                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", "4.05")))
+                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", "90")))
+                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", "90")))
+                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", "90")))
                 # Restore space group selection
                 try:
                     sg_number = parameters.get("space_group_number_var")
@@ -2674,7 +2716,7 @@ class TAVIController(QObject):
                         U, mis_omega, mis_chi = decode_training(ub_hash)
                         self.window.ub_matrix_dock._loaded_training = (U, mis_omega, mis_chi)
                         self.ub_matrix.set_U(U)
-                        self.PUMA.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+                        self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
                         self._update_ub_display()
                         self.window.ub_matrix_dock.update_training_status(True)
                     except Exception as e:
@@ -2687,7 +2729,9 @@ class TAVIController(QObject):
                 self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
                 
                 # Load diagnostic settings with defaults for any missing keys
-                default_diag = DiagnosticConfigDialog.get_default_settings()
+                default_diag = DiagnosticConfigDialog.get_default_settings(
+                    self.descriptor.monitors
+                )
                 loaded_diag = parameters.get("diagnostic_settings", {})
                 # Merge: use loaded value if present, else default
                 self.diagnostic_settings = {**default_diag, **loaded_diag}
@@ -2709,8 +2753,8 @@ class TAVIController(QObject):
         self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
         self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
         
-        self.window.instrument_dock.monocris_combo.setCurrentText("PG[002]")
-        self.window.instrument_dock.anacris_combo.setCurrentText("PG[002]")
+        self.window.instrument_dock.set_mono_id(self.descriptor.mono_crystals[0].id)
+        self.window.instrument_dock.set_ana_id(self.descriptor.ana_crystals[0].id)
         self.window.instrument_dock.mtt_edit.setText("41.167")
         self.window.instrument_dock.stt_edit.setText("-71.2502")
         self.window.instrument_dock.omega_edit.setText("-35.6251")
@@ -2720,21 +2764,13 @@ class TAVIController(QObject):
         self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
         self.window.instrument_dock.Ef_edit.setText("14.7")
-        self.window.instrument_dock.nmo_combo.setCurrentText("None")
-        self.window.instrument_dock.v_selector_check.setChecked(False)
-        self.window.instrument_dock.source_type_combo.setCurrentText("Maxwellian")
+        # Descriptor defaults for modules/collimation/slits (empty dict = defaults)
+        self.window.instrument_dock.set_module_values({})
+        self.window.instrument_dock.set_source_id(self.descriptor.source_types[0].id)
         self.window.instrument_dock.source_dE_edit.setText("2")
-        self.window.instrument_dock.alpha_1_combo.setCurrentText("40")
-        self.window.instrument_dock.alpha_2_30_check.setChecked(False)
-        self.window.instrument_dock.alpha_2_40_check.setChecked(True)
-        self.window.instrument_dock.alpha_2_60_check.setChecked(False)
-        self.window.instrument_dock.alpha_3_combo.setCurrentText("30")
-        self.window.instrument_dock.alpha_4_combo.setCurrentText("30")
-        # Slit apertures (in mm) - PUMA defaults
-        self.window.instrument_dock.vbl_hgap_edit.setText("88")
-        self.window.instrument_dock.pbl_hgap_edit.setText("100")
-        self.window.instrument_dock.pbl_vgap_edit.setText("100")
-        self.window.instrument_dock.dbl_hgap_edit.setText("50")
+        self.window.instrument_dock.set_collimation_values({})
+        # Slit apertures - descriptor defaults (SlitSpec.default_*_mm)
+        self.window.instrument_dock.set_slit_values_mm({})
 
         # Set default absolute bending to ideal values
         self.update_ideal_bending_buttons()
@@ -2771,7 +2807,9 @@ class TAVIController(QObject):
         self.window.data_control_dock.save_folder_edit.setText(folder_suggestion)
         self.window.data_control_dock.load_folder_edit.setText(folder_suggestion)
         
-        self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings()
+        self.diagnostic_settings = DiagnosticConfigDialog.get_default_settings(
+            self.descriptor.monitors
+        )
         self.current_sample_settings = {}
         # Reset UB matrix to identity
         self.ub_matrix = UBMatrix()
@@ -2782,8 +2820,7 @@ class TAVIController(QObject):
             self._reconnect_peak_signals()
         # Default sample to Al: Bragg for easy testing
         try:
-            if hasattr(self.window.sample_dock, 'sample_combo'):
-                self.window.sample_dock.sample_combo.setCurrentText("AL: Bragg")
+            self.window.sample_dock.set_sample_by_key("Al_bragg")
         except Exception:
             pass
         
@@ -2870,18 +2907,42 @@ class TAVIController(QObject):
         """Handle sample selection changes from the GUI."""
         try:
             key = self.window.sample_dock.get_selected_sample_key()
-            self.PUMA.sample_key = key
+            self.instrument_state.sample_key = key
             self.current_sample_settings = {"sample_label": label, "sample_key": key}
             self.print_to_message_center(f"Sample selection changed: {label} ({key})")
+            self._adopt_sample_lattice(key)
         except Exception as e:
             self.print_to_message_center(f"Sample selection change failed: {e}")
+
+    def _adopt_sample_lattice(self, sample_key):
+        """Set the lattice fields from the selected sample's own lattice.
+
+        Samples carry their lattice constants (SampleSpec.lattice) because the
+        McStas components bake them in -- driving e.g. Phonon_DFT (a=4.03893)
+        with a mismatched GUI lattice misses its Bragg condition entirely.
+        The parameter-restore path re-applies saved lattice values afterwards,
+        so hand-edited lattices survive a reload.
+        """
+        spec = next((s for s in self.descriptor.samples if s.id == sample_key), None)
+        if spec is None or spec.lattice is None:
+            return
+        a, b, c, alpha, beta, gamma = spec.lattice
+        dock = self.window.sample_dock
+        for edit, value in ((dock.lattice_a_edit, a), (dock.lattice_b_edit, b),
+                            (dock.lattice_c_edit, c), (dock.lattice_alpha_edit, alpha),
+                            (dock.lattice_beta_edit, beta), (dock.lattice_gamma_edit, gamma)):
+            edit.setText(f"{value:g}")
+        self.print_to_message_center(
+            f"Lattice set from sample '{spec.display_name}': "
+            f"a={a:g}, b={b:g}, c={c:g}"
+        )
     
     def stop_simulation(self):
         """Stop the running simulation."""
         self.stop_event.set()
         self.print_to_message_center("Stop requested...")
 
-    def _prep_worker(self, scan_parameter_input, scan_mode, scan_puma_config, is_2d_scan,
+    def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, is_2d_scan,
                      variable_name1, variable_name2, vals, data_folder,
                      scan_command1, scan_command2, snapshot_queue, stop_event):
         """Compute per-point snapshots ahead of the simulation thread."""
@@ -2891,11 +2952,11 @@ class TAVIController(QObject):
                     break
 
                 prep_stage_start = time.perf_counter()
-                snapshot = compute_scan_snapshot(
+                snapshot = self.instrument.compute_snapshot(
                     scan_item,
                     scan_index,
                     scan_mode,
-                    scan_puma_config,
+                    scan_config,
                     vals,
                     data_folder,
                     is_2d_scan=is_2d_scan,
@@ -2910,19 +2971,20 @@ class TAVIController(QObject):
                 while not stop_event.is_set():
                     try:
                         snapshot_queue.put(snapshot, timeout=0.1)
+                        # The queued PointSnapshot is shared by reference; stamping
+                        # timing after put() is visible to the consumer loop.
                         queue_wait_duration = time.perf_counter() - queue_wait_start
-                        timing = snapshot.setdefault('timing', {})
-                        timing['prep_compute_duration_s'] = prep_compute_duration
-                        timing['prep_queue_wait_duration_s'] = queue_wait_duration
-                        timing['prep_duration_s'] = prep_compute_duration + queue_wait_duration
+                        snapshot.timing['prep_compute_duration_s'] = prep_compute_duration
+                        snapshot.timing['prep_queue_wait_duration_s'] = queue_wait_duration
+                        snapshot.timing['prep_duration_s'] = prep_compute_duration + queue_wait_duration
                         break
                     except queue.Full:
                         continue
         except Exception as exc:
-            error_snapshot = {'fatal_error': str(exc)}
+            failure = PrepFailure(str(exc))
             while not stop_event.is_set():
                 try:
-                    snapshot_queue.put(error_snapshot, timeout=0.1)
+                    snapshot_queue.put(failure, timeout=0.1)
                     break
                 except queue.Full:
                     continue
@@ -2941,7 +3003,7 @@ class TAVIController(QObject):
         self.message_printed.emit("Starting simulation...")
 
         vals = launch_state['vals']
-        scan_puma_config = launch_state['scan_puma_config']
+        scan_config = launch_state['scan_config']
         diagnostic_settings = launch_state['diagnostic_settings']
         number_neutrons = vals['number_neutrons']
         scan_command1 = vals['scan_command1']
@@ -3017,11 +3079,11 @@ class TAVIController(QObject):
         valid_mask_2d = None
         array_values1 = []
         array_values2 = []
-        puma_instance = PUMA_Instrument()
-        puma_instance.monocris = scan_puma_config.monocris
-        puma_instance.anacris = scan_puma_config.anacris
-        puma_instance.K_fixed = scan_puma_config.K_fixed
-        puma_instance.fixed_E = scan_puma_config.fixed_E
+        check_state = self.instrument.default_state()
+        check_state.monocris = scan_config.monocris
+        check_state.anacris = scan_config.anacris
+        check_state.K_fixed = scan_config.K_fixed
+        check_state.fixed_E = scan_config.fixed_E
         
         # Single scan command
         if scan_command1 and not scan_command2:
@@ -3042,19 +3104,19 @@ class TAVIController(QObject):
                 scan_parameter_input.append((scan_point, idx))
 
                 if scan_mode in ("momentum", "orientation"):
-                    _, error_flags = puma_instance.calculate_angles(
-                        *scan_point[:4], scan_puma_config.fixed_E, scan_puma_config.K_fixed,
-                        scan_puma_config.monocris, scan_puma_config.anacris
+                    _, error_flags = check_state.calculate_angles(
+                        *scan_point[:4], scan_config.fixed_E, scan_config.K_fixed,
+                        scan_config.monocris, scan_config.anacris
                     )
                 elif scan_mode == "rlu":
                     qx, qy, qz = component_q_to_instrument_q(
-                        scan_puma_config.sample_mount.hkl_to_q(
+                        scan_config.sample_mount.hkl_to_q(
                             scan_point[0], scan_point[1], scan_point[2]
                         )
                     )
-                    _, error_flags = puma_instance.calculate_angles(
-                        qx, qy, qz, scan_point[3], scan_puma_config.fixed_E,
-                        scan_puma_config.K_fixed, scan_puma_config.monocris, scan_puma_config.anacris
+                    _, error_flags = check_state.calculate_angles(
+                        qx, qy, qz, scan_point[3], scan_config.fixed_E,
+                        scan_config.K_fixed, scan_config.monocris, scan_config.anacris
                     )
                 else:
                     error_flags = []
@@ -3093,19 +3155,19 @@ class TAVIController(QObject):
                     scan_parameter_input.append((scan_point, idx_x, idx_y))
 
                     if scan_mode in ("momentum", "orientation"):
-                        _, error_flags = puma_instance.calculate_angles(
-                            *scan_point[:4], scan_puma_config.fixed_E, scan_puma_config.K_fixed,
-                            scan_puma_config.monocris, scan_puma_config.anacris
+                        _, error_flags = check_state.calculate_angles(
+                            *scan_point[:4], scan_config.fixed_E, scan_config.K_fixed,
+                            scan_config.monocris, scan_config.anacris
                         )
                     elif scan_mode == "rlu":
                         qx, qy, qz = component_q_to_instrument_q(
-                            scan_puma_config.sample_mount.hkl_to_q(
+                            scan_config.sample_mount.hkl_to_q(
                                 scan_point[0], scan_point[1], scan_point[2]
                             )
                         )
-                        _, error_flags = puma_instance.calculate_angles(
-                            qx, qy, qz, scan_point[3], scan_puma_config.fixed_E,
-                            scan_puma_config.K_fixed, scan_puma_config.monocris, scan_puma_config.anacris
+                        _, error_flags = check_state.calculate_angles(
+                            qx, qy, qz, scan_point[3], scan_config.fixed_E,
+                            scan_config.K_fixed, scan_config.monocris, scan_config.anacris
                         )
                     else:
                         error_flags = []
@@ -3133,7 +3195,7 @@ class TAVIController(QObject):
         self.message_printed.emit(f"Running {total_scans} scan points...")
         
         # Show pre-scan estimate based on historical data
-        instrument_name = "PUMA"
+        instrument_name = self.instrument.id
         total_est, compile_est, _ = self.runtime_tracker.estimate_total_time(
             instrument_name, estimated_runtime_points, number_neutrons
         )
@@ -3163,13 +3225,27 @@ class TAVIController(QObject):
             scan_x_values = []
             scan_counts = []
         
-        instrument = build_PUMA_instrument(
-            scan_puma_config,
-            diagnostic_mode,
-            diagnostic_settings if diagnostic_mode else {},
-            number_neutrons,
+        effective_diagnostic_settings = diagnostic_settings if diagnostic_mode else {}
+        build_fingerprint = self.instrument.build_fingerprint(
+            scan_config, diagnostic_mode, effective_diagnostic_settings
         )
-        execution_state = PUMARunExecutionState()
+        reuse_binary = self._can_reuse_binary(
+            self._binary_reuse_cache, build_fingerprint, diagnostic_mode
+        )
+        if reuse_binary:
+            instrument = self._binary_reuse_cache["instrument"]
+            execution_state = self._binary_reuse_cache["execution_state"]
+            self.message_printed.emit(
+                "Build settings unchanged; reusing compiled instrument from previous scan"
+            )
+        else:
+            instrument = self.instrument.build(
+                scan_config,
+                diagnostic_mode,
+                effective_diagnostic_settings,
+                number_neutrons,
+            )
+            execution_state = RunExecutionState()
         retained_diagnostic_data = None
 
         if diagnostic_mode and diagnostic_settings.get('Show Instrument Diagram', False):
@@ -3181,7 +3257,7 @@ class TAVIController(QObject):
             args=(
                 scan_parameter_input,
                 scan_mode,
-                scan_puma_config,
+                scan_config,
                 is_2d_scan,
                 variable_name1,
                 variable_name2,
@@ -3218,22 +3294,22 @@ class TAVIController(QObject):
                 if snapshot is None:
                     break
 
-                if snapshot.get('fatal_error'):
-                    simulation_error_message = f"Preparation thread failed: {snapshot['fatal_error']}"
+                if isinstance(snapshot, PrepFailure):
+                    simulation_error_message = f"Preparation thread failed: {snapshot.message}"
                     self.message_printed.emit(simulation_error_message)
                     break
 
                 scan_start_time = time.time()
-                i = snapshot['scan_index']
-                self.message_printed.emit(snapshot['log_message'])
-                indices = snapshot['indices']
+                i = snapshot.scan_index
+                self.message_printed.emit(snapshot.log_message)
+                indices = snapshot.indices
                 idx_1d = indices['idx_1d']
                 idx_x = indices['idx_x']
                 idx_y = indices['idx_y']
-                scan_folder = snapshot['output_folder']
-                error_flags = list(snapshot['error_flags'])
-                metadata = snapshot['metadata']
-                deltaE = snapshot['deltaE']
+                scan_folder = snapshot.output_folder
+                error_flags = list(snapshot.error_flags)
+                metadata = snapshot.metadata
+                deltaE = snapshot.deltaE
                 qx = metadata['qx']
                 qy = metadata['qy']
                 qz = metadata['qz']
@@ -3252,7 +3328,7 @@ class TAVIController(QObject):
                 chi_scan = metadata['chi']
                 psi_scan = metadata['psi']
                 kappa_scan = metadata['kappa']
-                timing = snapshot.get('timing', {})
+                timing = snapshot.timing
                 prep_duration = float(timing.get('prep_duration_s', 0.0))
                 prep_compute_duration = float(timing.get('prep_compute_duration_s', 0.0))
                 prep_queue_wait_duration = float(timing.get('prep_queue_wait_duration_s', 0.0))
@@ -3274,9 +3350,9 @@ class TAVIController(QObject):
                     'armed_direct_run': False,
                 }
 
-                if not error_flags and snapshot['params'] is not None:
+                if not error_flags and snapshot.params is not None:
                     simulation_stage_start = time.perf_counter()
-                    data, error_flags, execution_info = run_PUMA_point(
+                    data, error_flags, execution_info = self.instrument.run_point(
                         instrument,
                         snapshot,
                         scan_folder,
@@ -3309,8 +3385,14 @@ class TAVIController(QObject):
                 # (it's the same for every point since only parameters change, not the compiled
                 # instrument structure; rewriting it per-point would be redundant).
                 if i == 0:
-                    instr_src = os.path.join(scan_folder, "PUMA_McScript.instr")
-                    instr_dst = os.path.join(data_folder, "PUMA_McScript.instr")
+                    instr_src = os.path.join(scan_folder, f"{self._mcstas_name}.instr")
+                    instr_dst = os.path.join(data_folder, f"{self._mcstas_name}.instr")
+                    # Direct binary runs write no .instr into the scan folder;
+                    # a reused-binary scan archives the compiling scan's copy.
+                    if not os.path.exists(instr_src) and reuse_binary:
+                        cached_instr = self._binary_reuse_cache.get("instr_path")
+                        if cached_instr and os.path.isfile(cached_instr):
+                            instr_src = cached_instr
                     if os.path.exists(instr_src):
                         try:
                             shutil.copy2(instr_src, instr_dst)
@@ -3323,7 +3405,7 @@ class TAVIController(QObject):
                 # Compact save mode: remove large intermediate files from the scan sub-folder.
                 # detector.dat and scan_parameters.txt are kept; everything else is transient.
                 if compact_save_enabled:
-                    for _fname in ("PUMA_McScript.c", "PUMA_McScript.instr", "mccode.sim"):
+                    for _fname in (f"{self._mcstas_name}.c", f"{self._mcstas_name}.instr", "mccode.sim"):
                         _fpath = os.path.join(scan_folder, _fname)
                         if os.path.exists(_fpath):
                             try:
@@ -3462,6 +3544,15 @@ class TAVIController(QObject):
 
         if simulation_stopped:
             self.message_printed.emit("Simulation stopped by user.")
+
+        self._binary_reuse_cache = self._updated_binary_cache(
+            self._binary_reuse_cache,
+            reuse_binary,
+            build_fingerprint,
+            instrument,
+            execution_state,
+            os.path.join(data_folder, f"{self._mcstas_name}.instr"),
+        )
 
         inferred_compile_duration = None
         if len(simulation_stage_durations) > 1:
@@ -3610,10 +3701,57 @@ class TAVIController(QObject):
 
 
 def main():
-    """Main entry point for the application."""
-    app = QApplication(sys.argv)
-    window = TAVIMainWindow()
-    controller = TAVIController(window)
+    """Main entry point for the application.
+
+    Instrument selection (docs/CONFIGURABLE_INSTRUMENTS.md §7.1, §17.1): the
+    --instrument CLI flag always wins; a picker dialog appears only when more
+    than one instrument is registered and no flag was given; with a single
+    registered instrument, startup is identical to the pre-registry app. The
+    selection is fixed for the session.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="TAVI")
+    parser.add_argument(
+        "--instrument", metavar="ID", default=None,
+        help="Instrument id to load (e.g. 'puma'); skips the startup picker.",
+    )
+    args, qt_args = parser.parse_known_args()  # leftover args go to Qt
+
+    import instruments.builtin  # noqa: F401  (explicit built-in registration)
+    from instruments.registry import available_instruments, get_instrument
+
+    infos = available_instruments()
+    if args.instrument is not None:
+        instrument_id = args.instrument.lower()
+        if instrument_id not in {info.id for info in infos}:
+            print(
+                f"Unknown instrument '{args.instrument}'. Available: "
+                + ", ".join(info.id for info in infos),
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+    app = QApplication([sys.argv[0], *qt_args])
+
+    if args.instrument is None:
+        if len(infos) == 1:
+            instrument_id = infos[0].id
+        else:
+            from gui.dialogs.instrument_picker_dialog import InstrumentPickerDialog
+
+            instrument_id = InstrumentPickerDialog.pick(infos)
+            if instrument_id is None:
+                sys.exit(0)
+
+    instrument = get_instrument(instrument_id)
+
+    # Fail fast, with readable errors, if the registered descriptor is unrunnable.
+    from instruments.validation import assert_valid_descriptor
+    assert_valid_descriptor(instrument.descriptor(), runnable=True)
+
+    window = TAVIMainWindow(instrument.descriptor())
+    controller = TAVIController(window, instrument)
     # Store controller reference on window so closeEvent can access it
     window.controller = controller
     window.show()
