@@ -40,7 +40,13 @@ class RuntimeTracker:
     
     DEFAULT_CONFIG_PATH = "config/runtimes.json"
     MAX_RECORDS = 100
-    
+
+    # One-time key migration: scans recorded before the instrument registry
+    # existed were keyed by the literal "PUMA"; the registry id is "puma".
+    # Merged on load (legacy records first); the next save persists the new key.
+    LEGACY_INSTRUMENT_KEYS = {"PUMA": "puma"}
+
+
     def __init__(self, config_path: Optional[str] = None):
         """Initialize the runtime tracker.
         
@@ -64,12 +70,24 @@ class RuntimeTracker:
                     self.records[instrument] = [
                         ScanRecord(**rec) for rec in record_list
                     ]
+                self._migrate_legacy_keys()
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 print(f"Warning: Could not load runtimes.json: {e}")
                 self.records = {}
         else:
             self.records = {}
     
+    def _migrate_legacy_keys(self) -> None:
+        """Merge records stored under legacy instrument keys into their new key."""
+        for legacy_key, new_key in self.LEGACY_INSTRUMENT_KEYS.items():
+            legacy_records = self.records.pop(legacy_key, None)
+            if not legacy_records:
+                continue
+            for record in legacy_records:
+                record.instrument_name = new_key
+            merged = legacy_records + self.records.get(new_key, [])
+            self.records[new_key] = merged[-self.max_records:]
+
     def _save(self) -> None:
         """Save runtime records to config file."""
         # Ensure config directory exists
