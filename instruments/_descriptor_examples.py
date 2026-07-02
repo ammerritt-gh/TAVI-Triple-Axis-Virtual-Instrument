@@ -1,33 +1,27 @@
-"""Illustrative descriptors: PUMA (real, from the plugin) and IN8 (skeleton).
+"""Side-by-side descriptor demo: PUMA and IN8, both real.
 
 Purpose: prove the ``InstrumentDescriptor`` of ``instruments/descriptor.py``
 captures both reference instruments *without* baking in PUMA's shape -- the
 "design against PUMA and IN8" check from ``docs/CONFIGURABLE_INSTRUMENTS.md``
-§12.5. PUMA's descriptor is no longer defined here: the real one lives in
-``instruments/puma_plugin.py`` (single source of truth) and is re-imported for
-the side-by-side comparison.
-
-IN8 values come from ``examples/vtas_reference/instruments_repository.xml``
-(ILL vTAS). The IN8 skeleton is deliberately **incomplete** (``TODO``/``nan``
-markers): it must pass ``validate_descriptor(...)`` structurally but *fail* with
-``runnable=True`` -- run this module as a script to see both:
+§12.5. Neither descriptor is defined here anymore: PUMA's lives in
+``instruments/puma_plugin.py`` and IN8's in ``instruments/in8_plugin.py``
+(single sources of truth, both runnable); they are re-imported for the
+comparison printout:
 
     python -m instruments._descriptor_examples
+
+``_CORE_PARAMS`` documents the shared "core" TAS parameter set every
+instrument's ``scannable_parameters`` starts from (the sample-orientation /
+mount hierarchy of ``tavi/instrument_helpers.py``); the real plugins inline
+these in their full parameter tuples.
 
 Targets Python 3.11 syntax.
 """
 from __future__ import annotations
 
-from instruments.descriptor import (
-    AxisLimits,
-    CrystalSpec,
-    Geometry,
-    InstrumentDescriptor,
-    ParameterSpec,
-    Sense,
-)
+from instruments.descriptor import ParameterSpec
+from instruments.in8_plugin import in8_descriptor  # noqa: F401  (re-export)
 from instruments.puma_plugin import puma_descriptor  # noqa: F401  (re-export)
-from tavi.sample_library import default_sample_library
 
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
 # (slits, bending, selector) are appended per instrument. The sample-orientation /
@@ -51,45 +45,6 @@ _CORE_PARAMS = (
     ParameterSpec("mount_ry_param", "Static sample mount rotation about y", default=0.0),
     ParameterSpec("mount_rz_param", "Static sample mount rotation about z", default=0.0),
 )
-
-
-def in8_descriptor() -> InstrumentDescriptor:
-    """ILL IN8 -- kinematic skeleton from vTAS; McStas "flesh" still TODO.
-
-    What vTAS gives us (filled below): arm lengths L2/L3/L4, scattering senses,
-    axis limits, mono/ana d-spacing. What it does NOT give (TODO from the
-    instrument scientist): L1/source, crystal slab geometry, collimation, slits,
-    focusing, sample environment, detector. FlatCone/IMPS are deferred (§14).
-    """
-    return InstrumentDescriptor(
-        id="in8",
-        display_name="ILL IN8",
-        institute="ILL",
-        geometry=Geometry(
-            l1_source_mono=float("nan"),   # TODO: vTAS omits source->mono; needs IN8 docs
-            l2_mono_sample=2.5,
-            l3_sample_ana=1.35,
-            l4_ana_det=0.65,
-            # KEY DELTA vs PUMA: IN8 sample sense is RIGHT (vTAS ss = -1).
-            sense_mono=Sense.LEFT,
-            sense_sample=Sense.RIGHT,
-            sense_ana=Sense.LEFT,
-            sample_table_radius=0.3,
-        ),
-        # d-spacing known (PG[002]); slab geometry TODO -> kinematic-only is valid.
-        mono_crystals=(CrystalSpec("pg002", "PG[002]", 3.355),),
-        ana_crystals=(CrystalSpec("pg002", "PG[002]", 3.355),),
-        samples=default_sample_library(),   # shared library: samples move between instruments
-        scannable_parameters=_CORE_PARAMS,                  # shared core; extras TODO
-        primary_detector="detector",
-        mcstas_name="IN8_McScript",
-        axis_limits={
-            "A1": AxisLimits(-40.0, 77.256, 110.0),     # vTAS a2 (mono take-off)
-            "A2": AxisLimits(-120.0, -111.08, 120.0),   # vTAS a4 (sample 2-theta)
-            "A4": AxisLimits(-120.0, 83.957, 120.0),    # vTAS a6 (analyser take-off)
-        },
-        # modules: FlatCone / IMPS available on IN8 but multi-detector -> deferred past v1.
-    )
 
 
 if __name__ == "__main__":
