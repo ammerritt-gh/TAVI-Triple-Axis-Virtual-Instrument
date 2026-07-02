@@ -13,7 +13,15 @@ build() emits monitors/samples/collimators/crystals through shared helpers in
 `tavi/instrument_helpers.py`, the sample library is instrument-independent
 (`tavi/sample_library.py` — samples move between instruments), the two §18.4
 monitor-sizing bugs are fixed, and sample selection adopts the sample's own
-lattice into the GUI. 95 tests pass. Next: Phase 4 (IN8).
+lattice into the GUI. **Phase 4 IMPLEMENTED (2026-07-02, spec §20):** IN8 is
+the second registered instrument — scattering senses threaded through the
+angle solvers (vTAS-verified for IN8: +1/+1/−1), crystal/point-param dispatch
+through the instrument state, `instruments/in8_plugin.py` +
+`instruments/IN8_instrument_definition.py` built on the shared helpers,
+branch-signed crystal bending, startup picker active, end-to-end McStas smoke
+produces a real Bragg peak. 143 tests pass. `docs/INSTRUMENT_AUTHORING.md` is
+the authoring guide; the IN8 modules are the living template. Open: vTAS
+re-check of the a3 difference (§20.5).
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -1348,3 +1356,113 @@ library specs, alpha_2 collimator selection/order, table↔descriptor sync.
 - `SampleSpec.lattice` could also drive a space-group default per sample.
 - IN8 (Phase 4) should build its backbone from `tavi/instrument_helpers.py`;
   anything it cannot express is the signal to extend the helpers.
+
+---
+
+## 20. Phase 4 implementation record (2026-07-02)
+
+Six commits: PUMA sign goldens; sense threading; state dispatch; the IN8
+modules; registration (+ vTAS-verified goldens + branch-signed bending); this
+record + `docs/INSTRUMENT_AUTHORING.md`. Gates held throughout: full pytest
+after every commit (95 → 143), PUMA `.instr` baselines B1–B5 byte-identical
+after every PUMA-touching commit, and an end-to-end IN8 McStas compile+run
+smoke before registration was declared done.
+
+### 20.1 Scattering senses (§16.7 resolved)
+
+- `Sense` semantics are now defined precisely: **the value IS the numeric sign
+  of that axis' two-theta readout** (LEFT = +1 = McStas +y rotation; equals
+  vTAS's sm/ss/sa convention). `stt_from_q_norm`/`solve_sample_angles`/
+  `solve_instrument_angles` take `sense_sample` (default −1 = the historical
+  baked branch, bit-for-bit identical); `TAS_Instrument` carries
+  `sense_mono/sense_sample/sense_ana` and `calculate_angles` applies them.
+  `calculate_q_and_deltaE` was already sign-safe.
+- **PUMA's descriptor was self-inconsistent** — it declared
+  `sense_sample=LEFT` while the code has always produced stt < 0. Corrected to
+  `RIGHT`; TAVI's existing behavior is the contract (whether the physical PUMA
+  hall matches is an open instrument-scientist question).
+- **IN8's senses are (+1, +1, −1), verified against a live vTAS run
+  (2026-07-02)**: all four reference cases (elastic/inelastic (2,0,0),
+  skew-Q (1,1,0), Cu200 + ki-fixed) matched within 0.02°, with a4 positive and
+  a6 negative. This OVERRIDES the vTAS repository XML (`ss="-1" sa="1"`) and
+  the §14 table derived from it — the live readout wins. Locked as goldens in
+  `tests/test_sign_conventions.py`.
+- A flipped sample sense does NOT mirror sth: the sample rotation axis does
+  not flip with the scattering side, so sth lands on the other atan2 branch
+  (elastic (2,0,0): −144.35° instead of +35.63°; same Bragg planes mod 180°).
+  The round-trip through `q_instrument_from_angles` is exact — locked by
+  tests.
+
+### 20.2 Shared-code generalization
+
+`TAS_Instrument.calculate_angles`/`calculate_q_and_deltaE` resolve crystals
+via `self.crystal_info()` (was: module-level `mono_ana_crystals_setup`, hard-
+wired to `puma_descriptor()`); `compute_scan_snapshot` builds per-point params
+via `state.build_point_params(deltaE)` and `state.point_energy_metadata(...)`.
+`crystal_spec_to_info`/`find_crystal_spec`/`crystal_info_from_descriptor` are
+public in `tavi/instrument_helpers.py`. `update_diagnostic_settings` and the
+E0/energy-metadata logic moved onto the base class. `run_tas_point` aliases
+the (already binary-name-agnostic) run layer. All value-identical for PUMA.
+
+### 20.3 IN8 (`instruments/in8_plugin.py` + `instruments/IN8_instrument_definition.py`)
+
+- **Data provenance:** arm lengths are ILL-current Thermes values
+  (L1..L4 = 2.28/2.48/1.05/0.70 m) — a deliberate deviation from the vTAS
+  values in §14 (2.5/1.35/0.65): distances never affect angles, and the
+  simulation should match today's hardware. Axis limits from vTAS; crystal
+  faces from the 2006/2023 papers + the ILL page.
+- **Crystals v1:** mono PG002 (11×11 of 25×17 mm, mosaic 30′) + Cu200 (same
+  face; no stock reflectivity data → constant r0=0.7 with the McStas `"NULL"`
+  sentinel — validator-legal since reflect/transmit must be non-None strings,
+  not real files); ana PG002 (~180×140 mm Thermes). Si111/Si311 bent-perfect
+  faces deferred — not representable by the mosaic `Monochromator_curved`.
+- **Build backbone** entirely from `tavi/instrument_helpers.py` (monitors,
+  crystal assemblies, collimators, slits, sample + orientation arms). Literal
+  remainder: source block, axis arms, PG filter, detector — exactly the §19.4
+  prediction; **no helper extensions were needed**. The source block is the
+  first helper candidate if a third instrument repeats it.
+- **Branch-signed crystal bending (found in the smoke run):**
+  `Monochromator_curved` needs the curvature center on the take-off side, so
+  the bending radii carry the sign of the branch. IN8's
+  `calculate_crystal_bending` returns signed radii (point-source formulas on
+  BOTH sides — the virtual source is a real focal point, unlike PUMA's guide),
+  and `scan_config` applies the branch sign to the GUI magnitudes
+  (rha/rva negative). Measured cost of the wrong sign: **~7 orders of
+  magnitude** in elastic peak intensity. PUMA is unaffected (all its take-offs
+  are the positive branch).
+- Minimal six-monitor diagnostic set; collimation slots α2/α3/α4
+  (20/30/40/60′, default open); no modules (FlatCone/IMPS deferred, §14).
+  PLACEHOLDER values (positions, apertures, Cu200 mosaic/r0, analyzer
+  subdivision, hvs height, single vs double PG filter, no bending clamps,
+  rva magnitude 0.31) are marked in-line in both modules.
+
+### 20.4 Verified
+
+- 143 pytest tests; PUMA baselines B1–B5 byte-identical end-to-end (sense
+  threading and dispatch are runtime-value changes only).
+- vTAS live cross-check of the four IN8 angle cases (magnitudes ±0.02°, signs
+  exact) — recorded in `tests/test_sign_conventions.py`.
+- End-to-end smoke: IN8 built through the plugin, compiled, and ran one
+  elastic Al (2,0,0) point at kf=2.662 with the Phonon_DFT sample —
+  I = 0.043 ± 0.030 at 1e7 neutrons (same rare-giant-weight-event character
+  as PUMA's Bragg peak). Unsigned bending gives 2e-8; PUMA-sense angles on the
+  same tree give 1.2e-7 — the A/B that isolated the bending sign.
+- GUI matrix: `--instrument in8`, `--instrument puma`, and no flag (picker)
+  all launch clean; startup runnable-validation now gates both descriptors.
+
+### 20.5 Accepted couplings and follow-ups
+
+- IN8 imports `compute_scan_snapshot`/`run_tas_point`/`TAS_Instrument` from
+  `instruments/PUMA_instrument_definition.py`. Deliberate (anti-refactor
+  rule); **relocation trigger = a third instrument**.
+- `TAVIController._compute_ideal_bending_values` still uses PUMA's
+  parallel-beam mono formula and unsigned magnitudes for the advisory "Ideal:"
+  labels — mildly wrong for IN8 (point-source + signed). Follow-up: route
+  through `state.calculate_crystal_bending`.
+- **Open verification:** the a3(V3)−a3(V1) sample-rotation difference computes
+  to +33.69° under IN8's flipped sample sense (not the ±56.31° a PUMA-sense
+  instrument gives). Needs a vTAS re-check; if vTAS disagrees, TAVI's sth
+  convention for the +1 branch needs a mapping (data stays, solver branch
+  choice is the question).
+- Si bent-perfect crystals, FlatCone/IMPS, and the §20.3 placeholders await
+  instrument-scientist input.

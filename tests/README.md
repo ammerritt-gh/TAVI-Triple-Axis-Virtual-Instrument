@@ -73,3 +73,22 @@ Cross-scan binary reuse (`docs/CONFIGURABLE_INSTRUMENTS.md` §18.5):
 - `test_mcstas_config.py` — MPIRUN resolution from flat and nested
   `mccode_config.json` schemas plus launcher-argv normalization (the nested
   schema had silently disabled direct McStas execution).
+
+Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
+
+- `test_sign_conventions.py` — golden sign-convention tests: PUMA's baked
+  angle branch frozen (elastic/inelastic/skew-Q/out-of-plane/Kf-fixed +
+  reverse recovery), sense-threading equivalence and flip tests, and the
+  vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02).
+- `test_in8_plugin.py` — IN8 plugin conformance: runnable descriptor,
+  scan-config mapping (single-select collimation, branch-signed bending),
+  crystal lookup incl. the Cu200 `"NULL"` reflectivity sentinel, fingerprint
+  sensitivity, snapshot params == `_IN8_PARAMS`.
+- `test_in8_build_tree.py` — object-level IN8 build-tree tests (construction
+  only, no compile): backbone beam order, parameter set, monitor
+  gating/settings, collimator selection, crystal properties per descriptor,
+  detector contract, Mono/Maxwellian source wiring, shared-library sample
+  emission, no PUMA-only components.
+- `test_descriptor_validation.py` / `test_instrument_registry.py` updated:
+  IN8 is runnable-valid (rejection paths keep synthetic broken descriptors);
+  the lazy-import test lists in8 and bans `instruments.IN8_instrument_definition`.
