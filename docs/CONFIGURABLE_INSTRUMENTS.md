@@ -1,10 +1,13 @@
 # Configurable Instruments — Research & Plan
 
 **Status:** Design decided; Phase-0 drafted; review §15 folded in (§16);
-pre-implementation audit + spec in §17. **Phase 1 + 1.5 IMPLEMENTED
-(2026-07-02):** PUMA runs through the registry/`InstrumentPlugin` contract, the
-controller contains no "PUMA" literal, the descriptor validator gates startup,
-and 42 contract tests pass (54 total with the geometry suite). Next: Phase 2.
+Phase 1 + 1.5 IMPLEMENTED (2026-07-02, spec §17). **Phase 2 IMPLEMENTED
+(2026-07-02, spec §18):** the GUI renders from the descriptor (instrument dock,
+sample dock, diagnostic dialog), the descriptor is the single source for
+crystal/sample/monitor data, snapshots are typed (`PointSnapshot`),
+`config/parameters.json` is namespaced per instrument with a schema version,
+and ChangeImpact + `build_fingerprint` groundwork is in place. 65 tests pass.
+Next: the cross-scan binary-reuse follow-up task (§18.5), then Phase 3.
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -527,7 +530,7 @@ the draft, then Phase 1 wires PUMA behind it.
   lives in the pytest contract tests, not the validator, because it requires
   instantiating instrument state.
 
-**Phase 2 — Structured descriptor + descriptor-driven GUI.**
+**Phase 2 — Structured descriptor + descriptor-driven GUI. ✅ IMPLEMENTED 2026-07-02 (spec + record: §18).**
 - Promote PUMA's `descriptor()` to the real source (libraries no longer literal).
 - Extract crystal/sample/monitor libraries to data + registries; remove the
   duplicate crystal table in `validate_angles`.
@@ -1124,3 +1127,111 @@ Verification checklist (env is `tavi-dev` — see §17.3.4):
   on load. A live multi-point McStas scan (checklist item 5's "Direct run
   armed" console check and `scan_parameters.txt` diff) has not been re-run in
   this pass — recommended as a final manual smoke test.
+
+---
+
+## 18. Phase 2 Implementation Record — 2026-07-02
+
+Phase 2 (descriptor-driven GUI + library single-source) implemented on branch
+`instrument-selection`, five commits, app verified working after each. Guiding
+decision from the maintainer mid-implementation: **forward-facing only** — PUMA
+moves to the new formats with no migration of old data or control schemes.
+
+### 18.1 What changed
+
+1. **Descriptor completed (single source of truth).** 19 `MonitorSpec` entries
+   (ids = the exact `diagnostic_settings` gate strings; placements computed
+   numerically from PUMA geometry; `component_name` records the McStas instance
+   name; `sample_region` tags drive the dialog quick-select). Sample specs
+   corrected and completed (notably `Al_rod_phonon_optic` is
+   `Optic_Phonon_simple`, T=300, with `zero_energy`/`maximum_energy`; every
+   `properties` dict now lists all build() properties; `extend` recorded).
+   `pg002_test` mono crystal added (d-spacing 2.355). Collimation slot defaults
+   mirror the GUI reset values (α1 40, α2 {40}, α3/α4 30).
+2. **Crystal single-source.** `mono_ana_crystals_setup` is a thin adapter over
+   the descriptor `CrystalSpec`s (id-keyed; re-adds the embedded quotes on
+   reflect/transmit that build() emits verbatim). Dead `validate_angles`
+   deleted — only `archive/` referenced it, and its divergent duplicate crystal
+   values were assigned-but-never-read, so removal is behaviorally inert.
+3. **Typed snapshots (§16.6 resolved).** `PointSnapshot` dataclass +
+   `PrepFailure` sentinel in `instruments/contract.py`; producer, run loop,
+   `run_PUMA_point`, and tests all cut over in one commit. `PointSnapshot` is
+   non-frozen with a pre-created `timing` dict because the prep thread stamps
+   timings onto the queued instance after `put()` (shared-reference semantics).
+   `metadata` stays a plain dict (it is `**`-spread into scan_parameters.txt).
+4. **Descriptor-driven GUI.** `main()` → `TAVIMainWindow(descriptor)` →
+   `InstrumentDock(self, descriptor)` / `UnifiedSampleDock(self, descriptor)`;
+   population precedes `load_parameters()` (avoids the `setCurrentText` no-op
+   trap). Module/collimation/slit rows are GENERATED from
+   `ModuleSpec`/`CollimationSlot`/`SlitSpec` with deterministic objectNames
+   (`module_<id>`, `collimation_<id>`, `slit_<id>_width/height`); accessor
+   methods replace attribute access for generated widgets. Live-linked widgets
+   (angles/energies/crystal combos/bending) keep attribute names + signal
+   wiring; the NMO↔bending coupling guards on widget existence. Crystal/source
+   combos carry ids as item data; ids travel through vals/state/persistence,
+   labels are display-only. `get_gui_values()` exposes generic containers
+   (`modules`, `collimation`, `slits_mm` — mm; the plugin converts to m);
+   `PUMAPlugin.scan_config` owns the mapping onto its state fields.
+5. **Persistence namespaced (§16.8 resolved).** `config/parameters.json` is
+   `{"<instrument_id>": {"_schema": 1, ...}}`; save preserves other
+   instruments' blocks and discards non-schema content; load reads only the
+   active block with per-field defaults. **No legacy migration** (forward-facing
+   decision): old flat files are ignored — defaults load, first save rewrites.
+6. **ChangeImpact + fingerprint groundwork (§16-Q4 resolved: added in Phase 2).**
+   `ChangeImpact` enum (BUILD/RUNTIME) on crystal/sample/source/collimation/
+   slit/module specs (`ModuleSpec.requires_recompile` replaced);
+   `PUMAPlugin.build_fingerprint(config)` hashes the build-time state. No
+   consumer yet — see §18.5.
+7. **Removed transitional/legacy code:** `PUMARunExecutionState` alias, crystal
+   display-label lookups, `sample_label_var`, factor-based bending fallback
+   (`rhmfac_var` era), duplicate shadowed `update_monocris_info`/
+   `update_anacris_info` pair.
+
+### 18.2 Deliberate behavior changes (everything else verified identical)
+
+- Sample entry label "None" → "No sample" (descriptor display name); sample
+  restore is by id.
+- Velocity-selector checkbox label is now the `ModuleSpec.display_name`
+  ("Velocity selector", was "Enable velocity selector (Use in Ki fixed mode)").
+- Window title includes the instrument display name.
+- Saved crystal/source values are ids; `parameters.json` is namespaced; old
+  files load as defaults (no migration).
+- `vals` reshape: `modules`/`collimation`/`slits_mm` containers (slits in mm).
+
+### 18.3 Verified
+
+`.instr` generated through the full path (registry → `default_state` →
+`scan_config` → `build`) is byte-identical to the pre-Phase-2 baseline modulo
+the `* Date:` stamp, checked after the crystal-adapter step and again after the
+GUI/persistence steps. 65 pytest tests pass (incl. new anti-drift source-scans:
+monitor ids == build() gates, sample ids == build() ladder, add_parameter ==
+descriptor params; crystal-adapter golden-dict parity; persistence round-trips).
+GUI launched and ran cleanly after the switch-over. Recommended manual check:
+one short scan + a diagnostic-mode run with a few monitors enabled.
+
+### 18.4 Known build() debts (deferred to Phase 3, recorded in the descriptor)
+
+- Two copy-paste sizing bugs in build(): the 'Postmono Emonitor' and
+  'Post-analyzer EMonitor' blocks set the WRONG component's xwidth/yheight
+  (premono/preanalyzer respectively). The `MonitorSpec.settings` record the
+  INTENDED sizes; Phase 3's monitor loop fixes the emission.
+- build() still contains the literal monitor/collimator/sample blocks the
+  descriptor now mirrors; anti-drift source-scan tests hold them together until
+  Phase 3 makes build() loop over the descriptor tables.
+- `analyzer.r0` is set twice in build() (harmless duplicate assignment).
+
+### 18.5 Follow-up task: cross-scan binary reuse (next up)
+
+Today every scan's first point runs `backengine()` with
+`force_compile=not execution_state.first_backengine_succeeded`, and the
+`RunExecutionState` is scan-local — so every scan pays a full McStas compile
+even when nothing build-relevant changed. With `build_fingerprint` in place the
+task is: (1) keep the `RunExecutionState` (and last fingerprint + built
+instrument) across scans on the controller; (2) at scan start, if
+`build_fingerprint(new_config)` matches the stored one AND the binary exists →
+skip the rebuild/force-compile and go straight to the direct-invocation path;
+else rebuild as today; (3) diagnostic-mode retains first-point `backengine()`
+(it needs the McStasData for plots); (4) verify with two consecutive scans —
+the second must log a direct run on point 1 and produce identical
+`scan_parameters.txt` structure. Estimated saving: one full compile
+(`runtimes.json` `compilation_time`) per scan after the first.

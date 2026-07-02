@@ -42,3 +42,13 @@ Contract tests for the configurable-instruments Phase 1
   seam (`self.instrument.build/compute_snapshot/run_point/...`) is present.
 - `test_runtime_tracker_legacy_key.py` — `"PUMA"` → `"puma"` runtimes.json
   key migration.
+
+Phase-2 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §18):
+
+- `test_parameters_persistence.py` — per-instrument `parameters.json` block
+  selection and container round-trips (built on a bare `TAVIController` via
+  `__new__`; skips without PySide6/mcstasscript).
+- Anti-drift source-scans in `test_descriptor_validation.py`: descriptor
+  monitor ids == build() diagnostic gates, sample ids == build() ladder.
+- Crystal-adapter golden-dict parity and `build_fingerprint` tests in
+  `test_puma_plugin.py`.
