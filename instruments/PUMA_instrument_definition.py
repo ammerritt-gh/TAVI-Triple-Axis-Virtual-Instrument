@@ -42,55 +42,48 @@ from tavi.neutron_conversions import (  # noqa: F401  (re-export)
     k2energy,
 )
 
+def _crystal_spec_to_info(spec, d_key):
+    """Legacy crystal-info dict from a descriptor CrystalSpec.
+
+    ``reflect``/``transmit`` carry embedded quotes because they are emitted
+    verbatim as McStas string literals by build().
+    """
+    return {
+        d_key: spec.d_spacing,
+        'slabwidth': spec.slab_width,
+        'slabheight': spec.slab_height,
+        'ncolumns': spec.n_columns,
+        'nrows': spec.n_rows,
+        'gap': spec.gap,
+        'mosaic': spec.mosaic,
+        'r0': spec.r0,
+        'reflect': f'"{spec.reflect_file}"',
+        'transmit': f'"{spec.transmit_file}"',
+    }
+
+
+def _find_crystal_spec(specs, key):
+    for spec in specs:
+        if key in (spec.id, spec.display_name):
+            return spec
+    return None
+
+
 def mono_ana_crystals_setup(monocris, anacris):
-    """Holds the available monochromator and analyzer crystals to recall"""
-    monochromator_info = {}
-    analyzer_info = {}
+    """Crystal parameter dicts for the mono/analyzer, sourced from the descriptor.
 
-    # Monochromator crystal
-    if monocris == "PG[002]":
-        #print("\nPG[002] monochromator crystal")
-        monochromator_info['dm'] = 3.355
-        monochromator_info['slabwidth'] = 0.0202
-        monochromator_info['slabheight'] = 0.018
-        monochromator_info['ncolumns'] = 13
-        monochromator_info['nrows'] = 9
-        monochromator_info['gap'] = 0.0005
-        monochromator_info['mosaic'] = 35
-        monochromator_info['r0'] = 1.0 #0.7
-        monochromator_info['reflect'] = '"HOPG.rfl"'
-        monochromator_info['transmit'] = '"HOPG.trm"'
-    if monocris == "PG[002] test":
-        #print("\nPG[002] monochromator crystal")
-        monochromator_info['dm'] = 2.355
-        monochromator_info['slabwidth'] = 0.0202
-        monochromator_info['slabheight'] = 0.018
-        monochromator_info['ncolumns'] = 13
-        monochromator_info['nrows'] = 9
-        monochromator_info['gap'] = 0.0005
-        monochromator_info['mosaic'] = 35
-        monochromator_info['r0'] = 1.0 #0.7
-        monochromator_info['reflect'] = '"HOPG.rfl"'
-        monochromator_info['transmit'] = '"HOPG.trm"'
-    # else:
-    #     print("\nNo monochromator crystal selected")
+    The descriptor (instruments/puma_plugin.py) is the single source of truth for
+    crystal data. Accepts CrystalSpec ids ("pg002") and, for backward
+    compatibility, legacy display labels ("PG[002]"). Unknown keys return empty
+    dicts (legacy behavior preserved).
+    """
+    from instruments.puma_plugin import puma_descriptor
 
-    # Analyzer crystal
-    if anacris == "PG[002]":
-        #print("\nPG[002] analyzer crystal")
-        analyzer_info['da'] = 3.355
-        analyzer_info['slabwidth'] = 0.01
-        analyzer_info['slabheight'] = 0.0295
-        analyzer_info['ncolumns'] = 21
-        analyzer_info['nrows'] = 5
-        analyzer_info['gap'] = 0.0005
-        analyzer_info['mosaic'] = 35
-        analyzer_info['r0'] = 1.0 #0.7
-        analyzer_info['reflect'] = '"HOPG.rfl"'
-        analyzer_info['transmit'] = '"HOPG.trm"'
-    # else:
-    #     print("\nNo analyzer crystal selected")
-
+    descriptor = puma_descriptor()
+    mono_spec = _find_crystal_spec(descriptor.mono_crystals, monocris)
+    ana_spec = _find_crystal_spec(descriptor.ana_crystals, anacris)
+    monochromator_info = _crystal_spec_to_info(mono_spec, 'dm') if mono_spec else {}
+    analyzer_info = _crystal_spec_to_info(ana_spec, 'da') if ana_spec else {}
     return monochromator_info, analyzer_info
 
 ## This function adds a Union material with incoherent scattering and powder lines
@@ -1634,136 +1627,3 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         return instrument
 
     return configure_component_tree()
-
-def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
-
-    # error flag array
-    error_flag_array = []
-    
-    # Check for zero momentum transfer early to avoid division by zero
-    if qx == 0 and qy == 0 and qz == 0:
-        error_flag_array.append("zero_q")
-        return error_flag_array
-
-    # base instrument parameters
-    # distances in meters
-    # arm lengths
-    L1 = 2.150  # source-mono
-    L2 = 2.290  # mono-sample
-    L3 = 0.880  # sample-ana
-    L4 = 0.750  # ana-det
-
-    # focusing; use 1 for optimal focusing, 0 for flat monochromator
-    rhmfac = 1 # radius factor in the horizontal for the monochromator
-    rvmfac = 1 # radius factor in the vertical for the monochromator
-    rhafac = 1 # radius factor in the horizontal for the analyzer (vertical is fixed)
-
-    ## start the instrument
-
-    # Monochromator crystal
-    if monocris == "PG[002]":
-        #print("\nPG[002] monochromator crystal")
-        dm = 3.355
-        slabwidth_M = 0.018
-        slabheight_M = 0.02
-        ncolumn_M = 13
-        nrows_M = 9
-        eth_M = 35
-    else:
-        print("\nNo monochromator crystal selected")
-
-    # Analyzer crystal
-    if anacris == "PG[002]":
-        #print("\nPG[002] analyzer crystal")
-        da = 3.355
-        slabwidth_A = 0.01
-        slabheight_A = 0.03
-        ncolumn_A = 5
-        nrows_A = 21
-        eth_A = 35
-    else:
-        print("\nNo analyzer crystal selected")
-
-
-    # pre-calculate values from paramters
-    q = math.sqrt(qx**2 + qy**2 + qz**2)
-
-    K = energy2k(fixed_E)
-
-    if K_fixed == "Ki Fixed":
-        mtt = 2 * k2angle(K, dm)
-        Ei = fixed_E
-        ki = energy2k(Ei)
-        Ef = Ei - deltaE
-        kf = energy2k(Ef)
-        att = 2 * k2angle(kf, da)
-        if mtt == math.inf:
-            #print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
-            error_flag_array.append("mtt")
-        if att == math.inf:
-            #print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
-            att = 0
-            error_flag_array.append("att")
-    elif K_fixed == "Kf Fixed":
-        att = 2 * k2angle(K, da)
-        Ef = fixed_E
-        kf = energy2k(Ef)
-        Ei = Ef + deltaE
-        ki = energy2k(Ei)
-        mtt = 2 * k2angle(ki, dm)
-        if mtt == math.inf:
-            #print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
-            error_flag_array.append("mtt")
-        if att == math.inf:
-            #print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
-            error_flag_array.append("att")
-
-    try:
-        sample_angles = solve_instrument_angles(np.array([qx, qy, qz], dtype=float), ki, kf)
-        stt = sample_angles.stt
-    except ValueError:
-        print("\nSample two theta angle invalid")
-        stt = 0
-        error_flag_array.append("stt")
-        sample_angles = None
-
-    if "stt" in error_flag_array:
-        #print("\nCannot compute sample theta angle as sample two theta angle invalid")
-        sth = 0
-        saz = 0
-    else:
-        sth = sample_angles.sth
-        saz = sample_angles.saz
-
-    # set crystal rotations
-    mth = mtt/2
-    ath = att/2
-
-    # TODO: add in NMO component to validation
-    rhmfac, rvmfac = 1, 1
-    rhafac = 1
-
-    if not error_flag_array: #check if the error flags are empty
-        # set crystal bending
-        rhm = rhmfac*2*(1/L1 + 1/L2)/math.sin(math.radians(mth))
-        rvm = rvmfac*2*(1/L1 + 1/L2)*math.sin(math.radians(mth))
-
-        # check if the mirror focus is too short
-        if rhm < 2.0:
-            #print("\nRequested Rh (mono) is {:.2f} m, but minimum Rh is 2.0 m".format(rhm))
-            rhm = 2.0
-
-        if rvm < 0.5:
-            #print("\nRequested Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
-            rvm = 0.5
-
-        rha = rhafac*2*(1/L3 + 1/L4)/math.sin(math.radians(ath))
-        rva = 0.8 # fixed at 0.8 m
-
-        if rha < 2.0:
-            print(f"\nRequested Rh (ana) is {rha:.2f} m, but minimum Rh is 2.0 m")
-            rha = 2.0
-
-        #print(f"\nmtt: {mtt:.2f} ki: {ki:.3f} Ei: {Ei:.3f} stt: {stt:.3f} saz: {saz:.3f} Q: {q:.2f} kf: {kf:.3f} Ef: {Ef:.3f} att: {att:.2f}")
- 
-    return(error_flag_array)

@@ -173,6 +173,47 @@ def test_binary_fallback_uses_mcstas_name(tmp_path):
     assert derived == os.path.abspath(os.path.join(str(tmp_path), "Foo.exe"))
 
 
+# Golden copies of the pre-Phase-2 hard-coded crystal dicts; the descriptor
+# adapter must reproduce them exactly (incl. the embedded-quote reflect/transmit
+# strings emitted verbatim into the .instr).
+_GOLDEN_PG002_MONO = {
+    'dm': 3.355, 'slabwidth': 0.0202, 'slabheight': 0.018, 'ncolumns': 13,
+    'nrows': 9, 'gap': 0.0005, 'mosaic': 35, 'r0': 1.0,
+    'reflect': '"HOPG.rfl"', 'transmit': '"HOPG.trm"',
+}
+_GOLDEN_PG002_ANA = {
+    'da': 3.355, 'slabwidth': 0.01, 'slabheight': 0.0295, 'ncolumns': 21,
+    'nrows': 5, 'gap': 0.0005, 'mosaic': 35, 'r0': 1.0,
+    'reflect': '"HOPG.rfl"', 'transmit': '"HOPG.trm"',
+}
+
+
+def test_crystal_adapter_matches_golden_dicts():
+    pytest.importorskip("mcstasscript")
+    from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
+
+    mono, ana = mono_ana_crystals_setup("PG[002]", "PG[002]")
+    assert mono == _GOLDEN_PG002_MONO
+    assert ana == _GOLDEN_PG002_ANA
+
+    # Test variant: PG[002] geometry, d-spacing 2.355, mono-only.
+    mono_test, ana_test = mono_ana_crystals_setup("PG[002] test", "PG[002]")
+    assert mono_test == {**_GOLDEN_PG002_MONO, 'dm': 2.355}
+    assert ana_test == _GOLDEN_PG002_ANA
+
+
+def test_crystal_adapter_accepts_ids_and_labels():
+    pytest.importorskip("mcstasscript")
+    from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
+
+    assert mono_ana_crystals_setup("pg002", "pg002") == mono_ana_crystals_setup(
+        "PG[002]", "PG[002]"
+    )
+    assert mono_ana_crystals_setup("pg002_test", "pg002")[0]['dm'] == 2.355
+    # Unknown keys keep the legacy empty-dict behavior.
+    assert mono_ana_crystals_setup("nope", "nope") == ({}, {})
+
+
 def test_crystal_info_matches_legacy():
     pytest.importorskip("mcstasscript")
     from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
