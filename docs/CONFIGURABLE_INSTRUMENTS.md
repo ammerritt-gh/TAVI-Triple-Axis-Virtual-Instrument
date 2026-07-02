@@ -8,7 +8,12 @@ crystal/sample/monitor data, snapshots are typed (`PointSnapshot`),
 `config/parameters.json` is namespaced per instrument with a schema version,
 and ChangeImpact + `build_fingerprint` groundwork is in place. **Cross-scan
 binary reuse IMPLEMENTED (2026-07-02, §18.5)** along with two direct-execution
-fixes that were masking it. 77 tests pass. Next: Phase 3.
+fixes that were masking it. **Phase 3 IMPLEMENTED (2026-07-02, spec §19):**
+build() emits monitors/samples/collimators/crystals through shared helpers in
+`tavi/instrument_helpers.py`, the sample library is instrument-independent
+(`tavi/sample_library.py` — samples move between instruments), the two §18.4
+monitor-sizing bugs are fixed, and sample selection adopts the sample's own
+lattice into the GUI. 95 tests pass. Next: Phase 4 (IN8).
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -341,8 +346,11 @@ data-driven registry that the instrument descriptor references:
   from, but it is not the source of truth.
 - **Samples** — replace the `if sample_key == ...` ladder + `unified_sample_dock`
   `sample_map` with a sample registry (id → component type + properties). Keep the
-  "no sample" path. **Owned per-instrument** as well; a shared sample library is an
-  optional convenience the descriptor can draw from, not a global list.
+  "no sample" path. ~~**Owned per-instrument** as well; a shared sample library is an
+  optional convenience the descriptor can draw from, not a global list.~~
+  **Amended 2026-07-02 (Phase 3, §19):** samples are INSTRUMENT-INDEPENDENT —
+  physical objects moved between instruments. The shared table lives in
+  `tavi/sample_library.py` and every descriptor mounts it by default.
 - **Monitors / diagnostics** — replace the literal `DIAGNOSTIC_OPTIONS` with a
   per-instrument list of monitor descriptors (name, McStas type, AT/RELATIVE,
   settings). The dialog renders from that list. Quick-select groups ("sample
@@ -1212,14 +1220,16 @@ one short scan + a diagnostic-mode run with a few monitors enabled.
 
 ### 18.4 Known build() debts (deferred to Phase 3, recorded in the descriptor)
 
+All three were paid in Phase 3 (§19):
+
 - Two copy-paste sizing bugs in build(): the 'Postmono Emonitor' and
   'Post-analyzer EMonitor' blocks set the WRONG component's xwidth/yheight
   (premono/preanalyzer respectively). The `MonitorSpec.settings` record the
-  INTENDED sizes; Phase 3's monitor loop fixes the emission.
+  INTENDED sizes; Phase 3's monitor loop fixes the emission. ✅
 - build() still contains the literal monitor/collimator/sample blocks the
   descriptor now mirrors; anti-drift source-scan tests hold them together until
-  Phase 3 makes build() loop over the descriptor tables.
-- `analyzer.r0` is set twice in build() (harmless duplicate assignment).
+  Phase 3 makes build() loop over the descriptor tables. ✅
+- `analyzer.r0` is set twice in build() (harmless duplicate assignment). ✅
 
 ### 18.5 Cross-scan binary reuse — IMPLEMENTED (2026-07-02)
 
@@ -1265,3 +1275,76 @@ no compile; changed collimation or diagnostic mode → no reuse. Note
 `runtimes.json` records from reused scans have `compilation_time ≈ 0`, which
 will drag the historical compile estimate down — acceptable, revisit if
 pre-scan estimates matter.
+
+## 19. Phase 3 Implementation Record (2026-07-02)
+
+Phase 3 (§11 "build() cleanup + shared helpers") is implemented, plus the
+user-directed scope addition: **samples are instrument-independent**. Eight
+commits; 95 pytest tests.
+
+### 19.1 What changed
+
+- **`tavi/instrument_helpers.py` (new):** instrument-agnostic emitters —
+  `emit_monitors`, `emit_sample`, `emit_sample_orientation_arms`,
+  `emit_crystal_assembly`, `emit_slit`, `emit_collimator`, plus
+  `_mcstas_number` (int-coerces integral floats so AT/ROTATED text matches
+  legacy; McStasScript renders them with `str()`). No mcstasscript import; the
+  `instrument` argument is duck-typed. Callers invoke emitters at the exact
+  insertion points of their tree — component order is physics and stays in
+  statement order.
+- **`tavi/sample_library.py` (new):** `default_sample_library()` — the shared,
+  instrument-independent sample table (samples move between instruments;
+  supersedes §6's "owned per-instrument" disposition). Every descriptor mounts
+  it (`samples=default_sample_library()`); an instrument may filter/extend.
+  `SampleSpec` gains `component_name` (the `Al_bragg` spec keeps the legacy
+  `"Al_Bragg"` McStas instance name) and `lattice` (a,b,c,α,β,γ).
+- **`build_PUMA_instrument()` rewrite of the repetitive categories:** the 19
+  monitor gate blocks became 10 `emit_monitors` call sites reading
+  `_PUMA_MONITORS`; crystal-sized monitors get their extents from the SELECTED
+  crystal via `size_overrides` (identical to the descriptor numerics for the
+  current crystals — the build-tree test asserts that equality and will alarm
+  if a crystal with different slab geometry lands). The alpha_2 collimators
+  loop over a PUMA-local `_ALPHA2_COLLIMATORS` geometry table (build-only data;
+  `CollimationSlot` stays GUI-facing). Slits/collimators/crystal assemblies/
+  orientation arms go through the shared emitters. The sample ladder is a
+  shared-library lookup + `emit_sample`. ~120 lines of commented-out
+  exploration code deleted.
+- **Lattice sync (user-locked):** selecting a sample adopts
+  `SampleSpec.lattice` into the GUI lattice fields
+  (`TAVIController._adopt_sample_lattice`) — driving Phonon_DFT (internal
+  a=4.03893) with the default 4.05 lattice misses its Bragg condition entirely
+  (found the hard way, 2026-07-02). `load_parameters` applies saved lattice
+  values AFTER the sample restore so hand-edited lattices survive reload.
+
+### 19.2 Deliberate behavior changes
+
+- The two §18.4 monitor-sizing bugs are FIXED: `postmono_Emonitor` and
+  `postanalyzer_Emonitor` now get their own mono/analyzer extents
+  (0.2626×0.162 and 0.21×0.1475 for PG[002]); the latent NameError (post-
+  monitor enabled while its pre- partner was off) is gone.
+- Six monitors that legacy added without an explicit ROTATED now emit a
+  cosmetic `ROTATED (0, 0, 0)` line in the diagnostic `.instr` (`source_PSD`,
+  `source_DSD`, `postcollimation_PSD`, `postcollimation_DSD`,
+  `premono_Emonitor`, `detector_PSD`) — physically zero rotation.
+- Duplicate `analyzer.r0` assignment gone; `try/except` around the phonon
+  samples' `append_EXTEND` dropped (never raised; silent-swallow anti-pattern).
+- Non-diagnostic builds are byte-identical throughout.
+
+### 19.3 Verified
+
+Baselines B1 (defaults/no sample), B2a–d (one per sample), B3 (all three
+alpha_2 collimators), B4 (diagnostic, all 19 monitors), B5 (NMO Both +
+v-selector) captured via the full plugin path and re-compared after every
+commit (modulo `* Date:`). B1/B2/B3/B5 byte-identical end-to-end; B4's diff is
+exactly the enumerated §19.2 lines (two size fixes + six ROTATED cosmetics),
+then frozen as the new diagnostic baseline. The two anti-drift source-scans
+were replaced by object-level build-tree tests (`tests/test_puma_build_tree.py`
+— construction only, no McStas compile/run): monitor presence/order/settings
+against `_PUMA_MONITORS`, per-monitor gating, per-sample emission against the
+library specs, alpha_2 collimator selection/order, table↔descriptor sync.
+
+### 19.4 Follow-ups
+
+- `SampleSpec.lattice` could also drive a space-group default per sample.
+- IN8 (Phase 4) should build its backbone from `tavi/instrument_helpers.py`;
+  anything it cannot express is the signal to extend the helpers.
