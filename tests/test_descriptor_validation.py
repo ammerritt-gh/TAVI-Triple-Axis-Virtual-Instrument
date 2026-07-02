@@ -27,21 +27,36 @@ def test_puma_descriptor_valid_runnable():
     assert validate_descriptor(puma_descriptor(), runnable=True) == []
 
 
-def test_in8_descriptor_valid_as_example():
-    assert validate_descriptor(in8_descriptor(), runnable=False) == []
+def test_in8_descriptor_valid_runnable():
+    # Phase 4: IN8 is a real, registered instrument -- startup gates on this.
+    assert validate_descriptor(in8_descriptor(), runnable=True) == []
 
 
-def test_in8_descriptor_rejected_as_runnable():
-    errors = "\n".join(validate_descriptor(in8_descriptor(), runnable=True))
+def test_runnable_rejects_incomplete_descriptor():
+    """The runnable gate still catches missing L1 and incomplete crystals."""
+    d = in8_descriptor()
+    broken = dataclasses.replace(
+        d,
+        geometry=dataclasses.replace(d.geometry, l1_source_mono=float("nan")),
+        mono_crystals=(dataclasses.replace(
+            d.mono_crystals[0], slab_width=None), ) + d.mono_crystals[1:],
+    )
+    errors = "\n".join(validate_descriptor(broken, runnable=True))
     assert "l1_source_mono" in errors
     assert "slab_width" in errors          # crystal completeness
-    assert "source_types" in errors        # empty library
+    # ...but the same descriptor is still structurally valid as an example.
+    assert validate_descriptor(broken, runnable=False) == []
 
 
 def test_assert_valid_descriptor_raises_with_messages():
+    d = in8_descriptor()
+    broken = dataclasses.replace(
+        d, geometry=dataclasses.replace(d.geometry, l1_source_mono=float("nan"))
+    )
     with pytest.raises(DescriptorValidationError, match="l1_source_mono"):
-        assert_valid_descriptor(in8_descriptor(), runnable=True)
+        assert_valid_descriptor(broken, runnable=True)
     assert_valid_descriptor(puma_descriptor(), runnable=True)  # must not raise
+    assert_valid_descriptor(in8_descriptor(), runnable=True)   # must not raise
 
 
 def _replace(d, **kwargs):
