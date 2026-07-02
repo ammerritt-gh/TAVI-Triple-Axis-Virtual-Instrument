@@ -52,3 +52,12 @@ Phase-2 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §18):
   monitor ids == build() diagnostic gates, sample ids == build() ladder.
 - Crystal-adapter golden-dict parity and `build_fingerprint` tests in
   `test_puma_plugin.py`.
+
+Cross-scan binary reuse (`docs/CONFIGURABLE_INSTRUMENTS.md` §18.5):
+
+- `test_binary_reuse.py` — the controller's Qt-free reuse decision helpers
+  (`_can_reuse_binary` / `_updated_binary_cache`): fingerprint match, binary
+  existence, diagnostic-mode opt-out, cache replacement rules.
+- `test_mcstas_config.py` — MPIRUN resolution from flat and nested
+  `mccode_config.json` schemas plus launcher-argv normalization (the nested
+  schema had silently disabled direct McStas execution).
