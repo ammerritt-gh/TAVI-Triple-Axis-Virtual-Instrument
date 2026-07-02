@@ -381,7 +381,8 @@ class TAVIMainWindow(QMainWindow):
     def _show_about(self):
         """Show the About dialog."""
         QMessageBox.about(self, "About TAVI",
-                         "TAVI - Triple-Axis Virtual Instrument\n\n"
+                         "TAVI - Triple-Axis Virtual Instrument\n"
+                         "Version v1.2.0\n\n"
                          "A virtual instrument simulator for triple-axis neutron "
                          "spectrometry experiments.\n\n"
                          "Panels can be undocked, moved, and rearranged.\n"
