@@ -88,4 +88,12 @@ powershell -NoProfile -Command "$WshShell = New-Object -ComObject WScript.Shell;
 2. Add git verification step after env setup with a hard stop on failure
 3. Harden all clone/git error paths so failures are visible and halt the installer
 4. Re-test on the test user account
-5. Once working: cut `v1.0.0` tag, set `TAVI_VERSION=v1.0.0`, attach installer as GitHub release artifact
+
+## Release recipe
+
+For each new release `vX.Y.Z`:
+1. Merge the release branch to `main` and cut the `vX.Y.Z` tag there.
+2. Copy the previous pinned installer to `WINDOWS-install-TAVI-vX.Y.Z.bat` and bump
+   the header comment plus `TAVI_VERSION`/`INSTALLER_VERSION` (nothing else changes).
+3. Create the GitHub release from the tag and attach the pinned installer `.bat`
+   as a release artifact. Done for `v1.1.0` and `v1.2.0`.

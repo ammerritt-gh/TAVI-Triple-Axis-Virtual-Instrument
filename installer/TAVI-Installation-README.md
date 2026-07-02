@@ -71,7 +71,7 @@ The installer detects MPI automatically and includes the SDK paths in generated 
 
 ## Versioning
 
-The installer pins a specific TAVI release via the `TAVI_VERSION` variable near the top of the script. Installers published as release artifacts will always pin a specific tag (e.g. `v1.0.0`). Development builds may set `TAVI_VERSION=main`.
+The installer pins a specific TAVI release via the `TAVI_VERSION` variable near the top of the script. Installers published as release artifacts will always pin a specific tag (e.g. `v1.2.0`). Development builds may set `TAVI_VERSION=main`.
 
 To check which version is installed:
 
