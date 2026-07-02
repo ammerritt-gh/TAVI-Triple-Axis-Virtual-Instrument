@@ -53,6 +53,18 @@ Phase-2 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §18):
 - Crystal-adapter golden-dict parity and `build_fingerprint` tests in
   `test_puma_plugin.py`.
 
+Phase-3 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §19):
+
+- `test_puma_build_tree.py` — object-level build-tree tests replacing the two
+  anti-drift source-scans (monitor gates, sample ladder): builds the instrument
+  through the full plugin path and inspects `component_list`. Construction
+  only — creating a `McStas_instr` and adding components never compiles or
+  runs McStas, so this stays within the no-compile rule (it does need a
+  configured mcstasscript, which the tavi-dev env provides).
+- `test_sample_library.py` — the shared, instrument-independent sample library
+  (`tavi/sample_library.py`): shape, legacy `Al_Bragg` component name, per-
+  sample lattice constants, and that the PUMA descriptor mounts the library.
+
 Cross-scan binary reuse (`docs/CONFIGURABLE_INSTRUMENTS.md` §18.5):
 
 - `test_binary_reuse.py` — the controller's Qt-free reuse decision helpers
