@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
-from instruments.contract import RunExecutionState
+from instruments.contract import PrepFailure, RunExecutionState
 
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
@@ -2867,19 +2867,20 @@ class TAVIController(QObject):
                 while not stop_event.is_set():
                     try:
                         snapshot_queue.put(snapshot, timeout=0.1)
+                        # The queued PointSnapshot is shared by reference; stamping
+                        # timing after put() is visible to the consumer loop.
                         queue_wait_duration = time.perf_counter() - queue_wait_start
-                        timing = snapshot.setdefault('timing', {})
-                        timing['prep_compute_duration_s'] = prep_compute_duration
-                        timing['prep_queue_wait_duration_s'] = queue_wait_duration
-                        timing['prep_duration_s'] = prep_compute_duration + queue_wait_duration
+                        snapshot.timing['prep_compute_duration_s'] = prep_compute_duration
+                        snapshot.timing['prep_queue_wait_duration_s'] = queue_wait_duration
+                        snapshot.timing['prep_duration_s'] = prep_compute_duration + queue_wait_duration
                         break
                     except queue.Full:
                         continue
         except Exception as exc:
-            error_snapshot = {'fatal_error': str(exc)}
+            failure = PrepFailure(str(exc))
             while not stop_event.is_set():
                 try:
-                    snapshot_queue.put(error_snapshot, timeout=0.1)
+                    snapshot_queue.put(failure, timeout=0.1)
                     break
                 except queue.Full:
                     continue
@@ -3175,22 +3176,22 @@ class TAVIController(QObject):
                 if snapshot is None:
                     break
 
-                if snapshot.get('fatal_error'):
-                    simulation_error_message = f"Preparation thread failed: {snapshot['fatal_error']}"
+                if isinstance(snapshot, PrepFailure):
+                    simulation_error_message = f"Preparation thread failed: {snapshot.message}"
                     self.message_printed.emit(simulation_error_message)
                     break
 
                 scan_start_time = time.time()
-                i = snapshot['scan_index']
-                self.message_printed.emit(snapshot['log_message'])
-                indices = snapshot['indices']
+                i = snapshot.scan_index
+                self.message_printed.emit(snapshot.log_message)
+                indices = snapshot.indices
                 idx_1d = indices['idx_1d']
                 idx_x = indices['idx_x']
                 idx_y = indices['idx_y']
-                scan_folder = snapshot['output_folder']
-                error_flags = list(snapshot['error_flags'])
-                metadata = snapshot['metadata']
-                deltaE = snapshot['deltaE']
+                scan_folder = snapshot.output_folder
+                error_flags = list(snapshot.error_flags)
+                metadata = snapshot.metadata
+                deltaE = snapshot.deltaE
                 qx = metadata['qx']
                 qy = metadata['qy']
                 qz = metadata['qz']
@@ -3209,7 +3210,7 @@ class TAVIController(QObject):
                 chi_scan = metadata['chi']
                 psi_scan = metadata['psi']
                 kappa_scan = metadata['kappa']
-                timing = snapshot.get('timing', {})
+                timing = snapshot.timing
                 prep_duration = float(timing.get('prep_duration_s', 0.0))
                 prep_compute_duration = float(timing.get('prep_compute_duration_s', 0.0))
                 prep_queue_wait_duration = float(timing.get('prep_queue_wait_duration_s', 0.0))
@@ -3231,7 +3232,7 @@ class TAVIController(QObject):
                     'armed_direct_run': False,
                 }
 
-                if not error_flags and snapshot['params'] is not None:
+                if not error_flags and snapshot.params is not None:
                     simulation_stage_start = time.perf_counter()
                     data, error_flags, execution_info = self.instrument.run_point(
                         instrument,

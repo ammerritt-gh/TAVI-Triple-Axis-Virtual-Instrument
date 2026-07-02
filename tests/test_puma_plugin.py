@@ -137,14 +137,14 @@ def test_snapshot_params_match_descriptor(tmp_path):
         {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
     )
 
-    assert snapshot["error_flags"] == []
-    assert snapshot["params"] is not None
+    from instruments.contract import PointSnapshot
+
+    assert isinstance(snapshot, PointSnapshot)
+    assert snapshot.error_flags == []
+    assert snapshot.params is not None
     descriptor_names = {p.name for p in plugin.descriptor().scannable_parameters}
-    assert set(snapshot["params"]) == descriptor_names
-    assert set(snapshot) == {
-        "params", "output_folder", "scan_index", "deltaE",
-        "error_flags", "metadata", "indices", "log_message",
-    }
+    assert set(snapshot.params) == descriptor_names
+    assert snapshot.timing == {}  # controller stamps timings post-enqueue
 
 
 def test_run_execution_state_is_shared():
