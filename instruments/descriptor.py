@@ -32,13 +32,34 @@ from enum import Enum
 class Sense(int, Enum):
     """Scattering sense (handedness) at an axis. vTAS records these as sm/ss/sa.
 
-    PUMA bakes a fixed handedness into its arm rotations; IN8 differs
-    (sample sense = RIGHT). Carrying this per-axis in the descriptor is what keeps
-    the angle solve / build() from assuming PUMA's signs. See §12.5 / §14.
+    The value IS the numeric sign of that axis' two-theta readout: LEFT = +1
+    means a positive angle (McStas +y rotation, beam deflecting toward +x when
+    looking downstream), RIGHT = -1 a negative one. This matches vTAS's
+    sm/ss/sa convention exactly. The angle solvers consume these through
+    ``TAS_Instrument.sense_mono/sense_sample/sense_ana``; TAVI-PUMA's
+    historical behavior is (+1, -1, +1), IN8's verified senses are
+    (+1, +1, -1). See §12.5 / §14 / §20.
     """
 
     LEFT = 1
     RIGHT = -1
+
+
+class ChangeImpact(str, Enum):
+    """What changing a descriptor-controlled setting costs (design record §16.4).
+
+    BUILD: the setting affects McStas topology or component properties fixed at
+    build time -- changing it invalidates the compiled binary (recompile).
+    RUNTIME: the setting maps to a McStas instrument parameter -- safe to change
+    between points/scans without recompiling.
+
+    Groundwork for cross-scan binary reuse: a fingerprint over the BUILD-impact
+    state (see ``PUMAPlugin.build_fingerprint``) will let the run loop skip
+    ``force_compile`` when nothing build-relevant changed. No consumer yet.
+    """
+
+    BUILD = "build"
+    RUNTIME = "runtime"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +113,7 @@ class CrystalSpec:
     r0: float | None = None
     reflect_file: str | None = None
     transmit_file: str | None = None
+    change_impact: ChangeImpact = ChangeImpact.BUILD  # crystal props are baked into build()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +121,10 @@ class SampleSpec:
     """A selectable sample component: id -> McStas component type + properties.
 
     ``component_type=None`` represents the "no sample" path (run without a sample
-    component). Owned per-instrument.
+    component). Samples are physical objects moved between instruments, so the
+    shared table lives in ``tavi/sample_library.py`` and instruments mount it
+    (``samples=default_sample_library()``) rather than owning their own copies;
+    an instrument may still filter or extend the tuple (design record §19).
     """
 
     id: str
@@ -108,6 +133,12 @@ class SampleSpec:
     properties: dict = field(default_factory=dict)
     split: int | None = None        # McStas SPLIT
     extend: str | None = None       # McStas EXTEND snippet
+    component_name: str | None = None   # McStas instance name (None -> use id)
+    # Sample's own lattice (a, b, c, alpha, beta, gamma); the GUI adopts it into
+    # the lattice fields on user sample selection so instrument angles match the
+    # component's internal crystal (e.g. Phonon_DFT bakes a=4.03893).
+    lattice: tuple[float, float, float, float, float, float] | None = None
+    change_impact: ChangeImpact = ChangeImpact.BUILD  # sample choice changes the tree
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +161,7 @@ class MonitorSpec:
     rotated: tuple[float, float, float] = (0.0, 0.0, 0.0)
     settings: dict = field(default_factory=dict)
     tags: tuple[str, ...] = ()
+    component_name: str | None = None   # McStas component instance name in build()
 
 
 class ModuleKind(str, Enum):
@@ -141,7 +173,7 @@ class ModuleKind(str, Enum):
 class ModuleSpec:
     """An optional module that changes the component tree (adds/removes components).
 
-    Changing one of these generally forces recompilation; ``requires_recompile``
+    Changing one of these generally forces recompilation; ``change_impact``
     documents that for the GUI. PUMA: NMO (CHOICE), velocity selector (TOGGLE).
     IN8: FlatCone / IMPS exist but are multi-detector and **deferred** past v1.
     """
@@ -151,7 +183,7 @@ class ModuleSpec:
     kind: ModuleKind
     options: tuple[str, ...] = ()           # for CHOICE
     default: str | bool = False
-    requires_recompile: bool = True
+    change_impact: ChangeImpact = ChangeImpact.BUILD  # modules add/remove components
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +195,7 @@ class CollimationSlot:
     allowed: tuple[str, ...]                # e.g. ("0", "20", "40", "60")
     multi_select: bool = False              # PUMA alpha_2 stacks several in series
     default: str = "0"
+    change_impact: ChangeImpact = ChangeImpact.BUILD  # divergence/gating fixed at build
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +208,7 @@ class SlitSpec:
     has_height: bool = False
     default_width_mm: float | None = None
     default_height_mm: float | None = None
+    change_impact: ChangeImpact = ChangeImpact.RUNTIME  # slits are McStas parameters
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +218,7 @@ class SourceType:
     id: str
     display_name: str
     extra_params: tuple[str, ...] = ()      # e.g. ("source_dE",) for Mono
+    change_impact: ChangeImpact = ChangeImpact.BUILD  # source model is a build choice
 
 
 @dataclass(frozen=True, slots=True)

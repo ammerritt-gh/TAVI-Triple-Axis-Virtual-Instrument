@@ -1,0 +1,4 @@
+# Development-only dependencies (not needed to run TAVI).
+# Install into the dev environment, e.g.:
+#   micromamba run -n tavi-dev python -m pip install -r requirements-dev.txt
+pytest

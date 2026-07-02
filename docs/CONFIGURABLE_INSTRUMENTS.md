@@ -1,14 +1,39 @@
 # Configurable Instruments — Research & Plan
 
-**Status:** Design decided; Phase-0 drafted; review §15 folded in (§16). Ready for
-Phase 1.
+**Status:** Design decided; Phase-0 drafted; review §15 folded in (§16);
+Phase 1 + 1.5 IMPLEMENTED (2026-07-02, spec §17). **Phase 2 IMPLEMENTED
+(2026-07-02, spec §18):** the GUI renders from the descriptor (instrument dock,
+sample dock, diagnostic dialog), the descriptor is the single source for
+crystal/sample/monitor data, snapshots are typed (`PointSnapshot`),
+`config/parameters.json` is namespaced per instrument with a schema version,
+and ChangeImpact + `build_fingerprint` groundwork is in place. **Cross-scan
+binary reuse IMPLEMENTED (2026-07-02, §18.5)** along with two direct-execution
+fixes that were masking it. **Phase 3 IMPLEMENTED (2026-07-02, spec §19):**
+build() emits monitors/samples/collimators/crystals through shared helpers in
+`tavi/instrument_helpers.py`, the sample library is instrument-independent
+(`tavi/sample_library.py` — samples move between instruments), the two §18.4
+monitor-sizing bugs are fixed, and sample selection adopts the sample's own
+lattice into the GUI. **Phase 4 IMPLEMENTED (2026-07-02, spec §20):** IN8 is
+the second registered instrument — scattering senses threaded through the
+angle solvers (vTAS-verified for IN8: +1/+1/−1), crystal/point-param dispatch
+through the instrument state, `instruments/in8_plugin.py` +
+`instruments/IN8_instrument_definition.py` built on the shared helpers,
+branch-signed crystal bending, startup picker active, end-to-end McStas smoke
+produces a real Bragg peak. 144 tests pass. `docs/INSTRUMENT_AUTHORING.md` is
+the authoring guide; the IN8 modules are the living template. The a3
+convention for the flipped sample sense is vTAS-verified too (Friedel/-Q
+branch; §20.5).
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
-incorporated 2026-06-18.
+incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
+2026-07-02.
 **Decision summary:** Instruments are Python modules (imperative `build()` +
 structured GUI descriptor + physics hooks), selected at startup and fixed per
 session. Per-instrument libraries. First two instruments: PUMA, then IN8 (ILL).
 JSON/YAML definitions are a non-goal. Full rationale in §4; all framing questions
-resolved in §12.
+resolved in §12. Phase-1 additions (2026-07-02): Phases 1 and 1.5 land together;
+startup picker = CLI flag first, dialog only when >1 instrument registered;
+contract tests are pytest in `tests/`; the contract's `new_state` is split into
+`default_state()` + `scan_config(...)` (see §5 and §17.2).
 **Goal:** Turn TAVI from a PUMA-only simulator into a *general-purpose* triple-axis
 spectrometer (TAS) simulator, where new instruments are added through a
 consistent, documented format that other researchers can author without rewriting
@@ -244,10 +269,19 @@ never a tree interpreter. PUMA becomes the first module conforming to it.
 > **Realized in Phase-0 draft** — see `instruments/contract.py`. The protocol is
 > named `InstrumentPlugin` (not `TASInstrument`) to avoid confusion with the
 > existing `TAS_Instrument` physics/config base class (review §16.1).
+>
+> **Adjusted 2026-07-02** after the pre-implementation audit (§17.2): the drafted
+> `new_state(gui_values)` could not express how the controller actually builds a
+> scan config, so it is replaced by `default_state()` + `scan_config(...)`, and a
+> *transitional* `crystal_info(...)` hook is added. The opaque state alias is
+> renamed `InstrumentConfig` → `InstrumentState`.
 
 A registered instrument exposes:
 
 ```
+InstrumentState = Any   # opaque per-session/per-run state
+                        # (today: PUMA_Instrument, a TAS_Instrument subclass)
+
 class InstrumentPlugin(Protocol):
     id: str                         # "puma", "in8", ...
     display_name: str               # "PUMA (FRM-II)"
@@ -257,20 +291,48 @@ class InstrumentPlugin(Protocol):
         # modules, collimation, slits, source_types, scannable_parameters,
         # geometry (L1..L4 + senses), axis_limits, detector contract.
 
-    def new_state(self, gui_values: dict) -> InstrumentConfig: ...
-        # Build the per-run config object (today: PUMA_Instrument()).
+    def default_state(self) -> InstrumentState: ...
+        # Fresh state with the instrument's defaults. Used for (a) the
+        # controller's live per-session state at startup and (b) throwaway
+        # states for scan-point validation prepasses.
+
+    def scan_config(self, base_state, gui_values, sample_key,
+                    diagnostic_settings, sample_mount) -> InstrumentState: ...
+        # Frozen scan-launch config: deep-copies base_state *inside the
+        # plugin*, then applies the instrument's GUI-value mapping (replaces
+        # the controller's hand-written _build_scan_puma_config).
+
+    def crystal_info(self, mono_label, ana_label) -> tuple[dict, dict]: ...
+        # TRANSITIONAL (Phase 1 only): crystal dicts shaped like
+        # mono_ana_crystals_setup()'s output. Phase 2 replaces this with
+        # descriptor CrystalSpec lookups.
 
     def build(self, config, diagnostic_mode, diagnostic_settings, ncount) -> ms.McStas_instr: ...
     def compute_snapshot(self, ...) -> dict: ...     # per-point params
     def run_point(self, instrument, snapshot, ...) -> (data, flags, info): ...
 ```
 
+Why the `new_state` split (audit, §17.2): the scan config is a
+`copy.deepcopy(self.PUMA)` of **live session state**, not a pure function of GUI
+values — hidden training misalignments (`mis_omega`/`mis_chi`) are set on the
+live object from a hash and are deliberately absent from `gui_values`; a
+`gui_values -> config` constructor would silently drop them and change
+training-exercise physics. `sample_mount` is an explicit argument because
+`_build_sample_mount` depends on the controller's `ub_matrix` (session state
+built from generic `tavi/` modules) — passing it in keeps the plugin free of UB
+coupling. The three controller sites that need a bare state to poke generic TAS
+fields into for validation get `default_state()`; the fields they set
+(`monocris/anacris/K_fixed/fixed_E/sample_mount`) are `TAS_Instrument`
+*base-class* attributes, so setting them directly is instrument-agnostic.
+
 `build` / `compute_snapshot` / `run_point` are exactly today's
 `build_PUMA_instrument` / `compute_scan_snapshot` / `run_PUMA_point`, lifted
 behind the contract. `PUMARunExecutionState` generalizes to
-`RunExecutionState` (drop the PUMA-specific binary-name assumption in
-`_resolve_materialized_binary_path` — derive from `instrument.name`, which it
-already mostly does).
+`RunExecutionState` (verified field-for-field identical; the PUMA module keeps
+`PUMARunExecutionState` as an alias until Phase 3). The PUMA-specific
+binary-name assumption lives only in `_resolve_materialized_binary_path`'s
+*fallback* — the primary path already derives `<input_path>/<instrument.name>.exe`;
+the fallback derives from a new `MCSTAS_NAME` module constant.
 
 **Registry.** `instruments/registry.py` exposes `get_instrument(id)` and
 `available_instruments()`. Discovery is a simple explicit registry dict to
@@ -293,8 +355,11 @@ data-driven registry that the instrument descriptor references:
   from, but it is not the source of truth.
 - **Samples** — replace the `if sample_key == ...` ladder + `unified_sample_dock`
   `sample_map` with a sample registry (id → component type + properties). Keep the
-  "no sample" path. **Owned per-instrument** as well; a shared sample library is an
-  optional convenience the descriptor can draw from, not a global list.
+  "no sample" path. ~~**Owned per-instrument** as well; a shared sample library is an
+  optional convenience the descriptor can draw from, not a global list.~~
+  **Amended 2026-07-02 (Phase 3, §19):** samples are INSTRUMENT-INDEPENDENT —
+  physical objects moved between instruments. The shared table lives in
+  `tavi/sample_library.py` and every descriptor mounts it by default.
 - **Monitors / diagnostics** — replace the literal `DIAGNOSTIC_OPTIONS` with a
   per-instrument list of monitor descriptors (name, McStas type, AT/RELATIVE,
   settings). The dialog renders from that list. Quick-select groups ("sample
@@ -312,9 +377,13 @@ The GUI must become **descriptor-driven**:
    **fixed for the session** (decided; see §12). Switching instruments starts a
    *new session* (re-init the controller/GUI) rather than live-swapping widgets
    while state is loaded. This deliberately avoids the "run a scan → pick a
-   different instrument → run again" path, which is bug-prone and not needed. A
-   picker (startup dialog, CLI flag, or a "New session with instrument…" menu
-   action) selects from `available_instruments()`.
+   different instrument → run again" path, which is bug-prone and not needed.
+   **Picker UX decided 2026-07-02:** a `--instrument <id>` CLI flag always wins;
+   a picker dialog appears **only** when more than one instrument is registered
+   and no flag was given. With a single registered instrument (PUMA today),
+   startup is identical to the current app — no dialog. An unknown id prints the
+   available ids to stderr and exits with code 2 before any Qt window is
+   created. Selection reads `available_instruments()`.
 2. **InstrumentDock** — crystal combos, NMO/optional-module controls, collimation
    slots, slit fields, and source types are populated from the descriptor rather
    than literals. Widgets that don't apply to an instrument are hidden.
@@ -367,6 +436,13 @@ semantics) unchanged — they are instrument-agnostic already.
   scans record which instrument produced them.
 - **Runtime tracker** — already multi-instrument; just feed the real id.
   `config/runtimes.json` will naturally grow per-instrument record sets.
+  **Legacy-key migration (decided 2026-07-02):** existing history is keyed by the
+  literal `"PUMA"`; switching the controller to `instrument.id` (`"puma"`) would
+  orphan it. `RuntimeTracker._load()` gains a one-time legacy-key map
+  (`{"PUMA": "puma"}`) that merges old records into the new key on load (legacy
+  records first) and drops the old key on the next save. A permanent
+  read-both-keys fallback was rejected — it leaves two spellings forever. The
+  migration must land in the **same commit** as the controller id switch.
 - **Config files** — `config/parameters.json` currently stores a flat PUMA GUI
   state. Plan: namespace by instrument id **with a per-block schema version**
   (`{"puma": {"_schema": 1, ...}}`) so descriptor changes can migrate, default, or
@@ -430,7 +506,18 @@ the draft, then Phase 1 wires PUMA behind it.
 > widget-from-descriptor work into the first de-PUMA pass, or a PUMA regression
 > becomes hard to attribute.
 
-**Phase 1 — Registry + contract, PUMA as a plugin (routing only).**
+**Phase 1 — Registry + contract, PUMA as a plugin (routing only). ✅ IMPLEMENTED 2026-07-02.**
+> **Fully specified in §17** (2026-07-02): file-by-file change list, controller
+> edit groups, commit sequencing, and verification checklist. The bullets below
+> remain the intent; §17 is the executable spec and supersedes them where they
+> differ (notably: `new_state` split per §5, and the Phase-0 example descriptor
+> must gain 8 missing sample-orientation/mount parameters).
+> **Implementation verified** (§17.8): 54 pytest tests pass; the `.instr`
+> generated through the full plugin path (`default_state` → `scan_config` →
+> `build`) is byte-identical to the pre-change baseline modulo McStasScript's
+> `* Date:` header stamp; the GUI launch matrix (no flag / `--instrument puma` /
+> `--instrument nope`) behaves as specified; the real `config/runtimes.json`
+> (63 "PUMA" records) migrates to `"puma"` on load.
 - Introduce `instruments/registry.py` + `InstrumentPlugin` contract.
 - Wrap PUMA's existing `build/compute_snapshot/run_point` behind the contract;
   rename `PUMARunExecutionState`→`RunExecutionState` and de-hardcode the binary
@@ -448,15 +535,20 @@ the draft, then Phase 1 wires PUMA behind it.
 - **Exit criterion:** PUMA runs identically; nothing in the controller says
   "PUMA" except the plugin id.
 
-**Phase 1.5 — Descriptor validator (review §16.2, do alongside Phase 1).**
+**Phase 1.5 — Descriptor validator (review §16.2, do alongside Phase 1). ✅ IMPLEMENTED 2026-07-02.**
 - Add `validate_descriptor(d)` checking: unique ids across each list; ids match
   `[a-z0-9_]`; no duplicate McStas parameter names; `primary_detector` present;
   module/collimation defaults are within their options; runnable instruments have
   complete crystal data and **no `nan` placeholders**; component/data paths exist.
 - Examples may keep `TODO`/`nan`; a *registered runnable* instrument may not.
 - Run it against the Phase-0 examples; use its error messages to drive Phase 2.
+- **Decided 2026-07-02:** ships together with Phase 1 as
+  `instruments/validation.py`; full rule list (structural vs runnable-only) in
+  §17.6. The snapshot-subset rule (`params.keys()` ⊆ `scannable_parameters`)
+  lives in the pytest contract tests, not the validator, because it requires
+  instantiating instrument state.
 
-**Phase 2 — Structured descriptor + descriptor-driven GUI.**
+**Phase 2 — Structured descriptor + descriptor-driven GUI. ✅ IMPLEMENTED 2026-07-02 (spec + record: §18).**
 - Promote PUMA's `descriptor()` to the real source (libraries no longer literal).
 - Extract crystal/sample/monitor libraries to data + registries; remove the
   duplicate crystal table in `validate_angles`.
@@ -549,6 +641,8 @@ Phase 1.
   `tavi/ub_matrix.py`, `tavi/runtime_tracker.py`, `tavi/data_processing.py`.
 - Phase-0 draft scaffolding: `instruments/descriptor.py`, `instruments/contract.py`,
   `instruments/registry.py`, `instruments/_descriptor_examples.py`.
+- Phase-1/1.5 implementation spec: §17 (new/modified file lists, controller edit
+  groups, validator rules, contract tests, sequencing, verification).
 - IN8 reference data: `examples/vtas_reference/instruments_repository.xml` (ILL vTAS).
 
 ---
@@ -601,7 +695,7 @@ variation.
 | ana→det | 0.65 m | 0.750 (L4) |
 | source→mono | not modeled | 2.150 (L1) |
 | mono D / ana D | 3.355 / 3.355 Å (PG002) | 3.355 / 3.355 |
-| senses sm/ss/sa | +1 / −1 / +1 | implicit / fixed |
+| senses sm/ss/sa | +1 / +1 / −1 (live vTAS run; the repository XML's −1/+1 for ss/sa is stale — §20.1) | implicit / fixed |
 | a2 (mono 2θ) ll/df/ul | −40 / 77.256 / 110° | — |
 | a4 (sample 2θ) ll/df/ul | −120 / −111.08 / 120° | — |
 | a6 (ana 2θ) ll/df/ul | −120 / 83.957 / 120° | — |
@@ -766,6 +860,11 @@ suggestion is adopted as Phase 1.5.
    become `TASState`/`InstrumentState`. *Recommend deferring* — it's referenced
    throughout PUMA and the controller; rename it as a dedicated step once Phase 1
    routing is stable, not mixed into it.
+   *Partially resolved 2026-07-02:* the `TAS_Instrument` **class** rename stays
+   deferred, but Phase 1 does rename the contract's opaque alias
+   (`InstrumentConfig` → `InstrumentState`) and the controller's attribute
+   (`self.PUMA` → `self.instrument_state`) — the latter is required by the
+   Phase-1 exit criterion anyway.
 2. **Confirm the monitor-placement decision (#5).** I kept placement inside
    `MonitorSpec` (anti-drift) rather than splitting GUI vs build tables. Override if
    you'd rather the public descriptor be strictly GUI-only.
@@ -775,3 +874,607 @@ suggestion is adopted as Phase 1.5.
 4. **Per-setting `ChangeImpact` (#4).** I documented the recompile-vs-runtime
    principle but deferred a per-field enum to Phase 2. OK, or do you want it on the
    dataclasses from the start?
+
+---
+
+## 17. Pre-Implementation Audit & Phase 1/1.5 Spec — 2026-07-02
+
+A full audit of the PUMA module, controller, and GUI surfaces was done
+immediately before implementation, together with three scope decisions from the
+maintainer. This section is the executable spec for Phases 1 + 1.5; where it
+differs from the sketch-level bullets in §11, this section wins.
+
+### 17.1 Locked decisions (2026-07-02)
+
+1. **Scope:** Phase 1 and Phase 1.5 land together (validator + pytest contract
+   tests alongside the routing change).
+2. **Startup picker:** `--instrument <id>` CLI flag always wins; picker dialog
+   only when >1 instrument is registered and no flag given (see §7.1). With only
+   PUMA registered, startup is byte-identical to today.
+3. **Tests:** pytest in `tests/` — infrastructure already exists
+   (`tests/test_tas_geometry.py`). pytest itself is **not installed** in the
+   working micromamba env (`tavi`); add `requirements-dev.txt` with `pytest`.
+
+### 17.2 Audit findings that changed the design
+
+1. **`new_state` split (§5 updated).** `_build_scan_puma_config()`
+   (`TAVI_PySide6.py:649`) deep-copies **live session state** (`self.PUMA`) —
+   which carries hidden training misalignments set from a hash (`:2626`,
+   `:2677`) that never appear in `gui_values` — before applying ~22 GUI fields.
+   Hence `default_state()` + `scan_config(base_state, gui_values, sample_key,
+   diagnostic_settings, sample_mount)`, with the deepcopy inside the plugin.
+2. **`sample_mount` is an explicit `scan_config` argument.**
+   `_build_sample_mount` (`:684`) depends on the controller's `ub_matrix`
+   (session state from generic `tavi/` modules); passing the built `SampleMount`
+   in keeps UB coupling out of the plugin. `_build_sample_mount` stays in the
+   controller.
+3. **Transitional `crystal_info()` hook.** The controller needs
+   `monocris_info['dm']` / `anacris_info['da']` for seven live-calculation
+   handlers plus init. Phase 1 delegates to the existing
+   `mono_ana_crystals_setup()` via the plugin (same dicts, zero drift); Phase 2
+   replaces it with descriptor lookups.
+4. **Lazy-import blocker.** `PUMA_instrument_definition.py` imports
+   `mcstasscript` at module level (`:3`). Therefore: registration stores only
+   `(id, display_name, factory)`; `instruments/puma_plugin.py` keeps **all**
+   references to the heavy module function-local; a subprocess-based test
+   asserts listing pulls in neither `mcstasscript`, `PySide6`, nor
+   `instruments.PUMA_instrument_definition`.
+5. **The Phase-0 example descriptor is 8 parameters short.** The real instrument
+   declares **25** McStas parameters (`:878–893` + `:1324–1333`), matching
+   `build_puma_point_params` (`:524`). Missing from `_PUMA_PARAMS`: `chi_param`,
+   `kappa_param`, `mis_chi_param`, `psi_param`, `mis_omega_param`,
+   `mount_rx_param`, `mount_ry_param`, `mount_rz_param`. They join the shared
+   core set (generic sample-orientation hierarchy → IN8 inherits them too).
+6. **Already general (less work than §2.2 implied):**
+   `_resolve_materialized_binary_path` (`:717`) already derives
+   `<input_path>/<instrument.name>.exe` — only its *fallback* (`:724`)
+   hard-codes `PUMA_McScript.exe`; `add_record(...)` at `TAVI_PySide6.py:3537`
+   already passes a variable (the literals are at `:1744`, `:2354`, `:3136`).
+7. **Dead import:** the controller imports `validate_angles` (`:24`) but never
+   calls it — the import is simply dropped.
+8. **K↔E converters are instrument-independent** (`k2angle`, `angle2k`,
+   `k2energy`, `energy2k`, `energy2lambda` at `:41–66` take d-spacing as an
+   argument). They move to a new `tavi/neutron_conversions.py`; the PUMA module
+   re-exports them for backward compatibility. This also removes the seven
+   function-local `from instruments.PUMA_instrument_definition import …` lines
+   in the controller.
+
+### 17.3 Pre-existing defects found (preserved verbatim in Phase 1)
+
+Byte-identical rule: none of these are fixed in the routing pass; they are
+recorded here so later phases pick them up deliberately.
+
+1. `validate_angles` (`PUMA_instrument_definition.py:1661`) duplicates the
+   crystal table with **divergent values** (mono slabwidth 0.018 vs 0.0202;
+   analyzer ncolumns/nrows swapped: 5/21 vs 21/5). Fix belongs to Phase 2's
+   single crystal source.
+2. `TAVI_PySide6.py:2626` calls `set_misalignment(omega_m, chi_m, psi_m)` (3
+   args) against a 2-parameter signature
+   (`set_misalignment(mis_omega=None, mis_chi=None)`,
+   `PUMA_instrument_definition.py:186`); the `TypeError` is caught at `:2635`,
+   so misalignment-hash restore from `parameters.json` silently fails today.
+3. `update_monocris_info`/`update_anacris_info` are each defined **twice** in
+   the controller (`:577`/`:584` and `:1494`/`:1501`; the later definitions win
+   at runtime). Route all four through `crystal_info`; do not dedupe.
+4. Environment: at audit time (2026-07-02, morning) `run-tavi-dev.bat` targeted a
+   nonexistent env. *Superseded during implementation:* the dev machine was
+   rebuilt — the working micromamba env is now **`tavi-dev`** (Python 3.11,
+   mcstasscript, PySide6; McStas resources at
+   `%USERPROFILE%\AppData\Roaming\mamba\envs\tavi-dev\share\mcstas\resources`,
+   which the launcher exports as `MCSTAS`), so the launcher is correct again.
+   Verification uses `micromamba run -n tavi-dev …`. The launcher gained a `%*`
+   passthrough so `run-tavi-dev.bat --instrument puma` works.
+
+### 17.4 New files
+
+| File | Purpose |
+|---|---|
+| `tavi/neutron_conversions.py` | K↔E/angle converters moved verbatim from the PUMA module (+ constants they use); PUMA re-exports |
+| `instruments/puma_plugin.py` | `PUMAPlugin` (import-light; heavy imports function-local); `puma_descriptor()` moves here with the 8 added params; `scan_config` gets the verbatim `_build_scan_puma_config` body |
+| `instruments/builtin.py` | Explicit lazy registration: `register("puma", "PUMA (FRM-II)", PUMAPlugin)` |
+| `instruments/validation.py` | `validate_descriptor` / `assert_valid_descriptor` (§17.6) |
+| `gui/dialogs/instrument_picker_dialog.py` | Minimal QDialog; only shown when >1 registered; `objectName("instrument_picker_dialog")` |
+| `tests/test_instrument_registry.py` | Registry roundtrip/duplicates/errors + subprocess lazy-import test |
+| `tests/test_descriptor_validation.py` | Validator positive/negative cases + `add_parameter` source-scan (25 names == descriptor) |
+| `tests/test_puma_plugin.py` | Protocol/defaults/scan_config/snapshot-⊆-descriptor/alias/binary-fallback/crystal_info tests |
+| `tests/test_controller_is_instrument_agnostic.py` | Source scan: no `"PUMA"`, no direct PUMA import, routing calls present |
+| `tests/test_runtime_tracker_legacy_key.py` | Legacy `"PUMA"`→`"puma"` migration tests |
+| `requirements-dev.txt` | `pytest` |
+
+### 17.5 Modified files
+
+- **`instruments/contract.py`** — adjusted contract per §5 (alias rename,
+  `default_state`/`scan_config`/`crystal_info`); `RunExecutionState`, `build`,
+  `compute_snapshot`, `run_point` unchanged from the draft.
+- **`instruments/PUMA_instrument_definition.py`** (mechanical only): delete the
+  `PUMARunExecutionState` dataclass → import `RunExecutionState` from the
+  contract, keep `PUMARunExecutionState = RunExecutionState` alias (remove in
+  Phase 3); add `MCSTAS_NAME = "PUMA_McScript"` used at `:874` and in the `:724`
+  fallback; replace converter definitions with `tavi.neutron_conversions`
+  re-exports. Nothing else — not `validate_angles`, not
+  `mono_ana_crystals_setup`, not `compute_scan_snapshot`.
+- **`instruments/_descriptor_examples.py`** — re-import `puma_descriptor` from
+  the plugin; add the 8 params to `_CORE_PARAMS`; `__main__` also runs the
+  validator on both examples and prints results.
+- **`instruments/registry.py`** — doc comments only ("Phase-0 DRAFT" → live).
+- **`tavi/runtime_tracker.py`** — legacy-key migration in `_load()` (§9); same
+  commit as the controller id switch.
+- **`TAVI_PySide6.py`** — edit groups:
+  - **G1 imports:** delete the PUMA import block (`:18–26`, incl. dead
+    `validate_angles`); add `RunExecutionState` + converter imports. Keep
+    `import mcstasscript as ms` (`:12` — used at `:488`, instrument-agnostic).
+  - **G2 constructor:** `__init__(self, window, instrument)`;
+    `self.instrument = instrument`;
+    `self.instrument_state = instrument.default_state()` (was `self.PUMA`);
+    `self._mcstas_name = instrument.descriptor().mcstas_name`; crystal init via
+    `self.instrument.crystal_info("PG[002]", "PG[002]")`.
+  - **G3 rename:** `self.PUMA` → `self.instrument_state` (22 occurrences;
+    preserve the 3-arg `set_misalignment` call at `:2626` as-is).
+  - **G4 crystal info:** 4 `mono_ana_crystals_setup` call sites
+    (`:581/:588/:1498/:1505`) → `self.instrument.crystal_info(...)`.
+  - **G5 converters:** delete the 7 function-local import lines.
+  - **G6 scan config:** delete `_build_scan_puma_config` (body → plugin); call
+    `self.instrument.scan_config(self.instrument_state, vals, sample_key,
+    diagnostic_settings, self._build_sample_mount(vals))`; rename
+    `scan_puma_config` locals → `scan_config`.
+  - **G7 throwaway states:** `PUMA_Instrument()` at `:1863/:1999/:3020` →
+    `self.instrument.default_state()`; attribute pokes unchanged.
+  - **G8 pipeline routing:** `:2894` → `self.instrument.compute_snapshot`;
+    `:3166` → `self.instrument.build`; `:3172` → `RunExecutionState()`;
+    `:3279` → `self.instrument.run_point`. Queue/`stop_event` pipeline
+    untouched.
+  - **G9 names/filenames:** `:1744/:3136` → `self.instrument.id`; `:2354` →
+    `get_record_count(self.instrument.id)`; `:3312–3313/:3326` →
+    `f"{self._mcstas_name}.instr"` / `.c`.
+  - **G10 `main()`:** `argparse.parse_known_args()` **before** `QApplication`
+    (leftover args go to Qt); `import instruments.builtin`; unknown id → stderr
+    + exit 2 pre-Qt; flag → use; elif exactly 1 registered → auto-select; else
+    picker dialog (after `QApplication`, Cancel → exit 0); then
+    `assert_valid_descriptor(plugin.descriptor(), runnable=True)` fail-fast;
+    `TAVIController(window, plugin)`.
+  - **G11 comment sweep:** reword remaining "PUMA" comments/docstrings so the
+    case-sensitive source-scan test passes.
+- **`run-tavi-dev.bat`** (optional): append `%*` for flag passthrough.
+
+### 17.6 `validate_descriptor` rules
+
+`validate_descriptor(d, *, runnable=False) -> list[str]` (empty = valid) plus
+`assert_valid_descriptor` raising `DescriptorValidationError`.
+
+**Structural (always — examples must pass):** instrument id slug
+(`^[a-z0-9_]+$`) + non-empty display name; slug ids for crystals, modules,
+collimation, slits (**exceptions:** `SampleSpec.id`, `MonitorSpec.id`, and
+`SourceType.id` keep legacy strings — non-empty + unique only); per-list id
+uniqueness; parameter names unique and valid C identifiers; `primary_detector`
+non-empty; v1 detector contract exactly `detector.dat`/`1d_monitor`; module
+`CHOICE` default ∈ options / `TOGGLE` default is bool; collimation default ∈
+allowed; L2/L3/L4 finite > 0 (`l1_source_mono` exempt — vTAS omits it);
+axis limits `lower ≤ default ≤ upper`, finite; senses are `Sense` members.
+
+*Amendments found during implementation (2026-07-02):* (a) `SourceType.id`
+joined the legacy-string exceptions — PUMA's ids are the GUI combo strings
+`"Maxwellian"`/`"Mono"`, wired 1:1 like sample keys; Phase 2 revisits. (b) a
+`multi_select` collimation slot may default to `""` = nothing pre-selected
+(PUMA's `alpha_2` checkboxes); single-select slots must default to an allowed
+value.
+
+**Runnable-only (registered instruments must pass; examples may fail):** no
+`nan`/`inf` anywhere (incl. `l1_source_mono` > 0); crystal specs complete (all
+optional fields non-None, numerics finite/positive); `mcstas_name` set and a
+valid C identifier; `component_path` exists on disk if set; non-empty libraries
+(≥1 mono crystal, ana crystal, sample, source type, scannable parameter).
+
+Expected results: fixed `puma_descriptor()` → `[]` at `runnable=True`;
+`in8_descriptor()` → `[]` at `runnable=False`, and at `runnable=True` errors
+naming at least `l1_source_mono`, crystal completeness, and `source_types`.
+
+### 17.7 Contract tests (pytest; heavy tests `pytest.importorskip("mcstasscript")`)
+
+Key assertions per file (see §17.4 for the file list):
+
+- **Registry:** roundtrip with `_FACTORIES` snapshot/restore fixture; duplicate
+  id raises; unknown-id error lists available ids; `instruments.builtin`
+  registers puma; **subprocess lazy test** — listing must not import
+  `mcstasscript`, `PySide6`, or `instruments.PUMA_instrument_definition`.
+- **Validator:** PUMA runnable-valid; IN8 example-valid / runnable-invalid
+  (assert error substrings); parametrized negatives via `dataclasses.replace`;
+  **source-scan:** regex `add_parameter\(\s*"(\w+)"` over the PUMA module ==
+  the 25 descriptor parameter names.
+- **Plugin:** `isinstance(PUMAPlugin(), InstrumentPlugin)`; id/display/mcstas
+  name consistency; `default_state()` matches legacy defaults and returns fresh
+  objects; `scan_config` applies the full GUI mapping (incl. `rva == 0.8`,
+  NMO ⇒ `rhm = rvm = 0`, `alpha_2` list, base not mutated, hidden `mis_omega`
+  propagates); **snapshot `params.keys()` == descriptor parameter names**;
+  `PUMARunExecutionState is RunExecutionState`; binary fallback ends with
+  `PUMA_McScript.exe` and `SimpleNamespace(input_path=tmp, name="Foo")` →
+  `Foo.exe`; `crystal_info` equals `mono_ana_crystals_setup`.
+- **Controller source-scan:** no case-sensitive `"PUMA"`, no
+  `"PUMA_instrument_definition"`, and positive presence of
+  `self.instrument.build(` / `.compute_snapshot(` / `.run_point(`.
+- **Runtime tracker:** legacy `"PUMA"` records migrate/merge to `"puma"`;
+  MAX_RECORDS trim still applies.
+
+### 17.8 Sequencing & verification
+
+One commit per step; the app launches and scans identically after each:
+
+0. **Baseline capture** — short 3-point scan in env `tavi`; keep the output
+   folder (deterministic `PUMA_McScript.instr` + per-point
+   `scan_parameters.txt`) as the golden reference.
+1. `tavi/neutron_conversions.py` + PUMA re-export.
+2. Contract adjustments + PUMA module mechanics (alias, `MCSTAS_NAME`).
+3. Plugin + `builtin.py` + `validation.py` + example fixes (nothing app-facing
+   imports these yet); registry/validator/plugin tests pass.
+4. **Switch-over commit** — all controller groups G1–G11 + picker dialog +
+   runtime-tracker migration. Phase-1 exit criterion.
+5. Remaining tests (controller scan, tracker migration) + docs +
+   `requirements-dev.txt`.
+
+Verification checklist (env is `tavi-dev` — see §17.3.4):
+
+1. `micromamba run -n tavi-dev python -m py_compile <all changed .py files>`.
+2. `micromamba run -n tavi-dev python -m pip install -r requirements-dev.txt`
+   (once), then `micromamba run -n tavi-dev python -m pytest tests -q` from the
+   repo root.
+3. `micromamba run -n tavi-dev python -m instruments._descriptor_examples` —
+   PUMA runnable-valid; IN8 example-valid / runnable-invalid.
+4. Launch matrix: no flag → no picker, identical startup; `--instrument puma` →
+   identical; `--instrument nope` → stderr lists `puma`, exit 2, no window.
+5. **Byte-identical scan check:** rerun the Step-0 scan;
+   `PUMA_McScript.instr` must be byte-identical to the baseline (detector
+   counts are Monte-Carlo stochastic and are *not* expected to match);
+   `scan_parameters.txt` identical except timestamps/counts; "Direct run
+   armed" still appears on point 2 (direct-invocation path intact).
+6. `config/runtimes.json`: records under `"puma"` with legacy `"PUMA"` merged;
+   pre-scan estimate non-empty (history survived the migration).
+
+**Executed 2026-07-02.** All checks ran green, with two practical adaptations:
+
+- The baseline/regression `.instr` was generated deterministically via
+  `McStas_instr.write_full_instrument()` (a script driving
+  `default_state → scan_config → build` through the registry) rather than a
+  live GUI scan — that is the same file a scan's first point writes, without a
+  McStas run. McStasScript stamps a `* Date:` line in the header, so
+  "byte-identical" is asserted modulo that single line; everything else matched
+  byte-for-byte both after the mechanical Steps 1–2 and after the full
+  switch-over.
+- Results: 54 pytest tests pass (42 new); descriptor examples validate as
+  specified; launch matrix verified by starting the real GUI (process up, no
+  traceback) for the no-flag and `--instrument puma` cases and exit-2 for
+  `nope`; the real `runtimes.json` (63 `"PUMA"` records) migrates to `"puma"`
+  on load. A live multi-point McStas scan (checklist item 5's "Direct run
+  armed" console check and `scan_parameters.txt` diff) has not been re-run in
+  this pass — recommended as a final manual smoke test.
+
+---
+
+## 18. Phase 2 Implementation Record — 2026-07-02
+
+Phase 2 (descriptor-driven GUI + library single-source) implemented on branch
+`instrument-selection`, five commits, app verified working after each. Guiding
+decision from the maintainer mid-implementation: **forward-facing only** — PUMA
+moves to the new formats with no migration of old data or control schemes.
+
+### 18.1 What changed
+
+1. **Descriptor completed (single source of truth).** 19 `MonitorSpec` entries
+   (ids = the exact `diagnostic_settings` gate strings; placements computed
+   numerically from PUMA geometry; `component_name` records the McStas instance
+   name; `sample_region` tags drive the dialog quick-select). Sample specs
+   corrected and completed (notably `Al_rod_phonon_optic` is
+   `Optic_Phonon_simple`, T=300, with `zero_energy`/`maximum_energy`; every
+   `properties` dict now lists all build() properties; `extend` recorded).
+   `pg002_test` mono crystal added (d-spacing 2.355). Collimation slot defaults
+   mirror the GUI reset values (α1 40, α2 {40}, α3/α4 30).
+2. **Crystal single-source.** `mono_ana_crystals_setup` is a thin adapter over
+   the descriptor `CrystalSpec`s (id-keyed; re-adds the embedded quotes on
+   reflect/transmit that build() emits verbatim). Dead `validate_angles`
+   deleted — only `archive/` referenced it, and its divergent duplicate crystal
+   values were assigned-but-never-read, so removal is behaviorally inert.
+3. **Typed snapshots (§16.6 resolved).** `PointSnapshot` dataclass +
+   `PrepFailure` sentinel in `instruments/contract.py`; producer, run loop,
+   `run_PUMA_point`, and tests all cut over in one commit. `PointSnapshot` is
+   non-frozen with a pre-created `timing` dict because the prep thread stamps
+   timings onto the queued instance after `put()` (shared-reference semantics).
+   `metadata` stays a plain dict (it is `**`-spread into scan_parameters.txt).
+4. **Descriptor-driven GUI.** `main()` → `TAVIMainWindow(descriptor)` →
+   `InstrumentDock(self, descriptor)` / `UnifiedSampleDock(self, descriptor)`;
+   population precedes `load_parameters()` (avoids the `setCurrentText` no-op
+   trap). Module/collimation/slit rows are GENERATED from
+   `ModuleSpec`/`CollimationSlot`/`SlitSpec` with deterministic objectNames
+   (`module_<id>`, `collimation_<id>`, `slit_<id>_width/height`); accessor
+   methods replace attribute access for generated widgets. Live-linked widgets
+   (angles/energies/crystal combos/bending) keep attribute names + signal
+   wiring; the NMO↔bending coupling guards on widget existence. Crystal/source
+   combos carry ids as item data; ids travel through vals/state/persistence,
+   labels are display-only. `get_gui_values()` exposes generic containers
+   (`modules`, `collimation`, `slits_mm` — mm; the plugin converts to m);
+   `PUMAPlugin.scan_config` owns the mapping onto its state fields.
+5. **Persistence namespaced (§16.8 resolved).** `config/parameters.json` is
+   `{"<instrument_id>": {"_schema": 1, ...}}`; save preserves other
+   instruments' blocks and discards non-schema content; load reads only the
+   active block with per-field defaults. **No legacy migration** (forward-facing
+   decision): old flat files are ignored — defaults load, first save rewrites.
+6. **ChangeImpact + fingerprint groundwork (§16-Q4 resolved: added in Phase 2).**
+   `ChangeImpact` enum (BUILD/RUNTIME) on crystal/sample/source/collimation/
+   slit/module specs (`ModuleSpec.requires_recompile` replaced);
+   `PUMAPlugin.build_fingerprint(config)` hashes the build-time state. No
+   consumer yet — see §18.5.
+7. **Removed transitional/legacy code:** `PUMARunExecutionState` alias, crystal
+   display-label lookups, `sample_label_var`, factor-based bending fallback
+   (`rhmfac_var` era), duplicate shadowed `update_monocris_info`/
+   `update_anacris_info` pair.
+
+### 18.2 Deliberate behavior changes (everything else verified identical)
+
+- Sample entry label "None" → "No sample" (descriptor display name); sample
+  restore is by id.
+- Velocity-selector checkbox label is now the `ModuleSpec.display_name`
+  ("Velocity selector", was "Enable velocity selector (Use in Ki fixed mode)").
+- Window title includes the instrument display name.
+- Saved crystal/source values are ids; `parameters.json` is namespaced; old
+  files load as defaults (no migration).
+- `vals` reshape: `modules`/`collimation`/`slits_mm` containers (slits in mm).
+
+### 18.3 Verified
+
+`.instr` generated through the full path (registry → `default_state` →
+`scan_config` → `build`) is byte-identical to the pre-Phase-2 baseline modulo
+the `* Date:` stamp, checked after the crystal-adapter step and again after the
+GUI/persistence steps. 65 pytest tests pass (incl. new anti-drift source-scans:
+monitor ids == build() gates, sample ids == build() ladder, add_parameter ==
+descriptor params; crystal-adapter golden-dict parity; persistence round-trips).
+GUI launched and ran cleanly after the switch-over. Recommended manual check:
+one short scan + a diagnostic-mode run with a few monitors enabled.
+
+### 18.4 Known build() debts (deferred to Phase 3, recorded in the descriptor)
+
+All three were paid in Phase 3 (§19):
+
+- Two copy-paste sizing bugs in build(): the 'Postmono Emonitor' and
+  'Post-analyzer EMonitor' blocks set the WRONG component's xwidth/yheight
+  (premono/preanalyzer respectively). The `MonitorSpec.settings` record the
+  INTENDED sizes; Phase 3's monitor loop fixes the emission. ✅
+- build() still contains the literal monitor/collimator/sample blocks the
+  descriptor now mirrors; anti-drift source-scan tests hold them together until
+  Phase 3 makes build() loop over the descriptor tables. ✅
+- `analyzer.r0` is set twice in build() (harmless duplicate assignment). ✅
+
+### 18.5 Cross-scan binary reuse — IMPLEMENTED (2026-07-02)
+
+Previously every scan's first point ran `backengine()` with
+`force_compile=True` (fresh scan-local `RunExecutionState`), so every scan paid
+a McStas compile even when nothing build-relevant changed.
+
+**Implementation.** The controller keeps `self._binary_reuse_cache`
+(`{fingerprint, instrument, execution_state, instr_path}`) across scans. At
+scan start it computes `plugin.build_fingerprint(scan_config, diagnostic_mode,
+effective_diagnostic_settings)` — the fingerprint now hashes the same
+*effective* inputs `build()` receives (the diagnostic args were previously read
+off the config, where they never live). Decision logic is in two Qt-free static
+methods (`tests/test_binary_reuse.py`):
+
+- `_can_reuse_binary`: reuse iff fingerprint matches, the cached state
+  compiled successfully, the binary file still exists, and the scan is NOT
+  diagnostic-mode (its first point needs backengine McStasData for plots).
+- `_updated_binary_cache`: a scan that compiled replaces the cache (it owns
+  the on-disk binary — builds share one `input_path/<name>.exe`); a reused or
+  aborted-before-compile scan leaves the previous entry valid.
+
+On reuse the scan skips `plugin.build()` entirely and its first point goes
+straight to direct invocation. Since direct runs write no `.instr` into the
+scan folder, the point-0 archive copy falls back to the compiling scan's
+archived `.instr` (`instr_path`).
+
+**Two pre-existing bugs found by the two-scan verification** (direct mode had
+in fact never worked — all 2026-07-02 GUI scans logged 0 direct points):
+
+1. `tavi/mcstas_config.py` read `MPIRUN` only from the top level of
+   `mccode_config.json`; conda-packaged McStas 3.4.65 nests it under a section
+   (`{"run": {"MPIRUN": "mpiexec"}}`) → launcher resolved to `[]` → every
+   point fell back to mcrun/backengine. Now nested sections are searched and a
+   bare launcher name is resolved against PATH.
+2. `_run_puma_point_direct` pre-created the leaf output folder; McStas `--dir`
+   aborts if it exists (`mcuse_dir`) → every direct run returned rc -1. Now
+   only the parent folder is ensured.
+
+**Verified headless** (plugin path, exact controller helpers): scan A =
+[backengine 3.0s, direct 1.7s]; scan B (identical settings) = [direct 1.7s] —
+no compile; changed collimation or diagnostic mode → no reuse. Note
+`runtimes.json` records from reused scans have `compilation_time ≈ 0`, which
+will drag the historical compile estimate down — acceptable, revisit if
+pre-scan estimates matter.
+
+## 19. Phase 3 Implementation Record (2026-07-02)
+
+Phase 3 (§11 "build() cleanup + shared helpers") is implemented, plus the
+user-directed scope addition: **samples are instrument-independent**. Eight
+commits; 95 pytest tests.
+
+### 19.1 What changed
+
+- **`tavi/instrument_helpers.py` (new):** instrument-agnostic emitters —
+  `emit_monitors`, `emit_sample`, `emit_sample_orientation_arms`,
+  `emit_crystal_assembly`, `emit_slit`, `emit_collimator`, plus
+  `_mcstas_number` (int-coerces integral floats so AT/ROTATED text matches
+  legacy; McStasScript renders them with `str()`). No mcstasscript import; the
+  `instrument` argument is duck-typed. Callers invoke emitters at the exact
+  insertion points of their tree — component order is physics and stays in
+  statement order.
+- **`tavi/sample_library.py` (new):** `default_sample_library()` — the shared,
+  instrument-independent sample table (samples move between instruments;
+  supersedes §6's "owned per-instrument" disposition). Every descriptor mounts
+  it (`samples=default_sample_library()`); an instrument may filter/extend.
+  `SampleSpec` gains `component_name` (the `Al_bragg` spec keeps the legacy
+  `"Al_Bragg"` McStas instance name) and `lattice` (a,b,c,α,β,γ).
+- **`build_PUMA_instrument()` rewrite of the repetitive categories:** the 19
+  monitor gate blocks became 10 `emit_monitors` call sites reading
+  `_PUMA_MONITORS`; crystal-sized monitors get their extents from the SELECTED
+  crystal via `size_overrides` (identical to the descriptor numerics for the
+  current crystals — the build-tree test asserts that equality and will alarm
+  if a crystal with different slab geometry lands). The alpha_2 collimators
+  loop over a PUMA-local `_ALPHA2_COLLIMATORS` geometry table (build-only data;
+  `CollimationSlot` stays GUI-facing). Slits/collimators/crystal assemblies/
+  orientation arms go through the shared emitters. The sample ladder is a
+  shared-library lookup + `emit_sample`. ~120 lines of commented-out
+  exploration code deleted.
+- **Lattice sync (user-locked):** selecting a sample adopts
+  `SampleSpec.lattice` into the GUI lattice fields
+  (`TAVIController._adopt_sample_lattice`) — driving Phonon_DFT (internal
+  a=4.03893) with the default 4.05 lattice misses its Bragg condition entirely
+  (found the hard way, 2026-07-02). `load_parameters` applies saved lattice
+  values AFTER the sample restore so hand-edited lattices survive reload.
+
+### 19.2 Deliberate behavior changes
+
+- The two §18.4 monitor-sizing bugs are FIXED: `postmono_Emonitor` and
+  `postanalyzer_Emonitor` now get their own mono/analyzer extents
+  (0.2626×0.162 and 0.21×0.1475 for PG[002]); the latent NameError (post-
+  monitor enabled while its pre- partner was off) is gone.
+- Six monitors that legacy added without an explicit ROTATED now emit a
+  cosmetic `ROTATED (0, 0, 0)` line in the diagnostic `.instr` (`source_PSD`,
+  `source_DSD`, `postcollimation_PSD`, `postcollimation_DSD`,
+  `premono_Emonitor`, `detector_PSD`) — physically zero rotation.
+- Duplicate `analyzer.r0` assignment gone; `try/except` around the phonon
+  samples' `append_EXTEND` dropped (never raised; silent-swallow anti-pattern).
+- Non-diagnostic builds are byte-identical throughout.
+
+### 19.3 Verified
+
+Baselines B1 (defaults/no sample), B2a–d (one per sample), B3 (all three
+alpha_2 collimators), B4 (diagnostic, all 19 monitors), B5 (NMO Both +
+v-selector) captured via the full plugin path and re-compared after every
+commit (modulo `* Date:`). B1/B2/B3/B5 byte-identical end-to-end; B4's diff is
+exactly the enumerated §19.2 lines (two size fixes + six ROTATED cosmetics),
+then frozen as the new diagnostic baseline. The two anti-drift source-scans
+were replaced by object-level build-tree tests (`tests/test_puma_build_tree.py`
+— construction only, no McStas compile/run): monitor presence/order/settings
+against `_PUMA_MONITORS`, per-monitor gating, per-sample emission against the
+library specs, alpha_2 collimator selection/order, table↔descriptor sync.
+
+### 19.4 Follow-ups
+
+- `SampleSpec.lattice` could also drive a space-group default per sample.
+- IN8 (Phase 4) should build its backbone from `tavi/instrument_helpers.py`;
+  anything it cannot express is the signal to extend the helpers.
+
+---
+
+## 20. Phase 4 implementation record (2026-07-02)
+
+Six commits: PUMA sign goldens; sense threading; state dispatch; the IN8
+modules; registration (+ vTAS-verified goldens + branch-signed bending); this
+record + `docs/INSTRUMENT_AUTHORING.md`. Gates held throughout: full pytest
+after every commit (95 → 143), PUMA `.instr` baselines B1–B5 byte-identical
+after every PUMA-touching commit, and an end-to-end IN8 McStas compile+run
+smoke before registration was declared done.
+
+### 20.1 Scattering senses (§16.7 resolved)
+
+- `Sense` semantics are now defined precisely: **the value IS the numeric sign
+  of that axis' two-theta readout** (LEFT = +1 = McStas +y rotation; equals
+  vTAS's sm/ss/sa convention). `stt_from_q_norm`/`solve_sample_angles`/
+  `solve_instrument_angles` take `sense_sample` (default −1 = the historical
+  baked branch, bit-for-bit identical); `TAS_Instrument` carries
+  `sense_mono/sense_sample/sense_ana` and `calculate_angles` applies them.
+  `calculate_q_and_deltaE` was already sign-safe.
+- **PUMA's descriptor was self-inconsistent** — it declared
+  `sense_sample=LEFT` while the code has always produced stt < 0. Corrected to
+  `RIGHT`; TAVI's existing behavior is the contract (whether the physical PUMA
+  hall matches is an open instrument-scientist question).
+- **IN8's senses are (+1, +1, −1), verified against a live vTAS run
+  (2026-07-02)**: all four reference cases (elastic/inelastic (2,0,0),
+  skew-Q (1,1,0), Cu200 + ki-fixed) matched within 0.02°, with a4 positive and
+  a6 negative. This OVERRIDES the vTAS repository XML (`ss="-1" sa="1"`) and
+  the §14 table derived from it — the live readout wins. Locked as goldens in
+  `tests/test_sign_conventions.py`.
+- **Flipped-branch sample rotation follows the Friedel/vTAS convention**
+  (second live vTAS check, same day): for `sense_sample=+1` the solvers align
+  the Friedel partner −Q with the scattered-side Q_lab (implemented as
+  solving for −q on the positive-stt branch, sth normalized to (−180, 180],
+  saz flipping with −q). The user's live a3(V3) = 69.337 matches TAVI's sth
+  to three decimals; their a3(V1) = 125.647 is TAVI's +35.647 plus exactly
+  90.000 — vTAS displayed the cubic-equivalent (0,2,0) setting for that
+  point. The raw inverse of a +1-branch solution recovers −Q;
+  `calculate_q_and_deltaE` negates it back, so instrument-level round trips
+  return +Q exactly. Same Bragg planes either way (verified in the McStas
+  smoke: the −Q branch gives an equally real peak).
+
+### 20.2 Shared-code generalization
+
+`TAS_Instrument.calculate_angles`/`calculate_q_and_deltaE` resolve crystals
+via `self.crystal_info()` (was: module-level `mono_ana_crystals_setup`, hard-
+wired to `puma_descriptor()`); `compute_scan_snapshot` builds per-point params
+via `state.build_point_params(deltaE)` and `state.point_energy_metadata(...)`.
+`crystal_spec_to_info`/`find_crystal_spec`/`crystal_info_from_descriptor` are
+public in `tavi/instrument_helpers.py`. `update_diagnostic_settings` and the
+E0/energy-metadata logic moved onto the base class. `run_tas_point` aliases
+the (already binary-name-agnostic) run layer. All value-identical for PUMA.
+
+### 20.3 IN8 (`instruments/in8_plugin.py` + `instruments/IN8_instrument_definition.py`)
+
+- **Data provenance:** arm lengths are ILL-current Thermes values
+  (L1..L4 = 2.28/2.48/1.05/0.70 m) — a deliberate deviation from the vTAS
+  values in §14 (2.5/1.35/0.65): distances never affect angles, and the
+  simulation should match today's hardware. Axis limits from vTAS; crystal
+  faces from the 2006/2023 papers + the ILL page.
+- **Crystals v1:** mono PG002 (11×11 of 25×17 mm, mosaic 30′) + Cu200 (same
+  face; no stock reflectivity data → constant r0=0.7 with the McStas `"NULL"`
+  sentinel — validator-legal since reflect/transmit must be non-None strings,
+  not real files); ana PG002 (~180×140 mm Thermes). Si111/Si311 bent-perfect
+  faces deferred — not representable by the mosaic `Monochromator_curved`.
+- **Build backbone** entirely from `tavi/instrument_helpers.py` (monitors,
+  crystal assemblies, collimators, slits, sample + orientation arms). Literal
+  remainder: source block, axis arms, PG filter, detector — exactly the §19.4
+  prediction; **no helper extensions were needed**. The source block is the
+  first helper candidate if a third instrument repeats it.
+- **Branch-signed crystal bending (found in the smoke run):**
+  `Monochromator_curved` needs the curvature center on the take-off side, so
+  the bending radii carry the sign of the branch. IN8's
+  `calculate_crystal_bending` returns signed radii (point-source formulas on
+  BOTH sides — the virtual source is a real focal point, unlike PUMA's guide),
+  and `scan_config` applies the branch sign to the GUI magnitudes
+  (rha/rva negative). Measured cost of the wrong sign: **~7 orders of
+  magnitude** in elastic peak intensity. PUMA is unaffected (all its take-offs
+  are the positive branch).
+- Minimal six-monitor diagnostic set; collimation slots α2/α3/α4
+  (20/30/40/60′, default open); no modules (FlatCone/IMPS deferred, §14).
+  PLACEHOLDER values (positions, apertures, Cu200 mosaic/r0, analyzer
+  subdivision, hvs height, single vs double PG filter, no bending clamps,
+  rva magnitude 0.31) are marked in-line in both modules. The full inventory
+  of missing/placeholder data, with provenance and a priority order for the
+  next data pass, is `docs/IN8_MISSING_DATA.md`.
+
+### 20.4 Verified
+
+- 143 pytest tests; PUMA baselines B1–B5 byte-identical end-to-end (sense
+  threading and dispatch are runtime-value changes only).
+- vTAS live cross-check of the four IN8 angle cases (magnitudes ±0.02°, signs
+  exact) — recorded in `tests/test_sign_conventions.py`.
+- End-to-end smoke: IN8 built through the plugin, compiled, and ran one
+  elastic Al (2,0,0) point at kf=2.662 with the Phonon_DFT sample —
+  I = 0.043 ± 0.030 at 1e7 neutrons (same rare-giant-weight-event character
+  as PUMA's Bragg peak). Unsigned bending gives 2e-8; PUMA-sense angles on the
+  same tree give 1.2e-7 — the A/B that isolated the bending sign.
+- GUI matrix: `--instrument in8`, `--instrument puma`, and no flag (picker)
+  all launch clean; startup runnable-validation now gates both descriptors.
+
+### 20.5 Accepted couplings and follow-ups
+
+- IN8 imports `compute_scan_snapshot`/`run_tas_point`/`TAS_Instrument` from
+  `instruments/PUMA_instrument_definition.py`. Deliberate (anti-refactor
+  rule); **relocation trigger = a third instrument**.
+- `TAVIController._compute_ideal_bending_values` still uses PUMA's
+  parallel-beam mono formula and unsigned magnitudes for the advisory "Ideal:"
+  labels — mildly wrong for IN8 (point-source + signed). Follow-up: route
+  through `state.calculate_crystal_bending`.
+- **a3 convention: RESOLVED** (user's second live vTAS run). The raw readings
+  a3(V1)=125.647 / a3(V3)=69.337 initially suggested a −56.31° difference
+  (mirror of the baked branch), but decode exactly as TAVI's Friedel-branch
+  values +35.647/+69.337 with vTAS showing the cubic-equivalent +90° setting
+  for V1 — in one symmetry setting the difference is +33.69°, as computed.
+  The solvers now implement this convention for `sense_sample=+1` (§20.1);
+  goldens updated. When comparing a3 against vTAS on cubic samples, expect
+  ±90° symmetry-setting jumps between points.
+- Si bent-perfect crystals, FlatCone/IMPS, and the §20.3 placeholders await
+  instrument-scientist input.

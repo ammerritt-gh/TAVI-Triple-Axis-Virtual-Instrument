@@ -1,11 +1,11 @@
 import copy
-from dataclasses import dataclass
 import mcstasscript as ms
 import math
 import numpy as np
 import os
 import subprocess
 
+from instruments.contract import PointSnapshot, RunExecutionState
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
@@ -25,96 +25,40 @@ _module_dir = os.path.dirname(os.path.abspath(__file__))
 _project_dir = os.path.dirname(_module_dir)  # Go up one level from instruments/
 data_dir = os.path.join(_project_dir, "components")
 
+# McStas instrument name: drives the generated .instr/.c/.exe filenames and must
+# match the descriptor's mcstas_name (instruments/puma_plugin.py).
+MCSTAS_NAME = "PUMA_McScript"
 
-@dataclass
-class PUMARunExecutionState:
-    """Track when the compiled PUMA binary is ready for direct invocation."""
 
-    first_backengine_succeeded: bool = False
-    direct_run_ready: bool = False
-    binary_path: str | None = None
-    binary_cwd: str | None = None
-    mpi_launcher_argv: list[str] | None = None
-    last_execution_mode: str | None = None
+# Energy/angle/momentum conversions live in tavi.neutron_conversions; re-exported
+# here so existing `from instruments.PUMA_instrument_definition import ...` works.
+from tavi.neutron_conversions import (  # noqa: F401  (re-export)
+    angle2k,
+    energy2k,
+    energy2lambda,
+    k2angle,
+    k2energy,
+)
 
-##  some functions to convert between energies, angles and momenta ##
-def k2angle(k, d):
-    """Converts a k value to a Bragg scattering 2-theta angle"""
-    if 2*math.pi/(2*k*d)<-1 or 2*math.pi/(2*k*d)>1: #check if the angle is valid
-        return(math.inf)
-    else:
-        return(math.degrees(math.asin(2*math.pi/(2*k*d))))
+# Crystal-spec adapters live in tavi.instrument_helpers (shared with IN8);
+# the underscore names remain for existing imports.
+from tavi.instrument_helpers import (  # noqa: E402
+    crystal_info_from_descriptor,
+    crystal_spec_to_info as _crystal_spec_to_info,  # noqa: F401  (re-export)
+    find_crystal_spec as _find_crystal_spec,  # noqa: F401  (re-export)
+)
 
-def angle2k(angle, d):
-    """Converts a Bragg scattering 2-theta angle to a k value"""
-    if d*math.sin(math.radians(angle)) != 0:
-        return(abs(math.pi/(d*math.sin(math.radians(angle)))))
-    else:
-        return(0)
-
-# neutron momentum, in A/s, is converted to meV
-def k2energy(k):
-    """Converts a momentum k in A/s to energy in meV"""
-    return(1e3*math.pow((k * 1e10 * HBAR), 2) / (2 * N_MASS * E_CHARGE))
-
-def energy2k(energy):
-    """Converts an energy in meV to a momentum k in A/s"""
-    return(np.sqrt(energy * 1e-3 * E_CHARGE * 2 * N_MASS) * 1e-10/HBAR)
-
-def energy2lambda(energy):
-    """Converts an energy in meV to a wavelength lambda in A"""
-    return(9.044567/math.sqrt(energy))
 
 def mono_ana_crystals_setup(monocris, anacris):
-    """Holds the available monochromator and analyzer crystals to recall"""
-    monochromator_info = {}
-    analyzer_info = {}
+    """Crystal parameter dicts for the mono/analyzer, sourced from the descriptor.
 
-    # Monochromator crystal
-    if monocris == "PG[002]":
-        #print("\nPG[002] monochromator crystal")
-        monochromator_info['dm'] = 3.355
-        monochromator_info['slabwidth'] = 0.0202
-        monochromator_info['slabheight'] = 0.018
-        monochromator_info['ncolumns'] = 13
-        monochromator_info['nrows'] = 9
-        monochromator_info['gap'] = 0.0005
-        monochromator_info['mosaic'] = 35
-        monochromator_info['r0'] = 1.0 #0.7
-        monochromator_info['reflect'] = '"HOPG.rfl"'
-        monochromator_info['transmit'] = '"HOPG.trm"'
-    if monocris == "PG[002] test":
-        #print("\nPG[002] monochromator crystal")
-        monochromator_info['dm'] = 2.355
-        monochromator_info['slabwidth'] = 0.0202
-        monochromator_info['slabheight'] = 0.018
-        monochromator_info['ncolumns'] = 13
-        monochromator_info['nrows'] = 9
-        monochromator_info['gap'] = 0.0005
-        monochromator_info['mosaic'] = 35
-        monochromator_info['r0'] = 1.0 #0.7
-        monochromator_info['reflect'] = '"HOPG.rfl"'
-        monochromator_info['transmit'] = '"HOPG.trm"'
-    # else:
-    #     print("\nNo monochromator crystal selected")
+    The descriptor (instruments/puma_plugin.py) is the single source of truth for
+    crystal data; lookups are by CrystalSpec id ("pg002"). Unknown ids return
+    empty dicts.
+    """
+    from instruments.puma_plugin import puma_descriptor
 
-    # Analyzer crystal
-    if anacris == "PG[002]":
-        #print("\nPG[002] analyzer crystal")
-        analyzer_info['da'] = 3.355
-        analyzer_info['slabwidth'] = 0.01
-        analyzer_info['slabheight'] = 0.0295
-        analyzer_info['ncolumns'] = 21
-        analyzer_info['nrows'] = 5
-        analyzer_info['gap'] = 0.0005
-        analyzer_info['mosaic'] = 35
-        analyzer_info['r0'] = 1.0 #0.7
-        analyzer_info['reflect'] = '"HOPG.rfl"'
-        analyzer_info['transmit'] = '"HOPG.trm"'
-    # else:
-    #     print("\nNo analyzer crystal selected")
-
-    return monochromator_info, analyzer_info
+    return crystal_info_from_descriptor(puma_descriptor(), monocris, anacris)
 
 ## This function adds a Union material with incoherent scattering and powder lines
 def add_union_powder(name, data_name, sigma_inc, sigma_abs, unit_V, instr):
@@ -141,6 +85,13 @@ class TAS_Instrument:
         self.A3 = A3 # sample theta angle (psi)
         self.A4 = A4 # ana two-theta angle
         self.saz = saz # sample z-angle
+        # Scattering senses (vTAS sm/ss/sa convention): the numeric sign of the
+        # mono/sample/analyzer two-theta readout. Defaults are TAVI's historical
+        # baked convention (locked by tests/test_sign_conventions.py); each
+        # instrument subclass sets its own from its descriptor Geometry.
+        self.sense_mono = 1
+        self.sense_sample = -1
+        self.sense_ana = 1
         # Sample orientation angles (user-controllable)
         self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
         self.chi = 0    # static out-of-plane sample orientation offset
@@ -154,7 +105,10 @@ class TAS_Instrument:
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
         self.fixed_E = 0 # The fixed energy to work with, for the source.
+        self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
         self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
+        self.diagnostic_mode = False
+        self.diagnostic_settings = {}
  
     def set_parameters(self, **kwargs):
         """Method to set general parameters."""
@@ -255,6 +209,60 @@ class TAS_Instrument:
         if rva is not None:
             self.rva = rva
 
+    def update_diagnostic_settings(self, settings):
+        """Update the diagnostic settings."""
+        self.diagnostic_settings.update(settings)
+
+    def crystal_info(self, monocris, anacris):
+        """Return (monochromator_info, analyzer_info) dicts for the named crystals.
+
+        Each instrument state resolves crystals against its own descriptor.
+        """
+        raise NotImplementedError("Instrument state must supply crystal_info().")
+
+    def build_point_params(self, deltaE):
+        """Return the runtime parameter dict for one instrument point."""
+        raise NotImplementedError("Instrument state must supply build_point_params().")
+
+    def e0_param_value(self, deltaE):
+        """Return the runtime source-energy parameter for the current point."""
+        if self.source_type == "Mono":
+            if self.K_fixed == "Kf Fixed":
+                return self.fixed_E + deltaE
+            return self.fixed_E
+
+        return self.fixed_E
+
+    def point_energy_metadata(self, deltaE):
+        """Return the per-point energy values recorded with the scan output."""
+        if self.source_type == "Mono":
+            if self.K_fixed == "Kf Fixed":
+                E0_param = self.fixed_E + deltaE
+                Ei = E0_param
+                Ki = energy2k(Ei)
+                Ef = self.fixed_E
+                Kf = energy2k(Ef)
+            else:
+                E0_param = self.fixed_E
+                Ei = self.fixed_E
+                Ki = energy2k(Ei)
+                Ef = self.fixed_E - deltaE
+                Kf = energy2k(max(Ef, 1e-9))
+        else:
+            E0_param = self.fixed_E
+            Ei = self.fixed_E
+            Ki = energy2k(Ei)
+            Ef = self.fixed_E - deltaE
+            Kf = energy2k(max(Ef, 1e-9))
+
+        return {
+            "E0_param": E0_param,
+            "Ei": Ei,
+            "Ki": Ki,
+            "Ef": Ef,
+            "Kf": Kf,
+        }
+
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
         """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
         error_flags = []
@@ -266,42 +274,49 @@ class TAS_Instrument:
             return [0, 0, 0, 0, 0], error_flags
         
         # Retrieve mono/ana crystal information
-        monochromator_info, analyzer_info = mono_ana_crystals_setup(monocris, anacris)
-         
+        monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
+        if 'dm' not in monochromator_info or 'da' not in analyzer_info:
+            print(f"\nInvalid: unknown crystal selection (mono: {monocris}, ana: {anacris})")
+            error_flags.append("invalid_crystal")
+            return [0, 0, 0, 0, 0], error_flags
+
         # pre-calculate values from parameters
         q = math.sqrt(qx**2 + qy**2 + qz**2)
 
         K = energy2k(fixed_E)
 
         if K_fixed == "Ki Fixed":
-            mtt = 2 * k2angle(K, monochromator_info['dm'])
+            mtt = self.sense_mono * 2 * k2angle(K, monochromator_info['dm'])
             Ei = fixed_E
             ki = energy2k(Ei)
             Ef = Ei - deltaE
             kf = energy2k(Ef)
-            att = 2 * k2angle(kf, analyzer_info['da'])
-            if mtt == math.inf:
+            att = self.sense_ana * 2 * k2angle(kf, analyzer_info['da'])
+            if math.isinf(mtt):
                 print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
                 error_flags.append("mtt")
-            if att == math.inf:
+            if math.isinf(att):
                 print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
                 error_flags.append("att")
         elif K_fixed == "Kf Fixed":
-            att = 2 * k2angle(K, analyzer_info['da'])
+            att = self.sense_ana * 2 * k2angle(K, analyzer_info['da'])
             Ef = fixed_E
             kf = energy2k(Ef)
             Ei = Ef + deltaE
             ki = energy2k(Ei)
-            mtt = 2 * k2angle(ki, monochromator_info['dm'])
-            if mtt == math.inf:
+            mtt = self.sense_mono * 2 * k2angle(ki, monochromator_info['dm'])
+            if math.isinf(mtt):
                 print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
                 error_flags.append("mtt")
-            if att == math.inf:
+            if math.isinf(att):
                 print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
                 error_flags.append("att")
 
         try:
-            sample_angles = solve_instrument_angles(np.array([qx, qy, qz], dtype=float), ki, kf)
+            sample_angles = solve_instrument_angles(
+                np.array([qx, qy, qz], dtype=float), ki, kf,
+                sense_sample=self.sense_sample,
+            )
             stt = sample_angles.stt
         except ValueError as exc:
             print("\nSample two theta angle invalid")
@@ -328,7 +343,11 @@ class TAS_Instrument:
         error_flags = []
 
         # Retrieve mono/ana crystal information
-        monochromator_info, analyzer_info = mono_ana_crystals_setup(monocris, anacris)
+        monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
+        if 'dm' not in monochromator_info or 'da' not in analyzer_info:
+            print(f"\nInvalid: unknown crystal selection (mono: {monocris}, ana: {anacris})")
+            error_flags.append("invalid_crystal")
+            return [0, 0, 0, 0], error_flags
 
         # Calculate incident and scattered wavevectors based on the fixed energy
         if K_fixed == "Ki Fixed":
@@ -352,6 +371,11 @@ class TAS_Instrument:
         # qx and qy span the horizontal scattering plane; qz is vertical.
         try:
             qx, qy, qz = q_instrument_from_angles(sth, saz, stt, ki, kf)
+            if self.sense_sample > 0:
+                # Flipped-branch solutions align the Friedel partner -Q with
+                # the beam (vTAS convention; see solve_instrument_angles), so
+                # the raw inverse recovers -Q.
+                qx, qy, qz = -qx, -qy, -qz
         except Exception as exc:
             error_flags.append("q")
             print(f"Invalid Q from sample angles: {exc}")
@@ -410,9 +434,11 @@ class PUMA_Instrument(TAS_Instrument):
             print("Diagnostic Mode Activated!")
             self.display_diagnostic_settings()
 
-    def update_diagnostic_settings(self, settings):
-        """Update the diagnostic settings."""
-        self.diagnostic_settings.update(settings)
+    def crystal_info(self, monocris, anacris):
+        return mono_ana_crystals_setup(monocris, anacris)
+
+    def build_point_params(self, deltaE):
+        return build_puma_point_params(self, deltaE)
 
     def display_diagnostic_settings(self):
         """Display the diagnostic settings."""
@@ -468,13 +494,8 @@ class PUMA_Instrument(TAS_Instrument):
 
 
 def _get_E0_param_value(PUMA, deltaE):
-    """Return the runtime source-energy parameter for the current point."""
-    if PUMA.source_type == "Mono":
-        if PUMA.K_fixed == "Kf Fixed":
-            return PUMA.fixed_E + deltaE
-        return PUMA.fixed_E
-
-    return PUMA.fixed_E
+    """Back-compat wrapper; the logic lives on TAS_Instrument.e0_param_value."""
+    return PUMA.e0_param_value(deltaE)
 
 
 def _get_v_selector_frequency(PUMA, deltaE):
@@ -491,34 +512,8 @@ def _get_v_selector_frequency(PUMA, deltaE):
 
 
 def _get_point_energy_metadata(PUMA, deltaE):
-    """Return the per-point energy values recorded with the scan output."""
-    if PUMA.source_type == "Mono":
-        if PUMA.K_fixed == "Kf Fixed":
-            E0_param = PUMA.fixed_E + deltaE
-            Ei = E0_param
-            Ki = energy2k(Ei)
-            Ef = PUMA.fixed_E
-            Kf = energy2k(Ef)
-        else:
-            E0_param = PUMA.fixed_E
-            Ei = PUMA.fixed_E
-            Ki = energy2k(Ei)
-            Ef = PUMA.fixed_E - deltaE
-            Kf = energy2k(max(Ef, 1e-9))
-    else:
-        E0_param = PUMA.fixed_E
-        Ei = PUMA.fixed_E
-        Ki = energy2k(Ei)
-        Ef = PUMA.fixed_E - deltaE
-        Kf = energy2k(max(Ef, 1e-9))
-
-    return {
-        "E0_param": E0_param,
-        "Ei": Ei,
-        "Ki": Ki,
-        "Ef": Ef,
-        "Kf": Kf,
-    }
+    """Back-compat wrapper; the logic lives on TAS_Instrument.point_energy_metadata."""
+    return PUMA.point_energy_metadata(deltaE)
 
 
 def build_puma_point_params(PUMA, deltaE):
@@ -696,22 +691,22 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
         'psi': psi_scan,
         'kappa': kappa_scan,
     }
-    metadata.update(_get_point_energy_metadata(point_puma, deltaE))
+    metadata.update(point_puma.point_energy_metadata(deltaE))
 
-    return {
-        'params': None if error_flags else build_puma_point_params(point_puma, deltaE),
-        'output_folder': output_folder,
-        'scan_index': scan_index,
-        'deltaE': deltaE,
-        'error_flags': error_flags,
-        'metadata': metadata,
-        'indices': {
+    return PointSnapshot(
+        params=None if error_flags else point_puma.build_point_params(deltaE),
+        output_folder=output_folder,
+        scan_index=scan_index,
+        deltaE=deltaE,
+        error_flags=error_flags,
+        metadata=metadata,
+        indices={
             'idx_1d': idx_1d,
             'idx_x': idx_x,
             'idx_y': idx_y,
         },
-        'log_message': log_message,
-    }
+        log_message=log_message,
+    )
 
 
 def _resolve_materialized_binary_path(instrument):
@@ -721,12 +716,15 @@ def _resolve_materialized_binary_path(instrument):
     if instrument_input_path and instrument_name:
         return os.path.abspath(os.path.join(instrument_input_path, f"{instrument_name}.exe"))
 
-    return os.path.abspath(os.path.join(data_dir, "PUMA_McScript.exe"))
+    return os.path.abspath(os.path.join(data_dir, f"{MCSTAS_NAME}.exe"))
 
 
 def _run_puma_point_direct(execution_state, params_snapshot, output_folder, number_neutrons, mpi_count):
     """Run the already-materialized PUMA binary directly without mcrun.py."""
-    os.makedirs(output_folder, exist_ok=True)
+    # McStas --dir creates the leaf folder itself and aborts if it already
+    # exists (mcuse_dir), so only ensure the parent is present.
+    parent_folder = os.path.dirname(os.path.abspath(output_folder))
+    os.makedirs(parent_folder, exist_ok=True)
     args = [
         *(execution_state.mpi_launcher_argv or []),
         "-np",
@@ -735,7 +733,7 @@ def _run_puma_point_direct(execution_state, params_snapshot, output_folder, numb
         f"--ncount={number_neutrons}",
         f"--dir={output_folder}",
     ]
-    for key, value in params_snapshot["params"].items():
+    for key, value in params_snapshot.params.items():
         args.append(f"{key}={value}")
 
     return subprocess.run(
@@ -764,7 +762,7 @@ def _build_execution_info(mode, output_folder, binary_path=None, returncode=None
 
 def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=30):
     """Run one point on an already-built PUMA instrument."""
-    error_flag_array = list(params_snapshot.get("error_flags", []))
+    error_flag_array = list(params_snapshot.error_flags)
 
     if error_flag_array:
         execution_state.last_execution_mode = "skipped"
@@ -822,7 +820,7 @@ def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, 
         increment_folder_name=False,
     )
 
-    instrument.set_parameters(**params_snapshot["params"])
+    instrument.set_parameters(**params_snapshot.params)
     data = instrument.backengine()
     execution_state.last_execution_mode = "backengine"
 
@@ -856,11 +854,25 @@ def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, 
     return data, error_flag_array, execution_info
 
 
+# The run layer is instrument-agnostic (the binary path comes from the built
+# instrument's input_path/name, never from MCSTAS_NAME once built); other
+# instrument definitions delegate through this alias.
+run_tas_point = run_PUMA_point
+
+
+# alpha_2 stacked collimators: (divergence_arcmin, component_name, at_z, ymax, length).
+# Shared geometry: xwidth = 39e-3, ymin = -70e-3. Tuple order = physical beam order.
+# Divergences mirror the descriptor's alpha_2 slot values
+# (tests/test_puma_build_tree.py keeps them in sync).
+_ALPHA2_COLLIMATORS = (
+    (40, "sample_collimator_40", 0.550, 84e-3, 0.152),
+    (60, "sample_collimator_60", 0.6520, 78e-3, 0.102),
+    (30, "sample_collimator_30", 0.854, 69e-3, 0.202),
+)
+
+
 def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons):
     """Build a PUMA instrument object for repeated per-point execution."""
-
-    #QE_parameter_array = [qx, qy, qz, deltaE]
-    #instrument_parameter_array = [number_neutrons, K_fixed, NMO_installed, fixed_E, monocris, anacris, alpha_1, alpha_2, alpha_3, alpha_4]
 
     PUMA = puma_config
 
@@ -871,7 +883,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
     ## start the instrument
 
-    instrument = ms.McStas_instr("PUMA_McScript", input_path=data_dir)
+    instrument = ms.McStas_instr(MCSTAS_NAME, input_path=data_dir)
     instrument.settings(output_path="./output", openacc=False) #uses nvc, must be set up on linux
     
     ## Add parameters
@@ -894,9 +906,42 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     
 
     # Monochromator crystal
-    monochromator_info, analyzer_info = mono_ana_crystals_setup(PUMA.monocris, PUMA.anacris)    
+    monochromator_info, analyzer_info = mono_ana_crystals_setup(PUMA.monocris, PUMA.anacris)
 
-    #rhm, rvm, rha, rva = PUMA.calculate_crystal_bending(PUMA.rhmfac, PUMA.rvmfac, PUMA.rhafac, PUMA.A1/2, PUMA.A4/2, )
+    # Diagnostic monitors are emitted from the descriptor table at the exact
+    # insertion points below (component order is physics in McStas). The
+    # crystal-sized monitors track the SELECTED crystal's slab geometry, so
+    # their sizes are computed here and override the descriptor's precomputed
+    # defaults (identical for the current crystals).
+    from instruments.puma_plugin import _PUMA_MONITORS
+    from tavi.instrument_helpers import (
+        emit_collimator,
+        emit_crystal_assembly,
+        emit_monitors,
+        emit_sample,
+        emit_sample_orientation_arms,
+        emit_slit,
+    )
+    from tavi.sample_library import default_sample_library
+
+    monitor = {m.id: m for m in _PUMA_MONITORS}
+    enabled_monitors = diagnostic_settings if diagnostic_mode else {}
+    _mono_w = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
+    _mono_h = monochromator_info['slabheight'] * monochromator_info['nrows']
+    _ana_w = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
+    _ana_h = analyzer_info['slabheight'] * analyzer_info['nrows']
+    monitor_size_overrides = {
+        "premono_Emonitor": {"xwidth": _mono_w, "yheight": _mono_h},
+        "postmono_Emonitor": {"xwidth": _mono_w, "yheight": _mono_h},
+        "preanalyzer_Emonitor": {"xwidth": _ana_w, "yheight": _ana_h},
+        "preanalyzer_PSD": {"xwidth": _ana_w, "yheight": _ana_h},
+        "postanalyzer_Emonitor": {"xwidth": _ana_w, "yheight": _ana_h},
+        "postanalyzer_PSD": {"xwidth": _ana_w, "yheight": _ana_h},
+    }
+
+    def emit_monitor_group(instrument, *ids):
+        emit_monitors(instrument, [monitor[i] for i in ids], enabled_monitors,
+                      size_overrides=monitor_size_overrides)
 
     def configure_component_tree():
 
@@ -926,27 +971,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
             source.E0 = "E0_param"  # Use E0_param for source energy (allows runtime adjustment without recompilation)
         source.divergence_distribution=0
 
-        # hblende = instrument.add_component("hblende", "Slit", AT=[0, 0, 0.0001], RELATIVE="origin")
-        # hblende.xwidth=PUMA.hbl_hgap
-        # hblende.yheight=PUMA.hbl_vgap
+        emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 
-        if diagnostic_mode and diagnostic_settings.get('Source EMonitor'):
-            source_Emonitor = instrument.add_component("source_Emonitor", "E_monitor", AT=[0,0,0.144], ROTATED=[0,0,0], RELATIVE="origin")
-            source_Emonitor.xwidth = 0.2
-            source_Emonitor.yheight = 0.2
-            source_Emonitor.nE = 100
-            source_Emonitor.Emin = -2
-            source_Emonitor.Emax = 200
-            source_Emonitor.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Source PSD'):
-            source_PSD = instrument.add_component("source_PSD", "PSD_monitor", AT=[0,0,0.145], RELATIVE="origin")
-            source_PSD.xwidth = PUMA.hbl_hgap*1.5
-            source_PSD.yheight = PUMA.hbl_vgap*1.5
-            source_PSD.nx = 100
-            source_PSD.ny = 100
-            source_PSD.restore_neutron = 1
-            
         if PUMA.V_selector_installed:
             V_selector = instrument.add_component("v_selector", "V_selector", AT=[0,0,0.6], RELATIVE="origin")
             V_selector.xwidth = .100 #
@@ -958,139 +984,55 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
             V_selector.nslit = 72 #
             V_selector.alpha = 	48.3 #
             V_selector.nu = "nu_param"
-        
-            
-        if diagnostic_mode and diagnostic_settings.get('Source DSD'):
-            source_DSD = instrument.add_component("source_DSD", "Divergence_monitor", AT=[0,0,0.924], RELATIVE="origin")
-            source_DSD.xwidth = PUMA.hbl_hgap*1.5
-            source_DSD.yheight = PUMA.hbl_vgap*1.5
-            source_DSD.nh = 100
-            source_DSD.nv = 100
-            source_DSD.restore_neutron = 1
 
-        mono_collimator = instrument.add_component("mono_collimator", "Collimator_linear", AT=[0,0,0.925], RELATIVE="origin")
-        mono_collimator.xwidth = 40e-3
-        mono_collimator.yheight = 220e-3
-        mono_collimator.length = 0.2
-        mono_collimator.divergence = PUMA.alpha_1
-        
-        
+        emit_monitor_group(instrument, 'Source DSD')
 
-        if diagnostic_mode and diagnostic_settings.get('Postcollimation PSD'):
-            postcollimation_PSD = instrument.add_component("postcollimation_PSD", "PSD_monitor", AT=[0,0,PUMA.L1-0.003], RELATIVE="origin")
-            postcollimation_PSD.xwidth = 0.05
-            postcollimation_PSD.yheight = 0.25
-            postcollimation_PSD.nx = 100
-            postcollimation_PSD.ny = 100
-            postcollimation_PSD.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Postcollimation DSD'):
-            postcollimation_DSD = instrument.add_component("postcollimation_DSD", "Divergence_monitor", AT=[0,0,PUMA.L1-0.002], RELATIVE="origin")
-            postcollimation_DSD.xwidth = 0.1
-            postcollimation_DSD.yheight = 0.1
-            postcollimation_DSD.nh = 100
-            postcollimation_DSD.nv = 100
-            postcollimation_DSD.restore_neutron = 1
+        emit_collimator(instrument, "mono_collimator", relative="origin",
+                        at=(0, 0, 0.925), divergence=PUMA.alpha_1, length=0.2,
+                        xwidth=40e-3, yheight=220e-3)
 
-        if diagnostic_mode and diagnostic_settings.get('Premono Emonitor'):  
-            premono_Emonitor = instrument.add_component("premono_Emonitor", "E_monitor", AT=[0,0,PUMA.L1-0.001], RELATIVE="origin")
-            premono_Emonitor.xwidth = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
-            premono_Emonitor.yheight = monochromator_info['slabheight'] * monochromator_info['nrows']
-            premono_Emonitor.nE = 400
-            premono_Emonitor.Emin = 0
-            premono_Emonitor.Emax = 200
-            premono_Emonitor.restore_neutron = 1
-
+        emit_monitor_group(instrument, 'Postcollimation PSD', 'Postcollimation DSD',
+                           'Premono Emonitor')
 
         ## monochromator section
 
-        mono_cradle = instrument.add_component("mono_cradle", "Arm", AT=[0,0,PUMA.L1], RELATIVE="origin", ROTATED=[0,"A1_param/2",0])
-
-        monochromator = instrument.add_component("monochromator", "Monochromator_curved", AT=[0,0,0], RELATIVE="mono_cradle")
-        monochromator.zwidth = monochromator_info['slabwidth']
-        monochromator.yheight = monochromator_info['slabheight']
-        monochromator.gap = monochromator_info['gap']
-        monochromator.NH = monochromator_info['ncolumns']
-        monochromator.NV = monochromator_info['nrows']
-        monochromator.r0 = monochromator_info['r0']
-        monochromator.DM = monochromator_info['dm']
-        monochromator.RV = "rvm_param"
-        monochromator.RH = "rhm_param"
-        monochromator.mosaic = monochromator_info['mosaic']
-        monochromator.order = 0 # all orders
-        monochromator.reflect = monochromator_info['reflect']
-        monochromator.transmit = monochromator_info['transmit']
-        monochromator.append_EXTEND("if(!SCATTERED) ABSORB;")
-        monochromator.set_SPLIT(2)
+        emit_crystal_assembly(instrument, cradle_name="mono_cradle",
+                              crystal_name="monochromator", relative="origin",
+                              distance=PUMA.L1, rotation_expr="A1_param/2",
+                              info=monochromator_info, d_key='dm',
+                              rv_param="rvm_param", rh_param="rhm_param",
+                              split=2, extend="if(!SCATTERED) ABSORB;")
 
         ## sample arm
 
         sample_arm = instrument.add_component("sample_arm", "Arm", AT=[0,0,PUMA.L1], RELATIVE="origin", ROTATED=[0,"A1_param",0])
 
-        if diagnostic_mode and diagnostic_settings.get('Postmono Emonitor'):
-            postmono_Emonitor = instrument.add_component("postmono_Emonitor", "E_monitor", AT=[0,0,0.1], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            premono_Emonitor.xwidth = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
-            premono_Emonitor.yheight = monochromator_info['slabheight'] * monochromator_info['nrows']
-            postmono_Emonitor.nE = 400
-            postmono_Emonitor.Emin = 0
-            postmono_Emonitor.Emax = 200
-            postmono_Emonitor.restore_neutron = 1
+        emit_monitor_group(instrument, 'Postmono Emonitor')
 
-        postmono_slit = instrument.add_component("postmono_slit", "Slit", AT=[0,0,0.286], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        postmono_slit.xwidth = "vbl_hgap_param"
-        postmono_slit.yheight = 0.142
+        emit_slit(instrument, "postmono_slit", relative="sample_arm",
+                  at=(0, 0, 0.286), rotated=(0, 0, 0),
+                  xwidth="vbl_hgap_param", yheight=0.142)
 
-        # # This is just an entrance slit
-        sample_collimator_dia = instrument.add_component("sample_collimator_dia", "Collimator_linear", AT=[0,0,0.398], RELATIVE="sample_arm")
-        sample_collimator_dia.xwidth = 39e-3
-        sample_collimator_dia.ymin = -70e-3
-        sample_collimator_dia.ymax = 77e-3
-        sample_collimator_dia.length = 0.112
-        sample_collimator_dia.divergence = 0
-        
-        if diagnostic_mode and diagnostic_settings.get('Pre-sample collimation PSD'):
-            sample1_PSD = instrument.add_component("sample1_PSD", "PSD_monitor", AT=[0,0,PUMA.L2/4], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample1_PSD.xwidth = 0.06
-            sample1_PSD.yheight = 0.15
-            sample1_PSD.nx = 200
-            sample1_PSD.ny = 200
-            sample1_PSD.restore_neutron = 1
-        
-        if 40 in PUMA.alpha_2:
-            sample_collimator_40 = instrument.add_component("sample_collimator_40", "Collimator_linear", AT=[0,0,0.550], RELATIVE="sample_arm")
-            sample_collimator_40.xwidth = 39e-3
-            sample_collimator_40.ymin = -70e-3
-            sample_collimator_40.ymax = 84e-3
-            sample_collimator_40.length = 0.152
-            sample_collimator_40.divergence = 40
-            
-        if 60 in PUMA.alpha_2:
-            sample_collimator_60 = instrument.add_component("sample_collimator_60", "Collimator_linear", AT=[0,0,0.6520], RELATIVE="sample_arm")
-            sample_collimator_60.xwidth = 39e-3
-            sample_collimator_60.ymin = -70e-3
-            sample_collimator_60.ymax = 78e-3
-            sample_collimator_60.length = 0.102
-            sample_collimator_60.divergence = 60
-        
-        if 30 in PUMA.alpha_2:
-            sample_collimator_30 = instrument.add_component("sample_collimator_30", "Collimator_linear", AT=[0,0,0.854], RELATIVE="sample_arm")
-            sample_collimator_30.xwidth = 39e-3
-            sample_collimator_30.ymin = -70e-3
-            sample_collimator_30.ymax = 69e-3
-            sample_collimator_30.length = 0.202
-            sample_collimator_30.divergence = 30
-        
+        # Entrance slit of the alpha_2 collimator housing
+        emit_collimator(instrument, "sample_collimator_dia", relative="sample_arm",
+                        at=(0, 0, 0.398), divergence=0, length=0.112,
+                        xwidth=39e-3, ymin=-70e-3, ymax=77e-3)
+
+        emit_monitor_group(instrument, 'Pre-sample collimation PSD')
+
+        for divergence, name, at_z, ymax, length in _ALPHA2_COLLIMATORS:
+            if divergence in PUMA.alpha_2:
+                emit_collimator(instrument, name, relative="sample_arm",
+                                at=(0, 0, at_z), divergence=divergence,
+                                length=length, xwidth=39e-3, ymin=-70e-3,
+                                ymax=ymax)
+
         # This is the exit beam tube
-        exit_beam_tube = instrument.add_component("exit_beam_tube", "Slit", AT=[0,0,1.1385], RELATIVE="sample_arm") 
-        exit_beam_tube.xwidth = 0.105
-        exit_beam_tube.yheight = 0.18
+        emit_slit(instrument, "exit_beam_tube", relative="sample_arm",
+                  at=(0, 0, 1.1385), xwidth=0.105, yheight=0.18)
 
-        # There is no actual sample filter on PUMA
-        # sample_filter = instrument.add_component("sample_filter", "Filter_graphite", AT=[0,0,1.194], ROTATED=[0,0,0], RELATIVE="sample_arm")
-        # sample_filter.length = 0.05
-        # sample_filter.xwidth = 0.5
-        # sample_filter.yheight = 0.5
-            
+        # There is no actual sample filter on PUMA.
+
         ##############################################################################
         # NESTED MIRROR OPTICS (NMO) CONFIGURATION
         ##############################################################################
@@ -1271,50 +1213,13 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         ## sample table
         
-        sample_slit = instrument.add_component("sample_slit", "Slit", AT=[0,0,PUMA.L2-0.674], RELATIVE="sample_arm")
-        sample_slit.xwidth = "pbl_hgap_param"
-        sample_slit.yheight = "pbl_vgap_param"
+        emit_slit(instrument, "sample_slit", relative="sample_arm",
+                  at=(0, 0, PUMA.L2 - 0.674),
+                  xwidth="pbl_hgap_param", yheight="pbl_vgap_param")
            
-        if diagnostic_mode and diagnostic_settings.get('Sample PSD @ L2-0.5'):
-            sample2_PSD = instrument.add_component("sample2_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.5], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample2_PSD.xwidth = 0.10
-            sample2_PSD.yheight = 0.10
-            sample2_PSD.nx = 100
-            sample2_PSD.ny = 100
-            sample2_PSD.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Sample PSD @ L2-0.3'):
-            sample3_PSD = instrument.add_component("sample3_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.3], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample3_PSD.xwidth = 0.10
-            sample3_PSD.yheight = 0.10
-            sample3_PSD.nx = 100
-            sample3_PSD.ny = 100
-            sample3_PSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Sample PSD @ Sample'):
-            sample_PSD = instrument.add_component("sample_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.03], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample_PSD.xwidth = 0.10
-            sample_PSD.yheight = 0.10
-            sample_PSD.nx = 100
-            sample_PSD.ny = 100
-            sample_PSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Sample DSD @ Sample'):
-            sample_DSD = instrument.add_component("sample_DSD", "Divergence_monitor", AT=[0,0,PUMA.L2-0.02], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample_DSD.xwidth = 0.1
-            sample_DSD.yheight = 0.1
-            sample_DSD.nh = 100
-            sample_DSD.nv = 100
-            sample_DSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Sample EMonitor @ Sample'):
-            sample_Emonitor = instrument.add_component("sample_Emonitor", "E_monitor", AT=[0,0,PUMA.L2-0.01], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample_Emonitor.xwidth = 0.2
-            sample_Emonitor.yheight = 0.2
-            sample_Emonitor.nE = 100
-            sample_Emonitor.Emin = -2
-            sample_Emonitor.Emax = 200
-            sample_Emonitor.restore_neutron = 1
+        emit_monitor_group(instrument, 'Sample PSD @ L2-0.5', 'Sample PSD @ L2-0.3',
+                           'Sample PSD @ Sample', 'Sample DSD @ Sample',
+                           'Sample EMonitor @ Sample')
 
         # Sample orientation hierarchy:
         # 1. sample_gonio: applies calculated saz (out-of-plane tilt from qz)
@@ -1332,314 +1237,61 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         instrument.add_parameter("mount_ry_param", value=0, comment="Static sample mount rotation about y")
         instrument.add_parameter("mount_rz_param", value=0, comment="Static sample mount rotation about z")
         
-        instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
-        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
-        instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset_total",0], RELATIVE="sample_chi_arm")
-        instrument.add_component("sample_mount", "Arm", AT=[0,0,0], ROTATED=["mount_rx_param","mount_ry_param","mount_rz_param"], RELATIVE="sample_cradle")
+        sample_mount = emit_sample_orientation_arms(instrument,
+                                                    relative="sample_arm",
+                                                    distance=PUMA.L2)
 
-
-        
-        # # Union Initialization
-        # init = instrument.add_component("init", "Union_init")
-        # #instrument.component_help("PhononSimple_process")
-
-        # # Define Phonon Scattering Process
-        # Al_phonon = instrument.add_component("Al_phonon", "PhononSimple_process")
-        # Al_phonon.a = 4.05
-        # Al_phonon.b = 345
-        # Al_phonon.M = 27
-        # Al_phonon.c = 4
-        # Al_phonon.DW = 1
-        # Al_phonon.T = 200
-        
-        # # Add incoherent scattering
-        # Al_incoherent = instrument.add_component("Al_incoherent", "Incoherent_process")
-        # Al_incoherent.sigma = 4.0*0.0082
-        # Al_incoherent.unit_cell_volume = 66.4
-
-        # # Define Bragg Scattering Process
-        # Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal_process")
-        # Al_Bragg.reflections = '"Al.lau"'
-        # Al_Bragg.mosaic = 5
-
-        # # Combine Processes into a Material
-        # Al_crystal = instrument.add_component("Al_crystal", "Union_make_material")
-        # Al_crystal.my_absorption = 0 #100.0*4.0*0.231/100
-        # Al_crystal.process_string = '"Al_incoherent,Al_Bragg,Al_phonon"'
-
-        # # Define Geometry and Attach Material
-        # Al_rod = instrument.add_component("Al_rod", "Union_cylinder", AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_cradle")
-        # Al_rod.radius = 20e-3
-        # Al_rod.yheight = 30e-3
-        # Al_rod.material_string = '"Al_crystal"'
-        # Al_rod.priority = 10
-        # Al_rod.p_interact = 0.4
-
-        # # Union Master and Stop
-        # master = instrument.add_component("master", "Union_master")
-        # stop = instrument.add_component("stop", "Union_stop")
-
-         
-
-        # Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # Al_rod_phonon.radius = 20e-3
-        # Al_rod_phonon.yheight = 30e-3
-        # Al_rod_phonon.sigma_abs = 0*0.231 #0.23 for Al
-        # Al_rod_phonon.sigma_inc = 0*0.0082 #0.0082 for Al
-        # Al_rod_phonon.a = 4.05 #4.05 for Al
-        # Al_rod_phonon.b = 345 #3.45 for Al
-        # Al_rod_phonon.M = 27 #atomic mass of Al
-        # Al_rod_phonon.c = 4
-        # Al_rod_phonon.DW = 1
-        # Al_rod_phonon.T = 200
-        # Al_rod_phonon.target_index = +2
-        # Al_rod_phonon.focus_aw = 5 #horizontal focus region in degrees, 5
-        # Al_rod_phonon.focus_ah = 15 #vertical focus region in degrees, 15
-        # Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-
-        # Add sample component according to selected sample_key on PUMA (if set)
+        # Mount the selected sample from the shared library (samples move
+        # between instruments; tavi/sample_library.py).
         sample_key = getattr(PUMA, 'sample_key', None)
-        if sample_key == "Al_rod_phonon":
-            Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
-            Al_rod_phonon.radius = 5e-3
-            Al_rod_phonon.yheight = 30e-3
-            Al_rod_phonon.sigma_abs = 0*0.231
-            Al_rod_phonon.sigma_inc = 0*0.0082
-            Al_rod_phonon.a = 4.05
-            Al_rod_phonon.b = 345
-            Al_rod_phonon.M = 27
-            Al_rod_phonon.c = 4
-            Al_rod_phonon.DW = 1
-            Al_rod_phonon.T = 200
-            Al_rod_phonon.target_index = +2
-            Al_rod_phonon.focus_aw = 5
-            Al_rod_phonon.focus_ah = 15
-            Al_rod_phonon.set_SPLIT(10)
-            try:
-                Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;")
-            except Exception:
-                pass
-        elif sample_key == "Al_rod_phonon_optic":
-            Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
-            Al_rod_phonon_optic.radius = 5e-3
-            Al_rod_phonon_optic.yheight = 30e-3
-            Al_rod_phonon_optic.sigma_abs = 0
-            Al_rod_phonon_optic.sigma_inc = 0
-            Al_rod_phonon_optic.a = 3.14
-            Al_rod_phonon_optic.b = 345
-            Al_rod_phonon_optic.M = 27
-            Al_rod_phonon_optic.c = 4
-            Al_rod_phonon_optic.DW = 1
-            Al_rod_phonon_optic.T = 300
-            Al_rod_phonon_optic.zero_energy = 4
-            Al_rod_phonon_optic.maximum_energy = 1
-            Al_rod_phonon_optic.target_index = +2
-            Al_rod_phonon_optic.focus_aw = 5
-            Al_rod_phonon_optic.focus_ah = 15
-            Al_rod_phonon_optic.set_SPLIT(10)
-            try:
-                Al_rod_phonon_optic.append_EXTEND("if(!SCATTERED) ABSORB;")
-            except Exception:
-                pass
-        elif sample_key == "Al_bragg":
-            Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
-            Al_Bragg.reflections = '"Al.lau"'
-            Al_Bragg.radius = 5e-3
-            Al_Bragg.yheight = 30e-3
-            Al_Bragg.mosaic = 5
-            Al_Bragg.sigma_inc = -1
-            Al_Bragg.set_SPLIT(10)
-        elif sample_key == "Al_phonon_DFT":
-            Al_phonon_DFT = instrument.add_component(
-                "Al_phonon_DFT", "Phonon_DFT",
-                AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_mount"
-            )
-            # --- Bragg scattering (pre-converted LAZ, avoids cif2hkl dependency) ---
-            Al_phonon_DFT.reflections = '"Al_mp-134_symmetrized.laz"'
-            Al_phonon_DFT.delta_d_d = 1.45e-3
-            Al_phonon_DFT.barns = 1
-            # --- Phonon scattering from dispersion file ---
-            Al_phonon_DFT.dispersion = '"Al_test_phonons_centered.dat"'
-            Al_phonon_DFT.tessellate = 1
-            Al_phonon_DFT.phonon_e_steps = 50
-            # --- Sample geometry ---
-            Al_phonon_DFT.radius = 5e-3
-            Al_phonon_DFT.yheight = 30e-3
-            # --- Material parameters ---
-            Al_phonon_DFT.a = 4.03893
-            Al_phonon_DFT.sigma_abs = 0
-            Al_phonon_DFT.sigma_inc = 0.0
-            Al_phonon_DFT.debye_waller = 1
-            Al_phonon_DFT.T = 200
-            # --- Channel balance ---
-            Al_phonon_DFT.p_interact = 1.0
-            Al_phonon_DFT.p_phonon = 0.95
-            Al_phonon_DFT.phonon_gamma = 0.2
-            # --- Focusing ---
-            Al_phonon_DFT.target_index = +2
-            Al_phonon_DFT.focus_aw = 5.0
-            Al_phonon_DFT.focus_ah = 15.0
-            Al_phonon_DFT.set_SPLIT(10)
+        sample_spec = next(
+            (s for s in default_sample_library() if s.id == sample_key), None
+        )
+        if sample_spec is not None and sample_spec.component_type is not None:
+            emit_sample(instrument, sample_spec, relative=sample_mount)
         else:
             # No sample selected; proceed without adding a sample component.
             print("Warning: No sample selected for instrument run; running without sample component.")
-
-
-        # powder_test = instrument.add_component("powder_test", "Powder1", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # powder_test.radius = 20e-3
-        # powder_test.yheight = 30e-3
-        # powder_test.d_phi = 0.07
-        # powder_test.sigma_abs = 0.231 #0.23 for Al
-        # powder_test.Vc = 30.96
-        # powder_test.pack = 1
-        # powder_test.q = 2
-        # powder_test.j = 6
-        # powder_test.F2 = 100
-        # powder_test.DW = 1
-        # powder_test.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-        
-        # Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle") # Sample cradle or sample gonio? Was cradle, H8 example has gonio
-        # Al_rod_phonon_optic.radius = 2e-2
-        # Al_rod_phonon_optic.yheight = 3e-2
-        # Al_rod_phonon_optic.sigma_abs = 0 #0.23 for Al
-        # Al_rod_phonon_optic.sigma_inc = 0 #0.0082 for Al
-        # Al_rod_phonon_optic.a = 3.14 #4.05 for Al
-        # Al_rod_phonon_optic.b = 345 #3.45 for Al
-        # Al_rod_phonon_optic.M = 27 #atomic mass of Al
-        # Al_rod_phonon_optic.c = 4
-        # Al_rod_phonon_optic.DW = 1
-        # Al_rod_phonon_optic.T = 300
-        # Al_rod_phonon_optic.zero_energy = 4
-        # Al_rod_phonon_optic.maximum_energy = 1
-        # Al_rod_phonon_optic.append_EXTEND("if(!SCATTERED) ABSORB;") # The phonon_simple does not contain the keyword SCATTER normally, is added
-        # Al_rod_phonon_optic.target_index = +2	#relative index of component to focus at, e.g. next is +1	#set for the analyzer collimator
-        # Al_rod_phonon_optic.focus_aw = 5 #horizontal focus region in degrees, 5
-        # Al_rod_phonon_optic.focus_ah = 15 #vertical focus region in degrees, 15
-        
-        # Al_ball = instrument.add_component("Al_ball", "PowderN", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_cradle")
-        # Al_ball.reflections = '"Al.laz"'
-        # Al_ball.radius = 20E-3
-        # Al_ball.append_EXTEND("if(!SCATTERED) ABSORB;")
-
-        ## All commented out, example of union sample with multiple powders available.
-        # def add_union_powder(name, data_name, sigma_inc, sigma_abs, unit_V, instr):
-        #     """
-        #     This function adds a Union material with incoherent scattering and powder lines
-        #     """
-        #     material_incoherent = instr.add_component(name + "_inc", "Incoherent_process")
-        #     material_incoherent.sigma = sigma_inc
-        #     material_incoherent.unit_cell_volume = unit_V
-        #     material_powder = instr.add_component(name + "_pow", "Powder_process")
-        #     material_powder.reflections = '"' + data_name + '"'  # Need quotes when describing a filename
-        #     material = instr.add_component(name, "Union_make_material")
-        #     material.my_absorption = 100*sigma_abs/unit_V
-        #     material.process_string = '"' + name + "_inc," + name + "_pow" + '"'
-    
-        # # Add a number of standard powders to our instrument (datafiles included with McStas)
-        # add_union_powder("Al", "Al.laz", 4*0.0082, 4*0.231, 66.4, instr)
-        # add_union_powder("Cu", "Cu.laz", 4*0.55, 4*3.78, 47.24, instr)
-        # add_union_powder("Ni", "Ni.laz", 4*5.2, 4*4.49, 43.76, instr)
-        # add_union_powder("Ti", "Ti.laz", 2*2.87, 2*6.09, 35.33, instr)
-        # add_union_powder("Pb", "Pb.laz", 4*0.003, 4*0.17, 121.29, instr)
-        # add_union_powder("Fe", "Fe.laz", 2*0.4, 2*2.56, 24.04, instr)
 
         ## analyzer
 
         analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0,0,PUMA.L2], ROTATED=[0,"A2_param",0], RELATIVE="sample_arm")
         
-        if diagnostic_mode and diagnostic_settings.get('Pre-analyzer collimation PSD'):
-            precollim_PSD = instrument.add_component("precollim_PSD", "PSD_monitor", AT=[0,0,0.49], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-            precollim_PSD.xwidth = 1000e-3
-            precollim_PSD.yheight = 1000e-3
-            precollim_PSD.nx = 200
-            precollim_PSD.ny = 200
-            precollim_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Pre-analyzer collimation PSD')
 
-        analyzer_collimator = instrument.add_component("analyzer_collimator", "Collimator_linear", AT=[0,0,0.497], RELATIVE="analyzer_arm")
-        analyzer_collimator.xwidth = 0.05 #38e-3
-        analyzer_collimator.yheight = 1.28 #128.5e-3
-        analyzer_collimator.length = 0.2
-        analyzer_collimator.divergence = PUMA.alpha_3
+        emit_collimator(instrument, "analyzer_collimator", relative="analyzer_arm",
+                        at=(0, 0, 0.497), divergence=PUMA.alpha_3, length=0.2,
+                        xwidth=0.05, yheight=1.28)
 
         analyzer_filter = instrument.add_component("analyzer_filter", "Filter_graphite", AT=[0,0,0.7], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
         analyzer_filter.length = 0.05
         analyzer_filter.xwidth = 0.5
         analyzer_filter.yheight = 0.5
 
-        if diagnostic_mode and diagnostic_settings.get('Pre-analyzer EMonitor'):
-            preanalyzer_Emonitor = instrument.add_component("preanalyzer_Emonitor", "E_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-            preanalyzer_Emonitor.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            preanalyzer_Emonitor.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            preanalyzer_Emonitor.nE = 100
-            preanalyzer_Emonitor.Emin = -2
-            preanalyzer_Emonitor.Emax = 30
-            preanalyzer_Emonitor.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Pre-analyzer PSD'):
-            preanalyzer_PSD = instrument.add_component("preanalyzer_PSD", "PSD_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-            preanalyzer_PSD.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            preanalyzer_PSD.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            preanalyzer_PSD.nx = 100
-            preanalyzer_PSD.ny = 100
-            preanalyzer_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Pre-analyzer EMonitor', 'Pre-analyzer PSD')
 
-        analyzer_cradle = instrument.add_component("analyzer_cradle", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"A4_param/2",0], RELATIVE="analyzer_arm")
-
-        analyzer = instrument.add_component("analyzer", "Monochromator_curved", AT=[0,0,0], RELATIVE="analyzer_cradle")
-        analyzer.zwidth = analyzer_info['slabwidth']
-        analyzer.yheight = analyzer_info['slabheight']
-        analyzer.gap = analyzer_info['gap']
-        analyzer.NH = analyzer_info['ncolumns']
-        analyzer.NV = analyzer_info['nrows']
-        analyzer.r0 = analyzer_info['r0']
-        analyzer.DM = analyzer_info['da']
-        analyzer.RV = "rva_param"
-        analyzer.RH = "rha_param"
-        analyzer.mosaic = analyzer_info['mosaic']
-        analyzer.r0 = analyzer_info['r0']
-        analyzer.reflect = analyzer_info['reflect']
-        analyzer.transmit = analyzer_info['transmit']
-        analyzer.order = 0 # all orders
-        analyzer.set_SPLIT(5)
+        emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
+                              crystal_name="analyzer", relative="analyzer_arm",
+                              distance=PUMA.L3, rotation_expr="A4_param/2",
+                              info=analyzer_info, d_key='da',
+                              rv_param="rva_param", rh_param="rha_param",
+                              split=5)
 
         ## detector
 
         detector_arm = instrument.add_component("detector_arm", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"A4_param",0], RELATIVE="analyzer_arm")
 
-        if diagnostic_mode and diagnostic_settings.get('Post-analyzer EMonitor'):
-            postanalyzer_Emonitor = instrument.add_component("postanalyzer_Emonitor", "E_monitor", AT=[0,0,0.1], ROTATED=[0,0,0], RELATIVE="detector_arm")
-            preanalyzer_Emonitor.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            preanalyzer_Emonitor.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            postanalyzer_Emonitor.nE = 100
-            postanalyzer_Emonitor.Emin = -2
-            postanalyzer_Emonitor.Emax = 30
-            postanalyzer_Emonitor.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Post-analyzer PSD'):
-            postanalyzer_PSD = instrument.add_component("postanalyzer_PSD", "PSD_monitor", AT=[0,0,0.5], ROTATED=[0,0,0], RELATIVE="detector_arm")
-            postanalyzer_PSD.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            postanalyzer_PSD.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            postanalyzer_PSD.nx = 100
-            postanalyzer_PSD.ny = 100
-            postanalyzer_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Post-analyzer EMonitor', 'Post-analyzer PSD')
 
-        detector_collimator = instrument.add_component("detector_collimator", "Collimator_linear", AT=[0,0,0.509], RELATIVE="detector_arm")
-        detector_collimator.xwidth = 30e-3
-        detector_collimator.yheight = 79e-3
-        detector_collimator.length = 0.2
-        detector_collimator.divergence = PUMA.alpha_4
+        emit_collimator(instrument, "detector_collimator", relative="detector_arm",
+                        at=(0, 0, 0.509), divergence=PUMA.alpha_4, length=0.2,
+                        xwidth=30e-3, yheight=79e-3)
 
-        detector_slit = instrument.add_component("detector_slit", "Slit", AT=[0,0,PUMA.L4-0.03], ROTATED=[0,0,0], RELATIVE="detector_arm")
-        detector_slit.xwidth = "dbl_hgap_param"
-        detector_slit.yheight = 0.07
+        emit_slit(instrument, "detector_slit", relative="detector_arm",
+                  at=(0, 0, PUMA.L4 - 0.03), rotated=(0, 0, 0),
+                  xwidth="dbl_hgap_param", yheight=0.07)
 
-        if diagnostic_mode and diagnostic_settings.get('Detector PSD'):
-            detector_PSD = instrument.add_component("detector_PSD", "PSD_monitor", AT=[0,0,PUMA.L4-0.005], RELATIVE="detector_arm")
-            detector_PSD.xwidth = 0.0254
-            detector_PSD.yheight = 1.0
-            detector_PSD.nx = 100
-            detector_PSD.ny = 100
-            detector_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Detector PSD')
 
         detector = instrument.add_component("detector", "Monitor", AT=[0,0,PUMA.L4], ROTATED=[0,0,0], RELATIVE="detector_arm")
         detector.xwidth = 0.0254
@@ -1657,136 +1309,3 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         return instrument
 
     return configure_component_tree()
-
-def validate_angles(K_fixed, fixed_E, qx, qy, qz, deltaE, monocris, anacris):
-
-    # error flag array
-    error_flag_array = []
-    
-    # Check for zero momentum transfer early to avoid division by zero
-    if qx == 0 and qy == 0 and qz == 0:
-        error_flag_array.append("zero_q")
-        return error_flag_array
-
-    # base instrument parameters
-    # distances in meters
-    # arm lengths
-    L1 = 2.150  # source-mono
-    L2 = 2.290  # mono-sample
-    L3 = 0.880  # sample-ana
-    L4 = 0.750  # ana-det
-
-    # focusing; use 1 for optimal focusing, 0 for flat monochromator
-    rhmfac = 1 # radius factor in the horizontal for the monochromator
-    rvmfac = 1 # radius factor in the vertical for the monochromator
-    rhafac = 1 # radius factor in the horizontal for the analyzer (vertical is fixed)
-
-    ## start the instrument
-
-    # Monochromator crystal
-    if monocris == "PG[002]":
-        #print("\nPG[002] monochromator crystal")
-        dm = 3.355
-        slabwidth_M = 0.018
-        slabheight_M = 0.02
-        ncolumn_M = 13
-        nrows_M = 9
-        eth_M = 35
-    else:
-        print("\nNo monochromator crystal selected")
-
-    # Analyzer crystal
-    if anacris == "PG[002]":
-        #print("\nPG[002] analyzer crystal")
-        da = 3.355
-        slabwidth_A = 0.01
-        slabheight_A = 0.03
-        ncolumn_A = 5
-        nrows_A = 21
-        eth_A = 35
-    else:
-        print("\nNo analyzer crystal selected")
-
-
-    # pre-calculate values from paramters
-    q = math.sqrt(qx**2 + qy**2 + qz**2)
-
-    K = energy2k(fixed_E)
-
-    if K_fixed == "Ki Fixed":
-        mtt = 2 * k2angle(K, dm)
-        Ei = fixed_E
-        ki = energy2k(Ei)
-        Ef = Ei - deltaE
-        kf = energy2k(Ef)
-        att = 2 * k2angle(kf, da)
-        if mtt == math.inf:
-            #print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
-            error_flag_array.append("mtt")
-        if att == math.inf:
-            #print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
-            att = 0
-            error_flag_array.append("att")
-    elif K_fixed == "Kf Fixed":
-        att = 2 * k2angle(K, da)
-        Ef = fixed_E
-        kf = energy2k(Ef)
-        Ei = Ef + deltaE
-        ki = energy2k(Ei)
-        mtt = 2 * k2angle(ki, dm)
-        if mtt == math.inf:
-            #print("\nCannot compute monochromator two theta angle as momentum transfer invalid")
-            error_flag_array.append("mtt")
-        if att == math.inf:
-            #print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
-            error_flag_array.append("att")
-
-    try:
-        sample_angles = solve_instrument_angles(np.array([qx, qy, qz], dtype=float), ki, kf)
-        stt = sample_angles.stt
-    except ValueError:
-        print("\nSample two theta angle invalid")
-        stt = 0
-        error_flag_array.append("stt")
-        sample_angles = None
-
-    if "stt" in error_flag_array:
-        #print("\nCannot compute sample theta angle as sample two theta angle invalid")
-        sth = 0
-        saz = 0
-    else:
-        sth = sample_angles.sth
-        saz = sample_angles.saz
-
-    # set crystal rotations
-    mth = mtt/2
-    ath = att/2
-
-    # TODO: add in NMO component to validation
-    rhmfac, rvmfac = 1, 1
-    rhafac = 1
-
-    if not error_flag_array: #check if the error flags are empty
-        # set crystal bending
-        rhm = rhmfac*2*(1/L1 + 1/L2)/math.sin(math.radians(mth))
-        rvm = rvmfac*2*(1/L1 + 1/L2)*math.sin(math.radians(mth))
-
-        # check if the mirror focus is too short
-        if rhm < 2.0:
-            #print("\nRequested Rh (mono) is {:.2f} m, but minimum Rh is 2.0 m".format(rhm))
-            rhm = 2.0
-
-        if rvm < 0.5:
-            #print("\nRequested Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
-            rvm = 0.5
-
-        rha = rhafac*2*(1/L3 + 1/L4)/math.sin(math.radians(ath))
-        rva = 0.8 # fixed at 0.8 m
-
-        if rha < 2.0:
-            print(f"\nRequested Rh (ana) is {rha:.2f} m, but minimum Rh is 2.0 m")
-            rha = 2.0
-
-        #print(f"\nmtt: {mtt:.2f} ki: {ki:.3f} Ei: {Ei:.3f} stt: {stt:.3f} saz: {saz:.3f} Q: {q:.2f} kf: {kf:.3f} Ef: {Ef:.3f} att: {att:.2f}")
- 
-    return(error_flag_array)

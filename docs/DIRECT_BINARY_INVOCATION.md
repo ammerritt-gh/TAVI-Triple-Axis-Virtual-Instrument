@@ -3,6 +3,14 @@
 *Date: 2026-05-20*
 *Status: First implementation slice landed. `TAVIController.run_simulation()` still executes through `run_PUMA_point()`, but that seam now arms and uses a direct-binary path after the first successful `backengine()` materializes the executable. This has not yet been integration-validated in a live McStas environment.*
 
+> **Forward note (2026-07-02):** the configurable-instruments Phase 1
+> (`docs/CONFIGURABLE_INSTRUMENTS.md` §17) routes this seam through the
+> `InstrumentPlugin` contract (`run_point`), renames `PUMARunExecutionState` to
+> the shared `RunExecutionState` (alias kept), and derives the hard-coded
+> `PUMA_McScript` name from a module-level `MCSTAS_NAME` constant fed by the
+> instrument descriptor's `mcstas_name`. The compile-once/run-direct mechanism
+> described here is unchanged.
+
 ## Problem
 
 Each `backengine()` call goes through this chain per scan point:

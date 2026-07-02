@@ -1,7 +1,7 @@
-"""Phase-0 DRAFT: the instrument registry.
+"""The instrument registry (``docs/CONFIGURABLE_INSTRUMENTS.md`` §5, §17).
 
-Design sketch for the configurable-instruments effort
-(see ``docs/CONFIGURABLE_INSTRUMENTS.md`` §5). **Nothing registers with it yet.**
+Built-in instruments register in ``instruments/builtin.py``, which ``main()``
+imports once at startup.
 
 Thin and explicit: instruments register a zero-arg *factory* (not an eager
 instance) so importing the registry does not pull in PySide6 / McStasScript until
