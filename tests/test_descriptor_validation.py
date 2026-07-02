@@ -122,21 +122,9 @@ def test_puma_build_declares_descriptor_params():
     )
 
 
-def test_monitor_ids_match_build_gates():
-    """Descriptor monitors stay 1:1 with build()'s diagnostic_settings gates.
-
-    Source scan -- the diagnostic dialog renders from the descriptor while
-    build() keeps its literal gate blocks until Phase 3; this test is what
-    stops the two from drifting apart in the meantime.
-    """
-    with open(PUMA_MODULE_PATH, encoding="utf-8") as f:
-        source = f.read()
-    gate_keys = set(re.findall(r"diagnostic_settings\.get\('([^']+)'\)", source))
-    monitor_ids = {m.id for m in puma_descriptor().monitors}
-    assert gate_keys == monitor_ids, (
-        f"build-only: {sorted(gate_keys - monitor_ids)}; "
-        f"descriptor-only: {sorted(monitor_ids - gate_keys)}"
-    )
+def test_monitor_count_is_stable():
+    """build() emits monitors straight from this table (Phase 3); the tree-level
+    guarantees live in tests/test_puma_build_tree.py."""
     assert len(puma_descriptor().monitors) == 19
 
 
