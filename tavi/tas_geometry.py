@@ -120,16 +120,31 @@ def lab_q_from_stt(ki: float, kf: float, stt_deg: float) -> np.ndarray:
     ], dtype=float)
 
 
+def _normalize_deg(angle: float) -> float:
+    """Wrap an angle to (-180, 180]."""
+    wrapped = (angle + 180.0) % 360.0 - 180.0
+    return 180.0 if wrapped == -180.0 else wrapped
+
+
 def solve_sample_angles(
     q_sample: np.ndarray, ki: float, kf: float, *, sense_sample: int = -1
 ) -> TASAngles:
-    """Solve TAS sample angles for a target Q in mounted sample coordinates."""
+    """Solve TAS sample angles for a target Q in mounted sample coordinates.
+
+    ``sense_sample=+1`` (the flipped scattering branch) follows the vTAS
+    convention verified against live IN8 runs (2026-07-02): the crystal aligns
+    the Friedel partner -Q with the scattered-side Q_lab, which keeps the
+    sample rotation near the mirror of the baked branch instead of 180 deg
+    away. Physically identical Bragg planes; readouts match vTAS.
+    """
     q = np.asarray(q_sample, dtype=float)
     if q.shape != (3,):
         raise ValueError("q_sample must be a 3-vector.")
     q_norm = float(np.linalg.norm(q))
     if q_norm <= EPS:
         raise ValueError("Zero momentum transfer is invalid.")
+    if sense_sample > 0:
+        q = -q
 
     stt = stt_from_q_norm(q_norm, ki, kf, sense_sample)
     q_lab = lab_q_from_stt(ki, kf, stt)
@@ -148,25 +163,37 @@ def solve_sample_angles(
 
     phi_sample = math.atan2(q_tilted[2], q_tilted[0])
     sth = math.degrees(phi_sample - phi_lab)
+    if sense_sample > 0:
+        sth = _normalize_deg(sth)
     return TASAngles(stt=stt, sth=sth, saz=saz)
 
 
 def solve_instrument_angles(
     q_instrument: np.ndarray, ki: float, kf: float, *, sense_sample: int = -1
 ) -> TASAngles:
-    """Solve TAS sample angles for Q in the public instrument/GUI convention."""
+    """Solve TAS sample angles for Q in the public instrument/GUI convention.
+
+    See solve_sample_angles for the ``sense_sample=+1`` (Friedel -Q / vTAS)
+    convention. The inverse of a +1-branch solution recovers -Q through
+    ``q_instrument_from_angles``; instrument-level callers negate it back
+    (``TAS_Instrument.calculate_q_and_deltaE``).
+    """
     q = np.asarray(q_instrument, dtype=float)
     if q.shape != (3,):
         raise ValueError("q_instrument must be a 3-vector.")
     q_norm = float(np.linalg.norm(q))
     if q_norm <= EPS:
         raise ValueError("Zero momentum transfer is invalid.")
+    if sense_sample > 0:
+        q = -q
 
     stt = stt_from_q_norm(q_norm, ki, kf, sense_sample)
     q_lab = lab_q_from_stt(ki, kf, stt)
     phi_lab = math.atan2(q_lab[2], q_lab[0])
     phi_target = math.atan2(q[1], q[0])
     sth = math.degrees(phi_target - phi_lab)
+    if sense_sample > 0:
+        sth = _normalize_deg(sth)
 
     q_horizontal = math.hypot(q[0], q[1])
     saz = -math.degrees(math.atan2(q[2], q_horizontal))

@@ -75,15 +75,29 @@ def test_solver_default_equals_explicit_baked_sense():
         assert implicit == explicit  # bit-for-bit, not approx
 
 
-def test_solver_positive_sample_sense_flips_stt_and_roundtrips():
+def test_solver_positive_sample_sense_follows_vtas_friedel_convention():
+    """The +1 branch aligns the Friedel partner -Q with the scattered beam
+    (vTAS convention, verified live against IN8 2026-07-02), so the raw
+    inverse recovers -Q and instrument-level callers negate it back."""
     q_target = np.array([TAU, TAU, 0.0])
     left = solve_instrument_angles(q_target, KI_14P7, KI_14P7, sense_sample=1)
     right = solve_instrument_angles(q_target, KI_14P7, KI_14P7, sense_sample=-1)
     assert left.stt == pytest.approx(-right.stt, abs=1e-12)
     assert left.stt > 0
-    # A flipped branch is still real physics: the angles must reproduce Q.
+    assert left.sth == pytest.approx(69.322745, abs=1e-3)
     q_back = q_instrument_from_angles(left.sth, left.saz, left.stt, KI_14P7, KI_14P7)
-    assert q_back == pytest.approx(q_target, abs=1e-9)
+    assert q_back == pytest.approx(-q_target, abs=1e-9)   # Friedel partner
+
+
+def test_solver_positive_sample_sense_out_of_plane():
+    q_target = np.array([1.55, 0.0, 0.3])
+    flipped = solve_instrument_angles(q_target, KI_14P7, KI_14P7, sense_sample=1)
+    assert flipped.stt == pytest.approx(+34.480243, abs=1e-3)
+    assert flipped.sth == pytest.approx(+17.240121, abs=1e-3)
+    assert flipped.saz == pytest.approx(+10.954063, abs=1e-3)  # -q flips saz too
+    q_back = q_instrument_from_angles(flipped.sth, flipped.saz, flipped.stt,
+                                      KI_14P7, KI_14P7)
+    assert q_back == pytest.approx(-q_target, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +193,9 @@ def test_instrument_senses_flip_mtt_att_and_recover_q():
     mtt, stt, sth, saz, att = angles
     assert mtt == pytest.approx(41.166977, abs=1e-3)
     assert stt == pytest.approx(+71.250440, abs=1e-3)
-    # NOT the mirror of the baked -35.63: the sample rotation axis does not
-    # flip with the scattering side, so sth = phi_target - (180 - phi_lab),
-    # i.e. -144.37 (== +215.63 mod 360). The round-trip below is the proof
-    # that this branch is physical.
-    assert sth == pytest.approx(-144.374780, abs=1e-3)
+    # Friedel/vTAS convention for the flipped branch: -Q aligned with the
+    # scattered beam, which lands sth on the mirror of the baked -35.63.
+    assert sth == pytest.approx(+35.625220, abs=1e-3)
     assert att == pytest.approx(-41.166977, abs=1e-3)
 
     q_and_e, error_flags = flipped.calculate_q_and_deltaE(
@@ -207,9 +219,11 @@ def test_default_instrument_senses_are_baked_convention():
 # IN8 goldens -- vTAS-verified 2026-07-02 (live run; magnitudes within 0.02
 # deg, signs exact: a2 +, a4 +, a6 -, i.e. senses (+1, +1, -1)). Setup: cubic
 # a=4.05, plane (1,0,0)/(0,1,0); kf fixed 2.662 (V1-V3), ki fixed 4.1 (V4).
-# Mapping: TAVI A1 = vTAS a2, A2 = a4, A4 = a6. The sth (a3) values are TAVI's
-# own convention -- the V3-V1 difference (+33.689) is still PENDING vTAS
-# re-verification (the sample-sense flip moves sth to the other branch).
+# Mapping: TAVI A1 = vTAS a2, A2 = a4, A4 = a6, A3 = a3 (Friedel/-Q branch).
+# The a3 convention is ALSO vTAS-verified: the user's live a3(V3) = 69.337
+# matches TAVI's sth to three decimals, and a3(V1) = 125.647 is TAVI's value
+# +90.000 exactly -- vTAS displayed the cubic-equivalent (0,2,0) setting for
+# that point.
 # ---------------------------------------------------------------------------
 
 E_KF_2P662 = 14.684089   # k2energy(2.662)
@@ -234,12 +248,13 @@ def _in8_angles(in8, qx, qy, qz, deltaE, fixed_E, k_fixed, mono="pg002"):
 def test_in8_v1_elastic_200(in8):
     mtt, stt, sth, saz, att = _in8_angles(in8, 2 * TAU, 0.0, 0.0, 0.0,
                                           E_KF_2P662, "Kf Fixed")
-    # vTAS live run: a2 = +41.19, a4 = +71.30, a6 = -41.19.
+    # vTAS live run: a2 = +41.19, a4 = +71.30, a6 = -41.19; a3 = 125.647
+    # (= this sth + the cubic 90-deg setting vTAS happened to display).
     assert mtt == pytest.approx(41.190287, abs=1e-3)
     assert stt == pytest.approx(71.294923, abs=1e-3)
     assert att == pytest.approx(-41.190287, abs=1e-3)
     assert mtt > 0 and stt > 0 and att < 0
-    assert sth == pytest.approx(-144.352538, abs=1e-3)
+    assert sth == pytest.approx(+35.647462, abs=1e-3)
 
 
 def test_in8_v2_inelastic_kf_fixed(in8):
@@ -254,9 +269,10 @@ def test_in8_v2_inelastic_kf_fixed(in8):
 def test_in8_v3_skew_q(in8):
     mtt, stt, sth, saz, att = _in8_angles(in8, TAU, TAU, 0.0, 0.0,
                                           E_KF_2P662, "Kf Fixed")
-    # vTAS live run: a4 = +48.69 (within 0.02 of the computed +48.674).
+    # vTAS live run: a4 = +48.69 (within 0.02 of the computed +48.674) and
+    # a3 = 69.337 -- an exact three-decimal match to this sth.
     assert stt == pytest.approx(48.673546, abs=1e-3)
-    assert sth == pytest.approx(-110.663227, abs=1e-3)
+    assert sth == pytest.approx(+69.336773, abs=1e-3)
 
 
 def test_in8_v4_cu200_ki_fixed(in8):
