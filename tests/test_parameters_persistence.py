@@ -84,6 +84,19 @@ def test_empty_block_falls_back_to_full_defaults():
     assert "self.set_default_parameters()" in prelude
 
 
+def test_saved_lattice_wins_over_sample_lattice_adoption():
+    """Sample selection adopts the sample's own lattice (SampleSpec.lattice),
+    so load_parameters must apply the saved lattice values AFTER the sample
+    restore or hand-edited lattices would be lost on reload."""
+    import inspect
+
+    source = inspect.getsource(controller_module.TAVIController.load_parameters)
+    assert source.index("set_sample_by_key") < source.index("lattice_a_var")
+
+    handler = inspect.getsource(controller_module.TAVIController.on_sample_changed)
+    assert "_adopt_sample_lattice" in handler
+
+
 def test_saved_module_values_container():
     values = controller_module.TAVIController._saved_module_values(
         {"modules": {"nmo": "Both", "v_selector": True}}
