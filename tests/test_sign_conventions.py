@@ -95,9 +95,11 @@ pytest.importorskip("mcstasscript")
 
 @pytest.fixture(scope="module")
 def tas():
-    from instruments.PUMA_instrument_definition import TAS_Instrument
+    # PUMA_Instrument: crystal_info() dispatches through the state object, so
+    # the goldens exercise a concrete instrument (bare TAS_Instrument raises).
+    from instruments.PUMA_instrument_definition import PUMA_Instrument
 
-    return TAS_Instrument()
+    return PUMA_Instrument()
 
 
 def _angles(tas, qx, qy, qz, deltaE, fixed_E, k_fixed):
@@ -164,9 +166,9 @@ def test_p5_reverse_recovers_q_and_deltaE(tas):
 def test_instrument_senses_flip_mtt_att_and_recover_q():
     """A TAS state with IN8-style senses (+1, +1, -1) negates the affected
     angles and the reverse path still recovers (Q, deltaE)."""
-    from instruments.PUMA_instrument_definition import TAS_Instrument
+    from instruments.PUMA_instrument_definition import PUMA_Instrument
 
-    flipped = TAS_Instrument()
+    flipped = PUMA_Instrument()
     flipped.sense_mono = 1
     flipped.sense_sample = 1
     flipped.sense_ana = -1
@@ -199,6 +201,16 @@ def test_default_instrument_senses_are_baked_convention():
 
     for state in (TAS_Instrument(), PUMA_Instrument()):
         assert (state.sense_mono, state.sense_sample, state.sense_ana) == (1, -1, 1)
+
+
+def test_base_state_requires_instrument_dispatch():
+    """The TAS base class must not silently resolve crystals against PUMA."""
+    from instruments.PUMA_instrument_definition import TAS_Instrument
+
+    with pytest.raises(NotImplementedError):
+        TAS_Instrument().crystal_info("pg002", "pg002")
+    with pytest.raises(NotImplementedError):
+        TAS_Instrument().build_point_params(0.0)
 
 
 def test_crystal_info_dict_shape_frozen():

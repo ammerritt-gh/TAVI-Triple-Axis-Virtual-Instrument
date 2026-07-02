@@ -179,3 +179,44 @@ def emit_collimator(instrument, name, *, relative, at, divergence, length,
     collimator.length = length
     collimator.divergence = divergence
     return collimator
+
+
+def crystal_spec_to_info(spec, d_key):
+    """Legacy crystal-info dict from a descriptor CrystalSpec.
+
+    ``reflect``/``transmit`` carry embedded quotes because they are emitted
+    verbatim as McStas string literals by build(). The McStas sentinel
+    ``"NULL"`` (no reflectivity file, constant r0) passes through unchanged.
+    """
+    return {
+        d_key: spec.d_spacing,
+        'slabwidth': spec.slab_width,
+        'slabheight': spec.slab_height,
+        'ncolumns': spec.n_columns,
+        'nrows': spec.n_rows,
+        'gap': spec.gap,
+        'mosaic': spec.mosaic,
+        'r0': spec.r0,
+        'reflect': f'"{spec.reflect_file}"',
+        'transmit': f'"{spec.transmit_file}"',
+    }
+
+
+def find_crystal_spec(specs, crystal_id):
+    for spec in specs:
+        if spec.id == crystal_id:
+            return spec
+    return None
+
+
+def crystal_info_from_descriptor(descriptor, monocris, anacris):
+    """(monochromator_info, analyzer_info) dicts looked up in a descriptor.
+
+    Lookups are by CrystalSpec id ("pg002"); unknown ids return empty dicts,
+    matching the historical mono_ana_crystals_setup contract.
+    """
+    mono_spec = find_crystal_spec(descriptor.mono_crystals, monocris)
+    ana_spec = find_crystal_spec(descriptor.ana_crystals, anacris)
+    monochromator_info = crystal_spec_to_info(mono_spec, 'dm') if mono_spec else {}
+    analyzer_info = crystal_spec_to_info(ana_spec, 'da') if ana_spec else {}
+    return monochromator_info, analyzer_info

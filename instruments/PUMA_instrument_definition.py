@@ -40,31 +40,13 @@ from tavi.neutron_conversions import (  # noqa: F401  (re-export)
     k2energy,
 )
 
-def _crystal_spec_to_info(spec, d_key):
-    """Legacy crystal-info dict from a descriptor CrystalSpec.
-
-    ``reflect``/``transmit`` carry embedded quotes because they are emitted
-    verbatim as McStas string literals by build().
-    """
-    return {
-        d_key: spec.d_spacing,
-        'slabwidth': spec.slab_width,
-        'slabheight': spec.slab_height,
-        'ncolumns': spec.n_columns,
-        'nrows': spec.n_rows,
-        'gap': spec.gap,
-        'mosaic': spec.mosaic,
-        'r0': spec.r0,
-        'reflect': f'"{spec.reflect_file}"',
-        'transmit': f'"{spec.transmit_file}"',
-    }
-
-
-def _find_crystal_spec(specs, crystal_id):
-    for spec in specs:
-        if spec.id == crystal_id:
-            return spec
-    return None
+# Crystal-spec adapters live in tavi.instrument_helpers (shared with IN8);
+# the underscore names remain for existing imports.
+from tavi.instrument_helpers import (  # noqa: E402
+    crystal_info_from_descriptor,
+    crystal_spec_to_info as _crystal_spec_to_info,  # noqa: F401  (re-export)
+    find_crystal_spec as _find_crystal_spec,  # noqa: F401  (re-export)
+)
 
 
 def mono_ana_crystals_setup(monocris, anacris):
@@ -76,12 +58,7 @@ def mono_ana_crystals_setup(monocris, anacris):
     """
     from instruments.puma_plugin import puma_descriptor
 
-    descriptor = puma_descriptor()
-    mono_spec = _find_crystal_spec(descriptor.mono_crystals, monocris)
-    ana_spec = _find_crystal_spec(descriptor.ana_crystals, anacris)
-    monochromator_info = _crystal_spec_to_info(mono_spec, 'dm') if mono_spec else {}
-    analyzer_info = _crystal_spec_to_info(ana_spec, 'da') if ana_spec else {}
-    return monochromator_info, analyzer_info
+    return crystal_info_from_descriptor(puma_descriptor(), monocris, anacris)
 
 ## This function adds a Union material with incoherent scattering and powder lines
 def add_union_powder(name, data_name, sigma_inc, sigma_abs, unit_V, instr):
@@ -128,7 +105,10 @@ class TAS_Instrument:
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
         self.fixed_E = 0 # The fixed energy to work with, for the source.
+        self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
         self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
+        self.diagnostic_mode = False
+        self.diagnostic_settings = {}
  
     def set_parameters(self, **kwargs):
         """Method to set general parameters."""
@@ -229,6 +209,60 @@ class TAS_Instrument:
         if rva is not None:
             self.rva = rva
 
+    def update_diagnostic_settings(self, settings):
+        """Update the diagnostic settings."""
+        self.diagnostic_settings.update(settings)
+
+    def crystal_info(self, monocris, anacris):
+        """Return (monochromator_info, analyzer_info) dicts for the named crystals.
+
+        Each instrument state resolves crystals against its own descriptor.
+        """
+        raise NotImplementedError("Instrument state must supply crystal_info().")
+
+    def build_point_params(self, deltaE):
+        """Return the runtime parameter dict for one instrument point."""
+        raise NotImplementedError("Instrument state must supply build_point_params().")
+
+    def e0_param_value(self, deltaE):
+        """Return the runtime source-energy parameter for the current point."""
+        if self.source_type == "Mono":
+            if self.K_fixed == "Kf Fixed":
+                return self.fixed_E + deltaE
+            return self.fixed_E
+
+        return self.fixed_E
+
+    def point_energy_metadata(self, deltaE):
+        """Return the per-point energy values recorded with the scan output."""
+        if self.source_type == "Mono":
+            if self.K_fixed == "Kf Fixed":
+                E0_param = self.fixed_E + deltaE
+                Ei = E0_param
+                Ki = energy2k(Ei)
+                Ef = self.fixed_E
+                Kf = energy2k(Ef)
+            else:
+                E0_param = self.fixed_E
+                Ei = self.fixed_E
+                Ki = energy2k(Ei)
+                Ef = self.fixed_E - deltaE
+                Kf = energy2k(max(Ef, 1e-9))
+        else:
+            E0_param = self.fixed_E
+            Ei = self.fixed_E
+            Ki = energy2k(Ei)
+            Ef = self.fixed_E - deltaE
+            Kf = energy2k(max(Ef, 1e-9))
+
+        return {
+            "E0_param": E0_param,
+            "Ei": Ei,
+            "Ki": Ki,
+            "Ef": Ef,
+            "Kf": Kf,
+        }
+
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
         """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
         error_flags = []
@@ -240,8 +274,8 @@ class TAS_Instrument:
             return [0, 0, 0, 0, 0], error_flags
         
         # Retrieve mono/ana crystal information
-        monochromator_info, analyzer_info = mono_ana_crystals_setup(monocris, anacris)
-         
+        monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
+
         # pre-calculate values from parameters
         q = math.sqrt(qx**2 + qy**2 + qz**2)
 
@@ -305,7 +339,7 @@ class TAS_Instrument:
         error_flags = []
 
         # Retrieve mono/ana crystal information
-        monochromator_info, analyzer_info = mono_ana_crystals_setup(monocris, anacris)
+        monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
 
         # Calculate incident and scattered wavevectors based on the fixed energy
         if K_fixed == "Ki Fixed":
@@ -387,9 +421,11 @@ class PUMA_Instrument(TAS_Instrument):
             print("Diagnostic Mode Activated!")
             self.display_diagnostic_settings()
 
-    def update_diagnostic_settings(self, settings):
-        """Update the diagnostic settings."""
-        self.diagnostic_settings.update(settings)
+    def crystal_info(self, monocris, anacris):
+        return mono_ana_crystals_setup(monocris, anacris)
+
+    def build_point_params(self, deltaE):
+        return build_puma_point_params(self, deltaE)
 
     def display_diagnostic_settings(self):
         """Display the diagnostic settings."""
@@ -445,13 +481,8 @@ class PUMA_Instrument(TAS_Instrument):
 
 
 def _get_E0_param_value(PUMA, deltaE):
-    """Return the runtime source-energy parameter for the current point."""
-    if PUMA.source_type == "Mono":
-        if PUMA.K_fixed == "Kf Fixed":
-            return PUMA.fixed_E + deltaE
-        return PUMA.fixed_E
-
-    return PUMA.fixed_E
+    """Back-compat wrapper; the logic lives on TAS_Instrument.e0_param_value."""
+    return PUMA.e0_param_value(deltaE)
 
 
 def _get_v_selector_frequency(PUMA, deltaE):
@@ -468,34 +499,8 @@ def _get_v_selector_frequency(PUMA, deltaE):
 
 
 def _get_point_energy_metadata(PUMA, deltaE):
-    """Return the per-point energy values recorded with the scan output."""
-    if PUMA.source_type == "Mono":
-        if PUMA.K_fixed == "Kf Fixed":
-            E0_param = PUMA.fixed_E + deltaE
-            Ei = E0_param
-            Ki = energy2k(Ei)
-            Ef = PUMA.fixed_E
-            Kf = energy2k(Ef)
-        else:
-            E0_param = PUMA.fixed_E
-            Ei = PUMA.fixed_E
-            Ki = energy2k(Ei)
-            Ef = PUMA.fixed_E - deltaE
-            Kf = energy2k(max(Ef, 1e-9))
-    else:
-        E0_param = PUMA.fixed_E
-        Ei = PUMA.fixed_E
-        Ki = energy2k(Ei)
-        Ef = PUMA.fixed_E - deltaE
-        Kf = energy2k(max(Ef, 1e-9))
-
-    return {
-        "E0_param": E0_param,
-        "Ei": Ei,
-        "Ki": Ki,
-        "Ef": Ef,
-        "Kf": Kf,
-    }
+    """Back-compat wrapper; the logic lives on TAS_Instrument.point_energy_metadata."""
+    return PUMA.point_energy_metadata(deltaE)
 
 
 def build_puma_point_params(PUMA, deltaE):
@@ -673,10 +678,10 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
         'psi': psi_scan,
         'kappa': kappa_scan,
     }
-    metadata.update(_get_point_energy_metadata(point_puma, deltaE))
+    metadata.update(point_puma.point_energy_metadata(deltaE))
 
     return PointSnapshot(
-        params=None if error_flags else build_puma_point_params(point_puma, deltaE),
+        params=None if error_flags else point_puma.build_point_params(deltaE),
         output_folder=output_folder,
         scan_index=scan_index,
         deltaE=deltaE,
@@ -834,6 +839,12 @@ def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, 
             execution_info["error_message"] = "MPI launcher could not be resolved for direct PUMA execution."
 
     return data, error_flag_array, execution_info
+
+
+# The run layer is instrument-agnostic (the binary path comes from the built
+# instrument's input_path/name, never from MCSTAS_NAME once built); other
+# instrument definitions delegate through this alias.
+run_tas_point = run_PUMA_point
 
 
 # alpha_2 stacked collimators: (divergence_arcmin, component_name, at_z, ymax, length).
