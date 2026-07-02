@@ -132,3 +132,35 @@ def test_alpha2_table_matches_descriptor_slot():
 
     slot = next(s for s in puma_descriptor().collimation if s.id == "alpha_2")
     assert {d for d, *_ in _ALPHA2_COLLIMATORS} == {int(v) for v in slot.allowed}
+
+
+@pytest.mark.parametrize("sample_id", [
+    "Al_rod_phonon", "Al_rod_phonon_optic", "Al_bragg", "Al_phonon_DFT",
+])
+def test_sample_emission_matches_library_spec(sample_id):
+    from tavi.sample_library import default_sample_library
+
+    spec = next(s for s in default_sample_library() if s.id == sample_id)
+    instrument = _build(sample_key=sample_id)
+    name = spec.component_name or spec.id
+    comp = next(c for c in instrument.component_list if c.name == name)
+    assert comp.component_name == spec.component_type
+    for key, value in spec.properties.items():
+        assert getattr(comp, key) == value, f"{name}.{key}"
+    if spec.split is not None:
+        assert str(spec.split) in str(comp.SPLIT)
+    if spec.extend:
+        assert spec.extend in comp.EXTEND
+
+
+def test_no_sample_build_warns_and_adds_nothing(capsys, plain_instrument):
+    from tavi.sample_library import default_sample_library
+
+    sample_names = {s.component_name or s.id for s in default_sample_library()
+                    if s.component_type is not None}
+    instrument = _build(sample_key=None)
+    assert not sample_names & set(_component_names(instrument))
+    assert "Warning: No sample selected" in capsys.readouterr().out
+    # sanity: mount hierarchy still present
+    for arm in ("sample_gonio", "sample_chi_arm", "sample_cradle", "sample_mount"):
+        assert arm in _component_names(plain_instrument)

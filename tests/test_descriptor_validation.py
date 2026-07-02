@@ -134,15 +134,6 @@ def test_monitor_component_names_unique_and_set():
     assert len(names) == len(set(names))
 
 
-def test_sample_ids_match_build_ladder():
-    """Descriptor sample ids stay 1:1 with build()'s sample_key ladder."""
-    with open(PUMA_MODULE_PATH, encoding="utf-8") as f:
-        source = f.read()
-    ladder_keys = set(re.findall(r'sample_key == "(\w+)"', source))
-    descriptor_ids = {
-        s.id for s in puma_descriptor().samples if s.component_type is not None
-    }
-    assert ladder_keys == descriptor_ids, (
-        f"build-only: {sorted(ladder_keys - descriptor_ids)}; "
-        f"descriptor-only: {sorted(descriptor_ids - ladder_keys)}"
-    )
+# build() now mounts the sample straight from the shared library
+# (tavi/sample_library.py); tree-level sample guarantees live in
+# tests/test_puma_build_tree.py.
