@@ -5,7 +5,7 @@ import numpy as np
 import os
 import subprocess
 
-from instruments.contract import RunExecutionState
+from instruments.contract import PointSnapshot, RunExecutionState
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
@@ -668,20 +668,20 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
     }
     metadata.update(_get_point_energy_metadata(point_puma, deltaE))
 
-    return {
-        'params': None if error_flags else build_puma_point_params(point_puma, deltaE),
-        'output_folder': output_folder,
-        'scan_index': scan_index,
-        'deltaE': deltaE,
-        'error_flags': error_flags,
-        'metadata': metadata,
-        'indices': {
+    return PointSnapshot(
+        params=None if error_flags else build_puma_point_params(point_puma, deltaE),
+        output_folder=output_folder,
+        scan_index=scan_index,
+        deltaE=deltaE,
+        error_flags=error_flags,
+        metadata=metadata,
+        indices={
             'idx_1d': idx_1d,
             'idx_x': idx_x,
             'idx_y': idx_y,
         },
-        'log_message': log_message,
-    }
+        log_message=log_message,
+    )
 
 
 def _resolve_materialized_binary_path(instrument):
@@ -705,7 +705,7 @@ def _run_puma_point_direct(execution_state, params_snapshot, output_folder, numb
         f"--ncount={number_neutrons}",
         f"--dir={output_folder}",
     ]
-    for key, value in params_snapshot["params"].items():
+    for key, value in params_snapshot.params.items():
         args.append(f"{key}={value}")
 
     return subprocess.run(
@@ -734,7 +734,7 @@ def _build_execution_info(mode, output_folder, binary_path=None, returncode=None
 
 def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=30):
     """Run one point on an already-built PUMA instrument."""
-    error_flag_array = list(params_snapshot.get("error_flags", []))
+    error_flag_array = list(params_snapshot.error_flags)
 
     if error_flag_array:
         execution_state.last_execution_mode = "skipped"
@@ -792,7 +792,7 @@ def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, 
         increment_folder_name=False,
     )
 
-    instrument.set_parameters(**params_snapshot["params"])
+    instrument.set_parameters(**params_snapshot.params)
     data = instrument.backengine()
     execution_state.last_execution_mode = "backengine"
 

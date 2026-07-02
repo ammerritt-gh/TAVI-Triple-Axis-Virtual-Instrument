@@ -19,7 +19,7 @@ Targets Python 3.11 syntax.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from instruments.descriptor import InstrumentDescriptor
@@ -53,6 +53,39 @@ class RunExecutionState:
     binary_cwd: str | None = None
     mpi_launcher_argv: list[str] | None = None
     last_execution_mode: str | None = None
+
+
+@dataclass
+class PointSnapshot:
+    """One scan point's prepared runtime state (returned by ``compute_snapshot``).
+
+    Replaces the raw snapshot dict (design record §16.6) so keys cannot silently
+    drift. Deliberately **non-frozen**: the controller's prep thread stamps
+    ``timing`` onto the instance *after* it is queued (the queued object is
+    shared by reference with the consumer loop). ``metadata`` stays a plain dict
+    because it is ``**``-spread into ``scan_parameters.txt``.
+    """
+
+    params: dict | None             # {<scannable_parameters> -> value}; None = point errored
+    output_folder: str
+    scan_index: int
+    deltaE: float
+    error_flags: list
+    metadata: dict
+    indices: dict                   # {"idx_1d", "idx_x", "idx_y"}
+    log_message: str
+    timing: dict = field(default_factory=dict)  # controller-stamped stage timings
+
+
+@dataclass(frozen=True, slots=True)
+class PrepFailure:
+    """Sentinel the prep thread queues when ``compute_snapshot`` raises.
+
+    Replaces the legacy ``{'fatal_error': str}`` dict; the simulation loop
+    aborts the scan when it dequeues one.
+    """
+
+    message: str
 
 
 @runtime_checkable
@@ -138,21 +171,8 @@ class InstrumentPlugin(Protocol):
         variable_name2: str = "",
         scan_command1: str = "",
         scan_command2: str = "",
-    ) -> dict:
-        """Compute one scan point's runtime snapshot.
-
-        Returns a dict shaped like today's PUMA snapshot::
-
-            {
-                "params": {<scannable_parameters> -> value} | None,
-                "output_folder": str,
-                "scan_index": int,
-                "deltaE": float,
-                "error_flags": list[str],
-                "metadata": dict,
-                "indices": {"idx_1d", "idx_x", "idx_y"},
-                "log_message": str,
-            }
+    ) -> PointSnapshot:
+        """Compute one scan point's runtime snapshot (a ``PointSnapshot``).
 
         ``params`` keys are this instrument's ``scannable_parameters`` -- **not** a
         fixed PUMA set. ``None`` params means the point errored and is skipped.
@@ -162,7 +182,7 @@ class InstrumentPlugin(Protocol):
     def run_point(
         self,
         instrument: "ms.McStas_instr",
-        snapshot: dict,
+        snapshot: PointSnapshot,
         output_folder: str,
         number_neutrons: int,
         execution_state: RunExecutionState,
