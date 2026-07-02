@@ -1,16 +1,18 @@
-"""Phase-0 DRAFT (illustrative, NOT wired): PUMA and IN8 descriptors side by side.
+"""Illustrative descriptors: PUMA (real, from the plugin) and IN8 (skeleton).
 
 Purpose: prove the ``InstrumentDescriptor`` of ``instruments/descriptor.py``
-captures both reference instruments *without* baking in PUMA's shape. This is the
-"design against PUMA and IN8" check from ``docs/CONFIGURABLE_INSTRUMENTS.md`` §12.5.
+captures both reference instruments *without* baking in PUMA's shape -- the
+"design against PUMA and IN8" check from ``docs/CONFIGURABLE_INSTRUMENTS.md``
+§12.5. PUMA's descriptor is no longer defined here: the real one lives in
+``instruments/puma_plugin.py`` (single source of truth) and is re-imported for
+the side-by-side comparison.
 
-Values:
-  - PUMA   <- ``instruments/PUMA_instrument_definition.py``
-  - IN8    <- ``examples/vtas_reference/instruments_repository.xml`` (ILL vTAS)
+IN8 values come from ``examples/vtas_reference/instruments_repository.xml``
+(ILL vTAS). The IN8 skeleton is deliberately **incomplete** (``TODO``/``nan``
+markers): it must pass ``validate_descriptor(...)`` structurally but *fail* with
+``runnable=True`` -- run this module as a script to see both:
 
-Deliberately **incomplete** -- enough to exercise the dataclasses and surface the
-real gaps (marked ``TODO``), not a migration. Running this module as a script
-prints a short PUMA-vs-IN8 comparison.
+    python -m instruments._descriptor_examples
 
 Targets Python 3.11 syntax.
 """
@@ -18,35 +20,19 @@ from __future__ import annotations
 
 from instruments.descriptor import (
     AxisLimits,
-    CollimationSlot,
     CrystalSpec,
     Geometry,
     InstrumentDescriptor,
-    ModuleKind,
-    ModuleSpec,
     ParameterSpec,
     SampleSpec,
     Sense,
-    SlitSpec,
-    SourceType,
 )
+from instruments.puma_plugin import puma_descriptor  # noqa: F401  (re-export)
 
-# --- shared crystal definitions (PUMA values) -----------------------------------
-# id = stable slug (config key / objectName); display_name = GUI label. See §16.3.
-PG002_MONO = CrystalSpec(
-    id="pg002", display_name="PG[002]", d_spacing=3.355,
-    slab_width=0.0202, slab_height=0.018, n_columns=13, n_rows=9,
-    gap=0.0005, mosaic=35, r0=1.0, reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
-)
-PG002_ANA = CrystalSpec(
-    id="pg002", display_name="PG[002]", d_spacing=3.355,
-    slab_width=0.01, slab_height=0.0295, n_columns=21, n_rows=5,
-    gap=0.0005, mosaic=35, r0=1.0, reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
-)
-
-# --- the scannable parameter set PUMA declares today (the per-point dict shape) --
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
-# (slits, bending, selector) are appended per instrument.
+# (slits, bending, selector) are appended per instrument. The sample-orientation /
+# mount parameters are part of the core because they come from the generic
+# sample-orientation hierarchy every TAVI instrument reuses.
 _CORE_PARAMS = (
     ParameterSpec("A1_param", "Monochromator 2-theta angle"),
     ParameterSpec("A2_param", "Sample 2-theta angle"),
@@ -54,75 +40,17 @@ _CORE_PARAMS = (
     ParameterSpec("A4_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("saz_param", "Sample azimuthal angle (out-of-plane)"),
-    ParameterSpec("chi_total", "Total chi = chi + kappa + mis_chi"),
-    ParameterSpec("omega_offset_total", "Total omega offset = psi + misalignments"),
+    ParameterSpec("chi_param", "User chi - out-of-plane tilt", default=0.0),
+    ParameterSpec("kappa_param", "Kappa - chi alignment offset", default=0.0),
+    ParameterSpec("mis_chi_param", "Hidden chi misalignment (training)", default=0.0),
+    ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
+    ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
+    ParameterSpec("chi_total", "Total chi = chi + kappa + mis_chi", default=0.0),
+    ParameterSpec("omega_offset_total", "Total omega offset = psi + mis_omega", default=0.0),
+    ParameterSpec("mount_rx_param", "Static sample mount rotation about x", default=0.0),
+    ParameterSpec("mount_ry_param", "Static sample mount rotation about y", default=0.0),
+    ParameterSpec("mount_rz_param", "Static sample mount rotation about z", default=0.0),
 )
-_PUMA_PARAMS = _CORE_PARAMS + (
-    ParameterSpec("nu_param", "Velocity selector frequency"),
-    ParameterSpec("rhm_param", "Monochromator horizontal bending"),
-    ParameterSpec("rvm_param", "Monochromator vertical bending"),
-    ParameterSpec("rha_param", "Analyzer horizontal bending"),
-    ParameterSpec("rva_param", "Analyzer vertical bending"),
-    ParameterSpec("vbl_hgap_param", "Post-mono slit horizontal gap", unit="m"),
-    ParameterSpec("pbl_hgap_param", "Pre-sample slit horizontal gap", unit="m"),
-    ParameterSpec("pbl_vgap_param", "Pre-sample slit vertical gap", unit="m"),
-    ParameterSpec("dbl_hgap_param", "Detector slit horizontal gap", unit="m"),
-)
-
-
-def puma_descriptor() -> InstrumentDescriptor:
-    """PUMA (FRM-II) -- fully specified from the existing instrument definition."""
-    return InstrumentDescriptor(
-        id="puma",
-        display_name="PUMA (FRM-II)",
-        institute="FRM-II",
-        geometry=Geometry(
-            l1_source_mono=2.150,
-            l2_mono_sample=2.290,
-            l3_sample_ana=0.880,
-            l4_ana_det=0.750,
-            # PUMA's handedness is implicit in its arm rotations; encoded here
-            # explicitly so the contract treats it uniformly with IN8.
-            sense_mono=Sense.LEFT,
-            sense_sample=Sense.LEFT,
-            sense_ana=Sense.LEFT,
-        ),
-        mono_crystals=(PG002_MONO,),
-        ana_crystals=(PG002_ANA,),
-        samples=(
-            SampleSpec("none", "No sample", None),
-            SampleSpec("Al_rod_phonon", "Al: acoustic phonon", "Phonon_simple_SCATTER",
-                       properties={"radius": 5e-3, "yheight": 30e-3, "T": 200}, split=10),
-            SampleSpec("Al_bragg", "Al: Bragg", "Single_crystal",
-                       properties={"reflections": '"Al.lau"', "mosaic": 5}, split=10),
-            SampleSpec("Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
-                       properties={"T": 200}, split=10),
-        ),
-        scannable_parameters=_PUMA_PARAMS,
-        primary_detector="detector",
-        mcstas_name="PUMA_McScript",
-        modules=(
-            ModuleSpec("nmo", "NMO installed", ModuleKind.CHOICE,
-                       options=("None", "Vertical", "Horizontal", "Both"), default="None"),
-            ModuleSpec("v_selector", "Velocity selector", ModuleKind.TOGGLE, default=False),
-        ),
-        collimation=(
-            CollimationSlot("alpha_1", "α1 (src-mono)", ("0", "20", "40", "60")),
-            CollimationSlot("alpha_2", "α2 (mono-smp)", ("30", "40", "60"), multi_select=True),
-            CollimationSlot("alpha_3", "α3 (smp-ana)", ("0", "10", "20", "30", "45", "60")),
-            CollimationSlot("alpha_4", "α4 (ana-det)", ("0", "10", "20", "30", "45", "60")),
-        ),
-        slits=(
-            SlitSpec("vbl_hgap", "Post-mono (width)", default_width_mm=88),
-            SlitSpec("pbl", "Pre-sample (W×H)", has_height=True,
-                     default_width_mm=100, default_height_mm=100),
-            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50),
-        ),
-        source_types=(
-            SourceType("Maxwellian", "Maxwellian"),
-            SourceType("Mono", "Mono", extra_params=("source_dE",)),
-        ),
-    )
 
 
 def in8_descriptor() -> InstrumentDescriptor:
@@ -165,6 +93,8 @@ def in8_descriptor() -> InstrumentDescriptor:
 
 
 if __name__ == "__main__":
+    from instruments.validation import validate_descriptor
+
     for d in (puma_descriptor(), in8_descriptor()):
         g = d.geometry
         print(f"\n{d.display_name}  (id={d.id})")
@@ -175,3 +105,12 @@ if __name__ == "__main__":
         print(f"  mono d / ana d = {d.mono_crystals[0].d_spacing} / {d.ana_crystals[0].d_spacing}")
         print(f"  #scannable params = {len(d.scannable_parameters)}, "
               f"#samples = {len(d.samples)}, #modules = {len(d.modules)}")
+        for runnable in (False, True):
+            problems = validate_descriptor(d, runnable=runnable)
+            label = "runnable" if runnable else "structural"
+            if problems:
+                print(f"  validate ({label}): {len(problems)} problem(s)")
+                for p in problems:
+                    print(f"    - {p}")
+            else:
+                print(f"  validate ({label}): OK")
