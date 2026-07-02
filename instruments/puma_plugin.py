@@ -27,6 +27,7 @@ from instruments.descriptor import (
     InstrumentDescriptor,
     ModuleKind,
     ModuleSpec,
+    MonitorSpec,
     ParameterSpec,
     SampleSpec,
     Sense,
@@ -77,6 +78,102 @@ _PUMA_PARAMS = (
 )
 
 
+# Fixed PUMA geometry used to compute monitor placements numerically -- the
+# build() z-expressions (L1-0.003, L2/4, L2-0.5, ...) are evaluated here so
+# MonitorSpec.at stays plain floats.
+_L1, _L2, _L3, _L4 = 2.150, 2.290, 0.880, 0.750
+_HBL_HGAP, _HBL_VGAP = 78e-3, 150e-3            # source beam-tube gaps
+_MONO_W, _MONO_H = 0.0202 * 13, 0.018 * 9       # pg002 mono slab extents (w*ncols, h*nrows)
+_ANA_W, _ANA_H = 0.01 * 21, 0.0295 * 5          # pg002 analyzer slab extents
+
+_SAMPLE_REGION = ("sample_region",)
+
+# Diagnostic monitors, 1:1 with the diagnostic_settings gates in build()
+# (anti-drift test: tests/test_descriptor_validation.py). Ids double as the
+# diagnostic-settings keys and dialog labels. NOTE: build() has two pre-existing
+# copy-paste bugs -- 'Postmono Emonitor' and 'Post-analyzer EMonitor' set the
+# xwidth/yheight of the WRONG component -- the settings below record the
+# INTENDED sizes; build() is fixed in Phase 3 when it loops over this table.
+_PUMA_MONITORS = (
+    MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.144), "origin",
+                settings={"xwidth": 0.2, "yheight": 0.2, "nE": 100, "Emin": -2,
+                          "Emax": 200, "restore_neutron": 1},
+                component_name="source_Emonitor"),
+    MonitorSpec("Source PSD", "PSD_monitor", (0.0, 0.0, 0.145), "origin",
+                settings={"xwidth": _HBL_HGAP * 1.5, "yheight": _HBL_VGAP * 1.5,
+                          "nx": 100, "ny": 100, "restore_neutron": 1},
+                component_name="source_PSD"),
+    MonitorSpec("Source DSD", "Divergence_monitor", (0.0, 0.0, 0.924), "origin",
+                settings={"xwidth": _HBL_HGAP * 1.5, "yheight": _HBL_VGAP * 1.5,
+                          "nh": 100, "nv": 100, "restore_neutron": 1},
+                component_name="source_DSD"),
+    MonitorSpec("Postcollimation PSD", "PSD_monitor", (0.0, 0.0, _L1 - 0.003), "origin",
+                settings={"xwidth": 0.05, "yheight": 0.25, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="postcollimation_PSD"),
+    MonitorSpec("Postcollimation DSD", "Divergence_monitor", (0.0, 0.0, _L1 - 0.002), "origin",
+                settings={"xwidth": 0.1, "yheight": 0.1, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="postcollimation_DSD"),
+    MonitorSpec("Premono Emonitor", "E_monitor", (0.0, 0.0, _L1 - 0.001), "origin",
+                settings={"xwidth": _MONO_W, "yheight": _MONO_H, "nE": 400,
+                          "Emin": 0, "Emax": 200, "restore_neutron": 1},
+                component_name="premono_Emonitor"),
+    MonitorSpec("Postmono Emonitor", "E_monitor", (0.0, 0.0, 0.1), "sample_arm",
+                settings={"xwidth": _MONO_W, "yheight": _MONO_H, "nE": 400,
+                          "Emin": 0, "Emax": 200, "restore_neutron": 1},
+                component_name="postmono_Emonitor"),
+    MonitorSpec("Pre-sample collimation PSD", "PSD_monitor", (0.0, 0.0, _L2 / 4), "sample_arm",
+                settings={"xwidth": 0.06, "yheight": 0.15, "nx": 200, "ny": 200,
+                          "restore_neutron": 1},
+                component_name="sample1_PSD"),
+    MonitorSpec("Sample PSD @ L2-0.5", "PSD_monitor", (0.0, 0.0, _L2 - 0.5), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.10, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample2_PSD"),
+    MonitorSpec("Sample PSD @ L2-0.3", "PSD_monitor", (0.0, 0.0, _L2 - 0.3), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.10, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample3_PSD"),
+    MonitorSpec("Sample PSD @ Sample", "PSD_monitor", (0.0, 0.0, _L2 - 0.03), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.10, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample_PSD"),
+    MonitorSpec("Sample DSD @ Sample", "Divergence_monitor", (0.0, 0.0, _L2 - 0.02), "sample_arm",
+                settings={"xwidth": 0.1, "yheight": 0.1, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample_DSD"),
+    MonitorSpec("Sample EMonitor @ Sample", "E_monitor", (0.0, 0.0, _L2 - 0.01), "sample_arm",
+                settings={"xwidth": 0.2, "yheight": 0.2, "nE": 100, "Emin": -2,
+                          "Emax": 200, "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample_Emonitor"),
+    MonitorSpec("Pre-analyzer collimation PSD", "PSD_monitor", (0.0, 0.0, 0.49), "analyzer_arm",
+                settings={"xwidth": 1.0, "yheight": 1.0, "nx": 200, "ny": 200,
+                          "restore_neutron": 1},
+                component_name="precollim_PSD"),
+    MonitorSpec("Pre-analyzer EMonitor", "E_monitor", (0.0, 0.0, _L3 - 0.1), "analyzer_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nE": 100,
+                          "Emin": -2, "Emax": 30, "restore_neutron": 1},
+                component_name="preanalyzer_Emonitor"),
+    MonitorSpec("Pre-analyzer PSD", "PSD_monitor", (0.0, 0.0, _L3 - 0.1), "analyzer_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="preanalyzer_PSD"),
+    MonitorSpec("Post-analyzer EMonitor", "E_monitor", (0.0, 0.0, 0.1), "detector_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nE": 100,
+                          "Emin": -2, "Emax": 30, "restore_neutron": 1},
+                component_name="postanalyzer_Emonitor"),
+    MonitorSpec("Post-analyzer PSD", "PSD_monitor", (0.0, 0.0, 0.5), "detector_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="postanalyzer_PSD"),
+    MonitorSpec("Detector PSD", "PSD_monitor", (0.0, 0.0, _L4 - 0.005), "detector_arm",
+                settings={"xwidth": 0.0254, "yheight": 1.0, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="detector_PSD"),
+)
+
+
 def puma_descriptor() -> InstrumentDescriptor:
     """PUMA (FRM-II) -- the GUI-facing knobs, fully specified.
 
@@ -105,6 +202,14 @@ def puma_descriptor() -> InstrumentDescriptor:
                 gap=0.0005, mosaic=35, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
             ),
+            # Development variant: PG[002] geometry with a deliberately wrong
+            # d-spacing, kept for A1/A2 sanity checks in the GUI.
+            CrystalSpec(
+                id="pg002_test", display_name="PG[002] test", d_spacing=2.355,
+                slab_width=0.0202, slab_height=0.018, n_columns=13, n_rows=9,
+                gap=0.0005, mosaic=35, r0=1.0,
+                reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+            ),
         ),
         ana_crystals=(
             CrystalSpec(
@@ -114,20 +219,59 @@ def puma_descriptor() -> InstrumentDescriptor:
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
             ),
         ),
+        # Sample specs mirror the build() ladder exactly (properties complete;
+        # anti-drift test: tests/test_descriptor_validation.py).
         samples=(
             SampleSpec("none", "No sample", None),
-            SampleSpec("Al_rod_phonon", "AL: acoustic phonon", "Phonon_simple_SCATTER",
-                       properties={"radius": 5e-3, "yheight": 30e-3, "T": 200}, split=10),
-            SampleSpec("Al_rod_phonon_optic", "Al: optic phonon", "Phonon_simple_SCATTER",
-                       properties={"radius": 5e-3, "yheight": 30e-3, "T": 200}, split=10),
-            SampleSpec("Al_bragg", "AL: Bragg", "Single_crystal",
-                       properties={"reflections": '"Al.lau"', "mosaic": 5}, split=10),
-            SampleSpec("Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
-                       properties={"T": 200}, split=10),
+            SampleSpec(
+                "Al_rod_phonon", "AL: acoustic phonon", "Phonon_simple_SCATTER",
+                properties={
+                    "radius": 5e-3, "yheight": 30e-3,
+                    "sigma_abs": 0.0, "sigma_inc": 0.0,
+                    "a": 4.05, "b": 345, "M": 27, "c": 4, "DW": 1, "T": 200,
+                    "target_index": 2, "focus_aw": 5, "focus_ah": 15,
+                },
+                split=10, extend="if(!SCATTERED) ABSORB;",
+            ),
+            SampleSpec(
+                "Al_rod_phonon_optic", "Al: optic phonon", "Optic_Phonon_simple",
+                properties={
+                    "radius": 5e-3, "yheight": 30e-3,
+                    "sigma_abs": 0, "sigma_inc": 0,
+                    "a": 3.14, "b": 345, "M": 27, "c": 4, "DW": 1, "T": 300,
+                    "zero_energy": 4, "maximum_energy": 1,
+                    "target_index": 2, "focus_aw": 5, "focus_ah": 15,
+                },
+                split=10, extend="if(!SCATTERED) ABSORB;",
+            ),
+            SampleSpec(
+                "Al_bragg", "AL: Bragg", "Single_crystal",
+                properties={
+                    "reflections": '"Al.lau"', "radius": 5e-3, "yheight": 30e-3,
+                    "mosaic": 5, "sigma_inc": -1,
+                },
+                split=10,
+            ),
+            SampleSpec(
+                "Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
+                properties={
+                    "reflections": '"Al_mp-134_symmetrized.laz"',
+                    "delta_d_d": 1.45e-3, "barns": 1,
+                    "dispersion": '"Al_test_phonons_centered.dat"',
+                    "tessellate": 1, "phonon_e_steps": 50,
+                    "radius": 5e-3, "yheight": 30e-3,
+                    "a": 4.03893, "sigma_abs": 0, "sigma_inc": 0.0,
+                    "debye_waller": 1, "T": 200,
+                    "p_interact": 1.0, "p_phonon": 0.95, "phonon_gamma": 0.2,
+                    "target_index": 2, "focus_aw": 5.0, "focus_ah": 15.0,
+                },
+                split=10,
+            ),
         ),
         scannable_parameters=_PUMA_PARAMS,
         primary_detector="detector",
         mcstas_name=PUMA_MCSTAS_NAME,
+        monitors=_PUMA_MONITORS,
         modules=(
             ModuleSpec("nmo", "NMO installed", ModuleKind.CHOICE,
                        options=("None", "Vertical", "Horizontal", "Both"), default="None"),
@@ -214,6 +358,38 @@ class PUMAPlugin:
         from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
 
         return mono_ana_crystals_setup(mono_label, ana_label)
+
+    def build_fingerprint(self, config):
+        """Stable hash of the build-time (ChangeImpact.BUILD) state.
+
+        Groundwork for cross-scan binary reuse: when this fingerprint matches
+        the one captured at the last compile and the compiled binary still
+        exists, a new scan's first point can skip force_compile and go straight
+        to direct invocation. No consumer is wired yet (follow-up task).
+        """
+        import hashlib
+        import json
+
+        build_state = {
+            "monocris": config.monocris,
+            "anacris": config.anacris,
+            "sample_key": getattr(config, "sample_key", None),
+            "NMO_installed": config.NMO_installed,
+            "V_selector_installed": bool(config.V_selector_installed),
+            "source_type": config.source_type,
+            "source_dE": config.source_dE,
+            "alpha_1": config.alpha_1,
+            "alpha_2": list(config.alpha_2),
+            "alpha_3": config.alpha_3,
+            "alpha_4": config.alpha_4,
+            "diagnostic_mode": bool(getattr(config, "diagnostic_mode", False)),
+            "diagnostic_settings": sorted(
+                (key, bool(value))
+                for key, value in getattr(config, "diagnostic_settings", {}).items()
+            ),
+        }
+        payload = json.dumps(build_state, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
 
     def build(self, config, diagnostic_mode, diagnostic_settings, number_neutrons):
         from instruments.PUMA_instrument_definition import build_PUMA_instrument
