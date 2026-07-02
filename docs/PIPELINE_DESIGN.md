@@ -3,6 +3,15 @@
 *Date: 2026-05-20*
 *Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, per-stage timing capture, and the first direct-binary invocation slice behind `run_PUMA_point()`; direct compile-time measurement still remains future work and is inferred from execution timings, and the direct path has not yet been integration-validated in a live McStas environment*
 
+> **Forward note (2026-07-02):** the configurable-instruments Phase 1
+> (`docs/CONFIGURABLE_INSTRUMENTS.md` §17) lifts the functions described here
+> behind an `InstrumentPlugin` contract: the controller calls
+> `self.instrument.build/compute_snapshot/run_point` instead of importing
+> `build_PUMA_instrument`/`compute_scan_snapshot`/`run_PUMA_point` directly, and
+> `PUMARunExecutionState` becomes an alias of the shared `RunExecutionState`
+> (`instruments/contract.py`). The pipeline architecture in this document —
+> threads, queue, stop-event drain semantics — is unchanged by that work.
+
 ---
 
 ## 1. Goal
