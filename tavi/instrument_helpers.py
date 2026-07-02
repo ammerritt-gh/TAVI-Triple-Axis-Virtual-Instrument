@@ -47,8 +47,9 @@ def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
     for spec in specs:
         if not enabled.get(spec.id):
             continue
+        name = spec.component_name or spec.id
         component = instrument.add_component(
-            spec.component_name or spec.id,
+            name,
             spec.component_type,
             AT=_placement(spec.at),
             ROTATED=_placement(spec.rotated),
@@ -56,7 +57,7 @@ def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
         )
         settings = dict(spec.settings)
         if size_overrides:
-            settings.update(size_overrides.get(spec.component_name, {}))
+            settings.update(size_overrides.get(name, {}))
         for key, value in settings.items():
             setattr(component, key, value)
         added.append(component)
@@ -186,8 +187,12 @@ def crystal_spec_to_info(spec, d_key):
 
     ``reflect``/``transmit`` carry embedded quotes because they are emitted
     verbatim as McStas string literals by build(). The McStas sentinel
-    ``"NULL"`` (no reflectivity file, constant r0) passes through unchanged.
+    ``"NULL"`` (no reflectivity file, constant r0) passes through unchanged;
+    an unset (None) file maps to the same sentinel so build() never emits
+    the invalid literal ``"None"``.
     """
+    reflect = spec.reflect_file if spec.reflect_file is not None else "NULL"
+    transmit = spec.transmit_file if spec.transmit_file is not None else "NULL"
     return {
         d_key: spec.d_spacing,
         'slabwidth': spec.slab_width,
@@ -197,8 +202,8 @@ def crystal_spec_to_info(spec, d_key):
         'gap': spec.gap,
         'mosaic': spec.mosaic,
         'r0': spec.r0,
-        'reflect': f'"{spec.reflect_file}"',
-        'transmit': f'"{spec.transmit_file}"',
+        'reflect': f'"{reflect}"',
+        'transmit': f'"{transmit}"',
     }
 
 

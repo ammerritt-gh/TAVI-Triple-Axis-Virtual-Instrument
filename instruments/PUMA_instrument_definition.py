@@ -275,6 +275,10 @@ class TAS_Instrument:
         
         # Retrieve mono/ana crystal information
         monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
+        if 'dm' not in monochromator_info or 'da' not in analyzer_info:
+            print(f"\nInvalid: unknown crystal selection (mono: {monocris}, ana: {anacris})")
+            error_flags.append("invalid_crystal")
+            return [0, 0, 0, 0, 0], error_flags
 
         # pre-calculate values from parameters
         q = math.sqrt(qx**2 + qy**2 + qz**2)
@@ -340,6 +344,10 @@ class TAS_Instrument:
 
         # Retrieve mono/ana crystal information
         monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
+        if 'dm' not in monochromator_info or 'da' not in analyzer_info:
+            print(f"\nInvalid: unknown crystal selection (mono: {monocris}, ana: {anacris})")
+            error_flags.append("invalid_crystal")
+            return [0, 0, 0, 0], error_flags
 
         # Calculate incident and scattered wavevectors based on the fixed energy
         if K_fixed == "Ki Fixed":

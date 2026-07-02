@@ -695,7 +695,7 @@ variation.
 | ana→det | 0.65 m | 0.750 (L4) |
 | source→mono | not modeled | 2.150 (L1) |
 | mono D / ana D | 3.355 / 3.355 Å (PG002) | 3.355 / 3.355 |
-| senses sm/ss/sa | +1 / −1 / +1 | implicit / fixed |
+| senses sm/ss/sa | +1 / +1 / −1 (live vTAS run; the repository XML's −1/+1 for ss/sa is stale — §20.1) | implicit / fixed |
 | a2 (mono 2θ) ll/df/ul | −40 / 77.256 / 110° | — |
 | a4 (sample 2θ) ll/df/ul | −120 / −111.08 / 120° | — |
 | a6 (ana 2θ) ll/df/ul | −120 / 83.957 / 120° | — |
