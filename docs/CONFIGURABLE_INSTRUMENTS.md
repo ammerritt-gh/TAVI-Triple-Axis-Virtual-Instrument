@@ -1441,7 +1441,9 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
   (20/30/40/60′, default open); no modules (FlatCone/IMPS deferred, §14).
   PLACEHOLDER values (positions, apertures, Cu200 mosaic/r0, analyzer
   subdivision, hvs height, single vs double PG filter, no bending clamps,
-  rva magnitude 0.31) are marked in-line in both modules.
+  rva magnitude 0.31) are marked in-line in both modules. The full inventory
+  of missing/placeholder data, with provenance and a priority order for the
+  next data pass, is `docs/IN8_MISSING_DATA.md`.
 
 ### 20.4 Verified
 
