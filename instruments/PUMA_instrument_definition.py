@@ -880,7 +880,14 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     # their sizes are computed here and override the descriptor's precomputed
     # defaults (identical for the current crystals).
     from instruments.puma_plugin import _PUMA_MONITORS
-    from tavi.instrument_helpers import emit_collimator, emit_monitors, emit_slit
+    from tavi.instrument_helpers import (
+        emit_collimator,
+        emit_monitors,
+        emit_sample,
+        emit_sample_orientation_arms,
+        emit_slit,
+    )
+    from tavi.sample_library import default_sample_library
 
     monitor = {m.id: m for m in _PUMA_MONITORS}
     enabled_monitors = diagnostic_settings if diagnostic_mode else {}
@@ -1207,94 +1214,18 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         instrument.add_parameter("mount_ry_param", value=0, comment="Static sample mount rotation about y")
         instrument.add_parameter("mount_rz_param", value=0, comment="Static sample mount rotation about z")
         
-        instrument.add_component("sample_gonio", "Arm", AT=[0,0,PUMA.L2], ROTATED=["saz_param",0,0], RELATIVE="sample_arm")
-        instrument.add_component("sample_chi_arm", "Arm", AT=[0,0,0], ROTATED=["chi_total",0,0], RELATIVE="sample_gonio")
-        instrument.add_component("sample_cradle", "Arm", AT=[0,0,0], ROTATED=[0,"A3_param + omega_offset_total",0], RELATIVE="sample_chi_arm")
-        instrument.add_component("sample_mount", "Arm", AT=[0,0,0], ROTATED=["mount_rx_param","mount_ry_param","mount_rz_param"], RELATIVE="sample_cradle")
+        sample_mount = emit_sample_orientation_arms(instrument,
+                                                    relative="sample_arm",
+                                                    distance=PUMA.L2)
 
-        # Add sample component according to selected sample_key on PUMA (if set)
+        # Mount the selected sample from the shared library (samples move
+        # between instruments; tavi/sample_library.py).
         sample_key = getattr(PUMA, 'sample_key', None)
-        if sample_key == "Al_rod_phonon":
-            Al_rod_phonon = instrument.add_component("Al_rod_phonon", "Phonon_simple_SCATTER", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
-            Al_rod_phonon.radius = 5e-3
-            Al_rod_phonon.yheight = 30e-3
-            Al_rod_phonon.sigma_abs = 0*0.231
-            Al_rod_phonon.sigma_inc = 0*0.0082
-            Al_rod_phonon.a = 4.05
-            Al_rod_phonon.b = 345
-            Al_rod_phonon.M = 27
-            Al_rod_phonon.c = 4
-            Al_rod_phonon.DW = 1
-            Al_rod_phonon.T = 200
-            Al_rod_phonon.target_index = +2
-            Al_rod_phonon.focus_aw = 5
-            Al_rod_phonon.focus_ah = 15
-            Al_rod_phonon.set_SPLIT(10)
-            try:
-                Al_rod_phonon.append_EXTEND("if(!SCATTERED) ABSORB;")
-            except Exception:
-                pass
-        elif sample_key == "Al_rod_phonon_optic":
-            Al_rod_phonon_optic = instrument.add_component("Al_rod_phonon_optic", "Optic_Phonon_simple", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
-            Al_rod_phonon_optic.radius = 5e-3
-            Al_rod_phonon_optic.yheight = 30e-3
-            Al_rod_phonon_optic.sigma_abs = 0
-            Al_rod_phonon_optic.sigma_inc = 0
-            Al_rod_phonon_optic.a = 3.14
-            Al_rod_phonon_optic.b = 345
-            Al_rod_phonon_optic.M = 27
-            Al_rod_phonon_optic.c = 4
-            Al_rod_phonon_optic.DW = 1
-            Al_rod_phonon_optic.T = 300
-            Al_rod_phonon_optic.zero_energy = 4
-            Al_rod_phonon_optic.maximum_energy = 1
-            Al_rod_phonon_optic.target_index = +2
-            Al_rod_phonon_optic.focus_aw = 5
-            Al_rod_phonon_optic.focus_ah = 15
-            Al_rod_phonon_optic.set_SPLIT(10)
-            try:
-                Al_rod_phonon_optic.append_EXTEND("if(!SCATTERED) ABSORB;")
-            except Exception:
-                pass
-        elif sample_key == "Al_bragg":
-            Al_Bragg = instrument.add_component("Al_Bragg", "Single_crystal", AT=[0,0,0], ROTATED=[0,0,0], RELATIVE="sample_mount")
-            Al_Bragg.reflections = '"Al.lau"'
-            Al_Bragg.radius = 5e-3
-            Al_Bragg.yheight = 30e-3
-            Al_Bragg.mosaic = 5
-            Al_Bragg.sigma_inc = -1
-            Al_Bragg.set_SPLIT(10)
-        elif sample_key == "Al_phonon_DFT":
-            Al_phonon_DFT = instrument.add_component(
-                "Al_phonon_DFT", "Phonon_DFT",
-                AT=[0, 0, 0], ROTATED=[0, 0, 0], RELATIVE="sample_mount"
-            )
-            # --- Bragg scattering (pre-converted LAZ, avoids cif2hkl dependency) ---
-            Al_phonon_DFT.reflections = '"Al_mp-134_symmetrized.laz"'
-            Al_phonon_DFT.delta_d_d = 1.45e-3
-            Al_phonon_DFT.barns = 1
-            # --- Phonon scattering from dispersion file ---
-            Al_phonon_DFT.dispersion = '"Al_test_phonons_centered.dat"'
-            Al_phonon_DFT.tessellate = 1
-            Al_phonon_DFT.phonon_e_steps = 50
-            # --- Sample geometry ---
-            Al_phonon_DFT.radius = 5e-3
-            Al_phonon_DFT.yheight = 30e-3
-            # --- Material parameters ---
-            Al_phonon_DFT.a = 4.03893
-            Al_phonon_DFT.sigma_abs = 0
-            Al_phonon_DFT.sigma_inc = 0.0
-            Al_phonon_DFT.debye_waller = 1
-            Al_phonon_DFT.T = 200
-            # --- Channel balance ---
-            Al_phonon_DFT.p_interact = 1.0
-            Al_phonon_DFT.p_phonon = 0.95
-            Al_phonon_DFT.phonon_gamma = 0.2
-            # --- Focusing ---
-            Al_phonon_DFT.target_index = +2
-            Al_phonon_DFT.focus_aw = 5.0
-            Al_phonon_DFT.focus_ah = 15.0
-            Al_phonon_DFT.set_SPLIT(10)
+        sample_spec = next(
+            (s for s in default_sample_library() if s.id == sample_key), None
+        )
+        if sample_spec is not None and sample_spec.component_type is not None:
+            emit_sample(instrument, sample_spec, relative=sample_mount)
         else:
             # No sample selected; proceed without adding a sample component.
             print("Warning: No sample selected for instrument run; running without sample component.")
