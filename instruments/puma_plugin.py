@@ -277,12 +277,16 @@ def puma_descriptor() -> InstrumentDescriptor:
                        options=("None", "Vertical", "Horizontal", "Both"), default="None"),
             ModuleSpec("v_selector", "Velocity selector", ModuleKind.TOGGLE, default=False),
         ),
+        # Defaults mirror the GUI's historical reset values.
         collimation=(
-            CollimationSlot("alpha_1", "α1 (src-mono)", ("0", "20", "40", "60")),
+            CollimationSlot("alpha_1", "α1 (src-mono)", ("0", "20", "40", "60"),
+                            default="40"),
             CollimationSlot("alpha_2", "α2 (mono-smp)", ("30", "40", "60"),
-                            multi_select=True, default=""),
-            CollimationSlot("alpha_3", "α3 (smp-ana)", ("0", "10", "20", "30", "45", "60")),
-            CollimationSlot("alpha_4", "α4 (ana-det)", ("0", "10", "20", "30", "45", "60")),
+                            multi_select=True, default="40"),
+            CollimationSlot("alpha_3", "α3 (smp-ana)", ("0", "10", "20", "30", "45", "60"),
+                            default="30"),
+            CollimationSlot("alpha_4", "α4 (ana-det)", ("0", "10", "20", "30", "45", "60"),
+                            default="30"),
         ),
         slits=(
             SlitSpec("vbl_hgap", "Post-mono (width)", default_width_mm=88),
@@ -316,14 +320,19 @@ class PUMAPlugin:
                     sample_mount):
         """Create a scan-local PUMA configuration from frozen launch state.
 
-        Body moved verbatim from the controller's ``_build_scan_puma_config``
-        (behavior-identical Phase-1 migration; do not "improve" it here).
+        Maps the generic GUI value containers (``modules``/``collimation``/
+        ``slits_mm``, produced by the descriptor-driven dock) onto PUMA's state
+        fields. The resulting state is identical to the pre-Phase-2 mapping.
         """
         vals = gui_values
+        modules = vals['modules']
+        collimation = vals['collimation']
+        slits_mm = vals['slits_mm']
+
         scan_config = copy.deepcopy(base_state)
         scan_config.K_fixed = vals['K_fixed']
-        scan_config.NMO_installed = vals['NMO_installed']
-        scan_config.V_selector_installed = vals['V_selector_installed']
+        scan_config.NMO_installed = modules['nmo']
+        scan_config.V_selector_installed = modules['v_selector']
         scan_config.source_type = vals['source_type']
         scan_config.source_dE = vals['source_dE']
         scan_config.rhm = vals['rhm']
@@ -337,18 +346,20 @@ class PUMAPlugin:
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
         scan_config.sample_key = sample_key
-        scan_config.alpha_1 = float(vals['alpha_1'])
+        scan_config.alpha_1 = float(collimation['alpha_1'])
+        alpha_2_selected = collimation['alpha_2']
         scan_config.alpha_2 = [
-            30 if vals['alpha_2_30'] else 0,
-            40 if vals['alpha_2_40'] else 0,
-            60 if vals['alpha_2_60'] else 0,
+            30 if "30" in alpha_2_selected else 0,
+            40 if "40" in alpha_2_selected else 0,
+            60 if "60" in alpha_2_selected else 0,
         ]
-        scan_config.alpha_3 = float(vals['alpha_3'])
-        scan_config.alpha_4 = float(vals['alpha_4'])
-        scan_config.vbl_hgap = vals['vbl_hgap']
-        scan_config.pbl_hgap = vals['pbl_hgap']
-        scan_config.pbl_vgap = vals['pbl_vgap']
-        scan_config.dbl_hgap = vals['dbl_hgap']
+        scan_config.alpha_3 = float(collimation['alpha_3'])
+        scan_config.alpha_4 = float(collimation['alpha_4'])
+        pbl_width_mm, pbl_height_mm = slits_mm['pbl']
+        scan_config.vbl_hgap = slits_mm['vbl_hgap'] / 1000.0
+        scan_config.pbl_hgap = pbl_width_mm / 1000.0
+        scan_config.pbl_vgap = pbl_height_mm / 1000.0
+        scan_config.dbl_hgap = slits_mm['dbl_hgap'] / 1000.0
         scan_config.sample_mount = sample_mount
         scan_config.update_diagnostic_settings(diagnostic_settings)
         return scan_config
