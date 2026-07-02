@@ -29,8 +29,6 @@ data_dir = os.path.join(_project_dir, "components")
 # match the descriptor's mcstas_name (instruments/puma_plugin.py).
 MCSTAS_NAME = "PUMA_McScript"
 
-# Backward-compatible alias for the shared run-execution state (remove in Phase 3).
-PUMARunExecutionState = RunExecutionState
 
 # Energy/angle/momentum conversions live in tavi.neutron_conversions; re-exported
 # here so existing `from instruments.PUMA_instrument_definition import ...` works.
@@ -62,9 +60,9 @@ def _crystal_spec_to_info(spec, d_key):
     }
 
 
-def _find_crystal_spec(specs, key):
+def _find_crystal_spec(specs, crystal_id):
     for spec in specs:
-        if key in (spec.id, spec.display_name):
+        if spec.id == crystal_id:
             return spec
     return None
 
@@ -73,9 +71,8 @@ def mono_ana_crystals_setup(monocris, anacris):
     """Crystal parameter dicts for the mono/analyzer, sourced from the descriptor.
 
     The descriptor (instruments/puma_plugin.py) is the single source of truth for
-    crystal data. Accepts CrystalSpec ids ("pg002") and, for backward
-    compatibility, legacy display labels ("PG[002]"). Unknown keys return empty
-    dicts (legacy behavior preserved).
+    crystal data; lookups are by CrystalSpec id ("pg002"). Unknown ids return
+    empty dicts.
     """
     from instruments.puma_plugin import puma_descriptor
 

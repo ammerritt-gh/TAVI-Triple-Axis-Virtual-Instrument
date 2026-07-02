@@ -1,0 +1,72 @@
+"""parameters.json namespacing tests (design record §9, §17).
+
+The load/save methods live on TAVIController (a QObject), so these tests build a
+bare instance via __new__ and exercise only the pure-Python helpers -- no Qt
+event loop, no widgets. Importing TAVI_PySide6 needs PySide6 + mcstasscript, so
+the whole module skips when either is unavailable.
+"""
+from types import SimpleNamespace
+
+import pytest
+
+pytest.importorskip("mcstasscript")
+pytest.importorskip("PySide6")
+
+import TAVI_PySide6 as controller_module
+
+
+def _controller_stub():
+    controller = controller_module.TAVIController.__new__(controller_module.TAVIController)
+    controller.instrument = SimpleNamespace(id="puma")
+    return controller
+
+
+def test_namespaced_block_selected_by_instrument_id():
+    controller = _controller_stub()
+    document = {
+        "puma": {"_schema": 1, "mtt_var": "41.167"},
+        "in8": {"_schema": 1, "mtt_var": "77.0"},
+    }
+    assert controller._parameters_block(document)["mtt_var"] == "41.167"
+
+
+def test_missing_or_malformed_block_gives_empty():
+    controller = _controller_stub()
+    assert controller._parameters_block({"in8": {"_schema": 1}}) == {}
+    assert controller._parameters_block({"puma": "garbage"}) == {}
+    assert controller._parameters_block("garbage") == {}
+
+
+def test_saved_crystal_id_falls_back_to_first():
+    resolve = controller_module.TAVIController._saved_crystal_id
+    crystals = (
+        SimpleNamespace(id="pg002", display_name="PG[002]"),
+        SimpleNamespace(id="pg002_test", display_name="PG[002] test"),
+    )
+    assert resolve("pg002_test", crystals) == "pg002_test"
+    assert resolve("unknown", crystals) == "pg002"
+
+
+def test_saved_collimation_container_roundtrip():
+    values = controller_module.TAVIController._saved_collimation_values(
+        {"collimation": {"alpha_1": "60", "alpha_2": ["30", "60"]}}
+    )
+    assert values["alpha_1"] == "60"
+    assert values["alpha_2"] == {"30", "60"}   # JSON list -> set
+    assert controller_module.TAVIController._saved_collimation_values({}) == {}
+
+
+def test_saved_slit_values_container_roundtrip():
+    values = controller_module.TAVIController._saved_slit_values(
+        {"slits_mm": {"vbl_hgap": 80.0, "pbl": [90.0, 95.0]}}
+    )
+    assert values == {"vbl_hgap": 80.0, "pbl": (90.0, 95.0)}   # JSON list -> tuple
+    assert controller_module.TAVIController._saved_slit_values({}) == {}
+
+
+def test_saved_module_values_container():
+    values = controller_module.TAVIController._saved_module_values(
+        {"modules": {"nmo": "Both", "v_selector": True}}
+    )
+    assert values == {"nmo": "Both", "v_selector": True}
+    assert controller_module.TAVIController._saved_module_values({}) == {}
