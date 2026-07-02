@@ -181,3 +181,19 @@ def test_crystal_info_matches_legacy():
     assert plugin.crystal_info("PG[002]", "PG[002]") == mono_ana_crystals_setup(
         "PG[002]", "PG[002]"
     )
+
+
+def test_build_fingerprint_stable_and_sensitive():
+    pytest.importorskip("mcstasscript")
+    plugin = PUMAPlugin()
+    base = plugin.default_state()
+    base.monocris = base.anacris = "pg002"
+
+    fp1 = plugin.build_fingerprint(base)
+    fp2 = plugin.build_fingerprint(base)
+    assert fp1 == fp2  # deterministic
+
+    changed = plugin.default_state()
+    changed.monocris = changed.anacris = "pg002"
+    changed.NMO_installed = "Vertical"
+    assert plugin.build_fingerprint(changed) != fp1  # build-time change detected

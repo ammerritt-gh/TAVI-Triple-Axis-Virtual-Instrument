@@ -113,3 +113,41 @@ def test_puma_build_declares_descriptor_params():
         f"builder-only: {sorted(declared - descriptor_names)}; "
         f"descriptor-only: {sorted(descriptor_names - declared)}"
     )
+
+
+def test_monitor_ids_match_build_gates():
+    """Descriptor monitors stay 1:1 with build()'s diagnostic_settings gates.
+
+    Source scan -- the diagnostic dialog renders from the descriptor while
+    build() keeps its literal gate blocks until Phase 3; this test is what
+    stops the two from drifting apart in the meantime.
+    """
+    with open(PUMA_MODULE_PATH, encoding="utf-8") as f:
+        source = f.read()
+    gate_keys = set(re.findall(r"diagnostic_settings\.get\('([^']+)'\)", source))
+    monitor_ids = {m.id for m in puma_descriptor().monitors}
+    assert gate_keys == monitor_ids, (
+        f"build-only: {sorted(gate_keys - monitor_ids)}; "
+        f"descriptor-only: {sorted(monitor_ids - gate_keys)}"
+    )
+    assert len(puma_descriptor().monitors) == 19
+
+
+def test_monitor_component_names_unique_and_set():
+    names = [m.component_name for m in puma_descriptor().monitors]
+    assert all(names)
+    assert len(names) == len(set(names))
+
+
+def test_sample_ids_match_build_ladder():
+    """Descriptor sample ids stay 1:1 with build()'s sample_key ladder."""
+    with open(PUMA_MODULE_PATH, encoding="utf-8") as f:
+        source = f.read()
+    ladder_keys = set(re.findall(r'sample_key == "(\w+)"', source))
+    descriptor_ids = {
+        s.id for s in puma_descriptor().samples if s.component_type is not None
+    }
+    assert ladder_keys == descriptor_ids, (
+        f"build-only: {sorted(ladder_keys - descriptor_ids)}; "
+        f"descriptor-only: {sorted(descriptor_ids - ladder_keys)}"
+    )
