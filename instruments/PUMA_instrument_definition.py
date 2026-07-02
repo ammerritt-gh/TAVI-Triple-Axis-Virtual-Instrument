@@ -863,6 +863,33 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     # Monochromator crystal
     monochromator_info, analyzer_info = mono_ana_crystals_setup(PUMA.monocris, PUMA.anacris)
 
+    # Diagnostic monitors are emitted from the descriptor table at the exact
+    # insertion points below (component order is physics in McStas). The
+    # crystal-sized monitors track the SELECTED crystal's slab geometry, so
+    # their sizes are computed here and override the descriptor's precomputed
+    # defaults (identical for the current crystals).
+    from instruments.puma_plugin import _PUMA_MONITORS
+    from tavi.instrument_helpers import emit_monitors
+
+    monitor = {m.id: m for m in _PUMA_MONITORS}
+    enabled_monitors = diagnostic_settings if diagnostic_mode else {}
+    _mono_w = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
+    _mono_h = monochromator_info['slabheight'] * monochromator_info['nrows']
+    _ana_w = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
+    _ana_h = analyzer_info['slabheight'] * analyzer_info['nrows']
+    monitor_size_overrides = {
+        "premono_Emonitor": {"xwidth": _mono_w, "yheight": _mono_h},
+        "postmono_Emonitor": {"xwidth": _mono_w, "yheight": _mono_h},
+        "preanalyzer_Emonitor": {"xwidth": _ana_w, "yheight": _ana_h},
+        "preanalyzer_PSD": {"xwidth": _ana_w, "yheight": _ana_h},
+        "postanalyzer_Emonitor": {"xwidth": _ana_w, "yheight": _ana_h},
+        "postanalyzer_PSD": {"xwidth": _ana_w, "yheight": _ana_h},
+    }
+
+    def emit_monitor_group(instrument, *ids):
+        emit_monitors(instrument, [monitor[i] for i in ids], enabled_monitors,
+                      size_overrides=monitor_size_overrides)
+
     def configure_component_tree():
 
         ## start adding components
@@ -891,23 +918,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
             source.E0 = "E0_param"  # Use E0_param for source energy (allows runtime adjustment without recompilation)
         source.divergence_distribution=0
 
-        if diagnostic_mode and diagnostic_settings.get('Source EMonitor'):
-            source_Emonitor = instrument.add_component("source_Emonitor", "E_monitor", AT=[0,0,0.144], ROTATED=[0,0,0], RELATIVE="origin")
-            source_Emonitor.xwidth = 0.2
-            source_Emonitor.yheight = 0.2
-            source_Emonitor.nE = 100
-            source_Emonitor.Emin = -2
-            source_Emonitor.Emax = 200
-            source_Emonitor.restore_neutron = 1
+        emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 
-        if diagnostic_mode and diagnostic_settings.get('Source PSD'):
-            source_PSD = instrument.add_component("source_PSD", "PSD_monitor", AT=[0,0,0.145], RELATIVE="origin")
-            source_PSD.xwidth = PUMA.hbl_hgap*1.5
-            source_PSD.yheight = PUMA.hbl_vgap*1.5
-            source_PSD.nx = 100
-            source_PSD.ny = 100
-            source_PSD.restore_neutron = 1
-            
         if PUMA.V_selector_installed:
             V_selector = instrument.add_component("v_selector", "V_selector", AT=[0,0,0.6], RELATIVE="origin")
             V_selector.xwidth = .100 #
@@ -919,15 +931,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
             V_selector.nslit = 72 #
             V_selector.alpha = 	48.3 #
             V_selector.nu = "nu_param"
-        
-            
-        if diagnostic_mode and diagnostic_settings.get('Source DSD'):
-            source_DSD = instrument.add_component("source_DSD", "Divergence_monitor", AT=[0,0,0.924], RELATIVE="origin")
-            source_DSD.xwidth = PUMA.hbl_hgap*1.5
-            source_DSD.yheight = PUMA.hbl_vgap*1.5
-            source_DSD.nh = 100
-            source_DSD.nv = 100
-            source_DSD.restore_neutron = 1
+
+        emit_monitor_group(instrument, 'Source DSD')
 
         mono_collimator = instrument.add_component("mono_collimator", "Collimator_linear", AT=[0,0,0.925], RELATIVE="origin")
         mono_collimator.xwidth = 40e-3
@@ -937,31 +942,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         
         
 
-        if diagnostic_mode and diagnostic_settings.get('Postcollimation PSD'):
-            postcollimation_PSD = instrument.add_component("postcollimation_PSD", "PSD_monitor", AT=[0,0,PUMA.L1-0.003], RELATIVE="origin")
-            postcollimation_PSD.xwidth = 0.05
-            postcollimation_PSD.yheight = 0.25
-            postcollimation_PSD.nx = 100
-            postcollimation_PSD.ny = 100
-            postcollimation_PSD.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Postcollimation DSD'):
-            postcollimation_DSD = instrument.add_component("postcollimation_DSD", "Divergence_monitor", AT=[0,0,PUMA.L1-0.002], RELATIVE="origin")
-            postcollimation_DSD.xwidth = 0.1
-            postcollimation_DSD.yheight = 0.1
-            postcollimation_DSD.nh = 100
-            postcollimation_DSD.nv = 100
-            postcollimation_DSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Premono Emonitor'):  
-            premono_Emonitor = instrument.add_component("premono_Emonitor", "E_monitor", AT=[0,0,PUMA.L1-0.001], RELATIVE="origin")
-            premono_Emonitor.xwidth = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
-            premono_Emonitor.yheight = monochromator_info['slabheight'] * monochromator_info['nrows']
-            premono_Emonitor.nE = 400
-            premono_Emonitor.Emin = 0
-            premono_Emonitor.Emax = 200
-            premono_Emonitor.restore_neutron = 1
-
+        emit_monitor_group(instrument, 'Postcollimation PSD', 'Postcollimation DSD',
+                           'Premono Emonitor')
 
         ## monochromator section
 
@@ -988,14 +970,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         sample_arm = instrument.add_component("sample_arm", "Arm", AT=[0,0,PUMA.L1], RELATIVE="origin", ROTATED=[0,"A1_param",0])
 
-        if diagnostic_mode and diagnostic_settings.get('Postmono Emonitor'):
-            postmono_Emonitor = instrument.add_component("postmono_Emonitor", "E_monitor", AT=[0,0,0.1], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            premono_Emonitor.xwidth = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
-            premono_Emonitor.yheight = monochromator_info['slabheight'] * monochromator_info['nrows']
-            postmono_Emonitor.nE = 400
-            postmono_Emonitor.Emin = 0
-            postmono_Emonitor.Emax = 200
-            postmono_Emonitor.restore_neutron = 1
+        emit_monitor_group(instrument, 'Postmono Emonitor')
 
         postmono_slit = instrument.add_component("postmono_slit", "Slit", AT=[0,0,0.286], ROTATED=[0,0,0], RELATIVE="sample_arm")
         postmono_slit.xwidth = "vbl_hgap_param"
@@ -1009,14 +984,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         sample_collimator_dia.length = 0.112
         sample_collimator_dia.divergence = 0
         
-        if diagnostic_mode and diagnostic_settings.get('Pre-sample collimation PSD'):
-            sample1_PSD = instrument.add_component("sample1_PSD", "PSD_monitor", AT=[0,0,PUMA.L2/4], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample1_PSD.xwidth = 0.06
-            sample1_PSD.yheight = 0.15
-            sample1_PSD.nx = 200
-            sample1_PSD.ny = 200
-            sample1_PSD.restore_neutron = 1
-        
+        emit_monitor_group(instrument, 'Pre-sample collimation PSD')
+
         if 40 in PUMA.alpha_2:
             sample_collimator_40 = instrument.add_component("sample_collimator_40", "Collimator_linear", AT=[0,0,0.550], RELATIVE="sample_arm")
             sample_collimator_40.xwidth = 39e-3
@@ -1232,46 +1201,9 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         sample_slit.xwidth = "pbl_hgap_param"
         sample_slit.yheight = "pbl_vgap_param"
            
-        if diagnostic_mode and diagnostic_settings.get('Sample PSD @ L2-0.5'):
-            sample2_PSD = instrument.add_component("sample2_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.5], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample2_PSD.xwidth = 0.10
-            sample2_PSD.yheight = 0.10
-            sample2_PSD.nx = 100
-            sample2_PSD.ny = 100
-            sample2_PSD.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Sample PSD @ L2-0.3'):
-            sample3_PSD = instrument.add_component("sample3_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.3], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample3_PSD.xwidth = 0.10
-            sample3_PSD.yheight = 0.10
-            sample3_PSD.nx = 100
-            sample3_PSD.ny = 100
-            sample3_PSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Sample PSD @ Sample'):
-            sample_PSD = instrument.add_component("sample_PSD", "PSD_monitor", AT=[0,0,PUMA.L2-0.03], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample_PSD.xwidth = 0.10
-            sample_PSD.yheight = 0.10
-            sample_PSD.nx = 100
-            sample_PSD.ny = 100
-            sample_PSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Sample DSD @ Sample'):
-            sample_DSD = instrument.add_component("sample_DSD", "Divergence_monitor", AT=[0,0,PUMA.L2-0.02], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample_DSD.xwidth = 0.1
-            sample_DSD.yheight = 0.1
-            sample_DSD.nh = 100
-            sample_DSD.nv = 100
-            sample_DSD.restore_neutron = 1
-
-        if diagnostic_mode and diagnostic_settings.get('Sample EMonitor @ Sample'):
-            sample_Emonitor = instrument.add_component("sample_Emonitor", "E_monitor", AT=[0,0,PUMA.L2-0.01], ROTATED=[0,0,0], RELATIVE="sample_arm")
-            sample_Emonitor.xwidth = 0.2
-            sample_Emonitor.yheight = 0.2
-            sample_Emonitor.nE = 100
-            sample_Emonitor.Emin = -2
-            sample_Emonitor.Emax = 200
-            sample_Emonitor.restore_neutron = 1
+        emit_monitor_group(instrument, 'Sample PSD @ L2-0.5', 'Sample PSD @ L2-0.3',
+                           'Sample PSD @ Sample', 'Sample DSD @ Sample',
+                           'Sample EMonitor @ Sample')
 
         # Sample orientation hierarchy:
         # 1. sample_gonio: applies calculated saz (out-of-plane tilt from qz)
@@ -1385,13 +1317,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0,0,PUMA.L2], ROTATED=[0,"A2_param",0], RELATIVE="sample_arm")
         
-        if diagnostic_mode and diagnostic_settings.get('Pre-analyzer collimation PSD'):
-            precollim_PSD = instrument.add_component("precollim_PSD", "PSD_monitor", AT=[0,0,0.49], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-            precollim_PSD.xwidth = 1000e-3
-            precollim_PSD.yheight = 1000e-3
-            precollim_PSD.nx = 200
-            precollim_PSD.ny = 200
-            precollim_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Pre-analyzer collimation PSD')
 
         analyzer_collimator = instrument.add_component("analyzer_collimator", "Collimator_linear", AT=[0,0,0.497], RELATIVE="analyzer_arm")
         analyzer_collimator.xwidth = 0.05 #38e-3
@@ -1404,22 +1330,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         analyzer_filter.xwidth = 0.5
         analyzer_filter.yheight = 0.5
 
-        if diagnostic_mode and diagnostic_settings.get('Pre-analyzer EMonitor'):
-            preanalyzer_Emonitor = instrument.add_component("preanalyzer_Emonitor", "E_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-            preanalyzer_Emonitor.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            preanalyzer_Emonitor.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            preanalyzer_Emonitor.nE = 100
-            preanalyzer_Emonitor.Emin = -2
-            preanalyzer_Emonitor.Emax = 30
-            preanalyzer_Emonitor.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Pre-analyzer PSD'):
-            preanalyzer_PSD = instrument.add_component("preanalyzer_PSD", "PSD_monitor", AT=[0,0,PUMA.L3-0.1], ROTATED=[0,0,0], RELATIVE="analyzer_arm")
-            preanalyzer_PSD.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            preanalyzer_PSD.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            preanalyzer_PSD.nx = 100
-            preanalyzer_PSD.ny = 100
-            preanalyzer_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Pre-analyzer EMonitor', 'Pre-analyzer PSD')
 
         analyzer_cradle = instrument.add_component("analyzer_cradle", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"A4_param/2",0], RELATIVE="analyzer_arm")
 
@@ -1444,22 +1355,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         detector_arm = instrument.add_component("detector_arm", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"A4_param",0], RELATIVE="analyzer_arm")
 
-        if diagnostic_mode and diagnostic_settings.get('Post-analyzer EMonitor'):
-            postanalyzer_Emonitor = instrument.add_component("postanalyzer_Emonitor", "E_monitor", AT=[0,0,0.1], ROTATED=[0,0,0], RELATIVE="detector_arm")
-            preanalyzer_Emonitor.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            preanalyzer_Emonitor.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            postanalyzer_Emonitor.nE = 100
-            postanalyzer_Emonitor.Emin = -2
-            postanalyzer_Emonitor.Emax = 30
-            postanalyzer_Emonitor.restore_neutron = 1
-            
-        if diagnostic_mode and diagnostic_settings.get('Post-analyzer PSD'):
-            postanalyzer_PSD = instrument.add_component("postanalyzer_PSD", "PSD_monitor", AT=[0,0,0.5], ROTATED=[0,0,0], RELATIVE="detector_arm")
-            postanalyzer_PSD.xwidth = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
-            postanalyzer_PSD.yheight = analyzer_info['slabheight'] * analyzer_info['nrows']
-            postanalyzer_PSD.nx = 100
-            postanalyzer_PSD.ny = 100
-            postanalyzer_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Post-analyzer EMonitor', 'Post-analyzer PSD')
 
         detector_collimator = instrument.add_component("detector_collimator", "Collimator_linear", AT=[0,0,0.509], RELATIVE="detector_arm")
         detector_collimator.xwidth = 30e-3
@@ -1471,13 +1367,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         detector_slit.xwidth = "dbl_hgap_param"
         detector_slit.yheight = 0.07
 
-        if diagnostic_mode and diagnostic_settings.get('Detector PSD'):
-            detector_PSD = instrument.add_component("detector_PSD", "PSD_monitor", AT=[0,0,PUMA.L4-0.005], RELATIVE="detector_arm")
-            detector_PSD.xwidth = 0.0254
-            detector_PSD.yheight = 1.0
-            detector_PSD.nx = 100
-            detector_PSD.ny = 100
-            detector_PSD.restore_neutron = 1
+        emit_monitor_group(instrument, 'Detector PSD')
 
         detector = instrument.add_component("detector", "Monitor", AT=[0,0,PUMA.L4], ROTATED=[0,0,0], RELATIVE="detector_arm")
         detector.xwidth = 0.0254
