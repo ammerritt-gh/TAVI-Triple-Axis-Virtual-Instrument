@@ -882,6 +882,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     from instruments.puma_plugin import _PUMA_MONITORS
     from tavi.instrument_helpers import (
         emit_collimator,
+        emit_crystal_assembly,
         emit_monitors,
         emit_sample,
         emit_sample_orientation_arms,
@@ -961,24 +962,12 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         ## monochromator section
 
-        mono_cradle = instrument.add_component("mono_cradle", "Arm", AT=[0,0,PUMA.L1], RELATIVE="origin", ROTATED=[0,"A1_param/2",0])
-
-        monochromator = instrument.add_component("monochromator", "Monochromator_curved", AT=[0,0,0], RELATIVE="mono_cradle")
-        monochromator.zwidth = monochromator_info['slabwidth']
-        monochromator.yheight = monochromator_info['slabheight']
-        monochromator.gap = monochromator_info['gap']
-        monochromator.NH = monochromator_info['ncolumns']
-        monochromator.NV = monochromator_info['nrows']
-        monochromator.r0 = monochromator_info['r0']
-        monochromator.DM = monochromator_info['dm']
-        monochromator.RV = "rvm_param"
-        monochromator.RH = "rhm_param"
-        monochromator.mosaic = monochromator_info['mosaic']
-        monochromator.order = 0 # all orders
-        monochromator.reflect = monochromator_info['reflect']
-        monochromator.transmit = monochromator_info['transmit']
-        monochromator.append_EXTEND("if(!SCATTERED) ABSORB;")
-        monochromator.set_SPLIT(2)
+        emit_crystal_assembly(instrument, cradle_name="mono_cradle",
+                              crystal_name="monochromator", relative="origin",
+                              distance=PUMA.L1, rotation_expr="A1_param/2",
+                              info=monochromator_info, d_key='dm',
+                              rv_param="rvm_param", rh_param="rhm_param",
+                              split=2, extend="if(!SCATTERED) ABSORB;")
 
         ## sample arm
 
@@ -1247,24 +1236,12 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_monitor_group(instrument, 'Pre-analyzer EMonitor', 'Pre-analyzer PSD')
 
-        analyzer_cradle = instrument.add_component("analyzer_cradle", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"A4_param/2",0], RELATIVE="analyzer_arm")
-
-        analyzer = instrument.add_component("analyzer", "Monochromator_curved", AT=[0,0,0], RELATIVE="analyzer_cradle")
-        analyzer.zwidth = analyzer_info['slabwidth']
-        analyzer.yheight = analyzer_info['slabheight']
-        analyzer.gap = analyzer_info['gap']
-        analyzer.NH = analyzer_info['ncolumns']
-        analyzer.NV = analyzer_info['nrows']
-        analyzer.r0 = analyzer_info['r0']
-        analyzer.DM = analyzer_info['da']
-        analyzer.RV = "rva_param"
-        analyzer.RH = "rha_param"
-        analyzer.mosaic = analyzer_info['mosaic']
-        analyzer.r0 = analyzer_info['r0']
-        analyzer.reflect = analyzer_info['reflect']
-        analyzer.transmit = analyzer_info['transmit']
-        analyzer.order = 0 # all orders
-        analyzer.set_SPLIT(5)
+        emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
+                              crystal_name="analyzer", relative="analyzer_arm",
+                              distance=PUMA.L3, rotation_expr="A4_param/2",
+                              info=analyzer_info, d_key='da',
+                              rv_param="rva_param", rh_param="rha_param",
+                              split=5)
 
         ## detector
 
