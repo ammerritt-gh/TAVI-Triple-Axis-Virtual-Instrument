@@ -6,8 +6,9 @@ Phase 1 + 1.5 IMPLEMENTED (2026-07-02, spec §17). **Phase 2 IMPLEMENTED
 sample dock, diagnostic dialog), the descriptor is the single source for
 crystal/sample/monitor data, snapshots are typed (`PointSnapshot`),
 `config/parameters.json` is namespaced per instrument with a schema version,
-and ChangeImpact + `build_fingerprint` groundwork is in place. 65 tests pass.
-Next: the cross-scan binary-reuse follow-up task (§18.5), then Phase 3.
+and ChangeImpact + `build_fingerprint` groundwork is in place. **Cross-scan
+binary reuse IMPLEMENTED (2026-07-02, §18.5)** along with two direct-execution
+fixes that were masking it. 77 tests pass. Next: Phase 3.
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -1220,18 +1221,47 @@ one short scan + a diagnostic-mode run with a few monitors enabled.
   Phase 3 makes build() loop over the descriptor tables.
 - `analyzer.r0` is set twice in build() (harmless duplicate assignment).
 
-### 18.5 Follow-up task: cross-scan binary reuse (next up)
+### 18.5 Cross-scan binary reuse — IMPLEMENTED (2026-07-02)
 
-Today every scan's first point runs `backengine()` with
-`force_compile=not execution_state.first_backengine_succeeded`, and the
-`RunExecutionState` is scan-local — so every scan pays a full McStas compile
-even when nothing build-relevant changed. With `build_fingerprint` in place the
-task is: (1) keep the `RunExecutionState` (and last fingerprint + built
-instrument) across scans on the controller; (2) at scan start, if
-`build_fingerprint(new_config)` matches the stored one AND the binary exists →
-skip the rebuild/force-compile and go straight to the direct-invocation path;
-else rebuild as today; (3) diagnostic-mode retains first-point `backengine()`
-(it needs the McStasData for plots); (4) verify with two consecutive scans —
-the second must log a direct run on point 1 and produce identical
-`scan_parameters.txt` structure. Estimated saving: one full compile
-(`runtimes.json` `compilation_time`) per scan after the first.
+Previously every scan's first point ran `backengine()` with
+`force_compile=True` (fresh scan-local `RunExecutionState`), so every scan paid
+a McStas compile even when nothing build-relevant changed.
+
+**Implementation.** The controller keeps `self._binary_reuse_cache`
+(`{fingerprint, instrument, execution_state, instr_path}`) across scans. At
+scan start it computes `plugin.build_fingerprint(scan_config, diagnostic_mode,
+effective_diagnostic_settings)` — the fingerprint now hashes the same
+*effective* inputs `build()` receives (the diagnostic args were previously read
+off the config, where they never live). Decision logic is in two Qt-free static
+methods (`tests/test_binary_reuse.py`):
+
+- `_can_reuse_binary`: reuse iff fingerprint matches, the cached state
+  compiled successfully, the binary file still exists, and the scan is NOT
+  diagnostic-mode (its first point needs backengine McStasData for plots).
+- `_updated_binary_cache`: a scan that compiled replaces the cache (it owns
+  the on-disk binary — builds share one `input_path/<name>.exe`); a reused or
+  aborted-before-compile scan leaves the previous entry valid.
+
+On reuse the scan skips `plugin.build()` entirely and its first point goes
+straight to direct invocation. Since direct runs write no `.instr` into the
+scan folder, the point-0 archive copy falls back to the compiling scan's
+archived `.instr` (`instr_path`).
+
+**Two pre-existing bugs found by the two-scan verification** (direct mode had
+in fact never worked — all 2026-07-02 GUI scans logged 0 direct points):
+
+1. `tavi/mcstas_config.py` read `MPIRUN` only from the top level of
+   `mccode_config.json`; conda-packaged McStas 3.4.65 nests it under a section
+   (`{"run": {"MPIRUN": "mpiexec"}}`) → launcher resolved to `[]` → every
+   point fell back to mcrun/backengine. Now nested sections are searched and a
+   bare launcher name is resolved against PATH.
+2. `_run_puma_point_direct` pre-created the leaf output folder; McStas `--dir`
+   aborts if it exists (`mcuse_dir`) → every direct run returned rc -1. Now
+   only the parent folder is ensured.
+
+**Verified headless** (plugin path, exact controller helpers): scan A =
+[backengine 3.0s, direct 1.7s]; scan B (identical settings) = [direct 1.7s] —
+no compile; changed collimation or diagnostic mode → no reuse. Note
+`runtimes.json` records from reused scans have `compilation_time ≈ 0`, which
+will drag the historical compile estimate down — acceptable, revisit if
+pre-scan estimates matter.
