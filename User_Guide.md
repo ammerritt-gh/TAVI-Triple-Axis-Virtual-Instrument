@@ -84,6 +84,10 @@ Use the data control dock to determine where data is saved. Each scan is saved t
 
 You can load data folders here as well, and they will be displayed in the display dock.
 
+## Remote API
+
+TAVI can be driven remotely by an external program (a script, a notebook, `curl`, or an LLM agent) through a local HTTP API, in addition to the interactive GUI. Remote clients can read the instrument state, change parameters, submit scans, stream live results, and download scan data; everything they do is mirrored back into the GUI so you can watch. The **Remote API** dock shows the listening address, lets you set the access mode (Allow control / Read-only / Off), and displays the job queue, budget, and an activity log. The server listens on `127.0.0.1:8642` by default and is off-limits to other machines unless you change that. For the full reference — endpoints, parameters, scan-command syntax, and worked examples — see `docs/API_USER_GUIDE.md`.
+
 ### Updates
 
-This user guide was last updated Jan. 29, 2026.
+This user guide was last updated Jul. 3, 2026.
