@@ -49,6 +49,8 @@ def _json_safe(value: Any) -> Any:
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_json_safe(v) for v in value), key=str)
     return value
 
 
