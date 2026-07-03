@@ -28,7 +28,9 @@ from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_compo
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
-from tavi.scan_jobs import BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult
+from tavi.scan_jobs import (
+    BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
+)
 from tavi.api_server import TaviApiServer, ApiError, load_api_config
 
 # Import GUI
@@ -207,13 +209,9 @@ class TaviApiBackend:
         return count
 
     def _budget_usage(self):
-        limits = self._budget_limits()
-        return {
-            "pending_neutrons": self._pending_api_cost(),
-            "budget": limits.queue_neutron_budget if limits is not None else None,
-            "queued_jobs": self._queued_count(),
-            "max_queued": limits.max_queued if limits is not None else None,
-        }
+        return compute_budget_usage(
+            self._controller._job_registry, self._budget_limits()
+        )
 
     def get_job(self, job_id):
         return self._get_job_or_404(job_id).snapshot()
@@ -430,7 +428,13 @@ class TAVIController(QObject):
 
     # Signal for job-queue state transitions (job_id, state value)
     job_state_changed = Signal(str, str)
-    
+
+    # Remote-API dock feeds (API dock, docs/API_SERVER_DESIGN.md sec 10):
+    #   api_activity     -- one activity-log line
+    #   api_status_changed -- listening URL (may be "") + human state string
+    api_activity = Signal(str)
+    api_status_changed = Signal(str, str)
+
     def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
         self.window = window
@@ -527,7 +531,13 @@ class TAVIController(QObject):
         # queue are ready (it reports status through print_to_message_center).
         self._start_api_server()
 
-    def _start_api_server(self):
+    def _set_api_dock_mode(self, mode):
+        """Reflect the effective access mode in the API dock combo (no-op safe)."""
+        dock = getattr(self.window, "api_dock", None)
+        if dock is not None:
+            dock.set_mode_display(mode)
+
+    def _start_api_server(self, mode_override=None):
         """Construct and start the remote API server per config + CLI overrides.
 
         Called at the end of ``__init__`` so the message center and job queue
@@ -567,11 +577,21 @@ class TAVIController(QObject):
             port = int(overrides["port"])
             enabled = True  # --api-port implies enabled
 
+        # A dock-driven mode change (set_api_mode -> restart) forces a listening
+        # mode and enables the server regardless of the persisted enabled flag.
+        if mode_override is not None:
+            mode = mode_override
+            enabled = True
+
         # 'off' mode (or disabled) means: do not listen at all. TaviApiServer only
         # accepts 'allow'/'readonly', so filter 'off' out before construction.
         if not enabled or mode == "off":
             self.print_to_message_center("API server disabled")
+            self._set_api_dock_mode("off")
+            self.api_status_changed.emit("", "Off")
             return
+
+        url = f"http://{host}:{port}/api/v1"
 
         bridge = ApiBridge()  # created on the GUI thread
         self._api_bridge = bridge
@@ -582,6 +602,7 @@ class TAVIController(QObject):
             )
         except ValueError as exc:
             self.print_to_message_center(f"API server not started: {exc}")
+            self.api_status_changed.emit("", "Failed")
             return
 
         backend.server = server
@@ -592,11 +613,14 @@ class TAVIController(QObject):
                 f"Warning: API server could not bind {host}:{port} ({exc}); "
                 "continuing without remote API"
             )
+            self.api_status_changed.emit(url, "Failed")
             return
 
         self.api_server = server
+        self._set_api_dock_mode(mode)
+        self.api_status_changed.emit(url, "Listening")
         self.print_to_message_center(
-            f"API server listening on http://{host}:{port}/api/v1 (mode: {mode})"
+            f"API server listening on {url} (mode: {mode})"
         )
         if host not in ("127.0.0.1", "localhost", "::1"):
             if token:
@@ -620,6 +644,112 @@ class TAVIController(QObject):
         queued connection), so this is the safe path off the GUI thread.
         """
         self.message_printed.emit(f"API: {msg}")
+        # Mirror to the API dock's activity log (raw line, no "API:" prefix).
+        self.api_activity.emit(msg)
+
+    # ---- API dock support methods ---------------------------------------
+
+    def get_recent_jobs(self, n=20):
+        """Return up to ``n`` recent job snapshots (newest first) for the dock.
+
+        Thin wrapper so the dock never touches ``_job_registry`` directly.
+        """
+        return self._job_registry.recent(n)
+
+    def get_api_budget_usage(self):
+        """Return the API budget-usage view (pending neutrons, queue depth).
+
+        Uses the same shared accounting as the ``/state`` endpoint's budget
+        block (``tavi.scan_jobs.compute_budget_usage``).
+        """
+        return compute_budget_usage(self._job_registry, self._budget_limits)
+
+    def cancel_job(self, job_id):
+        """Cancel a queued job or stop a running one (API dock Cancel button).
+
+        Mirrors the core of ``TaviApiBackend.stop_job`` without the HTTP error
+        envelope: QUEUED -> CANCELLED, RUNNING -> shared stop event, terminal
+        states -> no-op. GUI-thread entry; independent of the API server state
+        so it works even when the server is off.
+        """
+        job = self._job_registry.get(job_id)
+        if job is None:
+            self.print_to_message_center(f"Cancel: unknown job {job_id}")
+            return
+        with job.lock:
+            state = job.state
+            if state == JobState.QUEUED:
+                job.state = JobState.CANCELLED
+                if job.finished_at is None:
+                    job.finished_at = time.time()
+        if state == JobState.QUEUED:
+            self.job_state_changed.emit(job_id, JobState.CANCELLED.value)
+            self._api_log(f"job {job_id} cancelled from dock")
+        elif state == JobState.RUNNING:
+            self.stop_event.set()
+            self._api_log(f"job {job_id} stop requested from dock")
+        # Terminal states: nothing to do.
+
+    def set_api_mode(self, mode):
+        """Apply an access mode chosen in the API dock and persist it.
+
+        'off'  -> stop the server if running (connection refused thereafter).
+        'allow'/'readonly' -> if the server is stopped/absent, (re)start it with
+        this mode; otherwise switch the live mode in place. The chosen mode is
+        written back to ``config/api_config.json`` so it survives restart.
+        """
+        if mode not in ("off", "allow", "readonly"):
+            self.print_to_message_center(f"API: ignoring unknown mode '{mode}'")
+            return
+
+        if mode == "off":
+            if self.api_server is not None:
+                self.api_server.stop()
+                self.api_server = None
+                self._api_log("access mode set to 'off' (server stopped)")
+            self.api_status_changed.emit("", "Off")
+        else:
+            if self.api_server is None:
+                # Server not listening -- (re)start it in the requested mode.
+                self._start_api_server(mode_override=mode)
+            else:
+                self.api_server.set_mode(mode)
+                url = f"http://{self.api_server.host}:{self.api_server.port}/api/v1"
+                self.api_status_changed.emit(url, "Listening")
+                self._api_log(f"access mode set to '{mode}'")
+
+        self._persist_api_mode(mode)
+
+    def _persist_api_mode(self, mode):
+        """Read-modify-write the ``mode`` field of config/api_config.json.
+
+        Preserves any other keys; creates the file (and config dir) if absent.
+        Failures are surfaced to the message center, never swallowed silently.
+        """
+        config_path = os.path.join(os.getcwd(), "config", "api_config.json")
+        data = {}
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    data = loaded
+        except Exception as exc:
+            self.print_to_message_center(
+                f"API: could not read {config_path} to persist mode ({exc})"
+            )
+        data["mode"] = mode
+        # 'off' persists as enabled=False so a restart honors the user's choice;
+        # a listening mode re-enables the server on next launch.
+        data["enabled"] = mode != "off"
+        try:
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+        except Exception as exc:
+            self.print_to_message_center(
+                f"API: could not persist mode to {config_path} ({exc})"
+            )
 
     def connect_signals(self):
         """Connect all GUI signals to controller methods."""
@@ -632,6 +762,18 @@ class TAVIController(QObject):
         # Job-queue state transitions are emitted from the worker thread; Qt
         # delivers them to this GUI-thread slot as a queued connection.
         self.job_state_changed.connect(self._on_job_state_changed)
+
+        # Remote-API dock wiring (docs/API_SERVER_DESIGN.md sec 10). The dock
+        # drives user actions (mode change, cancel) through the controller ref;
+        # controller-to-dock updates all arrive on the GUI thread via signals.
+        api_dock = getattr(self.window, "api_dock", None)
+        if api_dock is not None:
+            api_dock.set_controller(self)
+            self.api_activity.connect(api_dock.append_activity)
+            self.api_status_changed.connect(api_dock.set_status)
+            # Any job transition (from either thread) refreshes the job table
+            # and budget readout via the controller's pull helpers.
+            self.job_state_changed.connect(api_dock.refresh_jobs)
         
         # Parameter buttons (moved to right panel)
         self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
