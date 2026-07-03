@@ -28,7 +28,7 @@ from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_compo
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
-from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
+from tavi.scan_jobs import BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult
 from tavi.api_server import TaviApiServer, ApiError, load_api_config
 
 # Import GUI
@@ -178,7 +178,42 @@ class TaviApiBackend:
         limits = getattr(self._controller, "_api_limits", None)
         if limits is not None:
             state["limits"] = limits
+        state["budget"] = self._budget_usage()
         return state
+
+    # ---- budget accounting (thread-safe registry reads) ----------------
+
+    def _budget_limits(self):
+        return getattr(self._controller, "_budget_limits", None)
+
+    def _pending_api_cost(self):
+        """Summed points*neutrons committed by pending API jobs (QUEUED+RUNNING)."""
+        total = 0.0
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                pending = job.state in (JobState.QUEUED, JobState.RUNNING)
+                source = job.source
+            if pending and source == "api":
+                total += float(getattr(job, "_api_cost", 0.0) or 0.0)
+        return total
+
+    def _queued_count(self):
+        """Number of jobs currently QUEUED (any source)."""
+        count = 0
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    count += 1
+        return count
+
+    def _budget_usage(self):
+        limits = self._budget_limits()
+        return {
+            "pending_neutrons": self._pending_api_cost(),
+            "budget": limits.queue_neutron_budget if limits is not None else None,
+            "queued_jobs": self._queued_count(),
+            "max_queued": limits.max_queued if limits is not None else None,
+        }
 
     def get_job(self, job_id):
         return self._get_job_or_404(job_id).snapshot()
@@ -225,6 +260,135 @@ class TaviApiBackend:
         if running_id is not None:
             self._controller.stop_event.set()
         return {"stopped": running_id, "cancelled": cancelled}
+
+    # ---- write endpoints ----------------------------------------------
+
+    def _has_active_or_queued(self):
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                if job.state in (JobState.QUEUED, JobState.RUNNING):
+                    return True
+        return False
+
+    def patch_parameters(self, patch, force):
+        """PATCH /parameters -- apply a partial parameter set (sec 6, sec 8).
+
+        Validates the request shape, guards against a busy queue (unless
+        ``force``), applies the patch on the GUI thread via the bridge, and
+        reports the applied fields plus any per-field errors.
+        """
+        if not isinstance(patch, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        for key, value in patch.items():
+            if not isinstance(value, (str, int, float, bool, dict)) or value is None:
+                raise ApiError(
+                    400, "bad_request",
+                    "Field %r must be a scalar or object, got %s"
+                    % (key, type(value).__name__),
+                )
+
+        if not force and self._has_active_or_queued():
+            raise ApiError(
+                409, "busy",
+                "A scan is running or queued; retry with ?force=1 to override",
+            )
+
+        applied, errors = self._bridge.call_on_gui(
+            lambda: self._controller.apply_parameters(patch)
+        )
+
+        if errors:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"applied": list(applied), "errors": errors},
+            )
+        return {"applied": list(applied), "errors": errors}
+
+    def submit_scan(self, body):
+        """POST /scan -- queue a scan job with budget enforcement (sec 6, 7).
+
+        Optional ``body['parameters']`` is applied first (same path as
+        patch_parameters, minus the busy guard since we are queueing anyway).
+        The whole submission runs atomically on the GUI thread so cost accounting
+        and enqueue cannot race another submitter.
+        """
+        if not isinstance(body, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        patch = body.get("parameters")
+        if patch is not None and not isinstance(patch, dict):
+            raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
+        force = bool(body.get("force", False))
+
+        result = self._bridge.call_on_gui(
+            lambda: self._submit_scan_on_gui(patch, force)
+        )
+        return result
+
+    def _submit_scan_on_gui(self, patch, force):
+        """Atomic scan submission body -- runs on the GUI thread via the bridge.
+
+        Returns the 202 payload dict or raises ``ApiError`` (which the bridge
+        re-raises to the HTTP thread for envelope serialization).
+        """
+        controller = self._controller
+
+        # 1. Apply an inline parameter patch first (no busy guard here).
+        if patch:
+            applied, errors = controller.apply_parameters(patch)
+            if errors:
+                raise ApiError(
+                    400, "invalid_parameters", "One or more fields failed",
+                    details={"applied": list(applied), "errors": errors},
+                )
+
+        # 2. Freeze launch state and read the scan commands from it.
+        launch_state = controller._collect_simulation_launch_state()
+        if not launch_state:
+            raise ApiError(400, "bad_request", "Could not read GUI values")
+        vals = launch_state["vals"]
+        cmd1 = vals.get("scan_command1", "")
+        cmd2 = vals.get("scan_command2", "")
+
+        # 3. Validate scan commands unless force overrides.
+        if not force:
+            msg = controller._validate_scan_commands_text(cmd1, cmd2)
+            if msg:
+                raise ApiError(400, "scan_validation", msg)
+
+        # 4. Compute this job's cost.
+        try:
+            points = controller._count_scan_points(cmd1, cmd2)
+        except Exception:
+            # Unparseable command with force=True: cannot size it, let the scan
+            # itself fail later; treat as a single point for budget purposes.
+            points = 1
+        neutrons = float(vals.get("number_neutrons") or 0)
+
+        # 5. Budget + queue-depth enforcement (API-sourced jobs only).
+        limits = getattr(controller, "_budget_limits", None)
+        pending_cost = self._pending_api_cost()
+        queued_now = self._queued_count()
+        if limits is not None:
+            if queued_now >= limits.max_queued:
+                raise ApiError(
+                    429, "limit_exceeded",
+                    "queue is full: %d queued jobs, limit is %d"
+                    % (queued_now, limits.max_queued),
+                    details={"usage": self._budget_usage()},
+                )
+            reason = limits.check_submission(points, neutrons, pending_cost)
+            if reason is not None:
+                raise ApiError(
+                    429, "limit_exceeded", reason,
+                    details={"usage": self._budget_usage()},
+                )
+
+        # 6. Enqueue and tag the job with its cost for future budget math.
+        job = controller.submit_scan_job(launch_state, "api")
+        job._api_cost = points * neutrons
+
+        position = self._queued_count()
+        return {"job_id": job.job_id, "state": "queued", "position": position}
 
 
 # Terminal states used by the API stop logic (mirrors scan_jobs terminal set).
@@ -273,6 +437,10 @@ class TAVIController(QObject):
         # CLI overrides for the remote API server (see main()); empty by default.
         self._api_cli_overrides = api_overrides or {}
         self.api_server = None
+        # Populated by _start_api_server; defaults keep the API backend safe if
+        # the server never starts (config load failure / disabled).
+        self._api_limits = None
+        self._budget_limits = None
         # The active instrument plugin (fixed for the session) and its live state.
         self.instrument = instrument
         self.instrument_state = instrument.default_state()
@@ -378,6 +546,16 @@ class TAVIController(QObject):
         port = int(cfg.get("port", 8642))
         token = cfg.get("token")
         self._api_limits = cfg.get("limits")
+
+        # Build the enforceable BudgetLimits used by the API submission path
+        # (docs/API_SERVER_DESIGN.md sec 7.1). Filter to known fields so an
+        # extra key in the user's config cannot raise a TypeError here.
+        limits_cfg = self._api_limits if isinstance(self._api_limits, dict) else {}
+        known = ("max_queued", "max_points", "max_neutrons_per_point",
+                 "queue_neutron_budget")
+        self._budget_limits = BudgetLimits(
+            **{k: limits_cfg[k] for k in known if k in limits_cfg}
+        )
 
         # CLI overrides win over the config file.
         if overrides.get("disabled"):
@@ -3268,41 +3446,304 @@ class TAVIController(QObject):
 
 
     def _preflight_scan_validation(self) -> str:
-        """Check scan commands before running simulation.
-        
+        """Check scan commands before running simulation (GUI wrapper).
+
+        Reads the scan-command widgets and delegates to the pure
+        ``_validate_scan_commands_text`` so the GUI Run path and the API path
+        share one validation implementation. GUI behavior is unchanged.
+
         Returns:
             str: Error/warning message if issues found, empty string if OK
         """
-        from gui.docks.unified_simulation_dock import (
-            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
-        )
-        
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        
+        return self._validate_scan_commands_text(cmd1, cmd2)
+
+    def _validate_scan_commands_text(self, cmd1: str, cmd2: str) -> str:
+        """Pure scan-command validation over two command strings.
+
+        Parameterized on strings only -- reads no widgets -- so both the GUI
+        Run button and the remote API can call it. Returns an empty string when
+        the commands are acceptable, or a newline-joined description of the
+        blocking issues (serious warnings / unknown variables / conflicts).
+        """
+        cmd1 = (cmd1 or "").strip()
+        cmd2 = (cmd2 or "").strip()
+
         issues = []
-        
+
         # Validate command 1
         var1, warning1 = self._validate_single_scan_command(cmd1)
         if warning1 and "⚠" in warning1:  # Only block on serious warnings
             issues.append(f"Command 1: {warning1}")
         elif warning1 and "Unknown" in warning1:
             issues.append(f"Command 1: {warning1}")
-        
+
         # Validate command 2
         var2, warning2 = self._validate_single_scan_command(cmd2)
         if warning2 and "⚠" in warning2:
             issues.append(f"Command 2: {warning2}")
         elif warning2 and "Unknown" in warning2:
             issues.append(f"Command 2: {warning2}")
-        
+
         # Check for conflicts between commands
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
                 issues.append(conflict)
-        
+
         return "\n".join(issues)
+
+    # ------------------------------------------------------------- remote API
+    #
+    # Parameter writes coming from the remote API (docs/API_SERVER_DESIGN.md
+    # sec 8). The field map mirrors get_gui_values() exactly; apply_parameters()
+    # parses/validates every field first, then applies valid ones in dependency
+    # order and fires each after-handler once. All of this runs on the GUI
+    # thread (the backend invokes it via ApiBridge.call_on_gui).
+
+    @staticmethod
+    def _api_fmt(v) -> str:
+        """Format a numeric value for a QLineEdit (compact, round-trippable)."""
+        return "%.10g" % float(v)
+
+    def _api_field_map(self):
+        """Return ``{field: (parse_fn, setter_fn, after_handler_or_None)}``.
+
+        Covers every key ``get_gui_values()`` returns. ``parse_fn(value)``
+        validates/coerces the incoming JSON value (raising ``ValueError`` with a
+        human message on bad input), ``setter_fn(parsed)`` writes the widget,
+        and ``after_handler`` (zero-arg or ``None``) recomputes derived state --
+        the same handler the user's Enter key would trigger.
+        """
+        w = self.window
+        idock = w.instrument_dock
+        sdock = w.scattering_dock
+        sam = w.sample_dock
+        sim = w.simulation_dock
+
+        # --- parse helpers ---
+        def p_float(v):
+            return float(v)
+
+        def p_int_pos(v):
+            n = int(float(v))
+            if n <= 0:
+                raise ValueError("must be a positive integer")
+            return n
+
+        def p_str(v):
+            if not isinstance(v, str):
+                raise ValueError("must be a string")
+            return v
+
+        def p_bool(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, int):
+                return bool(v)
+            raise ValueError("must be a boolean")
+
+        def p_dict(v):
+            if not isinstance(v, dict):
+                raise ValueError("must be an object/dict")
+            return v
+
+        def p_choice(valid, label):
+            valid = set(valid)
+
+            def _parse(v):
+                if v not in valid:
+                    raise ValueError(
+                        "%s must be one of %s" % (label, sorted(valid))
+                    )
+                return v
+            return _parse
+
+        mono_ids = [c.id for c in self.descriptor.mono_crystals]
+        ana_ids = [c.id for c in self.descriptor.ana_crystals]
+        source_ids = [s.id for s in self.descriptor.source_types]
+
+        # --- line-edit setter factory (numeric) ---
+        def set_text(edit):
+            return lambda v: edit.setText(self._api_fmt(v))
+
+        # --- bending after-handler factory (unlock ideal + refresh labels) ---
+        def bend_after(key):
+            def _after():
+                self.unlock_ideal_bending(key)
+                self.update_ideal_bending_buttons()
+            return _after
+
+        return {
+            # angles
+            'mtt': (p_float, set_text(idock.mtt_edit), self.on_mtt_changed),
+            'stt': (p_float, set_text(idock.stt_edit), self.on_stt_changed),
+            'omega': (p_float, set_text(idock.omega_edit), self.on_omega_changed),
+            'chi': (p_float, set_text(idock.chi_edit), self.on_chi_changed),
+            'att': (p_float, set_text(idock.att_edit), self.on_att_changed),
+            # energies
+            'Ki': (p_float, set_text(idock.Ki_edit), self.on_Ki_changed),
+            'Ei': (p_float, set_text(idock.Ei_edit), self.on_Ei_changed),
+            'Kf': (p_float, set_text(idock.Kf_edit), self.on_Kf_changed),
+            'Ef': (p_float, set_text(idock.Ef_edit), self.on_Ef_changed),
+            # energy mode
+            'K_fixed': (
+                p_choice(["Ki Fixed", "Kf Fixed"], "K_fixed"),
+                sdock.K_fixed_combo.setCurrentText,
+                self.on_K_fixed_changed,
+            ),
+            'fixed_E': (p_float, set_text(sdock.fixed_E_edit), self.on_fixed_E_changed),
+            # Q
+            'qx': (p_float, set_text(sdock.qx_edit), self.on_Q_changed),
+            'qy': (p_float, set_text(sdock.qy_edit), self.on_Q_changed),
+            'qz': (p_float, set_text(sdock.qz_edit), self.on_Q_changed),
+            # HKL
+            'H': (p_float, set_text(sdock.H_edit), self.on_HKL_changed),
+            'K': (p_float, set_text(sdock.K_edit), self.on_HKL_changed),
+            'L': (p_float, set_text(sdock.L_edit), self.on_HKL_changed),
+            'deltaE': (p_float, set_text(sdock.deltaE_edit), self.on_deltaE_changed),
+            # lattice
+            'lattice_a': (p_float, set_text(sam.lattice_a_edit), self.on_lattice_changed),
+            'lattice_b': (p_float, set_text(sam.lattice_b_edit), self.on_lattice_changed),
+            'lattice_c': (p_float, set_text(sam.lattice_c_edit), self.on_lattice_changed),
+            'lattice_alpha': (p_float, set_text(sam.lattice_alpha_edit), self.on_lattice_changed),
+            'lattice_beta': (p_float, set_text(sam.lattice_beta_edit), self.on_lattice_changed),
+            'lattice_gamma': (p_float, set_text(sam.lattice_gamma_edit), self.on_lattice_changed),
+            # alignment offsets
+            'kappa': (p_float, set_text(sam.kappa_edit), self.on_alignment_offset_changed),
+            'psi': (p_float, set_text(sam.psi_edit), self.on_alignment_offset_changed),
+            # crystals
+            'monocris': (
+                p_choice(mono_ids, "monocris"),
+                idock.set_mono_id,
+                self.update_monocris_info,
+            ),
+            'anacris': (
+                p_choice(ana_ids, "anacris"),
+                idock.set_ana_id,
+                self.update_anacris_info,
+            ),
+            # bending radii
+            'rhm': (p_float, set_text(idock.rhm_edit), bend_after('rhm')),
+            'rvm': (p_float, set_text(idock.rvm_edit), bend_after('rvm')),
+            'rha': (p_float, set_text(idock.rha_edit), bend_after('rha')),
+            # source
+            'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
+            'source_dE': (p_float, set_text(idock.source_dE_edit), None),
+            # descriptor-driven containers
+            'modules': (p_dict, idock.set_module_values, self.update_ideal_bending_buttons),
+            'collimation': (p_dict, idock.set_collimation_values, None),
+            'slits_mm': (p_dict, idock.set_slit_values_mm, None),
+            # simulation control
+            'number_neutrons': (p_int_pos, sim.set_number_neutrons, None),
+            'scan_command1': (p_str, sim.scan_command_1_edit.setText, self.validate_scan_commands),
+            'scan_command2': (p_str, sim.scan_command_2_edit.setText, self.validate_scan_commands),
+            'diagnostic_mode': (p_bool, sim.diagnostic_mode_check.setChecked, None),
+        }
+
+    # Dependency order for applying API parameter writes (sec 8 step b): lattice
+    # first, then energy mode, then Q/HKL, then angles. Fields not listed are
+    # applied afterward in patch order.
+    _API_APPLY_ORDER = (
+        'lattice_a', 'lattice_b', 'lattice_c',
+        'lattice_alpha', 'lattice_beta', 'lattice_gamma',
+        'K_fixed', 'fixed_E', 'Ki', 'Ei', 'Kf', 'Ef',
+        'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
+        'mtt', 'stt', 'omega', 'chi', 'att',
+    )
+
+    def apply_parameters(self, patch: dict):
+        """Apply a parameter patch to the GUI widgets. GUI-thread only.
+
+        Steps (docs/API_SERVER_DESIGN.md sec 8):
+          a) parse/validate every field first, collecting per-field errors;
+          b) apply valid fields in dependency order (lattice -> energy mode ->
+             Q/HKL -> angles -> the rest in patch order);
+          c) fire each field's after-handler once (deduped, order preserved);
+          d) log a summary to the message center;
+          e) return (applied, errors).
+        """
+        field_map = self._api_field_map()
+        applied = {}
+        errors = {}
+
+        if not isinstance(patch, dict):
+            return applied, {"_": "patch must be a JSON object"}
+
+        # (a) Parse/validate everything first; never partially apply a field.
+        parsed = {}
+        for name, value in patch.items():
+            spec = field_map.get(name)
+            if spec is None:
+                errors[name] = "unknown field"
+                continue
+            parse_fn = spec[0]
+            try:
+                parsed[name] = parse_fn(value)
+            except (ValueError, TypeError) as exc:
+                errors[name] = "invalid value: %s" % exc
+
+        # (b) Apply valid fields in dependency order, then leftover patch order.
+        ordered = [n for n in self._API_APPLY_ORDER if n in parsed]
+        ordered += [n for n in patch.keys() if n in parsed and n not in ordered]
+
+        after_handlers = []  # deduped-by-identity, order preserved
+        for name in ordered:
+            _parse_fn, setter_fn, after = field_map[name]
+            value = parsed[name]
+            try:
+                setter_fn(value)
+            except Exception as exc:  # setter failure: surface, do not swallow
+                errors[name] = "could not apply: %s" % exc
+                continue
+            applied[name] = value
+            if after is not None and after not in after_handlers:
+                after_handlers.append(after)
+
+        # (c) Fire each after-handler once, in dependency order.
+        for handler in after_handlers:
+            try:
+                handler()
+            except Exception as exc:
+                self.print_to_message_center(
+                    f"API: after-update handler {getattr(handler, '__name__', handler)} "
+                    f"failed: {exc}"
+                )
+
+        # (d) Summary to the message center.
+        if applied:
+            parts = []
+            for k, v in applied.items():
+                if isinstance(v, (dict, set)):
+                    parts.append(k)
+                else:
+                    parts.append(f"{k}={v}")
+            self.print_to_message_center("API: set " + ", ".join(parts))
+
+        # (e) Report back for the HTTP response.
+        return applied, errors
+
+    def _count_scan_points(self, scan_command1: str, scan_command2: str) -> int:
+        """Number of points a scan will run, mirroring run_simulation's logic.
+
+        Blank/single command -> 1; a single command -> len(values); both
+        commands -> product. Used for API budget enforcement.
+        """
+        c1 = (scan_command1 or "").strip()
+        c2 = (scan_command2 or "").strip()
+
+        def npts(cmd):
+            _, values = parse_scan_steps(cmd)
+            return len(values)
+
+        if not c1 and not c2:
+            return 1
+        if c1 and not c2:
+            return npts(c1)
+        if c2 and not c1:
+            return npts(c2)
+        return npts(c1) * npts(c2)
 
     def on_sample_changed(self, label):
         """Handle sample selection changes from the GUI."""
