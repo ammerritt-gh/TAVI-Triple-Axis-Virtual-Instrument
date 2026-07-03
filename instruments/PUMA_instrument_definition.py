@@ -549,31 +549,53 @@ def build_puma_point_params(PUMA, deltaE):
     }
 
 
-def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder,
-                          is_2d_scan=False, variable_name1="", variable_name2="",
-                          scan_command1="", scan_command2=""):
-    """Compute the complete runtime snapshot for one scan point."""
-    point_puma = copy.deepcopy(puma)
+# Human-readable limiting-constraint text for each TAS angle error flag emitted
+# by ``TAS_Instrument.calculate_angles`` (see that method for where each is set).
+_ERROR_FLAG_REASONS = {
+    "zero_q": "zero momentum transfer (Q = 0)",
+    "invalid_crystal": "unknown monochromator/analyzer crystal selection",
+    "mtt": "monochromator angle out of range (no Bragg reflection for Ki)",
+    "att": "analyzer angle out of range (no Bragg reflection for Kf)",
+    "stt": "scattering triangle does not close (|Q| unreachable for Ki, Kf)",
+    "sth": "sample rotation undefined (scattering triangle does not close)",
+    "q": "invalid Q from sample angles",
+    "K_fixed": "invalid fixed-energy mode",
+}
 
-    if is_2d_scan:
-        scans, idx_x, idx_y = scan_item
-        idx_1d = -1
-    else:
-        scans, idx_1d = scan_item
-        idx_x, idx_y = -1, -1
 
-    if len(scans) < 11:
-        raise ValueError(
-            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
-        )
+def describe_scan_error_flags(error_flags):
+    """Return a short human string for a list of TAS angle error flags.
 
+    Empty flags -> empty string. Duplicate reasons are collapsed and joined
+    with ``"; "`` so the caller gets one concise limiting-constraint phrase.
+    """
+    if not error_flags:
+        return ""
+    reasons = []
+    for flag in error_flags:
+        reason = _ERROR_FLAG_REASONS.get(flag, "angle solve failed (%s)" % flag)
+        if reason not in reasons:
+            reasons.append(reason)
+    return "; ".join(reasons)
+
+
+def _solve_point_geometry(point_puma, scan_mode, scans, vals):
+    """Solve Q and the TAS angles for one scan point (shared core).
+
+    Extracted verbatim from ``compute_scan_snapshot`` so feasibility checks
+    (``check_point_feasibility``) exercise the *exact* angle math the real run
+    uses. For feasible momentum/rlu/orientation points -- and always for
+    ``angle`` mode -- this applies ``point_puma.set_angles``; callers that only
+    want the error flags pass a throwaway copy. Returns a dict with keys
+    ``qx qy qz H K L deltaE mtt stt sth saz att error_flags``.
+    """
     error_flags = []
     qx = qy = qz = None
     H = K = L = None
     deltaE = 0.0
     mtt = stt = sth = att = saz = 0.0
 
-    if scan_mode == "momentum":
+    if scan_mode in ("momentum", "orientation"):
         qx, qy, qz, deltaE = scans[:4]
         angles_array, error_flags = point_puma.calculate_angles(
             qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
@@ -593,21 +615,70 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
         if not error_flags:
             mtt, stt, sth, saz, att = angles_array
             point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
-    elif scan_mode == "orientation":
-        qx, qy, qz, deltaE = scans[:4]
-        angles_array, error_flags = point_puma.calculate_angles(
-            qx, qy, qz, deltaE, point_puma.fixed_E, point_puma.K_fixed,
-            point_puma.monocris, point_puma.anacris
-        )
-        if not error_flags:
-            mtt, stt, sth, saz, att = angles_array
-            point_puma.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
     else:
         A1, A2, A3, A4 = scans[:4]
         point_puma.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
         deltaE = vals['deltaE']
         mtt, stt, sth, att = A1, A2, A3, A4
         saz = vals.get('chi', 0.0)
+
+    return {
+        "qx": qx, "qy": qy, "qz": qz,
+        "H": H, "K": K, "L": L,
+        "deltaE": deltaE,
+        "mtt": mtt, "stt": stt, "sth": sth, "saz": saz, "att": att,
+        "error_flags": error_flags,
+    }
+
+
+def check_point_feasibility(puma, scan_mode, scan_point, vals):
+    """Return ``(feasible: bool, reason: str | None)`` for one scan point.
+
+    Reuses ``_solve_point_geometry`` -- the same Q/angle solve
+    ``compute_scan_snapshot`` runs per point -- so a point flagged infeasible
+    here is exactly a point the real scan would skip. A point is infeasible
+    when ``calculate_angles`` emits any error flag (scattering triangle cannot
+    close, Bragg condition unreachable, zero Q, unknown crystal). ``angle``-mode
+    scans set raw instrument angles directly and are always feasible.
+
+    ``puma`` must be a solved scan-config state (it carries ``fixed_E``,
+    ``K_fixed``, ``monocris``, ``anacris`` and, for rlu mode, ``sample_mount``).
+    A private deep copy is used so the caller's state is never mutated.
+    """
+    point_puma = copy.deepcopy(puma)
+    geom = _solve_point_geometry(point_puma, scan_mode, scan_point, vals)
+    error_flags = geom["error_flags"]
+    if not error_flags:
+        return True, None
+    return False, describe_scan_error_flags(error_flags)
+
+
+def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder,
+                          is_2d_scan=False, variable_name1="", variable_name2="",
+                          scan_command1="", scan_command2=""):
+    """Compute the complete runtime snapshot for one scan point."""
+    point_puma = copy.deepcopy(puma)
+
+    if is_2d_scan:
+        scans, idx_x, idx_y = scan_item
+        idx_1d = -1
+    else:
+        scans, idx_1d = scan_item
+        idx_x, idx_y = -1, -1
+
+    if len(scans) < 11:
+        raise ValueError(
+            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
+        )
+
+    geom = _solve_point_geometry(point_puma, scan_mode, scans, vals)
+    qx, qy, qz = geom["qx"], geom["qy"], geom["qz"]
+    H, K, L = geom["H"], geom["K"], geom["L"]
+    deltaE = geom["deltaE"]
+    mtt, stt, sth, saz, att = (
+        geom["mtt"], geom["stt"], geom["sth"], geom["saz"], geom["att"]
+    )
+    error_flags = geom["error_flags"]
 
     q_vector = (qx, qy, qz) if qx is not None and qy is not None and qz is not None else None
 

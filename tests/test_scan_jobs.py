@@ -170,6 +170,33 @@ def test_snapshot_nan_in_summary_scalars_become_none():
     assert snap["result"]["max_counts"] is None
 
 
+def test_skipped_points_default_empty_and_in_summary():
+    # A normal job carries an empty skipped_points list in both snapshot views.
+    job = _job_with_result([1.0, 2.0, 3.0])
+    assert job.result.skipped_points == []
+    summary = job.snapshot(include_data=False)["result"]
+    assert summary["skipped_points"] == []
+    data = job.snapshot(include_data=True)["result"]
+    assert data["skipped_points"] == []
+
+
+def test_skipped_points_serialized_in_snapshot():
+    # An allow_partial job records infeasible points; they must survive the
+    # JSON-safe snapshot in both summary and data views.
+    skipped = [
+        {"index": 2, "values": {"H": 2.01},
+         "reason": "scattering triangle does not close"},
+    ]
+    job = _job_with_result([1.0, 2.0, None])
+    job.result.skipped_points = skipped
+    summary = job.snapshot(include_data=False)["result"]
+    assert summary["skipped_points"] == skipped
+    data = job.snapshot(include_data=True)["result"]
+    assert data["skipped_points"] == skipped
+    # Still strict-JSON serializable.
+    json.dumps(job.snapshot(include_data=True), allow_nan=False)
+
+
 def test_snapshot_include_data_toggles_arrays():
     job = _job_with_result([1.0, 2.0, 3.0], include_meta={"foo": "bar"})
 

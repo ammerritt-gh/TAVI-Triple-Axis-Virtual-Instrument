@@ -427,13 +427,46 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
+        allow_partial = bool(body.get("allow_partial", False))
 
         result = self._bridge.call_on_gui(
-            lambda: self._submit_scan_on_gui(patch, force, idempotency_key)
+            lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
+                                             allow_partial)
         )
         return result
 
-    def _submit_scan_on_gui(self, patch, force, idempotency_key=None):
+    def _build_validation(self, controller, launch_state, points, neutrons,
+                          allow_partial):
+        """Assemble the ``validation`` block for a launch state (points/cost/eta).
+
+        Feasibility + per-command expansion come from the controller (GUI-thread
+        angle math); budget/cost and ETA are folded in here since the backend
+        owns those. ``points`` is the total requested-point count; with
+        ``allow_partial`` the ETA is scaled to the points that will actually run.
+        Returns the ``validation`` dict embedded in 202/validate responses.
+        """
+        validation = controller.validate_scan_launch_state(launch_state)
+        infeasible = validation.get("infeasible", [])
+        run_points = points
+        if allow_partial:
+            run_points = max(0, points - len(infeasible))
+        validation["cost"] = dict(
+            self._budget_usage(),
+            points=points,
+            neutrons_per_point=neutrons,
+            job_neutrons=points * neutrons,
+        )
+        try:
+            eta = controller.runtime_tracker.estimate_scan_seconds(
+                self._instrument_id(), run_points, int(neutrons), True
+            )
+        except Exception:
+            eta = {"estimated_seconds": None, "confidence": "none", "samples": 0}
+        validation["eta"] = eta
+        return validation
+
+    def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
+                            allow_partial=False):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
@@ -486,7 +519,28 @@ class TaviApiBackend:
             points = 1
         neutrons = float(vals.get("number_neutrons") or 0)
 
-        # 5. Budget + queue-depth enforcement (API-sourced jobs only).
+        # 5. Always-on feasibility validation (API path only). Build the
+        #    validation block (per-command points + per-point feasibility +
+        #    cost + eta). Any infeasible point is a hard 400 unless the caller
+        #    opted into allow_partial, in which case the infeasible points are
+        #    recorded on the launch state so run_simulation skips them and the
+        #    result documents them under skipped_points.
+        validation = self._build_validation(
+            controller, launch_state, points, neutrons, allow_partial
+        )
+        infeasible = validation.get("infeasible", [])
+        if infeasible and not allow_partial:
+            raise ApiError(
+                400, "infeasible_points",
+                "%d scan point(s) are geometrically infeasible; resubmit with "
+                "\"allow_partial\": true to skip them" % len(infeasible),
+                details=validation,
+            )
+        if infeasible and allow_partial:
+            launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+            launch_state["skipped_points"] = infeasible
+
+        # 6. Budget + queue-depth enforcement (API-sourced jobs only).
         limits = getattr(controller, "_budget_limits", None)
         pending_cost = self._pending_api_cost()
         queued_now = self._queued_count()
@@ -505,7 +559,7 @@ class TaviApiBackend:
                     details={"usage": self._budget_usage()},
                 )
 
-        # 6. Enqueue and tag the job with its cost for future budget math.
+        # 7. Enqueue and tag the job with its cost for future budget math.
         job = controller.submit_scan_job(launch_state, "api")
         job._api_cost = points * neutrons
         if idempotency_key:
@@ -517,7 +571,101 @@ class TaviApiBackend:
             "state": "queued",
             "position": position,
             "eta": self._eta_for_job(job),
+            "validation": validation,
         }
+
+    def submit_validate(self, body):
+        """POST /validate -- run the identical checks as POST /scan, never queue.
+
+        Applies any inline ``parameters`` patch to a snapshot of the GUI state,
+        runs scan-command + feasibility + budget validation, then RESTORES the
+        original GUI values so validation never mutates live state (the known
+        submit-path gotcha where inline patches persist does not apply here).
+        Returns the validation block plus ``would_queue`` and ``blockers``.
+        Allowed in read-only mode (it is non-mutating).
+        """
+        if not isinstance(body, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        patch = body.get("parameters")
+        if patch is not None and not isinstance(patch, dict):
+            raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
+        force = bool(body.get("force", False))
+        allow_partial = bool(body.get("allow_partial", False))
+        return self._bridge.call_on_gui(
+            lambda: self._validate_scan_on_gui(patch, force, allow_partial)
+        )
+
+    def _validate_scan_on_gui(self, patch, force, allow_partial):
+        """Non-mutating validation body -- runs on the GUI thread via the bridge."""
+        controller = self._controller
+
+        # Snapshot current widget values so any inline patch can be rolled back.
+        saved = controller.get_gui_values()
+        try:
+            if patch:
+                applied, errors = controller.apply_parameters(patch)
+                if errors:
+                    raise ApiError(
+                        400, "invalid_parameters", "One or more fields failed",
+                        details={"applied": list(applied), "errors": errors},
+                    )
+
+            launch_state = controller._collect_simulation_launch_state()
+            if not launch_state:
+                raise ApiError(400, "bad_request", "Could not read GUI values")
+            vals = launch_state["vals"]
+            cmd1 = vals.get("scan_command1", "")
+            cmd2 = vals.get("scan_command2", "")
+
+            blockers = []
+            scan_msg = ""
+            if not force:
+                scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
+                if scan_msg:
+                    blockers.append("scan_validation: %s" % scan_msg)
+
+            try:
+                points = controller._count_scan_points(cmd1, cmd2)
+            except Exception:
+                points = 1
+            neutrons = float(vals.get("number_neutrons") or 0)
+
+            validation = self._build_validation(
+                controller, launch_state, points, neutrons, allow_partial
+            )
+            infeasible = validation.get("infeasible", [])
+            if infeasible and not allow_partial:
+                blockers.append(
+                    "infeasible_points: %d point(s) unreachable" % len(infeasible)
+                )
+
+            limits = getattr(controller, "_budget_limits", None)
+            if limits is not None:
+                if self._queued_count() >= limits.max_queued:
+                    blockers.append("limit_exceeded: queue is full")
+                reason = limits.check_submission(
+                    points, neutrons, self._pending_api_cost()
+                )
+                if reason is not None:
+                    blockers.append("limit_exceeded: %s" % reason)
+
+            validation["would_queue"] = not blockers
+            validation["blockers"] = blockers
+            return validation
+        finally:
+            # Restore the pre-validation GUI state (validate must not mutate).
+            if saved:
+                try:
+                    controller.apply_parameters(saved)
+                except Exception as exc:
+                    controller.print_to_message_center(
+                        "Warning: could not fully restore GUI state after "
+                        "/validate: %s" % exc
+                    )
+
+    def get_schema(self):
+        """GET /schema -- machine-readable API self-description (read-only)."""
+        return self._bridge.call_on_gui(self._controller.build_api_schema)
 
 
 # Terminal states used by the API stop logic (mirrors scan_jobs terminal set).
@@ -4070,6 +4218,250 @@ class TAVIController(QObject):
             return npts(c2)
         return npts(c1) * npts(c2)
 
+    # Scan-variable -> scan-point index, mirroring run_simulation. Kept as a
+    # class attribute so the validation expansion and the run share one map.
+    _SCAN_VARIABLE_TO_INDEX = {
+        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+        'H': 0, 'K': 1, 'L': 2,
+        'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
+        'omega': 10, '2theta': 1,
+        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+        'chi': 8, 'kappa': 9, 'psi': 10,
+    }
+
+    def _build_scan_point_template(self, scan_mode, vals):
+        """Build the 11-element scan-point template (mirrors run_simulation)."""
+        template = [0] * 11
+        if scan_mode == "momentum":
+            template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
+        elif scan_mode == "rlu":
+            template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
+        elif scan_mode == "angle":
+            template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
+        elif scan_mode == "orientation":
+            template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
+        template[8] = 0
+        template[9] = vals['kappa']
+        template[10] = vals['psi']
+        return template
+
+    def validate_scan_launch_state(self, launch_state):
+        """Expand a frozen launch state's scan and check each point's feasibility.
+
+        Mirrors ``run_simulation``'s point expansion (template + variable index,
+        per-command ``parse_scan_steps``, relative offsets, the single-command
+        swap) WITHOUT touching the GUI, then evaluates each concrete point with
+        the instrument's ``check_point_feasibility`` (the same angle math the run
+        uses). API-side only -- the GUI Run path never calls this.
+
+        Returns ``{"points", "per_command", "infeasible"}`` where ``per_command``
+        is a list of ``{"variable", "count", "values"}`` and ``infeasible`` is a
+        list of ``{"index", "values", "reason"}`` in run order (the linear index
+        matches ``run_simulation``'s ``scan_parameter_input`` order, so the
+        skip-filter can drop exactly those points).
+        """
+        vals = launch_state['vals']
+        scan_config = launch_state['scan_config']
+        cmd1 = (vals.get('scan_command1') or "").strip()
+        cmd2 = (vals.get('scan_command2') or "").strip()
+        relative_mode_1 = launch_state.get('relative_mode_1', False)
+        relative_mode_2 = launch_state.get('relative_mode_2', False)
+
+        result = {"points": 0, "per_command": [], "infeasible": []}
+
+        # Single-command swap matches run_simulation (a lone command 2 becomes 1).
+        if cmd2 and not cmd1:
+            cmd1, cmd2 = cmd2, ""
+            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+
+        scan_mode = self._determine_scan_mode(cmd1, cmd2)
+        template = self._build_scan_point_template(scan_mode, vals)
+        vi = self._SCAN_VARIABLE_TO_INDEX
+
+        # A plugin may not implement feasibility (older instruments); degrade to
+        # "assume feasible" rather than blocking submission.
+        feas_fn = getattr(self.instrument, "check_point_feasibility", None)
+
+        def _feasible(scan_point):
+            if not callable(feas_fn):
+                return True, None
+            try:
+                return feas_fn(scan_config, scan_mode, scan_point, vals)
+            except Exception as exc:
+                # A solver blow-up is itself an infeasible point, surfaced.
+                return False, f"angle solve error: {exc}"
+
+        def _expand(cmd, relative):
+            var, values = parse_scan_steps(cmd)
+            var = self.normalize_scan_variable(var)
+            if relative:
+                base = self._get_current_value_for_variable(var, vals, template)
+                values = values + base
+            return var, [float(v) for v in values]
+
+        try:
+            if cmd1 and not cmd2:
+                var1, values1 = _expand(cmd1, relative_mode_1)
+                result["per_command"].append(
+                    {"variable": var1, "count": len(values1), "values": values1}
+                )
+                for idx, value1 in enumerate(values1):
+                    scan_point = template[:]
+                    scan_point[vi[var1]] = value1
+                    feasible, reason = _feasible(scan_point)
+                    if not feasible:
+                        result["infeasible"].append({
+                            "index": idx,
+                            "values": {var1: value1},
+                            "reason": reason,
+                        })
+                result["points"] = len(values1)
+            elif cmd1 and cmd2:
+                var1, values1 = _expand(cmd1, relative_mode_1)
+                var2, values2 = _expand(cmd2, relative_mode_2)
+                result["per_command"].append(
+                    {"variable": var1, "count": len(values1), "values": values1}
+                )
+                result["per_command"].append(
+                    {"variable": var2, "count": len(values2), "values": values2}
+                )
+                linear = 0
+                for value2 in values2:
+                    for value1 in values1:
+                        scan_point = template[:]
+                        scan_point[vi[var1]] = value1
+                        scan_point[vi[var2]] = value2
+                        feasible, reason = _feasible(scan_point)
+                        if not feasible:
+                            result["infeasible"].append({
+                                "index": linear,
+                                "values": {var1: value1, var2: value2},
+                                "reason": reason,
+                            })
+                        linear += 1
+                result["points"] = len(values1) * len(values2)
+            else:
+                # Single point at current settings.
+                feasible, reason = _feasible(template[:])
+                if not feasible:
+                    result["infeasible"].append({
+                        "index": 0, "values": {}, "reason": reason
+                    })
+                result["points"] = 1
+        except Exception as exc:
+            # Unparseable command (e.g. force-submitted): cannot expand, so report
+            # no infeasible points and a best-effort count. run_simulation will
+            # surface any downstream failure normally.
+            self.print_to_message_center(f"Scan validation expansion failed: {exc}")
+            try:
+                result["points"] = self._count_scan_points(cmd1, cmd2)
+            except Exception:
+                result["points"] = 1
+            result["per_command"] = []
+            result["infeasible"] = []
+
+        return result
+
+    def build_api_schema(self):
+        """Return a machine-readable self-description of the API surface.
+
+        Generated at request time from live data: the field set comes from the
+        live ``_api_field_map`` (no hand-maintained duplicate), allowed values
+        from the descriptor (crystals/source) and the static choice maps
+        ``apply_parameters`` enforces. GUI-thread only (reads the field map).
+        """
+        # Live field names (order preserved) drive the schema so it can never
+        # drift from what apply_parameters actually accepts.
+        field_names = list(self._api_field_map().keys())
+
+        # Static type/units metadata (the only hand-kept part); every live field
+        # gets an entry, unknowns default to number/None.
+        meta = {
+            'mtt': ('number', 'degrees'), 'stt': ('number', 'degrees'),
+            'omega': ('number', 'degrees'), 'chi': ('number', 'degrees'),
+            'att': ('number', 'degrees'),
+            'Ki': ('number', 'angstrom^-1'), 'Ei': ('number', 'meV'),
+            'Kf': ('number', 'angstrom^-1'), 'Ef': ('number', 'meV'),
+            'K_fixed': ('string', None), 'fixed_E': ('number', 'meV'),
+            'qx': ('number', 'angstrom^-1'), 'qy': ('number', 'angstrom^-1'),
+            'qz': ('number', 'angstrom^-1'),
+            'H': ('number', 'r.l.u.'), 'K': ('number', 'r.l.u.'),
+            'L': ('number', 'r.l.u.'), 'deltaE': ('number', 'meV'),
+            'lattice_a': ('number', 'angstrom'), 'lattice_b': ('number', 'angstrom'),
+            'lattice_c': ('number', 'angstrom'),
+            'lattice_alpha': ('number', 'degrees'),
+            'lattice_beta': ('number', 'degrees'),
+            'lattice_gamma': ('number', 'degrees'),
+            'kappa': ('number', 'degrees'), 'psi': ('number', 'degrees'),
+            'monocris': ('string', None), 'anacris': ('string', None),
+            'rhm': ('number', None), 'rvm': ('number', None), 'rha': ('number', None),
+            'source_type': ('string', None), 'source_dE': ('number', 'meV'),
+            'modules': ('object', None), 'collimation': ('object', None),
+            'slits_mm': ('object', 'mm'),
+            'number_neutrons': ('integer', 'count'),
+            'scan_command1': ('string', None), 'scan_command2': ('string', None),
+            'diagnostic_mode': ('boolean', None),
+        }
+
+        # Allowed values pulled live from the descriptor / static choice maps.
+        allowed = {
+            'K_fixed': ["Ki Fixed", "Kf Fixed"],
+            'monocris': [c.id for c in self.descriptor.mono_crystals],
+            'anacris': [c.id for c in self.descriptor.ana_crystals],
+            'source_type': [s.id for s in self.descriptor.source_types],
+        }
+
+        fields = []
+        for name in field_names:
+            ftype, units = meta.get(name, ('number', None))
+            entry = {"name": name, "type": ftype}
+            if units is not None:
+                entry["units"] = units
+            if name in allowed:
+                entry["allowed"] = allowed[name]
+            fields.append(entry)
+
+        limits = getattr(self, "_api_limits", None)
+
+        return {
+            "instrument": self.descriptor.id,
+            "fields": fields,
+            "scan_variables": [
+                "H", "K", "L", "qx", "qy", "qz", "deltaE",
+                "A1", "A2", "A3", "A4", "omega", "2theta",
+                "chi", "kappa", "psi", "rhm", "rvm", "rha", "rva",
+            ],
+            "scan_command_grammar": (
+                "VARIABLE start stop STEP. The third number (the last token) is "
+                "the STEP SIZE, not the number of points. "
+                "'H 1.99 2.01 0.01' produces 3 points (1.99, 2.00, 2.01). A step "
+                "larger than the range is a validation error. Two non-empty "
+                "commands make a 2D scan (point counts multiply); one command is "
+                "1D; none is a single point at the current settings."
+            ),
+            "limits": limits,
+            "endpoints": [
+                {"method": "GET", "path": "/health", "description": "Liveness probe (no auth)."},
+                {"method": "GET", "path": "/state", "description": "Full instrument state, parameters, queue, budget."},
+                {"method": "GET", "path": "/parameters", "description": "Current parameter dict."},
+                {"method": "PATCH", "path": "/parameters", "description": "Partial parameter write."},
+                {"method": "POST", "path": "/scan", "description": "Validate and queue a scan job."},
+                {"method": "POST", "path": "/validate", "description": "Run scan validation only; never queues."},
+                {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll)."},
+                {"method": "GET", "path": "/scan/{id}/data", "description": "Job status plus full scan arrays."},
+                {"method": "POST", "path": "/scan/{id}/stop", "description": "Stop or cancel one job."},
+                {"method": "POST", "path": "/stop", "description": "Stop the running job (optionally clear the queue)."},
+                {"method": "GET", "path": "/jobs", "description": "Recent job snapshots."},
+                {"method": "GET", "path": "/schema", "description": "This machine-readable API self-description."},
+                {"method": "GET", "path": "/events", "description": "Server-Sent Events live stream."},
+            ],
+            "examples": [
+                "align-on-Bragg-peak",
+                "elastic-H-scan",
+                "constant-Q-energy-scan",
+            ],
+        }
+
     def on_sample_changed(self, label):
         """Handle sample selection changes from the GUI."""
         try:
@@ -4478,6 +4870,30 @@ class TAVIController(QObject):
                 'valid_mask_1': [],
                 'valid_mask_2d': None,
             })
+
+        # allow_partial (API only): the submission pre-determined some points
+        # geometrically infeasible and asked to skip them. Drop those points so
+        # the prep thread never queues a snapshot for them; the result arrays
+        # keep their None placeholders and job.result.skipped_points documents
+        # exactly what was omitted (never silent gaps). The linear index matches
+        # this expansion's order (see validate_scan_launch_state). GUI jobs never
+        # set skipped_indices, so this is a no-op for them.
+        skipped_indices = set(launch_state.get('skipped_indices') or [])
+        skipped_points = launch_state.get('skipped_points') or []
+        if skipped_indices and scan_parameter_input:
+            scan_parameter_input = [
+                item for k, item in enumerate(scan_parameter_input)
+                if k not in skipped_indices
+            ]
+            self.message_printed.emit(
+                f"Skipping {len(skipped_indices)} infeasible point(s) "
+                f"(allow_partial); running {len(scan_parameter_input)}."
+            )
+        if job is not None and skipped_points:
+            with job.lock:
+                if job.result is not None:
+                    job.result.skipped_points = list(skipped_points)
+                job.progress_total = len(scan_parameter_input)
 
         if is_2d_scan:
             estimated_runtime_points = int(sum(sum(1 for value in row if value) for row in valid_mask_2d))

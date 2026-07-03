@@ -165,9 +165,12 @@ curl http://127.0.0.1:8642/api/v1/scan/j-0001/data
    Linked fields recompute automatically (set `Ei` and `Ki` updates; set `H` and
    `qx`/`qy`/`qz` update via the UB matrix). The scan itself is defined by the
    `scan_command1` and (optionally) `scan_command2` parameters.
-3. **Submit.** `POST /scan`. The server validates the scan commands and enforces
-   budgets, then queues the job and returns a `job_id`. Validation happens here —
-   there is no separate validate endpoint. A bad scan command returns `400`.
+3. **Submit.** `POST /scan`. The server validates the scan commands, checks every
+   point's geometric feasibility, and enforces budgets, then queues the job and
+   returns a `job_id` plus a `validation` object. A bad scan command returns
+   `400 scan_validation`; an unreachable point returns `400 infeasible_points`
+   (or is skipped with `"allow_partial": true`). To preview all of this without
+   queueing, use `POST /validate` first.
 4. **Track progress.** Either **poll** `GET /scan/{id}` on an interval, or
    **stream** `GET /events` (SSE) for live `point` / `progress` events.
 5. **Fetch data.** `GET /scan/{id}/data` returns the scan arrays. It works
@@ -239,13 +242,34 @@ curl -X POST http://127.0.0.1:8642/api/v1/scan \
 ```
 ```json
 {"job_id": "j-0004", "state": "queued", "position": 0,
- "eta": {"estimated_seconds": 42.0, "confidence": "high", "samples": 11}}
+ "eta": {"estimated_seconds": 42.0, "confidence": "high", "samples": 11},
+ "validation": {"points": 3, "per_command": [{"variable": "H", "count": 3,
+   "values": [1.99, 2.0, 2.01]}], "cost": {"pending_neutrons": 0.0,
+   "budget": 1e10, "queued_jobs": 0, "max_queued": 10, "points": 3,
+   "neutrons_per_point": 100000.0, "job_neutrons": 300000.0},
+   "eta": {"estimated_seconds": 42.0, "confidence": "high", "samples": 11},
+   "infeasible": []}}
 ```
 `position` is the number of jobs still ahead of this one in the queue at the
 moment of the response — `0` means it is next to run (or already running).
 `eta` is a best-effort time estimate for the whole scan (see §5 *ETA object*).
+
+**Always-on validation (API submissions only).** Every `POST /scan` is fully
+validated *before* it is queued, and the checks are echoed back in a
+`validation` object (see §5 *Validation object*). This covers scan-command
+parsing (explicit point values per command), budget/cost, per-point geometric
+**feasibility** (does the scattering triangle close for every point?), and an
+ETA. The GUI Run button is **never** subject to this — humans are always allowed
+to submit.
+
 - Invalid scan command → `400 scan_validation` with a human-readable message.
   Pass `"force": true` in the body to bypass scan-command validation.
+- Any **geometrically infeasible** point → `400 infeasible_points`; the error
+  `details` is the full `validation` object (so you can see which points and
+  why). To queue anyway and simply **skip** the unreachable points, resubmit
+  with `"allow_partial": true` in the body — the job runs the feasible points
+  and records every omission under `result.skipped_points` (see §5 *GET
+  /scan/{id}*). Skipped points are never silent gaps.
 - Over a budget limit → `429 limit_exceeded` (see §9). The response carries a
   `Retry-After` header (see §5 *Retry-After*):
 ```json
@@ -254,6 +278,63 @@ moment of the response — `0` means it is next to run (or already running).
  "details": {"usage": {"pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0, "max_queued": 10}}}}
 ```
 - In read-only mode → `403 read_only`.
+
+**`allow_partial`** (optional boolean, default `false`). When `true`, a scan with
+some infeasible points is still queued: only the feasible points run, and
+`result.skipped_points` lists each omitted point as `{"index", "values",
+"reason"}`. When `false` (the default), a single infeasible point rejects the
+whole submission with `400 infeasible_points`.
+
+### POST /validate
+Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
+feasibility, budget, and ETA — **without queueing anything and without mutating
+any parameter**. The body is identical to `POST /scan` (optional `parameters`,
+`force`, `allow_partial`). Any inline `parameters` patch is applied to a private
+copy of the GUI state and rolled back before returning, so (unlike `POST /scan`)
+`/validate` never leaves parameter changes behind. Non-mutating, so it is
+**allowed in read-only mode**.
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/validate \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.05"}}'
+```
+Returns the `validation` object (§5 *Validation object*) plus two extra fields:
+- `would_queue` — `true` if `POST /scan` with the same body would be accepted.
+- `blockers` — a list of human strings for each reason it would be rejected
+  (empty when `would_queue` is `true`), e.g. `"infeasible_points: 2 point(s)
+  unreachable"` or `"scan_validation: ..."` or `"limit_exceeded: ..."`.
+```json
+{"points": 5, "per_command": [{"variable": "H", "count": 5,
+  "values": [1.9, 1.95, 2.0, 2.05, 2.1]}],
+ "cost": {"pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0,
+  "max_queued": 10, "points": 5, "neutrons_per_point": 100000.0,
+  "job_neutrons": 500000.0},
+ "eta": {"estimated_seconds": 70.0, "confidence": "high", "samples": 11},
+ "infeasible": [], "would_queue": true, "blockers": []}
+```
+
+### GET /schema
+Machine-readable self-description of the API, generated at request time from live
+instrument data (no hand-maintained duplicate). Read-only, no side effects,
+**allowed in read-only mode**.
+```json
+{"instrument": "puma",
+ "fields": [{"name": "Ei", "type": "number", "units": "meV"},
+   {"name": "K_fixed", "type": "string", "allowed": ["Ki Fixed", "Kf Fixed"]},
+   {"name": "monocris", "type": "string", "allowed": ["pg002", "pg002_test"]},
+   {"...": "one entry per writable parameter"}],
+ "scan_variables": ["H", "K", "L", "qx", "qy", "qz", "deltaE", "A1", "A2",
+   "A3", "A4", "omega", "2theta", "chi", "kappa", "psi", "rhm", "rvm", "rha", "rva"],
+ "scan_command_grammar": "VARIABLE start stop STEP. The third number (the last
+   token) is the STEP SIZE, not the number of points. ...",
+ "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
+   "queue_neutron_budget": 1e10},
+ "endpoints": [{"method": "GET", "path": "/schema", "description": "..."}],
+ "examples": ["align-on-Bragg-peak", "elastic-H-scan", "constant-Q-energy-scan"]}
+```
+Each field carries `name`, `type`, `units` (where known), and `allowed` (the
+permitted values for choice fields — crystal ids, `K_fixed` modes, source types).
+`examples` names the worked examples elsewhere in this guide.
 
 **Idempotency-Key** (optional request header). Send an `Idempotency-Key: <string>`
 header to make retries safe. The first request with a given key queues a job as
@@ -281,7 +362,20 @@ object (see *ETA object* below).
  "eta": {"estimated_seconds": 8.0, "confidence": "medium", "samples": 4}}
 ```
 `result` is `null` for a job that has not yet started building its scan geometry
-(e.g. still `queued`). Unknown id → `404 unknown_job`.
+(e.g. still `queued`). Unknown id → `404 unknown_job`. Once the job has geometry,
+`result.skipped_points` lists any points omitted because they were infeasible and
+the job was submitted with `allow_partial` (empty `[]` for a normal job) — each
+entry is `{"index", "values", "reason"}`.
+
+**Validation object.** The `validation` block embedded in a `POST /scan` 202
+response (and returned by `POST /validate`) has:
+`{"points": <int total>, "per_command": [{"variable", "count", "values":[...]},
+...], "cost": {budget usage + "points"/"neutrons_per_point"/"job_neutrons"},
+"eta": {ETA object}, "infeasible": [{"index", "values", "reason"}, ...]}`.
+`infeasible` is empty when every point's scattering triangle closes; each entry
+names a point that is geometrically unreachable and why (e.g. `"scattering
+triangle does not close"`, `"analyzer angle out of range"`). `POST /validate`
+adds `would_queue` (bool) and `blockers` (list of strings).
 
 **Long-poll — `?wait=N`.** Add `?wait=N` (seconds, float allowed, clamped to 120)
 to block until the job reaches a terminal state (`done`/`failed`/`stopped`/
@@ -366,6 +460,7 @@ Server-Sent Events stream. See §8.
 | 400 | `bad_request` | Malformed JSON body, non-object body, or a PATCH field whose value is not a scalar/object. |
 | 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) had an unknown field or a bad value. `details` lists `applied` and `errors`. |
 | 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, step larger than range). Bypass with `"force": true`. |
+| 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
 | 401 | `unauthorized` | A token is configured and the `Authorization: Bearer <token>` header is missing or wrong. |
 | 403 | `read_only` | A write endpoint was called while the server is in read-only mode. |
 | 404 | `not_found` | Unknown URL path. |

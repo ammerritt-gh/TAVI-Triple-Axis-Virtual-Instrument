@@ -78,6 +78,11 @@ class ScanResult:
     max_counts: float = 0.0
     output_folder: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Points deliberately omitted from the run because they were pre-determined
+    # geometrically infeasible at submission and the job was queued with
+    # ``allow_partial``. Each entry is ``{"index", "values", "reason"}``. Empty
+    # for a normal job. Documented so a partial scan never has silent gaps.
+    skipped_points: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
         """Return a JSON-safe dict view of this result.
@@ -93,6 +98,7 @@ class ScanResult:
             'total_counts': _json_safe(self.total_counts),
             'max_counts': _json_safe(self.max_counts),
             'output_folder': self.output_folder,
+            'skipped_points': _json_safe(self.skipped_points),
         }
         if not include_data:
             return summary
