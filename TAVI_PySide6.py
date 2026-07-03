@@ -437,6 +437,9 @@ class TAVIController(QObject):
         # CLI overrides for the remote API server (see main()); empty by default.
         self._api_cli_overrides = api_overrides or {}
         self.api_server = None
+        # Last SSE-publish error string, so identical consecutive publish
+        # failures are logged once instead of spamming the message center.
+        self._api_publish_last_error = None
         # Populated by _start_api_server; defaults keep the API backend safe if
         # the server never starts (config load failure / disabled).
         self._api_limits = None
@@ -3362,6 +3365,11 @@ class TAVIController(QObject):
         self._job_queue.put(job)
         self.job_state_changed.emit(job.job_id, JobState.QUEUED.value)
         self.print_to_message_center(f"Scan job {job.job_id} queued (source: {source})")
+        self._publish_api_event('job_queued', {
+            'job_id': job.job_id,
+            'source': source,
+            'position': self._job_queue.qsize(),
+        })
         return job
 
     def _job_worker_loop(self):
@@ -3391,6 +3399,10 @@ class TAVIController(QObject):
                 job.started_at = time.time()
             self._active_job = job
             self.job_state_changed.emit(job.job_id, JobState.RUNNING.value)
+            self._publish_api_event('job_started', {
+                'job_id': job.job_id,
+                'source': job.source,
+            })
 
             try:
                 self.run_simulation(job.launch_state, job)
@@ -3408,7 +3420,15 @@ class TAVIController(QObject):
 
             with job.lock:
                 final_state = job.state.value
+                final_error = job.error
             self.job_state_changed.emit(job.job_id, final_state)
+            # Covers both the normal-return and except (FAILED) paths, since
+            # both funnel through the terminal state read above.
+            self._publish_api_event('job_finished', {
+                'job_id': job.job_id,
+                'state': final_state,
+                'error': final_error,
+            })
 
     @Slot(str, str)
     def _on_job_state_changed(self, job_id, state):
@@ -3443,6 +3463,28 @@ class TAVIController(QObject):
                 if job.state in (JobState.QUEUED, JobState.RUNNING):
                     return True
         return False
+
+    def _publish_api_event(self, event: str, data: dict):
+        """Publish an SSE event to API clients, if a server is attached.
+
+        No-op when no API server is running. Thread-safe -- the ``SseBroker``
+        does its own locking -- so this may be called from the scan worker
+        thread beside the corresponding Qt signal emits (see
+        docs/API_SERVER_DESIGN.md sec 9). Publish failures are surfaced once to
+        the message center; identical consecutive errors are suppressed so a
+        persistent fault cannot spam the log.
+        """
+        server = getattr(self, 'api_server', None)
+        if server is None:
+            return
+        try:
+            server.publish(event, data)
+            self._api_publish_last_error = None
+        except Exception as exc:
+            msg = f"API: failed to publish '{event}' event: {exc}"
+            if msg != getattr(self, '_api_publish_last_error', None):
+                self._api_publish_last_error = msg
+                self.message_printed.emit(msg)
 
 
     def _preflight_scan_validation(self) -> str:
@@ -3720,6 +3762,10 @@ class TAVIController(QObject):
                 else:
                     parts.append(f"{k}={v}")
             self.print_to_message_center("API: set " + ", ".join(parts))
+            self._publish_api_event('parameters_changed', {
+                'fields': list(applied),
+                'source': 'api',
+            })
 
         # (e) Report back for the HTTP response.
         return applied, errors
@@ -4009,14 +4055,18 @@ class TAVIController(QObject):
             if job is not None:
                 # Pre-size the result so readers see per-index None until measured.
                 n_points = len(array_values1)
+                # Build the plain lists once so the ScanResult and the SSE
+                # event share the same objects (no needless re-copy).
+                scan_values_1_list = [float(v) for v in array_values1]
+                valid_mask_1_list = [bool(v) for v in valid_mask_1d]
                 with job.lock:
                     job.result = ScanResult(
                         mode='1D',
                         variable_1=variable_name1,
                         variable_2=None,
-                        scan_values_1=[float(v) for v in array_values1],
+                        scan_values_1=scan_values_1_list,
                         scan_values_2=None,
-                        valid_mask_1=[bool(v) for v in valid_mask_1d],
+                        valid_mask_1=valid_mask_1_list,
                         valid_mask_2d=None,
                         counts=[None] * n_points,
                         counts_grid=None,
@@ -4024,6 +4074,16 @@ class TAVIController(QObject):
                         metadata=dict(vals),
                     )
                     job.progress_total = len(scan_parameter_input)
+                self._publish_api_event('scan_initialized', {
+                    'job_id': job.job_id,
+                    'mode': '1D',
+                    'variable_1': variable_name1,
+                    'variable_2': None,
+                    'scan_values_1': scan_values_1_list,
+                    'scan_values_2': None,
+                    'valid_mask_1': valid_mask_1_list,
+                    'valid_mask_2d': None,
+                })
 
         # Double scan command
         if scan_command2 and scan_command1:
@@ -4079,21 +4139,34 @@ class TAVIController(QObject):
             if job is not None:
                 n_cols = len(array_values1)
                 n_rows = len(array_values2)
+                scan_values_1_list = [float(v) for v in array_values1]
+                scan_values_2_list = [float(v) for v in array_values2]
+                valid_mask_2d_list = [[bool(v) for v in row] for row in valid_mask_2d]
                 with job.lock:
                     job.result = ScanResult(
                         mode='2D',
                         variable_1=variable_name1,
                         variable_2=variable_name2,
-                        scan_values_1=[float(v) for v in array_values1],
-                        scan_values_2=[float(v) for v in array_values2],
+                        scan_values_1=scan_values_1_list,
+                        scan_values_2=scan_values_2_list,
                         valid_mask_1=[],
-                        valid_mask_2d=[[bool(v) for v in row] for row in valid_mask_2d],
+                        valid_mask_2d=valid_mask_2d_list,
                         counts=None,
                         counts_grid=[[None] * n_cols for _ in range(n_rows)],
                         output_folder=data_folder,
                         metadata=dict(vals),
                     )
                     job.progress_total = len(scan_parameter_input)
+                self._publish_api_event('scan_initialized', {
+                    'job_id': job.job_id,
+                    'mode': '2D',
+                    'variable_1': variable_name1,
+                    'variable_2': variable_name2,
+                    'scan_values_1': scan_values_1_list,
+                    'scan_values_2': scan_values_2_list,
+                    'valid_mask_1': [],
+                    'valid_mask_2d': valid_mask_2d_list,
+                })
 
         # Track if this is a 2D scan
         is_2d_scan = scan_command2 and scan_command1
@@ -4115,6 +4188,16 @@ class TAVIController(QObject):
                     metadata=dict(vals),
                 )
                 job.progress_total = len(scan_parameter_input)
+            self._publish_api_event('scan_initialized', {
+                'job_id': job.job_id,
+                'mode': 'single',
+                'variable_1': "",
+                'variable_2': None,
+                'scan_values_1': [],
+                'scan_values_2': None,
+                'valid_mask_1': [],
+                'valid_mask_2d': None,
+            })
 
         if is_2d_scan:
             estimated_runtime_points = int(sum(sum(1 for value in row if value) for row in valid_mask_2d))
@@ -4366,8 +4449,23 @@ class TAVIController(QObject):
                     self.message_printed.emit(message)
                     if is_2d_scan:
                         self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id,
+                                'ix': idx_x,
+                                'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                            })
                     elif not is_single_point_scan and idx_1d >= 0:
                         self.scan_point_invalid_1d.emit(idx_1d)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id,
+                                'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                            })
 
                     if not is_2d_scan and not is_single_point_scan and idx_1d >= 0 and idx_1d < len(array_values1):
                         scan_x_values.append(array_values1[idx_1d])
@@ -4422,6 +4520,32 @@ class TAVIController(QObject):
                                 res.counts[idx_1d] = float(counts)
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
+
+                        # Publish the per-point SSE event (outside the lock).
+                        if is_2d_scan:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id,
+                                'ix': idx_x,
+                                'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                                'counts': float(counts),
+                            })
+                        elif is_single_point_scan:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id,
+                                'index': 0,
+                                'value': None,
+                                'counts': float(counts),
+                            })
+                        elif idx_1d >= 0:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id,
+                                'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                                'counts': float(counts),
+                            })
                 
                 # Record scan time for this point
                 scan_elapsed = time.time() - scan_start_time
@@ -4440,6 +4564,12 @@ class TAVIController(QObject):
                 if job is not None:
                     with job.lock:
                         job.progress_done = processed_points
+                    self._publish_api_event('progress', {
+                        'job_id': job.job_id,
+                        'done': processed_points,
+                        'total': total_scans,
+                        'elapsed': time.time() - start_time,
+                    })
                 
                 # Calculate elapsed time and remaining time - ignore first scan (compilation overhead)
                 elapsed_time = time.time() - start_time
