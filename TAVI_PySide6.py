@@ -31,7 +31,7 @@ from tavi.runtime_tracker import RuntimeTracker
 from tavi.scan_jobs import (
     BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
 )
-from tavi.api_server import TaviApiServer, ApiError, load_api_config
+from tavi.api_server import TaviApiServer, ApiError, load_api_config, MAX_WAITERS
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -126,6 +126,12 @@ class TaviApiBackend:
         # Set by _start_api_server after the server is constructed so the backend
         # can report the live access mode. Guarded against None.
         self.server = None
+        # Long-poll (GET /scan/{id}?wait=N) coordination: a bounded count of
+        # concurrent waiters and an abort event that server shutdown sets so
+        # blocked handler threads release promptly.
+        self._waiter_lock = threading.Lock()
+        self._waiter_count = 0
+        self._wait_abort = threading.Event()
 
     # ---- helpers -------------------------------------------------------
 
@@ -214,13 +220,114 @@ class TaviApiBackend:
         )
 
     def get_job(self, job_id):
-        return self._get_job_or_404(job_id).snapshot()
+        job = self._get_job_or_404(job_id)
+        snap = job.snapshot()
+        snap["eta"] = self._eta_for_job(job)
+        return snap
 
     def get_job_data(self, job_id):
         return self._get_job_or_404(job_id).snapshot(include_data=True)
 
     def list_jobs(self):
         return self._controller._job_registry.recent()
+
+    # ---- ETA / long-poll -----------------------------------------------
+
+    def _eta_for_job(self, job):
+        """Return the ``{estimated_seconds, confidence, samples}`` ETA for a job.
+
+        Queued jobs estimate the whole scan (compile + all points); a running
+        job estimates only the remaining points (compile already sunk). Terminal
+        jobs still report a full-scan estimate for reference. Pure computation
+        over the runtime tracker -- safe to call off the GUI thread.
+        """
+        with job.lock:
+            state = job.state
+            done = job.progress_done
+            total = job.progress_total
+            launch = job.launch_state if isinstance(job.launch_state, dict) else {}
+        vals = launch.get("vals", {}) if isinstance(launch, dict) else {}
+        cmd1 = vals.get("scan_command1", "") or ""
+        cmd2 = vals.get("scan_command2", "") or ""
+        try:
+            ncount = int(float(vals.get("number_neutrons") or 0))
+        except (TypeError, ValueError):
+            ncount = 0
+        try:
+            points = self._controller._count_scan_points(cmd1, cmd2)
+        except Exception:
+            points = total if total else 1
+
+        needs_compile = True
+        if state == JobState.RUNNING:
+            needs_compile = False
+            if total > 0:
+                points = max(0, total - done)
+
+        instrument_name = self._instrument_id()
+        return self._controller.runtime_tracker.estimate_scan_seconds(
+            instrument_name, points, ncount, needs_compile
+        )
+
+    def estimate_queue_drain_seconds(self):
+        """Sum the ETA of all pending (QUEUED/RUNNING) jobs, or ``None``.
+
+        Backs the Retry-After hint on 429 responses. Returns ``None`` when no
+        pending job yields an estimate (the server then uses its constant).
+        """
+        total = 0.0
+        have_estimate = False
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                pending = job.state in (JobState.QUEUED, JobState.RUNNING)
+            if not pending:
+                continue
+            secs = self._eta_for_job(job).get("estimated_seconds")
+            if secs is not None:
+                total += secs
+                have_estimate = True
+        return total if have_estimate else None
+
+    def wait_for_job(self, job_id, timeout):
+        """Block up to ``timeout`` s until the job is terminal; return its status.
+
+        The returned payload matches ``get_job`` plus a ``timed_out`` flag (True
+        only when the wait expired while the job was still non-terminal). Caps
+        concurrent waiters with HTTP 429 ``too_many_waiters``.
+        """
+        job = self._get_job_or_404(job_id)
+        with self._waiter_lock:
+            if self._wait_abort.is_set():
+                # Server shutting down: do not block, report current status.
+                snap = job.snapshot()
+                snap["eta"] = self._eta_for_job(job)
+                snap["timed_out"] = False
+                return snap
+            if self._waiter_count >= MAX_WAITERS:
+                raise ApiError(
+                    429, "too_many_waiters",
+                    "Too many concurrent long-poll waiters (limit %d)" % MAX_WAITERS,
+                )
+            self._waiter_count += 1
+        try:
+            reached = job.wait_for_terminal(timeout, abort=self._wait_abort)
+        finally:
+            with self._waiter_lock:
+                self._waiter_count -= 1
+        snap = job.snapshot()
+        snap["eta"] = self._eta_for_job(job)
+        # timed_out only when the wait genuinely expired (not an abort/shutdown).
+        snap["timed_out"] = (not reached) and (not self._wait_abort.is_set())
+        return snap
+
+    def shutdown_waiters(self):
+        """Release all long-poll waiters on server shutdown.
+
+        Sets the abort event and notifies every job's condition so blocked
+        ``wait_for_job`` calls return promptly instead of hanging.
+        """
+        self._wait_abort.set()
+        self._controller._job_registry.wake_all_waiters()
 
     # ---- stop endpoints (thread-safe; no bridge / no GUI touch) --------
 
@@ -232,6 +339,7 @@ class TaviApiBackend:
                 job.state = JobState.CANCELLED
                 if job.finished_at is None:
                     job.finished_at = time.time()
+                job.notify_state_change()
             elif state in _API_TERMINAL_STATES:
                 raise ApiError(
                     409, "job_finished",
@@ -254,6 +362,7 @@ class TaviApiBackend:
                     job.state = JobState.CANCELLED
                     if job.finished_at is None:
                         job.finished_at = time.time()
+                    job.notify_state_change()
                     cancelled.append(job.job_id)
         if running_id is not None:
             self._controller.stop_event.set()
@@ -302,13 +411,15 @@ class TaviApiBackend:
             )
         return {"applied": list(applied), "errors": errors}
 
-    def submit_scan(self, body):
+    def submit_scan(self, body, idempotency_key=None):
         """POST /scan -- queue a scan job with budget enforcement (sec 6, 7).
 
         Optional ``body['parameters']`` is applied first (same path as
         patch_parameters, minus the busy guard since we are queueing anyway).
         The whole submission runs atomically on the GUI thread so cost accounting
-        and enqueue cannot race another submitter.
+        and enqueue cannot race another submitter. When ``idempotency_key`` is
+        given and already maps to a live job, the existing job's status is
+        returned (flagged for a 200 replay) instead of creating a new job.
         """
         if not isinstance(body, dict):
             raise ApiError(400, "bad_request", "Request body must be a JSON object")
@@ -318,17 +429,30 @@ class TaviApiBackend:
         force = bool(body.get("force", False))
 
         result = self._bridge.call_on_gui(
-            lambda: self._submit_scan_on_gui(patch, force)
+            lambda: self._submit_scan_on_gui(patch, force, idempotency_key)
         )
         return result
 
-    def _submit_scan_on_gui(self, patch, force):
+    def _submit_scan_on_gui(self, patch, force, idempotency_key=None):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
         re-raises to the HTTP thread for envelope serialization).
         """
         controller = self._controller
+        registry = controller._job_registry
+
+        # 0. Idempotency replay: a previously seen key mapping to a live job
+        #    returns that job's current status (200 replay) without re-queueing.
+        if idempotency_key:
+            existing_id = registry.get_idempotent(idempotency_key)
+            if existing_id:
+                existing = registry.get(existing_id)
+                if existing is not None:
+                    snap = existing.snapshot()
+                    snap["eta"] = self._eta_for_job(existing)
+                    snap["_idempotent_reuse"] = True
+                    return snap
 
         # 1. Apply an inline parameter patch first (no busy guard here).
         if patch:
@@ -384,9 +508,16 @@ class TaviApiBackend:
         # 6. Enqueue and tag the job with its cost for future budget math.
         job = controller.submit_scan_job(launch_state, "api")
         job._api_cost = points * neutrons
+        if idempotency_key:
+            registry.put_idempotent(idempotency_key, job.job_id)
 
         position = self._queued_count()
-        return {"job_id": job.job_id, "state": "queued", "position": position}
+        return {
+            "job_id": job.job_id,
+            "state": "queued",
+            "position": position,
+            "eta": self._eta_for_job(job),
+        }
 
 
 # Terminal states used by the API stop logic (mirrors scan_jobs terminal set).
@@ -682,6 +813,7 @@ class TAVIController(QObject):
                 job.state = JobState.CANCELLED
                 if job.finished_at is None:
                     job.finished_at = time.time()
+                job.notify_state_change()
         if state == JobState.QUEUED:
             self.job_state_changed.emit(job_id, JobState.CANCELLED.value)
             self._api_log(f"job {job_id} cancelled from dock")
@@ -3542,6 +3674,7 @@ class TAVIController(QObject):
             with job.lock:
                 job.state = JobState.RUNNING
                 job.started_at = time.time()
+                job.notify_state_change()
             self._active_job = job
             self.job_state_changed.emit(job.job_id, JobState.RUNNING.value)
             self._publish_api_event('job_started', {
@@ -3559,6 +3692,7 @@ class TAVIController(QObject):
                     job.error = str(exc)
                     if job.finished_at is None:
                         job.finished_at = time.time()
+                    job.notify_state_change()
                 self.message_printed.emit(f"Scan job {job.job_id} failed: {exc}")
             finally:
                 self._active_job = None
@@ -4000,6 +4134,7 @@ class TAVIController(QObject):
                     job.state = JobState.CANCELLED
                     if job.finished_at is None:
                         job.finished_at = time.time()
+                    job.notify_state_change()
 
         # Wake the worker with the exit sentinel and give it a moment to stop.
         self._job_queue.put(None)
@@ -4943,6 +5078,7 @@ class TAVIController(QObject):
                 job.error = simulation_error_message
                 job.finished_at = time.time()
                 self.last_scan_result = job.result
+                job.notify_state_change()
 
         return data_folder
 

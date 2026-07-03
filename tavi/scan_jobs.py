@@ -9,6 +9,8 @@ worker state. See ``docs/API_SERVER_DESIGN.md`` sections 7 and 13 (phase 1).
 import copy
 import math
 import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -126,6 +128,42 @@ class ScanJob:
     result: Optional[ScanResult] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
+    def __post_init__(self):
+        # Condition shares the job lock so a thread holding ``lock`` (every
+        # state-transition site does) can call ``notify_state_change()`` to wake
+        # long-poll waiters, and a waiter's ``wait()`` releases/re-acquires the
+        # same lock. Not a dataclass field: excluded from eq/repr, rebuilt fresh
+        # per instance.
+        self._state_cond = threading.Condition(self.lock)
+
+    def notify_state_change(self) -> None:
+        """Wake any long-poll waiters after a state change.
+
+        The caller MUST already hold ``self.lock`` (all state-transition sites
+        mutate ``state`` under it); this simply notifies the shared condition.
+        """
+        self._state_cond.notify_all()
+
+    def wait_for_terminal(self, timeout: float,
+                          abort: "Optional[threading.Event]" = None) -> bool:
+        """Block until this job reaches a terminal state, timeout, or abort.
+
+        Returns True if the job is terminal on return, False if the wait
+        expired (or ``abort`` was set) while still non-terminal. ``abort`` lets
+        server shutdown release the waiter promptly (shutdown both sets the
+        event and notifies via the registry).
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._state_cond:
+            while self.state not in _TERMINAL_STATES:
+                if abort is not None and abort.is_set():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._state_cond.wait(remaining)
+            return self.state in _TERMINAL_STATES
+
     def _launch_summary(self) -> Dict[str, Any]:
         """Small JSON-safe view of the frozen launch state.
 
@@ -178,11 +216,16 @@ class JobRegistry:
     jobs provides the JSON-safe read views.
     """
 
+    # Bounded LRU map of Idempotency-Key -> job_id for POST /scan replay
+    # protection. Cap keeps memory bounded; the oldest key is evicted first.
+    IDEMPOTENCY_MAX = 256
+
     def __init__(self):
         self._lock = threading.Lock()
         self._jobs: Dict[str, ScanJob] = {}
         self._order: List[str] = []  # insertion order, oldest first
         self._counter = 0
+        self._idempotency: "OrderedDict[str, str]" = OrderedDict()
 
     def next_id(self) -> str:
         """Produce the next sequential job id, e.g. ``'j-0001'``."""
@@ -214,6 +257,35 @@ class JobRegistry:
         # Snapshot outside the registry lock so a long deep-copy does not block
         # registration; each job takes its own lock internally.
         return [job.snapshot() for job in jobs]
+
+    def get_idempotent(self, key: str) -> Optional[str]:
+        """Return the job id previously stored under ``key`` (LRU touch)."""
+        with self._lock:
+            job_id = self._idempotency.get(key)
+            if job_id is not None:
+                self._idempotency.move_to_end(key)
+            return job_id
+
+    def put_idempotent(self, key: str, job_id: str) -> None:
+        """Record ``key -> job_id``, evicting the oldest beyond the LRU cap."""
+        with self._lock:
+            if key in self._idempotency:
+                self._idempotency.move_to_end(key)
+            self._idempotency[key] = job_id
+            while len(self._idempotency) > self.IDEMPOTENCY_MAX:
+                self._idempotency.popitem(last=False)
+
+    def wake_all_waiters(self) -> None:
+        """Notify every job's condition so long-poll waiters can re-check.
+
+        Used on server shutdown (paired with an abort event) so blocked
+        handler threads return promptly instead of hanging until their timeout.
+        """
+        with self._lock:
+            jobs = list(self._jobs.values())
+        for job in jobs:
+            with job.lock:
+                job.notify_state_change()
 
 
 def compute_budget_usage(registry: "JobRegistry",

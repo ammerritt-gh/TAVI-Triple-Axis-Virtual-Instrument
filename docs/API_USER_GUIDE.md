@@ -238,13 +238,16 @@ curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -d '{"parameters": {"scan_command1": "H 1.99 2.01 0.01"}}'
 ```
 ```json
-{"job_id": "j-0004", "state": "queued", "position": 0}
+{"job_id": "j-0004", "state": "queued", "position": 0,
+ "eta": {"estimated_seconds": 42.0, "confidence": "high", "samples": 11}}
 ```
 `position` is the number of jobs still ahead of this one in the queue at the
 moment of the response — `0` means it is next to run (or already running).
+`eta` is a best-effort time estimate for the whole scan (see §5 *ETA object*).
 - Invalid scan command → `400 scan_validation` with a human-readable message.
   Pass `"force": true` in the body to bypass scan-command validation.
-- Over a budget limit → `429 limit_exceeded` (see §9):
+- Over a budget limit → `429 limit_exceeded` (see §9). The response carries a
+  `Retry-After` header (see §5 *Retry-After*):
 ```json
 {"error": {"code": "limit_exceeded",
  "message": "2e+08 neutrons/point exceeds the limit of 1e+08",
@@ -252,20 +255,59 @@ moment of the response — `0` means it is next to run (or already running).
 ```
 - In read-only mode → `403 read_only`.
 
+**Idempotency-Key** (optional request header). Send an `Idempotency-Key: <string>`
+header to make retries safe. The first request with a given key queues a job as
+usual (`202`); any later request with the **same** key returns that job's current
+status with **HTTP 200** (not `202`) and does **not** create a duplicate job. Keys
+are remembered for the 256 most recently used values. No header → every request
+creates a new job.
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" -H "Idempotency-Key: run-2026-07-03-a" -d '{}'
+```
+
 ### GET /scan/{id}
 Job status. Returns the job snapshot: state, source (`gui`/`api`), timestamps,
-`progress: {done, total}`, error (or `null`), a small `launch` summary, and a
-`result` summary (count totals and output folder — no arrays here).
+`progress: {done, total}`, error (or `null`), a small `launch` summary, a
+`result` summary (count totals and output folder — no arrays here), and an `eta`
+object (see *ETA object* below).
 ```json
 {"job_id": "j-0003", "source": "api", "state": "running",
  "submitted_at": 1751500000.0, "started_at": 1751500001.0, "finished_at": null,
  "progress": {"done": 1, "total": 3}, "error": null,
  "launch": {"scan_command1": "H 1.99 2.01 0.01", "scan_command2": "", "number_neutrons": 100000},
  "result": {"mode": "1D", "variable_1": "H", "variable_2": null,
- "total_counts": 82.0, "max_counts": 82.0, "output_folder": "output/scan"}}
+ "total_counts": 82.0, "max_counts": 82.0, "output_folder": "output/scan"},
+ "eta": {"estimated_seconds": 8.0, "confidence": "medium", "samples": 4}}
 ```
 `result` is `null` for a job that has not yet started building its scan geometry
 (e.g. still `queued`). Unknown id → `404 unknown_job`.
+
+**Long-poll — `?wait=N`.** Add `?wait=N` (seconds, float allowed, clamped to 120)
+to block until the job reaches a terminal state (`done`/`failed`/`stopped`/
+`cancelled`) or the wait expires, instead of returning immediately. The response
+body is the same snapshot plus a `"timed_out"` boolean — `true` only when the
+wait expired while the job was still running/queued. If the job is already
+terminal it returns at once. Omitting `wait` gives the plain immediate response
+(no `timed_out` field).
+```bash
+# Block up to 30 s for the job to finish, then return its final status.
+curl "http://127.0.0.1:8642/api/v1/scan/j-0003?wait=30"
+```
+Concurrent waiters are capped (16); beyond that the endpoint returns
+`429 too_many_waiters` with a `Retry-After` header.
+
+**ETA object.** `eta` is a best-effort estimate derived from recorded run
+history for the active instrument: `{"estimated_seconds": <float|null>,
+"confidence": "none"|"low"|"medium"|"high", "samples": <int>}`. `estimated_seconds`
+is `null` when there is no usable history. Per-point time is scaled to the job's
+neutron count; a queued job's estimate covers compile + all points, a running
+job's covers the remaining points. `confidence` reflects the sample count
+(`none`=0, `low`=1–2, `medium`=3–9, `high`=10+).
+
+**Retry-After.** `409`, `429`, and `503` responses include a `Retry-After: <int
+seconds>` header hinting when to retry: `503 gui_busy` → `2`; `429` → an estimate
+of queue drain time when available, else `30`; `409` → `5`.
 
 ### GET /scan/{id}/data
 Same snapshot as `GET /scan/{id}`, but the `result` object additionally carries
@@ -331,7 +373,8 @@ Server-Sent Events stream. See §8.
 | 405 | `method_not_allowed` | Wrong HTTP method for a known path. |
 | 409 | `busy` | `PATCH /parameters` while a scan is running/queued without `?force=1`. |
 | 409 | `job_finished` | Tried to stop a job already in a terminal state. |
-| 429 | `limit_exceeded` | `POST /scan` exceeded a budget limit. `details.usage` shows current usage. |
+| 429 | `limit_exceeded` | `POST /scan` exceeded a budget limit. `details.usage` shows current usage. Carries `Retry-After`. |
+| 429 | `too_many_waiters` | `GET /scan/{id}?wait=N` was refused because the long-poll waiter cap (16) is reached. Carries `Retry-After`. |
 | 500 | `internal_error` | Unexpected server-side error. |
 | 501 | `not_implemented` | Endpoint's backend handler is unavailable (should not occur in the shipped build). |
 | 503 | `gui_busy` | The GUI thread did not respond within ~5 s (e.g. a modal dialog is open). Back off and retry. |
