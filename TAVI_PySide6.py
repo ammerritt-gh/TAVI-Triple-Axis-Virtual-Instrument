@@ -28,6 +28,7 @@ from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_compo
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
+from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -71,6 +72,9 @@ class TAVIController(QObject):
     runtime_data_updated = Signal()
     actual_output_folder_updated = Signal(str)
     pre_scan_estimate_updated = Signal(str)
+
+    # Signal for job-queue state transitions (job_id, state value)
+    job_state_changed = Signal(str, str)
     
     def __init__(self, window, instrument):
         super().__init__()
@@ -86,6 +90,20 @@ class TAVIController(QObject):
         
         # Global variables
         self.stop_event = threading.Event()
+
+        # Scan job queue (API design phase 1): every scan -- GUI or (later) API --
+        # runs as a ScanJob through a single persistent worker thread, so runs
+        # execute serially instead of racing. See docs/API_SERVER_DESIGN.md sec 7.
+        self._job_registry = JobRegistry()
+        self._job_queue = queue.Queue()
+        self._active_job = None  # job currently RUNNING in the worker (or None)
+        self.last_scan_result = None  # ScanResult from the most recent finished job
+        self._shutdown_called = False
+        self._job_worker = threading.Thread(
+            target=self._job_worker_loop, name="scan-job-worker", daemon=True
+        )
+        self._job_worker.start()
+
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
         # Cross-scan binary reuse (design record §18.5): the last compiled
@@ -147,6 +165,10 @@ class TAVIController(QObject):
         self.window.simulation_dock.stop_button.clicked.connect(self.stop_simulation)
         self.window.simulation_dock.quit_button.clicked.connect(self.quit_application)
         self.window.simulation_dock.clear_runtimes_button.clicked.connect(self.clear_runtime_data)
+
+        # Job-queue state transitions are emitted from the worker thread; Qt
+        # delivers them to this GUI-thread slot as a queued connection.
+        self.job_state_changed.connect(self._on_job_state_changed)
         
         # Parameter buttons (moved to right panel)
         self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
@@ -2862,10 +2884,107 @@ class TAVIController(QObject):
             self.print_to_message_center("Error: Could not get GUI values")
             return
         self.window.display_dock.set_scan_metadata(self._build_scan_metadata(launch_state['vals']))
-        
-        simulation_thread = threading.Thread(target=self.run_simulation, args=(launch_state,))
-        simulation_thread.start()
-    
+
+        # Route the GUI Run through the shared job queue instead of spawning a
+        # bare thread: this serializes runs (fixes the concurrent double-click
+        # race) and gives GUI and API submissions one execution path.
+        self.submit_scan_job(launch_state, 'gui')
+
+    def submit_scan_job(self, launch_state, source):
+        """Create, register, and enqueue a scan job. GUI-thread-only entry."""
+        job = ScanJob(
+            job_id=self._job_registry.next_id(),
+            source=source,
+            launch_state=launch_state,
+            submitted_at=time.time(),
+        )
+        self._job_registry.add(job)
+        self._job_queue.put(job)
+        self.job_state_changed.emit(job.job_id, JobState.QUEUED.value)
+        self.print_to_message_center(f"Scan job {job.job_id} queued (source: {source})")
+        return job
+
+    def _job_worker_loop(self):
+        """Persistent daemon worker: run queued scan jobs one at a time."""
+        while True:
+            job = self._job_queue.get()
+            if job is None:
+                # Sentinel from shutdown() -- exit the loop.
+                break
+
+            with job.lock:
+                if job.state == JobState.CANCELLED:
+                    # Cancelled before it ran; keep the registry record, skip it.
+                    skip = True
+                else:
+                    skip = False
+            if skip:
+                self.job_state_changed.emit(job.job_id, JobState.CANCELLED.value)
+                continue
+
+            # Clear the shared stop event AFTER popping and BEFORE marking the
+            # job RUNNING, so a Stop pressed between jobs cannot leak into the
+            # next one (see docs/API_SERVER_DESIGN.md sec 7.2).
+            self.stop_event.clear()
+            with job.lock:
+                job.state = JobState.RUNNING
+                job.started_at = time.time()
+            self._active_job = job
+            self.job_state_changed.emit(job.job_id, JobState.RUNNING.value)
+
+            try:
+                self.run_simulation(job.launch_state, job)
+            except Exception as exc:
+                # Unexpected failure escaping run_simulation: mark FAILED and
+                # surface it -- never swallow silently.
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = str(exc)
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+                self.message_printed.emit(f"Scan job {job.job_id} failed: {exc}")
+            finally:
+                self._active_job = None
+
+            with job.lock:
+                final_state = job.state.value
+            self.job_state_changed.emit(job.job_id, final_state)
+
+    @Slot(str, str)
+    def _on_job_state_changed(self, job_id, state):
+        """GUI-thread reaction to job-queue transitions.
+
+        Resets the progress display when a queued job actually starts, and
+        keeps the Run button disabled while any job is queued or running.
+        """
+        if state == JobState.RUNNING.value:
+            # Reset the progress display for the starting job (mirrors the prep
+            # done in run_simulation_thread at submission time, so a job that
+            # waited in the queue still gets a clean start).
+            try:
+                self.window.simulation_dock.progress_bar.setValue(0)
+                self.window.simulation_dock.progress_label.setText("Initializing...")
+                self.window.simulation_dock.remaining_time_label.setText(
+                    "Estimated Remaining Time: calculating..."
+                )
+            except Exception:
+                pass
+
+        # Disable Run while work is pending/active; re-enable once idle.
+        busy = self._has_pending_jobs()
+        dock = getattr(self.window, 'simulation_dock', None)
+        if dock is not None and hasattr(dock, 'run_button'):
+            dock.run_button.setEnabled(not busy)
+
+    def _has_pending_jobs(self):
+        """True if any job is currently QUEUED or RUNNING."""
+        for job in self._job_registry.all_jobs():
+            with job.lock:
+                if job.state in (JobState.QUEUED, JobState.RUNNING):
+                    return True
+        return False
+
+
     def _preflight_scan_validation(self) -> str:
         """Check scan commands before running simulation.
         
@@ -2938,9 +3057,35 @@ class TAVIController(QObject):
         )
     
     def stop_simulation(self):
-        """Stop the running simulation."""
+        """Stop the running simulation.
+
+        Sets the shared stop event; the worker's run_simulation completion path
+        marks the active job STOPPED once it drains.
+        """
         self.stop_event.set()
         self.print_to_message_center("Stop requested...")
+
+    def shutdown(self):
+        """Stop work and tear down the job worker. Safe to call repeatedly."""
+        if self._shutdown_called:
+            return
+        self._shutdown_called = True
+
+        # Signal any running scan to drain out.
+        self.stop_event.set()
+
+        # Cancel every still-queued job so the worker skips them on drain.
+        for job in self._job_registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    job.state = JobState.CANCELLED
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+
+        # Wake the worker with the exit sentinel and give it a moment to stop.
+        self._job_queue.put(None)
+        if self._job_worker is not None:
+            self._job_worker.join(timeout=2)
 
     def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, is_2d_scan,
                      variable_name1, variable_name2, vals, data_folder,
@@ -2998,8 +3143,14 @@ class TAVIController(QObject):
                         break
                     continue
     
-    def run_simulation(self, launch_state):
-        """Run the full simulation."""
+    def run_simulation(self, launch_state, job=None):
+        """Run the full simulation.
+
+        When ``job`` is provided (job-queue path), scan geometry and per-point
+        counts are recorded into ``job.result`` under ``job.lock`` for readers
+        (API snapshots) and the final job state is set here. When ``job`` is
+        None, behavior is unchanged from the pre-queue code path.
+        """
         self.message_printed.emit("Starting simulation...")
 
         vals = launch_state['vals']
@@ -3124,9 +3275,28 @@ class TAVIController(QObject):
                 valid_mask_1d[idx] = not error_flags
             
             # Initialize display dock for 1D scan
-            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d, 
+            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d,
                                        variable_name1, "", [], [])
-        
+
+            if job is not None:
+                # Pre-size the result so readers see per-index None until measured.
+                n_points = len(array_values1)
+                with job.lock:
+                    job.result = ScanResult(
+                        mode='1D',
+                        variable_1=variable_name1,
+                        variable_2=None,
+                        scan_values_1=[float(v) for v in array_values1],
+                        scan_values_2=None,
+                        valid_mask_1=[bool(v) for v in valid_mask_1d],
+                        valid_mask_2d=None,
+                        counts=[None] * n_points,
+                        counts_grid=None,
+                        output_folder=data_folder,
+                        metadata=dict(vals),
+                    )
+                    job.progress_total = len(scan_parameter_input)
+
         # Double scan command
         if scan_command2 and scan_command1:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
@@ -3177,9 +3347,46 @@ class TAVIController(QObject):
             # Initialize display dock for 2D scan
             self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
                                        variable_name2, list(array_values2), valid_mask_2d)
-        
+
+            if job is not None:
+                n_cols = len(array_values1)
+                n_rows = len(array_values2)
+                with job.lock:
+                    job.result = ScanResult(
+                        mode='2D',
+                        variable_1=variable_name1,
+                        variable_2=variable_name2,
+                        scan_values_1=[float(v) for v in array_values1],
+                        scan_values_2=[float(v) for v in array_values2],
+                        valid_mask_1=[],
+                        valid_mask_2d=[[bool(v) for v in row] for row in valid_mask_2d],
+                        counts=None,
+                        counts_grid=[[None] * n_cols for _ in range(n_rows)],
+                        output_folder=data_folder,
+                        metadata=dict(vals),
+                    )
+                    job.progress_total = len(scan_parameter_input)
+
         # Track if this is a 2D scan
         is_2d_scan = scan_command2 and scan_command1
+
+        if job is not None and job.result is None:
+            # Neither the 1D nor 2D branch ran -> single-point scan.
+            with job.lock:
+                job.result = ScanResult(
+                    mode='single',
+                    variable_1="",
+                    variable_2=None,
+                    scan_values_1=[],
+                    scan_values_2=None,
+                    valid_mask_1=[],
+                    valid_mask_2d=None,
+                    counts=[None],
+                    counts_grid=None,
+                    output_folder=data_folder,
+                    metadata=dict(vals),
+                )
+                job.progress_total = len(scan_parameter_input)
 
         if is_2d_scan:
             estimated_runtime_points = int(sum(sum(1 for value in row if value) for row in valid_mask_2d))
@@ -3472,6 +3679,21 @@ class TAVIController(QObject):
                             scan_x_values.append(array_values1[idx_1d])
                         scan_counts.append(counts)
                     # For single-point scans, we don't update scan arrays (handled separately)
+
+                    # Record the measured count into the job result for readers.
+                    if job is not None and job.result is not None:
+                        with job.lock:
+                            res = job.result
+                            if is_2d_scan:
+                                if res.counts_grid is not None:
+                                    res.counts_grid[idx_y][idx_x] = float(counts)
+                            elif is_single_point_scan:
+                                if res.counts:
+                                    res.counts[0] = float(counts)
+                            elif idx_1d >= 0 and res.counts is not None and idx_1d < len(res.counts):
+                                res.counts[idx_1d] = float(counts)
+                            res.total_counts = float(total_counts)
+                            res.max_counts = float(max_counts)
                 
                 # Record scan time for this point
                 scan_elapsed = time.time() - scan_start_time
@@ -3484,6 +3706,12 @@ class TAVIController(QObject):
                 # Emit progress signals
                 self.progress_updated.emit(processed_points, total_scans)
                 self.counts_updated.emit(max_counts, total_counts)
+
+                # Mirror progress into the job (covers valid and invalid points,
+                # since processed_points increments for every drained point).
+                if job is not None:
+                    with job.lock:
+                        job.progress_done = processed_points
                 
                 # Calculate elapsed time and remaining time - ignore first scan (compilation overhead)
                 elapsed_time = time.time() - start_time
@@ -3696,7 +3924,23 @@ class TAVIController(QObject):
             if monitors_enabled and retained_diagnostic_data is not None and retained_diagnostic_data is not math.nan:
                 # Emit signal to display plots on main thread (matplotlib requires this)
                 self.diagnostic_plot_requested.emit(retained_diagnostic_data)
-        
+
+        # Finalize job bookkeeping: pick the terminal state from the same flags
+        # the display/output paths above already used. The worker loop emits the
+        # job_state_changed signal after this returns.
+        if job is not None:
+            if simulation_error_message is not None:
+                final_state = JobState.FAILED
+            elif self.stop_event.is_set():
+                final_state = JobState.STOPPED
+            else:
+                final_state = JobState.DONE
+            with job.lock:
+                job.state = final_state
+                job.error = simulation_error_message
+                job.finished_at = time.time()
+                self.last_scan_result = job.result
+
         return data_folder
 
 
