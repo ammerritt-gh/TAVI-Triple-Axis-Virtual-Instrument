@@ -248,9 +248,10 @@ bootstrap order is ISAR's, and the driver respects it.
 > it can never drop below 0.3. The prior is for *seeding*; the interval is for
 > *deciding done*.
 
-**TAVI enters ISAR through a dedicated `tavi` parser plugin** (being built in
-ISAR, following ISAR's P3 "per-experiment parser → normalized scan →
-instrument-agnostic core"). Real-instrument parsing catalogues (IN8, S30, and
+**TAVI enters ISAR through a dedicated `tavi` parser plugin** (live in ISAR:
+`isar/parsers/tavi.py` + `isar/parsers/cards/tavi.policy.toml`, following
+ISAR's P3 "per-experiment parser → normalized scan → instrument-agnostic
+core"). Real-instrument parsing catalogues (IN8, S30, and
 future facility formats) stay **separate** from the TAVI plugin: TAVI writes its
 own JSON scan format and **never emits fake facility files**. When the driver
 moves to a real instrument, that instrument gets its own ISAR plugin; the TAVI
