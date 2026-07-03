@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QCompleter, QDialog, QTextEdit, QDialogButtonBox)
 from PySide6.QtCore import Qt, Signal
 
-from gui.docks.base_dock import BaseDockWidget
+from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
 from tavi.space_groups import (SPACE_GROUPS, CRYSTAL_SYSTEMS, EXTINCTION_RULES,
                                 get_space_group, get_extinction_rule_text)
 
@@ -103,7 +103,7 @@ class UnifiedSampleDock(BaseDockWidget):
         sample_combo_layout.addWidget(QLabel("Sample:"))
         # Samples come from the descriptor; the id "none" means "no sample
         # component" and maps to key None for the legacy sample_key contract.
-        self.sample_combo = QComboBox()
+        self.sample_combo = NoScrollComboBox()
         self.sample_combo.setObjectName("sample_combo")
         self.sample_map = {
             sample.display_name: (None if sample.id == "none" else sample.id)
@@ -128,7 +128,7 @@ class UnifiedSampleDock(BaseDockWidget):
         # Space group selector with search
         sg_combo_layout = QHBoxLayout()
         sg_combo_layout.setContentsMargins(0, 0, 0, 0)
-        self.spacegroup_combo = QComboBox()
+        self.spacegroup_combo = NoScrollComboBox()
         self.spacegroup_combo.setEditable(True)
         self.spacegroup_combo.setInsertPolicy(QComboBox.NoInsert)
         self.spacegroup_combo.lineEdit().setPlaceholderText("Search or select space group...")
