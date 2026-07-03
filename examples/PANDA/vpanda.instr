@@ -1,0 +1,590 @@
+/********************************************************************************
+* 
+* McStas, neutron ray-tracing package
+*         Copyright (C) 1997-2008, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+* 
+* This file was written by McStasScript, which is a 
+* python based McStas instrument generator written by 
+* Mads Bertelsen in 2019 while employed at the 
+* European Spallation Source Data Management and 
+* Software Centre
+* 
+* Instrument: vPANDA
+* 
+* %Identification
+* Written by: Python McStas Instrument Generator
+* Date: 00:12:29 on July 02, 2026
+* Origin: ESS DMSC
+* %INSTRUMENT_SITE: Generated_instruments
+* 
+* !!Please write a short instrument description (1 line) here!!
+* 
+* %Description
+* Please write a longer instrument description here!
+* 
+* 
+* %Parameters
+* prim_shut_pos: [unit] 
+* sapphire: [unit] 
+* ca1: [unit] 
+* ca2: [unit] 
+* ca3: [unit] 
+* ca4: [unit] 
+* ms1: [unit] 
+* lms: [unit] 
+* lsa: [unit] 
+* lad: [unit] 
+* ki: [unit] 
+* kf: [unit] 
+* dE: [unit] 
+* Q: [unit] 
+* scatsense_mono: [unit] 
+* scatsense_sample: [unit] 
+* scatsense_ana: [unit] 
+* mth: [unit] 
+* mtt: [unit] 
+* mtx: [unit] 
+* mty: [unit] 
+* mgy: [unit] 
+* mfh: [unit] 
+* mfv: [unit] 
+* sth: [unit] 
+* stt: [unit] 
+* stx: [unit] 
+* sty: [unit] 
+* stz: [unit] 
+* sgx: [unit] 
+* sgy: [unit] 
+* ss1_width: [unit] 
+* ss1_height: [unit] 
+* ss2_width: [unit] 
+* ss2_height: [unit] 
+* ath: [unit] 
+* att: [unit] 
+* atx: [unit] 
+* aty: [unit] 
+* agy: [unit] 
+* afh: [unit] 
+* afv: [unit] 
+* 
+* %Link 
+* 
+* %End 
+********************************************************************************/
+
+DEFINE INSTRUMENT vPANDA (
+int prim_shut_pos = 1, 
+int sapphire = 1, 
+int ca1 = 0, 
+int ca2 = 0, 
+int ca3 = 0, 
+int ca4 = 0, 
+double ms1 = 0.04, 
+double lms = 2.1, 
+double lsa = 1.05, 
+double lad = 0.95, 
+double ki = 1.55, 
+double kf = 1.55, 
+double dE = 0, 
+double Q = 0, 
+int scatsense_mono = -1, 
+int scatsense_sample = 1, 
+int scatsense_ana = -1, 
+double mth = 37.166, 
+double mtt = -74.332, 
+double mtx = 0.0, 
+double mty = 0.0, 
+double mgy = 0.0, 
+double mfh = 0.0, 
+double mfv = 0.0, 
+double sth = 323.442, 
+double stt = 54.95, 
+double stx = 0.0, 
+double sty = 0.0, 
+double stz = 0.0, 
+double sgx = 0.0, 
+double sgy = 0.0, 
+double ss1_width = 0.04, 
+double ss1_height = 0.08, 
+double ss2_width = 0.04, 
+double ss2_height = 0.08, 
+double ath = -37.166, 
+double att = -74.332, 
+double atx = 0.0, 
+double aty = 0.0, 
+double agy = 0.0, 
+double afh = 0.0, 
+double afv = 0.0 
+)
+
+DECLARE 
+%{
+double ca1_div;
+double ca2_div;
+double ca3_div;
+double ca4_div;
+double a1;
+double a2;
+double a3;
+double a4;
+double a5;
+double a6;
+double my_ki;
+double my_kf;
+double my_thetas;
+double Lam;
+double dLam;
+double MINLam;
+double MAXLam;
+double d_PG002;
+%}
+
+INITIALIZE 
+%{
+// Start of initialize for generated vPANDA
+ Lam = 4.0;
+ dLam = 0.1;
+ 
+ d_PG002 = 3.35461;
+ switch(ca1)
+     {
+        case 20 : ca1_div = 20;break; 
+        case 40 : ca1_div = 40;break;
+        case 60 : ca1_div = 60;break;
+		default:  ca1_div = 120;}
+ switch(ca2)
+     {
+        case 15 : ca2_div = 15;break; 
+        case 40 : ca2_div = 40;break;
+        case 60 : ca2_div = 60;break;
+		default:  ca2_div = 120;}
+ switch(ca3)
+     {
+        case 15 : ca3_div = 15;break; 
+        case 40 : ca3_div = 40;break;
+        case 60 : ca3_div = 60;break;
+		default:  ca3_div = 120;}
+ switch(ca4)
+     {
+        case 15 : ca4_div = 15;break; 
+        case 40 : ca4_div = 40;break;
+        case 60 : ca4_div = 60;break;
+		default:  ca4_div = 120;}
+  a1=mth; a2=mtt; a3=0; a4=0; a5=ath; a6=att;
+ if (kf) {
+	 my_kf = kf;
+if (dE){my_ki = sqrt(dE / 2.072 + kf*kf);}
+   else {my_ki = kf;};
+   Lam = 2*PI/my_ki;
+   dLam = 0.03 * Lam;}
+ else if (ki) {
+   my_ki = ki;
+if (dE){my_kf = sqrt( ki*ki - dE /2.072);}
+else { my_kf = ki;};
+   Lam = 2*PI/my_ki;
+   dLam = 0.03 * Lam;}
+ else {
+   my_ki = PI/ d_PG002 / sin(fabs(mtt) / 2 * DEG2RAD);
+   my_kf = PI/ d_PG002 / sin(fabs(att) / 2 * DEG2RAD);
+   dE = 81.82/((2*PI/(my_kf-my_ki))*(2*PI/(my_kf-my_ki)));
+   Lam = 2*PI/my_ki;
+   dLam = 0.03 * Lam;
+ }
+if ((Q) && (my_ki) && (my_kf)) {
+   my_thetas = acos ( (my_ki*my_ki + my_kf*my_kf - Q*Q)/ 2/my_ki/my_kf); 
+   a4 = my_thetas*RAD2DEG;}
+ else {a4 = stt;};  
+ a3 = sth;
+ if (kf || ki) {
+   a1 = -asin ( PI/d_PG002/my_ki)*RAD2DEG;
+   a2 = 2*a1;
+   a5 = -asin ( PI/d_PG002/my_kf)*RAD2DEG;
+   a6 = 2*a5;
+ }
+ MINLam = Lam -dLam;
+ MAXLam = Lam +dLam;
+ printf("ki: %f A-1\n",my_ki);
+ printf("kf: %f A-1\n",my_kf);
+ printf("dE: %f meV\n",dE);
+ printf("Lam: %f A\n",Lam);
+ printf("dLam: %f A\n",dLam);
+ 
+ printf("mth: %f deg\n",a1);
+ printf("mtt: %f deg\n",a2);
+ printf("sth: %f deg\n",a3);
+ printf("stt: %f deg\n",a4);
+ printf("ath: %f deg\n",a5);
+ printf("att: %f deg\n",a6);
+  
+%}
+
+TRACE 
+COMPONENT origin = Progress_bar()
+AT (0,     0,     0) ABSOLUTE
+
+COMPONENT ColdSource = Source_gen(
+ dist = 0.79045+0.39063, focus_xw = 0.11,
+ focus_yh = 0.1, lambda0 = Lam,
+ dlambda = dLam, I1 = 7.22e12,
+ yheight = 0.08, xwidth = 0.135,
+ T1 = 361.9, T2 = 159.0,
+ I2 = 6.74e12, T3 = 35.66,
+ I3 = 6.435e12)
+AT (0,     0,     0) RELATIVE origin
+ROTATED (0,     0,     0) RELATIVE origin
+
+COMPONENT PrimaryBeam = Arm()
+AT (0,     0,     0) RELATIVE origin
+ROTATED (0,     0,     0) RELATIVE origin
+
+COMPONENT NL_SR2_1 = Guide_gravity(
+ w1 = 0.105, h1 = 0.098,
+ w2 = 0.105, h2 = 0.118,
+ l = 1.307, R0 = 0.99,
+ Qc = 0.02174, alpha = 3.0,
+ W = 0.001, nslit = 1,
+ mleft = 3.0, mright = 3.0,
+ mtop = 3.0, mbottom = 3.0)
+AT (0,     0,     1.1960) RELATIVE PrimaryBeam
+ROTATED (0,     0,     0) RELATIVE PrimaryBeam
+
+COMPONENT NL_SR2_2a = Guide_gravity(
+ w1 = 0.106, h1 = 0.119,
+ w2 = 0.106, h2 = 0.134,
+ l = 0.997, R0 = 0.99,
+ Qc = 0.02174, alpha = 3.0,
+ W = 0.001, nslit = 1,
+ mleft = 3.0, mright = 3.0,
+ mtop = 0, mbottom = 0)
+WHEN (prim_shut_pos==1)
+AT (0,     0,     2.540) RELATIVE PrimaryBeam
+ROTATED (0,     0,     0) RELATIVE PrimaryBeam
+
+COMPONENT NL_SR2_2b = Guide_gravity(
+ w1 = 0.050, h1 = 0.099,
+ w2 = 0.050, h2 = 0.107,
+ l = 0.997, R0 = 0.99,
+ Qc = 0.02174, alpha = 3.0,
+ W = 0.001, nslit = 1,
+ mleft = 0, mright = 0,
+ mtop = 0, mbottom = 0)
+WHEN (prim_shut_pos==2)
+AT (0,     0,     2.540) RELATIVE PrimaryBeam
+ROTATED (0,     0,     0) RELATIVE PrimaryBeam
+
+COMPONENT NL_SR2_2c = Guide_gravity(
+ w1 = 0.040, h1 = 0.119,
+ w2 = 0.040, h2 = 0.134,
+ l = 0.997, R0 = 0.99,
+ Qc = 0.02174, alpha = 3.0,
+ W = 0.001, nslit = 1,
+ mleft = 2.0, mright = 2.0,
+ mtop = 0, mbottom = 0)
+WHEN (prim_shut_pos==3)
+AT (0,     0,     2.540) RELATIVE PrimaryBeam
+ROTATED (0,     0,     0) RELATIVE PrimaryBeam
+
+COMPONENT NL_SR2_3 = Guide_gravity(
+ w1 = 0.107, h1 = 0.135,
+ w2 = 0.107, h2 = 0.138,
+ l = 0.180, R0 = 0.99,
+ Qc = 0.02174, alpha = 3.0,
+ W = 0.001, nslit = 1,
+ mleft = 2.0, mright = 2.0,
+ mtop = 0, mbottom = 0)
+AT (0,     0,     3.5460) RELATIVE PrimaryBeam
+ROTATED (0,     0,     0) RELATIVE PrimaryBeam
+
+COMPONENT SR2_Beamportwindow = Al_window(
+ thickness = 0.003)
+AT (0,     0,     3.8100) RELATIVE PrimaryBeam
+ROTATED (0,     0,     0) RELATIVE PrimaryBeam
+
+COMPONENT SR2_eob = Arm()
+AT (0,     0,     0.0031) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PANDA_ca1 = Collimator_linear(
+ xwidth = 0.108, yheight = 0.160,
+ length = 0.50, divergence = ca1_div,
+ transmission = 1)
+WHEN (ca1_div < 80)
+AT (0,     0,     0.1000) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT PANDA_sapphire = Filter_gen(
+ filename = "Al2O3_sapphire.trm", thickness = 0.86)
+WHEN (sapphire==1)
+AT (0,     0,     0.9000) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT sk1_in = Slit(
+ xwidth = 0.11, yheight = 0.15)
+AT (0,     0,     1.0100) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT sk1_out = Slit(
+ xwidth = 0.09, yheight = 0.180)
+AT (0,     0,     2.0300) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT PANDA_ms1 = Slit(
+ xwidth = ms1, yheight = 0.180)
+AT (0,     0,     2.1800) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT sk2_in = Slit(
+ xwidth = 0.050, yheight = 0.180)
+AT (0,     0,     2.4760) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT sk2_out = Slit(
+ xwidth = 0.070, yheight = 0.200)
+AT (0,     0,     2.9360) RELATIVE SR2_eob
+ROTATED (0,     0,     0) RELATIVE SR2_eob
+
+COMPONENT PSD_PrimBeam = PSD_monitor(
+ nx = 80, ny = 200,
+ filename = "PSD_PrimBeam.psd", xmin = -0.04,
+ xmax = 0.04, ymin = -0.10,
+ ymax = 0.10, restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT LAM_PrimBeam = L_monitor(
+ nL = 100, filename = "LAM_PrimBeam.L",
+ xmin = -0.04, xmax = 0.04,
+ ymin = -0.15, ymax = 0.15,
+ Lmin = MINLam, Lmax = MAXLam,
+ restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT DIV_PrimBeam = Divergence_monitor(
+ nh = 40, nv = 40,
+ filename = "DIV_PrimBeam.dat", xmin = -0.04,
+ xmax = 0.04, ymin = -0.15,
+ ymax = 0.15, maxdiv_h = 2,
+ maxdiv_v = 2, restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PANDA_mth = Arm()
+AT (0,     0,     5.000) RELATIVE SR2_eob
+ROTATED (0,     180+a1,     0) RELATIVE SR2_eob
+
+COMPONENT a_mono = Arm()
+AT (mty,     0,     mtx) RELATIVE PANDA_mth
+ROTATED (mgy,     0,     0) RELATIVE PANDA_mth
+
+SPLIT 20 COMPONENT PG002_mono = Monochromator_curved(
+ reflect = "HOPG.rfl", zwidth = 0.02,
+ yheight = 0.018, gap = 0.002,
+ NH = 11, NV = 11,
+ Q = 1.873, RV = mfv,
+ RH = mfh, mosaic = 20)
+AT (0,     0,     0) RELATIVE a_mono
+
+COMPONENT PANDA_mtt = Arm()
+AT (0,     0,     0) RELATIVE PANDA_mth
+ROTATED (0,     a2,     0) RELATIVE PrimaryBeam
+
+COMPONENT sk3_in = Slit(
+ xwidth = 0.136, yheight = 0.174)
+AT (0,     0,     0.2660) RELATIVE PANDA_mtt
+ROTATED (0,     0,     0) RELATIVE PANDA_mtt
+
+COMPONENT PANDA_ca2 = Collimator_linear(
+ xwidth = 0.040, yheight = 0.120,
+ length = 0.20, divergence = ca2_div)
+WHEN (ca2_div < 61)
+AT (0,     0,     0.9000) RELATIVE PANDA_mtt
+ROTATED (0,     0,     0) RELATIVE PANDA_mtt
+
+COMPONENT sk3_out = Slit(
+ xwidth = 0.06, yheight = 0.10)
+AT (0,     0,     1.1500) RELATIVE PANDA_mtt
+ROTATED (0,     0,     0) RELATIVE PANDA_mtt
+
+COMPONENT PSD_mon1 = PSD_monitor(
+ nx = 80, ny = 120,
+ filename = "PSD_mon1.psd", xmin = -0.04,
+ xmax = 0.04, ymin = -0.06,
+ ymax = 0.06, restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT LAM_mon1 = L_monitor(
+ nL = 100, filename = "LAM_mon1.L",
+ xmin = -0.04, xmax = 0.04,
+ ymin = -0.06, ymax = 0.06,
+ Lmin = MINLam, Lmax = MAXLam,
+ restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PANDA_ss1 = Slit(
+ xwidth = ss1_width, yheight = ss1_height)
+AT (0,     0,     1.7000) RELATIVE PANDA_mtt
+ROTATED (0,     0,     0) RELATIVE PANDA_mtt
+
+COMPONENT PSD_samplepos = PSD_monitor(
+ nx = 100, ny = 200,
+ filename = "PSD_samplepos.psd", xmin = -0.05,
+ xmax = 0.05, ymin = -0.1,
+ ymax = 0.1, restore_neutron = 1)
+AT (0,     0,     lms) RELATIVE PANDA_mtt
+ROTATED (0,     0,     0) RELATIVE PANDA_mtt
+
+COMPONENT Mon_samplepos2 = Monitor(
+ xwidth = 0.01, yheight = 0.02,
+ restore_neutron = 1)
+AT (0,     0,     lms) RELATIVE PANDA_mtt
+ROTATED (0,     0,     0) RELATIVE PANDA_mtt
+
+COMPONENT PANDA_sth = Arm()
+AT (0,     0,     lms) RELATIVE PANDA_mtt
+ROTATED (0,     a3,     0) RELATIVE PANDA_mtt
+
+COMPONENT sample = Arm()
+AT (sty,     stz,     stx) RELATIVE PANDA_sth
+ROTATED (sgy,     0,     sgx) RELATIVE PANDA_sth
+
+COMPONENT PANDA_cryst = Single_crystal(
+ reflections = "Pb.lau", xwidth = 0.01,
+ yheight = 0.01, zdepth = 0.01,
+ mosaic = 30, ax = 4.95,
+ ay = 0.00, az = 0.00,
+ bx = 0.00, by = 4.95,
+ bz = 0.00, cx = 0.00,
+ cy = 0.00, cz = 4.95)
+WHEN (dE == 0)
+AT (0,     0,     0) RELATIVE sample
+ROTATED (0-0.67,     0,     45+0.75) RELATIVE sample
+
+COMPONENT PANDA_cryst_phonon = Phonon_simple(
+ radius = 0.01, yheight = 0.01,
+ sigma_abs = 0.684, sigma_inc = 0.012,
+ a = 4.95, b = 18.81,
+ M = 207.2, c = 8,
+ DW = 1.00, T = 300,
+ target_index = +2, focus_r = 0.01)
+WHEN (dE != 0)
+AT (0,     0,     0) RELATIVE sample
+ROTATED (0-0.67,     0,     45+0.75) RELATIVE sample
+
+COMPONENT PANDA_stt = Arm()
+AT (0,     0,     0) RELATIVE PANDA_sth
+ROTATED (0,     a4,     0) RELATIVE PANDA_mtt
+
+COMPONENT PSD_scattered = PSD_monitor(
+ nx = 100, ny = 100,
+ filename = "scattered.psd", xmin = -0.1,
+ xmax = 0.1, ymin = -0.1,
+ ymax = 0.1, restore_neutron = 1)
+AT (0,     0,     0.2) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PANDA_ss2 = Slit(
+ xwidth = ss2_width, yheight = ss2_height)
+AT (0,     0,     0.4000) RELATIVE PANDA_stt
+ROTATED (0,     0,     0) RELATIVE PANDA_stt
+
+COMPONENT sk4_in = Slit(
+ xwidth = 0.04, yheight = 0.12)
+AT (0,     0,     lsa-0.600) RELATIVE PANDA_stt
+ROTATED (0,     0,     0) RELATIVE PANDA_stt
+
+COMPONENT PANDA_ca3 = Collimator_linear(
+ xwidth = 0.040, yheight = 0.140,
+ length = 0.2, divergence = ca3_div)
+WHEN (ca3_div < 61)
+AT (0,     0,     lsa-0.550) RELATIVE PANDA_stt
+ROTATED (0,     0,     0) RELATIVE PANDA_stt
+
+COMPONENT sk4_out = Slit(
+ xwidth = 0.06, yheight = 0.1)
+AT (0,     0,     lsa-0.200) RELATIVE PANDA_stt
+ROTATED (0,     0,     0) RELATIVE PANDA_stt
+
+COMPONENT PSD_mon2 = PSD_monitor(
+ nx = 100, ny = 120,
+ filename = "PSD_mon2.psd", xmin = -0.05,
+ xmax = 0.05, ymin = -0.06,
+ ymax = 0.06, restore_neutron = 1)
+AT (0,     0,     0.1) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PANDA_ath = Arm()
+AT (0,     0,     lsa) RELATIVE PANDA_stt
+ROTATED (0,     180+a5,     0) RELATIVE PANDA_stt
+
+COMPONENT analyser = Arm()
+AT (aty,     0,     0) RELATIVE PANDA_ath
+ROTATED (agy,     0,     0) RELATIVE PANDA_ath
+
+COMPONENT PG002_ana = Monochromator_curved(
+ reflect = "HOPG.rfl", zwidth = 0.013,
+ yheight = 0.025, gap = 0.003,
+ NH = 13, NV = 6,
+ Q = 1.873, RV = afv,
+ RH = afh, mosaic = 20)
+AT (0,     0,     0) RELATIVE analyser
+
+COMPONENT PANDA_att = Arm()
+AT (0,     0,     0) RELATIVE PANDA_ath
+ROTATED (0,     a6,     0) RELATIVE PANDA_stt
+
+COMPONENT sk5_in = Slit(
+ xwidth = 0.04, yheight = 0.12)
+AT (0,     0,     0.4000) RELATIVE PANDA_att
+ROTATED (0,     0,     0) RELATIVE PANDA_att
+
+COMPONENT PANDA_ca4 = Collimator_linear(
+ xwidth = 0.040, yheight = 0.140,
+ length = 0.2, divergence = ca4_div)
+WHEN (ca4_div < 80)
+AT (0,     0,     0.4100) RELATIVE PANDA_att
+ROTATED (0,     0,     0) RELATIVE PANDA_att
+
+COMPONENT sk5_out = Slit(
+ xwidth = 0.03, yheight = 0.12)
+AT (0,     0,     lad-0.1) RELATIVE PANDA_att
+ROTATED (0,     0,     0) RELATIVE PANDA_att
+
+COMPONENT a_detector = Arm()
+AT (0,     0,     lad) RELATIVE PANDA_att
+ROTATED (0,     0,     0) RELATIVE PANDA_att
+
+COMPONENT PSD_det = PSD_monitor(
+ nx = 60, ny = 200,
+ filename = "PSD_det.psd", xmin = -0.03,
+ xmax = 0.03, ymin = -0.10,
+ ymax = 0.10, restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PSD_det1 = PSD_monitor(
+ nx = 25, ny = 100,
+ filename = "PSD_det1.psd", xmin = -0.0125,
+ xmax = 0.0125, ymin = -0.05,
+ ymax = 0.05, restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+COMPONENT PSD_det2 = PSD_monitor(
+ nx = 50, ny = 100,
+ filename = "PSD_det2.psd", xmin = -0.025,
+ xmax = 0.025, ymin = -0.05,
+ ymax = 0.05, restore_neutron = 1)
+AT (0,     0,     0.0001) RELATIVE PREVIOUS
+ROTATED (0,     0,     0) RELATIVE PREVIOUS
+
+FINALLY 
+%{
+// Start of finally for generated vPANDA
+%}
+
+END
