@@ -320,6 +320,8 @@ A recipe is implemented **purely as an orchestration** over `submit_scan_job`, t
 
 The instrumental resolution function is a **property of the instrument configuration** — collimations, crystal mosaics, Bragg angles, Ki/Kf, scattering senses — not a property of any measured data. Computing it interprets nothing: it answers "what volume of (Q, E) space does this spectrometer accept right now?", the same way `calculate_angles` answers "can the spectrometer reach this point?". Every serious TAS workflow runs this calculation offline (Cooper–Nathans in ResLib/ResCal, Popovici in Takin); TAVI can be the rare tool that serves it **live, from the actual current configuration**, to both surfaces. What remains firmly the client's job is *using* it scientifically — deconvolving lineshapes, convolving model S(Q,ω) — none of which enters TAVI.
 
+**This same Cooper–Nathans matrix is the analytic core of the deterministic engine mode (§6):** a deterministic intensity model convolves a ground-truth S(Q,ω) against exactly this resolution matrix. §5 is therefore a hard prerequisite of §6 — building the resolution calculation once serves both the overlay/readout here and the fast execution backend there.
+
 ### 5.2 Motivation
 
 - **Human (GUI):** The first question every measured linewidth raises is "is that physics or the instrument?" An overlay ellipse on the scan plot and a live ΔE/Δq readout answer it at a glance, and make TAVI a genuinely instructive training tool — students *see* focused vs. defocused configurations before burning simulation time.
@@ -388,21 +390,177 @@ The rare feature that verifies *itself against the rest of TAVI*: simulate an el
 
 ---
 
-## 6. Dependency-ordered roadmap
+## 6. Deterministic engine mode — analytic S(Q,ω) as a drop-in execution backend
+
+These three sections (§6–§8) come from the **TAVI × ISAR integration design** — an external automated analysis engine plus an autonomous measurement driver sitting on TAVI's control surface. The benchmarking framework of *Teixeira Parente et al., 2022* (Front. Mater. 8:772014), which pairs an exactly-evaluable intensity function with a movement-aware cost metric, motivates both this engine and the clock in §7.
+
+### 6.1 What it is
+
+A **selectable execution backend**: instead of compiling and running McStas, the worker evaluates an **analytic intensity model** and reports counts through the identical result pipeline. The model is S(Q,ω) built from the **same sample configuration that parameterizes the McStas sample** — an acoustic-phonon branch, an optic-phonon branch, and a Bragg peak, each tunable — convolved with the Cooper–Nathans resolution matrix from `tavi/resolution.py` (§5), plus seeded Poisson counting noise (or noiseless, a flag). Everything above the per-point evaluation is unchanged: **same scan commands, same path/point-list generators (§2, §8), same serial job queue, same SSE events, same `ScanResult`, same plots and PNG endpoint.** A job simply records which backend produced it — `engine: "deterministic" | "mcstas"` in its launch summary and result provenance — so a client can tell tiers apart. Cost per point drops from seconds-to-minutes (McStas) to **milliseconds** (a matrix convolution).
+
+**§5 (resolution) is promoted to an explicit prerequisite: it is this engine's core.** The Cooper–Nathans matrix that §5 computes for the overlay/readout is exactly the kernel a deterministic S(Q,ω) is convolved against. §6 cannot land before §5 is validated.
+
+### 6.2 Motivation
+
+- **Human (GUI, teaching):** Instant feedback. A student sweeps a dispersion, sees the peak move, and re-scans in seconds instead of waiting on Monte Carlo — the physics intuition lands before any simulation time is burned. Lean **yes** on a GUI exposure: a single engine toggle is a large time-saver for training and demos.
+- **LLM/API client:** A **fidelity ladder** for autonomous-driver development. The *same* driver code — same endpoints, same verbs — runs against deterministic → Monte Carlo → (eventually) a real instrument behind one switch. A driver's acquisition loop is debugged and benchmarked at millisecond cost on the deterministic tier, then promoted to McStas unchanged. This is the transfer principle of §0 applied to *execution speed*, not just verbs.
+- **Benchmarking (ISAR):** The Teixeira Parente setting — an exactly-evaluable intensity function against which an acquisition strategy's regret is measured — is realized *inside the same tool* that also does full MC. Ground truth and simulation share one instrument and one sample, so a strategy validated on the analytic tier is testing the same physics it will later measure.
+
+### 6.3 Key design constraint — one ground-truth sample config
+
+**Both engines must consume a single source-of-truth sample configuration.** The deterministic S(Q,ω) evaluator and the McStas sample component are parameterized from the *same* dispersion/peak parameters, so a deterministic scan and an MC scan of the same setup are comparing like with like. If the two drifted apart, cross-tier comparison (the whole point of the ladder) would be meaningless. This is the one non-negotiable in the design: the sample model is authored once and projected into both backends.
+
+### 6.4 Surfaces
+
+**API** — engine selection rides existing bodies; no new endpoint required for v1:
+
+```
+POST /scan  { "engine": "deterministic", "parameters": {...}, "scan_command1": "..." }
+→ 202  { "job_id": "j-0021", "engine": "deterministic", "eta": {"estimated_seconds": 0.1, ...}, ... }
+GET /scan/j-0021/data → result carries "engine": "deterministic" in metadata/provenance.
+```
+
+`engine` defaults to `"mcstas"` (backward-compatible). `GET /schema` advertises the allowed engines for the instrument. `GET /state` reports the session default engine.
+
+**GUI** — a small **Engine** selector (Deterministic / McStas) in the simulation dock or a menu, mirrored into the API's session default. Selecting Deterministic makes the Run button return near-instantly.
+
+### 6.5 Failure modes
+
+| Situation | Behavior |
+|---|---|
+| Sample feature the analytic model cannot express (incoherent background, multiple scattering, phonon linewidth from anharmonicity) | Documented **fidelity gap, not an error** — the deterministic result is honestly labelled as an idealized model. Provenance (`engine: "deterministic"`) is the client's signal not to expect MC-level realism. |
+| Resolution matrix undefined (degenerate geometry, A4 → 0) | Refuse with the **same reason strings as §5** ("resolution undefined at this geometry") — one vocabulary across resolution and deterministic execution. |
+| (Q, E) point infeasible | Same feasibility refusal as MC — geometry is checked identically; the engine switch changes only how counts are produced, never whether a point is reachable. |
+
+### 6.6 Boundary note
+
+The deterministic engine stays firmly on the **control side** of §0. It evaluates the *instrument-plus-sample model* — a property of the configured spectrometer and its ground-truth sample — and interprets **no measured data**. It is the simulation backend, not an analyst: it produces counts, exactly as McStas does, and makes no scientific decision about them.
+
+**Touched modules:** `tavi/resolution.py` (§5, prerequisite — the convolution kernel); a new pure evaluator, likely `tavi/deterministic_engine.py` (Qt-free, numpy-only S(Q,ω) + Poisson noise); instrument plugins (a second execution path alongside `run_PUMA_point`, plus the shared sample-config projection); `TAVI_PySide6.py` (engine selection in `launch_state`, worker dispatch on `engine`, provenance in the result); `tavi/scan_jobs.py` (`engine` field on `ScanJob`); `tavi/api_server.py` (accept `engine`, advertise in `/schema`); `gui/docks/unified_simulation_dock.py` (engine selector).
+
+**Open questions:** Where does the analytic S(Q,ω) evaluator live — a `tavi/` helper consumed by a second instrument-plugin execution path (keeps the math instrument-agnostic, mirroring `resolution.py`), or inside each plugin? Engine switch **per-session** (a mode) vs **per-job** (an `engine` field, more flexible, chosen above as the lean)? Should the GUI expose it at all (lean **yes** — the teaching payoff is large)? How is the shared sample config authored and versioned so both engines provably read the same numbers?
+
+**Dependencies:** **§5 (resolution) is a hard prerequisite** — its Cooper–Nathans matrix is the convolution kernel. Otherwise independent of §1–§4. Naturally consumed by the autonomous driver in `docs/LLM_HARNESS_DESIGN.md`, which uses the fidelity ladder directly.
+
+---
+
+## 7. Virtual instrument clock — simulated experimental time
+
+### 7.1 What it is
+
+TAVI jobs currently cost **wall-clock compute** (the `eta` from `tavi/runtime_tracker.py`). A real experiment costs **beam time**: counting time plus the time to move the spectrometer's axes between points. The clock adds a second, physically meaningful cost — **simulated experimental time** — computed per job from the angles TAVI already knows, and exposes it alongside the existing wall-clock ETA.
+
+The physics is free. `compute_scan_snapshot` already computes **every axis angle at every point** (A2/mtt, A3/omega, A4/stt, analyzer att, plus bending/orientation) via `calculate_angles`. So:
+
+- **Counting time** = points × a counting-time model (see open questions).
+- **Movement time** follows the **Teixeira Parente metric**: along the ordered scan path, each step's move time is `max over axes of |Δangle_axis| / velocity_axis` (the axes move in parallel, so the slowest axis sets the step), summed over the path. This needs **no new physics** — only per-axis angular velocities and a difference of angles TAVI already produces.
+
+Per-axis velocities are added to the **instrument descriptor** (deg/s per axis). Experimental time = Σ counting + Σ movement.
+
+### 7.2 Motivation
+
+- **Human (GUI, teaching):** Students *see* that a badly ordered scan list wastes an hour of "beam" — a Q-list that zig-zags across the accessible region spends most of its budget moving motors, not counting. A live "experimental time" readout next to the wall-clock ETA makes the cost of poor planning concrete in a way pure compute time never does.
+- **LLM/API client (benchmarking):** **Honest cost accounting** for autonomous-driver benchmarking. An acquisition function that ignores movement cost happily zig-zags — it looks efficient by point count but wastes beam. Only a **movement-aware clock** catches that, which is precisely the metric Teixeira Parente et al. use to score strategies. Exposing experimental time lets a driver optimize the real objective (information per beam-hour), not a proxy.
+
+### 7.3 Surfaces
+
+**API** — `experimental_time` rides existing responses, never replacing the wall-clock `eta`:
+
+```
+POST /validate / POST /scan → validation gains:
+  "experimental_time": { "seconds": 742.0, "counting": 660.0, "movement": 82.0,
+                         "velocities_known": true }
+GET /state → "session_experimental_time": 5310.0   (cumulative, this session)
+GET /journal → entries note per-job experimental time.
+```
+
+**GUI** — a readout in the simulation or API dock showing the pending scan's experimental time (counting + movement breakdown) beside the wall-clock ETA, and a cumulative session total, refreshed by the same hooks that already recompute the ETA.
+
+### 7.4 Failure modes
+
+| Situation | Behavior |
+|---|---|
+| Per-axis velocities not defined for the instrument | Fall back to a **descriptor default** with a provenance flag (`"velocities_known": false`); report movement time as an estimate, never silently omit it or assume zero. |
+| Points with infeasible geometry (no angles) | Excluded from the movement sum (no defined move to/from an unreachable setting); counting time counts only feasible/run points, consistent with `skipped_points`. |
+| Single point / single-command with one axis moving | Movement term is well-defined (or zero for a single point); the metric degenerates cleanly. |
+
+### 7.5 Boundary note
+
+The clock computes a **property of the instrument and the planned scan path** — how long this spectrometer would take to execute this motion — from geometry alone. It interprets no data. It sits on the control side of §0, exactly like feasibility and resolution.
+
+**Touched modules:** instrument descriptors (per-axis angular velocities, counting-rate model constants); `tavi/runtime_tracker.py` or a small new `tavi/experiment_clock.py` (Qt-free: consumes the per-point angle sequence from the snapshot pipeline, returns counting/movement seconds); `TAVI_PySide6.py` (compute at validate/submit, thread into results, accumulate session total); `tavi/api_server.py` (`experimental_time` in validation, `session_experimental_time` in `/state`); `tavi/journal.py` (per-job note); `gui/` (readout).
+
+**Open questions:** Counting-time model — proportional to `number_neutrons`? A configurable count-rate (neutrons/s) so simulated experimental time maps to a nominal flux? A fixed per-point monitor-count model like a real experiment? Should the **budget system** optionally budget *experimental time* (a beam-time allocation) rather than, or in addition to, neutrons — closer to how real allocations work and more meaningful for a driver optimizing beam-hours?
+
+**Dependencies:** the per-point angle sequence from `compute_scan_snapshot`/`calculate_angles` (live) and descriptor velocity fields (new). Independent of §1–§6; small and landable early.
+
+---
+
+## 8. Point-list (non-uniform) scans
+
+### 8.1 The gap
+
+The `VARIABLE start stop STEP` grammar produces **uniform grids only**. A single point already works (the degenerate command with both commands empty). But an **arbitrary list of values** — dense near a feature, sparse in the tails — is inexpressible. Every real counting-time saving in a well-planned scan lives in *non-uniform* sampling, and it cannot be requested today without submitting many one-point jobs.
+
+### 8.2 Motivation
+
+- **Human (GUI, later):** A scientist who already knows roughly where a peak sits wants to pack points around it and skip the flat background — fewer points, same information. The uniform grid forces a wasteful choice between "coarse everywhere" and "fine everywhere".
+- **LLM/API client:** **Adaptive within-scan sampling is where real counting-time savings live.** A driver's acquisition function naturally emits a non-uniform grid — dense near a predicted peak, sparse elsewhere. Downstream energy-scan fitters (DHO, damped-harmonic-oscillator fits) accept arbitrary x-arrays, so there is no reason to force the acquisition onto a uniform grid. This is the point-generation counterpart to path scans (§2): both feed the same pipeline, both express a scan the string grammar cannot.
+
+### 8.3 Design — a value-list point generator
+
+An explicit **value-list form**, mutually exclusive with `scan_commands`/`scan_path`:
+
+```
+POST /scan
+  { "scan_points": { "variable": "deltaE",
+                     "values": [2.0, 3.5, 4.0, 4.25, 4.5, 5.5] },
+    "parameters": { "H": 1.0, "K": 0.0, "L": 0.0 } }
+```
+
+Implementation is **another point-generator branch feeding the existing snapshot pipeline** — the *same insertion point* as path scans (§2), and even simpler: no interpolation, just place each listed value into the scanned index of the 11-element `scan_point` template and emit `(scan_point, i)` tuples. Validation, budget, and per-point feasibility run **unchanged** (each listed value is one point, checked exactly as a grid point is). The result is a **1D** `ScanResult` with `variable_1` = the named variable and `scan_values_1` = the (sorted) value list; `counts`, `valid_mask_1`, and every SSE event are identical to a command scan.
+
+`scan_points`, `scan_commands`, and `scan_path` are mutually exclusive per job (400 if more than one is present). The frozen `launch_state` gains a `scan_kind: "points"` marker plus the value list so the worker selects the branch. GUI exposure comes later (an editable value table); the API is the v1 surface.
+
+### 8.4 Failure modes
+
+| Situation | Detection | Behavior |
+|---|---|---|
+| Empty `values` | `len(values) == 0` | Refuse (400): "point-list scan needs at least one value". |
+| Duplicate values | repeated entries | **Reject** duplicates (400) rather than silently collapsing — a duplicate is almost always a client bug, and skipping it silently would hide it. |
+| Unsorted values | not monotonic | **Auto-sort** ascending and note it in the validation response (`"sorted": true`), so `write_1D_scan`'s `argsort` and the plot see a monotonic x with no surprise. |
+| A listed value geometrically infeasible | `calculate_angles` error flags | Per-point, exactly as today: reject the submission unless `allow_partial`, then skip and list under `skipped_points`. |
+
+### 8.5 Boundary note
+
+A point-list is a **scan geometry**, not an analysis. TAVI executes the values it is handed; deciding *which* values to sample (adaptive placement around a predicted peak) is the client's/driver's job — the acquisition function lives in `docs/LLM_HARNESS_DESIGN.md`, not here. TAVI only runs the list.
+
+**Touched modules:** `TAVI_PySide6.py` (value-list point-generator branch at the shared §2 insertion point, `scan_kind: "points"` in `launch_state`, `POST /scan` body parsing); `tavi/scan_jobs.py` (`scan_kind`/value-list in the frozen state); `tavi/api_server.py` (accept `scan_points`, mutual-exclusion check); `docs/API_USER_GUIDE.md` (document the form). Later: `gui/docks/unified_simulation_dock.py` (value table). No change to `instruments/`.
+
+**Open questions:** Should a point-list compose into a 2D scan (value-list × command, or value-list × value-list)? Should the auto-sort be suppressible (a client that *wants* acquisition order preserved for movement-time accounting — note the interaction with §7's movement metric, which is path-order-dependent)?
+
+**Dependencies:** none. Independent of §2 path scans but **shares the generator insertion point** (`TAVI_PySide6.py` ~:4159); landable before or after §2 with no ordering constraint. Small.
+
+---
+
+## 9. Dependency-ordered roadmap
 
 Each item is independently landable and verifiable, in order:
 
 1. **Scan-derived motion (§1).** `tavi/scan_fits.py` + `POST /goto` + display-dock buttons. Depends only on the live `ScanResult`/`apply_parameters` machinery. Highest value, smallest surface, self-contained. Verify: run a 1D scan, click "Go to CEN", confirm the scanned widget moves to the fitted center and refuses cleanly on a flat scan; `curl POST /goto` returns `moved`/`from`/`to`.
 2. **Path scans (§2).** New point-generator + `scan_path` body + "Path" GUI mode + `_get_axis_label` case. Depends on the existing generator/`compute_scan_snapshot` (no physics change). Verify: `(1 0 0)→(1 1 0)` in 21 points produces a 1D counts-vs-fraction result matching a hand-built grid diagonal; infeasible points reported per point.
 3. **Batch + campaigns (§3).** `Campaign`/`CampaignRegistry`, `POST /scans`, campaign endpoints, campaign-wide budget, grouped job table. Depends on the live serial queue and budget model; independent of §1–2 but naturally consumes path scans as members. Verify: submit a 3-job campaign, force one member infeasible, confirm the other two run and the campaign ends `partial`.
-4. **Resolution ellipsoids (§5).** `tavi/resolution.py` + plugin `resolution_config` adapters + `GET /resolution` + GUI readout/overlay. Independent of items 1–3 and landable in parallel with any of them (listed fourth only because 1–3 were designed first); the pure-math module plus published-reference unit tests can land well before the GUI overlay. Verify: reproduce a published Cooper–Nathans configuration to tolerance offline, then compare a simulated elastic Bragg width against the predicted Bragg width.
-5. **Recipes (§4).** Orchestration layer over 1–3. Lowest priority; do not start until 1–3 are live and stable. Verify: `rocking_curve` with `goto_cen` runs the scan then recenters.
+4. **Point-list scans (§8).** Value-list point-generator branch + `scan_points` body + mutual-exclusion check. Shares the §2 insertion point; **no dependency on §2** — landable independently and early. Small. Verify: `{"scan_points": {"variable": "deltaE", "values": [2, 3.5, 4, 4.25, 4.5, 5.5]}}` produces a 1D result at exactly those x-values; a duplicate rejects, an unsorted list auto-sorts with a note.
+5. **Virtual instrument clock (§7).** Per-axis velocities in the descriptor + `tavi/experiment_clock.py` + `experimental_time` in validation/results + cumulative session total. Independent of §1–§6; small (no new physics — reuses per-point angles). Landable early. Verify: a compact scan and a zig-zag Q-list of equal point count report clearly different movement times; velocities-unknown falls back with `"velocities_known": false`.
+6. **Resolution ellipsoids (§5).** `tavi/resolution.py` + plugin `resolution_config` adapters + `GET /resolution` + GUI readout/overlay. Independent of items 1–5 and landable in parallel with any of them; the pure-math module plus published-reference unit tests can land well before the GUI overlay. **Prerequisite of §6.** Verify: reproduce a published Cooper–Nathans configuration to tolerance offline, then compare a simulated elastic Bragg width against the predicted Bragg width.
+7. **Deterministic engine (§6).** `tavi/deterministic_engine.py` + shared sample-config projection + `engine` field through `launch_state`/worker dispatch + provenance. **Depends on §5** (its Cooper–Nathans matrix is the convolution kernel); otherwise independent. Verify: a deterministic scan of the same setup as an MC scan returns in milliseconds with a peak at the same position, tagged `engine: "deterministic"`; the two agree within Monte Carlo error where the analytic model is faithful.
+8. **Recipes (§4).** Orchestration layer over §1–§3. Lowest priority; do not start until §1–§3 are live and stable. Verify: `rocking_curve` with `goto_cen` runs the scan then recenters.
 
-Throughout: preserve the analysis/control boundary of §0. If a proposed addition requires TAVI to *interpret* data rather than *compute a motion or a scan geometry*, it belongs in the client, not here. Resolution (§5) sits on the control side deliberately: it is a property of the instrument configuration, computed from no data.
+Throughout: preserve the analysis/control boundary of §0. If a proposed addition requires TAVI to *interpret* data rather than *compute a motion or a scan geometry*, it belongs in the client, not here. Resolution (§5) sits on the control side deliberately: it is a property of the instrument configuration, computed from no data. The deterministic engine (§6) likewise stays on the control side — it evaluates the instrument-plus-sample model and produces counts, exactly as McStas does, interpreting no measured data; the clock (§7) computes a property of the planned motion, not of any result.
 
 ---
 
-## 7. Notes where the codebase shaped this design
+## 10. Notes where the codebase shaped this design
 
 - **`compute_scan_snapshot` is already path-ready.** It consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** change to `instruments/PUMA_instrument_definition.py` — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
 - **The scan-command grammar is the real constraint**, not the physics: `_validate_single_scan_command` (:2090) and `parse_scan_steps` (`tavi/utilities.py:91`) hard-code "one variable, four tokens, last = step". Path scans deliberately sidestep this grammar with a structured `scan_path` body rather than extending the string syntax (which cannot express coupled variables cleanly).
