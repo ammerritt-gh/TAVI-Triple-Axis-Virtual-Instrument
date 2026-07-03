@@ -29,6 +29,7 @@ from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
+from tavi.api_server import TaviApiServer, ApiError, load_api_config
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -40,6 +41,196 @@ E_CHARGE = 1.602176634e-19  # electron charge
 K_B = 0.08617333262  # Boltzmann's constant in meV/K
 HBAR_meV = 6.582119569e-13  # H-bar in meV*s
 HBAR = 1.05459e-34  # H-bar in J*s
+
+
+class _GuiCall:
+    """A function call marshalled from a worker thread onto the GUI thread.
+
+    Carries the callable plus a ``threading.Event`` the GUI-thread slot sets once
+    it has run ``fn`` and stored the result (or the exception). The waiting HTTP
+    thread blocks on ``done`` with a timeout.
+    """
+    __slots__ = ("fn", "done", "result", "error")
+
+    def __init__(self, fn):
+        self.fn = fn
+        self.done = threading.Event()
+        self.result = None
+        self.error = None
+
+
+class ApiBridge(QObject):
+    """Marshals backend reads/writes from HTTP worker threads onto the GUI thread.
+
+    Created on the GUI thread. ``call_on_gui`` wraps ``fn`` in a ``_GuiCall`` and
+    emits it over the ``_invoke`` signal; because the emitter is a worker thread
+    and this object lives on the GUI thread, Qt delivers it as a *queued*
+    connection to ``_execute`` on the GUI thread. The worker then waits (with a
+    timeout) for the call's Event. If the GUI thread is blocked -- e.g. a modal
+    dialog is open -- the wait times out and a 503 ``gui_busy`` is raised instead
+    of deadlocking (see docs/API_SERVER_DESIGN.md sec 4.1).
+    """
+
+    _invoke = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        # Auto/queued connection: created on the GUI thread, emitted from worker
+        # threads, so Qt queues delivery onto the GUI thread's event loop.
+        self._invoke.connect(self._execute)
+
+    def call_on_gui(self, fn, timeout=5.0):
+        """Run ``fn`` on the GUI thread and return its result (or raise).
+
+        Raises ``ApiError(503, 'gui_busy')`` if the GUI thread does not respond
+        within ``timeout`` seconds; re-raises any exception ``fn`` raised.
+        """
+        call = _GuiCall(fn)
+        self._invoke.emit(call)
+        if not call.done.wait(timeout):
+            raise ApiError(
+                503, "gui_busy",
+                "GUI thread did not respond (busy or modal dialog open)",
+            )
+        if call.error is not None:
+            raise call.error
+        return call.result
+
+    @Slot(object)
+    def _execute(self, call):
+        """GUI-thread slot: run the wrapped callable and signal completion."""
+        try:
+            call.result = call.fn()
+        except Exception as exc:  # propagate to the waiting HTTP thread
+            call.error = exc
+        finally:
+            call.done.set()
+
+
+class TaviApiBackend:
+    """Duck-typed backend consumed by ``TaviApiServer`` (plain class, no Qt).
+
+    Holds a reference to the controller and the ``ApiBridge``. Read endpoints
+    that touch GUI widgets (parameters) go through the bridge onto the GUI
+    thread; job-registry reads and stop actions use the thread-safe registry,
+    per-job locks, and the shared stop event directly (no GUI touch). The write
+    endpoints ``patch_parameters`` / ``submit_scan`` are intentionally absent so
+    the handler returns 501 until phase 3.
+    """
+
+    def __init__(self, controller, bridge):
+        self._controller = controller
+        self._bridge = bridge
+        # Set by _start_api_server after the server is constructed so the backend
+        # can report the live access mode. Guarded against None.
+        self.server = None
+
+    # ---- helpers -------------------------------------------------------
+
+    def _mode(self):
+        server = self.server
+        return server.mode if server is not None else None
+
+    def _instrument_id(self):
+        try:
+            return self._controller.descriptor.id
+        except Exception:
+            return None
+
+    def _get_job_or_404(self, job_id):
+        job = self._controller._job_registry.get(job_id)
+        if job is None:
+            raise ApiError(404, "unknown_job", "Unknown job id: %s" % job_id)
+        return job
+
+    # ---- read endpoints ------------------------------------------------
+
+    def get_health(self):
+        return {
+            "status": "ok",
+            "instrument": self._instrument_id(),
+            "mode": self._mode(),
+        }
+
+    def get_parameters(self):
+        return self._bridge.call_on_gui(self._controller.get_gui_values)
+
+    def get_state(self):
+        params = self._bridge.call_on_gui(self._controller.get_gui_values)
+        registry = self._controller._job_registry
+        active = self._controller._active_job
+        current_job = active.job_id if active is not None else None
+
+        queued = []
+        for job in registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    queued.append(job.job_id)
+
+        state = {
+            "instrument": self._instrument_id(),
+            "mode": self._mode(),
+            "busy": current_job is not None,
+            "current_job": current_job,
+            "queue": queued,
+            "parameters": params,
+        }
+        limits = getattr(self._controller, "_api_limits", None)
+        if limits is not None:
+            state["limits"] = limits
+        return state
+
+    def get_job(self, job_id):
+        return self._get_job_or_404(job_id).snapshot()
+
+    def get_job_data(self, job_id):
+        return self._get_job_or_404(job_id).snapshot(include_data=True)
+
+    def list_jobs(self):
+        return self._controller._job_registry.recent()
+
+    # ---- stop endpoints (thread-safe; no bridge / no GUI touch) --------
+
+    def stop_job(self, job_id):
+        job = self._get_job_or_404(job_id)
+        with job.lock:
+            state = job.state
+            if state == JobState.QUEUED:
+                job.state = JobState.CANCELLED
+                if job.finished_at is None:
+                    job.finished_at = time.time()
+            elif state in _API_TERMINAL_STATES:
+                raise ApiError(
+                    409, "job_finished",
+                    "Job %s already finished (%s)" % (job_id, state.value),
+                )
+            # RUNNING: fall through and set the shared stop event outside the lock
+        if state == JobState.RUNNING:
+            self._controller.stop_event.set()
+        return job.snapshot()
+
+    def stop_all(self, clear_queue):
+        registry = self._controller._job_registry
+        running_id = None
+        cancelled = []
+        for job in registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.RUNNING:
+                    running_id = job.job_id
+                elif clear_queue and job.state == JobState.QUEUED:
+                    job.state = JobState.CANCELLED
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+                    cancelled.append(job.job_id)
+        if running_id is not None:
+            self._controller.stop_event.set()
+        return {"stopped": running_id, "cancelled": cancelled}
+
+
+# Terminal states used by the API stop logic (mirrors scan_jobs terminal set).
+_API_TERMINAL_STATES = frozenset(
+    {JobState.DONE, JobState.FAILED, JobState.CANCELLED, JobState.STOPPED}
+)
 
 
 class TAVIController(QObject):
@@ -76,9 +267,12 @@ class TAVIController(QObject):
     # Signal for job-queue state transitions (job_id, state value)
     job_state_changed = Signal(str, str)
     
-    def __init__(self, window, instrument):
+    def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
         self.window = window
+        # CLI overrides for the remote API server (see main()); empty by default.
+        self._api_cli_overrides = api_overrides or {}
+        self.api_server = None
         # The active instrument plugin (fixed for the session) and its live state.
         self.instrument = instrument
         self.instrument_state = instrument.default_state()
@@ -157,7 +351,95 @@ class TAVIController(QObject):
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
-    
+
+        # Start the remote API server last, after the message center and job
+        # queue are ready (it reports status through print_to_message_center).
+        self._start_api_server()
+
+    def _start_api_server(self):
+        """Construct and start the remote API server per config + CLI overrides.
+
+        Called at the end of ``__init__`` so the message center and job queue
+        exist. Bind failures are surfaced to the message center and the GUI
+        continues without the API. See docs/API_SERVER_DESIGN.md sec 11.
+        """
+        try:
+            cfg = load_api_config()
+        except Exception as exc:
+            self.print_to_message_center(
+                f"API server: could not load config ({exc}); disabled"
+            )
+            return
+
+        overrides = self._api_cli_overrides or {}
+        enabled = bool(cfg.get("enabled", True))
+        mode = cfg.get("mode", "allow")
+        host = cfg.get("host", "127.0.0.1")
+        port = int(cfg.get("port", 8642))
+        token = cfg.get("token")
+        self._api_limits = cfg.get("limits")
+
+        # CLI overrides win over the config file.
+        if overrides.get("disabled"):
+            enabled = False
+        if overrides.get("port") is not None:
+            port = int(overrides["port"])
+            enabled = True  # --api-port implies enabled
+
+        # 'off' mode (or disabled) means: do not listen at all. TaviApiServer only
+        # accepts 'allow'/'readonly', so filter 'off' out before construction.
+        if not enabled or mode == "off":
+            self.print_to_message_center("API server disabled")
+            return
+
+        bridge = ApiBridge()  # created on the GUI thread
+        self._api_bridge = bridge
+        backend = TaviApiBackend(self, bridge)
+        try:
+            server = TaviApiServer(
+                host, port, token, mode, backend, log_callback=self._api_log
+            )
+        except ValueError as exc:
+            self.print_to_message_center(f"API server not started: {exc}")
+            return
+
+        backend.server = server
+        try:
+            server.start()
+        except OSError as exc:
+            self.print_to_message_center(
+                f"Warning: API server could not bind {host}:{port} ({exc}); "
+                "continuing without remote API"
+            )
+            return
+
+        self.api_server = server
+        self.print_to_message_center(
+            f"API server listening on http://{host}:{port}/api/v1 (mode: {mode})"
+        )
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            if token:
+                self.print_to_message_center(
+                    f"Note: API server bound to non-loopback address ({host})."
+                )
+            else:
+                self.print_to_message_center(
+                    "SECURITY WARNING: API server is bound to a non-loopback "
+                    f"address ({host}) with no bearer token configured; anyone on "
+                    "the network can control TAVI. Set a token in "
+                    "config/api_config.json."
+                )
+
+    def _api_log(self, msg):
+        """Forward an API-server log line to the message center.
+
+        Invoked from HTTP request threads and the server's own threads, so it
+        must never touch widgets directly. ``message_printed`` is a Qt signal;
+        emitting it is thread-safe (Qt delivers it to the GUI-thread slot via a
+        queued connection), so this is the safe path off the GUI thread.
+        """
+        self.message_printed.emit(f"API: {msg}")
+
     def connect_signals(self):
         """Connect all GUI signals to controller methods."""
         # Simulation control buttons (moved to right panel)
@@ -3071,6 +3353,11 @@ class TAVIController(QObject):
             return
         self._shutdown_called = True
 
+        # Stop accepting remote requests first (idempotent; closes SSE clients).
+        server = getattr(self, "api_server", None)
+        if server is not None:
+            server.stop()
+
         # Signal any running scan to drain out.
         self.stop_event.set()
 
@@ -3960,7 +4247,22 @@ def main():
         "--instrument", metavar="ID", default=None,
         help="Instrument id to load (e.g. 'puma'); skips the startup picker.",
     )
+    parser.add_argument(
+        "--api-port", metavar="N", type=int, default=None,
+        help="Enable the remote API server on port N (overrides config port).",
+    )
+    parser.add_argument(
+        "--no-api", action="store_true",
+        help="Disable the remote API server regardless of config.",
+    )
     args, qt_args = parser.parse_known_args()  # leftover args go to Qt
+
+    # Remote-API CLI overrides handed to the controller (see _start_api_server).
+    api_overrides = {}
+    if args.no_api:
+        api_overrides["disabled"] = True
+    if args.api_port is not None:
+        api_overrides["port"] = args.api_port
 
     import instruments.builtin  # noqa: F401  (explicit built-in registration)
     from instruments.registry import available_instruments, get_instrument
@@ -3995,7 +4297,7 @@ def main():
     assert_valid_descriptor(instrument.descriptor(), runnable=True)
 
     window = TAVIMainWindow(instrument.descriptor())
-    controller = TAVIController(window, instrument)
+    controller = TAVIController(window, instrument, api_overrides=api_overrides)
     # Store controller reference on window so closeEvent can access it
     window.controller = controller
     window.show()
