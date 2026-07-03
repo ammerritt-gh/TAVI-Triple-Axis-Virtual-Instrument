@@ -390,10 +390,11 @@ class TAVIMainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event - stop simulation and save layout."""
-        # Stop any running simulation before closing
+        # Stop any running simulation and tear down the job worker before closing.
         if hasattr(self, 'controller') and self.controller is not None:
-            self.controller.stop_flag = True
             self.controller.print_to_message_center("Window closing - stopping simulation...")
+            if hasattr(self.controller, 'shutdown'):
+                self.controller.shutdown()
         self.save_layout_to_file()
         event.accept()
 
