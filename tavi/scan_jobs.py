@@ -7,6 +7,7 @@ so HTTP request threads can read a consistent view without touching live
 worker state. See ``docs/API_SERVER_DESIGN.md`` sections 7 and 13 (phase 1).
 """
 import copy
+import json
 import math
 import threading
 import time
@@ -54,6 +55,24 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (set, frozenset)):
         return sorted((_json_safe(v) for v in value), key=str)
     return value
+
+
+def _serializable_params(vals: Dict[str, Any]) -> Dict[str, Any]:
+    """JSON-safe copy of a parameter dict, dropping unserializable values.
+
+    Launch-state ``vals`` may hold live objects alongside plain parameters;
+    those must never leak into a snapshot, so any value that still fails
+    strict JSON serialization after ``_json_safe`` is omitted entirely.
+    """
+    params: Dict[str, Any] = {}
+    for key, value in (vals or {}).items():
+        safe = _json_safe(value)
+        try:
+            json.dumps(safe, allow_nan=False)
+        except (TypeError, ValueError):
+            continue
+        params[key] = safe
+    return params
 
 
 @dataclass
@@ -171,11 +190,12 @@ class ScanJob:
             return self.state in _TERMINAL_STATES
 
     def _launch_summary(self) -> Dict[str, Any]:
-        """Small JSON-safe view of the frozen launch state.
+        """JSON-safe view of the frozen launch state.
 
         The full ``launch_state`` holds non-serializable objects (scan_config,
-        sample mount, etc.), so only the fields useful to a remote observer --
-        the scan commands and neutron count -- are exposed.
+        sample mount, etc.); this exposes the scan commands and neutron count
+        as top-level conveniences plus the complete ``vals`` parameter dict
+        under ``parameters``.
         """
         ls = self.launch_state if isinstance(self.launch_state, dict) else {}
         vals = ls.get('vals', {})
@@ -186,6 +206,12 @@ class ScanJob:
             # Whether this job was submitted with per-job parameter isolation
             # (GUI widgets restored after freezing the launch state).
             'isolated': bool(ls.get('isolated', False)),
+            # The complete frozen parameter set the job ran with. Downstream
+            # consumers (e.g. analysis pipelines reconstructing instrument
+            # geometry) need the full picture, not just the scan commands.
+            # Values that are not strictly JSON-serializable (live config
+            # objects and the like) are dropped rather than leaked.
+            'parameters': _serializable_params(vals),
         }
 
     def snapshot(self, include_data: bool = False) -> Dict[str, Any]:
