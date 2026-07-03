@@ -1,445 +1,425 @@
-# LLM Measurement Harness — Design Document
+# Measurement Driver — Design Document
 
-*Status: **Draft**, 2026-07-03 — design only, no code exists yet.*
+*Status: **Draft**, 2026-07-03 — design only. No driver code exists yet. The
+driver is **not** part of the TAVI tree; it is a client of TAVI's API and of
+ISAR's files, and will almost certainly live in **its own repository**. Nothing
+here is a commitment to land code in TAVI.*
 
-> **Nothing in this document is implemented.** Every module, tool, schema, and
-> data structure named below is proposed future work. Where it references TAVI
-> symbols and endpoints (`POST /validate`, `GET /schema`, `eta`, `ScanResult`,
-> `allow_partial`, `skipped_points`, the `tas-mcp` server) those are real and
-> current — verify their exact behavior in `docs/API_USER_GUIDE.md`. Everything
-> the *harness* itself does is a proposal.
->
-> **Code location is deferred.** The harness is almost certainly a **separate
-> repository** from TAVI, not a package inside it. TAVI is the instrument-and-
-> control-system product; the harness is a client of TAVI's API and, later, of
-> real-instrument data files. Keeping it in its own repo is what enforces the
-> boundary this document is built around (see §1). Nothing here should be read
-> as a commitment to land code in the TAVI tree.
+> This document describes the **third component** of a settled three-component
+> architecture (§1). Where it names TAVI symbols and endpoints (`POST /validate`,
+> `GET /schema`, `GET /scan/{id}/data`, `eta`, `isolated`, `allow_partial`,
+> `skipped_points`, the `tas-mcp` server) those are **real and current** — verify
+> them in `docs/API_USER_GUIDE.md`. Where it names ISAR symbols and files
+> (`isar run`, `report/results.csv`, `card.state.json`, `dispersion_prior`,
+> `prior_for`, `isar/synth`) those are **real and current in the ISAR repo**
+> (`c:\Users\AMM\Documents\Github\ISAR`) — verify them in ISAR's `DESIGN.md` and
+> `docs/UNIFICATION_DESIGN.md`. Everything the *driver* itself does is a proposal.
 
-> Companion documents: `docs/API_USER_GUIDE.md` (authoritative client-facing API
-> reference — endpoints, the 40-field parameter table, scan grammar, SSE,
-> budgets, gotchas), `docs/API_SERVER_DESIGN.md` (the live API architecture),
-> `docs/CONTROL_FEATURES_DESIGN.md` (proposed future TAVI control primitives:
-> goto CEN, path scans, campaigns, recipes), `docs/INSTRUMENT_LAYOUT.md`
-> (TAS/PUMA geometry), `docs/MCSTAS_PARAMETERS.md` (build-time vs run-time).
+> Companion documents. TAVI side: `docs/API_USER_GUIDE.md` (authoritative
+> client-facing API reference — endpoints, the 40-field parameter table, scan
+> grammar, SSE, budgets, gotchas), `docs/API_SERVER_DESIGN.md` (live API
+> architecture), `docs/CONTROL_FEATURES_DESIGN.md` (future TAVI control
+> primitives: goto CEN, path/point-list scans, campaigns, the resolution
+> ellipsoid §5, the deterministic engine, and the virtual instrument clock).
+> ISAR side: `DESIGN.md`, `docs/READING_GUIDE.md`, `docs/UNIFICATION_DESIGN.md`,
+> `docs/STATS_PRIMER.md`.
 
 ---
 
 ## 0. What this is
 
-A **measurement harness** for a purpose-built LLM *measurement driver* that runs
-experiments. The harness gives the LLM the analysis and decision tooling that
-TAVI **deliberately does not provide**, and forces the LLM through a structured
-pre-flight before it is allowed to touch the instrument.
+A **measurement driver**: a purpose-built agent whose entire job is to take a
+scientific goal ("map this phonon branch to this precision within this budget"),
+plan and run the measurement, hand each scan to an analysis engine, and decide
+what to measure next — until the goal is met or shown to be unmeetable.
 
-There are two LLM user classes, and the harness is designed for the second:
+This document is the driver's design. Its competence lives in *its own
+structure*, not in a prompt pasted into a chat model. It is built so it can be
+developed and validated against TAVI (a simulated triple-axis spectrometer where
+the truth is known) and then moved to a real instrument by flipping one endpoint.
 
-1. **General-purpose assistant.** A human pastes the §2 operator block from
-   `docs/API_USER_GUIDE.md` into a chat model and asks it to drive TAVI. It
-   needs tools but has no fixed loop. This is the *supported-but-not-the-target*
-   case; the MCP tool surface (§5) serves it directly.
-2. **Purpose-built measurement driver.** A dedicated agent whose entire job is
-   to plan, measure, analyze, and decide-next until an experimental goal is met.
-   This driver's competence lives in *its harness*, not in a prompt. **This is
-   the design target.** Everything below — the mandatory planning gate (§2), the
-   analysis toolkit (§3), the decision-loop recipes (§4) — exists so this driver
-   can be built, validated against TAVI, and then transferred to a real
-   instrument unchanged.
-
-TAVI (a simulated triple-axis spectrometer) is **one data source**. A real
-instrument (ILL, FRM-II/MLZ, HFIR) is another. The harness is the layer that
-makes those two interchangeable to the driver above it.
+The earlier version of this file proposed an in-driver "analysis toolkit"
+(`fit_peak`, `assemble_dispersion`, a statistics advisor). **That plan is
+deleted.** Analysis is now owned by ISAR, a separate, validated project (§1b,
+§3). The driver does no fitting and produces no numbers.
 
 ---
 
-## 1. Principles
+## 1. The three-component architecture (settled)
 
-**P1 — Analysis lives at the user end; the instrument provides raw counts,
-monitor, and metadata only.** This is the core project principle, stated in
-`docs/CONTROL_FEATURES_DESIGN.md` §0: *TAVI is instrument plus control system,
-never analyst.* TAVI (and a real TAS control system) will hand back per-point
-counts, a monitor normalization, geometry validity, and a frozen parameter
-snapshot. It will **not** fit a peak, model a background, judge whether a peak is
-"real", or advise a counting time. All of that is the harness's job. Even the one
-"analysis-looking" primitive TAVI may grow — `goto CEN/COM/MAX`
-(`CONTROL_FEATURES_DESIGN.md` §1) — is a *control action* (drive a motor to a
-scan-derived value), not a scientific conclusion, and the harness must not
-confuse the two.
+Autonomous measurement here is **three cooperating components**, each with a
+hard boundary. This split is a decision, not an option.
 
-**P2 — The same harness tools consume TAVI JSON or real-instrument data.** Every
-analysis tool operates on a **normalized scan-data model**, never on a
-TAVI-specific payload directly. Adapters translate a source into that model:
+### 1a. Instrument control surface — TAVI now, a real TAS later
 
-```
-NormalizedScan
-  scan_variable : str            # e.g. "H", "deltaE", "path", or an angle name
-  points        : list[float]    # the scanned x values, one per point
-  counts        : list[float|None]  # detector counts; None = unmeasured/invalid
-  errors        : list[float|None]  # per-point counting error (√N or provided)
-  monitor       : list[float|None]  # monitor counts for normalization (may be None)
-  metadata      : dict           # frozen parameters, units, source id, timestamps,
-                                  #   valid_mask, mode (1D/2D/single), instrument id
-```
+Executes and validates; **never analyzes**. It sets parameters, checks per-point
+geometric feasibility, runs scans, and hands back raw counts, a monitor
+normalization, geometry validity, and a frozen parameter snapshot. It does not
+fit a peak, model a background, judge whether a peak is "real", or advise a
+counting time — that is the boundary `docs/CONTROL_FEATURES_DESIGN.md` §0 draws,
+and TAVI holds it deliberately so a driver that learns to lean on a control-side
+analysis feature does not learn a habit that fails to transfer.
 
-- **`counts` uses `None`, never `0`, for an unmeasured or geometrically invalid
-  point.** This mirrors the API guarantee (`API_USER_GUIDE.md` §12: *"null counts
-  mean unmeasured or invalid — never 0"*). Any tool that sums, fits, or weights
-  counts MUST drop `None`/`NaN` first.
-- **Adapters, not tools, know the source.** The **TAVI API adapter** exists
-  today's-API-shaped: it reads `GET /scan/{id}/data` and maps `result.scan_values_1
-  → points`, `result.counts → counts`, `result.valid_mask_1 → metadata.valid_mask`,
-  `result.metadata → metadata`. For 2D it maps `counts_grid`. **File-based
-  adapters** for real instruments (ILL ASCII/`.dat`, NICOS data files, HFIR SPICE
-  files) come later and produce the *identical* `NormalizedScan`. Errors are √N
-  when the source gives only counts; a real file's provided errors win.
+Today this is TAVI over the REST+SSE API of `docs/API_USER_GUIDE.md`. Later it is
+NICOS/SPICE on a real PUMA-class instrument. The driver uses the *same verbs* for
+both (set → validate → scan → read), so the write path transfers by swapping the
+client (§2.3).
 
-**P3 — Sim-to-real transfer is the design test for every tool.** Before any tool
-is added, ask: *"Would this work unchanged on an ILL or FRM-II data file?"* If a
-tool needs a TAVI-only field (a McStas output folder, a `job_id`, an SSE event),
-that dependency must live in the *adapter*, not the tool. A driver validated
-against TAVI must move to real data by swapping the adapter and nothing else.
-This is why analysis is offloaded from TAVI in the first place: a driver that
-learned to lean on a TAVI-side analysis feature would learn a habit that does not
-transfer.
+### 1b. Analysis engine — ISAR
 
----
+The number-producer. **ISAR** (`c:\Users\AMM\Documents\Github\ISAR`, machine name
+`isar`) is a validated, deterministic triage fitter: DHO-on-background convolved
+with resolution, AIC/BIC (never raw χ²) model selection for peak count, per-scan
+MINOS uncertainty, a **verdict** on every scan (`resolved` / `flagged` /
+`declined`, the last covering `junk`/`held`/`underpowered`/`no_signal`), a
+computed confidence, a running dispersion prior, and provenance on every result.
+Its own core principle **P1 — "LLM proposes, deterministic code disposes"** keeps
+any model out of the runtime path of a number that matters; it is validated two
+ways, including against a human gold standard (`docs/READING_GUIDE.md`,
+`DESIGN.md` §11, §2).
 
-## 2. Planning layer — mandatory pre-flight
+ISAR is a *separate project with its own life*. The driver invokes it and reads
+its files; it does not reach inside it.
 
-The single most important structural feature. Weak LLMs ignore prompt
-instructions but **cannot skip a tool precondition.** So the checklist is not
-prose in a system prompt — it is a **gate enforced by tool schemas**: the
-`run_scan` tool *refuses to execute* without an attached, passed plan.
+### 1c. The driver — this document
 
-This is **defense in depth**, deliberately mirroring TAVI's server-side
-always-on validation (`API_USER_GUIDE.md` §5: every `POST /scan` is validated
-before it queues). TAVI validates on the server because it cannot trust clients;
-the harness validates on the client because it cannot trust the LLM. A scan that
-the harness lets through still faces TAVI's `POST /scan` validation — two
-independent gates.
+The layer between a human's goal and the other two components. It plans, selects
+points statistically, drives the instrument through its client, invokes ISAR,
+reads ISAR's verdicts and prior, and decides the next measurement. It is
+**decision-only**.
 
-### 2.1 The plan object
+### The boundary rule (verbatim)
 
-Before any submission the driver must fill and pass a `ScanPlan`:
+> **The driver may LOOK at data — plots, raw counts, a quick-look PNG — to decide
+> what to measure next. It may never CONCLUDE from its look. Every number comes
+> only from ISAR.**
 
-```
-ScanPlan
-  plan_id        : str            # minted by the harness on a PASSED validate_plan
-  scans          : list[ScanSpec] # each: parameters patch + scan_command(s)
-  time_budget_s  : float          # declared by the operator up front, once per session
-  checklist:
-    valid        : bool  # (a) every scan passed POST /validate, would_queue == true
-    time_sane    : bool  # (b) Σ eta.estimated_seconds × confidence-factor ≤ remaining budget
-    data_expected: bool  # (c) expected signal reasoned about; every point feasible
-                         #     OR allow_partial set with the gap consciously acknowledged
-  notes          : str            # the driver's justification, logged to the session log
-```
-
-`validate_plan` returns a `plan_id` **only if all three checklist booleans are
-true.** `run_scan(plan_id=...)` looks the id up and refuses (`plan_required`
-error) if it is missing, unknown, or stale. No plan → no scan.
-
-### 2.2 The three checks
-
-**(a) VALID? — `POST /validate` every planned scan.** For each `ScanSpec`, the
-harness calls TAVI `POST /validate` (non-mutating, allowed even in read-only
-mode; `API_USER_GUIDE.md` §5). It requires `would_queue == true` and an empty
-`blockers` list. `infeasible` points are surfaced to check (c). This costs
-nothing — no job is queued, no parameter is left behind (`/validate` rolls back
-its inline `parameters` patch).
-
-**(b) TIME-SANE? — `eta` × confidence against the session budget.** The operator
-declares `time_budget_s` up front. For each scan the harness reads `eta:
-{estimated_seconds, confidence, samples}` from the `/validate` response. It
-discounts by confidence (`API_USER_GUIDE.md` §5 *ETA object*: `none`=0 samples,
-`low`=1–2, `medium`=3–9, `high`=10+):
-
-- `high` → trust `estimated_seconds` as-is.
-- `medium` → inflate by a safety factor; allowed.
-- `low`/`none` → **the plan does not pass on ETA alone.** The harness requires a
-  cheap **calibration scan** first (a short, low-`number_neutrons`, few-point
-  scan at a known-strong position) to build up `samples` for the instrument's
-  run-history, after which `eta.confidence` rises and the real plan can be
-  re-validated. This directly exploits TAVI's history-based ETA: confidence is a
-  function of sample count, so one cheap run converts `none`/`low` into
-  `medium`/`high`.
-
-The running sum of discounted ETAs must fit the **remaining** session budget
-(the harness tracks spend in its session log, §4.3).
-
-**(c) DATA-EXPECTED? — expected-signal reasoning.** The driver must record, per
-scan, an expectation for the signal: at the count *rate* observed in prior
-results (pulled from the harness session log and `GET /journal`), how many counts
-does it expect at the peak, and is that enough for the error target it cares
-about (cross-checked with `advise_counts`, §3)? And: **is every point feasible?**
-If `/validate` reported `infeasible` points, the driver must either fix the plan
-or *consciously* set `allow_partial: true` and record the acknowledged gap in
-`notes`. A silent infeasible point never passes — this mirrors TAVI's own
-`skipped_points` honesty (`API_USER_GUIDE.md` §5: *"Skipped points are never
-silent gaps"*).
-
-### 2.3 Why a gate, not guidance
-
-The gate is the whole point. A capable model would follow a prompted checklist;
-a weak or context-truncated model would not. By making `plan_id` a required,
-schema-level argument of `run_scan` that can only be obtained from a passed
-`validate_plan`, the harness makes the checklist **unskippable by
-construction** — the same reason TAVI validates server-side instead of trusting
-the client. If the driver tries to `run_scan` without a plan, the tool errors
-before any HTTP call is made.
+Looking is control feedback ("the peak is at the edge, widen the window");
+concluding is science ("ω₀ = 5.2 ± 0.1 meV"). The first is the driver's; the
+second is ISAR's, always.
 
 ---
 
-## 3. Analysis toolkit
+## 2. The driver's three parts
 
-Pure, offline-testable functions (numpy/scipy) that operate **only** on the
-`NormalizedScan` model of §1, so each one satisfies the P3 transfer test. Every
-tool below was **deliberately excluded from TAVI** — the note in each row says
-why.
+### 2.1 LLM supervisor
 
-| Tool | What it does | Why excluded from TAVI |
-|---|---|---|
-| `fit_peak` | Gaussian / Lorentzian / pseudo-Voigt fit; returns center, amplitude, FWHM, background, **each with a fitted error**, plus goodness-of-fit (χ²/dof, R²). | Fitting a lineshape is scientific interpretation. TAVI's `goto CEN` computes a *center to move to* (`CONTROL_FEATURES_DESIGN.md` §1.3) but returns no model, no error bars, no lineshape choice — because choosing Gaussian vs. Lorentzian *is* the analysis. |
-| `peak_stats` | COM, CEN, MAX, FWHM, integrated intensity (trapezoid over `points`), directly from the arrays. | COM/CEN/MAX exist in TAVI **only as motion targets** (`goto`), not as reported quantities. Integrated intensity is a physics result — never a control action. |
-| `point_errors` | Per-point relative error √N/N (or from `errors`) and a "which points are under-counted" flag. | TAVI reports raw counts; turning counts into a statistical statement is analysis. |
-| `advise_counts` | "At the observed rate `r` counts/s, you need ≥ N neutrons/point for X% relative error at the peak." Inverts Poisson statistics. | A counting-time recommendation is a scientific/statistical judgement. TAVI's `eta` estimates *time*, never *how much you should count* — that would be advising the experiment. |
-| `estimate_background` | Fit/estimate a flat or linear background from the scan wings (edge points), return level + error. | Background modelling is explicitly named as client-side in `CONTROL_FEATURES_DESIGN.md` §0. |
-| `assemble_dispersion` | Collect peak centers (from `fit_peak`) across a *set* of const-Q energy scans into an E(q) curve with errors; carry per-point provenance. | Dispersion assembly is the canonical "deciding what the data means" task — the exact thing TAVI refuses to do (`CONTROL_FEATURES_DESIGN.md` §0). |
+The only place a language model sits. It never picks routine points and never
+produces a number. It does the things that need judgment and world knowledge:
 
-Design notes:
+- **Goal → objective spec.** Translate a natural-language goal ("map the acoustic
+  phonon dispersion from A to B, resolve ω₀ to ±0.1 meV") into a machine
+  objective: the reciprocal-space **path**, the per-point **tolerance** on ω₀, and
+  the **time / neutron budget**. This spec is what the acquisition engine (§2.2)
+  and the stopping criterion consume.
+- **The stopping criterion.** The supervisor holds the decision that the
+  objective is **met** (calibrated σ(ω₀) ≤ tolerance everywhere along the path) or
+  **unmeetable** (the target is below the instrument's resolution here; the budget
+  is exhausted with the path still under-determined; the sample/config cannot
+  deliver the statistics). This is the piece the field is missing: Teixeira
+  Parente et al. (2022), the benchmarking study of autonomous TAS approaches,
+  **explicitly names the stopping criterion as the untested gap** — the existing
+  autonomous methods optimize *where to measure* but never settle *when to stop*.
+  The driver makes stopping a first-class, testable output.
+- **Exception handling.** The supervisor owns the non-routine: a peak that fell
+  outside the chosen energy window, an ISAR `flagged`/`held` verdict, budget
+  exhaustion, a TAVI validation rejection, a σ-calibration that drifts. Each is a
+  branch it reasons about, not a crash.
+- **Warm-start layouts.** From physics knowledge (a known zone-center energy, an
+  expected sound velocity, symmetry) it proposes an initial scan layout so the
+  campaign does not start cold.
+- **Renegotiation.** When an assumption breaks (the dispersion is steeper than
+  expected; there is an unresolved second branch), it goes back to the user with a
+  concrete choice rather than silently burning budget.
 
-- **All consume `NormalizedScan`.** `assemble_dispersion` consumes a *list* of
-  them plus the q-value each was taken at (from `metadata`), so it works the same
-  whether the scans came from TAVI `GET /scan/{id}/data` or a directory of ILL
-  files.
-- **Errors propagate.** `fit_peak` returns parameter covariances; `assemble_
-  dispersion` carries the center errors into the E(q) curve. A real experiment is
-  useless without error bars, so the toolkit produces them from the first tool.
-- **numpy/scipy only**, no TAVI import. `fit_peak` uses `scipy.optimize.curve_
-  fit`; `advise_counts` is closed-form Poisson. This keeps the toolkit unit-
-  testable against synthetic data with no instrument present (§7 phase 1).
-- **Refusals, not guesses.** Like TAVI's `goto` (`CONTROL_FEATURES_DESIGN.md`
-  §1.6), each tool returns a structured refusal (`ok=false`, `reason`) for flat
-  data, too-few points, edge peaks, or non-convergence — the driver branches on
-  it rather than trusting a bad fit.
+### 2.2 Deterministic acquisition engine
 
----
+The statistical heart. No LLM. It holds a model over ISAR's accumulated per-scan
+results — e.g. a Gaussian process or local linear fit of ω₀(q) with predictive
+uncertainty — and an **acquisition function** that chooses the next measurement
+to maximize information per unit cost.
 
-## 4. Decision loop
+**The acquisition unit is a SCAN, not a point.** A proposal is a complete scan
+request:
 
-The driver's core competence is *measure → analyze → decide-next*. The harness
-supplies the recipes; the LLM supplies the goal.
+- a **Q position** (or a short segment) along the objective path;
+- an **energy window** — center = predicted ω(q), half-width = predicted ω
+  uncertainty **plus a margin**, so the peak lands inside;
+- a **neutron count** — chosen from the target σ(ω₀) and the observed count rate
+  (escalating from a cheap quick-look to a production count).
 
-### 4.1 Patterns
+**"Peak outside the chosen window" is a first-class outcome, not a failure.** The
+recovery policy is explicit: widen the window, re-center on the observed
+intensity (a LOOK, not a conclusion — §1), or escalate to the supervisor if it
+keeps missing. Because ISAR *declines* a scan with no usable peak rather than
+inventing one, a missed window shows up as a `declined`/`no_signal` verdict the
+engine can branch on.
 
-- **Alignment loop.** `run_scan` a rocking curve → `fit_peak` → if `ok` and the
-  center is off, patch the variable to the fitted center (via TAVI `PATCH
-  /parameters`, or a future `POST /goto`) → re-scan a **narrower** window around
-  it. Repeat until the center is stable within its own error bar.
-- **Convergence criterion.** After each production scan, `fit_peak` gives the
-  amplitude/center error. Stop when the error is below the operator's target;
-  otherwise `advise_counts` says how many more neutrons/point are needed and the
-  driver escalates `number_neutrons`.
-- **Window expansion.** If `fit_peak` (or `peak_stats`) reports the peak at a
-  **scan edge** (argmax at index 0 or n−1), the harness widens `start`/`stop` and
-  re-plans — never extrapolates outside the measured range. (Same edge rule TAVI
-  uses to *refuse* a `goto`.)
-- **Escalating neutron counts.** Every new position starts with a cheap
-  **quick-look** scan (low `number_neutrons`, coarse step) to confirm signal and
-  seed the ETA history (§2.2b), then a **production** scan at the count
-  `advise_counts` requires. This makes the mandatory calibration step (§2.2b)
-  double as reconnaissance.
+**Cost is movement-aware when the clock exists.** Cost = counting time + spectro­
+meter axis-movement time. The counting term is always available; the movement
+term becomes available when TAVI grows the **virtual instrument clock**
+(`docs/CONTROL_FEATURES_DESIGN.md`). Until then the engine uses counting time
+alone and treats movement as free; the acquisition function is written so the
+movement term slots in without restructuring.
 
-### 4.2 Every decision routes back through the gate
+### 2.3 Instrument client
 
-A "decide-next" step that produces a new scan **must** build a fresh `ScanPlan`
-and pass `validate_plan` before `run_scan` — the loop cannot bypass §2. Recentre,
-narrow, expand, escalate: each is a new submission and each re-validates.
+The plumbing. Two halves, both mechanical.
 
-### 4.3 State recovery
+- **TAVI API consumer.** `GET /schema` (learn the fields for *this* instrument
+  rather than hard-coding), `GET /state` (confirm `mode == "allow"`),
+  `POST /validate` (dry-run feasibility + budget + ETA), `POST /scan` with
+  **`isolated: true`** (run at one-off parameters without disturbing the GUI or
+  other work), `GET /scan/{id}?wait=N` (long-poll to a terminal state), and
+  `GET /scan/{id}/data` (the counts arrays, with `null` for unmeasured/invalid
+  points — never `0`). It honors `Retry-After` on 409/429/503 and reuses an
+  `Idempotency-Key` on uncertain retries. The whole surface is in
+  `docs/API_USER_GUIDE.md`; the client is a thin wrapper, nothing more.
+- **ISAR invoker.** Save each finished scan to the ISAR workspace's data
+  directory as a JSON scan file the `tavi` parser plugin understands (§4), run
+  `isar run --workspace <dir>` (idempotent — it re-fits only new/changed scans),
+  and read the outputs (§4). No query API is called; ISAR is driven by files and
+  a subprocess.
 
-A context-limited LLM will lose its working memory mid-campaign. Two mechanisms
-let it resume:
-
-- **TAVI `GET /journal`** — the server-side session narrative (parameter writes,
-  submissions, results). The harness can replay it to reconstruct what was
-  already measured on the instrument side.
-- **Harness-side session log** — a local append-only record of: the declared
-  `time_budget_s` and spend so far, every `plan_id` and its checklist, every
-  `job_id` submitted and its adapter-normalized result, and every analysis
-  verdict (`fit_peak` centers, convergence decisions). On resume, the driver
-  reads its own log + `GET /journal` and continues from the last completed step
-  rather than restarting the campaign.
-
-The two are complementary: `GET /journal` is the *instrument's* truth (survives a
-full harness restart); the session log is the *driver's* reasoning (what it
-concluded and why), which the instrument never sees.
-
----
-
-## 5. Tool surface (MCP)
-
-An **MCP server** exposing ~10–14 typed tools in two groups. Tool schemas are the
-enforcement mechanism for §2.
-
-**Instrument tools** (thin wrappers over `docs/API_USER_GUIDE.md` endpoints, via
-the TAVI API adapter):
-
-| Tool | Wraps | Notes |
-|---|---|---|
-| `get_state` | `GET /state` | Mode, busy, queue, all 40 parameters, budget. |
-| `get_schema` | `GET /schema` | Live self-description: field names/types/units, `scan_variables`, grammar, `limits`. The driver reads this instead of hard-coding fields. |
-| `validate_plan` | `POST /validate` per scan + local checklist | **Mints `plan_id`.** Fails closed. |
-| `run_scan` | `POST /scan` | **Requires `plan_id`** from a passed `validate_plan`. Passes `Idempotency-Key` for safe retries. |
-| `wait_for_scan` | `GET /scan/{id}?wait=N` | Long-poll to terminal state; honors `Retry-After` and the 16-waiter cap (`429 too_many_waiters`). |
-| `get_data` | `GET /scan/{id}/data` | Returns a `NormalizedScan` (adapter converts arrays; `null` preserved). |
-| `get_plot` | `GET /scan/{id}/plot.png` | 512×512 quick-look image for the driver/human. |
-| `stop` | `POST /scan/{id}/stop` or `POST /stop` | Drain semantics. |
-
-**Analysis tools** (pure, on `NormalizedScan`; §3):
-
-`fit_peak`, `advise_counts`, `assemble_dispersion`, `estimate_background`
-(plus `peak_stats`, `point_errors` as lightweight helpers).
-
-### 5.1 Relationship to `tas-mcp` — compose, don't duplicate
-
-A local `tas-mcp` MCP server already provides TAS *math*: `hkl_to_q`,
-`q_to_hkl`, `check_feasibility`, `accessible_range`, `d_spacing`,
-`bragg_two_theta`, `scattering_plane_check`, orientation helpers. The harness
-**uses `tas-mcp` for pre-submission physics sanity** (is this Q in the scattering
-plane? does the triangle plausibly close? what is the accessible range along this
-line?) and **does not re-implement any of it.**
-
-The division of labor is strict:
-
-- `tas-mcp` — *client-side physics preview*. Cheap, offline, advisory. Used
-  inside §2's plan building to prune obviously-impossible scans before spending a
-  `/validate` round-trip.
-- TAVI `POST /validate` — **authoritative** feasibility. Its `infeasible` verdict
-  (real instrument geometry, angle limits, crystal choice) always wins. `tas-mcp`
-  narrows the search; TAVI decides.
-
-So a plan flows: `tas-mcp` feasibility sweep → drop the hopeless points → `POST
-/validate` the survivors → trust TAVI's answer.
+The client also composes with the existing **`tas-mcp`** MCP server for
+client-side TAS math (`hkl_to_q`, `check_feasibility`, `accessible_range`) as a
+cheap pre-`/validate` sanity pass. It does **not** re-implement that math, and
+TAVI's `POST /validate` is always the authoritative feasibility verdict.
 
 ---
 
-## 6. Worked example — acoustic phonon dispersion
+## 3. Analysis is ISAR's — the boundary
 
-**Benchmark task:** *"Map the dispersion of an acoustic phonon between Q-points X
-and Y. Analysis is offloaded; TAVI only measures."* This is deliberately the task
-TAVI cannot do itself — it measures counts; the harness turns them into E(q).
+The old in-driver toolkit (`fit_peak`, `peak_stats`, `advise_counts`,
+`estimate_background`, `assemble_dispersion`) is **superseded and deleted.** Every
+one of those tasks is an ISAR responsibility, and ISAR has a validated
+implementation of them (DHO fit, model selection, per-scan interval, dispersion
+collation into the prior). Re-implementing them in the driver would duplicate
+ISAR, and worse, would put an unvalidated fitter in the loop.
 
-End-to-end through the harness:
+So the driver-side logic is decision-only, and the boundary is the rule stated in
+§1, restated because it is the load-bearing invariant of the whole design:
 
-1. **Declare the session time budget.** Operator sets `time_budget_s` (say, an
-   8-hour overnight = 28800 s). The harness opens a session log.
-2. **Plan the cut.** The driver lays out 10–15 **constant-Q energy scans**
-   (`scan_command1: "deltaE …"`) at Q-points evenly spaced along the line X→Y.
-   (A future TAVI **path scan**, `CONTROL_FEATURES_DESIGN.md` §2, would express
-   this line in one request — see below.)
-3. **Physics pre-sweep (`tas-mcp`).** For each Q-point: `hkl_to_q` →
-   `check_feasibility` / `accessible_range` to drop points that are kinematically
-   closed at the chosen fixed energy *before* any TAVI call.
-4. **Validate (TAVI).** `POST /validate` each surviving scan (or evaluate them in
-   a batch loop). Collect `would_queue`, `eta`, and any `infeasible` points.
-5. **Calibrate for ETA confidence.** The first plan's ETAs come back
-   `low`/`none` (no history). The gate (§2.2b) forces one cheap calibration
-   scan at the strongest Q-point; after it runs, `eta.confidence` climbs to
-   `medium`/`high` and the driver re-validates the full plan against the budget.
-6. **Submit.** For each validated scan, `run_scan(plan_id=…)` with `isolated:
-   true` per-job isolation and an `Idempotency-Key`. Points that `tas-mcp`/
-   `/validate` flagged as closed are handled with `allow_partial: true`, the gap
-   consciously recorded — they will surface honestly in `result.skipped_points`.
-7. **Collect.** `wait_for_scan` (long-poll) then `get_data` → a `NormalizedScan`
-   per Q-point.
-8. **Analyze.** `estimate_background` then `fit_peak` (Gaussian-on-background) per
-   scan → a peak center (energy) with error at each Q.
-9. **Assemble.** `assemble_dispersion` stitches the per-Q centers into an E(q)
-   curve with error bars; kinematically closed Q-points appear as honest **gaps**,
-   not zeros.
+> **The driver may LOOK at data to decide what to measure next; it may never
+> CONCLUDE from its look. Numbers only ever come from ISAR.**
 
-| Step | Tool used | What TAVI does | What the harness does | What the LLM decides |
-|---|---|---|---|---|
-| Budget | (harness) | — | Open session log | Declare `time_budget_s` |
-| Plan | `get_schema`, `tas-mcp` | Serves field/grammar schema | Build 10–15 `ScanSpec`s | Q-spacing, fixed-E mode |
-| Pre-sweep | `tas-mcp check_feasibility` | — | Prune closed points | Which points to keep |
-| Validate | `validate_plan`→`POST /validate` | Parse, feasibility, ETA, budget | Run checklist, mint `plan_id` | Accept / re-plan |
-| Calibrate | `run_scan` (cheap) | Run one short scan | Seed ETA history, log rate | Where/how cheap |
-| Submit | `run_scan` (`isolated`) | Queue, validate, run points | Track `job_id`s | `allow_partial` on gaps |
-| Collect | `wait_for_scan`, `get_data` | Return counts arrays | Normalize (`null`-safe) | When enough counts |
-| Fit | `fit_peak`, `estimate_background` | **nothing** | Peak center + error per Q | Lineshape, refit/refuse |
-| Assemble | `assemble_dispersion` | **nothing** | E(q) curve with errors + gaps | Is the dispersion mapped? |
-
-**How future TAVI features would shorten this — without the harness depending on
-them.** From `docs/CONTROL_FEATURES_DESIGN.md`:
-
-- **Path scans (§2)** would collapse steps 2–3's hand-laid Q-grid into a single
-  Q-line request — but the harness still assembles E(q) client-side, so the
-  design works today with per-Q energy scans and *automatically improves* if a
-  path-scan `scan_kind` lands (the adapter would emit the same `NormalizedScan`
-  with `scan_variable="path"`).
-- **Campaigns (§3)** would let step 6 submit all 10–15 scans atomically as one
-  named group with one combined `GET /campaign/{id}/data` pull, replacing N
-  round-trips — but the harness's session log already tracks the set, so campaign
-  support is an optimization, not a prerequisite.
-- **Recipes (§4)** could name "const-Q E-scan" server-side — but the harness
-  composes it from primitives regardless.
-
-The harness is designed to **compose whatever primitives exist** and degrade
-gracefully to the ones that exist today. That is the same "compose, don't
-duplicate" stance it takes toward `tas-mcp` (§5.1).
+Concretely: the acquisition engine may read a raw counts array or a
+`GET /scan/{id}/plot.png` to detect "the peak is at the scan edge" and re-center
+the window. It may **not** compute a center, a width, an amplitude, an integrated
+intensity, or an ω₀ for the record. Those come back from ISAR's `results.csv`
+with a verdict attached, or they do not exist.
 
 ---
 
-## 7. Open questions and phased roadmap
+## 4. ISAR file contract
 
-### 7.1 Open questions
+ISAR exposes **no query API**. Its stable interface is its files, written once per
+`isar run` into the workspace `report/` and `card.state.json`. The driver reads
+these; it never imports ISAR internals.
 
-- **Normalized model coverage.** Is a flat `NormalizedScan` enough, or does a 2D
-  map (`counts_grid`) need a distinct model? Lean: one model with an optional
-  `points_2` / `counts` matrix, so `fit_peak` stays 1D-only and a 2D fit is a
-  separate future tool.
-- **Monitor normalization policy.** Counts-per-monitor vs. counts-per-time —
-  which does the toolkit normalize to, and does the adapter or the tool decide?
-  This must be settled *before* real-instrument adapters, because ILL and NICOS
-  files disagree on convention.
-- **Where does `plan_id` live** — in-memory in the MCP server (lost on restart)
-  or persisted alongside the session log (survives, enabling §4.3 resume)? Lean:
-  persisted.
-- **Confidence-factor calibration.** What safety multipliers turn
-  `eta.confidence` into the §2.2b time discount? Needs empirical tuning against
-  TAVI run history before it can be trusted on a real instrument.
-- **How much `tas-mcp` overlap is safe.** `tas-mcp` and TAVI `/validate` can
-  disagree (different geometry assumptions). The harness must always defer to
-  TAVI, but should it *warn* when they diverge (a sign the `tas-mcp` session is
-  mis-configured)?
-- **Real-instrument write path.** TAVI has a clean `PATCH /parameters` + `POST
-  /scan`. A real NICOS/SPICE instrument does not speak this API. Does the harness
-  target a translation shim per instrument, or only *read* real data files and
-  *drive* only TAVI-compatible endpoints? (The read path transfers first; the
-  write path is instrument-specific.)
+- **`report/results.csv`** — the machine-readable product, one row per
+  scan × detector. Columns the driver consumes: `omega0`, `omega0_err`,
+  `interval_lo` / `interval_hi` (the per-scan MINOS interval), `gamma` +
+  **`gamma_provisional`** (**always `true` on TAS** — ISAR's 1-D resolution cannot
+  separate instrumental width from intrinsic damping, so the driver targets
+  **ω₀, never Γ**, on TAVI/PUMA data), `verdict`, `disposition`, `confidence`,
+  `prior_omega`/`prior_sigma`/`prior_n`/`prior_source`, `resolution_version`, and
+  `reasons`.
+- **`report/report.json`** — a light run summary (counts by verdict, gaps),
+  cheaper to poll than parsing the CSV when the driver only needs progress.
+- **`card.state.json`** — the accumulated experiment state: `dispersion_prior`
+  (a list of `PriorPoint` dicts: `{scan_id, sample, t_bin, component, q_value, q,
+  omega0, sigma, modality, verdict}`) and `resolution_versions`. This is the
+  running physics model the acquisition engine mirrors.
 
-### 7.2 Roadmap (dependency-ordered, each independently testable)
+**Session gates are driver planning constraints.** ISAR holds a measurement it
+cannot yet trust: `held_for_calibration` (no resolution/energy-zero version
+exists yet) and `held_for_sample` (no sample context). When the driver sees these
+statuses it must **schedule the missing context scans first** — a resolution/Bragg
+scan, or a sample-defining alignment — before ISAR will fit the phonon scans. The
+bootstrap order is ISAR's, and the driver respects it.
 
-1. **Data model + analysis toolkit.** `NormalizedScan`, the TAVI API adapter,
-   and §3's pure tools (`fit_peak`, `peak_stats`, `point_errors`, `advise_counts`,
-   `estimate_background`, `assemble_dispersion`). **Testable entirely offline
-   against synthetic scans** — no instrument, no MCP, no network. This is where
-   the P3 transfer test is first proven: feed the tools a synthetic scan and a
-   fake "ILL-style" dict and confirm identical output. Highest value, smallest
-   surface.
-2. **MCP instrument tools.** `get_state`, `get_schema`, `run_scan`,
-   `wait_for_scan`, `get_data`, `get_plot`, `stop`, `validate_plan` over the live
-   TAVI API. Verify against a running PUMA GUI with short, low-neutron scans.
-3. **Planning-layer gate.** The `ScanPlan` schema and the `plan_id` precondition
-   on `run_scan`. Verify that `run_scan` without a passed plan **refuses**, and
-   that a `low`/`none` ETA forces a calibration scan.
-4. **Decision-loop recipes.** Alignment loop, convergence, window expansion,
-   escalation, and §4.3 state recovery. Verify the full §6 worked example
-   end-to-end against TAVI, then re-run the analysis half against a directory of
-   canned real-instrument files to prove transfer.
+> **WARNING, encode this.** ISAR's `prior_for(...)` floors its returned `sigma` at
+> **0.3 meV by design** (it is an IC-seeding prior; `sigma = max(0.3 meV, resid
+> std)`, `UNIFICATION_DESIGN.md` §5). The acquisition engine's convergence test
+> must consume the **per-scan `interval_lo`/`interval_hi` from `results.csv`**,
+> **never** the prior's floored sigma. A 0.1 meV objective is **unreachable by
+> construction** if the driver reads the prior sigma as its measured uncertainty —
+> it can never drop below 0.3. The prior is for *seeding*; the interval is for
+> *deciding done*.
 
-Throughout, preserve P1–P3: if a proposed harness feature would push analysis
-back into TAVI, or would only work on TAVI's JSON and not a real data file, it is
-mis-placed.
+**TAVI enters ISAR through a dedicated `tavi` parser plugin** (being built in
+ISAR, following ISAR's P3 "per-experiment parser → normalized scan →
+instrument-agnostic core"). Real-instrument parsing catalogues (IN8, S30, and
+future facility formats) stay **separate** from the TAVI plugin: TAVI writes its
+own JSON scan format and **never emits fake facility files**. When the driver
+moves to a real instrument, that instrument gets its own ISAR plugin; the TAVI
+plugin is not reused to masquerade as real data.
+
+---
+
+## 5. σ-calibration is milestone 0
+
+**Before any adaptive campaign runs, the driver must calibrate ISAR's error
+bars.** This is non-negotiable and comes first.
+
+ISAR's intervals are **statistical-only and measured overtight**: on ISAR's gold
+set the human's value lands inside ISAR's 68% interval only **~20% of the time**,
+and ISAR's own docs say plainly *"don't weight by ISAR's σ"* (`READING_GUIDE.md`,
+`STATS_PRIMER.md`). The central value is good (median |Δ| ~0.16 meV from the
+human); the *width* misses systematics (background shape, resolution, energy-zero
+drift).
+
+The driver's MVP convergence criterion is `σ(ω₀) ≤ tolerance`. Feeding it a
+too-tight σ would declare convergence early and wrongly. So **milestone 0**:
+
+1. Run a set of known-ω scans on TAVI, where the **ground truth is the McStas
+   sample configuration** — TAVI is the only tier where the true ω₀ is actually
+   known.
+2. Pass them through ISAR and measure the **empirical coverage** of ISAR's
+   intervals (what fraction of true values fall inside the stated 68%/95%
+   intervals).
+3. Derive an **inflation factor** (or a calibration curve vs. count rate / verdict
+   / prior population) that the driver applies to every ISAR interval before the
+   convergence test.
+
+This calibration is per instrument configuration; the supervisor re-runs it (or
+reuses a stored one) when the configuration changes. It **doubles as a deliverable
+for ISAR itself**: ISAR's `UNIFICATION_DESIGN.md` §10 explicitly *defers* the full
+statistical coverage validation as a slow run, and the driver's milestone-0
+campaign produces exactly that coverage measurement on data with known truth —
+something ISAR cannot get from real beamtime.
+
+---
+
+## 6. Fidelity ladder
+
+The driver develops, validates, and deploys across three tiers that share one
+interface, so promotion is flipping one endpoint/mode switch, not a rewrite.
+
+| Tier | What it is | Turnaround | Role |
+|---|---|---|---|
+| **1. Deterministic TAVI engine** | analytic S(q,ω) ⊗ Cooper–Nathans resolution + seeded Poisson noise (designed in `docs/CONTROL_FEATURES_DESIGN.md`; **same TAVI API**) | milliseconds | **develop** the acquisition loop |
+| **2. TAVI Monte Carlo** | full McStas simulation | seconds–minutes | **validate** against realistic counts/resolution |
+| **3. Real instrument** | PUMA / NICOS | live beamtime | **deploy** |
+
+The driver is written once against the tier-1 endpoint, validated on tier 2 (same
+TAVI API, different `mode`/endpoint), and deployed on tier 3 by swapping the
+instrument client (§2.3) and the ISAR parser plugin (§4). **Ground truth — an
+acoustic branch, an optic branch, a Bragg peak, all tunable — lives in ONE McStas
+sample configuration consumed by both TAVI engines**, so tier-1 development and
+tier-2 validation measure the *same* physics.
+
+---
+
+## 7. Benchmark generator
+
+TAVI closes the gap the Teixeira Parente et al. (2022) benchmarking paper openly
+admits. That study **excluded noise and background** because a benchmark needs
+deterministic, known truth, and realistic noise seemed to preclude it. TAVI
+provides both at once: **known truth** (the McStas sample config, §6) **plus
+seeded, reproducible noise plus Monte Carlo resolution**. A driver campaign on
+TAVI is therefore scoreable in a way real beamtime never is.
+
+Two scores, deliberately distinct:
+
+- **Map-error** — the paper's benefit measure: a τ-clipped, weighted L² error of
+  the reconstructed intensity map against truth. Measures *coverage efficiency*.
+- **Physics-error** — dispersion RMS: the driver's final ω₀(q) curve (from ISAR's
+  prior) against the true dispersion. Measures *scientific correctness*.
+
+Both are reported **at cost milestones** in the paper's Table-1 format, with
+**cost = counting time + axis-movement time** (their metric — hence the
+dependency on TAVI's virtual instrument clock, `docs/CONTROL_FEATURES_DESIGN.md`).
+Adopt the paper's BASE conventions where practical, so results are directly
+comparable to the published autonomous-TAS methods.
+
+---
+
+## 8. MVP loop — worked example
+
+**Goal (operator, natural language):** *"Map the acoustic phonon dispersion from A
+to B and resolve ω₀ to ±0.1 meV, overnight."* This replaces the old fixed-grid
+example: the point of the driver is that the grid is **not** fixed — it adapts.
+
+1. **Objective spec (LLM supervisor).** Path A→B, tolerance σ(ω₀) ≤ 0.1 meV,
+   budget = 8 h counting (+ movement when the clock exists). Opens a session log.
+2. **σ-calibration (milestone 0, §5).** If no calibration exists for this
+   configuration: run known-ω scans, measure ISAR interval coverage, derive the
+   inflation factor. Skip if already done for this config.
+3. **Warm-start layout (LLM supervisor).** From the known zone-center energy and an
+   estimated sound velocity, lay out a coarse initial set of constant-Q energy
+   scans along A→B.
+4. **Adaptive loop** — repeat:
+   1. **Acquisition proposes a scan (§2.2):** a Q on the path, an energy window
+      = predicted ω ± margin, a neutron count from the target σ.
+   2. **Feasibility sanity:** `tas-mcp` `check_feasibility` (cheap, offline), then
+      TAVI **`POST /validate`** (authoritative — feasibility, budget, ETA), then
+      **`GET /resolution`** for the advisory step width (from
+      `docs/CONTROL_FEATURES_DESIGN.md` §5; steps ≪ resolution FWHM waste points,
+      steps ≫ it undersample).
+   3. **Run:** `POST /scan` with `isolated: true`, long-poll `GET /scan/{id}?wait=N`
+      to terminal, `GET /scan/{id}/data`.
+   4. **Analyze:** save the scan JSON to the ISAR workspace, `isar run --workspace`,
+      read `report/results.csv` and `card.state.json`.
+   5. **Update (acquisition):** fold the new `omega0` + calibrated interval into
+      the ω(q) model; update predictive uncertainty along the path.
+   6. **Check (LLM supervisor):** objective met along the path? Any anomaly — peak
+      outside window (recover: widen/re-center), ISAR `flagged`/`held` (schedule
+      context or escalate), budget nearly spent (renegotiate)?
+5. **Stop (LLM supervisor).** When the **calibrated** σ(ω₀) ≤ 0.1 meV everywhere
+   along A→B, declare the objective **met**. If the budget exhausts first, or the
+   target is below resolution here, declare it **unmeetable** with reasons.
+6. **Deliverable.** ISAR's `dispersion_prior` (the mapped branch) + ISAR's run
+   report + the driver's session log (what it measured, why, and how it decided to
+   stop).
+
+**The adaptive behavior to show:** the driver measures **densely where the
+dispersion bends or σ is still high**, and **sparsely where ω(q) has already
+converged**; it starts each new Q with a cheap **quick-look** (low neutrons, to
+seed the count rate and the ETA history) and escalates to a **production** count
+only where the tolerance demands it. A missed energy window at a steep segment is
+a normal event that triggers a widen-and-retry, not a stall.
+
+---
+
+## 9. Phased roadmap and open questions
+
+### 9.1 Roadmap (dependency-ordered, each independently testable)
+
+0. **σ-calibration campaign (§5).** Known-ω scans on TAVI → ISAR interval coverage
+   → inflation factor. First, because every later convergence decision depends on
+   it, and it is a deliverable for ISAR too.
+1. **Acquisition engine (§2.2).** Developed **offline against ISAR's `isar/synth`
+   module** (DHO + seeded Poisson, a millisecond fake instrument — no TAVI, no
+   McStas, no network), then against the **deterministic TAVI tier** (tier 1, §6).
+   The statistical core is provable before any instrument is involved.
+2. **Instrument client + MCP tool surface (§2.3).** The TAVI API consumer and the
+   ISAR invoker, exposed as MCP tools: instrument tools plus ISAR file readers
+   (`get_dispersion_prior`, `get_scan_verdicts`, `run_isar_batch`). **Compose with
+   the existing `tas-mcp`; do not duplicate** its TAS math.
+3. **LLM supervisor + full MVP campaign (§2.1, §8)** on the **Monte Carlo tier**
+   (tier 2). This is where goal→spec, the stopping criterion, and exception
+   handling first run end-to-end on realistic data.
+4. **Benchmark scoring + real-instrument adapter (§7).** The two-score benchmark
+   in Table-1 format, then the NICOS adapter that swaps the instrument client for
+   tier 3.
+
+### 9.2 Open questions
+
+- **Acquisition model choice.** Gaussian process over ω(q) (smooth, principled
+  uncertainty, but a kernel to choose and cost) vs. local linear fits (cheap,
+  matches ISAR's own prior builder, but weaker far from data). Lean: start local,
+  move to GP if the path curvature demands it.
+- **Multi-branch handling.** Near an acoustic/optic crossing, ISAR fits *per
+  scan* and does not assign a peak to a branch — **branch assignment is a driver
+  concern**. How does the acquisition engine keep two ω(q) models separate when
+  the scans do not label which branch each peak belongs to?
+- **Campaign batching vs. one-at-a-time.** Propose and submit one scan per loop
+  (simple, maximally adaptive) or a small batch per loop (fewer ISAR invocations,
+  better use of TAVI campaigns from `docs/CONTROL_FEATURES_DESIGN.md`, but staler
+  decisions)?
+- **When does ISAR need a query API?** The file contract (§4) is stable and
+  restart-safe, but re-running `isar run` and re-reading CSVs every loop has a
+  fixed cost. At what campaign size does a lightweight ISAR query interface earn
+  its keep over files?
