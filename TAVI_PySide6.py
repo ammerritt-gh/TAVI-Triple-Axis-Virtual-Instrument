@@ -5681,12 +5681,16 @@ def main():
         api_overrides["port"] = args.api_port
 
     import instruments.builtin  # noqa: F401  (explicit built-in registration)
-    from instruments.registry import available_instruments, get_instrument
+    from instruments.registry import (available_instruments, get_instrument,
+                                       load_last_instrument, save_last_instrument)
 
     infos = available_instruments()
+    valid_ids = {info.id for info in infos}
+
+    instrument_id = None
     if args.instrument is not None:
         instrument_id = args.instrument.lower()
-        if instrument_id not in {info.id for info in infos}:
+        if instrument_id not in valid_ids:
             print(
                 f"Unknown instrument '{args.instrument}'. Available: "
                 + ", ".join(info.id for info in infos),
@@ -5696,8 +5700,14 @@ def main():
 
     app = QApplication([sys.argv[0], *qt_args])
 
-    if args.instrument is None:
-        if len(infos) == 1:
+    # Precedence: --instrument flag > saved last_instrument (if still registered)
+    # > single-instrument shortcut > picker dialog. A stale/unknown saved id is
+    # ignored (load_last_instrument filters against valid_ids).
+    if instrument_id is None:
+        saved_id = load_last_instrument(valid_ids=valid_ids)
+        if saved_id is not None:
+            instrument_id = saved_id
+        elif len(infos) == 1:
             instrument_id = infos[0].id
         else:
             from gui.dialogs.instrument_picker_dialog import InstrumentPickerDialog
@@ -5706,18 +5716,57 @@ def main():
             if instrument_id is None:
                 sys.exit(0)
 
+    # Remember the resolved instrument so the next launch reopens it.
+    save_last_instrument(instrument_id)
+
     instrument = get_instrument(instrument_id)
 
     # Fail fast, with readable errors, if the registered descriptor is unrunnable.
     from instruments.validation import assert_valid_descriptor
     assert_valid_descriptor(instrument.descriptor(), runnable=True)
 
-    window = TAVIMainWindow(instrument.descriptor())
+    window = TAVIMainWindow(
+        instrument.descriptor(),
+        instrument_infos=infos,
+        current_instrument_id=instrument_id,
+        save_selection=save_last_instrument,
+    )
     controller = TAVIController(window, instrument, api_overrides=api_overrides)
     # Store controller reference on window so closeEvent can access it
     window.controller = controller
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+
+    # If the user chose a different instrument via the Instrument menu, the window
+    # saved the new id and closed. Relaunch a detached process with that id.
+    restart_id = getattr(window, "_restart_instrument_id", None)
+    if restart_id is not None:
+        import subprocess
+
+        # Rebuild argv robustly (argv[0] may be the script path) and strip any
+        # existing --instrument pair so only the new id applies; keep everything
+        # else (--api-port, --no-api, leftover Qt args).
+        script_path = os.path.abspath(__file__)
+        filtered_args = []
+        skip_next = False
+        for arg in sys.argv[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "--instrument":
+                skip_next = True
+                continue
+            if arg.startswith("--instrument="):
+                continue
+            filtered_args.append(arg)
+        new_argv = [sys.executable, script_path, "--instrument", restart_id,
+                    *filtered_args]
+        # The old process must fully exit before the new one binds the API port;
+        # the new process's slow imports (Qt/McStasScript) make this safe in
+        # practice. close_fds detaches so the child outlives this process.
+        subprocess.Popen(new_argv, close_fds=True)
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,10 @@ Targets Python 3.11 syntax.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Callable
+from pathlib import Path
+from typing import Callable, Iterable
 
 from instruments.contract import InstrumentPlugin
 
@@ -57,3 +59,62 @@ def get_instrument(instrument_id: str) -> InstrumentPlugin:
             f"Unknown instrument {instrument_id!r}. Available: {known}"
         ) from None
     return factory()
+
+
+# --- Remembered instrument selection ----------------------------------------
+#
+# The id of the last-resolved instrument is persisted so the next launch reopens
+# the same instrument (docs/CONFIGURABLE_INSTRUMENTS.md §7.1). This lives here,
+# beside the registry it references, and stays Qt-free. The file is local
+# generated state (like config/api_config.json), not a project fixture.
+
+_SELECTION_FILENAME = "instrument_selection.json"
+
+
+def _selection_config_path(config_path=None) -> Path:
+    """Resolve the selection config path (default: ``config/`` under repo root)."""
+    if config_path is not None:
+        return Path(config_path)
+    return Path(__file__).resolve().parent.parent / "config" / _SELECTION_FILENAME
+
+
+def load_last_instrument(
+    valid_ids: Iterable[str] | None = None,
+    config_path=None,
+) -> str | None:
+    """Return the saved last-instrument id, or ``None`` if unavailable.
+
+    An absent file yields ``None`` silently. Corrupt/unreadable JSON yields
+    ``None`` with a one-line console warning (no silent swallowing). If
+    ``valid_ids`` is given, a saved id that is not among them is treated as
+    stale and ignored (returns ``None``, no warning).
+    """
+    path = _selection_config_path(config_path)
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[TAVI] Warning: Could not parse {path}: {e}; ignoring saved instrument")
+        return None
+
+    if not isinstance(data, dict):
+        print(f"[TAVI] Warning: {path} is not a JSON object; ignoring saved instrument")
+        return None
+
+    saved = data.get("last_instrument")
+    if not isinstance(saved, str) or not saved:
+        return None
+    if valid_ids is not None and saved not in set(valid_ids):
+        return None
+    return saved
+
+
+def save_last_instrument(instrument_id: str, config_path=None) -> None:
+    """Persist ``instrument_id`` as the last-selected instrument."""
+    path = _selection_config_path(config_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"last_instrument": instrument_id}, f, indent=2)
