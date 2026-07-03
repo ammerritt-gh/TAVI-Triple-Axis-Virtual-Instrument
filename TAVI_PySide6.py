@@ -3504,7 +3504,9 @@ class TAVIController(QObject):
             submitted_at=time.time(),
         )
         self._job_registry.add(job)
-        self._job_queue.put(job)
+        # Announce before enqueueing: once put() lands, the idle worker can pop
+        # the job and publish job_started immediately, so publishing job_queued
+        # first is the only way to guarantee queued -> started event order.
         self.job_state_changed.emit(job.job_id, JobState.QUEUED.value)
         self.print_to_message_center(f"Scan job {job.job_id} queued (source: {source})")
         self._publish_api_event('job_queued', {
@@ -3512,6 +3514,7 @@ class TAVIController(QObject):
             'source': source,
             'position': self._job_queue.qsize(),
         })
+        self._job_queue.put(job)
         return job
 
     def _job_worker_loop(self):
