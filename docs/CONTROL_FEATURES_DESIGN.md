@@ -314,20 +314,95 @@ A recipe is implemented **purely as an orchestration** over `submit_scan_job`, t
 
 ---
 
-## 5. Dependency-ordered roadmap
+## 5. Resolution ellipsoids — analytical instrument resolution at any (Q, E)
+
+### 5.1 Why this is on the control side of the boundary
+
+The instrumental resolution function is a **property of the instrument configuration** — collimations, crystal mosaics, Bragg angles, Ki/Kf, scattering senses — not a property of any measured data. Computing it interprets nothing: it answers "what volume of (Q, E) space does this spectrometer accept right now?", the same way `calculate_angles` answers "can the spectrometer reach this point?". Every serious TAS workflow runs this calculation offline (Cooper–Nathans in ResLib/ResCal, Popovici in Takin); TAVI can be the rare tool that serves it **live, from the actual current configuration**, to both surfaces. What remains firmly the client's job is *using* it scientifically — deconvolving lineshapes, convolving model S(Q,ω) — none of which enters TAVI.
+
+### 5.2 Motivation
+
+- **Human (GUI):** The first question every measured linewidth raises is "is that physics or the instrument?" An overlay ellipse on the scan plot and a live ΔE/Δq readout answer it at a glance, and make TAVI a genuinely instructive training tool — students *see* focused vs. defocused configurations before burning simulation time.
+- **LLM/API client:** A driver planning scans needs resolution to choose step sizes (steps ≪ FWHM waste points; steps ≫ FWHM undersample) and to judge feasibility of an objective ("the 0.2 meV splitting you were asked to resolve is 15× smaller than the 3 meV energy resolution here — change the configuration or report impossible"). Without it the LLM guesses or the harness reimplements Cooper–Nathans against parameters it must scrape.
+- **TAVI itself:** the analytic widths are a continuous cross-check of the Monte Carlo — a simulated Bragg scan whose fitted FWHM disagrees badly with the Cooper–Nathans prediction flags an instrument-definition bug. Cheap, always-on validation of the simulation.
+
+### 5.3 The calculation — `tavi/resolution.py` (new, Qt-free, numpy only)
+
+Cooper–Nathans first (matrix algebra only, well-published, numpy-sufficient); Popovici (adds spatial effects: source/sample/detector sizes, focusing curvatures) as a later upgrade behind the same interface — worth doing eventually because TAVI *knows* `rhm`/`rvm`/`rha` bending radii, which Cooper–Nathans ignores.
+
+```python
+# tavi/resolution.py
+@dataclass
+class ResolutionResult:
+    ok: bool
+    reason: str                  # refusal reason when not ok
+    matrix: list[list[float]]    # 4x4 M in (Q_parallel, Q_perp, Q_z, E) basis; ellipsoid: x^T M x = 2 ln 2
+    r0: float                    # normalization/intensity prefactor
+    fwhm: dict                   # {"dE": ..., "dq_par": ..., "dq_perp": ..., "dq_z": ...} incoherent widths
+    bragg: dict                  # coherent (Bragg) widths for the same axes
+    basis: dict                  # unit vectors of Q_par/Q_perp in sample HKL, so clients can rotate
+
+def cooper_nathans(cfg: ResolutionConfig) -> ResolutionResult: ...
+```
+
+`ResolutionConfig` is a plain dataclass of physical inputs: `ki, kf, a1..a4` (or the (Q, E) point they derive from — reuse `_solve_point_geometry` so an infeasible point refuses with the same reason strings as §validation), horizontal/vertical collimations α₁–α₄ / β₁–β₄, mono/ana mosaics (η_M, η_A) and d-spacings, scattering senses. The instrument plugin supplies a `resolution_config(state)` adapter mapping its live state (collimation selection, `monocris_info` d-spacing, senses from the descriptor) onto this dataclass — the math module stays instrument-agnostic, mirroring how `check_point_feasibility` wraps `_solve_point_geometry`.
+
+### 5.4 Surfaces
+
+**API:**
+
+```
+GET /api/v1/resolution?H=1.0&K=1.0&L=0&deltaE=5.0
+→ 200  { "ok": true, "matrix": [[...]x4], "r0": ...,
+         "fwhm": { "dE": 0.94, "dq_par": 0.012, "dq_perp": 0.031, "dq_z": 0.058 },
+         "bragg": {...}, "basis": {...},
+         "config": { "collimation": "60-40-40-60", "eta_m": 30.0, ... } }
+```
+
+Read-only (allowed in read-only mode — it moves nothing). Omitted H/K/L/deltaE default to the current GUI values; supplied ones are evaluated **without** touching widgets (pure computation on a copied state, like `POST /validate`). Infeasible point → `"ok": false` with the standard feasibility reason. The echoed `config` block makes results reproducible and debuggable.
+
+Optional validation tie-in (advisory only, never blocking): the §validation response and `POST /validate` may attach `resolution.fwhm` per scan so a client sees step-size-vs-resolution at plan time. Warnings ("scan step 0.001 rlu is 12× finer than dq_par") are `diagnostics`, not blockers — resolution is information, and only budgets/feasibility reject.
+
+**GUI:** two touchpoints. (1) A live readout — ΔE and Δq FWHMs for the current (Q, E) — in the instrument or sample dock, updating with the same recompute hooks that already refresh angles. (2) An overlay toggle on the display dock's 1D plot: the projected resolution FWHM drawn as a horizontal bar (or Gaussian outline) at the scan's center point, using the scanned variable's projection from `basis`. A 2D (Q,E) ellipse overlay on 2D scans later.
+
+**Plot endpoint:** `GET /scan/{id}/plot.png?resolution=1` adds the same overlay to the API-rendered PNG — one flag, reuses the GUI's projection helper in `tavi/plot_render.py`.
+
+### 5.5 Failure modes
+
+| Situation | Behavior |
+|---|---|
+| (Q, E) point infeasible | Refuse with the existing feasibility reason ("scattering triangle does not close…") — same strings as validation, so clients handle one vocabulary. |
+| Collimation "open"/undefined for a segment | Use the descriptor's documented effective divergence (guide critical angle or a stated default); echo the value used in `config` — never silently assume. |
+| Mosaic not part of instrument state | v1: descriptor-level constants per crystal (PG(002) ~30′ etc.), echoed in `config`. Open question below. |
+| Matrix not positive-definite (degenerate geometry, e.g. A4 → 0) | Refuse: "resolution undefined at this geometry". |
+
+### 5.6 Verification
+
+The rare feature that verifies *itself against the rest of TAVI*: simulate an elastic Bragg scan at moderate statistics, fit the width (client-side or by eye), compare with the Cooper–Nathans Bragg width — agreement within Monte Carlo error validates both the matrix code and the McStas model; disagreement localizes a bug. Unit tests: published Cooper–Nathans reference configurations (e.g. the worked examples in Shirane, Shapiro & Tranquada) reproduced to numerical tolerance — fully offline, numpy-only, no McStas.
+
+**Touched modules:** `tavi/resolution.py` (new, pure math); instrument plugins (`resolution_config(state)` adapter + descriptor mosaic/divergence constants); `tavi/api_server.py` (`/resolution` route, `?resolution=1` plot flag); `TAVI_PySide6.py` (backend method, GUI readout wiring); `gui/docks/display_dock.py` (overlay toggle); `tavi/plot_render.py` (overlay drawing).
+
+**Open questions:** Cooper–Nathans only for v1, or jump to Popovici since bending radii are already in the state (lean: CN v1, Popovici behind the same interface once CN is validated against McStas)? Where do mosaics live long-term — descriptor constants vs. editable instrument-state fields (they are physical knobs on a real instrument)? Vertical resolution: full 4×4 from the start, or 3×3 in-plane first (lean: full 4×4 — the vertical term is cheap and often surprisingly large)? Should the harness's statistics advisor consume `r0` for count-rate prediction — and does exposing `r0` cross the analysis line (lean: no — it is part of the instrument response, same as fwhm)?
+
+**Dependencies:** `_solve_point_geometry` / feasibility vocabulary (live), descriptor access to collimation/crystal data (live). Independent of §1–§4 — landable at any point in the roadmap; naturally consumed by §4 recipes and the harness's planning layer (`docs/LLM_HARNESS_DESIGN.md`).
+
+---
+
+## 6. Dependency-ordered roadmap
 
 Each item is independently landable and verifiable, in order:
 
 1. **Scan-derived motion (§1).** `tavi/scan_fits.py` + `POST /goto` + display-dock buttons. Depends only on the live `ScanResult`/`apply_parameters` machinery. Highest value, smallest surface, self-contained. Verify: run a 1D scan, click "Go to CEN", confirm the scanned widget moves to the fitted center and refuses cleanly on a flat scan; `curl POST /goto` returns `moved`/`from`/`to`.
 2. **Path scans (§2).** New point-generator + `scan_path` body + "Path" GUI mode + `_get_axis_label` case. Depends on the existing generator/`compute_scan_snapshot` (no physics change). Verify: `(1 0 0)→(1 1 0)` in 21 points produces a 1D counts-vs-fraction result matching a hand-built grid diagonal; infeasible points reported per point.
 3. **Batch + campaigns (§3).** `Campaign`/`CampaignRegistry`, `POST /scans`, campaign endpoints, campaign-wide budget, grouped job table. Depends on the live serial queue and budget model; independent of §1–2 but naturally consumes path scans as members. Verify: submit a 3-job campaign, force one member infeasible, confirm the other two run and the campaign ends `partial`.
-4. **Recipes (§4).** Orchestration layer over 1–3. Lowest priority; do not start until 1–3 are live and stable. Verify: `rocking_curve` with `goto_cen` runs the scan then recenters.
+4. **Resolution ellipsoids (§5).** `tavi/resolution.py` + plugin `resolution_config` adapters + `GET /resolution` + GUI readout/overlay. Independent of items 1–3 and landable in parallel with any of them (listed fourth only because 1–3 were designed first); the pure-math module plus published-reference unit tests can land well before the GUI overlay. Verify: reproduce a published Cooper–Nathans configuration to tolerance offline, then compare a simulated elastic Bragg width against the predicted Bragg width.
+5. **Recipes (§4).** Orchestration layer over 1–3. Lowest priority; do not start until 1–3 are live and stable. Verify: `rocking_curve` with `goto_cen` runs the scan then recenters.
 
-Throughout: preserve the analysis/control boundary of §0. If a proposed addition requires TAVI to *interpret* data rather than *compute a motion or a scan geometry*, it belongs in the client, not here.
+Throughout: preserve the analysis/control boundary of §0. If a proposed addition requires TAVI to *interpret* data rather than *compute a motion or a scan geometry*, it belongs in the client, not here. Resolution (§5) sits on the control side deliberately: it is a property of the instrument configuration, computed from no data.
 
 ---
 
-## 6. Notes where the codebase shaped this design
+## 7. Notes where the codebase shaped this design
 
 - **`compute_scan_snapshot` is already path-ready.** It consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** change to `instruments/PUMA_instrument_definition.py` — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
 - **The scan-command grammar is the real constraint**, not the physics: `_validate_single_scan_command` (:2090) and `parse_scan_steps` (`tavi/utilities.py:91`) hard-code "one variable, four tokens, last = step". Path scans deliberately sidestep this grammar with a structured `scan_path` body rather than extending the string syntax (which cannot express coupled variables cleanly).
