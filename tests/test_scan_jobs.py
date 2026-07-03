@@ -6,6 +6,8 @@ sequencing/ordering, JSON-safe snapshots, and BudgetLimits.check_submission.
 """
 import json
 import math
+import threading
+import time
 
 import pytest
 
@@ -301,3 +303,135 @@ def test_budget_points_checked_before_budget():
     reason = limits.check_submission(points=100, neutrons_per_point=1e6,
                                      pending_cost=0.0)
     assert "points" in reason
+
+
+# --------------------------------------------------------------------------
+# Idempotency-Key LRU map
+# --------------------------------------------------------------------------
+
+def test_idempotent_get_put_roundtrip():
+    reg = JobRegistry()
+    assert reg.get_idempotent("k1") is None
+    reg.put_idempotent("k1", "j-0001")
+    assert reg.get_idempotent("k1") == "j-0001"
+
+
+def test_idempotent_put_overwrites_same_key():
+    reg = JobRegistry()
+    reg.put_idempotent("k1", "j-0001")
+    reg.put_idempotent("k1", "j-0002")
+    assert reg.get_idempotent("k1") == "j-0002"
+
+
+def test_idempotent_lru_evicts_oldest():
+    reg = JobRegistry()
+    cap = JobRegistry.IDEMPOTENCY_MAX
+    for i in range(cap):
+        reg.put_idempotent("k%d" % i, "j-%04d" % i)
+    # All present.
+    assert reg.get_idempotent("k0") == "j-0000"
+    # get_idempotent("k0") just touched it (moved to newest), so the now-oldest
+    # is "k1". Adding one more key evicts "k1", not "k0".
+    reg.put_idempotent("kX", "j-9999")
+    assert reg.get_idempotent("k1") is None
+    assert reg.get_idempotent("k0") == "j-0000"
+    assert reg.get_idempotent("kX") == "j-9999"
+
+
+def test_idempotent_lru_never_exceeds_cap():
+    reg = JobRegistry()
+    cap = JobRegistry.IDEMPOTENCY_MAX
+    for i in range(cap + 50):
+        reg.put_idempotent("k%d" % i, "j-%d" % i)
+    # Internal map stays bounded.
+    assert len(reg._idempotency) == cap
+    # The earliest 50 keys were evicted.
+    assert reg.get_idempotent("k0") is None
+    assert reg.get_idempotent("k%d" % (cap + 49)) == "j-%d" % (cap + 49)
+
+
+# --------------------------------------------------------------------------
+# Long-poll: wait_for_terminal / notify_state_change / wake_all_waiters
+# --------------------------------------------------------------------------
+
+def _set_state(job, state):
+    """Transition a job's state the way controller code does (locked + notify)."""
+    with job.lock:
+        job.state = state
+        job.notify_state_change()
+
+
+def test_wait_for_terminal_immediate_when_already_terminal():
+    job = ScanJob(job_id="j-0001", source="api", launch_state={})
+    _set_state(job, JobState.DONE)
+    start = time.monotonic()
+    assert job.wait_for_terminal(timeout=5.0) is True
+    # Returns effectively immediately, not after the timeout.
+    assert time.monotonic() - start < 0.5
+
+
+def test_wait_for_terminal_times_out_when_non_terminal():
+    job = ScanJob(job_id="j-0001", source="api", launch_state={})
+    start = time.monotonic()
+    assert job.wait_for_terminal(timeout=0.2) is False
+    elapsed = time.monotonic() - start
+    assert 0.15 <= elapsed < 1.0
+
+
+def test_wait_for_terminal_woken_by_state_change():
+    job = ScanJob(job_id="j-0001", source="api", launch_state={})
+
+    def flip():
+        time.sleep(0.1)
+        _set_state(job, JobState.DONE)
+
+    t = threading.Thread(target=flip)
+    t.start()
+    start = time.monotonic()
+    reached = job.wait_for_terminal(timeout=5.0)
+    elapsed = time.monotonic() - start
+    t.join()
+    assert reached is True
+    # Woken by the notify well before the 5s timeout.
+    assert elapsed < 2.0
+
+
+def test_wait_for_terminal_aborts_on_event():
+    job = ScanJob(job_id="j-0001", source="api", launch_state={})
+    abort = threading.Event()
+
+    def trip():
+        time.sleep(0.1)
+        # Mirror shutdown: set abort then notify via the registry helper.
+        abort.set()
+        with job.lock:
+            job.notify_state_change()
+
+    t = threading.Thread(target=trip)
+    t.start()
+    reached = job.wait_for_terminal(timeout=5.0, abort=abort)
+    t.join()
+    # Aborted while still non-terminal.
+    assert reached is False
+    assert job.state == JobState.RUNNING or job.state == JobState.QUEUED
+
+
+def test_wake_all_waiters_releases_blocked_waiter():
+    reg = JobRegistry()
+    job = ScanJob(job_id=reg.next_id(), source="api", launch_state={})
+    reg.add(job)
+    abort = threading.Event()
+    result = {}
+
+    def waiter():
+        result["reached"] = job.wait_for_terminal(timeout=5.0, abort=abort)
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    time.sleep(0.1)
+    # Shutdown sequence: set abort, then wake every job's condition.
+    abort.set()
+    reg.wake_all_waiters()
+    t.join(timeout=2.0)
+    assert not t.is_alive()
+    assert result["reached"] is False

@@ -28,7 +28,9 @@ from tavi.api_server import (
     DEFAULT_CONFIG,
     API_PREFIX,
     SSE_CLOSE,
+    MAX_WAITERS,
 )
+from tavi.scan_jobs import JobRegistry, JobState, ScanJob
 
 
 # ==========================================================================
@@ -647,3 +649,408 @@ def test_json_safe_helper():
     assert _json_safe({"a": [1.0, float("nan")]}) == {"a": [1.0, None]}
     assert _json_safe(1.5) == 1.5
     assert _json_safe("s") == "s"
+
+
+# ==========================================================================
+# Long-poll, ETA, Retry-After, Idempotency  (features 1-3)
+# ==========================================================================
+
+def _request_h(url, method="GET", data=None, headers=None, timeout=10):
+    """Like ``_request`` but also returns the response headers dict."""
+    hdrs = dict(headers or {})
+    if data is not None and not isinstance(data, (bytes, bytearray)):
+        data = json.dumps(data).encode("utf-8")
+        hdrs.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        raw = resp.read()
+        status = resp.getcode()
+        resp_headers = dict(resp.getheaders())
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        status = e.code
+        resp_headers = dict(e.headers.items())
+    try:
+        body = json.loads(raw.decode("utf-8")) if raw else None
+    except (ValueError, UnicodeDecodeError):
+        body = None
+    return status, body, resp_headers
+
+
+class JobBackend:
+    """Fake backend backed by a real JobRegistry/ScanJob for long-poll + eta.
+
+    Mirrors the relevant slice of the production ``TaviApiBackend`` contract:
+    wait_for_job (with the concurrent-waiter cap), an ``eta`` object on job/
+    submit payloads, idempotent submit replay, and shutdown_waiters.
+    """
+
+    ETA = {"estimated_seconds": 12.5, "confidence": "high", "samples": 11}
+
+    def __init__(self):
+        self.registry = JobRegistry()
+        self._waiter_lock = threading.Lock()
+        self._waiter_count = 0
+        self._wait_abort = threading.Event()
+        self._idem = {}  # key -> job_id
+        self.drain_estimate = None  # estimate_queue_drain_seconds() return
+
+    # -- helpers --
+    def _new_job(self, state=JobState.QUEUED):
+        job = ScanJob(job_id=self.registry.next_id(), source="api",
+                      launch_state={"vals": {}})
+        job.state = state
+        self.registry.add(job)
+        return job
+
+    def _get(self, job_id):
+        job = self.registry.get(job_id)
+        if job is None:
+            raise ApiError(404, "unknown_job", "Unknown job id: %s" % job_id)
+        return job
+
+    # -- read endpoints --
+    def get_health(self):
+        return {"status": "ok"}
+
+    def get_state(self):
+        return {"state": "idle"}
+
+    def get_parameters(self):
+        return {}
+
+    def get_job(self, job_id):
+        snap = self._get(job_id).snapshot()
+        snap["eta"] = dict(self.ETA)
+        return snap
+
+    def get_job_data(self, job_id):
+        return self._get(job_id).snapshot(include_data=True)
+
+    def list_jobs(self):
+        return self.registry.recent()
+
+    # -- long-poll --
+    def wait_for_job(self, job_id, timeout):
+        job = self._get(job_id)
+        with self._waiter_lock:
+            if self._wait_abort.is_set():
+                snap = job.snapshot()
+                snap["eta"] = dict(self.ETA)
+                snap["timed_out"] = False
+                return snap
+            if self._waiter_count >= MAX_WAITERS:
+                raise ApiError(429, "too_many_waiters",
+                               "Too many concurrent long-poll waiters")
+            self._waiter_count += 1
+        try:
+            reached = job.wait_for_terminal(timeout, abort=self._wait_abort)
+        finally:
+            with self._waiter_lock:
+                self._waiter_count -= 1
+        snap = job.snapshot()
+        snap["eta"] = dict(self.ETA)
+        snap["timed_out"] = (not reached) and (not self._wait_abort.is_set())
+        return snap
+
+    def shutdown_waiters(self):
+        self._wait_abort.set()
+        self.registry.wake_all_waiters()
+
+    # -- write endpoints --
+    def submit_scan(self, body, idempotency_key=None):
+        if idempotency_key and idempotency_key in self._idem:
+            job = self.registry.get(self._idem[idempotency_key])
+            if job is not None:
+                snap = job.snapshot()
+                snap["eta"] = dict(self.ETA)
+                snap["_idempotent_reuse"] = True
+                return snap
+        job = self._new_job()
+        if idempotency_key:
+            self._idem[idempotency_key] = job.job_id
+        return {"job_id": job.job_id, "state": "queued", "position": 0,
+                "eta": dict(self.ETA)}
+
+    def estimate_queue_drain_seconds(self):
+        return self.drain_estimate
+
+
+def _start_job_server(backend=None, mode="allow"):
+    backend = backend if backend is not None else JobBackend()
+    server = TaviApiServer(host="127.0.0.1", port=0, token=None, mode=mode,
+                           backend=backend)
+    server.start()
+    port = server._httpd.server_address[1]
+    base = "http://127.0.0.1:%d%s" % (port, API_PREFIX)
+    return server, base, backend
+
+
+# ---- long-poll -----------------------------------------------------------
+
+def test_wait_immediate_return_on_terminal_job():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.DONE)
+        t0 = time.time()
+        status, body, _ = _request(base + "/scan/%s?wait=5" % job.job_id)
+        assert status == 200
+        assert body["state"] == "done"
+        assert body["timed_out"] is False
+        assert time.time() - t0 < 1.0
+    finally:
+        srv.stop()
+
+
+def test_wait_timeout_returns_timed_out_true():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.RUNNING)
+        status, body, _ = _request(base + "/scan/%s?wait=0.3" % job.job_id)
+        assert status == 200
+        assert body["state"] == "running"
+        assert body["timed_out"] is True
+    finally:
+        srv.stop()
+
+
+def test_wait_woken_by_state_change():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.RUNNING)
+
+        def finish():
+            time.sleep(0.2)
+            with job.lock:
+                job.state = JobState.DONE
+                job.notify_state_change()
+
+        threading.Thread(target=finish).start()
+        t0 = time.time()
+        status, body, _ = _request(base + "/scan/%s?wait=5" % job.job_id)
+        elapsed = time.time() - t0
+        assert status == 200
+        assert body["state"] == "done"
+        assert body["timed_out"] is False
+        assert elapsed < 3.0
+    finally:
+        srv.stop()
+
+
+def test_no_wait_param_omits_timed_out():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.RUNNING)
+        status, body, _ = _request(base + "/scan/%s" % job.job_id)
+        assert status == 200
+        assert "timed_out" not in body
+    finally:
+        srv.stop()
+
+
+def test_wait_invalid_value_400():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.RUNNING)
+        status, body, _ = _request(base + "/scan/%s?wait=abc" % job.job_id)
+        assert status == 400
+        assert body["error"]["code"] == "bad_request"
+    finally:
+        srv.stop()
+
+
+def test_waiter_cap_returns_429():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.RUNNING)
+        threads = []
+        # Saturate the waiter pool with blocking long-polls.
+        for _ in range(MAX_WAITERS):
+            t = threading.Thread(
+                target=lambda: _request(base + "/scan/%s?wait=3" % job.job_id))
+            t.start()
+            threads.append(t)
+        # Wait until all are registered as waiters.
+        assert _wait(lambda: backend._waiter_count >= MAX_WAITERS, 3)
+        status, body, headers = _request_h(base + "/scan/%s?wait=1" % job.job_id)
+        assert status == 429
+        assert body["error"]["code"] == "too_many_waiters"
+        assert "Retry-After" in headers
+        # Release the blocked waiters.
+        with job.lock:
+            job.state = JobState.DONE
+            job.notify_state_change()
+        for t in threads:
+            t.join(timeout=3)
+    finally:
+        srv.stop()
+
+
+def test_shutdown_wakes_waiters():
+    srv, base, backend = _start_job_server()
+    job = backend._new_job(state=JobState.RUNNING)
+    done = {}
+
+    def waiter():
+        done["r"] = _request(base + "/scan/%s?wait=10" % job.job_id)
+
+    t = threading.Thread(target=waiter)
+    t.start()
+    assert _wait(lambda: backend._waiter_count >= 1, 3)
+    t0 = time.time()
+    srv.stop()  # should wake the waiter promptly
+    t.join(timeout=3)
+    assert not t.is_alive()
+    assert time.time() - t0 < 3.0
+
+
+# ---- eta in responses ----------------------------------------------------
+
+def test_eta_in_get_job_response():
+    srv, base, backend = _start_job_server()
+    try:
+        job = backend._new_job(state=JobState.QUEUED)
+        status, body, _ = _request(base + "/scan/%s" % job.job_id)
+        assert status == 200
+        assert set(body["eta"]) == {"estimated_seconds", "confidence", "samples"}
+    finally:
+        srv.stop()
+
+
+def test_eta_in_submit_202_response():
+    srv, base, backend = _start_job_server()
+    try:
+        status, body, _ = _request(base + "/scan", method="POST", data={})
+        assert status == 202
+        assert set(body["eta"]) == {"estimated_seconds", "confidence", "samples"}
+    finally:
+        srv.stop()
+
+
+# ---- Retry-After ---------------------------------------------------------
+
+class RetryBackend:
+    """Raises specific ApiErrors so Retry-After headers can be asserted."""
+
+    def __init__(self):
+        self.drain = None
+
+    def get_health(self):
+        return {"status": "ok"}
+
+    def get_state(self):
+        raise ApiError(503, "gui_busy", "GUI busy")
+
+    def get_parameters(self):
+        return {}
+
+    def get_job(self, job_id):
+        raise ApiError(409, "job_finished", "Job already finished")
+
+    def submit_scan(self, body, idempotency_key=None):
+        raise ApiError(429, "limit_exceeded", "queue full")
+
+    def estimate_queue_drain_seconds(self):
+        return self.drain
+
+
+def test_retry_after_on_503():
+    backend = RetryBackend()
+    srv, base = _start_server(backend=backend, mode="allow")
+    try:
+        status, _b, headers = _request_h(base + "/state")
+        assert status == 503
+        assert headers.get("Retry-After") == "2"
+    finally:
+        srv.stop()
+
+
+def test_retry_after_on_409():
+    backend = RetryBackend()
+    srv, base = _start_server(backend=backend, mode="allow")
+    try:
+        status, _b, headers = _request_h(base + "/scan/j-1")
+        assert status == 409
+        assert headers.get("Retry-After") == "5"
+    finally:
+        srv.stop()
+
+
+def test_retry_after_on_429_default_constant():
+    backend = RetryBackend()  # drain estimate None -> constant 30
+    srv, base = _start_server(backend=backend, mode="allow")
+    try:
+        status, _b, headers = _request_h(base + "/scan", method="POST", data={})
+        assert status == 429
+        assert headers.get("Retry-After") == "30"
+    finally:
+        srv.stop()
+
+
+def test_retry_after_on_429_uses_queue_drain_estimate():
+    backend = RetryBackend()
+    backend.drain = 42.2  # -> ceil = 43
+    srv, base = _start_server(backend=backend, mode="allow")
+    try:
+        status, _b, headers = _request_h(base + "/scan", method="POST", data={})
+        assert status == 429
+        assert headers.get("Retry-After") == "43"
+    finally:
+        srv.stop()
+
+
+def test_no_retry_after_on_normal_error():
+    # 404 must not carry a Retry-After header.
+    srv, base, backend = _start_job_server()
+    try:
+        status, _b, headers = _request_h(base + "/scan/missing")
+        assert status == 404
+        assert "Retry-After" not in headers
+    finally:
+        srv.stop()
+
+
+# ---- Idempotency-Key -----------------------------------------------------
+
+def test_idempotency_dedupe_returns_same_job_200():
+    srv, base, backend = _start_job_server()
+    try:
+        # First submission creates a job (202).
+        status1, body1, _ = _request_h(
+            base + "/scan", method="POST", data={},
+            headers={"Idempotency-Key": "abc"})
+        assert status1 == 202
+        job_id = body1["job_id"]
+        # Replay with the same key returns the existing job with 200.
+        status2, body2, _ = _request_h(
+            base + "/scan", method="POST", data={},
+            headers={"Idempotency-Key": "abc"})
+        assert status2 == 200
+        assert body2["job_id"] == job_id
+        # The private reuse marker must not leak to clients.
+        assert "_idempotent_reuse" not in body2
+    finally:
+        srv.stop()
+
+
+def test_idempotency_distinct_keys_create_distinct_jobs():
+    srv, base, backend = _start_job_server()
+    try:
+        _s1, b1, _ = _request_h(base + "/scan", method="POST", data={},
+                                headers={"Idempotency-Key": "k1"})
+        _s2, b2, _ = _request_h(base + "/scan", method="POST", data={},
+                                headers={"Idempotency-Key": "k2"})
+        assert b1["job_id"] != b2["job_id"]
+    finally:
+        srv.stop()
+
+
+def test_no_idempotency_key_always_new_job():
+    srv, base, backend = _start_job_server()
+    try:
+        _s1, b1, _ = _request(base + "/scan", method="POST", data={})
+        _s2, b2, _ = _request(base + "/scan", method="POST", data={})
+        assert b1["job_id"] != b2["job_id"]
+    finally:
+        srv.stop()

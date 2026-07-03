@@ -48,6 +48,18 @@ SSE_CLOSE = object()
 # Maximum number of concurrent SSE clients before /events returns 503.
 MAX_SSE_CLIENTS = 8
 
+# Maximum number of concurrent long-poll waiters (GET /scan/{id}?wait=N) before
+# the endpoint returns 429 too_many_waiters. Bounds handler-thread consumption.
+MAX_WAITERS = 16
+
+# Upper bound (seconds) on a long-poll ``wait`` request; larger values clamp.
+MAX_WAIT_SECONDS = 120.0
+
+# Constant Retry-After (seconds) hints per status class (see _retry_after).
+RETRY_AFTER_GUI_BUSY = 2      # 503 gui_busy: GUI thread briefly unavailable
+RETRY_AFTER_409 = 5           # 409 conflict/busy: short backoff
+RETRY_AFTER_429_DEFAULT = 30  # 429 with no queue-drain estimate available
+
 API_PREFIX = "/api/v1"
 
 DEFAULT_CONFIG = {
@@ -261,24 +273,52 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
 
     # ---- response helpers ---------------------------------------------
 
-    def _send_json(self, status, obj):
+    def _send_json(self, status, obj, extra_headers=None):
         """Serialize ``obj`` (NaN-sanitized) and write a JSON response."""
         payload = json.dumps(_json_safe(obj), allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, str(value))
         self.end_headers()
         try:
             self.wfile.write(payload)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def _retry_after(self, status, code):
+        """Return a Retry-After hint (int seconds) for a status/code, or None.
+
+        503 -> a short constant (GUI briefly busy). 429 -> a queue-drain
+        estimate from the backend when it can supply one, else a constant.
+        409 -> a short constant backoff. Other statuses -> no header.
+        """
+        if status == 503:
+            return RETRY_AFTER_GUI_BUSY
+        if status == 429:
+            backend = getattr(self.server, "backend", None)
+            fn = getattr(backend, "estimate_queue_drain_seconds", None)
+            if callable(fn):
+                try:
+                    secs = fn()
+                except Exception:
+                    secs = None
+                if secs is not None and secs > 0:
+                    return max(1, int(math.ceil(secs)))
+            return RETRY_AFTER_429_DEFAULT
+        if status == 409:
+            return RETRY_AFTER_409
+        return None
+
     def _send_error_envelope(self, status, code, message, details=None):
-        """Write the standard ``{"error": {...}}`` envelope."""
+        """Write the standard ``{"error": {...}}`` envelope (+ Retry-After)."""
         err = {"code": code, "message": message}
         if details is not None:
             err["details"] = details
-        self._send_json(status, {"error": err})
+        retry_after = self._retry_after(status, code)
+        headers = {"Retry-After": retry_after} if retry_after is not None else None
+        self._send_json(status, {"error": err}, extra_headers=headers)
 
     def _read_json_body(self):
         """Parse a JSON request body using Content-Length.
@@ -433,7 +473,17 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             if not self._check_writable():
                 return
             body = self._read_json_body()
-            self._send_json(202, self._call_backend("submit_scan", body))
+            idem_key = self.headers.get("Idempotency-Key")
+            if idem_key:
+                payload = self._call_backend("submit_scan", body, idem_key)
+            else:
+                payload = self._call_backend("submit_scan", body)
+            # A replayed idempotent submission returns the existing job's status
+            # with HTTP 200 (flagged privately by the backend); a fresh job -> 202.
+            status = 202
+            if isinstance(payload, dict) and payload.pop("_idempotent_reuse", False):
+                status = 200
+            self._send_json(status, payload)
             return
 
         if segments == ["stop"]:
@@ -449,7 +499,14 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             job_id = segments[1]
             if len(segments) == 2:
                 self._require_method(method, "GET")
-                self._send_json(200, self._call_backend("get_job", job_id))
+                wait_seconds = self._parse_wait(query)
+                if wait_seconds is None:
+                    # No ?wait= -> current behavior exactly.
+                    self._send_json(200, self._call_backend("get_job", job_id))
+                else:
+                    self._send_json(
+                        200, self._call_backend("wait_for_job", job_id, wait_seconds)
+                    )
                 return
             if len(segments) == 3 and segments[2] == "data":
                 self._require_method(method, "GET")
@@ -471,6 +528,27 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             raise ApiError(
                 405, "method_not_allowed", "Method not allowed: %s" % method
             )
+
+    @staticmethod
+    def _parse_wait(query):
+        """Parse the ``?wait=N`` long-poll param, clamped to [0, MAX_WAIT_SECONDS].
+
+        Returns ``None`` when the param is absent (caller uses current behavior).
+        Raises ``ApiError`` 400 for a non-numeric value.
+        """
+        values = query.get("wait")
+        if not values:
+            return None
+        raw = values[0].strip()
+        if raw == "":
+            return None
+        try:
+            wait_seconds = float(raw)
+        except (TypeError, ValueError):
+            raise ApiError(400, "bad_request", "wait must be a number of seconds")
+        if wait_seconds < 0:
+            wait_seconds = 0.0
+        return min(wait_seconds, MAX_WAIT_SECONDS)
 
     # ---- SSE -----------------------------------------------------------
 
@@ -622,6 +700,15 @@ class TaviApiServer:
             self.broker.close()
         except Exception as e:
             self._log("[TAVI API] Error closing SSE broker: %s" % e)
+
+        # Wake any long-poll waiters so their handler threads return promptly
+        # instead of blocking until their individual timeouts elapse.
+        wake = getattr(self.backend, "shutdown_waiters", None)
+        if callable(wake):
+            try:
+                wake()
+            except Exception as e:
+                self._log("[TAVI API] Error waking long-poll waiters: %s" % e)
 
         if httpd is not None:
             try:
