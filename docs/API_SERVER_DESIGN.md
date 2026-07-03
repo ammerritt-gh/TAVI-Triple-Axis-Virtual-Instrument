@@ -1,7 +1,27 @@
 # Remote API Server — Design Document
 
 *Date: 2026-07-03*
-*Status: Design — not yet implemented*
+*Status: Implemented (2026-07-03) — all 5 phases landed and live-verified against a running PUMA GUI (health/state/parameters, PATCH with linked recompute, POST /scan with 1D/2D scans and budget 429s, stop/drain, and SSE streaming all exercised).*
+
+> **Forward note (2026-07-03):** user-facing documentation now lives in
+> `docs/API_USER_GUIDE.md`. That guide is the authoritative reference for
+> clients (humans and LLM agents) — exact endpoints, request/response JSON,
+> the full 40-field parameter table, scan-command syntax, SSE events, budgets,
+> and gotchas. This document remains the design/architecture record.
+>
+> **Post-design fixes (not in the original body):**
+> - `set`/`frozenset` values are JSON-serialized as sorted lists (both the API
+>   server and `scan_jobs` sanitizers) so multi-select collimation survives
+>   `json.dumps`.
+> - `job_queued` is published *before* the job is enqueued, guaranteeing clients
+>   see `job_queued` ahead of `job_started` for a job the idle worker picks up
+>   immediately.
+> - Routine client disconnects (killed `curl`, closed SSE tab) are handled
+>   quietly via `_TaviHTTPServer.handle_error`, logged as a note instead of
+>   dumping a socket traceback to stderr.
+> - `GET /scan/{id}/data` returns the job snapshot with the `result` arrays
+>   expanded (completeness is read from the job `state`); there is no separate
+>   top-level `complete` flag as sketched in §6.1.
 
 ---
 

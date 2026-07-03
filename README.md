@@ -69,6 +69,10 @@ Simulation results are saved in the `output` directory with the following struct
 - Data files include detector readings and scan parameters
 - Plots are automatically generated for 1D and 2D scans
 
+## Remote API
+
+TAVI includes an optional remote API that lets external programs — scripts, notebooks, `curl`, or LLM agents — drive a running TAVI GUI over a local HTTP port. You can read the full instrument state, set any parameter, submit scans, stream live per-point results, and fetch complete scan data. The server binds `127.0.0.1:8642` by default and is controlled from the **Remote API** dock (Allow control / Read-only / Off). See `docs/API_USER_GUIDE.md` for the complete guide, including copy-paste examples for both humans and LLM agents.
+
 ## Troubleshooting
 
 **"No module named 'mcstasscript'"**
