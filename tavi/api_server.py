@@ -96,6 +96,8 @@ def _json_safe(obj):
         return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_json_safe(v) for v in obj]
+    if isinstance(obj, (set, frozenset)):
+        return sorted((_json_safe(v) for v in obj), key=str)
     return obj
 
 
