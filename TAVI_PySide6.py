@@ -32,6 +32,7 @@ from tavi.scan_jobs import (
     BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
 )
 from tavi.api_server import TaviApiServer, ApiError, load_api_config, MAX_WAITERS
+from tavi.journal import SessionJournal
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -227,6 +228,35 @@ class TaviApiBackend:
 
     def get_job_data(self, job_id):
         return self._get_job_or_404(job_id).snapshot(include_data=True)
+
+    def get_job_plot_png(self, job_id):
+        """GET /scan/{id}/plot.png -- render the job's stored arrays to PNG.
+
+        Reads the JSON-safe result arrays off the thread-safe job snapshot (no
+        GUI touch) and renders them in the calling HTTP handler thread via the
+        Qt-free ``tavi.plot_render`` module (matplotlib Agg, never pyplot).
+        Returns raw PNG bytes; 404 for an unknown job, 409 ``no_data`` when the
+        job has no renderable points yet.
+        """
+        job = self._get_job_or_404(job_id)
+        snap = job.snapshot(include_data=True)
+        result = snap.get("result")
+        # Lazy import so matplotlib is only loaded on first plot request and
+        # never at controller import time (keeps the render path off the GUI
+        # backend). NoPlotData -> 409 no_data.
+        from tavi.plot_render import render_scan_plot_png, NoPlotData
+        try:
+            return render_scan_plot_png(result, job_id)
+        except NoPlotData as exc:
+            raise ApiError(409, "no_data", str(exc))
+
+    def get_journal(self, limit=100):
+        """GET /journal -- session-narrative ring buffer (read-only).
+
+        Reads the controller's Qt-free ``SessionJournal`` directly (plain deque
+        + lock); no GUI-thread hop needed. Allowed in read-only mode.
+        """
+        return self._controller._journal.read(limit)
 
     def list_jobs(self):
         return self._controller._job_registry.recent()
@@ -428,10 +458,11 @@ class TaviApiBackend:
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
         allow_partial = bool(body.get("allow_partial", False))
+        isolated = bool(body.get("isolated", False))
 
         result = self._bridge.call_on_gui(
             lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
-                                             allow_partial)
+                                             allow_partial, isolated)
         )
         return result
 
@@ -466,17 +497,28 @@ class TaviApiBackend:
         return validation
 
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
-                            allow_partial=False):
+                            allow_partial=False, isolated=False):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
         re-raises to the HTTP thread for envelope serialization).
+
+        Parameter isolation (``isolated=True``): the current values of exactly
+        the patched fields are snapshotted before the patch is applied, and
+        restored before returning -- so the job runs with the patched *frozen*
+        launch state while the live GUI widgets end up unchanged. The snapshot
+        is also restored on ANY failure path (validation reject, budget reject,
+        exception), which additionally fixes the documented bug where a FAILED
+        submission left an inline patch applied -- that restore-on-failure runs
+        even for non-isolated submissions. A *successful* non-isolated submit
+        keeps the historical global-mutation behavior (the patch stays applied).
         """
         controller = self._controller
         registry = controller._job_registry
 
         # 0. Idempotency replay: a previously seen key mapping to a live job
         #    returns that job's current status (200 replay) without re-queueing.
+        #    Runs before any mutation, so no snapshot/restore is involved.
         if idempotency_key:
             existing_id = registry.get_idempotent(idempotency_key)
             if existing_id:
@@ -487,92 +529,122 @@ class TaviApiBackend:
                     snap["_idempotent_reuse"] = True
                     return snap
 
-        # 1. Apply an inline parameter patch first (no busy guard here).
+        # Snapshot exactly the fields the patch will touch, using the same
+        # getter machinery apply_parameters/get_gui_values use. Kept for
+        # restore-on-failure (both isolated and non-isolated) and for the
+        # always-restore step when isolated. ``None`` means "nothing to undo".
+        saved = None
         if patch:
-            applied, errors = controller.apply_parameters(patch)
-            if errors:
-                raise ApiError(
-                    400, "invalid_parameters", "One or more fields failed",
-                    details={"applied": list(applied), "errors": errors},
-                )
+            current = controller.get_gui_values()
+            if current:
+                saved = {k: current[k] for k in patch if k in current}
 
-        # 2. Freeze launch state and read the scan commands from it.
-        launch_state = controller._collect_simulation_launch_state()
-        if not launch_state:
-            raise ApiError(400, "bad_request", "Could not read GUI values")
-        vals = launch_state["vals"]
-        cmd1 = vals.get("scan_command1", "")
-        cmd2 = vals.get("scan_command2", "")
-
-        # 3. Validate scan commands unless force overrides.
-        if not force:
-            msg = controller._validate_scan_commands_text(cmd1, cmd2)
-            if msg:
-                raise ApiError(400, "scan_validation", msg)
-
-        # 4. Compute this job's cost.
+        success = False
         try:
-            points = controller._count_scan_points(cmd1, cmd2)
-        except Exception:
-            # Unparseable command with force=True: cannot size it, let the scan
-            # itself fail later; treat as a single point for budget purposes.
-            points = 1
-        neutrons = float(vals.get("number_neutrons") or 0)
+            # 1. Apply an inline parameter patch first (no busy guard here).
+            if patch:
+                applied, errors = controller.apply_parameters(patch)
+                if errors:
+                    raise ApiError(
+                        400, "invalid_parameters", "One or more fields failed",
+                        details={"applied": list(applied), "errors": errors},
+                    )
 
-        # 5. Always-on feasibility validation (API path only). Build the
-        #    validation block (per-command points + per-point feasibility +
-        #    cost + eta). Any infeasible point is a hard 400 unless the caller
-        #    opted into allow_partial, in which case the infeasible points are
-        #    recorded on the launch state so run_simulation skips them and the
-        #    result documents them under skipped_points.
-        validation = self._build_validation(
-            controller, launch_state, points, neutrons, allow_partial
-        )
-        infeasible = validation.get("infeasible", [])
-        if infeasible and not allow_partial:
-            raise ApiError(
-                400, "infeasible_points",
-                "%d scan point(s) are geometrically infeasible; resubmit with "
-                "\"allow_partial\": true to skip them" % len(infeasible),
-                details=validation,
+            # 2. Freeze launch state and read the scan commands from it.
+            launch_state = controller._collect_simulation_launch_state()
+            if not launch_state:
+                raise ApiError(400, "bad_request", "Could not read GUI values")
+            launch_state["isolated"] = bool(isolated)
+            vals = launch_state["vals"]
+            cmd1 = vals.get("scan_command1", "")
+            cmd2 = vals.get("scan_command2", "")
+
+            # 3. Validate scan commands unless force overrides.
+            if not force:
+                msg = controller._validate_scan_commands_text(cmd1, cmd2)
+                if msg:
+                    raise ApiError(400, "scan_validation", msg)
+
+            # 4. Compute this job's cost.
+            try:
+                points = controller._count_scan_points(cmd1, cmd2)
+            except Exception:
+                # Unparseable command with force=True: cannot size it, let the
+                # scan itself fail later; treat as a single point for budget.
+                points = 1
+            neutrons = float(vals.get("number_neutrons") or 0)
+
+            # 5. Always-on feasibility validation (API path only). Build the
+            #    validation block (per-command points + per-point feasibility +
+            #    cost + eta). Any infeasible point is a hard 400 unless the
+            #    caller opted into allow_partial, in which case the infeasible
+            #    points are recorded on the launch state so run_simulation skips
+            #    them and the result documents them under skipped_points.
+            validation = self._build_validation(
+                controller, launch_state, points, neutrons, allow_partial
             )
-        if infeasible and allow_partial:
-            launch_state["skipped_indices"] = [e["index"] for e in infeasible]
-            launch_state["skipped_points"] = infeasible
-
-        # 6. Budget + queue-depth enforcement (API-sourced jobs only).
-        limits = getattr(controller, "_budget_limits", None)
-        pending_cost = self._pending_api_cost()
-        queued_now = self._queued_count()
-        if limits is not None:
-            if queued_now >= limits.max_queued:
+            infeasible = validation.get("infeasible", [])
+            if infeasible and not allow_partial:
                 raise ApiError(
-                    429, "limit_exceeded",
-                    "queue is full: %d queued jobs, limit is %d"
-                    % (queued_now, limits.max_queued),
-                    details={"usage": self._budget_usage()},
+                    400, "infeasible_points",
+                    "%d scan point(s) are geometrically infeasible; resubmit "
+                    "with \"allow_partial\": true to skip them" % len(infeasible),
+                    details=validation,
                 )
-            reason = limits.check_submission(points, neutrons, pending_cost)
-            if reason is not None:
-                raise ApiError(
-                    429, "limit_exceeded", reason,
-                    details={"usage": self._budget_usage()},
-                )
+            if infeasible and allow_partial:
+                launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+                launch_state["skipped_points"] = infeasible
 
-        # 7. Enqueue and tag the job with its cost for future budget math.
-        job = controller.submit_scan_job(launch_state, "api")
-        job._api_cost = points * neutrons
-        if idempotency_key:
-            registry.put_idempotent(idempotency_key, job.job_id)
+            # 6. Budget + queue-depth enforcement (API-sourced jobs only).
+            limits = getattr(controller, "_budget_limits", None)
+            pending_cost = self._pending_api_cost()
+            queued_now = self._queued_count()
+            if limits is not None:
+                if queued_now >= limits.max_queued:
+                    reason = ("queue is full: %d queued jobs, limit is %d"
+                              % (queued_now, limits.max_queued))
+                    controller._journal.record("budget", "rejected: %s" % reason)
+                    raise ApiError(
+                        429, "limit_exceeded", reason,
+                        details={"usage": self._budget_usage()},
+                    )
+                reason = limits.check_submission(points, neutrons, pending_cost)
+                if reason is not None:
+                    controller._journal.record("budget", "rejected: %s" % reason)
+                    raise ApiError(
+                        429, "limit_exceeded", reason,
+                        details={"usage": self._budget_usage()},
+                    )
 
-        position = self._queued_count()
-        return {
-            "job_id": job.job_id,
-            "state": "queued",
-            "position": position,
-            "eta": self._eta_for_job(job),
-            "validation": validation,
-        }
+            # 7. Enqueue and tag the job with its cost for future budget math.
+            job = controller.submit_scan_job(launch_state, "api")
+            job._api_cost = points * neutrons
+            if idempotency_key:
+                registry.put_idempotent(idempotency_key, job.job_id)
+
+            position = self._queued_count()
+            success = True
+            return {
+                "job_id": job.job_id,
+                "state": "queued",
+                "position": position,
+                "isolated": bool(isolated),
+                "eta": self._eta_for_job(job),
+                "validation": validation,
+            }
+        finally:
+            # Restore the snapshot when the submission is isolated (always) OR
+            # when it failed (undo a patch a failed submit would otherwise
+            # leave applied -- the documented non-isolated bug). A successful
+            # non-isolated submit intentionally leaves the patch in place.
+            if saved is not None and (isolated or not success):
+                try:
+                    controller.apply_parameters(saved)
+                except Exception as exc:
+                    controller.print_to_message_center(
+                        "Warning: could not restore GUI state after scan "
+                        "submission: %s" % exc
+                    )
 
     def submit_validate(self, body):
         """POST /validate -- run the identical checks as POST /scan, never queue.
@@ -743,6 +815,10 @@ class TAVIController(QObject):
         # runs as a ScanJob through a single persistent worker thread, so runs
         # execute serially instead of racing. See docs/API_SERVER_DESIGN.md sec 7.
         self._job_registry = JobRegistry()
+        # Session narrative (parameter changes, job lifecycle, mode/budget events)
+        # exposed via GET /api/v1/journal. A Qt-free deque read directly by HTTP
+        # handler threads (no GUI-thread hop needed).
+        self._journal = SessionJournal()
         self._job_queue = queue.Queue()
         self._active_job = None  # job currently RUNNING in the worker (or None)
         self.last_scan_result = None  # ScanResult from the most recent finished job
@@ -998,6 +1074,7 @@ class TAVIController(QObject):
                 self.api_status_changed.emit(url, "Listening")
                 self._api_log(f"access mode set to '{mode}'")
 
+        self._journal.record("mode", f"access mode set to '{mode}'")
         self._persist_api_mode(mode)
 
     def _persist_api_mode(self, mode):
@@ -3789,6 +3866,7 @@ class TAVIController(QObject):
         # first is the only way to guarantee queued -> started event order.
         self.job_state_changed.emit(job.job_id, JobState.QUEUED.value)
         self.print_to_message_center(f"Scan job {job.job_id} queued (source: {source})")
+        self._journal.record("job", f"{job.job_id}: queued (source: {source})")
         self._publish_api_event('job_queued', {
             'job_id': job.job_id,
             'source': source,
@@ -3825,6 +3903,7 @@ class TAVIController(QObject):
                 job.notify_state_change()
             self._active_job = job
             self.job_state_changed.emit(job.job_id, JobState.RUNNING.value)
+            self._journal.record("job", f"{job.job_id}: started")
             self._publish_api_event('job_started', {
                 'job_id': job.job_id,
                 'source': job.source,
@@ -3848,7 +3927,14 @@ class TAVIController(QObject):
             with job.lock:
                 final_state = job.state.value
                 final_error = job.error
+                final_result = job.result
             self.job_state_changed.emit(job.job_id, final_state)
+            self._journal.record(
+                "job",
+                self._format_job_finished_summary(
+                    job.job_id, final_state, final_error, final_result
+                ),
+            )
             # Covers both the normal-return and except (FAILED) paths, since
             # both funnel through the terminal state read above.
             self._publish_api_event('job_finished', {
@@ -3913,6 +3999,64 @@ class TAVIController(QObject):
                 self._api_publish_last_error = msg
                 self.message_printed.emit(msg)
 
+
+    def _format_job_finished_summary(self, job_id, state, error, result):
+        """Build the one-line journal summary for a finished job.
+
+        DONE jobs get a data summary (variable, range, point count, peak);
+        failed/stopped/cancelled jobs get the terminal state plus any reason.
+        Best-effort and defensive -- a summary failure must never break the
+        worker loop, so any unexpected shape degrades to the bare state line.
+        """
+        try:
+            if state == JobState.DONE.value and result is not None:
+                return self._format_scan_result_summary(job_id, result)
+            if error:
+                return f"{job_id}: {state} ({error})"
+            return f"{job_id}: {state}"
+        except Exception:
+            return f"{job_id}: {state}"
+
+    @staticmethod
+    def _format_scan_result_summary(job_id, result):
+        """One-line human summary of a finished ScanResult (1D or 2D)."""
+        var = getattr(result, "variable_1", None) or "scan"
+        parts = [f"{job_id}: {var} scan"]
+        values = list(getattr(result, "scan_values_1", None) or [])
+        if values:
+            parts[0] += f" {values[0]:.3f} to {values[-1]:.3f}"
+
+        # Peak location: 1D uses counts[], 2D uses counts_grid[row=y][col=x].
+        counts = getattr(result, "counts", None)
+        grid = getattr(result, "counts_grid", None)
+        npts = 0
+        peak = None  # (counts, description)
+        if counts is not None:
+            npts = len(counts)
+            for i, c in enumerate(counts):
+                if c is None:
+                    continue
+                if peak is None or c > peak[0]:
+                    label = values[i] if i < len(values) else i
+                    peak = (c, f"{var}={label:.3f}" if isinstance(label, float)
+                            else f"{var}={label}")
+        elif grid is not None:
+            values2 = list(getattr(result, "scan_values_2", None) or [])
+            var2 = getattr(result, "variable_2", None) or "scan2"
+            for iy, row in enumerate(grid):
+                for ix, c in enumerate(row or []):
+                    npts += 1 if c is not None else 0
+                    if c is None:
+                        continue
+                    if peak is None or c > peak[0]:
+                        xl = values[ix] if ix < len(values) else ix
+                        yl = values2[iy] if iy < len(values2) else iy
+                        peak = (c, f"{var}={xl}, {var2}={yl}")
+
+        parts.append(f"{npts} pts")
+        if peak is not None:
+            parts.append(f"max {int(peak[0])} counts at {peak[1]}")
+        return ", ".join(parts)
 
     def _preflight_scan_validation(self) -> str:
         """Check scan commands before running simulation (GUI wrapper).
@@ -4193,6 +4337,9 @@ class TAVIController(QObject):
                 'fields': list(applied),
                 'source': 'api',
             })
+            self._journal.record(
+                "parameter", "api: set " + ", ".join(str(k) for k in applied)
+            )
 
         # (e) Report back for the HTTP response.
         return applied, errors

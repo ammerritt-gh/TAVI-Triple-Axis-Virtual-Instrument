@@ -285,6 +285,24 @@ some infeasible points is still queued: only the feasible points run, and
 "reason"}`. When `false` (the default), a single infeasible point rejects the
 whole submission with `400 infeasible_points`.
 
+**`isolated`** (optional boolean, default `false`). When `true`, the inline
+`parameters` patch is applied only to the **frozen launch state** of *this* job:
+the live GUI widgets are snapshotted before the patch, the job is queued with the
+patched values baked in, and the widgets are then **restored** — so a running
+operator's setup is left exactly as it was. Use this to run a one-off scan at
+different parameters without disturbing the GUI or other queued work. The 202
+payload and the job snapshot both carry `"isolated": true/false`.
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"H": 3.0, "scan_command1": "K -0.1 0.1 0.02"}, "isolated": true}'
+```
+Regardless of `isolated`, a submission that is **rejected** (bad parameter,
+invalid scan command, infeasible point, over budget) never leaves an inline
+`parameters` patch applied — the pre-patch values are always restored on failure.
+Only a *successful* `isolated:false` submit keeps its patch applied globally (the
+default, backward-compatible behavior).
+
 ### POST /validate
 Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
 feasibility, budget, and ETA — **without queueing anything and without mutating
@@ -422,6 +440,20 @@ For a **2D** scan, `counts` is `null` and `counts_grid` is a list of rows
 populated. Not-yet-measured or invalid points are `null`, never `NaN`. Unknown
 id → `404 unknown_job`.
 
+### GET /scan/{id}/plot.png
+A rendered PNG image (512×512 px) of the job's current result arrays. **1D**
+scans render as an errorbar plot (√counts uncertainty, markers + line); **2D**
+scans render as a heatmap with a colorbar. Not-yet-measured, invalid, or skipped
+points are simply absent. The response `Content-Type` is `image/png`. Rendered
+server-side (matplotlib Agg, no browser needed), so it works from `curl`, a
+notebook `<img>`, or an LLM tool.
+```bash
+curl -s http://127.0.0.1:8642/api/v1/scan/j-0003/plot.png -o scan.png
+```
+Available while the job is still running (a partial plot) and after it finishes.
+**Allowed in read-only mode.** Unknown id → `404 unknown_job`; a job with no
+renderable data yet (e.g. still `queued`, or every point missing) → `409 no_data`.
+
 ### POST /scan/{id}/stop
 Cancel or stop one job. A `queued` job becomes `cancelled` immediately; a
 `running` job is stopped with **drain semantics** — the in-flight point finishes,
@@ -450,6 +482,30 @@ Recent job snapshots (newest first), each in the same summary shape as
   "error": null, "launch": {"...": "..."}, "result": {"...": "..."}}]
 ```
 
+### GET /journal
+A human/LLM-readable session narrative: a rolling log of what has happened this
+session — parameter changes, job lifecycle (queued/started/finished with a
+one-line result summary, or stopped/failed with a reason), access-mode changes,
+and budget rejections. Backed by a ring buffer of the 1000 most recent entries.
+Read-only, no side effects, **allowed in read-only mode**.
+```bash
+curl "http://127.0.0.1:8642/api/v1/journal?limit=20"
+```
+```json
+{"entries": [
+   {"ts": "2026-07-03T14:05:01", "kind": "parameter", "text": "api: set H, scan_command1"},
+   {"ts": "2026-07-03T14:05:01", "kind": "job", "text": "j-0004: queued (source: api)"},
+   {"ts": "2026-07-03T14:05:02", "kind": "job", "text": "j-0004: started"},
+   {"ts": "2026-07-03T14:05:44", "kind": "job",
+    "text": "j-0004: H scan 1.990 to 2.010, 5 pts, max 31 counts at H=2.000"}],
+ "total_recorded": 4}
+```
+`?limit=N` (default `100`, capped at `1000`) returns the newest `N` entries with
+the **newest last**. `total_recorded` counts every entry ever recorded this
+session (including any already evicted from the ring buffer), so a poller can
+detect gaps. `kind` is one of `parameter`, `job`, `mode`, `budget`. A
+non-integer `limit` → `400 bad_request`.
+
 ### GET /events
 Server-Sent Events stream. See §8.
 
@@ -468,6 +524,7 @@ Server-Sent Events stream. See §8.
 | 405 | `method_not_allowed` | Wrong HTTP method for a known path. |
 | 409 | `busy` | `PATCH /parameters` while a scan is running/queued without `?force=1`. |
 | 409 | `job_finished` | Tried to stop a job already in a terminal state. |
+| 409 | `no_data` | `GET /scan/{id}/plot.png` for a job with no renderable data yet (still queued, or every point missing). |
 | 429 | `limit_exceeded` | `POST /scan` exceeded a budget limit. `details.usage` shows current usage. Carries `Retry-After`. |
 | 429 | `too_many_waiters` | `GET /scan/{id}?wait=N` was refused because the long-poll waiter cap (16) is reached. Carries `Retry-After`. |
 | 500 | `internal_error` | Unexpected server-side error. |
