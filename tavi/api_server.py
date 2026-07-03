@@ -19,6 +19,8 @@ Backend protocol
 - ``get_parameters() -> dict``
 - ``patch_parameters(patch: dict, force: bool) -> dict``
 - ``submit_scan(body: dict) -> dict``   (returns the 202 payload)
+- ``submit_validate(body: dict) -> dict``   (dry-run validation, never queues)
+- ``get_schema() -> dict``   (machine-readable API self-description)
 - ``get_job(job_id: str) -> dict``
 - ``get_job_data(job_id: str) -> dict``
 - ``stop_job(job_id: str) -> dict``
@@ -461,6 +463,20 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
         if segments == ["jobs"]:
             self._require_method(method, "GET")
             self._send_json(200, self._call_backend("list_jobs"))
+            return
+
+        if segments == ["schema"]:
+            self._require_method(method, "GET")
+            self._send_json(200, self._call_backend("get_schema"))
+            return
+
+        if segments == ["validate"]:
+            # Non-mutating dry run of POST /scan's checks. Intentionally NOT
+            # gated on write access (it never mutates), so it works in
+            # read-only mode too.
+            self._require_method(method, "POST")
+            body = self._read_json_body()
+            self._send_json(200, self._call_backend("submit_validate", body))
             return
 
         if segments == ["events"]:

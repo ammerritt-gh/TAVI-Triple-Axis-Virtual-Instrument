@@ -209,3 +209,21 @@ class InstrumentPlugin(Protocol):
         run (detector read from disk), or ``math.nan`` when skipped/failed.
         """
         ...
+
+    def check_point_feasibility(
+        self,
+        config: InstrumentState,
+        scan_mode: str,
+        scan_point: Any,
+        vals: dict,
+    ) -> tuple[bool, "str | None"]:
+        """Return ``(feasible, reason)`` for one scan point without running it.
+
+        Reuses the same angle/Q solve as ``compute_snapshot`` so an infeasible
+        result is exactly a point the real scan would skip. ``reason`` is a
+        short limiting-constraint string when infeasible, else ``None``. Used by
+        the remote API's always-on scan validation (reject, or skip under
+        ``allow_partial``). Optional for a plugin; the API degrades to
+        "assume feasible" when absent.
+        """
+        ...
