@@ -23,6 +23,8 @@ Backend protocol
 - ``get_schema() -> dict``   (machine-readable API self-description)
 - ``get_job(job_id: str) -> dict``
 - ``get_job_data(job_id: str) -> dict``
+- ``get_job_plot_png(job_id: str) -> bytes``   (rendered scan plot; 409 no_data)
+- ``get_journal(limit: int) -> dict``   (session-narrative ring buffer)
 - ``stop_job(job_id: str) -> dict``
 - ``stop_all(clear_queue: bool) -> dict``
 - ``list_jobs() -> list``
@@ -289,6 +291,21 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
+    def _send_bytes(self, status, content_type, data, extra_headers=None):
+        """Write a raw binary response (e.g. an image) with a Content-Type."""
+        if not isinstance(data, (bytes, bytearray)):
+            data = bytes(data)
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, str(value))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
     def _retry_after(self, status, code):
         """Return a Retry-After hint (int seconds) for a status/code, or None.
 
@@ -470,6 +487,14 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, self._call_backend("get_schema"))
             return
 
+        if segments == ["journal"]:
+            # Human/LLM-readable session narrative. Read-only, never mutates, so
+            # (like /schema and /validate) it is allowed in read-only mode.
+            self._require_method(method, "GET")
+            limit = self._parse_limit(query)
+            self._send_json(200, self._call_backend("get_journal", limit))
+            return
+
         if segments == ["validate"]:
             # Non-mutating dry run of POST /scan's checks. Intentionally NOT
             # gated on write access (it never mutates), so it works in
@@ -528,6 +553,13 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
                 self._require_method(method, "GET")
                 self._send_json(200, self._call_backend("get_job_data", job_id))
                 return
+            if len(segments) == 3 and segments[2] == "plot.png":
+                # Server-side PNG render of the job's stored arrays. Read-only,
+                # so allowed in read-only mode; returns image/png bytes.
+                self._require_method(method, "GET")
+                png = self._call_backend("get_job_plot_png", job_id)
+                self._send_bytes(200, "image/png", png)
+                return
             if len(segments) == 3 and segments[2] == "stop":
                 self._require_method(method, "POST")
                 if not self._check_writable():
@@ -544,6 +576,26 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             raise ApiError(
                 405, "method_not_allowed", "Method not allowed: %s" % method
             )
+
+    @staticmethod
+    def _parse_limit(query, default=100, cap=1000):
+        """Parse ``?limit=N`` (journal). Absent -> default; clamped to [0, cap].
+
+        Raises ``ApiError`` 400 for a non-integer value.
+        """
+        values = query.get("limit")
+        if not values:
+            return default
+        raw = values[0].strip()
+        if raw == "":
+            return default
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError):
+            raise ApiError(400, "bad_request", "limit must be an integer")
+        if limit < 0:
+            limit = 0
+        return min(limit, cap)
 
     @staticmethod
     def _parse_wait(query):

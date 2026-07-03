@@ -228,6 +228,7 @@ def test_snapshot_launch_summary_exposes_only_commands_and_neutrons():
         "scan_command1": "sc A3 0 1 3",
         "scan_command2": "",
         "number_neutrons": 1e6,
+        "isolated": False,
     }
     # The non-serializable object in launch_state must not leak out.
     assert "secret_object" not in launch
@@ -241,7 +242,14 @@ def test_snapshot_launch_summary_handles_missing_vals():
         "scan_command1": "",
         "scan_command2": "",
         "number_neutrons": None,
+        "isolated": False,
     }
+
+
+def test_snapshot_launch_summary_reports_isolated_flag():
+    job = ScanJob(job_id="j-0001", source="api",
+                  launch_state={"vals": {}, "isolated": True})
+    assert job.snapshot()["launch"]["isolated"] is True
 
 
 def test_snapshot_launch_number_neutrons_nan_becomes_none():

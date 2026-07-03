@@ -177,11 +177,15 @@ class ScanJob:
         sample mount, etc.), so only the fields useful to a remote observer --
         the scan commands and neutron count -- are exposed.
         """
-        vals = self.launch_state.get('vals', {}) if isinstance(self.launch_state, dict) else {}
+        ls = self.launch_state if isinstance(self.launch_state, dict) else {}
+        vals = ls.get('vals', {})
         return {
             'scan_command1': vals.get('scan_command1', ''),
             'scan_command2': vals.get('scan_command2', ''),
             'number_neutrons': _json_safe(vals.get('number_neutrons')),
+            # Whether this job was submitted with per-job parameter isolation
+            # (GUI widgets restored after freezing the launch state).
+            'isolated': bool(ls.get('isolated', False)),
         }
 
     def snapshot(self, include_data: bool = False) -> Dict[str, Any]:
