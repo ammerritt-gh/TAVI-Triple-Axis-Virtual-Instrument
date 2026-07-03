@@ -41,15 +41,17 @@ You control a TAVI triple-axis neutron spectrometer simulator through a local RE
 BASE URL: http://127.0.0.1:8642/api/v1   (JSON in, JSON out; add header
   "Authorization: Bearer <token>" only if the operator gave you a token)
 
-MOST-USED ENDPOINTS (all paths relative to BASE URL):
-  GET  /health              -> {"status":"ok","instrument":"puma","mode":"allow"}
-  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...40 fields...}, budget:{...}}
+KEY ENDPOINTS (all paths relative to BASE URL):
+  GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
+  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...40 fields...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
-  POST /scan  body {"parameters":{...optional...}} -> 202 {"job_id":"j-0004","state":"queued","position":0}
-  GET  /scan/{id}           -> {job_id, state, progress:{done,total}, result:{total_counts,max_counts,...}, error}
-  GET  /scan/{id}/data      -> same shape + result.scan_values_1, result.counts (or counts_grid), etc.
-  POST /scan/{id}/stop      -> stop one job (drain: in-flight point finishes)
-  POST /stop  body {"clear_queue":true}  -> stop the running job and clear the queue
+  POST /validate  body {same as /scan}  -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates)
+  POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool} -> 202 {job_id, state, position, eta, validation}
+  GET  /scan/{id}?wait=N     -> block up to N s for terminal state; body carries "timed_out":bool
+  GET  /scan/{id}/data       -> result + scan_values_1, counts (or counts_grid), skipped_points
+  GET  /scan/{id}/plot.png   -> 512x512 PNG of current arrays (409 no_data if nothing renderable yet)
+  GET  /journal?limit=N      -> human-readable session log (params, job lifecycle, mode/budget events)
+  POST /scan/{id}/stop  |  POST /stop {"clear_queue":true}  -> drain-stop one job | stop running + clear queue
 
 SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them via
   scan_command1 / scan_command2, e.g. PATCH /parameters {"scan_command1":"H 1.99 2.01 0.01"}.
@@ -59,22 +61,33 @@ SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them vi
   Scannable variables: H K L, qx qy qz, deltaE, A1 A2 A3 A4, omega, 2theta, chi kappa psi, rhm rvm rha rva.
 
 GOLDEN WORKFLOW:
-  1. GET /state  (ALWAYS read state first; confirm mode=="allow" and busy==false)
-  2. PATCH /parameters to set energies/Q/lattice/scan_command1[/2] and number_neutrons
-  3. POST /scan  -> capture job_id
-  4. Poll GET /scan/{id} every few seconds until state is terminal:
-       done | failed | stopped | cancelled   (running/queued are NOT terminal)
-  5. GET /scan/{id}/data  -> read result.scan_values_1 and result.counts
+  1. GET /schema  (learn fields, allowed values, and limits for THIS instrument — do this first)
+  2. GET /state   (confirm mode=="allow" and busy==false; read current parameters)
+  3. PATCH /parameters to set energies/Q/lattice/scan_command1[/2] and number_neutrons
+  4. POST /validate with the same body you will POST /scan -> only submit if would_queue==true;
+     if blockers list infeasible points, either fix them or POST /scan with "allow_partial":true
+  5. POST /scan  -> capture job_id (add "isolated":true to run at one-off parameters WITHOUT
+     disturbing the GUI or other queued work; the inline patch is baked into this job only)
+  6. GET /scan/{id}?wait=30  -> long-poll instead of tight polling; repeat while "timed_out":true
+     until state is terminal: done | failed | stopped | cancelled  (running/queued are NOT terminal)
+  7. GET /scan/{id}/data -> read result.scan_values_1 + result.counts; result.skipped_points lists
+     any points omitted by allow_partial (never a silent gap). GET .../plot.png for a visual check.
+
+ETA: 202 and status carry eta {estimated_seconds, confidence:none|low|medium|high, samples}.
+  confidence low/none => estimate is unreliable; run one cheap scan first to calibrate history.
 
 BUDGET LIMITS (API jobs only): <=10 queued jobs, <=200 points/scan,
   <=1e8 neutrons/point, <=1e10 total pending neutrons. Over-limit POST /scan -> HTTP 429.
 
 RULES:
-  - Always GET /state before submitting; do not submit if mode!="allow".
-  - Poll on an interval (a few seconds); never spin in a tight loop.
+  - Read /schema then /state before submitting; do not submit if mode!="allow".
+  - Prefer wait= long-poll over repeat GETs; never spin in a tight loop.
   - A count of null means the point was not measured / was invalid — never treat null as 0.
-  - On 409 (busy) or 429 (limit) or 503 (gui_busy / too_many_clients): back off, wait,
-    and report the message to the user; do not retry immediately in a loop.
+  - On 409 / 429 / 503, OBEY the Retry-After header: wait that many seconds before retrying,
+    report the .message to the user, and do not retry in a loop.
+  - When retrying a POST /scan you are unsure completed, send the SAME "Idempotency-Key: <str>"
+    header — a repeat returns the original job (HTTP 200) instead of creating a duplicate.
+  - Lost track of state? GET /journal to recover what happened this session.
   - Errors come as {"error":{"code":...,"message":...,"details":...}}. Read .message.
 ```
 
@@ -348,7 +361,8 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
  "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
    "queue_neutron_budget": 1e10},
  "endpoints": [{"method": "GET", "path": "/schema", "description": "..."}],
- "examples": ["align-on-Bragg-peak", "elastic-H-scan", "constant-Q-energy-scan"]}
+ "examples": ["align-on-bragg-peak", "elastic-h-scan", "constant-q-energy-scan",
+   "quick-look-vs-production"]}
 ```
 Each field carries `name`, `type`, `units` (where known), and `allowed` (the
 permitted values for choice fields — crystal ids, `K_fixed` modes, source types).
@@ -865,7 +879,233 @@ Additional notes:
 
 ---
 
-## 13. Related documents
+## 13. Worked examples
+
+Four end-to-end recipes. Each shows the requests in order, abbreviated but
+realistic responses, and the gotchas that bite first. These are the same names
+`GET /schema` advertises in its `examples` array
+(`align-on-bragg-peak`, `elastic-h-scan`, `constant-q-energy-scan`,
+`quick-look-vs-production`). All use PUMA at `Ei = 14.7 meV` with `pg002`
+crystals; a (2 0 0)-type Bragg peak stands in for a "known" reflection.
+
+### 13.1 align-on-bragg-peak
+
+**Goal.** Confirm the sample is aligned by scanning tightly across a known
+elastic Bragg peak near **H = 2** and inspecting where the intensity peaks. Run
+it *without* disturbing the operator's live setup, so use `isolated: true`.
+
+Set the elastic condition and center, then dry-run the tight scan:
+```bash
+curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
+  -H "Content-Type: application/json" \
+  -d '{"Ei": 14.7, "deltaE": 0, "H": 2.0, "K": 0.0, "L": 0.0}'
+# -> {"applied": ["Ei", "deltaE", "H", "K", "L"], "errors": {}}
+
+curl -X POST http://127.0.0.1:8642/api/v1/validate \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "H 1.98 2.02 0.005", "number_neutrons": 200000}}'
+```
+```json
+{"points": 9, "per_command": [{"variable": "H", "count": 9,
+  "values": [1.98, 1.985, 1.99, 1.995, 2.0, 2.005, 2.01, 2.015, 2.02]}],
+ "cost": {"points": 9, "neutrons_per_point": 200000.0, "job_neutrons": 1800000.0,
+  "pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0, "max_queued": 10},
+ "eta": {"estimated_seconds": 96.0, "confidence": "high", "samples": 12},
+ "infeasible": [], "would_queue": true, "blockers": []}
+```
+`would_queue` is `true`, so submit the identical body as an **isolated** job and
+long-poll for the result:
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "H 1.98 2.02 0.005", "number_neutrons": 200000}, "isolated": true}'
+# -> 202 {"job_id": "j-0007", "state": "queued", "position": 0, "isolated": true,
+#         "eta": {"estimated_seconds": 96.0, "confidence": "high", "samples": 12},
+#         "validation": {"points": 9, "infeasible": [], ...}}
+
+curl "http://127.0.0.1:8642/api/v1/scan/j-0007?wait=120"
+```
+```json
+{"job_id": "j-0007", "state": "done", "isolated": true,
+ "progress": {"done": 9, "total": 9}, "timed_out": false,
+ "result": {"mode": "1D", "variable_1": "H", "total_counts": 5120.0, "max_counts": 2010.0}}
+```
+```bash
+curl http://127.0.0.1:8642/api/v1/scan/j-0007/data
+```
+```json
+{"job_id": "j-0007", "state": "done",
+ "result": {"variable_1": "H", "scan_values_1": [1.98, 1.985, 1.99, 1.995, 2.0,
+   2.005, 2.01, 2.015, 2.02],
+   "counts": [95.0, 210.0, 640.0, 1480.0, 2010.0, 1500.0, 690.0, 205.0, 90.0]}}
+```
+**Gotchas.**
+- **TAVI does not fit peaks.** The `counts` array peaks at `H = 2.0` here, but
+  finding the center (centroid, Gaussian fit, whatever) is the *client's* job —
+  no endpoint returns a fitted peak position.
+- Because the job was `isolated: true`, the operator's live `scan_command1` and
+  `number_neutrons` widgets are untouched after the run — the patch lived only in
+  this job's frozen launch state.
+
+### 13.2 elastic-h-scan
+
+**Goal.** A plain elastic (ΔE = 0) line scan across the (2 0 0) Bragg position
+at a sensible production neutron count, reading the `validation` block echoed in
+the 202 to confirm the point list before the scan runs.
+
+```bash
+curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
+  -H "Content-Type: application/json" \
+  -d '{"Ei": 14.7, "deltaE": 0, "K": 0.0, "L": 0.0,
+       "scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 1000000}'
+# -> {"applied": ["Ei", "deltaE", "K", "L", "scan_command1", "number_neutrons"], "errors": {}}
+
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" -d '{}'
+```
+```json
+{"job_id": "j-0008", "state": "queued", "position": 0,
+ "eta": {"estimated_seconds": 470.0, "confidence": "high", "samples": 12},
+ "validation": {"points": 11, "per_command": [{"variable": "H", "count": 11,
+   "values": [1.9, 1.92, 1.94, 1.96, 1.98, 2.0, 2.02, 2.04, 2.06, 2.08, 2.1]}],
+   "cost": {"points": 11, "neutrons_per_point": 1000000.0, "job_neutrons": 11000000.0,
+    "pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0, "max_queued": 10},
+   "eta": {"estimated_seconds": 470.0, "confidence": "high", "samples": 12},
+   "infeasible": []}}
+```
+The `validation.per_command[0].values` list is the exact 11 points that will run
+(step **0.02** over the 0.2-wide range → 11 points, not 21). Then wait for it:
+```bash
+curl "http://127.0.0.1:8642/api/v1/scan/j-0008?wait=120"
+# -> {"state": "running", "progress": {"done": 3, "total": 11}, "timed_out": true, ...}
+curl "http://127.0.0.1:8642/api/v1/scan/j-0008?wait=120"
+# -> {"state": "done", "progress": {"done": 11, "total": 11}, "timed_out": false, ...}
+```
+**Gotchas.**
+- `deltaE: 0` is what makes this *elastic*; omit it and you inherit whatever
+  energy transfer was set previously.
+- A `wait=` poll returns `"timed_out": true` while the job is still running —
+  just call it again with the same `?wait=N`; it is not an error.
+
+### 13.3 constant-q-energy-scan
+
+**Goal.** Hold **Q** fixed at (2 0 0) and scan energy transfer `deltaE` upward.
+Low-energy points are reachable, but the highest-energy points fall outside the
+analyzer's range — a case where validation flags infeasible points and you must
+choose whether to skip them.
+
+```bash
+curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
+  -H "Content-Type: application/json" \
+  -d '{"Ei": 14.7, "H": 2.0, "K": 0.0, "L": 0.0,
+       "scan_command1": "deltaE 0 20 2", "number_neutrons": 1000000}'
+
+curl -X POST http://127.0.0.1:8642/api/v1/validate \
+  -H "Content-Type: application/json" -d '{}'
+```
+```json
+{"points": 11, "per_command": [{"variable": "deltaE", "count": 11,
+  "values": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]}],
+ "cost": {"points": 11, "neutrons_per_point": 1000000.0, "job_neutrons": 11000000.0, "...": "..."},
+ "eta": {"estimated_seconds": 480.0, "confidence": "medium", "samples": 5},
+ "infeasible": [
+   {"index": 9, "values": {"deltaE": 18}, "reason": "scattering triangle does not close"},
+   {"index": 10, "values": {"deltaE": 20}, "reason": "scattering triangle does not close"}],
+ "would_queue": false,
+ "blockers": ["infeasible_points: 2 point(s) unreachable"]}
+```
+A plain `POST /scan` with this body would return `400 infeasible_points`. You
+have two choices: shorten the scan (e.g. `"deltaE 0 16 2"`), or keep the range
+and skip the two unreachable points with `allow_partial`:
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" -d '{"allow_partial": true}'
+# -> 202 {"job_id": "j-0009", "state": "queued", "position": 0,
+#         "validation": {"points": 11, "infeasible": [ ...index 9,10... ]}}
+
+curl http://127.0.0.1:8642/api/v1/scan/j-0009/data
+```
+```json
+{"job_id": "j-0009", "state": "done",
+ "result": {"variable_1": "deltaE",
+   "scan_values_1": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
+   "counts": [1820.0, 640.0, 210.0, 95.0, 60.0, 44.0, 30.0, 22.0, 15.0, null, null],
+   "skipped_points": [
+     {"index": 9, "values": {"deltaE": 18}, "reason": "scattering triangle does not close"},
+     {"index": 10, "values": {"deltaE": 20}, "reason": "scattering triangle does not close"}]}}
+```
+**Gotchas.**
+- Skipped points are **never silent**: they appear as `null` in `counts` *and*
+  are itemized in `result.skipped_points`. Never read a `null` as zero intensity.
+- `allow_partial` only skips *geometrically infeasible* points. A bad scan
+  command (`400 scan_validation`) or a budget overrun (`429`) still rejects the
+  whole submission.
+
+### 13.4 quick-look-vs-production
+
+**Goal.** Run the same H scan twice — first a fast low-`number_neutrons`
+quick-look to see the shape, then a high-count production run — and use the `eta`
+`confidence` to decide when the estimate is trustworthy. On a cold instrument
+with no run history, the first estimate is worthless; the quick-look calibrates
+it.
+
+Quick look (few neutrons, cold history):
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 50000}}'
+```
+```json
+{"job_id": "j-0010", "state": "queued", "position": 0,
+ "eta": {"estimated_seconds": null, "confidence": "none", "samples": 0},
+ "validation": {"points": 11, "infeasible": []}}
+```
+`confidence: "none"` and `estimated_seconds: null` mean *no usable history* — do
+not trust any time estimate yet. Let it finish (it is cheap), which records
+timing samples:
+```bash
+curl "http://127.0.0.1:8642/api/v1/scan/j-0010?wait=60"
+# -> {"state": "done", "progress": {"done": 11, "total": 11}, "timed_out": false,
+#     "result": {"total_counts": 210.0, "max_counts": 44.0}}   # noisy: statistics are poor
+```
+Now validate the production run — the ETA has history and scales to the higher
+neutron count:
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/validate \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 5000000}}'
+# -> {"points": 11, "eta": {"estimated_seconds": 2350.0, "confidence": "medium", "samples": 3},
+#     "would_queue": true, "blockers": []}
+
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 5000000}}'
+# -> 202 {"job_id": "j-0011", "eta": {"estimated_seconds": 2350.0, "confidence": "medium", "samples": 3}}
+```
+Read the two runs back from the journal to tie them together:
+```bash
+curl "http://127.0.0.1:8642/api/v1/journal?limit=6"
+```
+```json
+{"entries": [
+   {"ts": "2026-07-03T15:20:05", "kind": "job", "text": "j-0010: queued (source: api)"},
+   {"ts": "2026-07-03T15:20:42", "kind": "job",
+    "text": "j-0010: H scan 1.900 to 2.100, 11 pts, max 44 counts at H=2.000"},
+   {"ts": "2026-07-03T15:21:10", "kind": "job", "text": "j-0011: queued (source: api)"},
+   {"ts": "2026-07-03T15:58:00", "kind": "job",
+    "text": "j-0011: H scan 1.900 to 2.100, 11 pts, max 4380 counts at H=2.000"}],
+ "total_recorded": 24}
+```
+**Gotchas.**
+- `confidence` follows the sample count: `none` (0 samples) → `low` (1–2) →
+  `medium` (3–9) → `high` (10+). Treat `low`/`none` estimates as
+  "don't-know"; a single cheap scan is the cheapest way to calibrate.
+- The two runs share the same journal, so a poller (or a human) can correlate the
+  quick-look and the production job by their `job_id`s and result summaries.
+
+---
+
+## 14. Related documents
 
 - `docs/API_SERVER_DESIGN.md` — the design and architecture behind this API.
 - `docs/INSTRUMENT_LAYOUT.md` — TAS/PUMA geometry, angles, and scan modes.

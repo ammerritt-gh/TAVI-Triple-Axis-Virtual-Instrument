@@ -170,8 +170,8 @@ class ValidationBackend:
             "limits": {"max_points": 200},
             "endpoints": [{"method": "GET", "path": "/schema",
                            "description": "self-description"}],
-            "examples": ["align-on-Bragg-peak", "elastic-H-scan",
-                         "constant-Q-energy-scan"],
+            "examples": ["align-on-bragg-peak", "elastic-h-scan",
+                         "constant-q-energy-scan", "quick-look-vs-production"],
         }
 
 
@@ -320,7 +320,8 @@ def test_schema_shape_and_step_warning():
         kf = next(f for f in body["fields"] if f["name"] == "K_fixed")
         assert kf["allowed"] == ["Ki Fixed", "Kf Fixed"]
         assert set(body["examples"]) == {
-            "align-on-Bragg-peak", "elastic-H-scan", "constant-Q-energy-scan"
+            "align-on-bragg-peak", "elastic-h-scan", "constant-q-energy-scan",
+            "quick-look-vs-production"
         }
     finally:
         srv.stop()
