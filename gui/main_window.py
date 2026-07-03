@@ -16,6 +16,7 @@ from gui.docks.data_control_dock import DataControlDock
 from gui.docks.display_dock import DisplayDock
 from gui.docks.misalignment_dock import MisalignmentDock
 from gui.docks.ub_matrix_dock import UBMatrixDock
+from gui.docks.api_dock import ApiDock
 
 
 class TAVIMainWindow(QMainWindow):
@@ -103,7 +104,10 @@ class TAVIMainWindow(QMainWindow):
         
         # Data Control Panel (column 3, bottom)
         self.data_control_dock = DataControlDock(self)
-        
+
+        # Remote API Panel (column 3, near output/data)
+        self.api_dock = ApiDock(self)
+
         # Store all docks in a list for easy iteration
         self._all_docks = [
             self.instrument_dock,
@@ -115,6 +119,7 @@ class TAVIMainWindow(QMainWindow):
             self.display_dock,
             self.output_dock,
             self.data_control_dock,
+            self.api_dock,
         ]
     
     def _connect_dock_signals(self):
@@ -203,7 +208,12 @@ class TAVIMainWindow(QMainWindow):
         # Data Control below Output (column 3)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
         self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
-        
+
+        # Remote API tabbed with Data Control (column 3, bottom)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.api_dock)
+        self.tabifyDockWidget(self.data_control_dock, self.api_dock)
+        self.data_control_dock.raise_()
+
         # Misalignment dock is added and configured elsewhere to avoid duplicate layout entries.
         
         # Step 4: Set column widths

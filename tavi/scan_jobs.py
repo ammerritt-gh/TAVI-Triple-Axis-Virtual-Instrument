@@ -214,6 +214,35 @@ class JobRegistry:
         return [job.snapshot() for job in jobs]
 
 
+def compute_budget_usage(registry: "JobRegistry",
+                         limits: "Optional[BudgetLimits]") -> Dict[str, Any]:
+    """Return the API budget-usage view: pending neutrons and queue depth.
+
+    Shared by ``TaviApiBackend.get_state`` (the ``/state`` budget block) and the
+    GUI API dock (via ``TAVIController.get_api_budget_usage``) so both report the
+    same numbers. ``pending_neutrons`` sums the pre-computed ``_api_cost`` of the
+    still-pending (QUEUED/RUNNING) API-sourced jobs; ``queued_jobs`` counts jobs
+    in QUEUED regardless of source. Budget/limit fields are ``None`` when no
+    ``BudgetLimits`` is configured.
+    """
+    pending_neutrons = 0.0
+    queued_jobs = 0
+    for job in registry.all_jobs():
+        with job.lock:
+            state = job.state
+            source = job.source
+        if state == JobState.QUEUED:
+            queued_jobs += 1
+        if state in (JobState.QUEUED, JobState.RUNNING) and source == "api":
+            pending_neutrons += float(getattr(job, "_api_cost", 0.0) or 0.0)
+    return {
+        "pending_neutrons": pending_neutrons,
+        "budget": limits.queue_neutron_budget if limits is not None else None,
+        "queued_jobs": queued_jobs,
+        "max_queued": limits.max_queued if limits is not None else None,
+    }
+
+
 @dataclass
 class BudgetLimits:
     """Abuse-prevention limits for API-submitted scan jobs.
