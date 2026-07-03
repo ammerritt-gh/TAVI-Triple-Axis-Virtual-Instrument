@@ -220,18 +220,20 @@ def test_snapshot_result_none_when_no_result():
     assert snap["result"] is None
 
 
-def test_snapshot_launch_summary_exposes_only_commands_and_neutrons():
+def test_snapshot_launch_summary_exposes_commands_and_full_parameters():
     job = _job_with_result([1.0])
     snap = job.snapshot()
     launch = snap["launch"]
-    assert launch == {
-        "scan_command1": "sc A3 0 1 3",
-        "scan_command2": "",
-        "number_neutrons": 1e6,
-        "isolated": False,
-    }
-    # The non-serializable object in launch_state must not leak out.
+    assert launch["scan_command1"] == "sc A3 0 1 3"
+    assert launch["scan_command2"] == ""
+    assert launch["number_neutrons"] == 1e6
+    assert launch["isolated"] is False
+    # The full frozen parameter set is exposed for downstream consumers...
+    assert launch["parameters"]["scan_command1"] == "sc A3 0 1 3"
+    assert launch["parameters"]["number_neutrons"] == 1e6
+    # ...but non-serializable objects in launch_state must not leak out.
     assert "secret_object" not in launch
+    assert "secret_object" not in launch["parameters"]
     json.dumps(snap, allow_nan=False)
 
 
@@ -243,6 +245,7 @@ def test_snapshot_launch_summary_handles_missing_vals():
         "scan_command2": "",
         "number_neutrons": None,
         "isolated": False,
+        "parameters": {},
     }
 
 
