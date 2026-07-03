@@ -1,7 +1,28 @@
 """Base Dock Widget with custom border painting for TAVI application."""
-from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QScrollArea, QFrame
+from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QScrollArea, QFrame, QComboBox
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPen, QColor
+
+
+class NoScrollComboBox(QComboBox):
+    """A QComboBox that ignores mouse-wheel events unless it has focus.
+
+    Prevents accidental selection changes when a user scrolls a dock/scroll
+    area with the cursor over a drop-down. Deliberate use still works: click
+    to focus, then the wheel adjusts the selection as usual. The popup list is
+    unaffected. Focus policy is StrongFocus (click/tab only) so hovering or
+    scrolling never grabs focus the way the default WheelFocus would.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event):
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
 
 class BorderedFrame(QFrame):

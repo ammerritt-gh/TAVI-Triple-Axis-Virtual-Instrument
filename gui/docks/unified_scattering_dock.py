@@ -2,10 +2,10 @@
 
 Contains absolute Q-space, relative HKL space, and energy transfer parameters.
 """
-from PySide6.QtWidgets import (QLabel, QLineEdit, QGroupBox, QGridLayout, QComboBox)
+from PySide6.QtWidgets import (QLabel, QLineEdit, QGroupBox, QGridLayout)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import BaseDockWidget
+from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
 
 
 class UnifiedScatteringDock(BaseDockWidget):
@@ -95,7 +95,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         
         # Ki or Kf fixed
         mode_layout.addWidget(QLabel("Ki/Kf fixed:"), 0, 0)
-        self.K_fixed_combo = QComboBox()
+        self.K_fixed_combo = NoScrollComboBox()
         self.K_fixed_combo.addItems(["Ki Fixed", "Kf Fixed"])
         self.K_fixed_combo.setMaximumWidth(100)
         mode_layout.addWidget(self.K_fixed_combo, 0, 1)

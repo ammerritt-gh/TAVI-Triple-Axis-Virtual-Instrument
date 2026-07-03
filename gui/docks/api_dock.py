@@ -13,12 +13,12 @@ controller methods through the controller reference set with
 ``set_controller``.
 """
 from PySide6.QtWidgets import (
-    QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QTableWidget,
+    QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
     QTableWidgetItem, QPushButton, QPlainTextEdit, QHeaderView, QWidget,
 )
 from PySide6.QtCore import Qt, Slot
 
-from gui.docks.base_dock import BaseDockWidget
+from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
 
 
 # Combo entries: display label -> mode value understood by controller.set_api_mode.
@@ -60,7 +60,7 @@ class ApiDock(BaseDockWidget):
         mode_layout = QHBoxLayout()
         mode_group.setLayout(mode_layout)
         mode_layout.addWidget(QLabel("Mode:"))
-        self.mode_combo = QComboBox()
+        self.mode_combo = NoScrollComboBox()
         self.mode_combo.addItems(_MODE_LABELS)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_layout.addWidget(self.mode_combo, 1)
