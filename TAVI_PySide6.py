@@ -4603,9 +4603,10 @@ class TAVIController(QObject):
                 {"method": "GET", "path": "/events", "description": "Server-Sent Events live stream."},
             ],
             "examples": [
-                "align-on-Bragg-peak",
-                "elastic-H-scan",
-                "constant-Q-energy-scan",
+                "align-on-bragg-peak",
+                "elastic-h-scan",
+                "constant-q-energy-scan",
+                "quick-look-vs-production",
             ],
         }
 
