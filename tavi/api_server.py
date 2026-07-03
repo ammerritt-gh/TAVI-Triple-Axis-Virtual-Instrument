@@ -34,6 +34,7 @@ The module owns no persistent state at import time (no side effects on import).
 
 import json
 import math
+import sys
 import threading
 import queue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -528,6 +529,23 @@ class _TaviHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        """Quiet routine client disconnects; keep full tracebacks for real errors.
+
+        A client dropping a keep-alive connection (killed curl, closed SSE tab)
+        surfaces as ConnectionResetError/BrokenPipeError in the request-line
+        read, outside any handler code. socketserver's default prints a full
+        traceback to stderr for these; that is console noise, not a fault.
+        """
+        exc = sys.exception()
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            log_callback = getattr(self, "log_callback", None)
+            if log_callback is not None:
+                log_callback("client %s:%s disconnected (%s)" % (
+                    client_address[0], client_address[1], type(exc).__name__))
+            return
+        super().handle_error(request, client_address)
 
 
 class TaviApiServer:
