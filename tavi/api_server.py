@@ -148,6 +148,41 @@ def parse_scan_engine(body):
     return engine, seed, noiseless
 
 
+# Allowed top-level keys for each JSON-body POST endpoint. An unknown top-level
+# key is rejected with 400 rather than silently ignored: a typo'd key (e.g.
+# "scan_commands" instead of nesting the write under "parameters") must fail
+# loudly instead of validating/queueing the GUI's *current* state. Tracked in
+# TODO.md "API polish". PATCH /parameters is deliberately excluded -- its whole
+# body IS the parameter dict, validated field-by-field against the field map.
+SCAN_BODY_KEYS = frozenset({
+    "parameters", "force", "allow_partial", "isolated",
+    "engine", "seed", "noiseless",
+})
+VALIDATE_BODY_KEYS = frozenset({"parameters", "force", "allow_partial"})
+STOP_BODY_KEYS = frozenset({"clear_queue"})
+
+
+def reject_unknown_body_keys(body, allowed):
+    """Raise 400 ``bad_request`` if ``body`` carries a top-level key outside ``allowed``.
+
+    Qt-free so the exact contract can be unit-tested standalone. ``body`` is the
+    already-parsed request dict (a non-dict body is left for the caller/backend
+    to reject on its own terms). The error message names the offending key(s)
+    and lists the allowed keys, using the same envelope vocabulary as the other
+    ``bad_request`` responses.
+    """
+    if not isinstance(body, dict):
+        return
+    unknown = sorted(k for k in body if k not in allowed)
+    if unknown:
+        raise ApiError(
+            400, "bad_request",
+            "Unknown top-level field(s): %s; allowed: %s"
+            % (", ".join(unknown), ", ".join(sorted(allowed))),
+            details={"unknown": unknown, "allowed": sorted(allowed)},
+        )
+
+
 def _json_safe(obj):
     """Recursively convert NaN/inf floats to ``None`` so output is valid JSON.
 
@@ -552,6 +587,7 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             # read-only mode too.
             self._require_method(method, "POST")
             body = self._read_json_body()
+            reject_unknown_body_keys(body, VALIDATE_BODY_KEYS)
             self._send_json(200, self._call_backend("submit_validate", body))
             return
 
@@ -583,6 +619,7 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             if not self._check_writable():
                 return
             body = self._read_json_body()
+            reject_unknown_body_keys(body, SCAN_BODY_KEYS)
             idem_key = self.headers.get("Idempotency-Key")
             if idem_key:
                 payload = self._call_backend("submit_scan", body, idem_key)
@@ -601,6 +638,7 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             if not self._check_writable():
                 return
             body = self._read_json_body()
+            reject_unknown_body_keys(body, STOP_BODY_KEYS)
             clear_queue = bool(body.get("clear_queue", False))
             self._send_json(200, self._call_backend("stop_all", clear_queue))
             return

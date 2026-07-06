@@ -322,7 +322,7 @@ def test_set_mode_allow_lets_post_through():
         assert status == 403
         srv.set_mode("allow")
         status, body, _ = _request(base + "/scan", method="POST",
-                                    data={"foo": 1})
+                                    data={"force": True})
         assert status == 202
         assert body["job_id"] == "j-0001"
     finally:
@@ -386,6 +386,93 @@ def test_non_object_json_body_400():
             headers={"Content-Type": "application/json"})
         assert status == 400
         assert body["error"]["code"] == "bad_request"
+    finally:
+        srv.stop()
+
+
+# ==========================================================================
+# Strict top-level POST body keys (unknown key -> 400)
+# ==========================================================================
+
+def test_reject_unknown_body_keys_helper():
+    from tavi.api_server import reject_unknown_body_keys, SCAN_BODY_KEYS
+    # A non-dict body is a no-op (the caller/backend rejects it on its own terms).
+    reject_unknown_body_keys([1, 2, 3], SCAN_BODY_KEYS)
+    # A body with only allowed keys passes.
+    reject_unknown_body_keys({"parameters": {}, "force": True}, SCAN_BODY_KEYS)
+    # Unknown keys raise 400 and are reported sorted in the details.
+    with pytest.raises(ApiError) as exc:
+        reject_unknown_body_keys(
+            {"parameters": {}, "bogus": 1, "aaa": 2}, SCAN_BODY_KEYS)
+    assert exc.value.status == 400
+    assert exc.value.code == "bad_request"
+    assert exc.value.details["unknown"] == ["aaa", "bogus"]
+
+
+def test_scan_unknown_top_level_key_400():
+    backend = FakeBackend()
+    srv, base = _start_server(backend=backend, mode="allow")
+    try:
+        status, body, _ = _request(base + "/scan", method="POST",
+                                   data={"scan_commands": "H 1 2 0.5"})
+        assert status == 400
+        assert body["error"]["code"] == "bad_request"
+        assert "scan_commands" in body["error"]["message"]
+        assert body["error"]["details"]["unknown"] == ["scan_commands"]
+        # The offending body must never reach the backend / queue a job.
+        assert not any(c[0] == "submit_scan" for c in backend.calls)
+    finally:
+        srv.stop()
+
+
+def test_scan_known_top_level_keys_pass():
+    # Every documented POST /scan top-level field is accepted together.
+    srv, base = _start_server(mode="allow")
+    try:
+        status, body, _ = _request(
+            base + "/scan", method="POST",
+            data={"parameters": {"Ei": 14.0}, "force": True,
+                  "allow_partial": True, "isolated": True,
+                  "engine": "mcstas", "seed": 7, "noiseless": False})
+        assert status == 202
+        assert body["job_id"] == "j-0001"
+    finally:
+        srv.stop()
+
+
+def test_validate_unknown_top_level_key_400():
+    # /validate rejects an unknown key before dispatching to the backend, so a
+    # backend lacking submit_validate still yields 400 (not 501).
+    srv, base = _start_server(mode="allow")
+    try:
+        status, body, _ = _request(base + "/validate", method="POST",
+                                   data={"parameters": {}, "typo": 1})
+        assert status == 400
+        assert body["error"]["code"] == "bad_request"
+        assert "typo" in body["error"]["message"]
+    finally:
+        srv.stop()
+
+
+def test_stop_unknown_top_level_key_400():
+    srv, base = _start_server(mode="allow")
+    try:
+        status, body, _ = _request(base + "/stop", method="POST",
+                                   data={"clear_q": True})
+        assert status == 400
+        assert body["error"]["code"] == "bad_request"
+        assert "clear_q" in body["error"]["message"]
+    finally:
+        srv.stop()
+
+
+def test_stop_known_key_passes():
+    srv, base = _start_server(mode="allow")
+    try:
+        status, body, _ = _request(base + "/stop", method="POST",
+                                   data={"clear_queue": True})
+        assert status == 200
+        assert body["clear_queue"] is True
     finally:
         srv.stop()
 
