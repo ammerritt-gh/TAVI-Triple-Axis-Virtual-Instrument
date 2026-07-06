@@ -64,7 +64,8 @@ class BenchmarkDialog(QDialog):
             ("cpu_name", "CPU"),
             ("machine_id", "Machine ID"),
             ("benchmarked_at", "Last benchmark"),
-            ("speed_index", "Speed index"),
+            ("overhead_seconds", "Per-point overhead"),
+            ("rate_per_neutron", "Neutron rate"),
         ]
         for r, (key, label) in enumerate(rows):
             machine_grid.addWidget(QLabel(f"<b>{label}</b>"), r, 0)
@@ -142,9 +143,13 @@ class BenchmarkDialog(QDialog):
         self._machine_labels["machine_id"].setText(str(fp.get("machine_id") or "-"))
         self._machine_labels["benchmarked_at"].setText(
             str(profile.get("benchmarked_at") or "never"))
-        speed = profile.get("speed_index")
-        self._machine_labels["speed_index"].setText(
-            f"{speed:.3e} s/neutron" if speed else "-")
+        is_v2 = (profile.get("model_version") or 0) >= 2
+        overhead = profile.get("overhead_seconds") if is_v2 else None
+        rate = profile.get("rate_per_neutron") if is_v2 else None
+        self._machine_labels["overhead_seconds"].setText(
+            f"{overhead:.2f} s" if overhead is not None else "-")
+        self._machine_labels["rate_per_neutron"].setText(
+            f"{rate:.3e} s/neutron" if rate is not None else "-")
 
     # --- plan table --------------------------------------------------------
     def _rebuild_plan_table(self):
