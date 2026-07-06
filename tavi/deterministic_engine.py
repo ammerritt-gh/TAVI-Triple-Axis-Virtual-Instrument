@@ -21,11 +21,14 @@ The analytic model mirrors the McStas ``Phonon_DFT`` component
 1-point-per-ms evaluator. Conventions chosen (and where they diverge from McStas):
 
 * **q-parameterization.** Each (h,k,l) component is folded into the dispersion
-  grid's span ``[-1, 1)`` (period 2) exactly as ``pdft_fold_into_grid`` does:
-  ``q_i = ((x_i + 1) mod 2) - 1``. Zone centers therefore sit at **even** integers
-  (the toy model is "centered on Gamma"), *not* at every integer. At the validated
-  anchor Q=(2.15,0,0) this gives reduced q=0.15 (2 is even), matching the McStas
-  ground truth and the CLOSED_LOOP §7 live measurement (E=6*sin(pi*0.15/2)=1.4004
+  grid's span exactly as ``pdft_fold_into_grid`` does: ``q_i = ((x_i + half) mod
+  period) - half``. The period is a property of the sample's dispersion FILE, not
+  of ``Phonon_DFT`` itself (``grid_period`` in ``SampleSpec.properties``; default
+  2, the span of ``Al_test_phonons_centered.dat``). With period 2, zone centers
+  sit at **even** integers (the toy model is "centered on Gamma"), *not* at every
+  integer. At the validated anchor Q=(2.15,0,0) this gives reduced q=0.15 (2 is
+  even), matching the McStas ground truth and the CLOSED_LOOP §7 live measurement
+  (E=6*sin(pi*0.15/2)=1.4004
   meV). A naive nearest-integer reduction would coincide near even integers and
   differ near odd ones; we mirror McStas.
 
@@ -198,26 +201,31 @@ class PhononSQW(AnalyticSQW):
     """
 
     def __init__(self, a: float, temperature: float, phonon_gamma_fwhm: float,
-                 sample_id: str = "Al_phonon_DFT"):
+                 sample_id: str = "Al_phonon_DFT", grid_period: float = 2.0):
         self.a = float(a)
         self.temperature = float(temperature)
         self.gamma_hwhm = 0.5 * float(phonon_gamma_fwhm)   # FWHM -> HWHM
         self.sample_id = sample_id
+        # Folding period of the dispersion grid in rlu. A property of the sample's
+        # dispersion file (Al_test_phonons_centered.dat spans [-1,1) -> period 2,
+        # zone centers at even integers), NOT of Phonon_DFT itself -- another
+        # material's grid may have a different periodicity.
+        self.grid_period = float(grid_period)
         self._rlu_to_inv_ang = _TWO_PI / self.a            # |dQ|/d(rlu), cubic
 
     # -- dispersion -------------------------------------------------------
-    @staticmethod
-    def _fold(x: float) -> float:
-        """Fold an rlu coordinate into [-1, 1) (period 2), as pdft_fold_into_grid."""
-        return ((x + 1.0) % 2.0) - 1.0
+    def _fold(self, x: float) -> float:
+        """Fold an rlu coordinate into the grid span, as pdft_fold_into_grid."""
+        half = 0.5 * self.grid_period
+        return ((x + half) % self.grid_period) - half
 
-    @classmethod
-    def _s(cls, hkl) -> float:
-        return math.sqrt(sum(math.sin(math.pi * cls._fold(c) / 2.0) ** 2 for c in hkl))
+    def _s(self, hkl) -> float:
+        half = 0.5 * self.grid_period
+        return math.sqrt(sum(math.sin(math.pi * self._fold(c) / (2.0 * half)) ** 2
+                             for c in hkl))
 
-    @classmethod
-    def _omega_branch(cls, hkl, branch: int) -> float:
-        s = cls._s(hkl)
+    def _omega_branch(self, hkl, branch: int) -> float:
+        s = self._s(hkl)
         if branch == 0:
             return _ACOUSTIC_AMP * s
         return _OPTIC_GAP + _OPTIC_AMP * s
@@ -301,6 +309,7 @@ def ground_truth(sample_spec) -> Optional[AnalyticSQW]:
             temperature=props.get("T", 200.0),
             phonon_gamma_fwhm=props.get("phonon_gamma", 0.0),
             sample_id=sid,
+            grid_period=props.get("grid_period", 2.0),
         )
     if sid == "Al_bragg":
         # lattice a from the spec's lattice tuple (Single_crystal has no 'a' prop)
