@@ -70,6 +70,8 @@ TAVI tries to inform you if you use the wrong commands, the wrong format, or if 
 ### Runtimes Cache
 TAVI keeps a local log of the last 100 scans and their runtimes, and uses these to estimate how long scans will take. If there is an issue with the time estimations, you can clear this log with the "Clear Runtimes" button. Note that scans under different conditions do have different times, and the times are only an estimate.
 
+Estimates are now kept **per machine**: the log records which computer each scan ran on, so if you use TAVI on several machines of different speeds their timings no longer blend together. Estimates also account for the execution engine (McStas vs. deterministic) and whether a scan reuses the previous compiled binary (a reused binary skips compile time, so the estimate drops it). On a fresh machine there is no local history yet — run the Scan-time benchmark once (see Utilities, below) to give it a clean baseline; ordinary scan history then refines the estimate the more you use it.
+
 ### Diagnostic Mode
 Diagnostic mode enables different monitors in the beam to check beam characteristics, e.g. the neutron energy profile, position and divergence. This is helpful for understanding what is going on in the instrument and troubleshooting. Use "Enable Diagnostic Mode" to have these monitors enabled and for them to appear after a scan. Use the "Configuration" button to change which monitors are enabled.
 
@@ -88,6 +90,27 @@ You can load data folders here as well, and they will be displayed in the displa
 
 TAVI can be driven remotely by an external program (a script, a notebook, `curl`, or an LLM agent) through a local HTTP API, in addition to the interactive GUI. Remote clients can read the instrument state, change parameters, submit scans, stream live results, and download scan data; everything they do is mirrored back into the GUI so you can watch. The **Remote API** dock shows the listening address, lets you set the access mode (Allow control / Read-only / Off), and displays the job queue, budget, and an activity log. The server listens on `127.0.0.1:8642` by default and is off-limits to other machines unless you change that. For the full reference — endpoints, parameters, scan-command syntax, and worked examples — see `docs/API_USER_GUIDE.md`.
 
+## Utilities
+
+The **Utilities** menu holds standalone helper windows that read the current setup but do not change your scan.
+
+### Scan-time benchmark
+
+Scan-time estimates are kept per machine (see Runtimes Cache). A fresh install has no history for the current computer, so its first estimates are guesses. **Utilities → Scan-time benchmark…** gives that machine a clean baseline: it runs a short, fixed sweep of tiny scans around your current position, times them, and stores this machine's speed. You only need to run it once when you start using TAVI on a new machine — after that, ordinary scan history keeps the estimates accurate.
+
+The dialog shows:
+
+- **This machine** — hostname, CPU, a machine id, when it was last benchmarked, and the stored speed index.
+- **Benchmark plan** — the stages that will run (a cold McStas stage that measures compile time, warm McStas stages at two neutron counts, and a deterministic stage if the instrument supports it). You can edit the neutron count of each stage before running.
+- **Run / Cancel** — Run queues the stages through the normal scan queue (they show up in the job list tagged as benchmark jobs); Cancel stops them. You cannot start a benchmark while a scan is already running or queued.
+- **Cross-check** — after the benchmark finishes, this compares each stage's measured time against what your existing (non-benchmark) history would have predicted, and flags any row that drifts more than 30%. A large drift usually means your history is stale or the machine has changed.
+
+The benchmark writes its output to folders prefixed `benchmark_` so they are easy to identify and clean up.
+
+### Resolution calculator
+
+Computes the theoretical instrument resolution (FWHMs and projection ellipses) for the current setup at a chosen (H, K, L, ΔE). It reads the live main-window configuration but changes nothing.
+
 ### Updates
 
-This user guide was last updated Jul. 3, 2026.
+This user guide was last updated Jul. 6, 2026.
