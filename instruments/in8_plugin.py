@@ -209,6 +209,11 @@ def in8_descriptor() -> InstrumentDescriptor:
             "A2": AxisLimits(-120.0, 71.30, 120.0),
             "A4": AxisLimits(-120.0, -41.19, 120.0),
         },
+        # Vertical (out-of-plane) Soller divergences BET1..4 (arcmin, FWHM). IN8's
+        # secondary spectrometer carries no surveyed per-blade vertical Soller
+        # data; 120 arcmin is a documented uniform default (recorded as such in
+        # the resolution adapter's provenance).
+        vertical_divergence=(120.0, 120.0, 120.0, 120.0),
     )
 
 
@@ -340,3 +345,16 @@ class IN8Plugin:
         from instruments.PUMA_instrument_definition import check_point_feasibility
 
         return check_point_feasibility(config, scan_mode, scan_point, vals)
+
+    def resolution_config(self, vals, q0, w):
+        """Build a theoretical-resolution config for IN8 (see contract).
+
+        Pure function of the descriptor + ``vals``; imports no mcstasscript. IN8
+        has no NMO and no velocity selector, so no invalidations arise from
+        modules; a monochromatic source still warns. IN8's collimation has no
+        alpha_1 slot (open primary) -> the adapter substitutes 60 arcmin for it
+        with a recorded warning.
+        """
+        from instruments.resolution_adapter import build_resolution_config
+
+        return build_resolution_config(in8_descriptor(), vals, q0, w)

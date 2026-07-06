@@ -109,7 +109,8 @@ class CrystalSpec:
     n_columns: int | None = None
     n_rows: int | None = None
     gap: float | None = None
-    mosaic: float | None = None     # arcmin
+    mosaic: float | None = None     # arcmin (horizontal mosaic, FWHM)
+    mosaic_v: float | None = None   # arcmin (vertical mosaic, FWHM); None -> use horizontal
     r0: float | None = None
     reflect_file: str | None = None
     transmit_file: str | None = None
@@ -270,3 +271,10 @@ class InstrumentDescriptor:
     description: str = ""
     component_path: str | None = None        # extra McStas input_path for custom comps
     mcstas_name: str | None = None           # e.g. "PUMA_McScript"; default derives from id
+    # Per-instrument vertical (out-of-plane) Soller divergences BET1..BET4 in
+    # arcmin (FWHM), consumed by the theoretical resolution adapter
+    # (``resolution_config``). vTAS payloads and the McStas definitions do not
+    # record per-blade vertical Soller data, so these are documented defaults
+    # (the adapter records the source as "descriptor default" in provenance).
+    # None -> the adapter falls back to a uniform 120 arcmin default.
+    vertical_divergence: tuple[float, float, float, float] | None = None
