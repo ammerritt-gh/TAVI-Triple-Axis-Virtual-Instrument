@@ -324,6 +324,10 @@ class TAVIMainWindow(QMainWindow):
         resolution_action.triggered.connect(self._open_resolution_dialog)
         utilities_menu.addAction(resolution_action)
 
+        benchmark_action = QAction("&Scan-time benchmark…", self)
+        benchmark_action.triggered.connect(self._open_benchmark_dialog)
+        utilities_menu.addAction(benchmark_action)
+
         # ===== Help Menu =====
         help_menu = menubar.addMenu("&Help")
 
@@ -385,6 +389,27 @@ class TAVIMainWindow(QMainWindow):
             from gui.dialogs.resolution_dialog import ResolutionDialog
             self._resolution_dialog = ResolutionDialog(controller, parent=self)
         dialog = self._resolution_dialog
+        dialog.refresh_from_state()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _open_benchmark_dialog(self):
+        """Open (or re-raise) the non-modal Scan-time benchmark utility.
+
+        Created lazily and kept as a single instance; each open refreshes the
+        machine panel and plan table from current state. Requires the
+        controller, which main() attaches after construction.
+        """
+        controller = getattr(self, "controller", None)
+        if controller is None:
+            QMessageBox.warning(self, "Scan-time benchmark",
+                                "Controller not ready yet.")
+            return
+        if getattr(self, "_benchmark_dialog", None) is None:
+            from gui.dialogs.benchmark_dialog import BenchmarkDialog
+            self._benchmark_dialog = BenchmarkDialog(controller, parent=self)
+        dialog = self._benchmark_dialog
         dialog.refresh_from_state()
         dialog.show()
         dialog.raise_()
