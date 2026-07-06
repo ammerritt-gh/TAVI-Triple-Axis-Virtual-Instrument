@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 
+from instruments.contract import DEFAULT_MPI_COUNT
 from instruments.descriptor import (
     CollimationSlot,
     CrystalSpec,
@@ -386,7 +387,7 @@ class PUMAPlugin:
         )
 
     def run_point(self, instrument, snapshot, output_folder, number_neutrons,
-                  execution_state, mpi_count=30):
+                  execution_state, mpi_count=DEFAULT_MPI_COUNT):
         from instruments.PUMA_instrument_definition import run_PUMA_point
 
         return run_PUMA_point(
