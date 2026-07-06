@@ -62,7 +62,7 @@ class RuntimeTracker:
         """Load runtime records from config file."""
         if os.path.exists(self.config_path):
             try:
-                with open(self.config_path, 'r') as f:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 self.records = {}
@@ -100,7 +100,7 @@ class RuntimeTracker:
             }
         }
         
-        with open(self.config_path, 'w') as f:
+        with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
     
     def add_record(self, 
@@ -227,6 +227,94 @@ class RuntimeTracker:
         
         return (total_time, compile_time, run_time_per_point)
     
+    @staticmethod
+    def _confidence_from_samples(n: int) -> str:
+        """Map a sample count to a confidence tier.
+
+        0 -> 'none', 1-2 -> 'low', 3-9 -> 'medium', 10+ -> 'high'.
+        """
+        if n <= 0:
+            return "none"
+        if n <= 2:
+            return "low"
+        if n <= 9:
+            return "medium"
+        return "high"
+
+    def _per_point_seconds(self, records: List[ScanRecord],
+                           num_neutrons: int) -> Optional[float]:
+        """Estimate seconds/point for ``num_neutrons`` by nearest-sample scaling.
+
+        Each record contributes a ``(ncount, seconds_per_point)`` sample; the
+        per-point time is taken to scale linearly with neutron count, so we pick
+        the sample whose ncount is closest to the request and scale it. Returns
+        ``None`` when no usable sample exists.
+        """
+        samples: List[Tuple[int, float]] = []
+        for rec in records:
+            if rec.num_neutrons and rec.num_neutrons > 0 and rec.num_points > 0:
+                spp = rec.avg_subsequent_time if rec.num_points > 1 else rec.first_scan_time
+                if spp and spp > 0:
+                    samples.append((rec.num_neutrons, spp))
+        if not samples:
+            return None
+        nearest = min(samples, key=lambda s: abs(s[0] - num_neutrons))
+        return nearest[1] * (num_neutrons / nearest[0])
+
+    def _compile_seconds(self, records: List[ScanRecord]) -> float:
+        """Median measured/inferred compile time across records (0.0 if none)."""
+        comps: List[float] = []
+        for rec in records:
+            if rec.compilation_time and rec.compilation_time > 0:
+                comps.append(rec.compilation_time)
+            elif rec.num_points > 1:
+                inferred = rec.first_scan_time - rec.avg_subsequent_time
+                if inferred > 0:
+                    comps.append(inferred)
+        if not comps:
+            return 0.0
+        comps.sort()
+        mid = len(comps) // 2
+        if len(comps) % 2:
+            return comps[mid]
+        return (comps[mid - 1] + comps[mid]) / 2.0
+
+    def estimate_scan_seconds(self,
+                              instrument_name: str,
+                              n_points: int,
+                              num_neutrons: int,
+                              needs_compile: bool = True) -> Dict[str, object]:
+        """Estimate wall-clock seconds for a scan, with a confidence tier.
+
+        Per-point time is scaled to ``num_neutrons`` from the nearest historical
+        sample (time ~ linear in neutron count); compile time (measured, or
+        inferred as first_point - median(other points)) is added when
+        ``needs_compile``.
+
+        Returns ``{"estimated_seconds": float|None, "confidence": str,
+        "samples": int}``. ``estimated_seconds`` is ``None`` when there is no
+        usable historical data for the instrument or the inputs are invalid.
+        """
+        records = self.records.get(instrument_name, []) or []
+        samples = len(records)
+        confidence = self._confidence_from_samples(samples)
+
+        if (samples == 0 or num_neutrons is None or num_neutrons <= 0
+                or n_points is None or n_points < 0):
+            return {"estimated_seconds": None, "confidence": confidence,
+                    "samples": samples}
+
+        per_point = self._per_point_seconds(records, num_neutrons)
+        if per_point is None:
+            return {"estimated_seconds": None, "confidence": confidence,
+                    "samples": samples}
+
+        total = per_point * n_points
+        if needs_compile:
+            total += self._compile_seconds(records)
+        return {"estimated_seconds": total, "confidence": confidence,
+                "samples": samples}
+
     def has_data(self, instrument_name: str) -> bool:
         """Check if there is historical data for an instrument.
         

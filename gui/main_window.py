@@ -5,7 +5,7 @@ import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                 QScrollArea, QMenuBar, QMenu, QMessageBox)
 from PySide6.QtCore import Qt, QByteArray, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 
 from gui.docks.instrument_dock import InstrumentDock
 from gui.docks.unified_scattering_dock import UnifiedScatteringDock
@@ -16,6 +16,7 @@ from gui.docks.data_control_dock import DataControlDock
 from gui.docks.display_dock import DisplayDock
 from gui.docks.misalignment_dock import MisalignmentDock
 from gui.docks.ub_matrix_dock import UBMatrixDock
+from gui.docks.api_dock import ApiDock
 
 
 class TAVIMainWindow(QMainWindow):
@@ -24,7 +25,8 @@ class TAVIMainWindow(QMainWindow):
     # Layout config file path
     LAYOUT_CONFIG_FILE = "config/view_layout.json"
     
-    def __init__(self, descriptor=None):
+    def __init__(self, descriptor=None, instrument_infos=None,
+                 current_instrument_id=None, save_selection=None):
         super().__init__()
         if descriptor is None:
             raise ValueError("TAVIMainWindow requires the active InstrumentDescriptor")
@@ -32,6 +34,17 @@ class TAVIMainWindow(QMainWindow):
         self.setWindowTitle(
             f"TAVI - Triple-Axis Virtual Instrument - {descriptor.display_name}"
         )
+
+        # Instrument-switcher wiring (populated by main(); gui/ stays free of any
+        # registry import). ``instrument_infos`` are lightweight (id, display_name)
+        # entries, ``save_selection`` is a callable(id) that persists the choice.
+        self._instrument_infos = list(instrument_infos or [])
+        self._current_instrument_id = current_instrument_id
+        self._save_selection = save_selection
+        self._instrument_actions = {}
+        # Set to the chosen id when the user confirms an instrument switch; main()
+        # reads this after app.exec() returns to relaunch with the new instrument.
+        self._restart_instrument_id = None
 
         # Enable dock nesting for more flexible layouts
         self.setDockNestingEnabled(True)
@@ -103,7 +116,10 @@ class TAVIMainWindow(QMainWindow):
         
         # Data Control Panel (column 3, bottom)
         self.data_control_dock = DataControlDock(self)
-        
+
+        # Remote API Panel (column 3, near output/data)
+        self.api_dock = ApiDock(self)
+
         # Store all docks in a list for easy iteration
         self._all_docks = [
             self.instrument_dock,
@@ -115,6 +131,7 @@ class TAVIMainWindow(QMainWindow):
             self.display_dock,
             self.output_dock,
             self.data_control_dock,
+            self.api_dock,
         ]
     
     def _connect_dock_signals(self):
@@ -203,7 +220,12 @@ class TAVIMainWindow(QMainWindow):
         # Data Control below Output (column 3)
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
         self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
-        
+
+        # Remote API tabbed with Data Control (column 3, bottom)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.api_dock)
+        self.tabifyDockWidget(self.data_control_dock, self.api_dock)
+        self.data_control_dock.raise_()
+
         # Misalignment dock is added and configured elsewhere to avoid duplicate layout entries.
         
         # Step 4: Set column widths
@@ -274,12 +296,71 @@ class TAVIMainWindow(QMainWindow):
         save_layout_action.triggered.connect(self.save_layout_to_file)
         view_menu.addAction(save_layout_action)
         
+        # ===== Instrument Menu =====
+        # Only shown when the launcher supplied the registered-instrument list.
+        if self._instrument_infos:
+            instrument_menu = menubar.addMenu("&Instrument")
+            group = QActionGroup(self)
+            group.setExclusive(True)
+            for info in self._instrument_infos:
+                action = QAction(info.display_name, self, checkable=True)
+                action.setData(info.id)
+                if info.id == self._current_instrument_id:
+                    # The active instrument reads as the current choice and does
+                    # nothing when clicked (disabled but still visibly checked).
+                    action.setChecked(True)
+                    action.setEnabled(False)
+                action.triggered.connect(
+                    lambda _checked=False, iid=info.id: self._on_instrument_selected(iid)
+                )
+                group.addAction(action)
+                instrument_menu.addAction(action)
+                self._instrument_actions[info.id] = action
+
         # ===== Help Menu =====
         help_menu = menubar.addMenu("&Help")
-        
+
         about_action = QAction("&About TAVI", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
+
+    def _on_instrument_selected(self, instrument_id):
+        """Handle an Instrument-menu selection: confirm and restart, or revert."""
+        if instrument_id == self._current_instrument_id:
+            return
+
+        info = next(
+            (i for i in self._instrument_infos if i.id == instrument_id), None
+        )
+        name = info.display_name if info is not None else instrument_id
+
+        reply = QMessageBox.question(
+            self,
+            "Switch Instrument",
+            f"Switching to {name} requires restarting TAVI.\n\n"
+            f"TAVI will close and reopen with {name}. Any running or queued "
+            f"scans will be stopped and unsaved changes to the current session "
+            f"will be lost.\n\n"
+            f"Restart now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            # Declined: put the check back on the current instrument, quietly.
+            current_action = self._instrument_actions.get(self._current_instrument_id)
+            if current_action is not None:
+                current_action.blockSignals(True)
+                current_action.setChecked(True)
+                current_action.blockSignals(False)
+            return
+
+        # Confirmed: persist the new choice FIRST, then trigger the restart via
+        # the normal close path (closeEvent -> controller.shutdown() + layout save).
+        if self._save_selection is not None:
+            self._save_selection(instrument_id)
+        self._restart_instrument_id = instrument_id
+        self.close()
     
     def _store_default_state(self):
         """Store the default window state for reset functionality."""
@@ -390,10 +471,11 @@ class TAVIMainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close event - stop simulation and save layout."""
-        # Stop any running simulation before closing
+        # Stop any running simulation and tear down the job worker before closing.
         if hasattr(self, 'controller') and self.controller is not None:
-            self.controller.stop_flag = True
             self.controller.print_to_message_center("Window closing - stopping simulation...")
+            if hasattr(self.controller, 'shutdown'):
+                self.controller.shutdown()
         self.save_layout_to_file()
         event.accept()
 

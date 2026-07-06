@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QPushButton, QWidget)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import BaseDockWidget
+from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
 from instruments.descriptor import ModuleKind
 
 
@@ -38,7 +38,7 @@ class InstrumentDock(BaseDockWidget):
         source_layout = QFormLayout()
         source_group.setLayout(source_layout)
 
-        self.source_type_combo = QComboBox()
+        self.source_type_combo = NoScrollComboBox()
         self.source_type_combo.setObjectName("source_type_combo")
         for source_type in descriptor.source_types:
             self.source_type_combo.addItem(source_type.display_name, source_type.id)
@@ -129,13 +129,13 @@ class InstrumentDock(BaseDockWidget):
         crystals_layout = QFormLayout()
         crystals_group.setLayout(crystals_layout)
 
-        self.monocris_combo = QComboBox()
+        self.monocris_combo = NoScrollComboBox()
         self.monocris_combo.setObjectName("monocris_combo")
         for crystal in descriptor.mono_crystals:
             self.monocris_combo.addItem(crystal.display_name, crystal.id)
         crystals_layout.addRow("Monochromator crystal:", self.monocris_combo)
 
-        self.anacris_combo = QComboBox()
+        self.anacris_combo = NoScrollComboBox()
         self.anacris_combo.setObjectName("anacris_combo")
         for crystal in descriptor.ana_crystals:
             self.anacris_combo.addItem(crystal.display_name, crystal.id)
@@ -152,7 +152,7 @@ class InstrumentDock(BaseDockWidget):
 
             for module in descriptor.modules:
                 if module.kind is ModuleKind.CHOICE:
-                    combo = QComboBox()
+                    combo = NoScrollComboBox()
                     combo.setObjectName(f"module_{module.id}")
                     combo.addItems(list(module.options))
                     combo.setCurrentText(str(module.default))
@@ -235,7 +235,7 @@ class InstrumentDock(BaseDockWidget):
                     collimations_layout.addWidget(slot_widget, row, 1, 1, 2)
                     self.collimation_widgets[slot.id] = checks
                 else:
-                    combo = QComboBox()
+                    combo = NoScrollComboBox()
                     combo.setObjectName(f"collimation_{slot.id}")
                     combo.addItems(list(slot.allowed))
                     combo.setCurrentText(slot.default)

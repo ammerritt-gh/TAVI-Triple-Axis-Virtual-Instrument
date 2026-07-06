@@ -329,3 +329,14 @@ class IN8Plugin:
             instrument, snapshot, output_folder, number_neutrons,
             execution_state, mpi_count,
         )
+
+    def check_point_feasibility(self, config, scan_mode, scan_point, vals):
+        """Return ``(feasible, reason)`` for one scan point (see contract).
+
+        IN8 shares PUMA's TAS angle math, so this delegates to the same shared
+        feasibility helper (which reuses the per-point ``compute_snapshot``
+        solve). Used by the remote API's always-on scan validation.
+        """
+        from instruments.PUMA_instrument_definition import check_point_feasibility
+
+        return check_point_feasibility(config, scan_mode, scan_point, vals)

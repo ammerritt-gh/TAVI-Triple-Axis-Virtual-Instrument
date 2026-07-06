@@ -28,6 +28,11 @@ from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_compo
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
+from tavi.scan_jobs import (
+    BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
+)
+from tavi.api_server import TaviApiServer, ApiError, load_api_config, MAX_WAITERS
+from tavi.journal import SessionJournal
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -39,6 +44,706 @@ E_CHARGE = 1.602176634e-19  # electron charge
 K_B = 0.08617333262  # Boltzmann's constant in meV/K
 HBAR_meV = 6.582119569e-13  # H-bar in meV*s
 HBAR = 1.05459e-34  # H-bar in J*s
+
+
+class _GuiCall:
+    """A function call marshalled from a worker thread onto the GUI thread.
+
+    Carries the callable plus a ``threading.Event`` the GUI-thread slot sets once
+    it has run ``fn`` and stored the result (or the exception). The waiting HTTP
+    thread blocks on ``done`` with a timeout.
+    """
+    __slots__ = ("fn", "done", "result", "error")
+
+    def __init__(self, fn):
+        self.fn = fn
+        self.done = threading.Event()
+        self.result = None
+        self.error = None
+
+
+class ApiBridge(QObject):
+    """Marshals backend reads/writes from HTTP worker threads onto the GUI thread.
+
+    Created on the GUI thread. ``call_on_gui`` wraps ``fn`` in a ``_GuiCall`` and
+    emits it over the ``_invoke`` signal; because the emitter is a worker thread
+    and this object lives on the GUI thread, Qt delivers it as a *queued*
+    connection to ``_execute`` on the GUI thread. The worker then waits (with a
+    timeout) for the call's Event. If the GUI thread is blocked -- e.g. a modal
+    dialog is open -- the wait times out and a 503 ``gui_busy`` is raised instead
+    of deadlocking (see docs/API_SERVER_DESIGN.md sec 4.1).
+    """
+
+    _invoke = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        # Auto/queued connection: created on the GUI thread, emitted from worker
+        # threads, so Qt queues delivery onto the GUI thread's event loop.
+        self._invoke.connect(self._execute)
+
+    def call_on_gui(self, fn, timeout=5.0):
+        """Run ``fn`` on the GUI thread and return its result (or raise).
+
+        Raises ``ApiError(503, 'gui_busy')`` if the GUI thread does not respond
+        within ``timeout`` seconds; re-raises any exception ``fn`` raised.
+        """
+        call = _GuiCall(fn)
+        self._invoke.emit(call)
+        if not call.done.wait(timeout):
+            raise ApiError(
+                503, "gui_busy",
+                "GUI thread did not respond (busy or modal dialog open)",
+            )
+        if call.error is not None:
+            raise call.error
+        return call.result
+
+    @Slot(object)
+    def _execute(self, call):
+        """GUI-thread slot: run the wrapped callable and signal completion."""
+        try:
+            call.result = call.fn()
+        except Exception as exc:  # propagate to the waiting HTTP thread
+            call.error = exc
+        finally:
+            call.done.set()
+
+
+class TaviApiBackend:
+    """Duck-typed backend consumed by ``TaviApiServer`` (plain class, no Qt).
+
+    Holds a reference to the controller and the ``ApiBridge``. Read endpoints
+    that touch GUI widgets (parameters) go through the bridge onto the GUI
+    thread; job-registry reads and stop actions use the thread-safe registry,
+    per-job locks, and the shared stop event directly (no GUI touch). The write
+    endpoints ``patch_parameters`` / ``submit_scan`` are intentionally absent so
+    the handler returns 501 until phase 3.
+    """
+
+    def __init__(self, controller, bridge):
+        self._controller = controller
+        self._bridge = bridge
+        # Set by _start_api_server after the server is constructed so the backend
+        # can report the live access mode. Guarded against None.
+        self.server = None
+        # Long-poll (GET /scan/{id}?wait=N) coordination: a bounded count of
+        # concurrent waiters and an abort event that server shutdown sets so
+        # blocked handler threads release promptly.
+        self._waiter_lock = threading.Lock()
+        self._waiter_count = 0
+        self._wait_abort = threading.Event()
+
+    # ---- helpers -------------------------------------------------------
+
+    def _mode(self):
+        server = self.server
+        return server.mode if server is not None else None
+
+    def _instrument_id(self):
+        try:
+            return self._controller.descriptor.id
+        except Exception:
+            return None
+
+    def _get_job_or_404(self, job_id):
+        job = self._controller._job_registry.get(job_id)
+        if job is None:
+            raise ApiError(404, "unknown_job", "Unknown job id: %s" % job_id)
+        return job
+
+    # ---- read endpoints ------------------------------------------------
+
+    def get_health(self):
+        return {
+            "status": "ok",
+            "instrument": self._instrument_id(),
+            "mode": self._mode(),
+        }
+
+    def get_parameters(self):
+        return self._bridge.call_on_gui(self._controller.get_gui_values)
+
+    def get_state(self):
+        params = self._bridge.call_on_gui(self._controller.get_gui_values)
+        registry = self._controller._job_registry
+        active = self._controller._active_job
+        current_job = active.job_id if active is not None else None
+
+        queued = []
+        for job in registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    queued.append(job.job_id)
+
+        state = {
+            "instrument": self._instrument_id(),
+            "mode": self._mode(),
+            "busy": current_job is not None,
+            "current_job": current_job,
+            "queue": queued,
+            "parameters": params,
+        }
+        limits = getattr(self._controller, "_api_limits", None)
+        if limits is not None:
+            state["limits"] = limits
+        state["budget"] = self._budget_usage()
+        return state
+
+    # ---- budget accounting (thread-safe registry reads) ----------------
+
+    def _budget_limits(self):
+        return getattr(self._controller, "_budget_limits", None)
+
+    def _pending_api_cost(self):
+        """Summed points*neutrons committed by pending API jobs (QUEUED+RUNNING)."""
+        total = 0.0
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                pending = job.state in (JobState.QUEUED, JobState.RUNNING)
+                source = job.source
+            if pending and source == "api":
+                total += float(getattr(job, "_api_cost", 0.0) or 0.0)
+        return total
+
+    def _queued_count(self):
+        """Number of jobs currently QUEUED (any source)."""
+        count = 0
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    count += 1
+        return count
+
+    def _budget_usage(self):
+        return compute_budget_usage(
+            self._controller._job_registry, self._budget_limits()
+        )
+
+    def get_job(self, job_id):
+        job = self._get_job_or_404(job_id)
+        snap = job.snapshot()
+        snap["eta"] = self._eta_for_job(job)
+        return snap
+
+    def get_job_data(self, job_id):
+        return self._get_job_or_404(job_id).snapshot(include_data=True)
+
+    def get_job_plot_png(self, job_id):
+        """GET /scan/{id}/plot.png -- render the job's stored arrays to PNG.
+
+        Reads the JSON-safe result arrays off the thread-safe job snapshot (no
+        GUI touch) and renders them in the calling HTTP handler thread via the
+        Qt-free ``tavi.plot_render`` module (matplotlib Agg, never pyplot).
+        Returns raw PNG bytes; 404 for an unknown job, 409 ``no_data`` when the
+        job has no renderable points yet.
+        """
+        job = self._get_job_or_404(job_id)
+        snap = job.snapshot(include_data=True)
+        result = snap.get("result")
+        # Lazy import so matplotlib is only loaded on first plot request and
+        # never at controller import time (keeps the render path off the GUI
+        # backend). NoPlotData -> 409 no_data.
+        from tavi.plot_render import render_scan_plot_png, NoPlotData
+        try:
+            return render_scan_plot_png(result, job_id)
+        except NoPlotData as exc:
+            raise ApiError(409, "no_data", str(exc))
+
+    def get_journal(self, limit=100):
+        """GET /journal -- session-narrative ring buffer (read-only).
+
+        Reads the controller's Qt-free ``SessionJournal`` directly (plain deque
+        + lock); no GUI-thread hop needed. Allowed in read-only mode.
+        """
+        return self._controller._journal.read(limit)
+
+    def list_jobs(self):
+        return self._controller._job_registry.recent()
+
+    # ---- ETA / long-poll -----------------------------------------------
+
+    def _eta_for_job(self, job):
+        """Return the ``{estimated_seconds, confidence, samples}`` ETA for a job.
+
+        Queued jobs estimate the whole scan (compile + all points); a running
+        job estimates only the remaining points (compile already sunk). Terminal
+        jobs still report a full-scan estimate for reference. Pure computation
+        over the runtime tracker -- safe to call off the GUI thread.
+        """
+        with job.lock:
+            state = job.state
+            done = job.progress_done
+            total = job.progress_total
+            launch = job.launch_state if isinstance(job.launch_state, dict) else {}
+        vals = launch.get("vals", {}) if isinstance(launch, dict) else {}
+        cmd1 = vals.get("scan_command1", "") or ""
+        cmd2 = vals.get("scan_command2", "") or ""
+        try:
+            ncount = int(float(vals.get("number_neutrons") or 0))
+        except (TypeError, ValueError):
+            ncount = 0
+        try:
+            points = self._controller._count_scan_points(cmd1, cmd2)
+        except Exception:
+            points = total if total else 1
+
+        needs_compile = True
+        if state == JobState.RUNNING:
+            needs_compile = False
+            if total > 0:
+                points = max(0, total - done)
+
+        instrument_name = self._instrument_id()
+        return self._controller.runtime_tracker.estimate_scan_seconds(
+            instrument_name, points, ncount, needs_compile
+        )
+
+    def estimate_queue_drain_seconds(self):
+        """Sum the ETA of all pending (QUEUED/RUNNING) jobs, or ``None``.
+
+        Backs the Retry-After hint on 429 responses. Returns ``None`` when no
+        pending job yields an estimate (the server then uses its constant).
+        """
+        total = 0.0
+        have_estimate = False
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                pending = job.state in (JobState.QUEUED, JobState.RUNNING)
+            if not pending:
+                continue
+            secs = self._eta_for_job(job).get("estimated_seconds")
+            if secs is not None:
+                total += secs
+                have_estimate = True
+        return total if have_estimate else None
+
+    def wait_for_job(self, job_id, timeout):
+        """Block up to ``timeout`` s until the job is terminal; return its status.
+
+        The returned payload matches ``get_job`` plus a ``timed_out`` flag (True
+        only when the wait expired while the job was still non-terminal). Caps
+        concurrent waiters with HTTP 429 ``too_many_waiters``.
+        """
+        job = self._get_job_or_404(job_id)
+        with self._waiter_lock:
+            if self._wait_abort.is_set():
+                # Server shutting down: do not block, report current status.
+                snap = job.snapshot()
+                snap["eta"] = self._eta_for_job(job)
+                snap["timed_out"] = False
+                return snap
+            if self._waiter_count >= MAX_WAITERS:
+                raise ApiError(
+                    429, "too_many_waiters",
+                    "Too many concurrent long-poll waiters (limit %d)" % MAX_WAITERS,
+                )
+            self._waiter_count += 1
+        try:
+            reached = job.wait_for_terminal(timeout, abort=self._wait_abort)
+        finally:
+            with self._waiter_lock:
+                self._waiter_count -= 1
+        snap = job.snapshot()
+        snap["eta"] = self._eta_for_job(job)
+        # timed_out only when the wait genuinely expired (not an abort/shutdown).
+        snap["timed_out"] = (not reached) and (not self._wait_abort.is_set())
+        return snap
+
+    def shutdown_waiters(self):
+        """Release all long-poll waiters on server shutdown.
+
+        Sets the abort event and notifies every job's condition so blocked
+        ``wait_for_job`` calls return promptly instead of hanging.
+        """
+        self._wait_abort.set()
+        self._controller._job_registry.wake_all_waiters()
+
+    # ---- stop endpoints (thread-safe; no bridge / no GUI touch) --------
+
+    def stop_job(self, job_id):
+        job = self._get_job_or_404(job_id)
+        with job.lock:
+            state = job.state
+            if state == JobState.QUEUED:
+                job.state = JobState.CANCELLED
+                if job.finished_at is None:
+                    job.finished_at = time.time()
+                job.notify_state_change()
+            elif state in _API_TERMINAL_STATES:
+                raise ApiError(
+                    409, "job_finished",
+                    "Job %s already finished (%s)" % (job_id, state.value),
+                )
+            # RUNNING: fall through and set the shared stop event outside the lock
+        if state == JobState.RUNNING:
+            self._controller.stop_event.set()
+        return job.snapshot()
+
+    def stop_all(self, clear_queue):
+        registry = self._controller._job_registry
+        running_id = None
+        cancelled = []
+        for job in registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.RUNNING:
+                    running_id = job.job_id
+                elif clear_queue and job.state == JobState.QUEUED:
+                    job.state = JobState.CANCELLED
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+                    job.notify_state_change()
+                    cancelled.append(job.job_id)
+        if running_id is not None:
+            self._controller.stop_event.set()
+        return {"stopped": running_id, "cancelled": cancelled}
+
+    # ---- write endpoints ----------------------------------------------
+
+    def _has_active_or_queued(self):
+        for job in self._controller._job_registry.all_jobs():
+            with job.lock:
+                if job.state in (JobState.QUEUED, JobState.RUNNING):
+                    return True
+        return False
+
+    def patch_parameters(self, patch, force):
+        """PATCH /parameters -- apply a partial parameter set (sec 6, sec 8).
+
+        Validates the request shape, guards against a busy queue (unless
+        ``force``), applies the patch on the GUI thread via the bridge, and
+        reports the applied fields plus any per-field errors.
+        """
+        if not isinstance(patch, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        for key, value in patch.items():
+            if not isinstance(value, (str, int, float, bool, dict)) or value is None:
+                raise ApiError(
+                    400, "bad_request",
+                    "Field %r must be a scalar or object, got %s"
+                    % (key, type(value).__name__),
+                )
+
+        if not force and self._has_active_or_queued():
+            raise ApiError(
+                409, "busy",
+                "A scan is running or queued; retry with ?force=1 to override",
+            )
+
+        applied, errors = self._bridge.call_on_gui(
+            lambda: self._controller.apply_parameters(patch)
+        )
+
+        if errors:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"applied": list(applied), "errors": errors},
+            )
+        return {"applied": list(applied), "errors": errors}
+
+    def submit_scan(self, body, idempotency_key=None):
+        """POST /scan -- queue a scan job with budget enforcement (sec 6, 7).
+
+        Optional ``body['parameters']`` is applied first (same path as
+        patch_parameters, minus the busy guard since we are queueing anyway).
+        The whole submission runs atomically on the GUI thread so cost accounting
+        and enqueue cannot race another submitter. When ``idempotency_key`` is
+        given and already maps to a live job, the existing job's status is
+        returned (flagged for a 200 replay) instead of creating a new job.
+        """
+        if not isinstance(body, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        patch = body.get("parameters")
+        if patch is not None and not isinstance(patch, dict):
+            raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
+        force = bool(body.get("force", False))
+        allow_partial = bool(body.get("allow_partial", False))
+        isolated = bool(body.get("isolated", False))
+
+        result = self._bridge.call_on_gui(
+            lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
+                                             allow_partial, isolated)
+        )
+        return result
+
+    def _build_validation(self, controller, launch_state, points, neutrons,
+                          allow_partial):
+        """Assemble the ``validation`` block for a launch state (points/cost/eta).
+
+        Feasibility + per-command expansion come from the controller (GUI-thread
+        angle math); budget/cost and ETA are folded in here since the backend
+        owns those. ``points`` is the total requested-point count; with
+        ``allow_partial`` the ETA is scaled to the points that will actually run.
+        Returns the ``validation`` dict embedded in 202/validate responses.
+        """
+        validation = controller.validate_scan_launch_state(launch_state)
+        infeasible = validation.get("infeasible", [])
+        run_points = points
+        if allow_partial:
+            run_points = max(0, points - len(infeasible))
+        validation["cost"] = dict(
+            self._budget_usage(),
+            points=points,
+            neutrons_per_point=neutrons,
+            job_neutrons=points * neutrons,
+        )
+        try:
+            eta = controller.runtime_tracker.estimate_scan_seconds(
+                self._instrument_id(), run_points, int(neutrons), True
+            )
+        except Exception:
+            eta = {"estimated_seconds": None, "confidence": "none", "samples": 0}
+        validation["eta"] = eta
+        return validation
+
+    def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
+                            allow_partial=False, isolated=False):
+        """Atomic scan submission body -- runs on the GUI thread via the bridge.
+
+        Returns the 202 payload dict or raises ``ApiError`` (which the bridge
+        re-raises to the HTTP thread for envelope serialization).
+
+        Parameter isolation (``isolated=True``): the current values of exactly
+        the patched fields are snapshotted before the patch is applied, and
+        restored before returning -- so the job runs with the patched *frozen*
+        launch state while the live GUI widgets end up unchanged. The snapshot
+        is also restored on ANY failure path (validation reject, budget reject,
+        exception), which additionally fixes the documented bug where a FAILED
+        submission left an inline patch applied -- that restore-on-failure runs
+        even for non-isolated submissions. A *successful* non-isolated submit
+        keeps the historical global-mutation behavior (the patch stays applied).
+        """
+        controller = self._controller
+        registry = controller._job_registry
+
+        # 0. Idempotency replay: a previously seen key mapping to a live job
+        #    returns that job's current status (200 replay) without re-queueing.
+        #    Runs before any mutation, so no snapshot/restore is involved.
+        if idempotency_key:
+            existing_id = registry.get_idempotent(idempotency_key)
+            if existing_id:
+                existing = registry.get(existing_id)
+                if existing is not None:
+                    snap = existing.snapshot()
+                    snap["eta"] = self._eta_for_job(existing)
+                    snap["_idempotent_reuse"] = True
+                    return snap
+
+        # Snapshot exactly the fields the patch will touch, using the same
+        # getter machinery apply_parameters/get_gui_values use. Kept for
+        # restore-on-failure (both isolated and non-isolated) and for the
+        # always-restore step when isolated. ``None`` means "nothing to undo".
+        saved = None
+        if patch:
+            current = controller.get_gui_values()
+            if current:
+                saved = {k: current[k] for k in patch if k in current}
+
+        success = False
+        try:
+            # 1. Apply an inline parameter patch first (no busy guard here).
+            if patch:
+                applied, errors = controller.apply_parameters(patch)
+                if errors:
+                    raise ApiError(
+                        400, "invalid_parameters", "One or more fields failed",
+                        details={"applied": list(applied), "errors": errors},
+                    )
+
+            # 2. Freeze launch state and read the scan commands from it.
+            launch_state = controller._collect_simulation_launch_state()
+            if not launch_state:
+                raise ApiError(400, "bad_request", "Could not read GUI values")
+            launch_state["isolated"] = bool(isolated)
+            vals = launch_state["vals"]
+            cmd1 = vals.get("scan_command1", "")
+            cmd2 = vals.get("scan_command2", "")
+
+            # 3. Validate scan commands unless force overrides.
+            if not force:
+                msg = controller._validate_scan_commands_text(cmd1, cmd2)
+                if msg:
+                    raise ApiError(400, "scan_validation", msg)
+
+            # 4. Compute this job's cost.
+            try:
+                points = controller._count_scan_points(cmd1, cmd2)
+            except Exception:
+                # Unparseable command with force=True: cannot size it, let the
+                # scan itself fail later; treat as a single point for budget.
+                points = 1
+            neutrons = float(vals.get("number_neutrons") or 0)
+
+            # 5. Always-on feasibility validation (API path only). Build the
+            #    validation block (per-command points + per-point feasibility +
+            #    cost + eta). Any infeasible point is a hard 400 unless the
+            #    caller opted into allow_partial, in which case the infeasible
+            #    points are recorded on the launch state so run_simulation skips
+            #    them and the result documents them under skipped_points.
+            validation = self._build_validation(
+                controller, launch_state, points, neutrons, allow_partial
+            )
+            infeasible = validation.get("infeasible", [])
+            if infeasible and not allow_partial:
+                raise ApiError(
+                    400, "infeasible_points",
+                    "%d scan point(s) are geometrically infeasible; resubmit "
+                    "with \"allow_partial\": true to skip them" % len(infeasible),
+                    details=validation,
+                )
+            if infeasible and allow_partial:
+                launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+                launch_state["skipped_points"] = infeasible
+
+            # 6. Budget + queue-depth enforcement (API-sourced jobs only).
+            limits = getattr(controller, "_budget_limits", None)
+            pending_cost = self._pending_api_cost()
+            queued_now = self._queued_count()
+            if limits is not None:
+                if queued_now >= limits.max_queued:
+                    reason = ("queue is full: %d queued jobs, limit is %d"
+                              % (queued_now, limits.max_queued))
+                    controller._journal.record("budget", "rejected: %s" % reason)
+                    raise ApiError(
+                        429, "limit_exceeded", reason,
+                        details={"usage": self._budget_usage()},
+                    )
+                reason = limits.check_submission(points, neutrons, pending_cost)
+                if reason is not None:
+                    controller._journal.record("budget", "rejected: %s" % reason)
+                    raise ApiError(
+                        429, "limit_exceeded", reason,
+                        details={"usage": self._budget_usage()},
+                    )
+
+            # 7. Enqueue and tag the job with its cost for future budget math.
+            job = controller.submit_scan_job(launch_state, "api")
+            job._api_cost = points * neutrons
+            if idempotency_key:
+                registry.put_idempotent(idempotency_key, job.job_id)
+
+            position = self._queued_count()
+            success = True
+            return {
+                "job_id": job.job_id,
+                "state": "queued",
+                "position": position,
+                "isolated": bool(isolated),
+                "eta": self._eta_for_job(job),
+                "validation": validation,
+            }
+        finally:
+            # Restore the snapshot when the submission is isolated (always) OR
+            # when it failed (undo a patch a failed submit would otherwise
+            # leave applied -- the documented non-isolated bug). A successful
+            # non-isolated submit intentionally leaves the patch in place.
+            if saved is not None and (isolated or not success):
+                try:
+                    controller.apply_parameters(saved)
+                except Exception as exc:
+                    controller.print_to_message_center(
+                        "Warning: could not restore GUI state after scan "
+                        "submission: %s" % exc
+                    )
+
+    def submit_validate(self, body):
+        """POST /validate -- run the identical checks as POST /scan, never queue.
+
+        Applies any inline ``parameters`` patch to a snapshot of the GUI state,
+        runs scan-command + feasibility + budget validation, then RESTORES the
+        original GUI values so validation never mutates live state (the known
+        submit-path gotcha where inline patches persist does not apply here).
+        Returns the validation block plus ``would_queue`` and ``blockers``.
+        Allowed in read-only mode (it is non-mutating).
+        """
+        if not isinstance(body, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        patch = body.get("parameters")
+        if patch is not None and not isinstance(patch, dict):
+            raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
+        force = bool(body.get("force", False))
+        allow_partial = bool(body.get("allow_partial", False))
+        return self._bridge.call_on_gui(
+            lambda: self._validate_scan_on_gui(patch, force, allow_partial)
+        )
+
+    def _validate_scan_on_gui(self, patch, force, allow_partial):
+        """Non-mutating validation body -- runs on the GUI thread via the bridge."""
+        controller = self._controller
+
+        # Snapshot current widget values so any inline patch can be rolled back.
+        saved = controller.get_gui_values()
+        try:
+            if patch:
+                applied, errors = controller.apply_parameters(patch)
+                if errors:
+                    raise ApiError(
+                        400, "invalid_parameters", "One or more fields failed",
+                        details={"applied": list(applied), "errors": errors},
+                    )
+
+            launch_state = controller._collect_simulation_launch_state()
+            if not launch_state:
+                raise ApiError(400, "bad_request", "Could not read GUI values")
+            vals = launch_state["vals"]
+            cmd1 = vals.get("scan_command1", "")
+            cmd2 = vals.get("scan_command2", "")
+
+            blockers = []
+            scan_msg = ""
+            if not force:
+                scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
+                if scan_msg:
+                    blockers.append("scan_validation: %s" % scan_msg)
+
+            try:
+                points = controller._count_scan_points(cmd1, cmd2)
+            except Exception:
+                points = 1
+            neutrons = float(vals.get("number_neutrons") or 0)
+
+            validation = self._build_validation(
+                controller, launch_state, points, neutrons, allow_partial
+            )
+            infeasible = validation.get("infeasible", [])
+            if infeasible and not allow_partial:
+                blockers.append(
+                    "infeasible_points: %d point(s) unreachable" % len(infeasible)
+                )
+
+            limits = getattr(controller, "_budget_limits", None)
+            if limits is not None:
+                if self._queued_count() >= limits.max_queued:
+                    blockers.append("limit_exceeded: queue is full")
+                reason = limits.check_submission(
+                    points, neutrons, self._pending_api_cost()
+                )
+                if reason is not None:
+                    blockers.append("limit_exceeded: %s" % reason)
+
+            validation["would_queue"] = not blockers
+            validation["blockers"] = blockers
+            return validation
+        finally:
+            # Restore the pre-validation GUI state (validate must not mutate).
+            if saved:
+                try:
+                    controller.apply_parameters(saved)
+                except Exception as exc:
+                    controller.print_to_message_center(
+                        "Warning: could not fully restore GUI state after "
+                        "/validate: %s" % exc
+                    )
+
+    def get_schema(self):
+        """GET /schema -- machine-readable API self-description (read-only)."""
+        return self._bridge.call_on_gui(self._controller.build_api_schema)
+
+
+# Terminal states used by the API stop logic (mirrors scan_jobs terminal set).
+_API_TERMINAL_STATES = frozenset(
+    {JobState.DONE, JobState.FAILED, JobState.CANCELLED, JobState.STOPPED}
+)
 
 
 class TAVIController(QObject):
@@ -71,10 +776,29 @@ class TAVIController(QObject):
     runtime_data_updated = Signal()
     actual_output_folder_updated = Signal(str)
     pre_scan_estimate_updated = Signal(str)
-    
-    def __init__(self, window, instrument):
+
+    # Signal for job-queue state transitions (job_id, state value)
+    job_state_changed = Signal(str, str)
+
+    # Remote-API dock feeds (API dock, docs/API_SERVER_DESIGN.md sec 10):
+    #   api_activity     -- one activity-log line
+    #   api_status_changed -- listening URL (may be "") + human state string
+    api_activity = Signal(str)
+    api_status_changed = Signal(str, str)
+
+    def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
         self.window = window
+        # CLI overrides for the remote API server (see main()); empty by default.
+        self._api_cli_overrides = api_overrides or {}
+        self.api_server = None
+        # Last SSE-publish error string, so identical consecutive publish
+        # failures are logged once instead of spamming the message center.
+        self._api_publish_last_error = None
+        # Populated by _start_api_server; defaults keep the API backend safe if
+        # the server never starts (config load failure / disabled).
+        self._api_limits = None
+        self._budget_limits = None
         # The active instrument plugin (fixed for the session) and its live state.
         self.instrument = instrument
         self.instrument_state = instrument.default_state()
@@ -86,6 +810,24 @@ class TAVIController(QObject):
         
         # Global variables
         self.stop_event = threading.Event()
+
+        # Scan job queue (API design phase 1): every scan -- GUI or (later) API --
+        # runs as a ScanJob through a single persistent worker thread, so runs
+        # execute serially instead of racing. See docs/API_SERVER_DESIGN.md sec 7.
+        self._job_registry = JobRegistry()
+        # Session narrative (parameter changes, job lifecycle, mode/budget events)
+        # exposed via GET /api/v1/journal. A Qt-free deque read directly by HTTP
+        # handler threads (no GUI-thread hop needed).
+        self._journal = SessionJournal()
+        self._job_queue = queue.Queue()
+        self._active_job = None  # job currently RUNNING in the worker (or None)
+        self.last_scan_result = None  # ScanResult from the most recent finished job
+        self._shutdown_called = False
+        self._job_worker = threading.Thread(
+            target=self._job_worker_loop, name="scan-job-worker", daemon=True
+        )
+        self._job_worker.start()
+
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
         # Cross-scan binary reuse (design record §18.5): the last compiled
@@ -139,7 +881,233 @@ class TAVIController(QObject):
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
-    
+
+        # Start the remote API server last, after the message center and job
+        # queue are ready (it reports status through print_to_message_center).
+        self._start_api_server()
+
+    def _set_api_dock_mode(self, mode):
+        """Reflect the effective access mode in the API dock combo (no-op safe)."""
+        dock = getattr(self.window, "api_dock", None)
+        if dock is not None:
+            dock.set_mode_display(mode)
+
+    def _start_api_server(self, mode_override=None):
+        """Construct and start the remote API server per config + CLI overrides.
+
+        Called at the end of ``__init__`` so the message center and job queue
+        exist. Bind failures are surfaced to the message center and the GUI
+        continues without the API. See docs/API_SERVER_DESIGN.md sec 11.
+        """
+        try:
+            cfg = load_api_config()
+        except Exception as exc:
+            self.print_to_message_center(
+                f"API server: could not load config ({exc}); disabled"
+            )
+            return
+
+        overrides = self._api_cli_overrides or {}
+        enabled = bool(cfg.get("enabled", True))
+        mode = cfg.get("mode", "allow")
+        host = cfg.get("host", "127.0.0.1")
+        port = int(cfg.get("port", 8642))
+        token = cfg.get("token")
+        self._api_limits = cfg.get("limits")
+
+        # Build the enforceable BudgetLimits used by the API submission path
+        # (docs/API_SERVER_DESIGN.md sec 7.1). Filter to known fields so an
+        # extra key in the user's config cannot raise a TypeError here.
+        limits_cfg = self._api_limits if isinstance(self._api_limits, dict) else {}
+        known = ("max_queued", "max_points", "max_neutrons_per_point",
+                 "queue_neutron_budget")
+        self._budget_limits = BudgetLimits(
+            **{k: limits_cfg[k] for k in known if k in limits_cfg}
+        )
+
+        # CLI overrides win over the config file.
+        if overrides.get("disabled"):
+            enabled = False
+        if overrides.get("port") is not None:
+            port = int(overrides["port"])
+            enabled = True  # --api-port implies enabled
+
+        # A dock-driven mode change (set_api_mode -> restart) forces a listening
+        # mode and enables the server regardless of the persisted enabled flag.
+        if mode_override is not None:
+            mode = mode_override
+            enabled = True
+
+        # 'off' mode (or disabled) means: do not listen at all. TaviApiServer only
+        # accepts 'allow'/'readonly', so filter 'off' out before construction.
+        if not enabled or mode == "off":
+            self.print_to_message_center("API server disabled")
+            self._set_api_dock_mode("off")
+            self.api_status_changed.emit("", "Off")
+            return
+
+        url = f"http://{host}:{port}/api/v1"
+
+        bridge = ApiBridge()  # created on the GUI thread
+        self._api_bridge = bridge
+        backend = TaviApiBackend(self, bridge)
+        try:
+            server = TaviApiServer(
+                host, port, token, mode, backend, log_callback=self._api_log
+            )
+        except ValueError as exc:
+            self.print_to_message_center(f"API server not started: {exc}")
+            self.api_status_changed.emit("", "Failed")
+            return
+
+        backend.server = server
+        try:
+            server.start()
+        except OSError as exc:
+            self.print_to_message_center(
+                f"Warning: API server could not bind {host}:{port} ({exc}); "
+                "continuing without remote API"
+            )
+            self.api_status_changed.emit(url, "Failed")
+            return
+
+        self.api_server = server
+        self._set_api_dock_mode(mode)
+        self.api_status_changed.emit(url, "Listening")
+        self.print_to_message_center(
+            f"API server listening on {url} (mode: {mode})"
+        )
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            if token:
+                self.print_to_message_center(
+                    f"Note: API server bound to non-loopback address ({host})."
+                )
+            else:
+                self.print_to_message_center(
+                    "SECURITY WARNING: API server is bound to a non-loopback "
+                    f"address ({host}) with no bearer token configured; anyone on "
+                    "the network can control TAVI. Set a token in "
+                    "config/api_config.json."
+                )
+
+    def _api_log(self, msg):
+        """Forward an API-server log line to the message center.
+
+        Invoked from HTTP request threads and the server's own threads, so it
+        must never touch widgets directly. ``message_printed`` is a Qt signal;
+        emitting it is thread-safe (Qt delivers it to the GUI-thread slot via a
+        queued connection), so this is the safe path off the GUI thread.
+        """
+        self.message_printed.emit(f"API: {msg}")
+        # Mirror to the API dock's activity log (raw line, no "API:" prefix).
+        self.api_activity.emit(msg)
+
+    # ---- API dock support methods ---------------------------------------
+
+    def get_recent_jobs(self, n=20):
+        """Return up to ``n`` recent job snapshots (newest first) for the dock.
+
+        Thin wrapper so the dock never touches ``_job_registry`` directly.
+        """
+        return self._job_registry.recent(n)
+
+    def get_api_budget_usage(self):
+        """Return the API budget-usage view (pending neutrons, queue depth).
+
+        Uses the same shared accounting as the ``/state`` endpoint's budget
+        block (``tavi.scan_jobs.compute_budget_usage``).
+        """
+        return compute_budget_usage(self._job_registry, self._budget_limits)
+
+    def cancel_job(self, job_id):
+        """Cancel a queued job or stop a running one (API dock Cancel button).
+
+        Mirrors the core of ``TaviApiBackend.stop_job`` without the HTTP error
+        envelope: QUEUED -> CANCELLED, RUNNING -> shared stop event, terminal
+        states -> no-op. GUI-thread entry; independent of the API server state
+        so it works even when the server is off.
+        """
+        job = self._job_registry.get(job_id)
+        if job is None:
+            self.print_to_message_center(f"Cancel: unknown job {job_id}")
+            return
+        with job.lock:
+            state = job.state
+            if state == JobState.QUEUED:
+                job.state = JobState.CANCELLED
+                if job.finished_at is None:
+                    job.finished_at = time.time()
+                job.notify_state_change()
+        if state == JobState.QUEUED:
+            self.job_state_changed.emit(job_id, JobState.CANCELLED.value)
+            self._api_log(f"job {job_id} cancelled from dock")
+        elif state == JobState.RUNNING:
+            self.stop_event.set()
+            self._api_log(f"job {job_id} stop requested from dock")
+        # Terminal states: nothing to do.
+
+    def set_api_mode(self, mode):
+        """Apply an access mode chosen in the API dock and persist it.
+
+        'off'  -> stop the server if running (connection refused thereafter).
+        'allow'/'readonly' -> if the server is stopped/absent, (re)start it with
+        this mode; otherwise switch the live mode in place. The chosen mode is
+        written back to ``config/api_config.json`` so it survives restart.
+        """
+        if mode not in ("off", "allow", "readonly"):
+            self.print_to_message_center(f"API: ignoring unknown mode '{mode}'")
+            return
+
+        if mode == "off":
+            if self.api_server is not None:
+                self.api_server.stop()
+                self.api_server = None
+                self._api_log("access mode set to 'off' (server stopped)")
+            self.api_status_changed.emit("", "Off")
+        else:
+            if self.api_server is None:
+                # Server not listening -- (re)start it in the requested mode.
+                self._start_api_server(mode_override=mode)
+            else:
+                self.api_server.set_mode(mode)
+                url = f"http://{self.api_server.host}:{self.api_server.port}/api/v1"
+                self.api_status_changed.emit(url, "Listening")
+                self._api_log(f"access mode set to '{mode}'")
+
+        self._journal.record("mode", f"access mode set to '{mode}'")
+        self._persist_api_mode(mode)
+
+    def _persist_api_mode(self, mode):
+        """Read-modify-write the ``mode`` field of config/api_config.json.
+
+        Preserves any other keys; creates the file (and config dir) if absent.
+        Failures are surfaced to the message center, never swallowed silently.
+        """
+        config_path = os.path.join(os.getcwd(), "config", "api_config.json")
+        data = {}
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    data = loaded
+        except Exception as exc:
+            self.print_to_message_center(
+                f"API: could not read {config_path} to persist mode ({exc})"
+            )
+        data["mode"] = mode
+        # 'off' persists as enabled=False so a restart honors the user's choice;
+        # a listening mode re-enables the server on next launch.
+        data["enabled"] = mode != "off"
+        try:
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+        except Exception as exc:
+            self.print_to_message_center(
+                f"API: could not persist mode to {config_path} ({exc})"
+            )
+
     def connect_signals(self):
         """Connect all GUI signals to controller methods."""
         # Simulation control buttons (moved to right panel)
@@ -147,6 +1115,22 @@ class TAVIController(QObject):
         self.window.simulation_dock.stop_button.clicked.connect(self.stop_simulation)
         self.window.simulation_dock.quit_button.clicked.connect(self.quit_application)
         self.window.simulation_dock.clear_runtimes_button.clicked.connect(self.clear_runtime_data)
+
+        # Job-queue state transitions are emitted from the worker thread; Qt
+        # delivers them to this GUI-thread slot as a queued connection.
+        self.job_state_changed.connect(self._on_job_state_changed)
+
+        # Remote-API dock wiring (docs/API_SERVER_DESIGN.md sec 10). The dock
+        # drives user actions (mode change, cancel) through the controller ref;
+        # controller-to-dock updates all arrive on the GUI thread via signals.
+        api_dock = getattr(self.window, "api_dock", None)
+        if api_dock is not None:
+            api_dock.set_controller(self)
+            self.api_activity.connect(api_dock.append_activity)
+            self.api_status_changed.connect(api_dock.set_status)
+            # Any job transition (from either thread) refreshes the job table
+            # and budget readout via the controller's pull helpers.
+            self.job_state_changed.connect(api_dock.refresh_jobs)
         
         # Parameter buttons (moved to right panel)
         self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
@@ -2862,46 +3846,769 @@ class TAVIController(QObject):
             self.print_to_message_center("Error: Could not get GUI values")
             return
         self.window.display_dock.set_scan_metadata(self._build_scan_metadata(launch_state['vals']))
-        
-        simulation_thread = threading.Thread(target=self.run_simulation, args=(launch_state,))
-        simulation_thread.start()
-    
+
+        # Route the GUI Run through the shared job queue instead of spawning a
+        # bare thread: this serializes runs (fixes the concurrent double-click
+        # race) and gives GUI and API submissions one execution path.
+        self.submit_scan_job(launch_state, 'gui')
+
+    def submit_scan_job(self, launch_state, source):
+        """Create, register, and enqueue a scan job. GUI-thread-only entry."""
+        job = ScanJob(
+            job_id=self._job_registry.next_id(),
+            source=source,
+            launch_state=launch_state,
+            submitted_at=time.time(),
+        )
+        self._job_registry.add(job)
+        # Announce before enqueueing: once put() lands, the idle worker can pop
+        # the job and publish job_started immediately, so publishing job_queued
+        # first is the only way to guarantee queued -> started event order.
+        self.job_state_changed.emit(job.job_id, JobState.QUEUED.value)
+        self.print_to_message_center(f"Scan job {job.job_id} queued (source: {source})")
+        self._journal.record("job", f"{job.job_id}: queued (source: {source})")
+        self._publish_api_event('job_queued', {
+            'job_id': job.job_id,
+            'source': source,
+            'position': self._job_queue.qsize(),
+        })
+        self._job_queue.put(job)
+        return job
+
+    def _job_worker_loop(self):
+        """Persistent daemon worker: run queued scan jobs one at a time."""
+        while True:
+            job = self._job_queue.get()
+            if job is None:
+                # Sentinel from shutdown() -- exit the loop.
+                break
+
+            with job.lock:
+                if job.state == JobState.CANCELLED:
+                    # Cancelled before it ran; keep the registry record, skip it.
+                    skip = True
+                else:
+                    skip = False
+            if skip:
+                self.job_state_changed.emit(job.job_id, JobState.CANCELLED.value)
+                continue
+
+            # Clear the shared stop event AFTER popping and BEFORE marking the
+            # job RUNNING, so a Stop pressed between jobs cannot leak into the
+            # next one (see docs/API_SERVER_DESIGN.md sec 7.2).
+            self.stop_event.clear()
+            with job.lock:
+                job.state = JobState.RUNNING
+                job.started_at = time.time()
+                job.notify_state_change()
+            self._active_job = job
+            self.job_state_changed.emit(job.job_id, JobState.RUNNING.value)
+            self._journal.record("job", f"{job.job_id}: started")
+            self._publish_api_event('job_started', {
+                'job_id': job.job_id,
+                'source': job.source,
+            })
+
+            try:
+                self.run_simulation(job.launch_state, job)
+            except Exception as exc:
+                # Unexpected failure escaping run_simulation: mark FAILED and
+                # surface it -- never swallow silently.
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = str(exc)
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+                    job.notify_state_change()
+                self.message_printed.emit(f"Scan job {job.job_id} failed: {exc}")
+            finally:
+                self._active_job = None
+
+            with job.lock:
+                final_state = job.state.value
+                final_error = job.error
+                final_result = job.result
+            self.job_state_changed.emit(job.job_id, final_state)
+            self._journal.record(
+                "job",
+                self._format_job_finished_summary(
+                    job.job_id, final_state, final_error, final_result
+                ),
+            )
+            # Covers both the normal-return and except (FAILED) paths, since
+            # both funnel through the terminal state read above.
+            self._publish_api_event('job_finished', {
+                'job_id': job.job_id,
+                'state': final_state,
+                'error': final_error,
+            })
+
+    @Slot(str, str)
+    def _on_job_state_changed(self, job_id, state):
+        """GUI-thread reaction to job-queue transitions.
+
+        Resets the progress display when a queued job actually starts, and
+        keeps the Run button disabled while any job is queued or running.
+        """
+        if state == JobState.RUNNING.value:
+            # Reset the progress display for the starting job (mirrors the prep
+            # done in run_simulation_thread at submission time, so a job that
+            # waited in the queue still gets a clean start).
+            try:
+                self.window.simulation_dock.progress_bar.setValue(0)
+                self.window.simulation_dock.progress_label.setText("Initializing...")
+                self.window.simulation_dock.remaining_time_label.setText(
+                    "Estimated Remaining Time: calculating..."
+                )
+            except Exception:
+                pass
+
+        # Disable Run while work is pending/active; re-enable once idle.
+        busy = self._has_pending_jobs()
+        dock = getattr(self.window, 'simulation_dock', None)
+        if dock is not None and hasattr(dock, 'run_button'):
+            dock.run_button.setEnabled(not busy)
+
+    def _has_pending_jobs(self):
+        """True if any job is currently QUEUED or RUNNING."""
+        for job in self._job_registry.all_jobs():
+            with job.lock:
+                if job.state in (JobState.QUEUED, JobState.RUNNING):
+                    return True
+        return False
+
+    def _publish_api_event(self, event: str, data: dict):
+        """Publish an SSE event to API clients, if a server is attached.
+
+        No-op when no API server is running. Thread-safe -- the ``SseBroker``
+        does its own locking -- so this may be called from the scan worker
+        thread beside the corresponding Qt signal emits (see
+        docs/API_SERVER_DESIGN.md sec 9). Publish failures are surfaced once to
+        the message center; identical consecutive errors are suppressed so a
+        persistent fault cannot spam the log.
+        """
+        server = getattr(self, 'api_server', None)
+        if server is None:
+            return
+        try:
+            server.publish(event, data)
+            self._api_publish_last_error = None
+        except Exception as exc:
+            msg = f"API: failed to publish '{event}' event: {exc}"
+            if msg != getattr(self, '_api_publish_last_error', None):
+                self._api_publish_last_error = msg
+                self.message_printed.emit(msg)
+
+
+    def _format_job_finished_summary(self, job_id, state, error, result):
+        """Build the one-line journal summary for a finished job.
+
+        DONE jobs get a data summary (variable, range, point count, peak);
+        failed/stopped/cancelled jobs get the terminal state plus any reason.
+        Best-effort and defensive -- a summary failure must never break the
+        worker loop, so any unexpected shape degrades to the bare state line.
+        """
+        try:
+            if state == JobState.DONE.value and result is not None:
+                return self._format_scan_result_summary(job_id, result)
+            if error:
+                return f"{job_id}: {state} ({error})"
+            return f"{job_id}: {state}"
+        except Exception:
+            return f"{job_id}: {state}"
+
+    @staticmethod
+    def _format_scan_result_summary(job_id, result):
+        """One-line human summary of a finished ScanResult (1D or 2D)."""
+        var = getattr(result, "variable_1", None) or "scan"
+        parts = [f"{job_id}: {var} scan"]
+        values = list(getattr(result, "scan_values_1", None) or [])
+        if values:
+            parts[0] += f" {values[0]:.3f} to {values[-1]:.3f}"
+
+        # Peak location: 1D uses counts[], 2D uses counts_grid[row=y][col=x].
+        counts = getattr(result, "counts", None)
+        grid = getattr(result, "counts_grid", None)
+        npts = 0
+        peak = None  # (counts, description)
+        if counts is not None:
+            npts = len(counts)
+            for i, c in enumerate(counts):
+                if c is None:
+                    continue
+                if peak is None or c > peak[0]:
+                    label = values[i] if i < len(values) else i
+                    peak = (c, f"{var}={label:.3f}" if isinstance(label, float)
+                            else f"{var}={label}")
+        elif grid is not None:
+            values2 = list(getattr(result, "scan_values_2", None) or [])
+            var2 = getattr(result, "variable_2", None) or "scan2"
+            for iy, row in enumerate(grid):
+                for ix, c in enumerate(row or []):
+                    npts += 1 if c is not None else 0
+                    if c is None:
+                        continue
+                    if peak is None or c > peak[0]:
+                        xl = values[ix] if ix < len(values) else ix
+                        yl = values2[iy] if iy < len(values2) else iy
+                        peak = (c, f"{var}={xl}, {var2}={yl}")
+
+        parts.append(f"{npts} pts")
+        if peak is not None:
+            parts.append(f"max {int(peak[0])} counts at {peak[1]}")
+        return ", ".join(parts)
+
     def _preflight_scan_validation(self) -> str:
-        """Check scan commands before running simulation.
-        
+        """Check scan commands before running simulation (GUI wrapper).
+
+        Reads the scan-command widgets and delegates to the pure
+        ``_validate_scan_commands_text`` so the GUI Run path and the API path
+        share one validation implementation. GUI behavior is unchanged.
+
         Returns:
             str: Error/warning message if issues found, empty string if OK
         """
-        from gui.docks.unified_simulation_dock import (
-            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
-        )
-        
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        
+        return self._validate_scan_commands_text(cmd1, cmd2)
+
+    def _validate_scan_commands_text(self, cmd1: str, cmd2: str) -> str:
+        """Pure scan-command validation over two command strings.
+
+        Parameterized on strings only -- reads no widgets -- so both the GUI
+        Run button and the remote API can call it. Returns an empty string when
+        the commands are acceptable, or a newline-joined description of the
+        blocking issues (serious warnings / unknown variables / conflicts).
+        """
+        cmd1 = (cmd1 or "").strip()
+        cmd2 = (cmd2 or "").strip()
+
         issues = []
-        
+
         # Validate command 1
         var1, warning1 = self._validate_single_scan_command(cmd1)
         if warning1 and "⚠" in warning1:  # Only block on serious warnings
             issues.append(f"Command 1: {warning1}")
         elif warning1 and "Unknown" in warning1:
             issues.append(f"Command 1: {warning1}")
-        
+
         # Validate command 2
         var2, warning2 = self._validate_single_scan_command(cmd2)
         if warning2 and "⚠" in warning2:
             issues.append(f"Command 2: {warning2}")
         elif warning2 and "Unknown" in warning2:
             issues.append(f"Command 2: {warning2}")
-        
+
         # Check for conflicts between commands
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
                 issues.append(conflict)
-        
+
         return "\n".join(issues)
+
+    # ------------------------------------------------------------- remote API
+    #
+    # Parameter writes coming from the remote API (docs/API_SERVER_DESIGN.md
+    # sec 8). The field map mirrors get_gui_values() exactly; apply_parameters()
+    # parses/validates every field first, then applies valid ones in dependency
+    # order and fires each after-handler once. All of this runs on the GUI
+    # thread (the backend invokes it via ApiBridge.call_on_gui).
+
+    @staticmethod
+    def _api_fmt(v) -> str:
+        """Format a numeric value for a QLineEdit (compact, round-trippable)."""
+        return "%.10g" % float(v)
+
+    def _api_field_map(self):
+        """Return ``{field: (parse_fn, setter_fn, after_handler_or_None)}``.
+
+        Covers every key ``get_gui_values()`` returns. ``parse_fn(value)``
+        validates/coerces the incoming JSON value (raising ``ValueError`` with a
+        human message on bad input), ``setter_fn(parsed)`` writes the widget,
+        and ``after_handler`` (zero-arg or ``None``) recomputes derived state --
+        the same handler the user's Enter key would trigger.
+        """
+        w = self.window
+        idock = w.instrument_dock
+        sdock = w.scattering_dock
+        sam = w.sample_dock
+        sim = w.simulation_dock
+
+        # --- parse helpers ---
+        def p_float(v):
+            return float(v)
+
+        def p_int_pos(v):
+            n = int(float(v))
+            if n <= 0:
+                raise ValueError("must be a positive integer")
+            return n
+
+        def p_str(v):
+            if not isinstance(v, str):
+                raise ValueError("must be a string")
+            return v
+
+        def p_bool(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, int):
+                return bool(v)
+            raise ValueError("must be a boolean")
+
+        def p_dict(v):
+            if not isinstance(v, dict):
+                raise ValueError("must be an object/dict")
+            return v
+
+        def p_choice(valid, label):
+            valid = set(valid)
+
+            def _parse(v):
+                if v not in valid:
+                    raise ValueError(
+                        "%s must be one of %s" % (label, sorted(valid))
+                    )
+                return v
+            return _parse
+
+        mono_ids = [c.id for c in self.descriptor.mono_crystals]
+        ana_ids = [c.id for c in self.descriptor.ana_crystals]
+        source_ids = [s.id for s in self.descriptor.source_types]
+
+        # --- line-edit setter factory (numeric) ---
+        def set_text(edit):
+            return lambda v: edit.setText(self._api_fmt(v))
+
+        # --- bending after-handler factory (unlock ideal + refresh labels) ---
+        def bend_after(key):
+            def _after():
+                self.unlock_ideal_bending(key)
+                self.update_ideal_bending_buttons()
+            return _after
+
+        return {
+            # angles
+            'mtt': (p_float, set_text(idock.mtt_edit), self.on_mtt_changed),
+            'stt': (p_float, set_text(idock.stt_edit), self.on_stt_changed),
+            'omega': (p_float, set_text(idock.omega_edit), self.on_omega_changed),
+            'chi': (p_float, set_text(idock.chi_edit), self.on_chi_changed),
+            'att': (p_float, set_text(idock.att_edit), self.on_att_changed),
+            # energies
+            'Ki': (p_float, set_text(idock.Ki_edit), self.on_Ki_changed),
+            'Ei': (p_float, set_text(idock.Ei_edit), self.on_Ei_changed),
+            'Kf': (p_float, set_text(idock.Kf_edit), self.on_Kf_changed),
+            'Ef': (p_float, set_text(idock.Ef_edit), self.on_Ef_changed),
+            # energy mode
+            'K_fixed': (
+                p_choice(["Ki Fixed", "Kf Fixed"], "K_fixed"),
+                sdock.K_fixed_combo.setCurrentText,
+                self.on_K_fixed_changed,
+            ),
+            'fixed_E': (p_float, set_text(sdock.fixed_E_edit), self.on_fixed_E_changed),
+            # Q
+            'qx': (p_float, set_text(sdock.qx_edit), self.on_Q_changed),
+            'qy': (p_float, set_text(sdock.qy_edit), self.on_Q_changed),
+            'qz': (p_float, set_text(sdock.qz_edit), self.on_Q_changed),
+            # HKL
+            'H': (p_float, set_text(sdock.H_edit), self.on_HKL_changed),
+            'K': (p_float, set_text(sdock.K_edit), self.on_HKL_changed),
+            'L': (p_float, set_text(sdock.L_edit), self.on_HKL_changed),
+            'deltaE': (p_float, set_text(sdock.deltaE_edit), self.on_deltaE_changed),
+            # lattice
+            'lattice_a': (p_float, set_text(sam.lattice_a_edit), self.on_lattice_changed),
+            'lattice_b': (p_float, set_text(sam.lattice_b_edit), self.on_lattice_changed),
+            'lattice_c': (p_float, set_text(sam.lattice_c_edit), self.on_lattice_changed),
+            'lattice_alpha': (p_float, set_text(sam.lattice_alpha_edit), self.on_lattice_changed),
+            'lattice_beta': (p_float, set_text(sam.lattice_beta_edit), self.on_lattice_changed),
+            'lattice_gamma': (p_float, set_text(sam.lattice_gamma_edit), self.on_lattice_changed),
+            # alignment offsets
+            'kappa': (p_float, set_text(sam.kappa_edit), self.on_alignment_offset_changed),
+            'psi': (p_float, set_text(sam.psi_edit), self.on_alignment_offset_changed),
+            # crystals
+            'monocris': (
+                p_choice(mono_ids, "monocris"),
+                idock.set_mono_id,
+                self.update_monocris_info,
+            ),
+            'anacris': (
+                p_choice(ana_ids, "anacris"),
+                idock.set_ana_id,
+                self.update_anacris_info,
+            ),
+            # bending radii
+            'rhm': (p_float, set_text(idock.rhm_edit), bend_after('rhm')),
+            'rvm': (p_float, set_text(idock.rvm_edit), bend_after('rvm')),
+            'rha': (p_float, set_text(idock.rha_edit), bend_after('rha')),
+            # source
+            'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
+            'source_dE': (p_float, set_text(idock.source_dE_edit), None),
+            # descriptor-driven containers
+            'modules': (p_dict, idock.set_module_values, self.update_ideal_bending_buttons),
+            'collimation': (p_dict, idock.set_collimation_values, None),
+            'slits_mm': (p_dict, idock.set_slit_values_mm, None),
+            # simulation control
+            'number_neutrons': (p_int_pos, sim.set_number_neutrons, None),
+            'scan_command1': (p_str, sim.scan_command_1_edit.setText, self.validate_scan_commands),
+            'scan_command2': (p_str, sim.scan_command_2_edit.setText, self.validate_scan_commands),
+            'diagnostic_mode': (p_bool, sim.diagnostic_mode_check.setChecked, None),
+        }
+
+    # Dependency order for applying API parameter writes (sec 8 step b): lattice
+    # first, then energy mode, then Q/HKL, then angles. Fields not listed are
+    # applied afterward in patch order.
+    _API_APPLY_ORDER = (
+        'lattice_a', 'lattice_b', 'lattice_c',
+        'lattice_alpha', 'lattice_beta', 'lattice_gamma',
+        'K_fixed', 'fixed_E', 'Ki', 'Ei', 'Kf', 'Ef',
+        'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
+        'mtt', 'stt', 'omega', 'chi', 'att',
+    )
+
+    def apply_parameters(self, patch: dict):
+        """Apply a parameter patch to the GUI widgets. GUI-thread only.
+
+        Steps (docs/API_SERVER_DESIGN.md sec 8):
+          a) parse/validate every field first, collecting per-field errors;
+          b) apply valid fields in dependency order (lattice -> energy mode ->
+             Q/HKL -> angles -> the rest in patch order);
+          c) fire each field's after-handler once (deduped, order preserved);
+          d) log a summary to the message center;
+          e) return (applied, errors).
+        """
+        field_map = self._api_field_map()
+        applied = {}
+        errors = {}
+
+        if not isinstance(patch, dict):
+            return applied, {"_": "patch must be a JSON object"}
+
+        # (a) Parse/validate everything first; never partially apply a field.
+        parsed = {}
+        for name, value in patch.items():
+            spec = field_map.get(name)
+            if spec is None:
+                errors[name] = "unknown field"
+                continue
+            parse_fn = spec[0]
+            try:
+                parsed[name] = parse_fn(value)
+            except (ValueError, TypeError) as exc:
+                errors[name] = "invalid value: %s" % exc
+
+        # (b) Apply valid fields in dependency order, then leftover patch order.
+        ordered = [n for n in self._API_APPLY_ORDER if n in parsed]
+        ordered += [n for n in patch.keys() if n in parsed and n not in ordered]
+
+        after_handlers = []  # deduped-by-identity, order preserved
+        for name in ordered:
+            _parse_fn, setter_fn, after = field_map[name]
+            value = parsed[name]
+            try:
+                setter_fn(value)
+            except Exception as exc:  # setter failure: surface, do not swallow
+                errors[name] = "could not apply: %s" % exc
+                continue
+            applied[name] = value
+            if after is not None and after not in after_handlers:
+                after_handlers.append(after)
+
+        # (c) Fire each after-handler once, in dependency order.
+        for handler in after_handlers:
+            try:
+                handler()
+            except Exception as exc:
+                self.print_to_message_center(
+                    f"API: after-update handler {getattr(handler, '__name__', handler)} "
+                    f"failed: {exc}"
+                )
+
+        # (d) Summary to the message center.
+        if applied:
+            parts = []
+            for k, v in applied.items():
+                if isinstance(v, (dict, set)):
+                    parts.append(k)
+                else:
+                    parts.append(f"{k}={v}")
+            self.print_to_message_center("API: set " + ", ".join(parts))
+            self._publish_api_event('parameters_changed', {
+                'fields': list(applied),
+                'source': 'api',
+            })
+            self._journal.record(
+                "parameter", "api: set " + ", ".join(str(k) for k in applied)
+            )
+
+        # (e) Report back for the HTTP response.
+        return applied, errors
+
+    def _count_scan_points(self, scan_command1: str, scan_command2: str) -> int:
+        """Number of points a scan will run, mirroring run_simulation's logic.
+
+        Blank/single command -> 1; a single command -> len(values); both
+        commands -> product. Used for API budget enforcement.
+        """
+        c1 = (scan_command1 or "").strip()
+        c2 = (scan_command2 or "").strip()
+
+        def npts(cmd):
+            _, values = parse_scan_steps(cmd)
+            return len(values)
+
+        if not c1 and not c2:
+            return 1
+        if c1 and not c2:
+            return npts(c1)
+        if c2 and not c1:
+            return npts(c2)
+        return npts(c1) * npts(c2)
+
+    # Scan-variable -> scan-point index, mirroring run_simulation. Kept as a
+    # class attribute so the validation expansion and the run share one map.
+    _SCAN_VARIABLE_TO_INDEX = {
+        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
+        'H': 0, 'K': 1, 'L': 2,
+        'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
+        'omega': 10, '2theta': 1,
+        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
+        'chi': 8, 'kappa': 9, 'psi': 10,
+    }
+
+    def _build_scan_point_template(self, scan_mode, vals):
+        """Build the 11-element scan-point template (mirrors run_simulation)."""
+        template = [0] * 11
+        if scan_mode == "momentum":
+            template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
+        elif scan_mode == "rlu":
+            template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
+        elif scan_mode == "angle":
+            template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
+        elif scan_mode == "orientation":
+            template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
+        template[8] = 0
+        template[9] = vals['kappa']
+        template[10] = vals['psi']
+        return template
+
+    def validate_scan_launch_state(self, launch_state):
+        """Expand a frozen launch state's scan and check each point's feasibility.
+
+        Mirrors ``run_simulation``'s point expansion (template + variable index,
+        per-command ``parse_scan_steps``, relative offsets, the single-command
+        swap) WITHOUT touching the GUI, then evaluates each concrete point with
+        the instrument's ``check_point_feasibility`` (the same angle math the run
+        uses). API-side only -- the GUI Run path never calls this.
+
+        Returns ``{"points", "per_command", "infeasible"}`` where ``per_command``
+        is a list of ``{"variable", "count", "values"}`` and ``infeasible`` is a
+        list of ``{"index", "values", "reason"}`` in run order (the linear index
+        matches ``run_simulation``'s ``scan_parameter_input`` order, so the
+        skip-filter can drop exactly those points).
+        """
+        vals = launch_state['vals']
+        scan_config = launch_state['scan_config']
+        cmd1 = (vals.get('scan_command1') or "").strip()
+        cmd2 = (vals.get('scan_command2') or "").strip()
+        relative_mode_1 = launch_state.get('relative_mode_1', False)
+        relative_mode_2 = launch_state.get('relative_mode_2', False)
+
+        result = {"points": 0, "per_command": [], "infeasible": []}
+
+        # Single-command swap matches run_simulation (a lone command 2 becomes 1).
+        if cmd2 and not cmd1:
+            cmd1, cmd2 = cmd2, ""
+            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+
+        scan_mode = self._determine_scan_mode(cmd1, cmd2)
+        template = self._build_scan_point_template(scan_mode, vals)
+        vi = self._SCAN_VARIABLE_TO_INDEX
+
+        # A plugin may not implement feasibility (older instruments); degrade to
+        # "assume feasible" rather than blocking submission.
+        feas_fn = getattr(self.instrument, "check_point_feasibility", None)
+
+        def _feasible(scan_point):
+            if not callable(feas_fn):
+                return True, None
+            try:
+                return feas_fn(scan_config, scan_mode, scan_point, vals)
+            except Exception as exc:
+                # A solver blow-up is itself an infeasible point, surfaced.
+                return False, f"angle solve error: {exc}"
+
+        def _expand(cmd, relative):
+            var, values = parse_scan_steps(cmd)
+            var = self.normalize_scan_variable(var)
+            if relative:
+                base = self._get_current_value_for_variable(var, vals, template)
+                values = values + base
+            return var, [float(v) for v in values]
+
+        try:
+            if cmd1 and not cmd2:
+                var1, values1 = _expand(cmd1, relative_mode_1)
+                result["per_command"].append(
+                    {"variable": var1, "count": len(values1), "values": values1}
+                )
+                for idx, value1 in enumerate(values1):
+                    scan_point = template[:]
+                    scan_point[vi[var1]] = value1
+                    feasible, reason = _feasible(scan_point)
+                    if not feasible:
+                        result["infeasible"].append({
+                            "index": idx,
+                            "values": {var1: value1},
+                            "reason": reason,
+                        })
+                result["points"] = len(values1)
+            elif cmd1 and cmd2:
+                var1, values1 = _expand(cmd1, relative_mode_1)
+                var2, values2 = _expand(cmd2, relative_mode_2)
+                result["per_command"].append(
+                    {"variable": var1, "count": len(values1), "values": values1}
+                )
+                result["per_command"].append(
+                    {"variable": var2, "count": len(values2), "values": values2}
+                )
+                linear = 0
+                for value2 in values2:
+                    for value1 in values1:
+                        scan_point = template[:]
+                        scan_point[vi[var1]] = value1
+                        scan_point[vi[var2]] = value2
+                        feasible, reason = _feasible(scan_point)
+                        if not feasible:
+                            result["infeasible"].append({
+                                "index": linear,
+                                "values": {var1: value1, var2: value2},
+                                "reason": reason,
+                            })
+                        linear += 1
+                result["points"] = len(values1) * len(values2)
+            else:
+                # Single point at current settings.
+                feasible, reason = _feasible(template[:])
+                if not feasible:
+                    result["infeasible"].append({
+                        "index": 0, "values": {}, "reason": reason
+                    })
+                result["points"] = 1
+        except Exception as exc:
+            # Unparseable command (e.g. force-submitted): cannot expand, so report
+            # no infeasible points and a best-effort count. run_simulation will
+            # surface any downstream failure normally.
+            self.print_to_message_center(f"Scan validation expansion failed: {exc}")
+            try:
+                result["points"] = self._count_scan_points(cmd1, cmd2)
+            except Exception:
+                result["points"] = 1
+            result["per_command"] = []
+            result["infeasible"] = []
+
+        return result
+
+    def build_api_schema(self):
+        """Return a machine-readable self-description of the API surface.
+
+        Generated at request time from live data: the field set comes from the
+        live ``_api_field_map`` (no hand-maintained duplicate), allowed values
+        from the descriptor (crystals/source) and the static choice maps
+        ``apply_parameters`` enforces. GUI-thread only (reads the field map).
+        """
+        # Live field names (order preserved) drive the schema so it can never
+        # drift from what apply_parameters actually accepts.
+        field_names = list(self._api_field_map().keys())
+
+        # Static type/units metadata (the only hand-kept part); every live field
+        # gets an entry, unknowns default to number/None.
+        meta = {
+            'mtt': ('number', 'degrees'), 'stt': ('number', 'degrees'),
+            'omega': ('number', 'degrees'), 'chi': ('number', 'degrees'),
+            'att': ('number', 'degrees'),
+            'Ki': ('number', 'angstrom^-1'), 'Ei': ('number', 'meV'),
+            'Kf': ('number', 'angstrom^-1'), 'Ef': ('number', 'meV'),
+            'K_fixed': ('string', None), 'fixed_E': ('number', 'meV'),
+            'qx': ('number', 'angstrom^-1'), 'qy': ('number', 'angstrom^-1'),
+            'qz': ('number', 'angstrom^-1'),
+            'H': ('number', 'r.l.u.'), 'K': ('number', 'r.l.u.'),
+            'L': ('number', 'r.l.u.'), 'deltaE': ('number', 'meV'),
+            'lattice_a': ('number', 'angstrom'), 'lattice_b': ('number', 'angstrom'),
+            'lattice_c': ('number', 'angstrom'),
+            'lattice_alpha': ('number', 'degrees'),
+            'lattice_beta': ('number', 'degrees'),
+            'lattice_gamma': ('number', 'degrees'),
+            'kappa': ('number', 'degrees'), 'psi': ('number', 'degrees'),
+            'monocris': ('string', None), 'anacris': ('string', None),
+            'rhm': ('number', None), 'rvm': ('number', None), 'rha': ('number', None),
+            'source_type': ('string', None), 'source_dE': ('number', 'meV'),
+            'modules': ('object', None), 'collimation': ('object', None),
+            'slits_mm': ('object', 'mm'),
+            'number_neutrons': ('integer', 'count'),
+            'scan_command1': ('string', None), 'scan_command2': ('string', None),
+            'diagnostic_mode': ('boolean', None),
+        }
+
+        # Allowed values pulled live from the descriptor / static choice maps.
+        allowed = {
+            'K_fixed': ["Ki Fixed", "Kf Fixed"],
+            'monocris': [c.id for c in self.descriptor.mono_crystals],
+            'anacris': [c.id for c in self.descriptor.ana_crystals],
+            'source_type': [s.id for s in self.descriptor.source_types],
+        }
+
+        fields = []
+        for name in field_names:
+            ftype, units = meta.get(name, ('number', None))
+            entry = {"name": name, "type": ftype}
+            if units is not None:
+                entry["units"] = units
+            if name in allowed:
+                entry["allowed"] = allowed[name]
+            fields.append(entry)
+
+        limits = getattr(self, "_api_limits", None)
+
+        return {
+            "instrument": self.descriptor.id,
+            "fields": fields,
+            "scan_variables": [
+                "H", "K", "L", "qx", "qy", "qz", "deltaE",
+                "A1", "A2", "A3", "A4", "omega", "2theta",
+                "chi", "kappa", "psi", "rhm", "rvm", "rha", "rva",
+            ],
+            "scan_command_grammar": (
+                "VARIABLE start stop STEP. The third number (the last token) is "
+                "the STEP SIZE, not the number of points. "
+                "'H 1.99 2.01 0.01' produces 3 points (1.99, 2.00, 2.01). A step "
+                "larger than the range is a validation error. Two non-empty "
+                "commands make a 2D scan (point counts multiply); one command is "
+                "1D; none is a single point at the current settings."
+            ),
+            "limits": limits,
+            "endpoints": [
+                {"method": "GET", "path": "/health", "description": "Liveness probe (no auth)."},
+                {"method": "GET", "path": "/state", "description": "Full instrument state, parameters, queue, budget."},
+                {"method": "GET", "path": "/parameters", "description": "Current parameter dict."},
+                {"method": "PATCH", "path": "/parameters", "description": "Partial parameter write."},
+                {"method": "POST", "path": "/scan", "description": "Validate and queue a scan job."},
+                {"method": "POST", "path": "/validate", "description": "Run scan validation only; never queues."},
+                {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll)."},
+                {"method": "GET", "path": "/scan/{id}/data", "description": "Job status plus full scan arrays."},
+                {"method": "POST", "path": "/scan/{id}/stop", "description": "Stop or cancel one job."},
+                {"method": "POST", "path": "/stop", "description": "Stop the running job (optionally clear the queue)."},
+                {"method": "GET", "path": "/jobs", "description": "Recent job snapshots."},
+                {"method": "GET", "path": "/schema", "description": "This machine-readable API self-description."},
+                {"method": "GET", "path": "/events", "description": "Server-Sent Events live stream."},
+            ],
+            "examples": [
+                "align-on-bragg-peak",
+                "elastic-h-scan",
+                "constant-q-energy-scan",
+                "quick-look-vs-production",
+            ],
+        }
 
     def on_sample_changed(self, label):
         """Handle sample selection changes from the GUI."""
@@ -2938,9 +4645,41 @@ class TAVIController(QObject):
         )
     
     def stop_simulation(self):
-        """Stop the running simulation."""
+        """Stop the running simulation.
+
+        Sets the shared stop event; the worker's run_simulation completion path
+        marks the active job STOPPED once it drains.
+        """
         self.stop_event.set()
         self.print_to_message_center("Stop requested...")
+
+    def shutdown(self):
+        """Stop work and tear down the job worker. Safe to call repeatedly."""
+        if self._shutdown_called:
+            return
+        self._shutdown_called = True
+
+        # Stop accepting remote requests first (idempotent; closes SSE clients).
+        server = getattr(self, "api_server", None)
+        if server is not None:
+            server.stop()
+
+        # Signal any running scan to drain out.
+        self.stop_event.set()
+
+        # Cancel every still-queued job so the worker skips them on drain.
+        for job in self._job_registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    job.state = JobState.CANCELLED
+                    if job.finished_at is None:
+                        job.finished_at = time.time()
+                    job.notify_state_change()
+
+        # Wake the worker with the exit sentinel and give it a moment to stop.
+        self._job_queue.put(None)
+        if self._job_worker is not None:
+            self._job_worker.join(timeout=2)
 
     def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, is_2d_scan,
                      variable_name1, variable_name2, vals, data_folder,
@@ -2998,8 +4737,14 @@ class TAVIController(QObject):
                         break
                     continue
     
-    def run_simulation(self, launch_state):
-        """Run the full simulation."""
+    def run_simulation(self, launch_state, job=None):
+        """Run the full simulation.
+
+        When ``job`` is provided (job-queue path), scan geometry and per-point
+        counts are recorded into ``job.result`` under ``job.lock`` for readers
+        (API snapshots) and the final job state is set here. When ``job`` is
+        None, behavior is unchanged from the pre-queue code path.
+        """
         self.message_printed.emit("Starting simulation...")
 
         vals = launch_state['vals']
@@ -3124,9 +4869,42 @@ class TAVIController(QObject):
                 valid_mask_1d[idx] = not error_flags
             
             # Initialize display dock for 1D scan
-            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d, 
+            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d,
                                        variable_name1, "", [], [])
-        
+
+            if job is not None:
+                # Pre-size the result so readers see per-index None until measured.
+                n_points = len(array_values1)
+                # Build the plain lists once so the ScanResult and the SSE
+                # event share the same objects (no needless re-copy).
+                scan_values_1_list = [float(v) for v in array_values1]
+                valid_mask_1_list = [bool(v) for v in valid_mask_1d]
+                with job.lock:
+                    job.result = ScanResult(
+                        mode='1D',
+                        variable_1=variable_name1,
+                        variable_2=None,
+                        scan_values_1=scan_values_1_list,
+                        scan_values_2=None,
+                        valid_mask_1=valid_mask_1_list,
+                        valid_mask_2d=None,
+                        counts=[None] * n_points,
+                        counts_grid=None,
+                        output_folder=data_folder,
+                        metadata=dict(vals),
+                    )
+                    job.progress_total = len(scan_parameter_input)
+                self._publish_api_event('scan_initialized', {
+                    'job_id': job.job_id,
+                    'mode': '1D',
+                    'variable_1': variable_name1,
+                    'variable_2': None,
+                    'scan_values_1': scan_values_1_list,
+                    'scan_values_2': None,
+                    'valid_mask_1': valid_mask_1_list,
+                    'valid_mask_2d': None,
+                })
+
         # Double scan command
         if scan_command2 and scan_command1:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
@@ -3177,9 +4955,93 @@ class TAVIController(QObject):
             # Initialize display dock for 2D scan
             self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
                                        variable_name2, list(array_values2), valid_mask_2d)
-        
+
+            if job is not None:
+                n_cols = len(array_values1)
+                n_rows = len(array_values2)
+                scan_values_1_list = [float(v) for v in array_values1]
+                scan_values_2_list = [float(v) for v in array_values2]
+                valid_mask_2d_list = [[bool(v) for v in row] for row in valid_mask_2d]
+                with job.lock:
+                    job.result = ScanResult(
+                        mode='2D',
+                        variable_1=variable_name1,
+                        variable_2=variable_name2,
+                        scan_values_1=scan_values_1_list,
+                        scan_values_2=scan_values_2_list,
+                        valid_mask_1=[],
+                        valid_mask_2d=valid_mask_2d_list,
+                        counts=None,
+                        counts_grid=[[None] * n_cols for _ in range(n_rows)],
+                        output_folder=data_folder,
+                        metadata=dict(vals),
+                    )
+                    job.progress_total = len(scan_parameter_input)
+                self._publish_api_event('scan_initialized', {
+                    'job_id': job.job_id,
+                    'mode': '2D',
+                    'variable_1': variable_name1,
+                    'variable_2': variable_name2,
+                    'scan_values_1': scan_values_1_list,
+                    'scan_values_2': scan_values_2_list,
+                    'valid_mask_1': [],
+                    'valid_mask_2d': valid_mask_2d_list,
+                })
+
         # Track if this is a 2D scan
         is_2d_scan = scan_command2 and scan_command1
+
+        if job is not None and job.result is None:
+            # Neither the 1D nor 2D branch ran -> single-point scan.
+            with job.lock:
+                job.result = ScanResult(
+                    mode='single',
+                    variable_1="",
+                    variable_2=None,
+                    scan_values_1=[],
+                    scan_values_2=None,
+                    valid_mask_1=[],
+                    valid_mask_2d=None,
+                    counts=[None],
+                    counts_grid=None,
+                    output_folder=data_folder,
+                    metadata=dict(vals),
+                )
+                job.progress_total = len(scan_parameter_input)
+            self._publish_api_event('scan_initialized', {
+                'job_id': job.job_id,
+                'mode': 'single',
+                'variable_1': "",
+                'variable_2': None,
+                'scan_values_1': [],
+                'scan_values_2': None,
+                'valid_mask_1': [],
+                'valid_mask_2d': None,
+            })
+
+        # allow_partial (API only): the submission pre-determined some points
+        # geometrically infeasible and asked to skip them. Drop those points so
+        # the prep thread never queues a snapshot for them; the result arrays
+        # keep their None placeholders and job.result.skipped_points documents
+        # exactly what was omitted (never silent gaps). The linear index matches
+        # this expansion's order (see validate_scan_launch_state). GUI jobs never
+        # set skipped_indices, so this is a no-op for them.
+        skipped_indices = set(launch_state.get('skipped_indices') or [])
+        skipped_points = launch_state.get('skipped_points') or []
+        if skipped_indices and scan_parameter_input:
+            scan_parameter_input = [
+                item for k, item in enumerate(scan_parameter_input)
+                if k not in skipped_indices
+            ]
+            self.message_printed.emit(
+                f"Skipping {len(skipped_indices)} infeasible point(s) "
+                f"(allow_partial); running {len(scan_parameter_input)}."
+            )
+        if job is not None and skipped_points:
+            with job.lock:
+                if job.result is not None:
+                    job.result.skipped_points = list(skipped_points)
+                job.progress_total = len(scan_parameter_input)
 
         if is_2d_scan:
             estimated_runtime_points = int(sum(sum(1 for value in row if value) for row in valid_mask_2d))
@@ -3431,8 +5293,23 @@ class TAVIController(QObject):
                     self.message_printed.emit(message)
                     if is_2d_scan:
                         self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id,
+                                'ix': idx_x,
+                                'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                            })
                     elif not is_single_point_scan and idx_1d >= 0:
                         self.scan_point_invalid_1d.emit(idx_1d)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id,
+                                'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                            })
 
                     if not is_2d_scan and not is_single_point_scan and idx_1d >= 0 and idx_1d < len(array_values1):
                         scan_x_values.append(array_values1[idx_1d])
@@ -3472,6 +5349,47 @@ class TAVIController(QObject):
                             scan_x_values.append(array_values1[idx_1d])
                         scan_counts.append(counts)
                     # For single-point scans, we don't update scan arrays (handled separately)
+
+                    # Record the measured count into the job result for readers.
+                    if job is not None and job.result is not None:
+                        with job.lock:
+                            res = job.result
+                            if is_2d_scan:
+                                if res.counts_grid is not None:
+                                    res.counts_grid[idx_y][idx_x] = float(counts)
+                            elif is_single_point_scan:
+                                if res.counts:
+                                    res.counts[0] = float(counts)
+                            elif idx_1d >= 0 and res.counts is not None and idx_1d < len(res.counts):
+                                res.counts[idx_1d] = float(counts)
+                            res.total_counts = float(total_counts)
+                            res.max_counts = float(max_counts)
+
+                        # Publish the per-point SSE event (outside the lock).
+                        if is_2d_scan:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id,
+                                'ix': idx_x,
+                                'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                                'counts': float(counts),
+                            })
+                        elif is_single_point_scan:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id,
+                                'index': 0,
+                                'value': None,
+                                'counts': float(counts),
+                            })
+                        elif idx_1d >= 0:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id,
+                                'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                                'counts': float(counts),
+                            })
                 
                 # Record scan time for this point
                 scan_elapsed = time.time() - scan_start_time
@@ -3484,6 +5402,18 @@ class TAVIController(QObject):
                 # Emit progress signals
                 self.progress_updated.emit(processed_points, total_scans)
                 self.counts_updated.emit(max_counts, total_counts)
+
+                # Mirror progress into the job (covers valid and invalid points,
+                # since processed_points increments for every drained point).
+                if job is not None:
+                    with job.lock:
+                        job.progress_done = processed_points
+                    self._publish_api_event('progress', {
+                        'job_id': job.job_id,
+                        'done': processed_points,
+                        'total': total_scans,
+                        'elapsed': time.time() - start_time,
+                    })
                 
                 # Calculate elapsed time and remaining time - ignore first scan (compilation overhead)
                 elapsed_time = time.time() - start_time
@@ -3696,7 +5626,24 @@ class TAVIController(QObject):
             if monitors_enabled and retained_diagnostic_data is not None and retained_diagnostic_data is not math.nan:
                 # Emit signal to display plots on main thread (matplotlib requires this)
                 self.diagnostic_plot_requested.emit(retained_diagnostic_data)
-        
+
+        # Finalize job bookkeeping: pick the terminal state from the same flags
+        # the display/output paths above already used. The worker loop emits the
+        # job_state_changed signal after this returns.
+        if job is not None:
+            if simulation_error_message is not None:
+                final_state = JobState.FAILED
+            elif self.stop_event.is_set():
+                final_state = JobState.STOPPED
+            else:
+                final_state = JobState.DONE
+            with job.lock:
+                job.state = final_state
+                job.error = simulation_error_message
+                job.finished_at = time.time()
+                self.last_scan_result = job.result
+                job.notify_state_change()
+
         return data_folder
 
 
@@ -3716,15 +5663,34 @@ def main():
         "--instrument", metavar="ID", default=None,
         help="Instrument id to load (e.g. 'puma'); skips the startup picker.",
     )
+    parser.add_argument(
+        "--api-port", metavar="N", type=int, default=None,
+        help="Enable the remote API server on port N (overrides config port).",
+    )
+    parser.add_argument(
+        "--no-api", action="store_true",
+        help="Disable the remote API server regardless of config.",
+    )
     args, qt_args = parser.parse_known_args()  # leftover args go to Qt
 
+    # Remote-API CLI overrides handed to the controller (see _start_api_server).
+    api_overrides = {}
+    if args.no_api:
+        api_overrides["disabled"] = True
+    if args.api_port is not None:
+        api_overrides["port"] = args.api_port
+
     import instruments.builtin  # noqa: F401  (explicit built-in registration)
-    from instruments.registry import available_instruments, get_instrument
+    from instruments.registry import (available_instruments, get_instrument,
+                                       load_last_instrument, save_last_instrument)
 
     infos = available_instruments()
+    valid_ids = {info.id for info in infos}
+
+    instrument_id = None
     if args.instrument is not None:
         instrument_id = args.instrument.lower()
-        if instrument_id not in {info.id for info in infos}:
+        if instrument_id not in valid_ids:
             print(
                 f"Unknown instrument '{args.instrument}'. Available: "
                 + ", ".join(info.id for info in infos),
@@ -3734,8 +5700,14 @@ def main():
 
     app = QApplication([sys.argv[0], *qt_args])
 
-    if args.instrument is None:
-        if len(infos) == 1:
+    # Precedence: --instrument flag > saved last_instrument (if still registered)
+    # > single-instrument shortcut > picker dialog. A stale/unknown saved id is
+    # ignored (load_last_instrument filters against valid_ids).
+    if instrument_id is None:
+        saved_id = load_last_instrument(valid_ids=valid_ids)
+        if saved_id is not None:
+            instrument_id = saved_id
+        elif len(infos) == 1:
             instrument_id = infos[0].id
         else:
             from gui.dialogs.instrument_picker_dialog import InstrumentPickerDialog
@@ -3744,18 +5716,57 @@ def main():
             if instrument_id is None:
                 sys.exit(0)
 
+    # Remember the resolved instrument so the next launch reopens it.
+    save_last_instrument(instrument_id)
+
     instrument = get_instrument(instrument_id)
 
     # Fail fast, with readable errors, if the registered descriptor is unrunnable.
     from instruments.validation import assert_valid_descriptor
     assert_valid_descriptor(instrument.descriptor(), runnable=True)
 
-    window = TAVIMainWindow(instrument.descriptor())
-    controller = TAVIController(window, instrument)
+    window = TAVIMainWindow(
+        instrument.descriptor(),
+        instrument_infos=infos,
+        current_instrument_id=instrument_id,
+        save_selection=save_last_instrument,
+    )
+    controller = TAVIController(window, instrument, api_overrides=api_overrides)
     # Store controller reference on window so closeEvent can access it
     window.controller = controller
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+
+    # If the user chose a different instrument via the Instrument menu, the window
+    # saved the new id and closed. Relaunch a detached process with that id.
+    restart_id = getattr(window, "_restart_instrument_id", None)
+    if restart_id is not None:
+        import subprocess
+
+        # Rebuild argv robustly (argv[0] may be the script path) and strip any
+        # existing --instrument pair so only the new id applies; keep everything
+        # else (--api-port, --no-api, leftover Qt args).
+        script_path = os.path.abspath(__file__)
+        filtered_args = []
+        skip_next = False
+        for arg in sys.argv[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg == "--instrument":
+                skip_next = True
+                continue
+            if arg.startswith("--instrument="):
+                continue
+            filtered_args.append(arg)
+        new_argv = [sys.executable, script_path, "--instrument", restart_id,
+                    *filtered_args]
+        # The old process must fully exit before the new one binds the API port;
+        # the new process's slow imports (Qt/McStasScript) make this safe in
+        # practice. close_fds detaches so the child outlives this process.
+        subprocess.Popen(new_argv, close_fds=True)
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
