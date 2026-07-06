@@ -317,6 +317,13 @@ class TAVIMainWindow(QMainWindow):
                 instrument_menu.addAction(action)
                 self._instrument_actions[info.id] = action
 
+        # ===== Utilities Menu =====
+        utilities_menu = menubar.addMenu("&Utilities")
+
+        resolution_action = QAction("&Resolution calculator…", self)
+        resolution_action.triggered.connect(self._open_resolution_dialog)
+        utilities_menu.addAction(resolution_action)
+
         # ===== Help Menu =====
         help_menu = menubar.addMenu("&Help")
 
@@ -362,6 +369,27 @@ class TAVIMainWindow(QMainWindow):
         self._restart_instrument_id = instrument_id
         self.close()
     
+    def _open_resolution_dialog(self):
+        """Open (or re-raise) the non-modal Resolution calculator utility.
+
+        Created lazily and kept as a single instance; each open prefills the
+        inputs from current GUI state and recomputes. Requires the controller,
+        which main() attaches after construction.
+        """
+        controller = getattr(self, "controller", None)
+        if controller is None:
+            QMessageBox.warning(self, "Resolution calculator",
+                                "Controller not ready yet.")
+            return
+        if getattr(self, "_resolution_dialog", None) is None:
+            from gui.dialogs.resolution_dialog import ResolutionDialog
+            self._resolution_dialog = ResolutionDialog(controller, parent=self)
+        dialog = self._resolution_dialog
+        dialog.refresh_from_state()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def _store_default_state(self):
         """Store the default window state for reset functionality."""
         self._default_state = self.saveState()
