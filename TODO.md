@@ -8,14 +8,22 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
 
 ## Closed-loop enablers (drive the ISAR/driver integration)
 
-- [ ] **Resolution ellipsoids** — `tavi/resolution.py` (Cooper–Nathans, numpy only),
-      plugin `resolution_config(state)` adapters, `GET /resolution`, GUI readout,
-      plot overlays. Prerequisite of the deterministic engine.
+- [x] **Resolution ellipsoids** — `tavi/resolution.py` (Cooper–Nathans **and Popovici**,
+      numpy only), plugin `resolution_config()` adapters (PUMA + IN8), `GET /resolution`,
+      Utilities → Resolution calculator dialog with projection ellipses. Prerequisite
+      of the deterministic engine.
       → CONTROL_FEATURES §5. Cross-check target: ISAR's `cn_energy_fwhm` must agree.
-- [ ] **Deterministic engine mode** — analytic S(Q,ω) ⊗ CN + seeded Poisson behind the
-      same API/queue/SSE; `engine` provenance on jobs; ONE ground-truth sample config
-      shared with the McStas component. Depends on resolution module.
+      Done: milestones 1–5 (resolution module, adapters, API, GUI dialog).
+- [x] **Deterministic engine mode** — analytic S(Q,ω) ⊗ CN/Popovici + seeded Poisson
+      behind the same API/queue/SSE; `engine`/`seed`/`noiseless` provenance on jobs;
+      ONE ground-truth sample config shared with the McStas component. Depends on
+      resolution module.
       → CONTROL_FEATURES §6, CLOSED_LOOP §6 (fidelity ladder tier 1).
+      Done: milestone 6 (`tavi/deterministic_engine.py`), milestone 7 (POST /scan
+      `engine`/`seed`/`noiseless` + `GET /schema` `engines` + `_launch_summary`
+      provenance + `_run_scan_deterministic` worker branch), milestone 8 (GUI engine
+      selector, API guide, this list). Deterministic result stamps `cn_valid` +
+      `invalidations`; brightness is a documented per-sample calibration.
 - [ ] **Virtual instrument clock** — per-axis velocities in the descriptor; per-job
       `experimental_time` = counting + axes-movement (angle-map metric); session total
       in /state and journal. Needed for honest driver benchmarking.

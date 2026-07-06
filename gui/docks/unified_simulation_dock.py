@@ -207,7 +207,26 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.total_time_estimate_label = QLabel("")
         self.total_time_estimate_label.setStyleSheet("color: #666666; font-size: 10px;")
         scan_layout.addWidget(self.total_time_estimate_label)
-        
+
+        # Execution engine selector (docs/CONTROL_FEATURES_DESIGN.md §6.4).
+        # McStas = full Monte-Carlo (default); Deterministic = fast analytic
+        # S(Q,w) x resolution + seeded Poisson. Read in the controller's
+        # _collect_simulation_launch_state as launch_state['engine'].
+        engine_row = QHBoxLayout()
+        engine_row.addWidget(QLabel("Engine:"))
+        self.engine_combo = QComboBox()
+        # userData carries the API engine id; the label is human-facing.
+        self.engine_combo.addItem("McStas (Monte Carlo)", "mcstas")
+        self.engine_combo.addItem("Deterministic (analytic)", "deterministic")
+        self.engine_combo.setToolTip(
+            "McStas: full Monte-Carlo simulation.\n"
+            "Deterministic: fast analytic S(Q,ω) ⊗ resolution with seeded "
+            "Poisson counts (validator; see the API guide)."
+        )
+        engine_row.addWidget(self.engine_combo)
+        engine_row.addStretch()
+        scan_layout.addLayout(engine_row)
+
         main_layout.addWidget(scan_group)
         
         # ===== Control Buttons Section =====
@@ -542,6 +561,19 @@ class UnifiedSimulationDock(BaseDockWidget):
         # Emit textChanged manually so connected slots are notified
         self.number_neutrons_edit.textChanged.emit(str(combined))
     
+    def get_selected_engine(self) -> str:
+        """Return the selected execution engine id ('mcstas' | 'deterministic').
+
+        Reads the engine selector's userData; falls back to 'mcstas' (the
+        default) if the widget is unavailable. Consumed by the controller's
+        _collect_simulation_launch_state.
+        """
+        try:
+            data = self.engine_combo.currentData()
+            return data if data in ("mcstas", "deterministic") else "mcstas"
+        except Exception:
+            return "mcstas"
+
     def get_number_neutrons(self) -> int:
         """Get the combined number of neutrons from mantissa × 10^exponent.
         

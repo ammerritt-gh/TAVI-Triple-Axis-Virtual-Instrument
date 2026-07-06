@@ -246,6 +246,8 @@ def test_snapshot_launch_summary_handles_missing_vals():
         "number_neutrons": None,
         "isolated": False,
         "parameters": {},
+        # Engine provenance defaults to mcstas for jobs with no engine set.
+        "engine": "mcstas",
     }
 
 

@@ -31,7 +31,8 @@ from tavi.runtime_tracker import RuntimeTracker
 from tavi.scan_jobs import (
     BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
 )
-from tavi.api_server import TaviApiServer, ApiError, load_api_config, MAX_WAITERS
+from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
+                             MAX_WAITERS, parse_scan_engine, ALLOWED_ENGINES)
 from tavi.journal import SessionJournal
 
 # Import GUI
@@ -459,10 +460,14 @@ class TaviApiBackend:
         force = bool(body.get("force", False))
         allow_partial = bool(body.get("allow_partial", False))
         isolated = bool(body.get("isolated", False))
+        # Execution-backend selection (docs/CONTROL_FEATURES_DESIGN.md §6.4).
+        # Validated Qt-free; an unknown engine is a 400 with the allowed list.
+        engine, seed, noiseless = parse_scan_engine(body)
 
         result = self._bridge.call_on_gui(
             lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
-                                             allow_partial, isolated)
+                                             allow_partial, isolated,
+                                             engine, seed, noiseless)
         )
         return result
 
@@ -497,7 +502,8 @@ class TaviApiBackend:
         return validation
 
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
-                            allow_partial=False, isolated=False):
+                            allow_partial=False, isolated=False,
+                            engine="mcstas", seed=None, noiseless=False):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
@@ -555,6 +561,13 @@ class TaviApiBackend:
             if not launch_state:
                 raise ApiError(400, "bad_request", "Could not read GUI values")
             launch_state["isolated"] = bool(isolated)
+            # Engine selection (POST /scan body) overrides any GUI-selected
+            # engine baked into the frozen launch state, so an API caller always
+            # gets the backend it asked for. seed/noiseless are deterministic-only
+            # (ignored by the McStas worker) but stored for provenance either way.
+            launch_state["engine"] = engine
+            launch_state["seed"] = seed
+            launch_state["noiseless"] = bool(noiseless)
             vals = launch_state["vals"]
             cmd1 = vals.get("scan_command1", "")
             cmd2 = vals.get("scan_command2", "")
@@ -1732,10 +1745,19 @@ class TAVIController(QObject):
 
         diagnostic_settings = copy.deepcopy(self.diagnostic_settings)
 
+        # GUI-selected execution engine (docs/CONTROL_FEATURES_DESIGN.md §6.4).
+        # The API's POST /scan body overrides this in _submit_scan_on_gui; for a
+        # GUI-launched run it is the sole source. Defaults to 'mcstas'.
+        try:
+            engine = self.window.simulation_dock.get_selected_engine()
+        except Exception:
+            engine = 'mcstas'
+
         return {
             'vals': vals,
             'save_folder_input': self.window.data_control_dock.save_folder_edit.text(),
             'sample_key': sample_key,
+            'engine': engine,
             'scan_config': self.instrument.scan_config(
                 self.instrument_state, vals, sample_key, diagnostic_settings,
                 self._build_sample_mount(vals),
@@ -4725,6 +4747,22 @@ class TAVIController(QObject):
         return {
             "instrument": self.descriptor.id,
             "fields": fields,
+            # Selectable execution backends for POST /scan (§6.4). "mcstas" is
+            # the default full Monte-Carlo engine; "deterministic" is the fast
+            # analytic S(Q,w) x resolution + seeded-Poisson tier.
+            "engines": list(ALLOWED_ENGINES),
+            # Optional top-level POST /scan body fields beyond "parameters".
+            "scan_body_fields": [
+                {"name": "engine", "type": "string", "allowed": list(ALLOWED_ENGINES),
+                 "default": "mcstas",
+                 "description": "Execution backend for this scan."},
+                {"name": "seed", "type": "integer", "default": None,
+                 "description": "Deterministic-engine RNG seed; default is a "
+                                "stable hash of the job id."},
+                {"name": "noiseless", "type": "boolean", "default": False,
+                 "description": "Deterministic engine only: return exact means "
+                                "(no Poisson noise)."},
+            ],
             "scan_variables": [
                 "H", "K", "L", "qx", "qy", "qz", "deltaE",
                 "A1", "A2", "A3", "A4", "omega", "2theta",
@@ -4744,7 +4782,7 @@ class TAVIController(QObject):
                 {"method": "GET", "path": "/state", "description": "Full instrument state, parameters, queue, budget."},
                 {"method": "GET", "path": "/parameters", "description": "Current parameter dict."},
                 {"method": "PATCH", "path": "/parameters", "description": "Partial parameter write."},
-                {"method": "POST", "path": "/scan", "description": "Validate and queue a scan job."},
+                {"method": "POST", "path": "/scan", "description": "Validate and queue a scan job (optional 'engine'/'seed'/'noiseless' body fields)."},
                 {"method": "POST", "path": "/validate", "description": "Run scan validation only; never queues."},
                 {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll)."},
                 {"method": "GET", "path": "/scan/{id}/data", "description": "Job status plus full scan arrays."},
@@ -4889,6 +4927,328 @@ class TAVIController(QObject):
                         break
                     continue
     
+    def _run_scan_deterministic(self, launch_state, job, scan_parameter_input,
+                                scan_mode, scan_config, is_2d_scan,
+                                is_single_point_scan, variable_name1,
+                                variable_name2, array_values1, array_values2,
+                                vals, data_folder, number_neutrons, start_time):
+        """Fast analytic engine branch of ``run_simulation`` (§6.4).
+
+        Called only when ``launch_state['engine'] == 'deterministic'``. Point
+        generation, feasibility masks, the ScanResult, and the scan_initialized
+        SSE were already produced by the shared code in ``run_simulation``; this
+        method REUSES those and replaces the McStas build/prep/run machinery with
+        the analytic S(Q,w) x resolution engine (``tavi.deterministic_engine``).
+
+        What is reused vs reimplemented:
+          * REUSED: ``self.instrument.compute_snapshot`` -- the exact per-point
+            Q/angle solve + feasibility flags the McStas prep thread runs, so a
+            point skipped here is skipped for the same reason with the same
+            geometry; the pre-sized ``job.result``; the identical per-point
+            progress / point / point_invalid signals + SSE events.
+          * NEW: per-point resolution kernel (``resolution_config`` + ``tavi.
+            resolution.resolution``) and analytic evaluation
+            (``deterministic_engine.evaluate_point``) with a per-point RNG stream
+            ``default_rng((seed, i))`` so a skipped point never shifts a later
+            point's noise. No compilation, no per-point output folders.
+
+        The final job terminal state is set here (mirrors the McStas path), and
+        ``result.metadata`` is stamped with the engine provenance (engine, seed,
+        noiseless, cn_valid, invalidations) even when ``cn_valid`` is false
+        ("run + stamp", §6.5).
+        """
+        import numpy as np
+        import zlib
+        from tavi.resolution import resolution as _resolution
+        from tavi import deterministic_engine as _det
+
+        # -- seed: explicit body seed, else a stable hash of the job id so a
+        #    re-run of the same job reproduces bit-identically (crc32 is
+        #    deterministic across processes, unlike Python's salted hash()).
+        seed = launch_state.get('seed')
+        if seed is None:
+            job_id = getattr(job, 'job_id', '') or ''
+            seed = int(zlib.crc32(job_id.encode('utf-8')))
+        noiseless = bool(launch_state.get('noiseless', False))
+
+        # -- ground truth: keyed by the frozen sample id. Unknown sample ->
+        #    fail the job cleanly (API clients see a failed job with a reason,
+        #    not a crash), reusing the same terminal-state path as success.
+        sample_key = launch_state.get('sample_key')
+        spec = None
+        try:
+            spec = next(
+                (s for s in self.descriptor.samples if s.id == sample_key), None
+            )
+        except Exception:
+            spec = None
+        sqw = _det.ground_truth(spec) if spec is not None else None
+        if sqw is None:
+            reason = "no analytic ground truth for sample %r" % (sample_key,)
+            self.message_printed.emit(
+                "Deterministic engine: %s -- job failed." % reason
+            )
+            if job is not None:
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = reason
+                    job.finished_at = time.time()
+                    job.notify_state_change()
+            return data_folder
+
+        brightness = _det._brightness_for(sqw)
+        self.message_printed.emit(
+            "Deterministic engine: sample '%s', seed %d%s"
+            % (getattr(sqw, 'sample_id', '?'), seed,
+               ", noiseless" if noiseless else "")
+        )
+
+        total_scans = len(scan_parameter_input)
+        # Deterministic runs do not touch the McStas runtime tracker; report an
+        # immediate estimate so the GUI's pre-scan label is not left stale.
+        self.pre_scan_estimate_updated.emit("< 1s (deterministic)")
+
+        total_counts = 0.0
+        max_counts = 0.0
+        processed_points = 0
+        meta_res = None
+        simulation_stopped = False
+        simulation_error_message = None
+
+        # Accumulators for the output data file (parity with the McStas path).
+        if is_2d_scan:
+            counts_grid = np.full((len(array_values2), len(array_values1)), np.nan)
+        else:
+            scan_x_values = []
+            scan_counts = []
+
+        cmd1 = vals.get('scan_command1', "")
+        cmd2 = vals.get('scan_command2', "")
+
+        try:
+            for i, scan_item in enumerate(scan_parameter_input):
+                if self.stop_event.is_set():
+                    simulation_stopped = True
+                    break
+
+                if is_2d_scan:
+                    _, idx_x, idx_y = scan_item
+                    idx_1d = -1
+                else:
+                    _, idx_1d = scan_item
+                    idx_x = idx_y = -1
+
+                # REUSE the exact per-point Q/angle solve + feasibility flags.
+                snapshot = self.instrument.compute_snapshot(
+                    scan_item, i, scan_mode, scan_config, vals, data_folder,
+                    is_2d_scan=is_2d_scan,
+                    variable_name1=variable_name1,
+                    variable_name2=variable_name2,
+                    scan_command1=cmd1, scan_command2=cmd2,
+                )
+                md = snapshot.metadata
+                error_flags = list(snapshot.error_flags)
+                w = float(snapshot.deltaE)
+
+                if is_2d_scan:
+                    self.scan_current_index_2d.emit(idx_x, idx_y)
+                else:
+                    self.scan_current_index_1d.emit(idx_1d)
+
+                if error_flags:
+                    self.message_printed.emit(
+                        "Point %d: skipped, error flags: %s" % (i, error_flags)
+                    )
+                    if is_2d_scan:
+                        self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                            })
+                    elif not is_single_point_scan and idx_1d >= 0:
+                        self.scan_point_invalid_1d.emit(idx_1d)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id, 'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                            })
+                    if not is_2d_scan and not is_single_point_scan \
+                            and 0 <= idx_1d < len(array_values1):
+                        scan_x_values.append(array_values1[idx_1d])
+                        scan_counts.append(np.nan)
+                else:
+                    # (H,K,L) for the ground-truth model: rlu mode carries it
+                    # directly; momentum/orientation give Q -> derive hkl via the
+                    # sample mount; angle mode has no Q -> origin.
+                    qx, qy, qz = md.get('qx'), md.get('qy'), md.get('qz')
+                    if md.get('H') is not None:
+                        hkl = (md['H'], md['K'], md['L'])
+                    elif qx is not None:
+                        hkl = tuple(self._sample_q_to_hkl(qx, qy, qz, vals))
+                    else:
+                        hkl = (0.0, 0.0, 0.0)
+                    if qx is not None:
+                        q0 = math.sqrt(qx * qx + qy * qy + qz * qz)
+                    else:
+                        q0 = 0.0
+
+                    # Resolution kernel for this point (cheap: one config + solve).
+                    rr = None
+                    try:
+                        cfg = self.instrument.resolution_config(vals, q0, w)
+                        rr = _resolution(cfg)
+                        meta_res = rr
+                    except Exception as exc:
+                        self.message_printed.emit(
+                            "Point %d: resolution unavailable (%s); counts=0" % (i, exc)
+                        )
+
+                    rng = None if noiseless else np.random.default_rng((int(seed), i))
+                    out = _det.evaluate_point(
+                        rr, sqw, hkl, w, number_neutrons, brightness,
+                        rng=rng, noiseless=noiseless,
+                    )
+                    counts = float(out['counts'])
+                    self.message_printed.emit(
+                        "Final counts (analytic): %s" % (counts,)
+                    )
+
+                    total_counts += counts
+                    max_counts = max(max_counts, counts)
+
+                    if is_2d_scan:
+                        self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                        counts_grid[idx_y, idx_x] = counts
+                    elif not is_single_point_scan:
+                        if idx_1d >= 0:
+                            self.scan_point_updated_1d.emit(idx_1d, counts)
+                        if 0 <= idx_1d < len(array_values1):
+                            scan_x_values.append(array_values1[idx_1d])
+                        scan_counts.append(counts)
+
+                    if job is not None and job.result is not None:
+                        with job.lock:
+                            res = job.result
+                            if is_2d_scan:
+                                if res.counts_grid is not None:
+                                    res.counts_grid[idx_y][idx_x] = counts
+                            elif is_single_point_scan:
+                                if res.counts:
+                                    res.counts[0] = counts
+                            elif idx_1d >= 0 and res.counts is not None \
+                                    and idx_1d < len(res.counts):
+                                res.counts[idx_1d] = counts
+                            res.total_counts = float(total_counts)
+                            res.max_counts = float(max_counts)
+                        if is_2d_scan:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                                'counts': counts,
+                            })
+                        elif is_single_point_scan:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id, 'index': 0,
+                                'value': None, 'counts': counts,
+                            })
+                        elif idx_1d >= 0:
+                            self._publish_api_event('point', {
+                                'job_id': job.job_id, 'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                                'counts': counts,
+                            })
+
+                processed_points += 1
+                self.progress_updated.emit(processed_points, total_scans)
+                self.counts_updated.emit(max_counts, total_counts)
+                if job is not None:
+                    with job.lock:
+                        job.progress_done = processed_points
+                    self._publish_api_event('progress', {
+                        'job_id': job.job_id, 'done': processed_points,
+                        'total': total_scans, 'elapsed': time.time() - start_time,
+                    })
+        except Exception as exc:
+            simulation_error_message = "Deterministic engine failed: %s" % exc
+            self.message_printed.emit(simulation_error_message)
+
+        if simulation_stopped or self.stop_event.is_set():
+            self.message_printed.emit("Simulation stopped by user.")
+
+        # Stamp engine provenance into result.metadata (run + stamp, §6.5), so
+        # cn_valid / invalidations reach every reader even when cn_valid is false.
+        if job is not None and job.result is not None \
+                and simulation_error_message is None:
+            with job.lock:
+                job.result.metadata.update(
+                    _det.engine_metadata(seed, meta_res, method="analytic")
+                )
+                job.result.metadata['noiseless'] = noiseless
+
+        # One data file (parity with McStas output; the folder already exists and
+        # its parameters file was written by the shared section). No per-point
+        # McStas artifacts are produced.
+        if simulation_error_message is None and not self.stop_event.is_set() \
+                and not is_single_point_scan:
+            try:
+                if is_2d_scan:
+                    x_label = variable_name1 or 'scan1'
+                    y_label = variable_name2 or 'scan2'
+                    write_2D_scan(
+                        np.array(array_values1), np.array(array_values2),
+                        counts_grid, data_folder, "2D_scan_data.txt",
+                        x_label=x_label, y_label=y_label,
+                    )
+                elif scan_x_values and scan_counts:
+                    order = np.argsort(scan_x_values)
+                    sorted_x = np.array(scan_x_values)[order]
+                    sorted_counts = np.array(scan_counts)[order]
+                    x_label = variable_name1 or 'scan'
+                    write_1D_scan(sorted_x, sorted_counts, data_folder,
+                                  "1D_scan_data.txt", x_label=x_label,
+                                  y_label='counts')
+            except Exception as exc:
+                self.message_printed.emit(
+                    "Warning: Failed to write deterministic scan data: %s" % exc
+                )
+
+        if simulation_error_message is None and not self.stop_event.is_set():
+            self.message_printed.emit(
+                "Deterministic scan complete. Total counts: %s, Max counts: %s"
+                % (total_counts, max_counts)
+            )
+
+        # Display completion signals (mirror the McStas finalization).
+        if simulation_error_message is not None or self.stop_event.is_set():
+            self.scan_completed.emit()
+        elif is_single_point_scan:
+            self.single_point_result.emit(max_counts, total_counts)
+        else:
+            self.scan_completed.emit()
+            self.scan_auto_save.emit()
+
+        # Finalize job bookkeeping (same terminal-state selection as McStas).
+        if job is not None:
+            if simulation_error_message is not None:
+                final_state = JobState.FAILED
+            elif self.stop_event.is_set():
+                final_state = JobState.STOPPED
+            else:
+                final_state = JobState.DONE
+            with job.lock:
+                job.state = final_state
+                job.error = simulation_error_message
+                job.finished_at = time.time()
+                self.last_scan_result = job.result
+                job.notify_state_change()
+
+        return data_folder
+
     def run_simulation(self, launch_state, job=None):
         """Run the full simulation.
 
@@ -5202,7 +5562,21 @@ class TAVIController(QObject):
         else:
             estimated_runtime_points = int(sum(1 for value in valid_mask_1d if value))
         estimated_runtime_points = max(estimated_runtime_points, 1)
-        
+
+        # Deterministic-engine branch (docs/CONTROL_FEATURES_DESIGN.md §6.4).
+        # Everything above -- point generation, feasibility masks, ScanResult
+        # init, the scan_initialized SSE -- is SHARED with the McStas path. From
+        # here the analytic engine replaces the McStas build/prep/run machinery
+        # entirely: no compilation, no per-point output folders, milliseconds per
+        # point. seed/noiseless come from the POST /scan body via launch_state.
+        if launch_state.get('engine') == 'deterministic':
+            return self._run_scan_deterministic(
+                launch_state, job, scan_parameter_input, scan_mode, scan_config,
+                is_2d_scan, is_single_point_scan, variable_name1, variable_name2,
+                array_values1, array_values2, vals, data_folder, number_neutrons,
+                start_time=time.time(),
+            )
+
         # Run the scans
         start_time = time.time()
         total_scans = len(scan_parameter_input)
