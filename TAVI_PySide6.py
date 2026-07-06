@@ -2786,7 +2786,60 @@ class TAVIController(QObject):
     def _trigger_scan_update(self):
         """Trigger a debounced update of scan estimates."""
         self._scan_update_timer.start()
-    
+
+    def _pending_needs_compile(self):
+        """Whether the next McStas scan would compile (no binary reuse).
+
+        Mirrors the pre-scan reuse check so the debounced GUI estimate can drop
+        compile time when the current binary will be reused. Degrades to True
+        (assume a rebuild, matching the pre-rework behavior of always adding
+        compile time) on any failure or when reuse state is unavailable.
+        """
+        try:
+            vals = self.get_gui_values()
+            if not vals:
+                return True
+            diagnostic_mode = bool(vals.get('diagnostic_mode'))
+            effective = self.diagnostic_settings if diagnostic_mode else {}
+            try:
+                sample_key = self.window.sample_dock.get_selected_sample_key()
+            except Exception:
+                sample_key = None
+            scan_config = self.instrument.scan_config(
+                self.instrument_state, vals, sample_key, self.diagnostic_settings,
+                self._build_sample_mount(vals),
+            )
+            fingerprint = self.instrument.build_fingerprint(
+                scan_config, diagnostic_mode, effective,
+            )
+            return not self._can_reuse_binary(
+                self._binary_reuse_cache, fingerprint, diagnostic_mode,
+            )
+        except Exception:
+            return True
+
+    def _estimate_total_and_compile(self, instrument_name, num_points,
+                                    num_neutrons, needs_compile):
+        """Total-seconds + compile-seconds for the GUI estimate labels.
+
+        Uses the machine-aware estimator (mcstas engine). Compile is surfaced
+        only when a rebuild is pending; it is derived as the estimate for zero
+        scan points (compile only). Returns ``(total_seconds|None,
+        compile_seconds|None)``.
+        """
+        est = self.runtime_tracker.estimate_scan_seconds(
+            instrument_name, num_points, num_neutrons,
+            needs_compile=needs_compile, engine="mcstas",
+        )
+        total = est.get("estimated_seconds")
+        compile_seconds = None
+        if total is not None and needs_compile:
+            compile_seconds = self.runtime_tracker.estimate_scan_seconds(
+                instrument_name, 0, num_neutrons,
+                needs_compile=True, engine="mcstas",
+            ).get("estimated_seconds")
+        return total, compile_seconds
+
     def _update_scan_estimates(self):
         """Update all scan time estimates based on current settings.
         
@@ -2809,7 +2862,11 @@ class TAVIController(QObject):
         
         # Get instrument name
         instrument_name = self.instrument.id
-        
+
+        # Whether the next McStas run would compile (drops compile time from the
+        # total estimate when the current binary will be reused).
+        needs_compile = self._pending_needs_compile()
+
         # Update time per point estimate
         _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, num_neutrons)
         if run_time_per_point is not None:
@@ -2846,12 +2903,12 @@ class TAVIController(QObject):
             self.print_to_message_center(f"⚠ {total_potential_points} scan points - validation deferred until simulation starts")
             self.window.simulation_dock.update_point_count_display_deferred(count1, count2)
             # Still show time estimate based on total points (assume all valid for estimate)
-            total_time, compile_time, _ = self.runtime_tracker.estimate_total_time(
-                instrument_name, total_potential_points, num_neutrons
+            total_time, compile_time = self._estimate_total_and_compile(
+                instrument_name, total_potential_points, num_neutrons, needs_compile
             )
             if total_time is not None:
                 total_str = RuntimeTracker.format_time(total_time)
-                compile_str = RuntimeTracker.format_time(compile_time)
+                compile_str = RuntimeTracker.format_time(compile_time) if compile_time else ""
                 self.window.simulation_dock.update_total_time_estimate(total_str, compile_str)
             else:
                 self.window.simulation_dock.update_total_time_estimate("")
@@ -2880,12 +2937,12 @@ class TAVIController(QObject):
         )
         
         # Update total time estimate
-        total_time, compile_time, _ = self.runtime_tracker.estimate_total_time(
-            instrument_name, valid_count, num_neutrons
+        total_time, compile_time = self._estimate_total_and_compile(
+            instrument_name, valid_count, num_neutrons, needs_compile
         )
         if total_time is not None:
             total_str = RuntimeTracker.format_time(total_time)
-            compile_str = RuntimeTracker.format_time(compile_time)
+            compile_str = RuntimeTracker.format_time(compile_time) if compile_time else ""
             self.window.simulation_dock.update_total_time_estimate(total_str, compile_str)
         else:
             self.window.simulation_dock.update_total_time_estimate("")
@@ -5653,11 +5710,24 @@ class TAVIController(QObject):
         total_scans = len(scan_parameter_input)
         self.message_printed.emit(f"Running {total_scans} scan points...")
         
-        # Show pre-scan estimate based on historical data
-        instrument_name = self.instrument.id
-        total_est, compile_est, _ = self.runtime_tracker.estimate_total_time(
-            instrument_name, estimated_runtime_points, number_neutrons
+        # Resolve binary reuse before estimating: a reused binary skips the
+        # rebuild, so the pre-scan estimate must not add compile time.
+        effective_diagnostic_settings = diagnostic_settings if diagnostic_mode else {}
+        build_fingerprint = self.instrument.build_fingerprint(
+            scan_config, diagnostic_mode, effective_diagnostic_settings
         )
+        reuse_binary = self._can_reuse_binary(
+            self._binary_reuse_cache, build_fingerprint, diagnostic_mode
+        )
+
+        # Show pre-scan estimate based on historical data (machine-aware,
+        # mcstas engine; compile time included only when a rebuild is pending).
+        instrument_name = self.instrument.id
+        estimate = self.runtime_tracker.estimate_scan_seconds(
+            instrument_name, estimated_runtime_points, number_neutrons,
+            needs_compile=not reuse_binary, engine="mcstas",
+        )
+        total_est = estimate.get("estimated_seconds")
         if total_est is not None:
             est_str = RuntimeTracker.format_time(total_est)
             self.pre_scan_estimate_updated.emit(est_str)
@@ -5684,13 +5754,8 @@ class TAVIController(QObject):
             scan_x_values = []
             scan_counts = []
         
-        effective_diagnostic_settings = diagnostic_settings if diagnostic_mode else {}
-        build_fingerprint = self.instrument.build_fingerprint(
-            scan_config, diagnostic_mode, effective_diagnostic_settings
-        )
-        reuse_binary = self._can_reuse_binary(
-            self._binary_reuse_cache, build_fingerprint, diagnostic_mode
-        )
+        # build_fingerprint / reuse_binary were resolved above for the pre-scan
+        # estimate; reuse them here to build (or skip building) the instrument.
         if reuse_binary:
             instrument = self._binary_reuse_cache["instrument"]
             execution_state = self._binary_reuse_cache["execution_state"]
@@ -6021,8 +6086,14 @@ class TAVIController(QObject):
                 except Exception:
                     pass
                 if len(executed_scan_times) <= 1:
-                    # After first scan, use historical data for estimation if available
-                    _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, number_neutrons)
+                    # After first scan, use historical data for estimation if
+                    # available. Engine-filtered to mcstas so tiny deterministic
+                    # records never poison the McStas per-point estimate.
+                    hist = self.runtime_tracker.estimate_scan_seconds(
+                        instrument_name, 1, number_neutrons,
+                        needs_compile=False, engine="mcstas",
+                    )
+                    run_time_per_point = hist.get("estimated_seconds")
                     if run_time_per_point is not None and remaining_runtime_points > 0:
                         remaining_time = run_time_per_point * remaining_runtime_points
                     elif executed_scan_times and remaining_runtime_points > 0:
