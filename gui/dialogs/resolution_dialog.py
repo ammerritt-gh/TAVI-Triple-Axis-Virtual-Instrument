@@ -28,9 +28,9 @@ _METHODS = [("Auto", "auto"),
 
 # Projection planes: result key -> (title, x-label, y-label).
 _PLANES = [
-    ("q_par_q_perp", "Q∥ vs Q⟂", "Q∥ (Å⁻¹)", "Q⟂ (Å⁻¹)"),
+    ("q_par_q_perp", "Q∥ vs Q⊥", "Q∥ (Å⁻¹)", "Q⊥ (Å⁻¹)"),
     ("q_par_E", "Q∥ vs E", "Q∥ (Å⁻¹)", "E (meV)"),
-    ("q_perp_E", "Q⟂ vs E", "Q⟂ (Å⁻¹)", "E (meV)"),
+    ("q_perp_E", "Q⊥ vs E", "Q⊥ (Å⁻¹)", "E (meV)"),
 ]
 
 
@@ -226,7 +226,7 @@ class ResolutionDialog(QDialog):
              _fmt(bragg.get("dE"))),
             ("Δq∥ (Å⁻¹)", _fmt(fwhm.get("dq_par")),
              _fmt(bragg.get("dq_par"))),
-            ("Δq⟂ (Å⁻¹)", _fmt(fwhm.get("dq_perp")),
+            ("Δq⊥ (Å⁻¹)", _fmt(fwhm.get("dq_perp")),
              _fmt(bragg.get("dq_perp"))),
             ("Δq_z (Å⁻¹)", _fmt(fwhm.get("dq_z")),
              _fmt(bragg.get("dq_z"))),
