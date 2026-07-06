@@ -486,8 +486,23 @@ def run_deterministic_scan(points: Sequence, res_results, sqw, number_neutrons,
 
 
 def engine_metadata(seed, res_result, method="analytic") -> dict:
-    """Result provenance for ``job.result.metadata`` (milestone 7 consumes this)."""
-    ok = getattr(res_result, "ok", False)
+    """Result provenance for ``job.result.metadata`` (milestone 7 consumes this).
+
+    ``res_result=None`` means the resolution was never evaluated (e.g. every scan
+    point was infeasible); that is reported as ``cn_valid: None`` -- "not
+    evaluated" -- rather than a false ``cn_valid: False`` claim about a config
+    that may be perfectly CN-valid.
+    """
+    if res_result is None:
+        return {
+            "engine": "deterministic",
+            "seed": int(seed),
+            "method": method,
+            "cn_valid": None,
+            "invalidations": [],
+            "resolution_method": None,
+            "resolution_ok": False,
+        }
     return {
         "engine": "deterministic",
         "seed": int(seed),
@@ -495,5 +510,5 @@ def engine_metadata(seed, res_result, method="analytic") -> dict:
         "cn_valid": bool(getattr(res_result, "cn_valid", False)),
         "invalidations": list(getattr(res_result, "invalidations", ()) or ()),
         "resolution_method": getattr(res_result, "method", None),
-        "resolution_ok": bool(ok),
+        "resolution_ok": bool(getattr(res_result, "ok", False)),
     }

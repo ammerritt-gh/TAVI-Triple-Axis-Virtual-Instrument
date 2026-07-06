@@ -240,6 +240,16 @@ def test_engine_metadata():
     assert isinstance(md["invalidations"], list)
 
 
+def test_engine_metadata_never_evaluated_is_not_invalid():
+    # No resolution ever computed (e.g. all points infeasible): cn_valid must be
+    # None ("not evaluated"), not a false claim that the config is CN-invalid.
+    md = de.engine_metadata(seed=7, res_result=None, method="analytic")
+    assert md["cn_valid"] is None
+    assert md["invalidations"] == []
+    assert md["resolution_method"] is None
+    assert md["resolution_ok"] is False
+
+
 # --------------------------------------------------------------------------- timing
 def test_timing_smoke_21_points_under_100ms():
     res, sqw = _res(), _phonon_sqw()

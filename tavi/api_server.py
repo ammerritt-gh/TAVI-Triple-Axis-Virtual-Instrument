@@ -133,9 +133,13 @@ def parse_scan_engine(body):
 
     seed = body.get("seed")
     if seed is not None:
-        # Reject bools (a bool is an int subclass) and non-integers.
-        if isinstance(seed, bool) or not isinstance(seed, int):
-            raise ApiError(400, "bad_request", "'seed' must be an integer")
+        # Reject bools (a bool is an int subclass) and non-integers. Negative
+        # seeds are rejected here because numpy's default_rng((seed, i)) only
+        # accepts non-negative entries -- a 400 at submit beats a failed job
+        # at the first scan point.
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ApiError(400, "bad_request",
+                           "'seed' must be a non-negative integer")
 
     noiseless = body.get("noiseless", False)
     if not isinstance(noiseless, bool):
