@@ -467,13 +467,16 @@ class IsolationBackend:
     Mirrors ``TaviApiBackend._submit_scan_on_gui``'s snapshot/restore predicate:
     snapshot exactly the patched fields, apply the patch, (maybe) fail, and in a
     ``finally`` restore the snapshot when ``isolated`` OR the submit failed. A
-    successful non-isolated submit leaves the patch applied. ``force_fail`` in
-    the body simulates a post-patch validation/budget rejection.
+    successful non-isolated submit leaves the patch applied. Setting the
+    ``force_fail`` attribute simulates a post-patch validation/budget rejection
+    (an instance flag rather than a body key, since the router now rejects
+    unknown top-level POST body keys with 400).
     """
 
     def __init__(self, controller):
         self.controller = controller
         self.registry = JobRegistry()
+        self.force_fail = False
 
     def get_health(self):
         return {"status": "ok"}
@@ -488,7 +491,7 @@ class IsolationBackend:
         controller = self.controller
         patch = body.get("parameters") or {}
         isolated = bool(body.get("isolated", False))
-        force_fail = bool(body.get("force_fail", False))
+        force_fail = self.force_fail
 
         saved = None
         if patch:
@@ -543,12 +546,12 @@ def test_isolated_success_restores_widgets():
 def test_isolated_failure_restores_widgets():
     controller = FakeGuiController(_BASE_VALUES)
     backend = IsolationBackend(controller)
+    backend.force_fail = True
     srv, base = _start(backend)
     try:
         status, body, _raw, _ct = _request(
             base + "/scan", method="POST",
-            data={"parameters": {"H": 3.0}, "isolated": True,
-                  "force_fail": True})
+            data={"parameters": {"H": 3.0}, "isolated": True})
         assert status == 400
         assert body["error"]["code"] == "scan_validation"
         assert controller.widgets["H"] == 2.0  # restored despite failure
@@ -562,11 +565,12 @@ def test_non_isolated_failure_restores_patch():
     # inline patch applied.
     controller = FakeGuiController(_BASE_VALUES)
     backend = IsolationBackend(controller)
+    backend.force_fail = True
     srv, base = _start(backend)
     try:
         status, body, _raw, _ct = _request(
             base + "/scan", method="POST",
-            data={"parameters": {"H": 3.0}, "force_fail": True})
+            data={"parameters": {"H": 3.0}})
         assert status == 400
         assert controller.widgets["H"] == 2.0  # patch rolled back on failure
     finally:
