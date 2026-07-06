@@ -243,6 +243,12 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
 - In **read-only** mode, any write returns `403 read_only`.
 - Each field is validated first and applied all-or-nothing: a field with a bad
   value is skipped entirely and reported in `errors`; valid fields still apply.
+- The mounted **sample** is one of these fields: set `"sample": "<id>"` (e.g.
+  `"Al_phonon_DFT"`, `"Al_bragg"`, or `"none"`). Allowed ids come from the sample
+  library and are listed under the `sample` field of `GET /schema`; an unknown id
+  → `400 invalid_parameters`. Selecting a sample adopts its lattice, so pass any
+  explicit `lattice_*` overrides in the *same* patch (they win). The chosen
+  sample travels into each job's `launch.parameters` (as `sample`/`sample_key`).
 
 ### POST /scan
 Submit a scan job. The job runs the scan currently defined by the
@@ -292,6 +298,14 @@ to submit.
  "details": {"usage": {"pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0, "max_queued": 10}}}}
 ```
 - In read-only mode → `403 read_only`.
+- **Unknown top-level body key → `400 bad_request`.** The `POST /scan` body
+  accepts only `parameters`, `force`, `allow_partial`, `isolated`, `engine`,
+  `seed`, and `noiseless`; any other top-level key is rejected (the error names
+  the offending key and lists the allowed set). This is a guard against typos
+  such as sending `scan_command1` at the top level instead of nesting it under
+  `parameters` — which would otherwise silently run the GUI's current scan.
+  (`POST /validate` and `POST /stop` are equally strict about their own keys.)
+  Parameter names still go **inside** `parameters`.
 
 **`allow_partial`** (optional boolean, default `false`). When `true`, a scan with
 some infeasible points is still queued: only the feasible points run, and
