@@ -6,8 +6,9 @@ identity plus a cross-machine speed anchor.
 
 This module provides:
 - ``machine_fingerprint()``: a stable identity dict for the current machine.
-- ``machine_speed_index(records)``: the median per-neutron seconds derived from
-  a set of benchmark records, used to scale foreign-machine history.
+- ``machine_time_model(records)``: the affine ``{overhead, rate}`` cost model
+  fitted over a machine's benchmark records, used to scale foreign history.
+- ``machine_speed_index(records)``: deprecated alias returning the model rate.
 
 Fingerprinting never shells out: CPU name is best-effort from stdlib and the
 Linux ``/proc/cpuinfo`` file, degrading to ``""`` on any failure.
@@ -15,7 +16,7 @@ Linux ``/proc/cpuinfo`` file, degrading to ``""`` on any failure.
 import hashlib
 import os
 import platform
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 # Cached module-level fingerprint (identity is stable for a process lifetime).
 _FINGERPRINT_CACHE: Optional[dict] = None
@@ -74,17 +75,20 @@ def machine_fingerprint() -> dict:
     return dict(_FINGERPRINT_CACHE)
 
 
-def machine_speed_index(records: List) -> Optional[float]:
-    """Median per-neutron seconds from benchmark records, or ``None``.
+def machine_time_model(records: List) -> Optional[Dict[str, float]]:
+    """Affine ``{"overhead", "rate"}`` cost model for a machine, or ``None``.
 
-    This is the cross-machine scaling anchor: it captures how fast a machine
-    executes a neutron of simulation. Computed from ``source == "benchmark"``
-    mcstas records only (clean, machine-baseline samples). Each record
-    contributes ``seconds_per_point / num_neutrons`` using the warm per-point
-    time (``avg_subsequent_time`` when more than one point, else
-    ``first_scan_time``). Returns ``None`` when no usable benchmark record.
+    Fits ``per_point = overhead + rate * ncount`` over a machine's clean
+    benchmark samples (``source == "benchmark"`` mcstas records). Each record
+    contributes its warm per-point time (``avg_subsequent_time`` when more than
+    one point, else ``first_scan_time``) at its neutron count. The fit needs at
+    least two distinct ncounts with a >=10x spread (see
+    :func:`tavi.time_model.fit_affine_time_model`); otherwise -- a single-ncount
+    benchmark carries no rate information -- this returns ``None``.
     """
-    per_neutron: List[float] = []
+    from tavi.time_model import fit_affine_time_model
+
+    samples: List = []
     for rec in records or []:
         if getattr(rec, "source", "organic") != "benchmark":
             continue
@@ -97,11 +101,21 @@ def machine_speed_index(records: List) -> Optional[float]:
         spp = (rec.avg_subsequent_time if num_points > 1
                else rec.first_scan_time)
         if spp and spp > 0:
-            per_neutron.append(spp / num_neutrons)
-    if not per_neutron:
-        return None
-    per_neutron.sort()
-    mid = len(per_neutron) // 2
-    if len(per_neutron) % 2:
-        return per_neutron[mid]
-    return (per_neutron[mid - 1] + per_neutron[mid]) / 2.0
+            samples.append((num_neutrons, spp, 1.0))
+
+    model = fit_affine_time_model(samples)
+    if model.get("kind") == "affine":
+        return {"overhead": model["overhead"], "rate": model["rate"]}
+    return None
+
+
+def machine_speed_index(records: List) -> Optional[float]:
+    """Deprecated: the per-neutron rate from :func:`machine_time_model`.
+
+    Retained as a thin alias for callers that still store a scalar
+    ``speed_index``; it returns the affine model's ``rate`` (the per-neutron
+    cost), or ``None`` when no affine model can be fitted. Prefer
+    :func:`machine_time_model`, which also exposes the fixed overhead.
+    """
+    model = machine_time_model(records)
+    return model["rate"] if model else None

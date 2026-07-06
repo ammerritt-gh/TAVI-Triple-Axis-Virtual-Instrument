@@ -7,6 +7,8 @@ compile), deterministic flat scaling, and recency-weighting sanity.
 """
 import json
 
+import pytest
+
 from tavi.machine_profile import machine_fingerprint
 from tavi.runtime_tracker import RuntimeTracker, ScanRecord
 
@@ -135,11 +137,38 @@ def test_basis_legacy_when_machine_id_none(tmp_path):
     assert est["estimated_seconds"] == 20.0
 
 
-def test_basis_scaled_for_foreign_machine_with_speed_index(tmp_path):
+def test_basis_scaled_for_foreign_machine_with_v2_profiles(tmp_path):
+    # Both machines carry a v2 affine profile, so the foreign per-point time is
+    # rescaled component-wise (overhead vs rate) to this machine.
     me = machine_fingerprint()["machine_id"]
     payload = {
         "records": {"in8": [
             _rec(avg=4.0, neutrons=100000, machine_id="foreign", source="benchmark"),
+        ]},
+        "machines": {
+            # foreign a=2, b=1e-5 -> at 1e5 the frac_rate is 1/3.
+            "foreign": {"model_version": 2, "overhead_seconds": 2.0,
+                        "rate_per_neutron": 1e-5, "cpu_name": "slow"},
+            # local is 2x faster on BOTH components -> both ratios 0.5.
+            me: {"model_version": 2, "overhead_seconds": 1.0,
+                 "rate_per_neutron": 0.5e-5, "cpu_name": "fast"},
+        },
+    }
+    tracker = _tracker(tmp_path, payload)
+    est = tracker.estimate_scan_seconds("in8", 10, 100000, needs_compile=False)
+    assert est["basis"] == "scaled"
+    # foreign 4.0 s/pt scaled by (1/3*0.5 + 2/3*0.5) = 0.5 -> 2.0 s/pt * 10 = 20
+    assert est["estimated_seconds"] == pytest.approx(20.0)
+    assert est["confidence"] == "low"
+
+
+def test_v1_profile_ignored_for_scaling_falls_to_pooled(tmp_path):
+    # A pre-v2 profile (only a scalar speed_index, no model_version) is treated
+    # as unbenchmarked: no scaled basis, fall through to pooled.
+    me = machine_fingerprint()["machine_id"]
+    payload = {
+        "records": {"in8": [
+            _rec(avg=2.0, neutrons=100000, machine_id="foreign", source="benchmark"),
         ]},
         "machines": {
             me: {"speed_index": 1e-5, "cpu_name": "fast"},
@@ -148,10 +177,9 @@ def test_basis_scaled_for_foreign_machine_with_speed_index(tmp_path):
     }
     tracker = _tracker(tmp_path, payload)
     est = tracker.estimate_scan_seconds("in8", 10, 100000, needs_compile=False)
-    assert est["basis"] == "scaled"
-    # foreign 4.0 s/pt * (local 1e-5 / foreign 2e-5) = 2.0 s/pt * 10 = 20.0
-    assert est["estimated_seconds"] == 20.0
+    assert est["basis"] == "pooled"
     assert est["confidence"] == "low"
+    assert est["estimated_seconds"] == pytest.approx(20.0)
 
 
 def test_basis_pooled_when_foreign_without_speed_index(tmp_path):
