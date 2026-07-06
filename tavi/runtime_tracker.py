@@ -140,12 +140,21 @@ class RuntimeTracker:
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
 
+    # A machine profile is only trusted for cross-machine scaling once it
+    # carries the v2 affine model (overhead + rate). Older profiles held only a
+    # scalar per-neutron ``speed_index`` that misread fixed overhead as neutron
+    # cost, so they are treated as unbenchmarked until the next benchmark.
+    MACHINE_MODEL_VERSION = 2
+
     def set_machine_profile(self,
                             machine_id: str,
                             hostname: str = "",
                             cpu_name: str = "",
                             cpu_count: int = 0,
                             speed_index: Optional[float] = None,
+                            overhead_seconds: Optional[float] = None,
+                            rate_per_neutron: Optional[float] = None,
+                            model_version: Optional[int] = None,
                             benchmarked_at: Optional[str] = None) -> None:
         """Record/refresh a machine profile in the ``machines`` block and save.
 
@@ -154,19 +163,49 @@ class RuntimeTracker:
             hostname: Machine hostname.
             cpu_name: Best-effort CPU name.
             cpu_count: Logical CPU count.
-            speed_index: Median per-neutron seconds (cross-machine anchor).
+            speed_index: Legacy per-neutron scalar; ``None`` for v2 profiles.
+            overhead_seconds: Affine model fixed overhead (v2).
+            rate_per_neutron: Affine model per-neutron rate (v2).
+            model_version: Profile schema version; defaults to
+                ``MACHINE_MODEL_VERSION`` when both affine components are given,
+                else left unset (a v1/unbenchmarked profile).
             benchmarked_at: ISO timestamp of the benchmark; defaults to now.
         """
         from datetime import datetime
 
-        self.machines[machine_id] = {
+        profile = {
             "hostname": hostname,
             "cpu_name": cpu_name,
             "cpu_count": cpu_count,
+            "overhead_seconds": overhead_seconds,
+            "rate_per_neutron": rate_per_neutron,
             "speed_index": speed_index,
             "benchmarked_at": benchmarked_at or datetime.now().isoformat(),
         }
+        if model_version is not None:
+            profile["model_version"] = model_version
+        elif overhead_seconds is not None and rate_per_neutron is not None:
+            profile["model_version"] = self.MACHINE_MODEL_VERSION
+
+        self.machines[machine_id] = profile
         self._save()
+
+    def _machine_model(self, machine_id: Optional[str]
+                       ) -> Optional[Dict[str, float]]:
+        """Affine ``{overhead, rate}`` for a machine if it has a v2 profile.
+
+        ``None`` when the machine is unknown, its profile predates
+        ``model_version >= MACHINE_MODEL_VERSION`` (v1/unbenchmarked), or either
+        affine component is missing.
+        """
+        profile = self.machines.get(machine_id) or {}
+        if (profile.get("model_version") or 0) < self.MACHINE_MODEL_VERSION:
+            return None
+        overhead = profile.get("overhead_seconds")
+        rate = profile.get("rate_per_neutron")
+        if overhead is None or rate is None:
+            return None
+        return {"overhead": overhead, "rate": rate}
     
     def add_record(self,
                    instrument_name: str,
@@ -350,14 +389,17 @@ class RuntimeTracker:
         if legacy:
             return ([(r, 1.0) for r in legacy], "legacy")
 
+        # Scaled basis: convert foreign per-point times to this machine using
+        # component-wise (overhead vs rate) scaling. Requires a v2 affine
+        # profile on BOTH sides; any missing/v1 profile falls through to pooled.
         foreign = [r for r in records if r.machine_id is not None]
-        local_si = (self.machines.get(me) or {}).get("speed_index")
-        if local_si:
-            scaled: List[Tuple[ScanRecord, float]] = []
+        local_model = self._machine_model(me)
+        if local_model:
+            scaled: List[Tuple[ScanRecord, object]] = []
             for r in foreign:
-                foreign_si = (self.machines.get(r.machine_id) or {}).get("speed_index")
-                if foreign_si:
-                    scaled.append((r, local_si / foreign_si))
+                foreign_model = self._machine_model(r.machine_id)
+                if foreign_model:
+                    scaled.append((r, ("scaled", local_model, foreign_model)))
             if scaled:
                 return (scaled, "scaled")
 
