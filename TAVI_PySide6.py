@@ -876,6 +876,9 @@ class TAVIController(QObject):
         # run_benchmark, drained by _on_job_state_changed when all are terminal).
         self._benchmark_job_ids = []
         self._benchmark_plan = None
+        # Adaptive rate-sweep bookkeeping (see _advance_benchmark).
+        self._benchmark_adaptive_ncounts = set()
+        self._benchmark_finalized = False
         self._shutdown_called = False
         self._job_worker = threading.Thread(
             target=self._job_worker_loop, name="scan-job-worker", daemon=True
@@ -4247,7 +4250,7 @@ class TAVIController(QObject):
         if (job_id in self._benchmark_job_ids
                 and state in _JOB_TERMINAL_STATE_VALUES
                 and self._all_benchmark_jobs_terminal()):
-            self._finalize_benchmark()
+            self._advance_benchmark()
 
     def _has_pending_jobs(self):
         """True if any job is currently QUEUED or RUNNING."""
@@ -4351,51 +4354,70 @@ class TAVIController(QObject):
         self.save_parameters()
         self._benchmark_plan = list(plan)
         self._benchmark_job_ids = []
+        # Adaptive-phase bookkeeping: ncounts already submitted (loop guard) and
+        # the finalize latch (cleared here so a fresh run re-arms it).
+        self._benchmark_adaptive_ncounts = set()
+        self._benchmark_finalized = False
 
         for i, stage in enumerate(plan):
-            launch_state = self._collect_simulation_launch_state()
-            if not launch_state:
-                self.print_to_message_center(
-                    "Benchmark: could not read GUI values; aborting."
-                )
+            job = self._submit_benchmark_stage(stage, i)
+            if job is None:
                 break
-
-            vals = launch_state["vals"]
-            vals["scan_command1"] = self._benchmark_scan_command(stage["points"])
-            vals["scan_command2"] = ""
-            vals["number_neutrons"] = int(stage["ncount"])
-            # A benchmark is a machine baseline, not a diagnostic run: diagnostic
-            # mode forces a rebuild every point and would break the warm stages.
-            vals["diagnostic_mode"] = False
-
-            launch_state["engine"] = stage["engine"]
-            launch_state["benchmark"] = True
-            launch_state["force_rebuild"] = bool(stage["force_rebuild"])
-            launch_state["relative_mode_1"] = False
-            launch_state["relative_mode_2"] = False
-            launch_state["save_folder_input"] = os.path.join(
-                self.output_directory,
-                f"benchmark_{stage['engine']}_{int(stage['ncount'])}_{i + 1}",
-            )
-
-            # Pre-filter infeasible points so a tiny scan near an edge geometry
-            # skips rather than fails (reuses the API allow_partial machinery).
-            try:
-                validation = self.validate_scan_launch_state(launch_state)
-                infeasible = validation.get("infeasible", [])
-                if infeasible:
-                    launch_state["skipped_indices"] = [e["index"] for e in infeasible]
-                    launch_state["skipped_points"] = infeasible
-            except Exception:
-                pass
-
-            job = self.submit_scan_job(launch_state, "benchmark")
-            self._benchmark_job_ids.append(job.job_id)
 
         self.print_to_message_center(
             f"Benchmark: queued {len(self._benchmark_job_ids)} stage(s)."
         )
         return list(self._benchmark_job_ids)
+
+    def _submit_benchmark_stage(self, stage, index):
+        """Freeze the launch state for one benchmark ``stage`` and submit it.
+
+        Re-freezes the current GUI launch state, overrides the scan command with
+        a tiny centred scan, applies the stage's engine / ncount / force-rebuild
+        flag, tags it ``source="benchmark"``, pre-filters infeasible points, and
+        submits it through the job worker. Appends the new job id to
+        ``_benchmark_job_ids``. Returns the submitted job, or ``None`` when the
+        GUI launch state could not be read.
+        """
+        launch_state = self._collect_simulation_launch_state()
+        if not launch_state:
+            self.print_to_message_center(
+                "Benchmark: could not read GUI values; aborting."
+            )
+            return None
+
+        vals = launch_state["vals"]
+        vals["scan_command1"] = self._benchmark_scan_command(stage["points"])
+        vals["scan_command2"] = ""
+        vals["number_neutrons"] = int(stage["ncount"])
+        # A benchmark is a machine baseline, not a diagnostic run: diagnostic
+        # mode forces a rebuild every point and would break the warm stages.
+        vals["diagnostic_mode"] = False
+
+        launch_state["engine"] = stage["engine"]
+        launch_state["benchmark"] = True
+        launch_state["force_rebuild"] = bool(stage["force_rebuild"])
+        launch_state["relative_mode_1"] = False
+        launch_state["relative_mode_2"] = False
+        launch_state["save_folder_input"] = os.path.join(
+            self.output_directory,
+            f"benchmark_{stage['engine']}_{int(stage['ncount'])}_{index + 1}",
+        )
+
+        # Pre-filter infeasible points so a tiny scan near an edge geometry
+        # skips rather than fails (reuses the API allow_partial machinery).
+        try:
+            validation = self.validate_scan_launch_state(launch_state)
+            infeasible = validation.get("infeasible", [])
+            if infeasible:
+                launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+                launch_state["skipped_points"] = infeasible
+        except Exception:
+            pass
+
+        job = self.submit_scan_job(launch_state, "benchmark")
+        self._benchmark_job_ids.append(job.job_id)
+        return job
 
     def cancel_benchmark(self):
         """Cancel every in-flight benchmark stage (queued or running)."""
@@ -4416,29 +4438,109 @@ class TAVIController(QObject):
                     return False
         return True
 
-    def _finalize_benchmark(self):
-        """Recompute + store this machine's speed index, then signal the dialog.
-
-        Runs once the whole plan is terminal. The speed index is the median
-        per-neutron seconds over this machine's benchmark records (warm mcstas
-        stages); it anchors cross-machine scaling in the estimator.
-        """
-        from tavi.machine_profile import machine_speed_index
-
-        fp = machine_fingerprint()
-        machine_id = fp["machine_id"]
-        mine = [
+    def _benchmark_records(self):
+        """This machine's benchmark records for the active instrument."""
+        machine_id = machine_fingerprint()["machine_id"]
+        return [
             r for r in self.runtime_tracker.records.get(self.instrument.id, [])
             if getattr(r, "machine_id", None) == machine_id
+            and getattr(r, "source", "organic") == "benchmark"
         ]
-        speed_index = machine_speed_index(mine)
+
+    def _benchmark_adaptive_inputs(self):
+        """Derive ``next_rate_stage`` inputs from this machine's benchmark records.
+
+        Returns ``(overhead_s, last_ncount, last_spp, elapsed_adaptive_s)`` from
+        the mcstas benchmark records, or ``None`` when none are usable. Overhead
+        is the warm per-point time at the smallest ncount; the "last" values come
+        from the highest-ncount record; elapsed is the summed wall-clock of the
+        adaptive stages (ncount at or above the sweep start) recorded so far.
+        """
+        from tavi.benchmark import DEFAULT_ADAPTIVE_START_NCOUNT
+
+        def spp(rec):
+            return (rec.avg_subsequent_time if rec.num_points > 1
+                    else rec.first_scan_time)
+
+        recs = [
+            r for r in self._benchmark_records()
+            if getattr(r, "engine", "mcstas") == "mcstas"
+            and getattr(r, "num_neutrons", 0)
+            and spp(r) and spp(r) > 0
+        ]
+        if not recs:
+            return None
+
+        lo = min(recs, key=lambda r: r.num_neutrons)
+        hi = max(recs, key=lambda r: r.num_neutrons)
+        elapsed = sum(
+            r.total_time for r in recs
+            if r.num_neutrons >= DEFAULT_ADAPTIVE_START_NCOUNT and r.total_time
+        )
+        return (spp(lo), hi.num_neutrons, spp(hi), elapsed)
+
+    def _advance_benchmark(self):
+        """Drive the adaptive rate sweep, or finalize when it is complete.
+
+        Called whenever every tracked benchmark job is terminal. Submits the
+        next adaptive rate stage (appending it to the growing plan) when
+        :func:`tavi.benchmark.next_rate_stage` asks for one and its ncount has
+        not already been attempted (loop guard); otherwise finalizes.
+        """
+        from tavi.benchmark import next_rate_stage
+
+        if self._benchmark_finalized:
+            return
+
+        stage = None
+        inputs = self._benchmark_adaptive_inputs()
+        if inputs is not None:
+            overhead_s, last_ncount, last_spp, elapsed = inputs
+            candidate = next_rate_stage(overhead_s, last_ncount, last_spp, elapsed)
+            # Loop guard: never resubmit an ncount already attempted (e.g. a
+            # failed stage produced no record, so inputs would repeat).
+            if candidate is not None and \
+                    int(candidate["ncount"]) not in self._benchmark_adaptive_ncounts:
+                stage = candidate
+
+        if stage is not None:
+            self._benchmark_adaptive_ncounts.add(int(stage["ncount"]))
+            self._benchmark_plan = list(self._benchmark_plan or []) + [stage]
+            job = self._submit_benchmark_stage(stage, len(self._benchmark_plan) - 1)
+            if job is not None:
+                self.print_to_message_center(
+                    f"Benchmark: adaptive rate stage at {int(stage['ncount'])} neutrons."
+                )
+                return
+            # Submission failed (no GUI state): fall through to finalize.
+
+        self._finalize_benchmark()
+
+    def _finalize_benchmark(self):
+        """Fit + store this machine's affine time model, then signal the dialog.
+
+        Runs once the base plan and the adaptive rate sweep are complete. The
+        model is the affine ``{overhead, rate}`` fit over this machine's
+        benchmark records (:func:`tavi.machine_profile.machine_time_model`),
+        stored as a v2 machine profile; it anchors cross-machine scaling in the
+        estimator.
+        """
+        from tavi.machine_profile import machine_time_model
+
+        self._benchmark_finalized = True
+        fp = machine_fingerprint()
+        machine_id = fp["machine_id"]
+        model = machine_time_model(self._benchmark_records())
+        overhead = model["overhead"] if model else None
+        rate = model["rate"] if model else None
         try:
             self.runtime_tracker.set_machine_profile(
                 machine_id=machine_id,
                 hostname=fp.get("hostname", ""),
                 cpu_name=fp.get("cpu_name", ""),
                 cpu_count=fp.get("cpu_count", 0),
-                speed_index=speed_index,
+                overhead_seconds=overhead,
+                rate_per_neutron=rate,
             )
         except Exception as exc:
             self.print_to_message_center(
@@ -4447,10 +4549,16 @@ class TAVIController(QObject):
 
         # Clear the in-flight tracking so a later normal scan cannot re-trigger.
         self._benchmark_job_ids = []
-        self.print_to_message_center(
-            "Benchmark complete. Machine speed index: "
-            + (f"{speed_index:.3e} s/neutron" if speed_index else "unavailable")
-        )
+        if model:
+            self.print_to_message_center(
+                "Benchmark complete. Machine time model: "
+                f"overhead {overhead:.3g} s, rate {rate:.3e} s/neutron."
+            )
+        else:
+            self.print_to_message_center(
+                "Benchmark complete. Machine time model unavailable "
+                "(insufficient ncount spread)."
+            )
         self.runtime_data_updated.emit()
         self.benchmark_finished.emit()
 
