@@ -1635,6 +1635,10 @@ class TAVIController(QObject):
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
                 'kappa': float(self.window.sample_dock.kappa_edit.text() or 0),
                 'psi': float(self.window.sample_dock.psi_edit.text() or 0),
+                # Selected sample as its library id; the "no sample" entry maps
+                # to key None internally but surfaces to the API as "none" so it
+                # round-trips through apply_parameters/isolation restore.
+                'sample': self.window.sample_dock.get_selected_sample_key() or "none",
                 'monocris': self.window.instrument_dock.selected_mono_id(),
                 'anacris': self.window.instrument_dock.selected_ana_id(),
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
@@ -4844,6 +4848,17 @@ class TAVIController(QObject):
         mono_ids = [c.id for c in self.descriptor.mono_crystals]
         ana_ids = [c.id for c in self.descriptor.ana_crystals]
         source_ids = [s.id for s in self.descriptor.source_types]
+        sample_ids = [s.id for s in self.descriptor.samples]
+
+        # --- sample setter: select the sample combo by library id -----------
+        # "none" maps to the internal key None (no sample component). Setting the
+        # combo emits currentTextChanged -> on_sample_changed, so the same GUI
+        # bookkeeping (instrument_state.sample_key, lattice adoption) the user's
+        # click triggers runs here too -- no separate after-handler needed.
+        def set_sample(sample_id):
+            key = None if sample_id == "none" else sample_id
+            if not sam.set_sample_by_key(key):
+                raise ValueError("unknown sample %r" % (sample_id,))
 
         # --- line-edit setter factory (numeric) ---
         def set_text(edit):
@@ -4894,6 +4909,8 @@ class TAVIController(QObject):
             # alignment offsets
             'kappa': (p_float, set_text(sam.kappa_edit), self.on_alignment_offset_changed),
             'psi': (p_float, set_text(sam.psi_edit), self.on_alignment_offset_changed),
+            # sample selection (drives instrument_state.sample_key + lattice)
+            'sample': (p_choice(sample_ids, "sample"), set_sample, None),
             # crystals
             'monocris': (
                 p_choice(mono_ids, "monocris"),
@@ -4927,6 +4944,9 @@ class TAVIController(QObject):
     # first, then energy mode, then Q/HKL, then angles. Fields not listed are
     # applied afterward in patch order.
     _API_APPLY_ORDER = (
+        # Sample first: selecting it adopts the sample's own lattice, so an
+        # explicit lattice_* in the same patch (applied next) still wins.
+        'sample',
         'lattice_a', 'lattice_b', 'lattice_c',
         'lattice_alpha', 'lattice_beta', 'lattice_gamma',
         'K_fixed', 'fixed_E', 'Ki', 'Ei', 'Kf', 'Ef',
@@ -5208,6 +5228,7 @@ class TAVIController(QObject):
             'lattice_beta': ('number', 'degrees'),
             'lattice_gamma': ('number', 'degrees'),
             'kappa': ('number', 'degrees'), 'psi': ('number', 'degrees'),
+            'sample': ('string', None),
             'monocris': ('string', None), 'anacris': ('string', None),
             'rhm': ('number', None), 'rvm': ('number', None), 'rha': ('number', None),
             'source_type': ('string', None), 'source_dE': ('number', 'meV'),
@@ -5221,6 +5242,9 @@ class TAVIController(QObject):
         # Allowed values pulled live from the descriptor / static choice maps.
         allowed = {
             'K_fixed': ["Ki Fixed", "Kf Fixed"],
+            # Sample ids from the shared sample library (includes "none"); the
+            # same set apply_parameters validates a 'sample' write against.
+            'sample': [s.id for s in self.descriptor.samples],
             'monocris': [c.id for c in self.descriptor.mono_crystals],
             'anacris': [c.id for c in self.descriptor.ana_crystals],
             'source_type': [s.id for s in self.descriptor.source_types],
