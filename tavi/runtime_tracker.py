@@ -11,6 +11,14 @@ import os
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, asdict, fields as dataclass_fields
 
+from tavi.time_model import (
+    fit_affine_time_model,
+    per_point_estimate,
+    reference_ncount,
+    scale_per_point,
+    weighted_median,
+)
+
 
 @dataclass
 class ScanRecord:
@@ -30,6 +38,7 @@ class ScanRecord:
     binary_reused: Optional[bool] = None  # True => compilation_time not meaningful
     build_fp_hash: Optional[str] = None   # sha1(repr(build_fingerprint))[:12]
     source: str = "organic"               # "organic" | "benchmark"
+    mpi_count: Optional[int] = None       # MPI worker count (None => unknown)
 
 
 class RuntimeTracker:
@@ -172,7 +181,8 @@ class RuntimeTracker:
                    execution_mode: Optional[str] = None,
                    binary_reused: Optional[bool] = None,
                    build_fp_hash: Optional[str] = None,
-                   source: str = "organic") -> None:
+                   source: str = "organic",
+                   mpi_count: Optional[int] = None) -> None:
         """Add a new scan record.
 
         Args:
@@ -189,6 +199,7 @@ class RuntimeTracker:
             binary_reused: True => compilation_time is not meaningful
             build_fp_hash: sha1(repr(build_fingerprint))[:12], diagnostics only
             source: "organic" | "benchmark"
+            mpi_count: MPI worker count for this run (None => unknown)
         """
         from datetime import datetime
 
@@ -207,8 +218,9 @@ class RuntimeTracker:
             binary_reused=binary_reused,
             build_fp_hash=build_fp_hash,
             source=source,
+            mpi_count=mpi_count,
         )
-        
+
         if instrument_name not in self.records:
             self.records[instrument_name] = []
         
@@ -220,85 +232,67 @@ class RuntimeTracker:
         
         self._save()
     
-    def get_estimates(self, instrument_name: str, num_neutrons: int) -> Tuple[Optional[float], Optional[float]]:
+    def get_estimates(self, instrument_name: str, num_neutrons: int,
+                      engine: str = "mcstas"
+                      ) -> Tuple[Optional[float], Optional[float]]:
         """Get estimated compile time and per-point run time.
-        
-        Compile time is estimated as: first_scan_time - avg_subsequent_time
-        Run time is normalized by neutron count assuming linear scaling.
-        
+
+        Thin engine-aware wrapper over :meth:`estimate_scan_seconds`: the
+        per-point time comes from the affine cost model (``per_point_seconds``)
+        and the compile estimate from the non-reused compile samples of the same
+        machine pool. Records are filtered to ``engine`` (default ``"mcstas"``).
+
         Args:
-            instrument_name: Name of the instrument
-            num_neutrons: Number of neutrons for the upcoming scan
-            
+            instrument_name: Name of the instrument.
+            num_neutrons: Number of neutrons for the upcoming scan.
+            engine: "mcstas" | "deterministic".
+
         Returns:
             Tuple of (compile_time_estimate, run_time_per_point_estimate).
-            Returns (None, None) if no historical data available.
+            Returns (None, None) if no historical data for the engine.
         """
-        if instrument_name not in self.records or not self.records[instrument_name]:
+        records = [r for r in (self.records.get(instrument_name, []) or [])
+                   if getattr(r, "engine", "mcstas") == engine]
+        if not records:
             return (None, None)
-        
-        records = self.records[instrument_name]
-        
-        # Calculate averages from all records
-        compile_times = []
-        normalized_run_times = []  # Run time per neutron
-        
-        for rec in records:
-            if rec.num_neutrons > 0 and rec.num_points > 0:
-                if rec.compilation_time > 0:
-                    compile_time = rec.compilation_time
-                elif rec.num_points > 1:
-                    compile_time = rec.first_scan_time - rec.avg_subsequent_time
-                else:
-                    compile_time = 0.0
 
-                if compile_time > 0:  # Only use positive compile times
-                    compile_times.append(compile_time)
+        est = self.estimate_scan_seconds(
+            instrument_name, n_points=1, num_neutrons=num_neutrons,
+            needs_compile=False, engine=engine)
+        run_time_per_point = est.get("per_point_seconds")
 
-                # Normalize run time by neutron count
-                run_time_source = rec.avg_subsequent_time if rec.num_points > 1 else rec.first_scan_time
-                normalized_run_time = run_time_source / rec.num_neutrons
-                normalized_run_times.append(normalized_run_time)
-        
-        if not compile_times and not normalized_run_times:
-            return (None, None)
-        
-        # Average compile time (not dependent on neutrons)
-        avg_compile_time = sum(compile_times) / len(compile_times) if compile_times else 0.0
-        
-        # Average normalized run time, then scale by requested neutrons
-        if normalized_run_times:
-            avg_normalized_run_time = sum(normalized_run_times) / len(normalized_run_times)
-            run_time_per_point = avg_normalized_run_time * num_neutrons
-        else:
-            run_time_per_point = None
-        
-        return (avg_compile_time, run_time_per_point)
-    
-    def estimate_total_time(self, 
-                           instrument_name: str, 
-                           num_points: int, 
-                           num_neutrons: int) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        pairs, _ = self._select_pool(records)
+        compile_time = self._compile_seconds(pairs)
+        return (compile_time, run_time_per_point)
+
+    def estimate_total_time(self,
+                            instrument_name: str,
+                            num_points: int,
+                            num_neutrons: int,
+                            engine: str = "mcstas"
+                            ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
         """Estimate total scan time including compile time.
-        
+
         Args:
-            instrument_name: Name of the instrument
-            num_points: Number of scan points
-            num_neutrons: Number of neutrons per point
-            
+            instrument_name: Name of the instrument.
+            num_points: Number of scan points.
+            num_neutrons: Number of neutrons per point.
+            engine: "mcstas" | "deterministic".
+
         Returns:
             Tuple of (total_time, compile_time, run_time_per_point).
             Any value may be None if no historical data.
         """
-        compile_time, run_time_per_point = self.get_estimates(instrument_name, num_neutrons)
-        
+        compile_time, run_time_per_point = self.get_estimates(
+            instrument_name, num_neutrons, engine=engine)
+
         if compile_time is None or run_time_per_point is None:
             return (None, None, None)
-        
+
         # Total = compile_time + (num_points * run_time_per_point)
-        # Note: First point includes compile, so we don't double-count
+        # Note: First point includes compile, so we don't double-count.
         total_time = compile_time + (num_points * run_time_per_point)
-        
+
         return (total_time, compile_time, run_time_per_point)
     
     @staticmethod
@@ -321,8 +315,9 @@ class RuntimeTracker:
     # this floor weight so a single fresh-install benchmark keeps anchoring
     # estimates even after months of no benchmarking.
     BENCHMARK_FLOOR_WEIGHT = 0.25
-    # Per-point time is a weighted median over the K nearest-ncount samples.
-    K_NEAREST = 3
+    # Predictions beyond this factor of the observed ncount range are
+    # confidence-capped (see ``_cap_confidence_for_fit``).
+    EXTRAPOLATION_FACTOR = 10.0
     # Confidence caps applied per selection basis (None => no cap).
     _BASIS_CONFIDENCE_CAP = {"scaled": "low", "pooled": "low"}
     _CONFIDENCE_ORDER = ["none", "low", "medium", "high"]
@@ -390,55 +385,56 @@ class RuntimeTracker:
             return max(weight, self.BENCHMARK_FLOOR_WEIGHT)
         return weight
 
-    @staticmethod
-    def _weighted_median(pairs: List[Tuple[float, float]]) -> Optional[float]:
-        """Weighted median of ``(value, weight)`` pairs (weights > 0)."""
-        if not pairs:
-            return None
-        ordered = sorted(pairs, key=lambda p: p[0])
-        total = sum(w for _, w in ordered)
-        if total <= 0:
-            vals = [v for v, _ in ordered]
-            mid = len(vals) // 2
-            return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2.0
-        half = total / 2.0
-        cum = 0.0
-        for value, weight in ordered:
-            cum += weight
-            if cum >= half:
-                return value
-        return ordered[-1][0]
+    def _per_point_model(self, pairs: List[Tuple[ScanRecord, object]],
+                         num_neutrons: int, engine: str) -> Dict[str, object]:
+        """Per-point seconds at ``num_neutrons`` plus the affine-model diagnostics.
 
-    def _per_point_seconds(self, pairs: List[Tuple[ScanRecord, float]],
-                           num_neutrons: int, engine: str) -> Optional[float]:
-        """Weighted-median seconds/point over the K nearest-ncount samples.
+        Builds ``(ncount, per_point_seconds, weight)`` samples from the pool,
+        each per-point value cross-machine-corrected (a scalar speed ratio for
+        legacy/pooled bases, or the component-wise :func:`scale_per_point` when
+        the pool carries a ``("scaled", local_model, foreign_model)`` tag). The
+        mcstas engine fits the affine cost model and predicts at ``num_neutrons``;
+        the deterministic engine (analytic cost ~independent of ncount) takes a
+        flat weighted median instead.
 
-        Each record contributes a per-point value scaled to ``num_neutrons``
-        (linear in neutron count for mcstas; flat for the deterministic engine,
-        whose analytic cost is ~independent of ncount) and by its cross-machine
-        speed ratio. The K nearest samples by ncount distance are combined with
-        a recency/benchmark weighted median. ``None`` when no usable sample.
+        Returns ``{"per_point", "overhead", "rate", "fit", "ref_ncount"}`` with
+        ``per_point`` ``None`` when no usable sample exists.
         """
         from datetime import datetime
         now = datetime.now()
-        samples: List[Tuple[int, float, float]] = []  # (ncount_dist, value, weight)
+        samples: List[Tuple[float, float, float]] = []  # (ncount, value, weight)
         for rec, scale in pairs:
             if not (rec.num_neutrons and rec.num_neutrons > 0 and rec.num_points > 0):
                 continue
             spp = rec.avg_subsequent_time if rec.num_points > 1 else rec.first_scan_time
             if not spp or spp <= 0:
                 continue
-            if engine == "deterministic":
-                value = spp * scale
+            if isinstance(scale, tuple) and scale and scale[0] == "scaled":
+                _, local_model, foreign_model = scale
+                value = scale_per_point(spp, rec.num_neutrons,
+                                        local_model, foreign_model)
             else:
-                value = spp * scale * (num_neutrons / rec.num_neutrons)
+                value = spp * (1.0 if isinstance(scale, tuple) else scale)
             weight = self._record_weight(rec, now)
-            samples.append((abs(rec.num_neutrons - num_neutrons), value, weight))
+            samples.append((float(rec.num_neutrons), value, weight))
+
+        empty = {"per_point": None, "overhead": None, "rate": None,
+                 "fit": None, "ref_ncount": None}
         if not samples:
-            return None
-        samples.sort(key=lambda s: s[0])
-        knn = samples[:self.K_NEAREST]
-        return self._weighted_median([(v, w) for _, v, w in knn])
+            return empty
+
+        if engine == "deterministic":
+            per_point = weighted_median([(v, w) for _, v, w in samples])
+            return {"per_point": per_point, "overhead": None, "rate": None,
+                    "fit": "flat", "ref_ncount": None}
+
+        model = fit_affine_time_model(samples)
+        per_point, tag = per_point_estimate(model, samples, num_neutrons)
+        return {"per_point": per_point,
+                "overhead": model.get("overhead") if model else None,
+                "rate": model.get("rate") if model else None,
+                "fit": tag,
+                "ref_ncount": reference_ncount(model, samples)}
 
     def _compile_seconds(self, pairs: List[Tuple[ScanRecord, float]]) -> float:
         """Median compile time from non-reused records only (0.0 if none).
@@ -469,13 +465,35 @@ class RuntimeTracker:
             return comps[mid]
         return (comps[mid - 1] + comps[mid]) / 2.0
 
+    def _cap_to(self, confidence: str, cap: str) -> str:
+        """Lower ``confidence`` to ``cap`` when it exceeds it (never raises it)."""
+        order = self._CONFIDENCE_ORDER
+        return confidence if order.index(confidence) <= order.index(cap) else cap
+
     def _cap_confidence(self, confidence: str, basis: Optional[str]) -> str:
         """Apply the per-basis confidence cap (scaled/pooled capped 'low')."""
         cap = self._BASIS_CONFIDENCE_CAP.get(basis)
         if cap is None:
             return confidence
-        order = self._CONFIDENCE_ORDER
-        return confidence if order.index(confidence) <= order.index(cap) else cap
+        return self._cap_to(confidence, cap)
+
+    def _cap_confidence_for_fit(self, confidence: str,
+                                model: Dict[str, object],
+                                num_neutrons: int) -> str:
+        """Cap confidence when predicting outside the observed ncount range.
+
+        Degenerate extrapolation beyond ``EXTRAPOLATION_FACTOR`` of the anchor is
+        forced 'low'; extrapolation within it, and affine prediction beyond the
+        fitted range, are capped 'medium'.
+        """
+        ref = model.get("ref_ncount")
+        fit = model.get("fit")
+        far = bool(ref) and num_neutrons > self.EXTRAPOLATION_FACTOR * ref
+        if fit == "extrapolated":
+            return self._cap_to(confidence, "low" if far else "medium")
+        if fit == "affine" and far:
+            return self._cap_to(confidence, "medium")
+        return confidence
 
     def estimate_scan_seconds(self,
                               instrument_name: str,
@@ -483,7 +501,8 @@ class RuntimeTracker:
                               num_neutrons: int,
                               needs_compile: bool = True,
                               engine: str = "mcstas",
-                              source: Optional[str] = None) -> Dict[str, object]:
+                              source: Optional[str] = None,
+                              mpi_count: Optional[int] = None) -> Dict[str, object]:
         """Estimate wall-clock seconds for a scan, with a confidence tier.
 
         Records are filtered to ``instrument_name`` + ``engine`` (and, when
@@ -520,18 +539,34 @@ class RuntimeTracker:
         confidence = self._cap_confidence(confidence, basis)
         machine_samples = len(pairs)
 
-        per_point = self._per_point_seconds(pairs, num_neutrons, engine)
+        # MPI prefer-match: keep records whose worker count matches the request
+        # (or is unknown). If none match, fall back to the full pool at low
+        # confidence rather than blanking the estimate.
+        preferred = [(r, s) for (r, s) in pairs
+                     if getattr(r, "mpi_count", None) in (mpi_count, None)]
+        if preferred:
+            pairs = preferred
+        else:
+            confidence = self._cap_to(confidence, "low")
+
+        model = self._per_point_model(pairs, num_neutrons, engine)
+        per_point = model["per_point"]
+        extra = {"per_point_seconds": per_point,
+                 "overhead_seconds": model["overhead"],
+                 "rate_per_neutron": model["rate"],
+                 "fit": model["fit"]}
         if per_point is None:
             return {"estimated_seconds": None, "confidence": confidence,
                     "samples": samples, "basis": basis,
-                    "machine_samples": machine_samples}
+                    "machine_samples": machine_samples, **extra}
 
+        confidence = self._cap_confidence_for_fit(confidence, model, num_neutrons)
         total = per_point * n_points
         if needs_compile:
             total += self._compile_seconds(pairs)
         return {"estimated_seconds": total, "confidence": confidence,
                 "samples": samples, "basis": basis,
-                "machine_samples": machine_samples}
+                "machine_samples": machine_samples, **extra}
 
     def has_data(self, instrument_name: str) -> bool:
         """Check if there is historical data for an instrument.

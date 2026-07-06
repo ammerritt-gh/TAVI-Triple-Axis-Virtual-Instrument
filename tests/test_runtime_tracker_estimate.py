@@ -3,6 +3,8 @@ compile inclusion, and backward-compatible loading of old runtimes.json files.
 """
 import json
 
+import pytest
+
 from tavi.runtime_tracker import RuntimeTracker
 
 
@@ -83,8 +85,9 @@ def test_nearest_sample_chosen_for_scaling(tmp_path):
     })
     est = tracker.estimate_scan_seconds("in8", n_points=1, num_neutrons=900000,
                                         needs_compile=False)
-    # Nearest is the 1M sample (10 s/pt): 10 * (900000/1000000) = 9.0
-    assert est["estimated_seconds"] == 9.0
+    # Two groups spread 10x -> affine line through both points; predicting at
+    # 9e5 gives 9.0 (approx: closed-form fit carries tiny float rounding).
+    assert est["estimated_seconds"] == pytest.approx(9.0)
 
 
 def test_needs_compile_adds_compile_time(tmp_path):
