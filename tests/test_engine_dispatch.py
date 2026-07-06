@@ -88,6 +88,13 @@ def test_seed_none_is_allowed():
     assert seed is None
 
 
+def test_seed_negative_rejected():
+    # numpy default_rng((seed, i)) requires non-negative entries; reject at
+    # submit (400) instead of failing the job at the first scan point.
+    with pytest.raises(ApiError):
+        parse_scan_engine({"engine": "deterministic", "seed": -1})
+
+
 def test_noiseless_must_be_bool():
     with pytest.raises(ApiError) as ei:
         parse_scan_engine({"noiseless": "yes"})

@@ -4994,6 +4994,10 @@ class TAVIController(QObject):
                     job.error = reason
                     job.finished_at = time.time()
                     job.notify_state_change()
+            # Every other exit of this method (and the McStas path) emits
+            # scan_completed even on failure; without it display_dock never
+            # leaves its in-progress state.
+            self.scan_completed.emit()
             return data_folder
 
         brightness = _det._brightness_for(sqw)
