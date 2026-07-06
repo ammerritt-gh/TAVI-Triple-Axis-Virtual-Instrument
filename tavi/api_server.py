@@ -97,6 +97,53 @@ class ApiError(Exception):
         self.details = details
 
 
+# Execution backends selectable per POST /scan (docs/CONTROL_FEATURES_DESIGN.md
+# §6.4). ``mcstas`` is the full Monte-Carlo default; ``deterministic`` is the
+# fast analytic S(Q,w) x resolution + seeded-Poisson tier. Advertised by
+# GET /schema and validated by ``parse_scan_engine`` below.
+ALLOWED_ENGINES = ("mcstas", "deterministic")
+DEFAULT_ENGINE = "mcstas"
+
+
+def parse_scan_engine(body):
+    """Validate the optional ``engine``/``seed``/``noiseless`` POST /scan fields.
+
+    Qt-free so the exact contract can be unit-tested without importing the
+    controller. Follows the same body-validation vocabulary as ``submit_scan``:
+    a bad type or unknown value is a 400 ``bad_request`` with the allowed list.
+
+    Returns ``(engine, seed, noiseless)``:
+      * ``engine``      one of :data:`ALLOWED_ENGINES` (default ``"mcstas"``).
+      * ``seed``        ``int`` or ``None`` (deterministic per-point RNG seed).
+      * ``noiseless``   ``bool`` (deterministic-only; return means, no Poisson).
+    """
+    if not isinstance(body, dict):
+        raise ApiError(400, "bad_request", "Request body must be a JSON object")
+
+    engine = body.get("engine", DEFAULT_ENGINE)
+    if engine is None:
+        engine = DEFAULT_ENGINE
+    if not isinstance(engine, str) or engine not in ALLOWED_ENGINES:
+        raise ApiError(
+            400, "bad_request",
+            "Unknown engine %r; allowed: %s"
+            % (engine, ", ".join(ALLOWED_ENGINES)),
+            details={"allowed": list(ALLOWED_ENGINES)},
+        )
+
+    seed = body.get("seed")
+    if seed is not None:
+        # Reject bools (a bool is an int subclass) and non-integers.
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            raise ApiError(400, "bad_request", "'seed' must be an integer")
+
+    noiseless = body.get("noiseless", False)
+    if not isinstance(noiseless, bool):
+        raise ApiError(400, "bad_request", "'noiseless' must be a boolean")
+
+    return engine, seed, noiseless
+
+
 def _json_safe(obj):
     """Recursively convert NaN/inf floats to ``None`` so output is valid JSON.
 

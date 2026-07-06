@@ -46,7 +46,8 @@ KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...40 fields...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
   POST /validate  body {same as /scan}  -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates)
-  POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool} -> 202 {job_id, state, position, eta, validation}
+  POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool} -> 202 {job_id, state, position, eta, validation}
+              engine "deterministic" = fast analytic S(Q,w) x resolution + seeded Poisson (validator); check result.metadata.cn_valid
   GET  /scan/{id}?wait=N     -> block up to N s for terminal state; body carries "timed_out":bool
   GET  /scan/{id}/data       -> result + scan_values_1, counts (or counts_grid), skipped_points
   GET  /scan/{id}/plot.png   -> 512x512 PNG of current arrays (409 no_data if nothing renderable yet)
@@ -316,6 +317,63 @@ invalid scan command, infeasible point, over budget) never leaves an inline
 Only a *successful* `isolated:false` submit keeps its patch applied globally (the
 default, backward-compatible behavior).
 
+**`engine`** (optional string, default `"mcstas"`). Selects the execution
+backend for this job. `GET /schema` advertises the allowed list under `engines`.
+
+- **`"mcstas"`** — the full Monte-Carlo simulation. This is the default and the
+  reference; nothing changes for existing clients.
+- **`"deterministic"`** — a **fast analytic check**: the same ground-truth
+  S(Q,ω) that parameterizes the McStas sample component, convolved with the
+  theoretical Cooper–Nathans / Popovici resolution ellipsoid, plus seeded
+  Poisson counting. Milliseconds per point instead of seconds-to-minutes. It
+  runs through the identical job/queue/SSE pipeline: the same `scan_initialized`,
+  `point`, `point_invalid`, and `progress` events, the same `result.counts` /
+  `counts_grid` arrays, the same feasibility skipping. Use it to sanity-check
+  that a scan makes sense (peaks where the dispersion predicts, resolution is
+  reasonable) before committing McStas time.
+
+An unknown engine → `400 bad_request` whose `details.allowed` is the valid list.
+
+Two deterministic-only body fields:
+
+- **`seed`** (optional integer). RNG seed for the Poisson noise. When omitted,
+  the seed is a **stable hash of the job id**, so a given job reproduces
+  bit-identically on re-run. Each point draws from `default_rng((seed, point_index))`
+  so a skipped point never shifts a later point's noise. Echoed in provenance.
+- **`noiseless`** (optional boolean, default `false`). When `true`, the engine
+  returns the exact analytic **means** with no Poisson draw — useful for
+  comparing shapes without counting statistics. Ignored by the McStas engine.
+
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "deltaE 0.5 3.0 0.125"},
+       "engine": "deterministic", "seed": 1, "noiseless": false}'
+```
+
+**Provenance.** The chosen engine is recorded on the job: the `launch` summary
+(`GET /scan/{id}`, `/data`, and the saved JSON) carries `"engine"`, plus `"seed"`
+and `"noiseless"` when the deterministic engine ran. A deterministic job's
+`result.metadata` is additionally stamped with `engine`, `seed`, `method`,
+`cn_valid`, and `invalidations` (see below).
+
+**Honesty stamps.** Theoretical resolution is only valid when the analytic
+assumptions hold. Configurations that break them (e.g. nested-mirror optics
+replacing the collimator divergence model) do **not** silently fall back: the
+engine still runs, but stamps `metadata.cn_valid = false` and lists each reason
+in `metadata.invalidations`. Treat those results as a fidelity gap, not an error
+— always check `cn_valid` before trusting deterministic intensities.
+
+**Brightness caveat.** Absolute deterministic counts depend on a **calibrated**
+brightness constant per sample model (anchored to a single McStas reference
+point), *not* a first-principles normalization. Peak positions, relative
+intensities across a scan, and widths are meaningful; the absolute count scale is
+an approximation. For absolute counts, run McStas.
+
+The deterministic engine requires a sample with a registered analytic ground
+truth. An unknown sample fails the job cleanly with reason `no analytic ground
+truth for sample 'X'` (a failed job with a message, never a crash).
+
 ### POST /validate
 Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
 feasibility, budget, and ETA — **without queueing anything and without mutating
@@ -406,6 +464,12 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
    {"...": "one entry per writable parameter"}],
  "scan_variables": ["H", "K", "L", "qx", "qy", "qz", "deltaE", "A1", "A2",
    "A3", "A4", "omega", "2theta", "chi", "kappa", "psi", "rhm", "rvm", "rha", "rva"],
+ "engines": ["mcstas", "deterministic"],
+ "scan_body_fields": [
+   {"name": "engine", "type": "string", "allowed": ["mcstas", "deterministic"],
+    "default": "mcstas"},
+   {"name": "seed", "type": "integer", "default": null},
+   {"name": "noiseless", "type": "boolean", "default": false}],
  "scan_command_grammar": "VARIABLE start stop STEP. The third number (the last
    token) is the STEP SIZE, not the number of points. ...",
  "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
@@ -416,6 +480,9 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
 ```
 Each field carries `name`, `type`, `units` (where known), and `allowed` (the
 permitted values for choice fields — crystal ids, `K_fixed` modes, source types).
+`engines` is the list of execution backends selectable via the `POST /scan`
+`engine` body field; `scan_body_fields` documents the optional top-level scan
+body fields (`engine`, `seed`, `noiseless`) beyond `parameters`.
 `examples` names the worked examples elsewhere in this guide.
 
 **Idempotency-Key** (optional request header). Send an `Idempotency-Key: <string>`

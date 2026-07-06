@@ -199,7 +199,7 @@ class ScanJob:
         """
         ls = self.launch_state if isinstance(self.launch_state, dict) else {}
         vals = ls.get('vals', {})
-        return {
+        summary = {
             'scan_command1': vals.get('scan_command1', ''),
             'scan_command2': vals.get('scan_command2', ''),
             'number_neutrons': _json_safe(vals.get('number_neutrons')),
@@ -212,7 +212,19 @@ class ScanJob:
             # Values that are not strictly JSON-serializable (live config
             # objects and the like) are dropped rather than leaked.
             'parameters': _serializable_params(vals),
+            # Execution-backend provenance (docs/CONTROL_FEATURES_DESIGN.md §6.4):
+            # which engine ran this job, so GET /scan/{id}, /data, and the saved
+            # JSON record it (ISAR reads it). Defaults to 'mcstas' for legacy
+            # jobs that predate engine selection.
+            'engine': ls.get('engine', 'mcstas'),
         }
+        # Deterministic-only provenance: surface the seed and noiseless flag
+        # only when present, so an ordinary McStas job's summary stays unchanged.
+        if ls.get('seed') is not None:
+            summary['seed'] = _json_safe(ls.get('seed'))
+        if ls.get('noiseless'):
+            summary['noiseless'] = True
+        return summary
 
     def snapshot(self, include_data: bool = False) -> Dict[str, Any]:
         """Return a deep-copied, JSON-safe view of this job under its lock."""
