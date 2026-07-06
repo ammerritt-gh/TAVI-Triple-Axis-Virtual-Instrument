@@ -75,9 +75,6 @@ Roadmap order per CONTROL_FEATURES §9:
 
 ## Housekeeping
 
-- [ ] **Push `TAVI-API` / open PR to `main`** — branch has the full remote API,
-      instrument selection memory + switcher menu, and all closed-loop design docs;
-      unpushed as of 2026-07-03.
 - [ ] **Test-runner note** — full `pytest tests/` crashes the interpreter
       (mcstasscript import, fault 0xc06d007f). API test-file allowlist:
       `test_api_server.py test_scan_jobs.py test_runtime_tracker_*.py

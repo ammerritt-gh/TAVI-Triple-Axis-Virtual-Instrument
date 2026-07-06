@@ -1,7 +1,7 @@
 # Control Features — Design Document
 
 *Date: 2026-07-03*
-*Status: **Draft** — nothing in this document is implemented. Every module, endpoint, signal, and file named below is proposed future work. Where it references existing symbols (e.g. `compute_scan_snapshot`, `submit_scan_job`, `ScanResult`) those are real and current; where it references new ones (e.g. `tavi/scan_fits.py`, `POST /goto`, `CampaignRegistry`) those do not exist yet.*
+*Status: **Draft**, updated 2026-07-06 — §5 (resolution ellipsoids: `tavi/resolution.py`, Cooper–Nathans and Popovici, `GET /resolution`) and §6 (deterministic engine: `tavi/deterministic_engine.py`, `POST /scan` with `engine: "deterministic"`) are now implemented and live. §1–4 (goto/path/campaigns), §7 (virtual clock), and §8 (point-list scans) remain proposed future work; where those sections reference new symbols (e.g. `tavi/scan_fits.py`, `POST /goto`, `CampaignRegistry`) they do not exist yet.*
 
 > Companion documents: `docs/API_SERVER_DESIGN.md` (the live remote-API architecture this builds on), `docs/API_USER_GUIDE.md` (client-facing endpoint/field reference), `docs/PIPELINE_DESIGN.md` (per-point prep/run pipeline), `docs/INSTRUMENT_LAYOUT.md` (TAS geometry, angles, scan modes), `docs/MCSTAS_PARAMETERS.md` (build-time vs run-time parameter split).
 

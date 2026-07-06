@@ -5,6 +5,13 @@ driver is **not** part of the TAVI tree; it is a client of TAVI's API and of
 ISAR's files, and will almost certainly live in **its own repository**. Nothing
 here is a commitment to land code in TAVI.*
 
+> **Superseded 2026-07-06:** the "own repository" question below is settled —
+> the driver lives in the ISAR repo as `isar/drive/` (an `isar drive` CLI
+> subcommand). The analysis boundary is enforced by rule, not by process
+> separation: `isar.drive` consumes analysis only via the `isar run`
+> subprocess and the file contract (`report/results.csv`, `report.json`,
+> `card.state.json`), never by importing fit internals.
+
 > This document describes the **third component** of a settled three-component
 > architecture (§1). Where it names TAVI symbols and endpoints (`POST /validate`,
 > `GET /schema`, `GET /scan/{id}/data`, `eta`, `isolated`, `allow_partial`,
