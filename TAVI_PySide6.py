@@ -786,6 +786,10 @@ _API_TERMINAL_STATES = frozenset(
     {JobState.DONE, JobState.FAILED, JobState.CANCELLED, JobState.STOPPED}
 )
 
+# The same terminal set as plain string values (job_state_changed carries the
+# JobState.value string, not the enum). Used by the benchmark completion hook.
+_JOB_TERMINAL_STATE_VALUES = frozenset(s.value for s in _API_TERMINAL_STATES)
+
 
 class TAVIController(QObject):
     """Controller class to connect GUI with backend logic."""
@@ -820,6 +824,11 @@ class TAVIController(QObject):
 
     # Signal for job-queue state transitions (job_id, state value)
     job_state_changed = Signal(str, str)
+
+    # Emitted once every stage of a benchmark plan has reached a terminal state
+    # (after the machine speed index has been recomputed and stored). The
+    # benchmark dialog refreshes its machine panel + cross-check table on it.
+    benchmark_finished = Signal()
 
     # Remote-API dock feeds (API dock, docs/API_SERVER_DESIGN.md sec 10):
     #   api_activity     -- one activity-log line
@@ -863,6 +872,10 @@ class TAVIController(QObject):
         self._job_queue = queue.Queue()
         self._active_job = None  # job currently RUNNING in the worker (or None)
         self.last_scan_result = None  # ScanResult from the most recent finished job
+        # Job ids of the benchmark plan currently in flight (set by
+        # run_benchmark, drained by _on_job_state_changed when all are terminal).
+        self._benchmark_job_ids = []
+        self._benchmark_plan = None
         self._shutdown_called = False
         self._job_worker = threading.Thread(
             target=self._job_worker_loop, name="scan-job-worker", daemon=True
@@ -3759,14 +3772,17 @@ class TAVIController(QObject):
         return None
 
     @staticmethod
-    def _can_reuse_binary(cache, fingerprint, diagnostic_mode):
+    def _can_reuse_binary(cache, fingerprint, diagnostic_mode,
+                          force_rebuild=False):
         """Whether the previous scan's compiled binary satisfies this scan.
 
         Diagnostic-mode scans always rebuild: their first point must run
         ``backengine()`` so McStasData is available for the diagnostic plots
-        (design record §18.5).
+        (design record §18.5). ``force_rebuild`` (threaded from the launch
+        state) unconditionally forces a rebuild -- the benchmarker's cold stage
+        uses it to measure a genuine compile.
         """
-        if diagnostic_mode or not cache:
+        if force_rebuild or diagnostic_mode or not cache:
             return False
         execution_state = cache.get("execution_state")
         return bool(
@@ -4226,6 +4242,13 @@ class TAVIController(QObject):
         if dock is not None and hasattr(dock, 'run_button'):
             dock.run_button.setEnabled(not busy)
 
+        # Benchmark completion hook: once every stage of the in-flight plan has
+        # reached a terminal state, recompute + store this machine's speed index.
+        if (job_id in self._benchmark_job_ids
+                and state in _JOB_TERMINAL_STATE_VALUES
+                and self._all_benchmark_jobs_terminal()):
+            self._finalize_benchmark()
+
     def _has_pending_jobs(self):
         """True if any job is currently QUEUED or RUNNING."""
         for job in self._job_registry.all_jobs():
@@ -4233,6 +4256,257 @@ class TAVIController(QObject):
                 if job.state in (JobState.QUEUED, JobState.RUNNING):
                     return True
         return False
+
+    # ==================================================================
+    # Scan-time benchmarker (Utilities -> Scan-time benchmark)
+    # ==================================================================
+
+    def _deterministic_supported(self):
+        """Whether the active instrument can run the deterministic engine.
+
+        The analytic branch needs the plugin's ``resolution_config`` to build a
+        per-point resolution kernel; without it the deterministic stage is
+        omitted from the benchmark plan.
+        """
+        return callable(getattr(self.instrument, "resolution_config", None))
+
+    def build_benchmark_plan(self, ncounts=None):
+        """Return the benchmark plan for the current instrument.
+
+        Delegates the plan shape to :mod:`tavi.benchmark` (Qt-free), then
+        enriches each stage with ``predicted_seconds`` (the current machine-aware
+        estimate for that stage) so the dialog can show a predicted duration.
+        ``ncounts`` overrides the mcstas ncounts as ``(low, high)``.
+        """
+        from tavi.benchmark import build_benchmark_plan as _build
+
+        plan = _build(
+            ncounts=ncounts,
+            deterministic_supported=self._deterministic_supported(),
+        )
+        for stage in plan:
+            est = self.runtime_tracker.estimate_scan_seconds(
+                self.instrument.id, stage["points"], stage["ncount"],
+                needs_compile=stage["force_rebuild"], engine=stage["engine"],
+            )
+            stage["predicted_seconds"] = est.get("estimated_seconds")
+        return plan
+
+    def _benchmark_scan_command(self, points):
+        """Build a tiny centred scan command around the current GUI position.
+
+        Picks the scan variable from the current scan command (falling back to a
+        mode-appropriate default) and centres a ``points``-point sweep on that
+        variable's current value with a small fixed step. The result is a valid
+        absolute scan command; ``run_benchmark`` runs it with relative mode off
+        and feasibility filtering, so no point is ever driven out of range.
+        """
+        vals = self.get_gui_values() or {}
+        cmd1 = (vals.get("scan_command1") or "").strip()
+        cmd2 = (vals.get("scan_command2") or "").strip()
+
+        var = None
+        if cmd1:
+            parts = cmd1.split()
+            if parts:
+                var = self.normalize_scan_variable(parts[0])
+        if not var:
+            mode = self._determine_scan_mode(cmd1, cmd2)
+            var = {"rlu": "H", "momentum": "qx",
+                   "angle": "A3", "orientation": "omega"}.get(mode, "H")
+
+        template = self._build_scan_point_template(
+            self._determine_scan_mode(var, ""), vals
+        )
+        try:
+            center = float(self._get_current_value_for_variable(var, vals, template))
+        except Exception:
+            center = 0.0
+
+        step = 0.01
+        n = max(1, int(points))
+        half = step * (n - 1) / 2.0
+        start = center - half
+        end = center + half
+        return f"{var} {start:.4f} {end:.4f} {step}"
+
+    def run_benchmark(self, plan):
+        """Queue every stage of ``plan`` as a benchmark scan job.
+
+        Each stage re-freezes the current launch state, overrides the scan
+        command with a tiny centred scan, sets the stage's engine / ncount /
+        force-rebuild flag, tags it ``source="benchmark"``, and submits it
+        through the existing job worker (stages run sequentially). Infeasible
+        points are pre-filtered (never driven to). Refuses to start while any
+        scan job is already QUEUED/RUNNING. Returns the submitted job ids.
+        """
+        if self._has_pending_jobs():
+            self.print_to_message_center(
+                "Benchmark: a scan is already running or queued; try again once idle."
+            )
+            return []
+        if not plan:
+            return []
+
+        self.save_parameters()
+        self._benchmark_plan = list(plan)
+        self._benchmark_job_ids = []
+
+        for i, stage in enumerate(plan):
+            launch_state = self._collect_simulation_launch_state()
+            if not launch_state:
+                self.print_to_message_center(
+                    "Benchmark: could not read GUI values; aborting."
+                )
+                break
+
+            vals = launch_state["vals"]
+            vals["scan_command1"] = self._benchmark_scan_command(stage["points"])
+            vals["scan_command2"] = ""
+            vals["number_neutrons"] = int(stage["ncount"])
+            # A benchmark is a machine baseline, not a diagnostic run: diagnostic
+            # mode forces a rebuild every point and would break the warm stages.
+            vals["diagnostic_mode"] = False
+
+            launch_state["engine"] = stage["engine"]
+            launch_state["benchmark"] = True
+            launch_state["force_rebuild"] = bool(stage["force_rebuild"])
+            launch_state["relative_mode_1"] = False
+            launch_state["relative_mode_2"] = False
+            launch_state["save_folder_input"] = os.path.join(
+                self.output_directory,
+                f"benchmark_{stage['engine']}_{int(stage['ncount'])}_{i + 1}",
+            )
+
+            # Pre-filter infeasible points so a tiny scan near an edge geometry
+            # skips rather than fails (reuses the API allow_partial machinery).
+            try:
+                validation = self.validate_scan_launch_state(launch_state)
+                infeasible = validation.get("infeasible", [])
+                if infeasible:
+                    launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+                    launch_state["skipped_points"] = infeasible
+            except Exception:
+                pass
+
+            job = self.submit_scan_job(launch_state, "benchmark")
+            self._benchmark_job_ids.append(job.job_id)
+
+        self.print_to_message_center(
+            f"Benchmark: queued {len(self._benchmark_job_ids)} stage(s)."
+        )
+        return list(self._benchmark_job_ids)
+
+    def cancel_benchmark(self):
+        """Cancel every in-flight benchmark stage (queued or running)."""
+        self.stop_event.set()
+        for job_id in list(self._benchmark_job_ids):
+            self.cancel_job(job_id)
+
+    def _all_benchmark_jobs_terminal(self):
+        """True if every tracked benchmark job has reached a terminal state."""
+        if not self._benchmark_job_ids:
+            return False
+        for job_id in self._benchmark_job_ids:
+            job = self._job_registry.get(job_id)
+            if job is None:
+                continue
+            with job.lock:
+                if job.state in (JobState.QUEUED, JobState.RUNNING):
+                    return False
+        return True
+
+    def _finalize_benchmark(self):
+        """Recompute + store this machine's speed index, then signal the dialog.
+
+        Runs once the whole plan is terminal. The speed index is the median
+        per-neutron seconds over this machine's benchmark records (warm mcstas
+        stages); it anchors cross-machine scaling in the estimator.
+        """
+        from tavi.machine_profile import machine_speed_index
+
+        fp = machine_fingerprint()
+        machine_id = fp["machine_id"]
+        mine = [
+            r for r in self.runtime_tracker.records.get(self.instrument.id, [])
+            if getattr(r, "machine_id", None) == machine_id
+        ]
+        speed_index = machine_speed_index(mine)
+        try:
+            self.runtime_tracker.set_machine_profile(
+                machine_id=machine_id,
+                hostname=fp.get("hostname", ""),
+                cpu_name=fp.get("cpu_name", ""),
+                cpu_count=fp.get("cpu_count", 0),
+                speed_index=speed_index,
+            )
+        except Exception as exc:
+            self.print_to_message_center(
+                f"Benchmark: could not store machine profile ({exc})."
+            )
+
+        # Clear the in-flight tracking so a later normal scan cannot re-trigger.
+        self._benchmark_job_ids = []
+        self.print_to_message_center(
+            "Benchmark complete. Machine speed index: "
+            + (f"{speed_index:.3e} s/neutron" if speed_index else "unavailable")
+        )
+        self.runtime_data_updated.emit()
+        self.benchmark_finished.emit()
+
+    def benchmark_crosscheck(self, plan=None):
+        """Cross-check the latest benchmark against organic-history predictions.
+
+        For each stage, pairs the measured benchmark time (from this machine's
+        benchmark records) with the estimate the organic history alone would
+        have produced for the same config, and reports the signed drift percent.
+        Headless-testable; feeds the dialog's cross-check table. Returns a list
+        of ``{label, measured, predicted, drift_pct}`` rows.
+        """
+        from tavi.benchmark import crosscheck_rows
+
+        if plan is None:
+            plan = self._benchmark_plan or self.build_benchmark_plan()
+
+        machine_id = machine_fingerprint()["machine_id"]
+        recs = [
+            r for r in self.runtime_tracker.records.get(self.instrument.id, [])
+            if getattr(r, "machine_id", None) == machine_id
+            and getattr(r, "source", "organic") == "benchmark"
+        ]
+
+        stage_results = []
+        for stage in plan:
+            measured = self._latest_benchmark_measured(recs, stage)
+            predicted = self.runtime_tracker.estimate_scan_seconds(
+                self.instrument.id, stage["points"], stage["ncount"],
+                needs_compile=stage["force_rebuild"], engine=stage["engine"],
+                source="organic",
+            ).get("estimated_seconds")
+            stage_results.append({
+                "label": stage["label"],
+                "measured": measured,
+                "predicted": predicted,
+            })
+        return crosscheck_rows(stage_results)
+
+    @staticmethod
+    def _latest_benchmark_measured(records, stage):
+        """Total time of the most recent benchmark record matching ``stage``.
+
+        Matches on engine + neutron count (points may differ when infeasible
+        points were skipped). Returns ``None`` when no record matches.
+        """
+        engine = stage["engine"]
+        ncount = int(stage["ncount"])
+        match = [
+            r for r in records
+            if getattr(r, "engine", "mcstas") == engine
+            and getattr(r, "num_neutrons", None) == ncount
+        ]
+        if not match:
+            return None
+        return match[-1].total_time
 
     def _publish_api_event(self, event: str, data: dict):
         """Publish an SSE event to API clients, if a server is attached.
@@ -5717,7 +5991,8 @@ class TAVIController(QObject):
             scan_config, diagnostic_mode, effective_diagnostic_settings
         )
         reuse_binary = self._can_reuse_binary(
-            self._binary_reuse_cache, build_fingerprint, diagnostic_mode
+            self._binary_reuse_cache, build_fingerprint, diagnostic_mode,
+            force_rebuild=bool(launch_state.get("force_rebuild")),
         )
 
         # Show pre-scan estimate based on historical data (machine-aware,
