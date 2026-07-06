@@ -388,3 +388,15 @@ class PUMAPlugin:
             instrument, snapshot, output_folder, number_neutrons,
             execution_state, mpi_count,
         )
+
+    def check_point_feasibility(self, config, scan_mode, scan_point, vals):
+        """Return ``(feasible, reason)`` for one scan point (see contract).
+
+        Delegates to the shared TAS feasibility helper, which reuses the exact
+        per-point angle math ``compute_snapshot`` runs. Used by the remote API
+        to reject or (with ``allow_partial``) skip geometrically unreachable
+        scan points before queueing.
+        """
+        from instruments.PUMA_instrument_definition import check_point_feasibility
+
+        return check_point_feasibility(config, scan_mode, scan_point, vals)
