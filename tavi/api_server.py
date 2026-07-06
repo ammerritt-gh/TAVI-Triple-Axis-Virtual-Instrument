@@ -504,6 +504,24 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, self._call_backend("submit_validate", body))
             return
 
+        if segments == ["resolution"]:
+            # Theoretical TAS resolution at one (H, K, L, deltaE) point. Read-only
+            # (never mutates), so -- like /state, /schema and /validate -- it is
+            # allowed in read-only access mode. All query params are optional;
+            # omitted (H, K, L, deltaE) default to the current GUI values and an
+            # omitted method defaults to "auto". An infeasible geometry comes back
+            # as HTTP 200 with {"ok": false, "reason": ...} (not an error envelope).
+            self._require_method(method, "GET")
+            resolution_query = {
+                "H": self._parse_float_query(query, "H"),
+                "K": self._parse_float_query(query, "K"),
+                "L": self._parse_float_query(query, "L"),
+                "deltaE": self._parse_float_query(query, "deltaE"),
+                "method": self._parse_resolution_method(query),
+            }
+            self._send_json(200, self._call_backend("get_resolution", resolution_query))
+            return
+
         if segments == ["events"]:
             self._require_method(method, "GET")
             self._handle_sse()
@@ -617,6 +635,44 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
         if wait_seconds < 0:
             wait_seconds = 0.0
         return min(wait_seconds, MAX_WAIT_SECONDS)
+
+    #: Resolution methods GET /resolution accepts (mirrors tavi.resolution).
+    _RESOLUTION_METHODS = ("auto", "cooper_nathans", "popovici")
+
+    @staticmethod
+    def _parse_float_query(query, name):
+        """Parse an optional float query param. Absent/empty -> None.
+
+        Raises ``ApiError`` 400 for a non-numeric value (matches the ``wait`` /
+        ``limit`` error convention).
+        """
+        values = query.get(name)
+        if not values:
+            return None
+        raw = values[0].strip()
+        if raw == "":
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            raise ApiError(400, "bad_request", "%s must be a number" % name)
+
+    @classmethod
+    def _parse_resolution_method(cls, query):
+        """Parse ``?method=`` for /resolution. Absent/empty -> "auto".
+
+        Raises ``ApiError`` 400 for a value outside the allowed set.
+        """
+        values = query.get("method")
+        if not values or values[0].strip() == "":
+            return "auto"
+        method = values[0].strip()
+        if method not in cls._RESOLUTION_METHODS:
+            raise ApiError(
+                400, "bad_request",
+                "method must be one of: %s" % ", ".join(cls._RESOLUTION_METHODS),
+            )
+        return method
 
     # ---- SSE -----------------------------------------------------------
 
