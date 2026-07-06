@@ -315,36 +315,152 @@ class RuntimeTracker:
             return "medium"
         return "high"
 
-    def _per_point_seconds(self, records: List[ScanRecord],
-                           num_neutrons: int) -> Optional[float]:
-        """Estimate seconds/point for ``num_neutrons`` by nearest-sample scaling.
+    # Recency weighting: a sample's weight halves every 30 days of age.
+    RECENCY_HALF_LIFE_DAYS = 30.0
+    # Benchmark records are clean machine baselines; they never decay below
+    # this floor weight so a single fresh-install benchmark keeps anchoring
+    # estimates even after months of no benchmarking.
+    BENCHMARK_FLOOR_WEIGHT = 0.25
+    # Per-point time is a weighted median over the K nearest-ncount samples.
+    K_NEAREST = 3
+    # Confidence caps applied per selection basis (None => no cap).
+    _BASIS_CONFIDENCE_CAP = {"scaled": "low", "pooled": "low"}
+    _CONFIDENCE_ORDER = ["none", "low", "medium", "high"]
 
-        Each record contributes a ``(ncount, seconds_per_point)`` sample; the
-        per-point time is taken to scale linearly with neutron count, so we pick
-        the sample whose ncount is closest to the request and scale it. Returns
-        ``None`` when no usable sample exists.
+    def _select_pool(self, records: List[ScanRecord]
+                     ) -> Tuple[List[Tuple[ScanRecord, float]], Optional[str]]:
+        """Choose the sample pool for the current machine and its basis.
+
+        Returns ``(pairs, basis)`` where ``pairs`` is a list of
+        ``(record, speed_scale)`` and ``basis`` is one of
+        ``"local"|"legacy"|"scaled"|"pooled"`` (``None`` when ``records`` is
+        empty). ``speed_scale`` is the cross-machine speed ratio applied to a
+        foreign record (1.0 for same-machine/legacy/pooled records).
+
+        Chain: local (this machine) -> legacy (unknown machine, pre-v2) ->
+        scaled (foreign machine, both benchmarked) -> pooled (everything).
         """
-        samples: List[Tuple[int, float]] = []
-        for rec in records:
-            if rec.num_neutrons and rec.num_neutrons > 0 and rec.num_points > 0:
-                spp = rec.avg_subsequent_time if rec.num_points > 1 else rec.first_scan_time
-                if spp and spp > 0:
-                    samples.append((rec.num_neutrons, spp))
+        from tavi.machine_profile import machine_fingerprint
+
+        if not records:
+            return ([], None)
+
+        me = machine_fingerprint()["machine_id"]
+
+        local = [r for r in records if r.machine_id == me]
+        if local:
+            return ([(r, 1.0) for r in local], "local")
+
+        legacy = [r for r in records if r.machine_id is None]
+        if legacy:
+            return ([(r, 1.0) for r in legacy], "legacy")
+
+        foreign = [r for r in records if r.machine_id is not None]
+        local_si = (self.machines.get(me) or {}).get("speed_index")
+        if local_si:
+            scaled: List[Tuple[ScanRecord, float]] = []
+            for r in foreign:
+                foreign_si = (self.machines.get(r.machine_id) or {}).get("speed_index")
+                if foreign_si:
+                    scaled.append((r, local_si / foreign_si))
+            if scaled:
+                return (scaled, "scaled")
+
+        return ([(r, 1.0) for r in records], "pooled")
+
+    def _recency_weight(self, timestamp: str, now) -> float:
+        """Weight in (0, 1]: halves every ``RECENCY_HALF_LIFE_DAYS`` of age.
+
+        Unparseable timestamps are treated as fresh (weight 1.0). The result is
+        floored at a tiny epsilon so every sample stays usable.
+        """
+        from datetime import datetime
+        try:
+            ts = datetime.fromisoformat(timestamp)
+            age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+            weight = 0.5 ** (age_days / self.RECENCY_HALF_LIFE_DAYS)
+        except (ValueError, TypeError):
+            weight = 1.0
+        return max(weight, 1e-9)
+
+    def _record_weight(self, rec: ScanRecord, now) -> float:
+        """Recency weight, floored for benchmark anchors."""
+        weight = self._recency_weight(rec.timestamp, now)
+        if getattr(rec, "source", "organic") == "benchmark":
+            return max(weight, self.BENCHMARK_FLOOR_WEIGHT)
+        return weight
+
+    @staticmethod
+    def _weighted_median(pairs: List[Tuple[float, float]]) -> Optional[float]:
+        """Weighted median of ``(value, weight)`` pairs (weights > 0)."""
+        if not pairs:
+            return None
+        ordered = sorted(pairs, key=lambda p: p[0])
+        total = sum(w for _, w in ordered)
+        if total <= 0:
+            vals = [v for v, _ in ordered]
+            mid = len(vals) // 2
+            return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2.0
+        half = total / 2.0
+        cum = 0.0
+        for value, weight in ordered:
+            cum += weight
+            if cum >= half:
+                return value
+        return ordered[-1][0]
+
+    def _per_point_seconds(self, pairs: List[Tuple[ScanRecord, float]],
+                           num_neutrons: int, engine: str) -> Optional[float]:
+        """Weighted-median seconds/point over the K nearest-ncount samples.
+
+        Each record contributes a per-point value scaled to ``num_neutrons``
+        (linear in neutron count for mcstas; flat for the deterministic engine,
+        whose analytic cost is ~independent of ncount) and by its cross-machine
+        speed ratio. The K nearest samples by ncount distance are combined with
+        a recency/benchmark weighted median. ``None`` when no usable sample.
+        """
+        from datetime import datetime
+        now = datetime.now()
+        samples: List[Tuple[int, float, float]] = []  # (ncount_dist, value, weight)
+        for rec, scale in pairs:
+            if not (rec.num_neutrons and rec.num_neutrons > 0 and rec.num_points > 0):
+                continue
+            spp = rec.avg_subsequent_time if rec.num_points > 1 else rec.first_scan_time
+            if not spp or spp <= 0:
+                continue
+            if engine == "deterministic":
+                value = spp * scale
+            else:
+                value = spp * scale * (num_neutrons / rec.num_neutrons)
+            weight = self._record_weight(rec, now)
+            samples.append((abs(rec.num_neutrons - num_neutrons), value, weight))
         if not samples:
             return None
-        nearest = min(samples, key=lambda s: abs(s[0] - num_neutrons))
-        return nearest[1] * (num_neutrons / nearest[0])
+        samples.sort(key=lambda s: s[0])
+        knn = samples[:self.K_NEAREST]
+        return self._weighted_median([(v, w) for _, v, w in knn])
 
-    def _compile_seconds(self, records: List[ScanRecord]) -> float:
-        """Median measured/inferred compile time across records (0.0 if none)."""
-        comps: List[float] = []
-        for rec in records:
+    def _compile_seconds(self, pairs: List[Tuple[ScanRecord, float]]) -> float:
+        """Median compile time from non-reused records only (0.0 if none).
+
+        Reused-binary records never contribute (their first point skips
+        compilation, so ``first - avg`` would fabricate a compile time).
+        Explicit ``compilation_time`` samples are preferred; only when none
+        exist do we fall back to the ``first - avg`` inference. Each sample is
+        scaled by its cross-machine speed ratio.
+        """
+        explicit: List[float] = []
+        inferred: List[float] = []
+        for rec, scale in pairs:
+            if getattr(rec, "binary_reused", None) is True:
+                continue
             if rec.compilation_time and rec.compilation_time > 0:
-                comps.append(rec.compilation_time)
+                explicit.append(rec.compilation_time * scale)
             elif rec.num_points > 1:
-                inferred = rec.first_scan_time - rec.avg_subsequent_time
-                if inferred > 0:
-                    comps.append(inferred)
+                value = rec.first_scan_time - rec.avg_subsequent_time
+                if value > 0:
+                    inferred.append(value * scale)
+        comps = explicit if explicit else inferred
         if not comps:
             return 0.0
         comps.sort()
@@ -353,23 +469,37 @@ class RuntimeTracker:
             return comps[mid]
         return (comps[mid - 1] + comps[mid]) / 2.0
 
+    def _cap_confidence(self, confidence: str, basis: Optional[str]) -> str:
+        """Apply the per-basis confidence cap (scaled/pooled capped 'low')."""
+        cap = self._BASIS_CONFIDENCE_CAP.get(basis)
+        if cap is None:
+            return confidence
+        order = self._CONFIDENCE_ORDER
+        return confidence if order.index(confidence) <= order.index(cap) else cap
+
     def estimate_scan_seconds(self,
                               instrument_name: str,
                               n_points: int,
                               num_neutrons: int,
-                              needs_compile: bool = True) -> Dict[str, object]:
+                              needs_compile: bool = True,
+                              engine: str = "mcstas") -> Dict[str, object]:
         """Estimate wall-clock seconds for a scan, with a confidence tier.
 
-        Per-point time is scaled to ``num_neutrons`` from the nearest historical
-        sample (time ~ linear in neutron count); compile time (measured, or
-        inferred as first_point - median(other points)) is added when
+        Records are filtered to ``instrument_name`` + ``engine``, then a machine
+        selection chain (local -> legacy -> scaled -> pooled) picks the sample
+        pool. Per-point time is a recency-weighted median over the K nearest
+        ncount samples (linear ncount scaling for mcstas, flat for
+        deterministic); compile time (from non-reused records) is added when
         ``needs_compile``.
 
         Returns ``{"estimated_seconds": float|None, "confidence": str,
-        "samples": int}``. ``estimated_seconds`` is ``None`` when there is no
-        usable historical data for the instrument or the inputs are invalid.
+        "samples": int, "basis": str, "machine_samples": int}``. The ``basis``
+        and ``machine_samples`` keys are additive (absent only on the no-data /
+        invalid-input early return). ``estimated_seconds`` is ``None`` when
+        there is no usable historical data or the inputs are invalid.
         """
-        records = self.records.get(instrument_name, []) or []
+        records = [r for r in (self.records.get(instrument_name, []) or [])
+                   if getattr(r, "engine", "mcstas") == engine]
         samples = len(records)
         confidence = self._confidence_from_samples(samples)
 
@@ -378,16 +508,22 @@ class RuntimeTracker:
             return {"estimated_seconds": None, "confidence": confidence,
                     "samples": samples}
 
-        per_point = self._per_point_seconds(records, num_neutrons)
+        pairs, basis = self._select_pool(records)
+        confidence = self._cap_confidence(confidence, basis)
+        machine_samples = len(pairs)
+
+        per_point = self._per_point_seconds(pairs, num_neutrons, engine)
         if per_point is None:
             return {"estimated_seconds": None, "confidence": confidence,
-                    "samples": samples}
+                    "samples": samples, "basis": basis,
+                    "machine_samples": machine_samples}
 
         total = per_point * n_points
         if needs_compile:
-            total += self._compile_seconds(records)
+            total += self._compile_seconds(pairs)
         return {"estimated_seconds": total, "confidence": confidence,
-                "samples": samples}
+                "samples": samples, "basis": basis,
+                "machine_samples": machine_samples}
 
     def has_data(self, instrument_name: str) -> bool:
         """Check if there is historical data for an instrument.
