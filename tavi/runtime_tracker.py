@@ -9,7 +9,7 @@ This module provides functionality to:
 import json
 import os
 from typing import Optional, Dict, List, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields as dataclass_fields
 
 
 @dataclass
@@ -23,6 +23,13 @@ class ScanRecord:
     total_time: float  # Total scan time
     timestamp: str  # ISO format timestamp
     compilation_time: float = 0.0  # Explicit compile-time estimate when available
+    # --- Schema v2 fields (all defaulted so v1 records load unchanged) ---
+    machine_id: Optional[str] = None      # None => legacy/unknown machine
+    engine: str = "mcstas"                # "mcstas" | "deterministic"
+    execution_mode: Optional[str] = None  # "backengine" | "direct" | "mixed"
+    binary_reused: Optional[bool] = None  # True => compilation_time not meaningful
+    build_fp_hash: Optional[str] = None   # sha1(repr(build_fingerprint))[:12]
+    source: str = "organic"               # "organic" | "benchmark"
 
 
 class RuntimeTracker:
@@ -56,26 +63,45 @@ class RuntimeTracker:
         self.config_path = config_path or self.DEFAULT_CONFIG_PATH
         self.max_records = self.MAX_RECORDS
         self.records: Dict[str, List[ScanRecord]] = {}
+        # Schema v2: per-machine profiles keyed by machine_id.
+        self.machines: Dict[str, dict] = {}
         self._load()
-    
+
+    @staticmethod
+    def _record_from_dict(rec: dict) -> ScanRecord:
+        """Build a ScanRecord from a dict, ignoring unknown/future keys.
+
+        Filtering to known dataclass fields keeps a single unknown key from
+        tripping the TypeError catch in ``_load`` (which would wipe ALL
+        history). Forward-compatible with schema fields we do not yet know.
+        """
+        known = {f.name for f in dataclass_fields(ScanRecord)}
+        filtered = {k: v for k, v in rec.items() if k in known}
+        return ScanRecord(**filtered)
+
     def _load(self) -> None:
         """Load runtime records from config file."""
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                
+
                 self.records = {}
                 for instrument, record_list in data.get('records', {}).items():
                     self.records[instrument] = [
-                        ScanRecord(**rec) for rec in record_list
+                        self._record_from_dict(rec) for rec in record_list
                     ]
+                # v2 machines block; absent in v1 files (stays empty).
+                machines = data.get('machines', {})
+                self.machines = dict(machines) if isinstance(machines, dict) else {}
                 self._migrate_legacy_keys()
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 print(f"Warning: Could not load runtimes.json: {e}")
                 self.records = {}
+                self.machines = {}
         else:
             self.records = {}
+            self.machines = {}
     
     def _migrate_legacy_keys(self) -> None:
         """Merge records stored under legacy instrument keys into their new key."""
@@ -94,25 +120,61 @@ class RuntimeTracker:
         os.makedirs(os.path.dirname(self.config_path) or '.', exist_ok=True)
         
         data = {
+            'version': 2,
             'records': {
                 instrument: [asdict(rec) for rec in record_list]
                 for instrument, record_list in self.records.items()
-            }
+            },
+            'machines': self.machines,
         }
-        
+
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
+
+    def set_machine_profile(self,
+                            machine_id: str,
+                            hostname: str = "",
+                            cpu_name: str = "",
+                            cpu_count: int = 0,
+                            speed_index: Optional[float] = None,
+                            benchmarked_at: Optional[str] = None) -> None:
+        """Record/refresh a machine profile in the ``machines`` block and save.
+
+        Args:
+            machine_id: Stable machine identity (from ``machine_fingerprint``).
+            hostname: Machine hostname.
+            cpu_name: Best-effort CPU name.
+            cpu_count: Logical CPU count.
+            speed_index: Median per-neutron seconds (cross-machine anchor).
+            benchmarked_at: ISO timestamp of the benchmark; defaults to now.
+        """
+        from datetime import datetime
+
+        self.machines[machine_id] = {
+            "hostname": hostname,
+            "cpu_name": cpu_name,
+            "cpu_count": cpu_count,
+            "speed_index": speed_index,
+            "benchmarked_at": benchmarked_at or datetime.now().isoformat(),
+        }
+        self._save()
     
-    def add_record(self, 
+    def add_record(self,
                    instrument_name: str,
                    num_points: int,
                    num_neutrons: int,
                    first_scan_time: float,
                    avg_subsequent_time: float,
                    total_time: float,
-                   compilation_time: float = 0.0) -> None:
+                   compilation_time: float = 0.0,
+                   machine_id: Optional[str] = None,
+                   engine: str = "mcstas",
+                   execution_mode: Optional[str] = None,
+                   binary_reused: Optional[bool] = None,
+                   build_fp_hash: Optional[str] = None,
+                   source: str = "organic") -> None:
         """Add a new scan record.
-        
+
         Args:
             instrument_name: Name of the instrument (e.g., 'PUMA')
             num_points: Total number of scan points
@@ -121,9 +183,15 @@ class RuntimeTracker:
             avg_subsequent_time: Average time for subsequent points (run only)
             total_time: Total scan time
             compilation_time: Explicit compile-time estimate for this run
+            machine_id: Machine identity (None => legacy/unknown)
+            engine: "mcstas" | "deterministic"
+            execution_mode: "backengine" | "direct" | "mixed"
+            binary_reused: True => compilation_time is not meaningful
+            build_fp_hash: sha1(repr(build_fingerprint))[:12], diagnostics only
+            source: "organic" | "benchmark"
         """
         from datetime import datetime
-        
+
         record = ScanRecord(
             instrument_name=instrument_name,
             num_points=num_points,
@@ -133,6 +201,12 @@ class RuntimeTracker:
             total_time=total_time,
             timestamp=datetime.now().isoformat(),
             compilation_time=compilation_time,
+            machine_id=machine_id,
+            engine=engine,
+            execution_mode=execution_mode,
+            binary_reused=binary_reused,
+            build_fp_hash=build_fp_hash,
+            source=source,
         )
         
         if instrument_name not in self.records:
