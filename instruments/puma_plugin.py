@@ -255,6 +255,11 @@ def puma_descriptor() -> InstrumentDescriptor:
             SourceType("Maxwellian", "Maxwellian"),
             SourceType("Mono", "Mono", extra_params=("source_dE",)),
         ),
+        # Vertical (out-of-plane) Soller divergences BET1..4 (arcmin, FWHM). The
+        # McStas PUMA definition and vTAS carry no per-blade vertical Soller data;
+        # 120 arcmin is a documented uniform default (recorded as such in the
+        # resolution adapter's provenance).
+        vertical_divergence=(120.0, 120.0, 120.0, 120.0),
     )
 
 
@@ -400,3 +405,14 @@ class PUMAPlugin:
         from instruments.PUMA_instrument_definition import check_point_feasibility
 
         return check_point_feasibility(config, scan_mode, scan_point, vals)
+
+    def resolution_config(self, vals, q0, w):
+        """Build a theoretical-resolution config for PUMA (see contract).
+
+        Pure function of the descriptor + ``vals``; imports no mcstasscript. NMO
+        selection is recorded as an invalidation (``cn_valid`` -> False); the
+        velocity selector and a monochromatic source add warnings.
+        """
+        from instruments.resolution_adapter import build_resolution_config
+
+        return build_resolution_config(puma_descriptor(), vals, q0, w)

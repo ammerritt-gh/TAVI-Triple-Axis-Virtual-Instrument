@@ -27,6 +27,7 @@ from instruments.descriptor import InstrumentDescriptor
 if TYPE_CHECKING:  # avoid importing heavy modules just for type hints
     import mcstasscript as ms
 
+    from tavi.resolution import ResolutionConfig
     from tavi.sample_mount import SampleMount
 
 
@@ -225,5 +226,34 @@ class InstrumentPlugin(Protocol):
         the remote API's always-on scan validation (reject, or skip under
         ``allow_partial``). Optional for a plugin; the API degrades to
         "assume feasible" when absent.
+        """
+        ...
+
+    def resolution_config(
+        self,
+        vals: dict,
+        q0: float,
+        w: float,
+    ) -> "ResolutionConfig":
+        """Build a theoretical-resolution config for one ``(q0, w)`` point.
+
+        Maps this instrument's launch/GUI parameter dict (the same ``vals`` shape
+        ``scan_config`` consumes -- ``monocris``/``anacris``/``K_fixed``/
+        ``fixed_E``/``collimation``/``modules``/``source_type``/``rhm``... plus an
+        optional ``sample_key``) onto the instrument-independent
+        :class:`tavi.resolution.ResolutionConfig` (ISAR Cooper-Nathans vocabulary
+        + Popovici extensions): d-spacings, mosaics and senses from the
+        descriptor; horizontal collimations from ``vals`` (tightest non-zero
+        blade of a multi-select slot; an open/zero blade substitutes a documented
+        60 arcmin effective divergence and records a warning); vertical
+        divergences from the descriptor default; ``kfix``/``fx`` from ``K_fixed``/
+        ``fixed_E``. ``q0`` (Angstrom^-1) and ``w`` (meV) pass straight through.
+
+        A **pure function of its inputs**: it reads only the descriptor and
+        ``vals`` and must not import mcstasscript or touch any McStas state.
+        Components that break the analytic assumptions (PUMA's NMO) are recorded
+        as *invalidations* on the returned config (so ``cn_valid`` becomes False)
+        rather than silently ignored. Optional for a plugin, mirroring
+        ``check_point_feasibility``; callers degrade gracefully when absent.
         """
         ...
