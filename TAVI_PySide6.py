@@ -3,6 +3,7 @@ import sys
 import os
 import shutil
 import json
+import hashlib
 import time
 import datetime
 import copy
@@ -28,6 +29,7 @@ from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_compo
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training)
 from tavi.runtime_tracker import RuntimeTracker
+from tavi.machine_profile import machine_fingerprint
 from tavi.scan_jobs import (
     BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
 )
@@ -3676,6 +3678,30 @@ class TAVIController(QObject):
         return block if isinstance(block, dict) else {}
 
     @staticmethod
+    def _dominant_execution_mode(point_stage_timings):
+        """Dominant McStas execution mode across recorded points (schema v2).
+
+        Returns "mixed" when both backengine and direct points ran, else
+        whichever single mode is present, else None (no point recorded a
+        backengine/direct mode -- e.g. all skipped).
+        """
+        num_backengine = sum(
+            1 for record in (point_stage_timings or [])
+            if record.get('execution_mode') == 'backengine'
+        )
+        num_direct = sum(
+            1 for record in (point_stage_timings or [])
+            if record.get('execution_mode') == 'direct'
+        )
+        if num_backengine and num_direct:
+            return "mixed"
+        if num_backengine:
+            return "backengine"
+        if num_direct:
+            return "direct"
+        return None
+
+    @staticmethod
     def _can_reuse_binary(cache, fingerprint, diagnostic_mode):
         """Whether the previous scan's compiled binary satisfies this scan.
 
@@ -5008,9 +5034,20 @@ class TAVIController(QObject):
         )
 
         total_scans = len(scan_parameter_input)
-        # Deterministic runs do not touch the McStas runtime tracker; report an
-        # immediate estimate so the GUI's pre-scan label is not left stale.
-        self.pre_scan_estimate_updated.emit("< 1s (deterministic)")
+        # Pre-scan estimate from tracked deterministic history (engine-filtered).
+        # The analytic engine never compiles, so needs_compile is False. Keep the
+        # "< 1s" string only when there is no data or the estimate is sub-second.
+        det_estimate = self.runtime_tracker.estimate_scan_seconds(
+            self.instrument.id, total_scans, number_neutrons,
+            needs_compile=False, engine="deterministic",
+        )
+        det_seconds = det_estimate.get("estimated_seconds")
+        if det_seconds is None or det_seconds < 1.0:
+            self.pre_scan_estimate_updated.emit("< 1s (deterministic)")
+        else:
+            self.pre_scan_estimate_updated.emit(
+                RuntimeTracker.format_time(det_seconds)
+            )
 
         total_counts = 0.0
         max_counts = 0.0
@@ -5226,6 +5263,36 @@ class TAVIController(QObject):
                 "Deterministic scan complete. Total counts: %s, Max counts: %s"
                 % (total_counts, max_counts)
             )
+
+        # Record deterministic runtime for future ETAs (schema v2). Clean
+        # completion only (non-cancelled, non-error) and at least one point.
+        # The analytic engine has no compilation and its per-point cost is flat
+        # (not neutron-scaled), so first == avg == total / points.
+        if (simulation_error_message is None and not simulation_stopped
+                and not self.stop_event.is_set() and processed_points > 0):
+            det_total_time = time.time() - start_time
+            det_per_point = det_total_time / processed_points
+            record_source = (
+                "benchmark"
+                if (job is not None and getattr(job, "source", None) == "benchmark")
+                else "organic"
+            )
+            self.runtime_tracker.add_record(
+                instrument_name=self.instrument.id,
+                num_points=processed_points,
+                num_neutrons=number_neutrons,
+                first_scan_time=det_per_point,
+                avg_subsequent_time=det_per_point,
+                total_time=det_total_time,
+                compilation_time=0.0,
+                machine_id=machine_fingerprint()["machine_id"],
+                engine="deterministic",
+                execution_mode=None,
+                binary_reused=None,
+                build_fp_hash=None,
+                source=record_source,
+            )
+            self.runtime_data_updated.emit()
 
         # Display completion signals (mirror the McStas finalization).
         if simulation_error_message is not None or self.stop_event.is_set():
@@ -6079,12 +6146,29 @@ class TAVIController(QObject):
             # Calculate average time for subsequent scans (excluding first)
             if len(executed_scan_times) > 1:
                 avg_subsequent_time = sum(executed_scan_times[1:]) / len(executed_scan_times[1:])
-                compilation_time = inferred_compile_duration if inferred_compile_duration is not None else max(0.0, first_scan_time - avg_subsequent_time)
+                # A reused binary skips compilation, so first - avg is not a
+                # compile time; record 0 and suppress the inference (schema v2).
+                if reuse_binary:
+                    compilation_time = 0.0
+                else:
+                    compilation_time = inferred_compile_duration if inferred_compile_duration is not None else max(0.0, first_scan_time - avg_subsequent_time)
             else:
                 # Only one scan point - use first scan time as both
                 avg_subsequent_time = first_scan_time
                 compilation_time = 0.0
-            
+
+            # Dominant execution mode over the simulated points (schema v2).
+            execution_mode = self._dominant_execution_mode(point_stage_timings)
+
+            build_fp_hash = hashlib.sha1(
+                repr(build_fingerprint).encode('utf-8')
+            ).hexdigest()[:12]
+            record_source = (
+                "benchmark"
+                if (job is not None and getattr(job, "source", None) == "benchmark")
+                else "organic"
+            )
+
             self.runtime_tracker.add_record(
                 instrument_name=instrument_name,
                 num_points=len(executed_scan_times),
@@ -6093,6 +6177,12 @@ class TAVIController(QObject):
                 avg_subsequent_time=avg_subsequent_time,
                 total_time=total_time,
                 compilation_time=compilation_time,
+                machine_id=machine_fingerprint()["machine_id"],
+                engine="mcstas",
+                execution_mode=execution_mode,
+                binary_reused=reuse_binary,
+                build_fp_hash=build_fp_hash,
+                source=record_source,
             )
             self.message_printed.emit(
                 f"Timing data recorded: {len(executed_scan_times)} simulated points in {RuntimeTracker.format_time(total_time)}"
