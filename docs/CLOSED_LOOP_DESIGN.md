@@ -22,6 +22,9 @@ reasoning that the three per-project designs assume but do not restate.*
 >   reports comes from ISAR.
 > - **A measurement driver** (future, its own repo) — the only component with
 >   agency. It decides what to measure next and when to stop. The *loop*.
+>   **Superseded 2026-07-06:** lives in the ISAR repo as `isar/drive/` (an
+>   `isar drive` CLI subcommand), not a separate repo; see the §8 open-question
+>   note below.
 >
 > **Companion documents.** TAVI side: `docs/LLM_HARNESS_DESIGN.md` (the driver's
 > own design — component 3), `docs/CONTROL_FEATURES_DESIGN.md` (the TAVI-side
@@ -505,7 +508,11 @@ instrument client for tier 3.
 - **When ISAR grows a query API** — the file contract is stable and restart-safe, but
   re-running `isar run` every loop has a fixed cost; at what campaign size does a
   query interface earn its keep?
-- **Where the driver repo lives.**
+- **Where the driver repo lives.** *Superseded 2026-07-06:* the driver lives
+  in the ISAR repo as `isar/drive/` (an `isar drive` CLI subcommand). The
+  analysis boundary is enforced by rule: `isar.drive` consumes analysis only
+  via the `isar run` subprocess and the file contract (`report/results.csv`,
+  `report.json`, `card.state.json`), never by importing fit internals.
 - **How the virtual clock's counting-time model maps to real count rates** — the
   simulator's `number_neutrons` is a budget, not a flux; the mapping to a nominal
   neutron/s on a real instrument is an open modelling choice
