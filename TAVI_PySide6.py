@@ -735,6 +735,79 @@ class TaviApiBackend:
                         "/validate: %s" % exc
                     )
 
+    def get_resolution(self, query):
+        """GET /resolution -- theoretical TAS resolution at one (H,K,L,deltaE).
+
+        ``query`` carries optional floats ``H``/``K``/``L``/``deltaE`` (``None``
+        -> current GUI value) and a validated ``method`` (``auto`` /
+        ``cooper_nathans`` / ``popovici``). Bridged onto the GUI thread like
+        :meth:`submit_validate`; a pure read that mutates no state. An infeasible
+        geometry returns ``{"ok": false, "reason": ...}`` (the same refusal-string
+        vocabulary as /validate) with HTTP 200. Allowed in read-only mode.
+        """
+        if not isinstance(query, dict):
+            raise ApiError(400, "bad_request", "resolution query must be a JSON object")
+        return self._bridge.call_on_gui(lambda: self._resolution_on_gui(query))
+
+    def _resolution_on_gui(self, query):
+        """GUI-thread body of GET /resolution (read-only; never mutates state)."""
+        controller = self._controller
+
+        vals = controller.get_gui_values()
+        if not vals:
+            raise ApiError(400, "bad_request", "Could not read GUI values")
+        vals = dict(vals)
+
+        # Inject the selected sample key (same source _collect_simulation_launch_state
+        # uses) so the adapter's eta_s / sample-mosaic path resolves.
+        try:
+            vals["sample_key"] = controller.window.sample_dock.get_selected_sample_key()
+        except Exception:
+            vals["sample_key"] = None
+
+        # (H, K, L, deltaE): omitted params default to the current GUI values.
+        def _default(name, key):
+            v = query.get(name)
+            return float(vals[key]) if v is None else float(v)
+
+        H = _default("H", "H")
+        K = _default("K", "K")
+        L = _default("L", "L")
+        deltaE = _default("deltaE", "deltaE")
+        method = query.get("method") or "auto"
+
+        # (H,K,L) -> q0 via the same sample-mount/UB solve the scan generator uses.
+        qx, qy, qz = controller._hkl_to_sample_q(H, K, L, vals)
+        q0 = math.sqrt(qx ** 2 + qy ** 2 + qz ** 2)
+
+        # Feasibility gate: the same per-point angle solve run_simulation applies
+        # (throwaway check_state, calculate_angles error flags). Infeasible ->
+        # 200 {"ok": false, "reason": ...} with the /validate refusal vocabulary.
+        check_state = controller.instrument.default_state()
+        check_state.monocris = vals.get('monocris', controller.descriptor.mono_crystals[0].id)
+        check_state.anacris = vals.get('anacris', controller.descriptor.ana_crystals[0].id)
+        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+        check_state.fixed_E = vals.get('fixed_E', 14.7)
+        _, error_flags = check_state.calculate_angles(
+            qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
+            check_state.monocris, check_state.anacris,
+        )
+        if error_flags:
+            from instruments.PUMA_instrument_definition import describe_scan_error_flags
+            reason = describe_scan_error_flags(error_flags) or (
+                "scattering triangle cannot close for this (Q, E) and fixed-k setup"
+            )
+            return {"ok": False, "reason": reason}
+
+        # Build the instrument's resolution config (optional plugin method).
+        res_fn = getattr(controller.instrument, "resolution_config", None)
+        if not callable(res_fn):
+            return {"ok": False, "reason": "resolution not supported for this instrument"}
+        cfg = res_fn(vals, q0, deltaE)
+
+        from tavi.resolution import resolution
+        return resolution(cfg, method=method).to_dict()
+
     def get_schema(self):
         """GET /schema -- machine-readable API self-description (read-only)."""
         return self._bridge.call_on_gui(self._controller.build_api_schema)
@@ -1630,6 +1703,12 @@ class TAVIController(QObject):
         except Exception:
             sample_key = None
 
+        # Enrich the frozen vals with flat resolution/geometry parameters so they
+        # flow through _launch_summary -> _serializable_params into every job's
+        # JSON (consumed downstream by ISAR). Reuses the resolution adapter's
+        # descriptor/sample lookups rather than duplicating them.
+        self._enrich_launch_parameters(vals, sample_key)
+
         diagnostic_settings = copy.deepcopy(self.diagnostic_settings)
 
         return {
@@ -1645,7 +1724,59 @@ class TAVIController(QObject):
             'relative_mode_2': self.window.simulation_dock.relative_2_button.isChecked(),
             'compact_save_enabled': self.window.data_control_dock.compact_save_check.isChecked(),
         }
-    
+
+    def _enrich_launch_parameters(self, vals, sample_key):
+        """Inject flat resolution/geometry parameters into the frozen ``vals``.
+
+        Adds the mono/analyzer/sample mosaics, scattering senses, vertical
+        divergences, sample key, and sample temperature so they travel through
+        the job JSON (``_launch_summary`` -> ``_serializable_params``) to remote
+        consumers (ISAR). Values come from the shared resolution adapter (via the
+        plugin's optional ``resolution_config``), not a duplicate descriptor read.
+        Best-effort: any failure leaves ``vals`` unenriched rather than blocking a
+        launch. Keys are flat and JSON-simple.
+        """
+        vals['sample_key'] = sample_key
+
+        # Sample temperature from the descriptor sample library (SampleSpec.T).
+        temperature = None
+        try:
+            spec = next((s for s in self.descriptor.samples if s.id == sample_key), None)
+            if spec is not None:
+                raw_t = (spec.properties or {}).get('T')
+                temperature = float(raw_t) if raw_t is not None else None
+        except Exception:
+            temperature = None
+        vals['temperature'] = temperature
+
+        # Mosaics / senses / vertical divergences via the resolution adapter.
+        res_fn = getattr(self.instrument, 'resolution_config', None)
+        if not callable(res_fn):
+            return
+        try:
+            # q0/w are irrelevant here: resolution_config only assembles the config
+            # dataclass (no solver run), so any values populate the geometry fields.
+            cfg = res_fn(vals, 0.0, 0.0)
+        except Exception:
+            return
+
+        try:
+            bet = list(cfg.bet) + [None, None, None, None]
+            vals.update({
+                'eta_m': cfg.eta_m,
+                'eta_a': cfg.eta_a,
+                'eta_s': cfg.effective_eta_s(),
+                'sense_m': int(cfg.sm),
+                'sense_s': int(cfg.ss),
+                'sense_a': int(cfg.sa),
+                'beta_1': bet[0],
+                'beta_2': bet[1],
+                'beta_3': bet[2],
+                'beta_4': bet[3],
+            })
+        except Exception:
+            return
+
     def set_gui_value(self, widget, value, precision=4):
         """Helper to set GUI value with proper formatting."""
         if self.updating:

@@ -344,6 +344,56 @@ Returns the `validation` object (§5 *Validation object*) plus two extra fields:
  "infeasible": [], "would_queue": true, "blockers": []}
 ```
 
+### GET /resolution
+Theoretical triple-axis **resolution** (Cooper–Nathans / Popovici) at one
+`(H, K, L, deltaE)` point, computed from the current instrument configuration.
+Read-only, never mutates, so — like `/state`, `/schema` and `/validate` — it is
+**allowed in read-only mode**. All query params are optional:
+
+| Param | Meaning | Default |
+|-------|---------|---------|
+| `H`, `K`, `L` | Reciprocal-lattice point (r.l.u.) | current GUI values |
+| `deltaE` | Energy transfer (meV) | current GUI value |
+| `method` | `auto`, `cooper_nathans`, or `popovici` | `auto` |
+
+`method=auto` picks **Popovici** when the instrument config carries spatial
+information (mono/analyzer curvatures — `rhm`/`rvm`/`rha` — make the config
+"spatial"), otherwise **Cooper–Nathans**. When Popovici runs with defaulted
+spatial dimensions, that is intended: the `warnings` and `config.provenance`
+carry the honesty (which dimensions were defaulted). A non-numeric `H`/`K`/`L`/
+`deltaE` → `400 bad_request`; an unrecognized `method` → `400 bad_request`.
+
+```bash
+curl "http://127.0.0.1:8642/api/v1/resolution?H=2&K=0&L=0&deltaE=1.5&method=cooper_nathans"
+```
+
+Successful response (serialized resolution result):
+```json
+{"ok": true, "reason": null, "method": "cooper_nathans", "cn_valid": true,
+ "warnings": [], "invalidations": [], "r0": null,
+ "matrix": [[...4x4 FWHM-normalized precision matrix...]],
+ "fwhm": {"dq_par": 0.031, "dq_perp": 0.022, "dq_z": 0.05, "dE": 0.91},
+ "bragg": {"dq_par": 0.012, "dq_perp": 0.010, "dq_z": 0.02, "dE": 0.40},
+ "principal_axes": {"eigenvalues": [...], "fwhm": [...], "eigenvectors": [...]},
+ "vanadium_fwhm_meV": 0.91,
+ "projections": {"q_par_q_perp": {...}, "q_par_E": {...}, "q_perp_E": {...}},
+ "basis": ["dQ_par", "dQ_perp", "dQ_z", "dE"],
+ "config": {"...echoed config incl. provenance...",
+   "provenance": {"senses": {"sm": 1, "ss": -1, "sa": 1}, "...": "..."}},
+ "provenance": {"matrix_convention": "FWHM-normalized precision; R~exp(-1/2 x^T M x)"}}
+```
+
+- `cn_valid` is `false` (with a populated `invalidations` list) when a component
+  breaks the analytic model — e.g. PUMA's nested mirror optics (NMO). The result
+  is still returned; `invalidations` names why the numbers are not trustworthy.
+- `warnings` lists softer caveats (open collimation substituted, velocity selector
+  installed, monochromatic source, Popovici dimensions defaulted, …).
+- **Refusal convention:** an infeasible geometry (scattering triangle cannot
+  close, analyzer angle out of range, …) or an instrument without resolution
+  support returns **HTTP 200** with `{"ok": false, "reason": "..."}` — the same
+  refusal-string vocabulary as `/validate`, *not* an error envelope. Always check
+  `ok` before reading `matrix`/`fwhm` (which are `null` on a refusal).
+
 ### GET /schema
 Machine-readable self-description of the API, generated at request time from live
 instrument data (no hand-maintained duplicate). Read-only, no side effects,
@@ -453,6 +503,23 @@ For a **2D** scan, `counts` is `null` and `counts_grid` is a list of rows
 (`counts_grid[row][col]`), with `variable_2`, `scan_values_2`, and `valid_mask_2d`
 populated. Not-yet-measured or invalid points are `null`, never `NaN`. Unknown
 id → `404 unknown_job`.
+
+**Resolution parameters in `launch.parameters` / `result.metadata`.** Every job's
+frozen parameter snapshot (exposed as `launch.parameters` on `GET /scan/{id}` and
+as `result.metadata` here) carries a flat set of resolution/geometry fields for
+downstream analysis (e.g. reconstructing the theoretical resolution offline):
+
+| Key | Meaning |
+|-----|---------|
+| `eta_m`, `eta_a`, `eta_s` | Mono / analyzer / sample horizontal mosaic (arcmin, FWHM). `eta_s` reuses `eta_m` when the sample carries no mosaic. |
+| `sense_m`, `sense_s`, `sense_a` | Scattering senses at mono / sample / analyzer (`+1` / `-1`). |
+| `beta_1`…`beta_4` | Vertical divergences (arcmin, FWHM). |
+| `sample_key` | Selected sample id (or `null`). |
+| `temperature` | Sample temperature (`SampleSpec.properties['T']`) if defined, else `null`. |
+
+These are populated from the same instrument descriptor + sample library the
+theoretical-resolution adapter reads; they are absent only for an instrument that
+does not implement resolution support.
 
 ### GET /scan/{id}/plot.png
 A rendered PNG image (512×512 px) of the job's current result arrays. **1D**
