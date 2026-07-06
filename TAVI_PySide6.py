@@ -750,63 +750,16 @@ class TaviApiBackend:
         return self._bridge.call_on_gui(lambda: self._resolution_on_gui(query))
 
     def _resolution_on_gui(self, query):
-        """GUI-thread body of GET /resolution (read-only; never mutates state)."""
-        controller = self._controller
+        """GUI-thread body of GET /resolution (read-only; never mutates state).
 
-        vals = controller.get_gui_values()
-        if not vals:
-            raise ApiError(400, "bad_request", "Could not read GUI values")
-        vals = dict(vals)
-
-        # Inject the selected sample key (same source _collect_simulation_launch_state
-        # uses) so the adapter's eta_s / sample-mosaic path resolves.
-        try:
-            vals["sample_key"] = controller.window.sample_dock.get_selected_sample_key()
-        except Exception:
-            vals["sample_key"] = None
-
-        # (H, K, L, deltaE): omitted params default to the current GUI values.
-        def _default(name, key):
-            v = query.get(name)
-            return float(vals[key]) if v is None else float(v)
-
-        H = _default("H", "H")
-        K = _default("K", "K")
-        L = _default("L", "L")
-        deltaE = _default("deltaE", "deltaE")
-        method = query.get("method") or "auto"
-
-        # (H,K,L) -> q0 via the same sample-mount/UB solve the scan generator uses.
-        qx, qy, qz = controller._hkl_to_sample_q(H, K, L, vals)
-        q0 = math.sqrt(qx ** 2 + qy ** 2 + qz ** 2)
-
-        # Feasibility gate: the same per-point angle solve run_simulation applies
-        # (throwaway check_state, calculate_angles error flags). Infeasible ->
-        # 200 {"ok": false, "reason": ...} with the /validate refusal vocabulary.
-        check_state = controller.instrument.default_state()
-        check_state.monocris = vals.get('monocris', controller.descriptor.mono_crystals[0].id)
-        check_state.anacris = vals.get('anacris', controller.descriptor.ana_crystals[0].id)
-        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-        check_state.fixed_E = vals.get('fixed_E', 14.7)
-        _, error_flags = check_state.calculate_angles(
-            qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
-            check_state.monocris, check_state.anacris,
+        A thin query-parsing shell over ``TAVIController.compute_resolution`` --
+        the shared computation path the GUI dialog also calls. Omitted
+        H/K/L/deltaE (``None``) default to the current GUI values there.
+        """
+        return self._controller.compute_resolution(
+            query.get("H"), query.get("K"), query.get("L"),
+            query.get("deltaE"), query.get("method") or "auto",
         )
-        if error_flags:
-            from instruments.PUMA_instrument_definition import describe_scan_error_flags
-            reason = describe_scan_error_flags(error_flags) or (
-                "scattering triangle cannot close for this (Q, E) and fixed-k setup"
-            )
-            return {"ok": False, "reason": reason}
-
-        # Build the instrument's resolution config (optional plugin method).
-        res_fn = getattr(controller.instrument, "resolution_config", None)
-        if not callable(res_fn):
-            return {"ok": False, "reason": "resolution not supported for this instrument"}
-        cfg = res_fn(vals, q0, deltaE)
-
-        from tavi.resolution import resolution
-        return resolution(cfg, method=method).to_dict()
 
     def get_schema(self):
         """GET /schema -- machine-readable API self-description (read-only)."""
@@ -1691,6 +1644,74 @@ class TAVIController(QObject):
         """Convert public instrument/GUI Q to HKL using the current sample mount."""
         q_component = instrument_q_to_component_q([qx, qy, qz])
         return self._build_sample_mount(vals).q_to_hkl(*q_component)
+
+    def compute_resolution(self, H=None, K=None, L=None, deltaE=None, method="auto"):
+        """Theoretical TAS resolution at one (H, K, L, deltaE).
+
+        The single computation path shared by the GET /resolution backend and the
+        Utilities -> Resolution calculator dialog. Each of ``H``/``K``/``L``/
+        ``deltaE`` may be ``None`` -> use the current GUI value; they may also be
+        numbers or numeric strings. Reads live GUI state but never mutates it, so
+        it must run on the GUI thread.
+
+        Returns a JSON-serializable dict: a serialized ``ResolutionResult`` when
+        the geometry is feasible and the instrument supports resolution, otherwise
+        a ``{"ok": False, "reason": ...}`` refusal (feasibility / unsupported
+        instrument) using the same vocabulary as ``/validate``.
+        """
+        vals = self.get_gui_values()
+        if not vals:
+            raise ApiError(400, "bad_request", "Could not read GUI values")
+        vals = dict(vals)
+
+        # Inject the selected sample key (same source _collect_simulation_launch_state
+        # uses) so the adapter's eta_s / sample-mosaic path resolves.
+        try:
+            vals["sample_key"] = self.window.sample_dock.get_selected_sample_key()
+        except Exception:
+            vals["sample_key"] = None
+
+        # (H, K, L, deltaE): omitted (None) params default to current GUI values.
+        def _default(v, key):
+            return float(vals[key]) if v is None else float(v)
+
+        H = _default(H, "H")
+        K = _default(K, "K")
+        L = _default(L, "L")
+        deltaE = _default(deltaE, "deltaE")
+        method = method or "auto"
+
+        # (H,K,L) -> q0 via the same sample-mount/UB solve the scan generator uses.
+        qx, qy, qz = self._hkl_to_sample_q(H, K, L, vals)
+        q0 = math.sqrt(qx ** 2 + qy ** 2 + qz ** 2)
+
+        # Feasibility gate: the same per-point angle solve run_simulation applies
+        # (throwaway check_state, calculate_angles error flags). Infeasible ->
+        # {"ok": false, "reason": ...} with the /validate refusal vocabulary.
+        check_state = self.instrument.default_state()
+        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
+        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+        check_state.fixed_E = vals.get('fixed_E', 14.7)
+        _, error_flags = check_state.calculate_angles(
+            qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
+            check_state.monocris, check_state.anacris,
+        )
+        if error_flags:
+            from instruments.PUMA_instrument_definition import describe_scan_error_flags
+            reason = describe_scan_error_flags(error_flags) or (
+                "scattering triangle cannot close for this (Q, E) and fixed-k setup"
+            )
+            return {"ok": False, "reason": reason}
+
+        # Build the instrument's resolution config (optional plugin method).
+        res_fn = getattr(self.instrument, "resolution_config", None)
+        if not callable(res_fn):
+            return {"ok": False, "reason": "resolution not supported for this instrument"}
+        cfg = res_fn(vals, q0, deltaE)
+
+        from tavi.resolution import resolution
+        return resolution(cfg, method=method).to_dict()
 
     def _collect_simulation_launch_state(self):
         """Freeze GUI state before starting the simulation worker thread."""
