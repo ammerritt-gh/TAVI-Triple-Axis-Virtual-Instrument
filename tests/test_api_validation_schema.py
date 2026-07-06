@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 
 from tavi.api_server import ApiError, TaviApiServer, API_PREFIX
+from tavi.sample_library import default_sample_library
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
 
 
@@ -344,5 +345,170 @@ def test_schema_method_not_allowed_on_post():
     try:
         status, body = _request(base + "/schema", method="POST", data={})
         assert status == 405
+    finally:
+        srv.stop()
+
+
+# --------------------------------------------------------------------------
+# Sample selection via the API (B2)
+#
+# The real selection logic lives in the Qt-bound controller (_api_field_map /
+# apply_parameters / build_api_schema), which cannot be imported here (its
+# mcstasscript dependency crashes the interpreter) -- it is covered by
+# py_compile. These tests drive the HTTP contract through a fake backend that
+# reproduces the production behavior, grounded in the REAL shared sample library
+# (import-light: stdlib + instruments.descriptor) so the allowed-id set and the
+# unknown-id rejection are checked against genuine data, not a hand-copy.
+# --------------------------------------------------------------------------
+
+_SAMPLE_IDS = [s.id for s in default_sample_library()]
+
+
+class SampleBackend:
+    """Fake backend mirroring the sample-selection API contract.
+
+    GET /schema lists a ``sample`` field whose ``allowed`` comes from the sample
+    library; PATCH /parameters and POST /scan accept a valid id and reject an
+    unknown one with 400 ``invalid_parameters`` (as apply_parameters' p_choice
+    does); the selected sample is stamped into the job's launch.parameters.
+    """
+
+    def __init__(self):
+        self.registry = JobRegistry()
+        self.current_sample = "none"
+
+    def get_health(self):
+        return {"status": "ok"}
+
+    def get_state(self):
+        return {"state": "idle", "busy": False}
+
+    def get_parameters(self):
+        return {"sample": self.current_sample}
+
+    def get_schema(self):
+        return {
+            "instrument": "puma",
+            "fields": [
+                {"name": "sample", "type": "string", "allowed": list(_SAMPLE_IDS)},
+                {"name": "Ei", "type": "number", "units": "meV"},
+            ],
+            "scan_variables": ["H"],
+            "scan_command_grammar": "STEP SIZE, not the number of points",
+            "limits": {"max_points": 200},
+            "endpoints": [],
+            "examples": [],
+        }
+
+    def _apply_sample(self, patch):
+        """Mirror apply_parameters: unknown id -> 400 invalid_parameters."""
+        sample = patch.get("sample")
+        if sample is None:
+            return
+        if sample not in _SAMPLE_IDS:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"applied": [], "errors": {
+                    "sample": "invalid value: sample must be one of %s"
+                              % sorted(_SAMPLE_IDS)}},
+            )
+        self.current_sample = sample
+
+    def patch_parameters(self, patch, force):
+        self._apply_sample(patch)
+        return {"applied": list(patch), "errors": {}}
+
+    def submit_scan(self, body, idempotency_key=None):
+        self._apply_sample(body.get("parameters") or {})
+        key = None if self.current_sample == "none" else self.current_sample
+        job = ScanJob(
+            job_id=self.registry.next_id(), source="api",
+            launch_state={"vals": {"sample": self.current_sample,
+                                   "sample_key": key}},
+        )
+        self.registry.add(job)
+        return {"job_id": job.job_id, "state": "queued", "position": 0}
+
+    def get_job(self, job_id):
+        job = self.registry.get(job_id)
+        if job is None:
+            raise ApiError(404, "unknown_job", "Unknown job id: %s" % job_id)
+        return job.snapshot()
+
+
+def test_sample_library_exposes_expected_ids():
+    # Grounds the schema/allowed contract in the real library.
+    assert "none" in _SAMPLE_IDS
+    assert "Al_bragg" in _SAMPLE_IDS
+    assert "Al_phonon_DFT" in _SAMPLE_IDS
+
+
+def test_schema_lists_sample_with_library_allowed_values():
+    backend = SampleBackend()
+    srv, base = _start(backend)
+    try:
+        status, body = _request(base + "/schema")
+        assert status == 200
+        sample = next(f for f in body["fields"] if f["name"] == "sample")
+        assert sample["type"] == "string"
+        assert sample["allowed"] == _SAMPLE_IDS
+        assert "none" in sample["allowed"]
+    finally:
+        srv.stop()
+
+
+def test_patch_sample_accepted():
+    backend = SampleBackend()
+    srv, base = _start(backend)
+    try:
+        status, body = _request(base + "/parameters", method="PATCH",
+                                data={"sample": "Al_phonon_DFT"})
+        assert status == 200
+        assert backend.current_sample == "Al_phonon_DFT"
+    finally:
+        srv.stop()
+
+
+def test_patch_unknown_sample_400():
+    backend = SampleBackend()
+    srv, base = _start(backend)
+    try:
+        status, body = _request(base + "/parameters", method="PATCH",
+                                data={"sample": "Nonexistent"})
+        assert status == 400
+        assert body["error"]["code"] == "invalid_parameters"
+        assert "sample" in body["error"]["details"]["errors"]
+    finally:
+        srv.stop()
+
+
+def test_scan_stamps_selected_sample_in_launch_parameters():
+    backend = SampleBackend()
+    srv, base = _start(backend)
+    try:
+        status, body = _request(base + "/scan", method="POST",
+                                data={"parameters": {"sample": "Al_bragg"}})
+        assert status == 202
+        job_id = body["job_id"]
+        s_status, s_body = _request(base + "/scan/%s" % job_id)
+        assert s_status == 200
+        params = s_body["launch"]["parameters"]
+        assert params["sample"] == "Al_bragg"
+        assert params["sample_key"] == "Al_bragg"
+    finally:
+        srv.stop()
+
+
+def test_scan_unknown_sample_400():
+    backend = SampleBackend()
+    srv, base = _start(backend)
+    try:
+        status, body = _request(base + "/scan", method="POST",
+                                data={"parameters": {"sample": "bogus"}})
+        assert status == 400
+        assert body["error"]["code"] == "invalid_parameters"
+        # A sample nested under "parameters" is not a top-level key, so B1's
+        # unknown-top-level-key check does not fire here.
+        assert backend.registry.recent() == []
     finally:
         srv.stop()
