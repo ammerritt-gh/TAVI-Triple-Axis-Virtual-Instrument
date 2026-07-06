@@ -482,15 +482,21 @@ class RuntimeTracker:
                               n_points: int,
                               num_neutrons: int,
                               needs_compile: bool = True,
-                              engine: str = "mcstas") -> Dict[str, object]:
+                              engine: str = "mcstas",
+                              source: Optional[str] = None) -> Dict[str, object]:
         """Estimate wall-clock seconds for a scan, with a confidence tier.
 
-        Records are filtered to ``instrument_name`` + ``engine``, then a machine
-        selection chain (local -> legacy -> scaled -> pooled) picks the sample
-        pool. Per-point time is a recency-weighted median over the K nearest
-        ncount samples (linear ncount scaling for mcstas, flat for
-        deterministic); compile time (from non-reused records) is added when
-        ``needs_compile``.
+        Records are filtered to ``instrument_name`` + ``engine`` (and, when
+        ``source`` is given, to that record source), then a machine selection
+        chain (local -> legacy -> scaled -> pooled) picks the sample pool.
+        Per-point time is a recency-weighted median over the K nearest ncount
+        samples (linear ncount scaling for mcstas, flat for deterministic);
+        compile time (from non-reused records) is added when ``needs_compile``.
+
+        ``source`` is an optional filter (``"organic"`` | ``"benchmark"``); the
+        default ``None`` pools both sources unchanged. It exists so the
+        benchmark cross-check can compare a fresh benchmark measurement against
+        the estimate organic history alone would have produced.
 
         Returns ``{"estimated_seconds": float|None, "confidence": str,
         "samples": int, "basis": str, "machine_samples": int}``. The ``basis``
@@ -499,7 +505,9 @@ class RuntimeTracker:
         there is no usable historical data or the inputs are invalid.
         """
         records = [r for r in (self.records.get(instrument_name, []) or [])
-                   if getattr(r, "engine", "mcstas") == engine]
+                   if getattr(r, "engine", "mcstas") == engine
+                   and (source is None
+                        or getattr(r, "source", "organic") == source)]
         samples = len(records)
         confidence = self._confidence_from_samples(samples)
 
