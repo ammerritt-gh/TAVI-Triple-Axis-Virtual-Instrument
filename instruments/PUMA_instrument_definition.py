@@ -5,7 +5,7 @@ import numpy as np
 import os
 import subprocess
 
-from instruments.contract import PointSnapshot, RunExecutionState
+from instruments.contract import DEFAULT_MPI_COUNT, PointSnapshot, RunExecutionState
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
@@ -831,7 +831,7 @@ def _build_execution_info(mode, output_folder, binary_path=None, returncode=None
     }
 
 
-def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=30):
+def run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=DEFAULT_MPI_COUNT):
     """Run one point on an already-built PUMA instrument."""
     error_flag_array = list(params_snapshot.error_flags)
 

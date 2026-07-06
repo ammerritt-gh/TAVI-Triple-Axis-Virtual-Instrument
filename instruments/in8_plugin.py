@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import copy
 
+from instruments.contract import DEFAULT_MPI_COUNT
 from instruments.descriptor import (
     AxisLimits,
     CollimationSlot,
@@ -327,7 +328,7 @@ class IN8Plugin:
         )
 
     def run_point(self, instrument, snapshot, output_folder, number_neutrons,
-                  execution_state, mpi_count=30):
+                  execution_state, mpi_count=DEFAULT_MPI_COUNT):
         from instruments.IN8_instrument_definition import run_tas_point
 
         return run_tas_point(

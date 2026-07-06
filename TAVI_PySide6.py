@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
-from instruments.contract import PrepFailure, RunExecutionState
+from instruments.contract import DEFAULT_MPI_COUNT, PrepFailure, RunExecutionState
 
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
@@ -298,8 +298,9 @@ class TaviApiBackend:
                 points = max(0, total - done)
 
         instrument_name = self._instrument_id()
+        engine = launch.get("engine") or "mcstas"
         return self._controller.runtime_tracker.estimate_scan_seconds(
-            instrument_name, points, ncount, needs_compile
+            instrument_name, points, ncount, needs_compile, engine=engine
         )
 
     def estimate_queue_drain_seconds(self):
@@ -494,9 +495,11 @@ class TaviApiBackend:
             neutrons_per_point=neutrons,
             job_neutrons=points * neutrons,
         )
+        engine = (launch_state or {}).get("engine") or "mcstas"
         try:
             eta = controller.runtime_tracker.estimate_scan_seconds(
-                self._instrument_id(), run_points, int(neutrons), True
+                self._instrument_id(), run_points, int(neutrons), True,
+                engine=engine,
             )
         except Exception:
             eta = {"estimated_seconds": None, "confidence": "none", "samples": 0}
@@ -2835,24 +2838,29 @@ class TAVIController(QObject):
             return True
 
     def _estimate_total_and_compile(self, instrument_name, num_points,
-                                    num_neutrons, needs_compile):
+                                    num_neutrons, needs_compile,
+                                    engine="mcstas"):
         """Total-seconds + compile-seconds for the GUI estimate labels.
 
-        Uses the machine-aware estimator (mcstas engine). Compile is surfaced
-        only when a rebuild is pending; it is derived as the estimate for zero
-        scan points (compile only). Returns ``(total_seconds|None,
+        Uses the machine-aware estimator for the selected ``engine``. The
+        deterministic engine has no compilation, so ``needs_compile`` is forced
+        off and no compile label is surfaced. Otherwise compile is surfaced only
+        when a rebuild is pending; it is derived as the estimate for zero scan
+        points (compile only). Returns ``(total_seconds|None,
         compile_seconds|None)``.
         """
+        if engine == "deterministic":
+            needs_compile = False
         est = self.runtime_tracker.estimate_scan_seconds(
             instrument_name, num_points, num_neutrons,
-            needs_compile=needs_compile, engine="mcstas",
+            needs_compile=needs_compile, engine=engine,
         )
         total = est.get("estimated_seconds")
         compile_seconds = None
         if total is not None and needs_compile:
             compile_seconds = self.runtime_tracker.estimate_scan_seconds(
                 instrument_name, 0, num_neutrons,
-                needs_compile=True, engine="mcstas",
+                needs_compile=True, engine=engine,
             ).get("estimated_seconds")
         return total, compile_seconds
 
@@ -2879,13 +2887,32 @@ class TAVIController(QObject):
         # Get instrument name
         instrument_name = self.instrument.id
 
-        # Whether the next McStas run would compile (drops compile time from the
-        # total estimate when the current binary will be reused).
-        needs_compile = self._pending_needs_compile()
+        # GUI-selected execution engine drives which timing history is read and
+        # how the labels read (the analytic engine is fast and never compiles).
+        try:
+            engine = self.window.simulation_dock.get_selected_engine()
+        except Exception:
+            engine = 'mcstas'
 
-        # Update time per point estimate
-        _, run_time_per_point = self.runtime_tracker.get_estimates(instrument_name, num_neutrons)
-        if run_time_per_point is not None:
+        # Whether the next McStas run would compile (drops compile time from the
+        # total estimate when the current binary will be reused). The
+        # deterministic engine never compiles.
+        needs_compile = (False if engine == "deterministic"
+                         else self._pending_needs_compile())
+
+        # Update time per point estimate (affine per-point cost for the engine).
+        run_time_per_point = self.runtime_tracker.estimate_scan_seconds(
+            instrument_name, 1, num_neutrons, needs_compile=False, engine=engine,
+        ).get("per_point_seconds")
+        if engine == "deterministic":
+            # Analytic cost is ~independent of ncount and sub-second; never show
+            # an hours-scale mcstas figure or a "No timing data" scare for it.
+            if run_time_per_point is None or run_time_per_point < 1.0:
+                time_str = "< 1s/point (analytic)"
+            else:
+                time_str = f"~{RuntimeTracker.format_time(run_time_per_point)}/point"
+            self.window.simulation_dock.update_time_per_point(time_str)
+        elif run_time_per_point is not None:
             time_str = f"~{RuntimeTracker.format_time(run_time_per_point)}/point"
             self.window.simulation_dock.update_time_per_point(time_str)
         else:
@@ -2920,7 +2947,8 @@ class TAVIController(QObject):
             self.window.simulation_dock.update_point_count_display_deferred(count1, count2)
             # Still show time estimate based on total points (assume all valid for estimate)
             total_time, compile_time = self._estimate_total_and_compile(
-                instrument_name, total_potential_points, num_neutrons, needs_compile
+                instrument_name, total_potential_points, num_neutrons,
+                needs_compile, engine=engine
             )
             if total_time is not None:
                 total_str = RuntimeTracker.format_time(total_time)
@@ -2954,7 +2982,8 @@ class TAVIController(QObject):
         
         # Update total time estimate
         total_time, compile_time = self._estimate_total_and_compile(
-            instrument_name, valid_count, num_neutrons, needs_compile
+            instrument_name, valid_count, num_neutrons, needs_compile,
+            engine=engine
         )
         if total_time is not None:
             total_str = RuntimeTracker.format_time(total_time)
@@ -5730,6 +5759,7 @@ class TAVIController(QObject):
                 binary_reused=None,
                 build_fp_hash=None,
                 source=record_source,
+                mpi_count=None,
             )
             self.runtime_data_updated.emit()
 
@@ -6637,6 +6667,7 @@ class TAVIController(QObject):
                 binary_reused=reuse_binary,
                 build_fp_hash=build_fp_hash,
                 source=record_source,
+                mpi_count=DEFAULT_MPI_COUNT,
             )
             self.message_printed.emit(
                 f"Timing data recorded: {len(executed_scan_times)} simulated points in {RuntimeTracker.format_time(total_time)}"

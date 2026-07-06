@@ -37,6 +37,11 @@ if TYPE_CHECKING:  # avoid importing heavy modules just for type hints
 # (monocris/anacris/K_fixed/fixed_E/sample_mount/omega/...) on it directly.
 InstrumentState = Any
 
+# Default MPI worker count for a McStas point run. There is no GUI knob for this
+# today; the fan-out width is fixed here and referenced by the run-point sites
+# (and recorded on mcstas scan records for future-proofing).
+DEFAULT_MPI_COUNT = 30
+
 
 @dataclass
 class RunExecutionState:
@@ -202,7 +207,7 @@ class InstrumentPlugin(Protocol):
         output_folder: str,
         number_neutrons: int,
         execution_state: RunExecutionState,
-        mpi_count: int = 30,
+        mpi_count: int = DEFAULT_MPI_COUNT,
     ) -> tuple[Any, list[str], dict]:
         """Run one prepared point. Returns ``(data, error_flags, execution_info)``.
 
