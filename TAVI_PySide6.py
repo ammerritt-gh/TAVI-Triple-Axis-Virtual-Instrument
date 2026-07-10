@@ -592,6 +592,23 @@ class TaviApiBackend:
                 points = 1
             neutrons = float(vals.get("number_neutrons") or 0)
 
+            # 4a. Over-limit guard BEFORE the per-point feasibility expansion.
+            #     _build_validation below deep-copies the scan config and runs
+            #     the angle solver once per point on the GUI thread; for a scan
+            #     far over max_points that monopolizes the single GUI event loop
+            #     (starving every other bridged API call) only to be rejected by
+            #     the budget check in step 6 anyway. Rejecting here on the cheap
+            #     point count keeps an over-limit submission from ever expanding.
+            limits = getattr(controller, "_budget_limits", None)
+            if limits is not None and points > limits.max_points:
+                reason = ("scan has %d points, exceeding the limit of %d"
+                          % (points, limits.max_points))
+                controller._journal.record("budget", "rejected: %s" % reason)
+                raise ApiError(
+                    429, "limit_exceeded", reason,
+                    details={"usage": self._budget_usage()},
+                )
+
             # 5. Always-on feasibility validation (API path only). Build the
             #    validation block (per-command points + per-point feasibility +
             #    cost + eta). Any infeasible point is a hard 400 unless the
@@ -614,7 +631,7 @@ class TaviApiBackend:
                 launch_state["skipped_points"] = infeasible
 
             # 6. Budget + queue-depth enforcement (API-sourced jobs only).
-            limits = getattr(controller, "_budget_limits", None)
+            #    ``limits`` was resolved in step 4a for the over-limit guard.
             pending_cost = self._pending_api_cost()
             queued_now = self._queued_count()
             if limits is not None:
@@ -720,6 +737,32 @@ class TaviApiBackend:
                 points = 1
             neutrons = float(vals.get("number_neutrons") or 0)
 
+            limits = getattr(controller, "_budget_limits", None)
+
+            # Over-limit guard BEFORE the per-point feasibility expansion in
+            # _build_validation (which deep-copies the config and runs the angle
+            # solver once per point on the GUI thread). Returning here on the
+            # cheap point count keeps an over-limit /validate from monopolizing
+            # the single GUI event loop and starving other bridged API calls.
+            if limits is not None and points > limits.max_points:
+                reason = ("scan has %d points, exceeding the limit of %d"
+                          % (points, limits.max_points))
+                blockers.append("limit_exceeded: %s" % reason)
+                return {
+                    "points": points,
+                    "per_command": [],
+                    "infeasible": [],
+                    "cost": dict(
+                        self._budget_usage(), points=points,
+                        neutrons_per_point=neutrons,
+                        job_neutrons=points * neutrons,
+                    ),
+                    "eta": {"estimated_seconds": None,
+                            "confidence": "none", "samples": 0},
+                    "would_queue": False,
+                    "blockers": blockers,
+                }
+
             validation = self._build_validation(
                 controller, launch_state, points, neutrons, allow_partial
             )
@@ -729,7 +772,6 @@ class TaviApiBackend:
                     "infeasible_points: %d point(s) unreachable" % len(infeasible)
                 )
 
-            limits = getattr(controller, "_budget_limits", None)
             if limits is not None:
                 if self._queued_count() >= limits.max_queued:
                     blockers.append("limit_exceeded: queue is full")
