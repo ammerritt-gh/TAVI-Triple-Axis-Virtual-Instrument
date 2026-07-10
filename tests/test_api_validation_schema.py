@@ -419,12 +419,21 @@ class SampleBackend:
         return {"applied": list(patch), "errors": {}}
 
     def submit_scan(self, body, idempotency_key=None):
-        self._apply_sample(body.get("parameters") or {})
-        key = None if self.current_sample == "none" else self.current_sample
+        # GUI-independent: the sample is overlaid onto the defaults for THIS job
+        # only (unknown id -> 400), never mutating self.current_sample.
+        patch = body.get("parameters") or {}
+        sample = patch.get("sample", "none")
+        if sample not in _SAMPLE_IDS:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"errors": {
+                    "sample": "invalid value: sample must be one of %s"
+                              % sorted(_SAMPLE_IDS)}},
+            )
+        key = None if sample == "none" else sample
         job = ScanJob(
             job_id=self.registry.next_id(), source="api",
-            launch_state={"vals": {"sample": self.current_sample,
-                                   "sample_key": key}},
+            launch_state={"vals": {"sample": sample, "sample_key": key}},
         )
         self.registry.add(job)
         return {"job_id": job.job_id, "state": "queued", "position": 0}

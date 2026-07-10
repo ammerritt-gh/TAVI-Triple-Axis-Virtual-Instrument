@@ -44,7 +44,13 @@ The analytic model mirrors the McStas ``Phonon_DFT`` component
   (Stokes, neutron loses energy) with weight ``n+1`` and at **-omega0**
   (anti-Stokes) with weight ``n``, where ``n = 1/(exp(omega0/kT) - 1)`` and
   ``kT = T / 11.605`` meV (the component's ``PDFT_T2E``). The anti-Stokes/Stokes
-  ratio is therefore ``exp(-omega0/kT)`` exactly.
+  ratio is therefore ``exp(-omega0/kT)`` exactly -- but that constrains the
+  **integrated area** only. Because the Voigt lineshape is area-normalized and the
+  resolution width varies with energy transfer, the anti-Stokes **peak height** can
+  legitimately exceed the Stokes one: in fixed-kf mode w<0 gives a smaller ki and a
+  tighter energy resolution, so the energy-gain peak is narrower and taller (the
+  asymmetry reverses in fixed-ki mode). Any detailed-balance sanity check must
+  compare areas (or amplitude x width), never raw peak heights.
 
 * **Gradient frame.** ``branches()`` returns ``grad_omega`` = d(omega)/dQ as a
   3-vector in the ``(Q_par, Q_perp, Q_z)`` instrument frame. It is computed by

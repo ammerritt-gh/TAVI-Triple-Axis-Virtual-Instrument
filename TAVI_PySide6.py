@@ -514,22 +514,19 @@ class TaviApiBackend:
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
         re-raises to the HTTP thread for envelope serialization).
 
-        Parameter isolation (``isolated=True``): the current values of exactly
-        the patched fields are snapshotted before the patch is applied, and
-        restored before returning -- so the job runs with the patched *frozen*
-        launch state while the live GUI widgets end up unchanged. The snapshot
-        is also restored on ANY failure path (validation reject, budget reject,
-        exception), which additionally fixes the documented bug where a FAILED
-        submission left an inline patch applied -- that restore-on-failure runs
-        even for non-isolated submissions. A *successful* non-isolated submit
-        keeps the historical global-mutation behavior (the patch stays applied).
+        The launch state is built from widget-free defaults overlaid with the
+        request's ``parameters`` patch (:meth:`build_api_launch_state`);
+        submission neither reads nor writes GUI widgets, so live GUI state can
+        never poison an API scan and an API scan never mutates the GUI.
+        ``isolated`` is still accepted and echoed for backward compatibility but
+        is now a no-op (the path is always isolated); PATCH /parameters is the
+        only GUI-mutating endpoint.
         """
         controller = self._controller
         registry = controller._job_registry
 
         # 0. Idempotency replay: a previously seen key mapping to a live job
         #    returns that job's current status (200 replay) without re-queueing.
-        #    Runs before any mutation, so no snapshot/restore is involved.
         if idempotency_key:
             existing_id = registry.get_idempotent(idempotency_key)
             if existing_id:
@@ -540,156 +537,118 @@ class TaviApiBackend:
                     snap["_idempotent_reuse"] = True
                     return snap
 
-        # Snapshot exactly the fields the patch will touch, using the same
-        # getter machinery apply_parameters/get_gui_values use. Kept for
-        # restore-on-failure (both isolated and non-isolated) and for the
-        # always-restore step when isolated. ``None`` means "nothing to undo".
-        saved = None
-        if patch:
-            current = controller.get_gui_values()
-            if current:
-                saved = {k: current[k] for k in patch if k in current}
+        # 1. Freeze the launch state from defaults + patch (no widget access).
+        launch_state = controller.build_api_launch_state(patch)
+        launch_state["isolated"] = bool(isolated)
+        # Engine selection (POST /scan body) overrides the default engine baked
+        # into the frozen launch state, so an API caller always gets the backend
+        # it asked for. seed/noiseless are deterministic-only (ignored by the
+        # McStas worker) but stored for provenance either way.
+        launch_state["engine"] = engine
+        launch_state["seed"] = seed
+        launch_state["noiseless"] = bool(noiseless)
+        vals = launch_state["vals"]
+        cmd1 = vals.get("scan_command1", "")
+        cmd2 = vals.get("scan_command2", "")
 
-        success = False
+        # 2. Validate scan commands unless force overrides.
+        if not force:
+            msg = controller._validate_scan_commands_text(cmd1, cmd2)
+            if msg:
+                raise ApiError(400, "scan_validation", msg)
+
+        # 3. Compute this job's cost.
         try:
-            # 1. Apply an inline parameter patch first (no busy guard here).
-            if patch:
-                applied, errors = controller.apply_parameters(patch)
-                if errors:
-                    raise ApiError(
-                        400, "invalid_parameters", "One or more fields failed",
-                        details={"applied": list(applied), "errors": errors},
-                    )
+            points = controller._count_scan_points(cmd1, cmd2)
+        except Exception:
+            # Unparseable command with force=True: cannot size it, let the
+            # scan itself fail later; treat as a single point for budget.
+            points = 1
+        neutrons = float(vals.get("number_neutrons") or 0)
 
-            # 2. Freeze launch state and read the scan commands from it.
-            launch_state = controller._collect_simulation_launch_state()
-            if not launch_state:
-                raise ApiError(400, "bad_request", "Could not read GUI values")
-            launch_state["isolated"] = bool(isolated)
-            # Engine selection (POST /scan body) overrides any GUI-selected
-            # engine baked into the frozen launch state, so an API caller always
-            # gets the backend it asked for. seed/noiseless are deterministic-only
-            # (ignored by the McStas worker) but stored for provenance either way.
-            launch_state["engine"] = engine
-            launch_state["seed"] = seed
-            launch_state["noiseless"] = bool(noiseless)
-            vals = launch_state["vals"]
-            cmd1 = vals.get("scan_command1", "")
-            cmd2 = vals.get("scan_command2", "")
+        # 3a. Over-limit guard BEFORE the per-point feasibility expansion.
+        #     _build_validation below deep-copies the scan config and runs
+        #     the angle solver once per point on the GUI thread; for a scan
+        #     far over max_points that monopolizes the single GUI event loop
+        #     (starving every other bridged API call) only to be rejected by
+        #     the budget check in step 5 anyway. Rejecting here on the cheap
+        #     point count keeps an over-limit submission from ever expanding.
+        limits = getattr(controller, "_budget_limits", None)
+        if limits is not None and points > limits.max_points:
+            reason = ("scan has %d points, exceeding the limit of %d"
+                      % (points, limits.max_points))
+            controller._journal.record("budget", "rejected: %s" % reason)
+            raise ApiError(
+                429, "limit_exceeded", reason,
+                details={"usage": self._budget_usage()},
+            )
 
-            # 3. Validate scan commands unless force overrides.
-            if not force:
-                msg = controller._validate_scan_commands_text(cmd1, cmd2)
-                if msg:
-                    raise ApiError(400, "scan_validation", msg)
+        # 4. Always-on feasibility validation (API path only). Build the
+        #    validation block (per-command points + per-point feasibility +
+        #    cost + eta). Any infeasible point is a hard 400 unless the
+        #    caller opted into allow_partial, in which case the infeasible
+        #    points are recorded on the launch state so run_simulation skips
+        #    them and the result documents them under skipped_points.
+        validation = self._build_validation(
+            controller, launch_state, points, neutrons, allow_partial
+        )
+        infeasible = validation.get("infeasible", [])
+        if infeasible and not allow_partial:
+            raise ApiError(
+                400, "infeasible_points",
+                "%d scan point(s) are geometrically infeasible; resubmit "
+                "with \"allow_partial\": true to skip them" % len(infeasible),
+                details=validation,
+            )
+        if infeasible and allow_partial:
+            launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+            launch_state["skipped_points"] = infeasible
 
-            # 4. Compute this job's cost.
-            try:
-                points = controller._count_scan_points(cmd1, cmd2)
-            except Exception:
-                # Unparseable command with force=True: cannot size it, let the
-                # scan itself fail later; treat as a single point for budget.
-                points = 1
-            neutrons = float(vals.get("number_neutrons") or 0)
-
-            # 4a. Over-limit guard BEFORE the per-point feasibility expansion.
-            #     _build_validation below deep-copies the scan config and runs
-            #     the angle solver once per point on the GUI thread; for a scan
-            #     far over max_points that monopolizes the single GUI event loop
-            #     (starving every other bridged API call) only to be rejected by
-            #     the budget check in step 6 anyway. Rejecting here on the cheap
-            #     point count keeps an over-limit submission from ever expanding.
-            limits = getattr(controller, "_budget_limits", None)
-            if limits is not None and points > limits.max_points:
-                reason = ("scan has %d points, exceeding the limit of %d"
-                          % (points, limits.max_points))
+        # 5. Budget + queue-depth enforcement (API-sourced jobs only).
+        #    ``limits`` was resolved in step 3a for the over-limit guard.
+        pending_cost = self._pending_api_cost()
+        queued_now = self._queued_count()
+        if limits is not None:
+            if queued_now >= limits.max_queued:
+                reason = ("queue is full: %d queued jobs, limit is %d"
+                          % (queued_now, limits.max_queued))
+                controller._journal.record("budget", "rejected: %s" % reason)
+                raise ApiError(
+                    429, "limit_exceeded", reason,
+                    details={"usage": self._budget_usage()},
+                )
+            reason = limits.check_submission(points, neutrons, pending_cost)
+            if reason is not None:
                 controller._journal.record("budget", "rejected: %s" % reason)
                 raise ApiError(
                     429, "limit_exceeded", reason,
                     details={"usage": self._budget_usage()},
                 )
 
-            # 5. Always-on feasibility validation (API path only). Build the
-            #    validation block (per-command points + per-point feasibility +
-            #    cost + eta). Any infeasible point is a hard 400 unless the
-            #    caller opted into allow_partial, in which case the infeasible
-            #    points are recorded on the launch state so run_simulation skips
-            #    them and the result documents them under skipped_points.
-            validation = self._build_validation(
-                controller, launch_state, points, neutrons, allow_partial
-            )
-            infeasible = validation.get("infeasible", [])
-            if infeasible and not allow_partial:
-                raise ApiError(
-                    400, "infeasible_points",
-                    "%d scan point(s) are geometrically infeasible; resubmit "
-                    "with \"allow_partial\": true to skip them" % len(infeasible),
-                    details=validation,
-                )
-            if infeasible and allow_partial:
-                launch_state["skipped_indices"] = [e["index"] for e in infeasible]
-                launch_state["skipped_points"] = infeasible
+        # 6. Enqueue and tag the job with its cost for future budget math.
+        job = controller.submit_scan_job(launch_state, "api")
+        job._api_cost = points * neutrons
+        if idempotency_key:
+            registry.put_idempotent(idempotency_key, job.job_id)
 
-            # 6. Budget + queue-depth enforcement (API-sourced jobs only).
-            #    ``limits`` was resolved in step 4a for the over-limit guard.
-            pending_cost = self._pending_api_cost()
-            queued_now = self._queued_count()
-            if limits is not None:
-                if queued_now >= limits.max_queued:
-                    reason = ("queue is full: %d queued jobs, limit is %d"
-                              % (queued_now, limits.max_queued))
-                    controller._journal.record("budget", "rejected: %s" % reason)
-                    raise ApiError(
-                        429, "limit_exceeded", reason,
-                        details={"usage": self._budget_usage()},
-                    )
-                reason = limits.check_submission(points, neutrons, pending_cost)
-                if reason is not None:
-                    controller._journal.record("budget", "rejected: %s" % reason)
-                    raise ApiError(
-                        429, "limit_exceeded", reason,
-                        details={"usage": self._budget_usage()},
-                    )
-
-            # 7. Enqueue and tag the job with its cost for future budget math.
-            job = controller.submit_scan_job(launch_state, "api")
-            job._api_cost = points * neutrons
-            if idempotency_key:
-                registry.put_idempotent(idempotency_key, job.job_id)
-
-            position = self._queued_count()
-            success = True
-            return {
-                "job_id": job.job_id,
-                "state": "queued",
-                "position": position,
-                "isolated": bool(isolated),
-                "eta": self._eta_for_job(job),
-                "validation": validation,
-            }
-        finally:
-            # Restore the snapshot when the submission is isolated (always) OR
-            # when it failed (undo a patch a failed submit would otherwise
-            # leave applied -- the documented non-isolated bug). A successful
-            # non-isolated submit intentionally leaves the patch in place.
-            if saved is not None and (isolated or not success):
-                try:
-                    controller.apply_parameters(saved)
-                except Exception as exc:
-                    controller.print_to_message_center(
-                        "Warning: could not restore GUI state after scan "
-                        "submission: %s" % exc
-                    )
+        position = self._queued_count()
+        return {
+            "job_id": job.job_id,
+            "state": "queued",
+            "position": position,
+            "isolated": bool(isolated),
+            "eta": self._eta_for_job(job),
+            "validation": validation,
+        }
 
     def submit_validate(self, body):
         """POST /validate -- run the identical checks as POST /scan, never queue.
 
-        Applies any inline ``parameters`` patch to a snapshot of the GUI state,
-        runs scan-command + feasibility + budget validation, then RESTORES the
-        original GUI values so validation never mutates live state (the known
-        submit-path gotcha where inline patches persist does not apply here).
-        Returns the validation block plus ``would_queue`` and ``blockers``.
-        Allowed in read-only mode (it is non-mutating).
+        Builds the launch state from widget-free defaults overlaid with any
+        inline ``parameters`` patch (:meth:`build_api_launch_state`), then runs
+        scan-command + feasibility + budget validation. It reads no widgets, so
+        validation is inherently non-mutating. Returns the validation block plus
+        ``would_queue`` and ``blockers``. Allowed in read-only mode.
         """
         if not isinstance(body, dict):
             raise ApiError(400, "bad_request", "Request body must be a JSON object")
@@ -703,97 +662,79 @@ class TaviApiBackend:
         )
 
     def _validate_scan_on_gui(self, patch, force, allow_partial):
-        """Non-mutating validation body -- runs on the GUI thread via the bridge."""
+        """Non-mutating validation body -- runs on the GUI thread via the bridge.
+
+        Builds the launch state from widget-free defaults + the request patch
+        (:meth:`build_api_launch_state`), so validation is decoupled from live
+        GUI state and cannot mutate it.
+        """
         controller = self._controller
 
-        # Snapshot current widget values so any inline patch can be rolled back.
-        saved = controller.get_gui_values()
+        launch_state = controller.build_api_launch_state(patch)
+        vals = launch_state["vals"]
+        cmd1 = vals.get("scan_command1", "")
+        cmd2 = vals.get("scan_command2", "")
+
+        blockers = []
+        scan_msg = ""
+        if not force:
+            scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
+            if scan_msg:
+                blockers.append("scan_validation: %s" % scan_msg)
+
         try:
-            if patch:
-                applied, errors = controller.apply_parameters(patch)
-                if errors:
-                    raise ApiError(
-                        400, "invalid_parameters", "One or more fields failed",
-                        details={"applied": list(applied), "errors": errors},
-                    )
+            points = controller._count_scan_points(cmd1, cmd2)
+        except Exception:
+            points = 1
+        neutrons = float(vals.get("number_neutrons") or 0)
 
-            launch_state = controller._collect_simulation_launch_state()
-            if not launch_state:
-                raise ApiError(400, "bad_request", "Could not read GUI values")
-            vals = launch_state["vals"]
-            cmd1 = vals.get("scan_command1", "")
-            cmd2 = vals.get("scan_command2", "")
+        limits = getattr(controller, "_budget_limits", None)
 
-            blockers = []
-            scan_msg = ""
-            if not force:
-                scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
-                if scan_msg:
-                    blockers.append("scan_validation: %s" % scan_msg)
+        # Over-limit guard BEFORE the per-point feasibility expansion in
+        # _build_validation (which deep-copies the config and runs the angle
+        # solver once per point on the GUI thread). Returning here on the
+        # cheap point count keeps an over-limit /validate from monopolizing
+        # the single GUI event loop and starving other bridged API calls.
+        if limits is not None and points > limits.max_points:
+            reason = ("scan has %d points, exceeding the limit of %d"
+                      % (points, limits.max_points))
+            blockers.append("limit_exceeded: %s" % reason)
+            return {
+                "points": points,
+                "per_command": [],
+                "infeasible": [],
+                "cost": dict(
+                    self._budget_usage(), points=points,
+                    neutrons_per_point=neutrons,
+                    job_neutrons=points * neutrons,
+                ),
+                "eta": {"estimated_seconds": None,
+                        "confidence": "none", "samples": 0},
+                "would_queue": False,
+                "blockers": blockers,
+            }
 
-            try:
-                points = controller._count_scan_points(cmd1, cmd2)
-            except Exception:
-                points = 1
-            neutrons = float(vals.get("number_neutrons") or 0)
-
-            limits = getattr(controller, "_budget_limits", None)
-
-            # Over-limit guard BEFORE the per-point feasibility expansion in
-            # _build_validation (which deep-copies the config and runs the angle
-            # solver once per point on the GUI thread). Returning here on the
-            # cheap point count keeps an over-limit /validate from monopolizing
-            # the single GUI event loop and starving other bridged API calls.
-            if limits is not None and points > limits.max_points:
-                reason = ("scan has %d points, exceeding the limit of %d"
-                          % (points, limits.max_points))
-                blockers.append("limit_exceeded: %s" % reason)
-                return {
-                    "points": points,
-                    "per_command": [],
-                    "infeasible": [],
-                    "cost": dict(
-                        self._budget_usage(), points=points,
-                        neutrons_per_point=neutrons,
-                        job_neutrons=points * neutrons,
-                    ),
-                    "eta": {"estimated_seconds": None,
-                            "confidence": "none", "samples": 0},
-                    "would_queue": False,
-                    "blockers": blockers,
-                }
-
-            validation = self._build_validation(
-                controller, launch_state, points, neutrons, allow_partial
+        validation = self._build_validation(
+            controller, launch_state, points, neutrons, allow_partial
+        )
+        infeasible = validation.get("infeasible", [])
+        if infeasible and not allow_partial:
+            blockers.append(
+                "infeasible_points: %d point(s) unreachable" % len(infeasible)
             )
-            infeasible = validation.get("infeasible", [])
-            if infeasible and not allow_partial:
-                blockers.append(
-                    "infeasible_points: %d point(s) unreachable" % len(infeasible)
-                )
 
-            if limits is not None:
-                if self._queued_count() >= limits.max_queued:
-                    blockers.append("limit_exceeded: queue is full")
-                reason = limits.check_submission(
-                    points, neutrons, self._pending_api_cost()
-                )
-                if reason is not None:
-                    blockers.append("limit_exceeded: %s" % reason)
+        if limits is not None:
+            if self._queued_count() >= limits.max_queued:
+                blockers.append("limit_exceeded: queue is full")
+            reason = limits.check_submission(
+                points, neutrons, self._pending_api_cost()
+            )
+            if reason is not None:
+                blockers.append("limit_exceeded: %s" % reason)
 
-            validation["would_queue"] = not blockers
-            validation["blockers"] = blockers
-            return validation
-        finally:
-            # Restore the pre-validation GUI state (validate must not mutate).
-            if saved:
-                try:
-                    controller.apply_parameters(saved)
-                except Exception as exc:
-                    controller.print_to_message_center(
-                        "Warning: could not fully restore GUI state after "
-                        "/validate: %s" % exc
-                    )
+        validation["would_queue"] = not blockers
+        validation["blockers"] = blockers
+        return validation
 
     def get_resolution(self, query):
         """GET /resolution -- theoretical TAS resolution at one (H,K,L,deltaE).
@@ -1100,9 +1041,10 @@ class TAVIController(QObject):
         emitting it is thread-safe (Qt delivers it to the GUI-thread slot via a
         queued connection), so this is the safe path off the GUI thread.
         """
-        self.message_printed.emit(f"API: {msg}")
-        # Mirror to the API dock's activity log (raw line, no "API:" prefix).
-        self.api_activity.emit(msg)
+        stamp = time.strftime("%H:%M:%S")
+        self.message_printed.emit(f"API [{stamp}]: {msg}")
+        # Mirror to the API dock's activity log (timestamped, no "API:" prefix).
+        self.api_activity.emit(f"[{stamp}] {msg}")
 
     # ---- API dock support methods ---------------------------------------
 
@@ -1792,6 +1734,135 @@ class TAVIController(QObject):
 
         from tavi.resolution import resolution
         return resolution(cfg, method=method).to_dict()
+
+    def build_api_launch_state(self, patch):
+        """Freeze an API scan launch state from defaults + patch, GUI-independent.
+
+        Runs on the GUI thread (may read ``self.descriptor`` /
+        ``instrument_state`` / ``ub_matrix`` / ``diagnostic_settings``) but reads
+        and writes NO widgets: the scan a remote caller submits is fully
+        decoupled from live GUI state, so text a human left in a scan-command
+        widget can never poison it, and an API scan never mutates the GUI
+        (docs/API_SERVER_DESIGN.md sec 8). Returns a launch state shaped like
+        :meth:`_collect_simulation_launch_state`, or raises ``ApiError`` on a bad
+        patch or a missing scan command.
+        """
+        vals = self._default_parameter_values()
+        patch = patch or {}
+        field_map = self._api_field_map()
+
+        # (a) Parse/validate the patch with apply_parameters' own parse fns;
+        #     unknown field / bad value collects the identical 400.
+        parsed = {}
+        errors = {}
+        for name, value in patch.items():
+            spec = field_map.get(name)
+            if spec is None:
+                errors[name] = "unknown field"
+                continue
+            try:
+                parsed[name] = spec[0](value)
+            except (ValueError, TypeError) as exc:
+                errors[name] = "invalid value: %s" % exc
+        if errors:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"errors": errors},
+            )
+
+        patched = set(parsed)
+        vals.update(parsed)
+
+        # (b) Pure derivation pass (replaces the widget after-handlers).
+        lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
+                        'lattice_alpha', 'lattice_beta', 'lattice_gamma')
+
+        # A patched sample adopts its own lattice unless lattice_* is explicit.
+        if 'sample' in patched and not any(k in patched for k in lattice_keys):
+            spec = next((s for s in self.descriptor.samples
+                         if s.id == vals['sample']), None)
+            if spec is not None and spec.lattice is not None:
+                (vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
+                 vals['lattice_alpha'], vals['lattice_beta'],
+                 vals['lattice_gamma']) = spec.lattice
+        sample_key = None if vals['sample'] == "none" else vals['sample']
+
+        # k<->E consistency: a lone patched member of a k/E pair derives its
+        # partner; a patched fixed_E/K_fixed recomputes the fixed side. deltaE
+        # stays an independent scan variable (not folded back into the energies).
+        if 'Ei' in patched and 'Ki' not in patched:
+            vals['Ki'] = energy2k(vals['Ei'])
+        elif 'Ki' in patched and 'Ei' not in patched:
+            vals['Ei'] = k2energy(vals['Ki'])
+        if 'Ef' in patched and 'Kf' not in patched:
+            vals['Kf'] = energy2k(vals['Ef'])
+        elif 'Kf' in patched and 'Ef' not in patched:
+            vals['Ef'] = k2energy(vals['Kf'])
+        if 'fixed_E' in patched or 'K_fixed' in patched:
+            if vals['K_fixed'] == "Ki Fixed":
+                vals['Ei'] = vals['fixed_E']
+                vals['Ki'] = energy2k(vals['Ei'])
+            else:
+                vals['Ef'] = vals['fixed_E']
+                vals['Kf'] = energy2k(vals['Ef'])
+
+        # HKL<->Q under the (possibly sample-adopted) lattice. HKL is
+        # authoritative when position was patched via HKL/lattice/sample; Q is
+        # authoritative when patched via qx/qy/qz. LOAD-BEARING: ISAR sends
+        # H/K/L and the momentum-mode scan template reads vals qx/qy/qz.
+        q_keys = ('qx', 'qy', 'qz')
+        hkl_trigger = ('H', 'K', 'L') + lattice_keys + ('sample',)
+        if (any(k in patched for k in hkl_trigger)
+                and not any(k in patched for k in q_keys)):
+            vals['qx'], vals['qy'], vals['qz'] = self._hkl_to_sample_q(
+                vals['H'], vals['K'], vals['L'], vals
+            )
+        elif any(k in patched for k in q_keys):
+            vals['H'], vals['K'], vals['L'] = self._sample_q_to_hkl(
+                vals['qx'], vals['qy'], vals['qz'], vals
+            )
+
+        # Recompute ideal bending when mtt/att/modules were patched and the
+        # caller did not pin the radii explicitly.
+        if (any(k in patched for k in ('mtt', 'att', 'modules'))
+                and not any(k in patched for k in ('rhm', 'rvm', 'rha'))):
+            ideal = self._ideal_bending_from_modules(
+                vals['mtt'], vals['att'], vals['modules']
+            )
+            if ideal:
+                vals['rhm'] = ideal['rhm']
+                vals['rvm'] = ideal['rvm']
+                vals['rha'] = ideal['rha']
+
+        # At least one non-empty scan command is required (a lone command 2 is
+        # swapped into command 1 downstream, so either satisfies the check).
+        cmd1 = (vals.get('scan_command1') or "").strip()
+        cmd2 = (vals.get('scan_command2') or "").strip()
+        if not cmd1 and not cmd2:
+            raise ApiError(
+                400, "missing_required",
+                "scan_command1 is required for API scan submission",
+            )
+
+        # Assemble the launch state (mirrors _collect_simulation_launch_state
+        # minus every widget read). API scan commands are absolute; compact save
+        # is off; the save folder is a fixed non-widget API base.
+        self._enrich_launch_parameters(vals, sample_key)
+        diagnostic_settings = copy.deepcopy(self.diagnostic_settings)
+        return {
+            'vals': vals,
+            'save_folder_input': os.path.join(self.output_directory, "api_scans"),
+            'sample_key': sample_key,
+            'engine': 'mcstas',
+            'scan_config': self.instrument.scan_config(
+                self.instrument_state, vals, sample_key, diagnostic_settings,
+                self._build_sample_mount(vals),
+            ),
+            'diagnostic_settings': diagnostic_settings,
+            'relative_mode_1': False,
+            'relative_mode_2': False,
+            'compact_save_enabled': False,
+        }
 
     def _collect_simulation_launch_state(self):
         """Freeze GUI state before starting the simulation worker thread."""
@@ -4082,6 +4153,109 @@ class TAVIController(QObject):
         else:
             self.set_default_parameters()
     
+    def _ideal_bending_from_modules(self, mtt, att, modules):
+        """Widget-free ideal bending radii (mirrors _compute_ideal_bending_values).
+
+        The NMO installed-check reads ``modules['nmo']`` instead of the GUI combo
+        so the API launch path never touches widgets. Returns the same
+        ``{"rhm","rvm","rha","rva"}`` dict, or ``None`` for a degenerate geometry.
+        """
+        try:
+            nmo = modules.get("nmo", "None") if isinstance(modules, dict) else "None"
+            if nmo not in (None, "None", False):
+                rhm = 0
+                rvm = 0
+            else:
+                sin_m = math.sin(math.radians(mtt / 2))
+                if sin_m == 0:
+                    return None
+                rhm = 2 * self.instrument_state.L2 / sin_m
+                rvm = 2 * self.instrument_state.L2 * sin_m
+                if rhm < 2.0:
+                    rhm = 2.0
+                if rvm < 0.5:
+                    rvm = 0.5
+            denom_a = (1 / self.instrument_state.L3 + 1 / self.instrument_state.L4)
+            sin_a = math.sin(math.radians(att / 2))
+            if denom_a == 0 or sin_a == 0:
+                return None
+            rha = 2 / sin_a / denom_a
+            rva = 0.8
+            if rha < 2.0:
+                rha = 2.0
+            return {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+        except Exception:
+            return None
+
+    def _default_parameter_values(self):
+        """Widget-free defaults dict with exactly get_gui_values()'s key set.
+
+        The API scan/validate path builds its launch state from these
+        self-consistent Al(200) defaults overlaid with the caller's patch
+        (:meth:`build_api_launch_state`), so a submission never reads live GUI
+        widgets. Divergence from the GUI defaults: diagnostic_mode is False
+        (matches the benchmark launch path) and the scan commands start empty
+        (an API scan must supply its own).
+        """
+        from instruments.descriptor import ModuleKind
+
+        d = self.descriptor
+
+        modules = {}
+        for m in d.modules:
+            if m.kind is ModuleKind.CHOICE:
+                modules[m.id] = str(m.default)
+            else:
+                modules[m.id] = bool(m.default)
+
+        collimation = {}
+        for slot in d.collimation:
+            if slot.multi_select:
+                collimation[slot.id] = {slot.default} if slot.default else set()
+            else:
+                collimation[slot.id] = slot.default
+
+        slits_mm = {}
+        for slit in d.slits:
+            width = float(slit.default_width_mm or 0)
+            if slit.has_width and slit.has_height:
+                slits_mm[slit.id] = (width, float(slit.default_height_mm or 0))
+            else:
+                slits_mm[slit.id] = width
+
+        sample_ids = {s.id for s in d.samples}
+        vals = {
+            'mtt': 41.167, 'stt': -71.2502, 'omega': -35.6251, 'chi': 0.0,
+            'att': 41.167,
+            'Ki': 2.6634, 'Ei': 14.7, 'Kf': 2.6634, 'Ef': 14.7,
+            'K_fixed': "Kf Fixed", 'fixed_E': 14.7,
+            'qx': 3.1028, 'qy': 0.0, 'qz': 0.0,
+            'H': 2.0, 'K': 0.0, 'L': 0.0, 'deltaE': 0.0,
+            'lattice_a': 4.05, 'lattice_b': 4.05, 'lattice_c': 4.05,
+            'lattice_alpha': 90.0, 'lattice_beta': 90.0, 'lattice_gamma': 90.0,
+            'kappa': 0.0, 'psi': 0.0,
+            'sample': "Al_bragg" if "Al_bragg" in sample_ids else "none",
+            'monocris': d.mono_crystals[0].id,
+            'anacris': d.ana_crystals[0].id,
+            'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0,
+            'source_type': d.source_types[0].id,
+            'source_dE': 2.0,
+            'modules': modules,
+            'collimation': collimation,
+            'slits_mm': slits_mm,
+            'number_neutrons': 1000000,
+            'scan_command1': "",
+            'scan_command2': "",
+            'diagnostic_mode': False,
+        }
+
+        ideal = self._ideal_bending_from_modules(vals['mtt'], vals['att'], modules)
+        if ideal:
+            vals['rhm'] = ideal['rhm']
+            vals['rvm'] = ideal['rvm']
+            vals['rha'] = ideal['rha']
+        return vals
+
     def set_default_parameters(self):
         """Set default parameters."""
         # Block signals during loading to prevent premature validation

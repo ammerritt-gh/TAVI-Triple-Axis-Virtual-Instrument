@@ -68,17 +68,13 @@ class _StubController:
         self.feasibility_solves = 0     # per-point solves it performed
         self.messages = []
 
-    # -- reads / applies -------------------------------------------------
-    def get_gui_values(self):
-        return {"scan_command1": _CMD1, "scan_command2": "", "number_neutrons": 1e5}
-
-    def apply_parameters(self, patch):
-        return list(patch or {}), {}
-
-    def _collect_simulation_launch_state(self):
+    # -- GUI-independent launch-state builder (the seam the bodies use) --
+    def build_api_launch_state(self, patch):
+        vals = {"scan_command1": _CMD1, "scan_command2": "",
+                "number_neutrons": 1e5}
+        vals.update(patch or {})
         return {
-            "vals": {"scan_command1": _CMD1, "scan_command2": "",
-                     "number_neutrons": 1e5},
+            "vals": vals,
             "scan_config": object(),
             "relative_mode_1": False, "relative_mode_2": False,
         }
