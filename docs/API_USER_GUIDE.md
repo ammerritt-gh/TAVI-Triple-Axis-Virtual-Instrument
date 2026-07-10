@@ -67,8 +67,8 @@ GOLDEN WORKFLOW:
   3. PATCH /parameters to set energies/Q/lattice/scan_command1[/2] and number_neutrons
   4. POST /validate with the same body you will POST /scan -> only submit if would_queue==true;
      if blockers list infeasible points, either fix them or POST /scan with "allow_partial":true
-  5. POST /scan  -> capture job_id (add "isolated":true to run at one-off parameters WITHOUT
-     disturbing the GUI or other queued work; the inline patch is baked into this job only)
+  5. POST /scan  -> capture job_id (the launch state is built from defaults + your "parameters"
+     patch only, so a scan never reads or disturbs the GUI; "isolated" is an accepted no-op)
   6. GET /scan/{id}?wait=30  -> long-poll instead of tight polling; repeat while "timed_out":true
      until state is terminal: done | failed | stopped | cancelled  (running/queued are NOT terminal)
   7. GET /scan/{id}/data -> read result.scan_values_1 + result.counts; result.skipped_points lists
@@ -313,23 +313,23 @@ some infeasible points is still queued: only the feasible points run, and
 "reason"}`. When `false` (the default), a single infeasible point rejects the
 whole submission with `400 infeasible_points`.
 
-**`isolated`** (optional boolean, default `false`). When `true`, the inline
-`parameters` patch is applied only to the **frozen launch state** of *this* job:
-the live GUI widgets are snapshotted before the patch, the job is queued with the
-patched values baked in, and the widgets are then **restored** — so a running
-operator's setup is left exactly as it was. Use this to run a one-off scan at
-different parameters without disturbing the GUI or other queued work. The 202
-payload and the job snapshot both carry `"isolated": true/false`.
+**`isolated`** (optional boolean, default `false`). Accepted and echoed in the
+202 payload and the job snapshot for backward compatibility, but now a **no-op**:
+`POST /scan` and `POST /validate` always build their launch state from
+instrument defaults overlaid with the request's `parameters` patch, reading **no
+live GUI widgets**. A submission therefore never disturbs the operator's setup or
+other queued work, and text a human left in a scan-command widget (never
+submitted) can never bleed into an API scan. The only endpoint that mutates GUI
+state is `PATCH /parameters`; the only shared context between an API scan and the
+GUI is the loaded instrument.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"H": 3.0, "scan_command1": "K -0.1 0.1 0.02"}, "isolated": true}'
+  -d '{"parameters": {"H": 3.0, "scan_command1": "K -0.1 0.1 0.02"}}'
 ```
-Regardless of `isolated`, a submission that is **rejected** (bad parameter,
-invalid scan command, infeasible point, over budget) never leaves an inline
-`parameters` patch applied — the pre-patch values are always restored on failure.
-Only a *successful* `isolated:false` submit keeps its patch applied globally (the
-default, backward-compatible behavior).
+A scan submitted without a non-empty `scan_command1` (or a lone `scan_command2`,
+which is swapped in) is rejected with `400 missing_required`, since the launch
+state no longer inherits whatever command was sitting in the GUI.
 
 **`engine`** (optional string, default `"mcstas"`). Selects the execution
 backend for this job. `GET /schema` advertises the allowed list under `engines`.
@@ -1039,8 +1039,9 @@ crystals; a (2 0 0)-type Bragg peak stands in for a "known" reflection.
 ### 13.1 align-on-bragg-peak
 
 **Goal.** Confirm the sample is aligned by scanning tightly across a known
-elastic Bragg peak near **H = 2** and inspecting where the intensity peaks. Run
-it *without* disturbing the operator's live setup, so use `isolated: true`.
+elastic Bragg peak near **H = 2** and inspecting where the intensity peaks. A
+scan is always built from defaults + your patch, so it never disturbs the
+operator's live setup (the `isolated` flag below is an accepted no-op).
 
 Set the elastic condition and center, then dry-run the tight scan:
 ```bash
@@ -1091,9 +1092,9 @@ curl http://127.0.0.1:8642/api/v1/scan/j-0007/data
 - **TAVI does not fit peaks.** The `counts` array peaks at `H = 2.0` here, but
   finding the center (centroid, Gaussian fit, whatever) is the *client's* job —
   no endpoint returns a fitted peak position.
-- Because the job was `isolated: true`, the operator's live `scan_command1` and
-  `number_neutrons` widgets are untouched after the run — the patch lived only in
-  this job's frozen launch state.
+- The operator's live `scan_command1` and `number_neutrons` widgets are untouched
+  after the run — the scan's launch state is built from defaults + the request
+  patch and never reads or writes GUI widgets.
 
 ### 13.2 elastic-h-scan
 

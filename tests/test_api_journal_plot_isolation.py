@@ -10,13 +10,13 @@ fake backend and drive the HTTP surface.
 Qt-free and imported/exercised **directly** here, so the journal ring buffer and
 the real PNG renderer are covered end to end.
 
-The isolation logic lives in ``TaviApiBackend._submit_scan_on_gui`` inside
-``TAVI_PySide6.py``, which imports ``mcstasscript``/PySide6 at module top and
-cannot be imported on this machine. As in ``test_api_validation_schema.py``, the
-production snapshot/restore contract is reproduced by a fake backend driven over
-HTTP; the real method is covered by ``py_compile``. The fake below mirrors the
-production restore predicate exactly: restore the pre-patch snapshot when the
-submit is isolated (always) OR when it failed.
+The submission logic lives in ``TaviApiBackend._submit_scan_on_gui`` inside
+``TAVI_PySide6.py``. The fake backend below reproduces its GUI-independent
+contract over HTTP: the launch state is built from instrument defaults overlaid
+with the request patch (``build_api_launch_state``), so submission never reads or
+writes live GUI widgets and ``isolated`` is an accepted no-op. The real
+controller seam is exercised directly in
+``test_api_scan_gui_independence.py``.
 """
 import json
 import urllib.error
@@ -433,42 +433,56 @@ def test_plot_endpoint_post_405():
 # ==========================================================================
 
 class FakeGuiController:
-    """Minimal stand-in for TAVIController's parameter surface.
+    """Minimal stand-in for the controller's GUI-independent build seam.
 
-    ``widgets`` is the simulated live GUI state; ``apply_parameters`` mutates it
-    and ``get_gui_values`` reads it, exactly like the production controller's
-    contract that ``_submit_scan_on_gui`` relies on.
+    ``widgets`` is the simulated live GUI state. ``build_api_launch_state``
+    overlays the request patch onto instrument defaults WITHOUT reading or
+    writing ``widgets`` -- the production contract that decouples an API scan
+    from live GUI state. ``get_gui_values`` / ``apply_parameters`` are present
+    only to record that submission never touches them.
     """
 
     def __init__(self, values):
         self.widgets = dict(values)
         self.messages = []
+        self.get_calls = 0
+        self.apply_calls = 0
 
     def get_gui_values(self):
+        self.get_calls += 1
         return dict(self.widgets)
 
     def apply_parameters(self, patch):
-        applied, errors = {}, {}
+        self.apply_calls += 1
+        applied = {}
         for k, v in patch.items():
-            if k == "BAD":
-                errors[k] = "invalid value"
-                continue
             self.widgets[k] = v
             applied[k] = v
-        return applied, errors
+        return applied, {}
+
+    def build_api_launch_state(self, patch):
+        patch = patch or {}
+        if "BAD" in patch:
+            raise ApiError(400, "invalid_parameters", "bad field",
+                           details={"errors": {"BAD": "invalid value"}})
+        vals = dict(_DEFAULT_VALUES)
+        vals.update(patch)
+        if not (vals.get("scan_command1") or "").strip():
+            raise ApiError(400, "missing_required",
+                           "scan_command1 is required for API scan submission")
+        return {"vals": vals}
 
     def print_to_message_center(self, msg):
         self.messages.append(msg)
 
 
 class IsolationBackend:
-    """Fake backend reproducing the production isolated-submit contract.
+    """Fake backend reproducing the GUI-independent submit contract.
 
-    Mirrors ``TaviApiBackend._submit_scan_on_gui``'s snapshot/restore predicate:
-    snapshot exactly the patched fields, apply the patch, (maybe) fail, and in a
-    ``finally`` restore the snapshot when ``isolated`` OR the submit failed. A
-    successful non-isolated submit leaves the patch applied. Setting the
-    ``force_fail`` attribute simulates a post-patch validation/budget rejection
+    ``submit_scan`` builds the launch state from defaults + patch via
+    ``build_api_launch_state`` and never touches the live widgets. ``isolated``
+    is echoed for backward compatibility but changes nothing. Setting the
+    ``force_fail`` attribute simulates a post-build validation/budget rejection
     (an instance flag rather than a body key, since the router now rejects
     unknown top-level POST body keys with 400).
     """
@@ -491,105 +505,78 @@ class IsolationBackend:
         controller = self.controller
         patch = body.get("parameters") or {}
         isolated = bool(body.get("isolated", False))
-        force_fail = self.force_fail
 
-        saved = None
-        if patch:
-            current = controller.get_gui_values()
-            saved = {k: current[k] for k in patch if k in current}
+        launch_state = controller.build_api_launch_state(patch)
+        launch_state["isolated"] = isolated
+        if self.force_fail:
+            raise ApiError(400, "scan_validation", "simulated failure")
 
-        success = False
-        try:
-            if patch:
-                applied, errors = controller.apply_parameters(patch)
-                if errors:
-                    raise ApiError(400, "invalid_parameters", "bad field",
-                                   details={"errors": errors})
-            if force_fail:
-                raise ApiError(400, "scan_validation", "simulated failure")
-
-            job = ScanJob(job_id=self.registry.next_id(), source="api",
-                          launch_state={"vals": dict(controller.widgets),
-                                        "isolated": isolated})
-            self.registry.add(job)
-            success = True
-            return {"job_id": job.job_id, "state": "queued",
-                    "isolated": isolated}
-        finally:
-            if saved is not None and (isolated or not success):
-                controller.apply_parameters(saved)
+        job = ScanJob(job_id=self.registry.next_id(), source="api",
+                      launch_state=launch_state)
+        self.registry.add(job)
+        return {"job_id": job.job_id, "state": "queued", "isolated": isolated}
 
 
-_BASE_VALUES = {"H": 2.0, "K": 0.0, "L": 0.0, "Ei": 14.0}
+_DEFAULT_VALUES = {"H": 2.0, "K": 0.0, "L": 0.0, "Ei": 14.0,
+                   "scan_command1": "H 1.9 2.1 0.01", "scan_command2": ""}
+_BASE_VALUES = {"H": 5.0, "scan_command1": "IGNORED 0 1 1"}
 
 
-def test_isolated_success_restores_widgets():
+def test_submit_ignores_and_preserves_gui_state():
+    # Submission builds from defaults + patch: the live widget values are
+    # neither read nor written, and get_gui_values/apply_parameters go untouched.
     controller = FakeGuiController(_BASE_VALUES)
     backend = IsolationBackend(controller)
     srv, base = _start(backend)
     try:
         status, body, _raw, _ct = _request(
             base + "/scan", method="POST",
-            data={"parameters": {"H": 3.0}, "isolated": True})
-        assert status == 202
-        assert body["isolated"] is True
-        # Widget restored to pre-patch value.
-        assert controller.widgets["H"] == 2.0
-        # Job was queued with the patched frozen launch state.
-        job = backend.registry.get(body["job_id"])
-        assert job.launch_state["vals"]["H"] == 3.0
-        assert job.snapshot()["launch"]["isolated"] is True
-    finally:
-        srv.stop()
-
-
-def test_isolated_failure_restores_widgets():
-    controller = FakeGuiController(_BASE_VALUES)
-    backend = IsolationBackend(controller)
-    backend.force_fail = True
-    srv, base = _start(backend)
-    try:
-        status, body, _raw, _ct = _request(
-            base + "/scan", method="POST",
-            data={"parameters": {"H": 3.0}, "isolated": True})
-        assert status == 400
-        assert body["error"]["code"] == "scan_validation"
-        assert controller.widgets["H"] == 2.0  # restored despite failure
-        assert backend.registry.recent() == []
-    finally:
-        srv.stop()
-
-
-def test_non_isolated_failure_restores_patch():
-    # The documented bug fix: a FAILED non-isolated submit must NOT leave the
-    # inline patch applied.
-    controller = FakeGuiController(_BASE_VALUES)
-    backend = IsolationBackend(controller)
-    backend.force_fail = True
-    srv, base = _start(backend)
-    try:
-        status, body, _raw, _ct = _request(
-            base + "/scan", method="POST",
-            data={"parameters": {"H": 3.0}})
-        assert status == 400
-        assert controller.widgets["H"] == 2.0  # patch rolled back on failure
-    finally:
-        srv.stop()
-
-
-def test_non_isolated_success_keeps_patch():
-    # Back-compat: a SUCCESSFUL non-isolated submit keeps global mutation.
-    controller = FakeGuiController(_BASE_VALUES)
-    backend = IsolationBackend(controller)
-    srv, base = _start(backend)
-    try:
-        status, body, _raw, _ct = _request(
-            base + "/scan", method="POST",
-            data={"parameters": {"H": 3.0}})
+            data={"parameters": {"H": 3.0, "scan_command1": "K -0.1 0.1 0.02"}})
         assert status == 202
         assert body["isolated"] is False
-        assert controller.widgets["H"] == 3.0  # patch remains applied
+        assert controller.widgets == _BASE_VALUES  # widgets untouched
+        assert controller.apply_calls == 0
+        # The job carries the patched-onto-defaults launch state, not GUI state.
         job = backend.registry.get(body["job_id"])
-        assert job.snapshot()["launch"]["isolated"] is False
+        assert job.launch_state["vals"]["H"] == 3.0
+        assert job.launch_state["vals"]["scan_command1"] == "K -0.1 0.1 0.02"
+    finally:
+        srv.stop()
+
+
+def test_isolated_flag_round_trips_as_noop():
+    controller = FakeGuiController(_BASE_VALUES)
+    backend = IsolationBackend(controller)
+    srv, base = _start(backend)
+    try:
+        for iso in (True, False):
+            status, body, _raw, _ct = _request(
+                base + "/scan", method="POST",
+                data={"parameters": {"scan_command1": "H 1.9 2.1 0.01"},
+                      "isolated": iso})
+            assert status == 202
+            assert body["isolated"] is iso
+            job = backend.registry.get(body["job_id"])
+            assert job.snapshot()["launch"]["isolated"] is iso
+        assert controller.widgets == _BASE_VALUES
+        assert controller.apply_calls == 0
+    finally:
+        srv.stop()
+
+
+def test_submit_failure_leaves_gui_untouched():
+    controller = FakeGuiController(_BASE_VALUES)
+    backend = IsolationBackend(controller)
+    backend.force_fail = True
+    srv, base = _start(backend)
+    try:
+        status, body, _raw, _ct = _request(
+            base + "/scan", method="POST",
+            data={"parameters": {"H": 3.0, "scan_command1": "K -0.1 0.1 0.02"}})
+        assert status == 400
+        assert body["error"]["code"] == "scan_validation"
+        assert controller.widgets == _BASE_VALUES
+        assert controller.apply_calls == 0
+        assert backend.registry.recent() == []
     finally:
         srv.stop()
