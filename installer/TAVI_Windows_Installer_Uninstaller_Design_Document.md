@@ -83,7 +83,7 @@ set "SHORTCUT=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
 Important distinction:
 
 - The **developer** launcher may run from a checkout such as:
-  - `C:\Users\AMM\Documents\Github\TAVI`
+  - `C:\Users\AMM\Documents\Github\Science\TAVI`
   - environment: `tavi-dev`
 - The **user installer** must run from:
   - `%USERPROFILE%\TAVI`

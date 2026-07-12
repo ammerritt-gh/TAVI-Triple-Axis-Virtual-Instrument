@@ -84,11 +84,5 @@ Roadmap order per CONTROL_FEATURES §9:
 
 
 Others:
-- ~~Timestamp API calls~~ done: `_api_log` stamps `[HH:MM:SS]` on both sinks
 - vTAS style graphical interface
 - HKL cut-along-areas with saved data?
-- ~~Analysis mode has stronger anti-Stokes than Stokes peaks?~~ resolved: not a bug —
-  resolution focusing (fixed-kf: smaller ki at w<0 → narrower, taller peak); integrated
-  area obeys detailed balance exactly, asymmetry flips in fixed-ki. See the Bose-factor
-  note in `tavi/deterministic_engine.py`. Detailed-balance checks must compare areas,
-  never peak heights.
