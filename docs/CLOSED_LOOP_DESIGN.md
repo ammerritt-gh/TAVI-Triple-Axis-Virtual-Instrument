@@ -15,9 +15,9 @@ reasoning that the three per-project designs assume but do not restate.*
 > end, §9).
 >
 > **The three repositories.**
-> - **TAVI** (`c:\Users\AMM\Documents\Github\TAVI`) — a McStas-backed virtual
+> - **TAVI** (`c:\Users\AMM\Documents\Github\Science\TAVI`) — a McStas-backed virtual
 >   triple-axis spectrometer plus a REST+SSE control API. The *instrument*.
-> - **ISAR** (`c:\Users\AMM\Documents\Github\ISAR`, machine name `isar`) — an
+> - **ISAR** (`c:\Users\AMM\Documents\Github\Science\ISAR`, machine name `isar`) — an
 >   automated reduction/triage fitter. The *analysis*. Every number the system
 >   reports comes from ISAR.
 > - **A measurement driver** (future, its own repo) — the only component with

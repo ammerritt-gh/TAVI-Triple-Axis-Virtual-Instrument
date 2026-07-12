@@ -19,7 +19,7 @@ here is a commitment to land code in TAVI.*
 > them in `docs/API_USER_GUIDE.md`. Where it names ISAR symbols and files
 > (`isar run`, `report/results.csv`, `card.state.json`, `dispersion_prior`,
 > `prior_for`, `isar/synth`) those are **real and current in the ISAR repo**
-> (`c:\Users\AMM\Documents\Github\ISAR`) — verify them in ISAR's `DESIGN.md` and
+> (`c:\Users\AMM\Documents\Github\Science\ISAR`) — verify them in ISAR's `DESIGN.md` and
 > `docs/UNIFICATION_DESIGN.md`. Everything the *driver* itself does is a proposal.
 
 > Companion documents. TAVI side: `docs/API_USER_GUIDE.md` (authoritative
@@ -74,7 +74,7 @@ client (§2.3).
 
 ### 1b. Analysis engine — ISAR
 
-The number-producer. **ISAR** (`c:\Users\AMM\Documents\Github\ISAR`, machine name
+The number-producer. **ISAR** (`c:\Users\AMM\Documents\Github\Science\ISAR`, machine name
 `isar`) is a validated, deterministic triage fitter: DHO-on-background convolved
 with resolution, AIC/BIC (never raw χ²) model selection for peak count, per-scan
 MINOS uncertainty, a **verdict** on every scan (`resolved` / `flagged` /
