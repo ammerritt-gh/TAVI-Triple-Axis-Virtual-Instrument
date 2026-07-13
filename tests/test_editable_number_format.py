@@ -80,6 +80,7 @@ def test_reciprocal_snapshot_and_live_paths_are_separate_and_covered():
     assert "live_move_requested.connect(self.apply_reciprocal_live_move)" in source
     assert "reciprocal_live_result.connect(reciprocal_dock.set_live_result)" in source
     assert "def _apply_reciprocal_state" in source
+    assert "triangle_can_close(ki, kf, requested_q)" in source
     assert "qz belongs to the physical point" in source
     for handler in ("on_K_fixed_changed", "on_lattice_changed", "on_sample_changed", "_update_ub_display"):
         start = source.index(f"def {handler}")

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QCheckBox, QFormLayout, QFrame, QGridLayout,
 from gui.docks.base_dock import BaseDockWidget
 from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState,
                                          ReciprocalInteractionModel,
-                                         ReciprocalState, format_small)
+                                         ReachOverlay, ReciprocalState, format_small)
 from tavi.neutron_conversions import k2energy
 
 
@@ -55,6 +55,7 @@ class ReciprocalCanvas(QWidget):
         self._live_timer.timeout.connect(self._flush_live_preview)
         self._advisory = None
         self._has_advisory = False
+        self.reach_overlay = None
 
     def _queue_live_preview(self, state) -> None:
         """Coalesce controller writes while the local canvas remains immediate."""
@@ -87,7 +88,8 @@ class ReciprocalCanvas(QWidget):
     def set_snapshot(self, snapshot: dict) -> None:
         p2 = snapshot.get("p2") or (None, None)
         state = ReciprocalState(snapshot["ki"], snapshot["kf"], snapshot["qx"],
-                                snapshot["qy"], snapshot["qz"], p2[0], p2[1], snapshot.get("basis_u", (1., 0.)), snapshot.get("basis_v", (0., 1.)))
+                                snapshot["qy"], snapshot["qz"], p2[0], p2[1], snapshot.get("basis_u", (1., 0.)), snapshot.get("basis_v", (0., 1.)), snapshot.get("sense", 1))
+        self.reach_overlay = snapshot.get("reach_overlay")
         # Controller snapshots are authoritative, including updates arriving
         # while a drag is active; cancel the local preview rather than commit it.
         was_dragging = self._drag in {"p1", "p2"}
@@ -143,6 +145,8 @@ class ReciprocalCanvas(QWidget):
         state = self.model.preview
         p0 = self._point((0, 0))
         p1 = self._point((state.qx, state.qy))
+        self._draw_crystal_reach_overlay(painter)
+        self._draw_reach_overlay(painter)
         # Canonical local drawing puts ki endpoint at P2; preserve the current
         # incident orientation only for interaction, so the triangle is legible.
         p2 = self._point((state.p2x, state.p2y))
@@ -189,6 +193,60 @@ class ReciprocalCanvas(QWidget):
         painter.setPen(QPen(QColor("#222222"), 1))
         painter.drawText(8, 18, f"ki {state.ki:.3f}  kf {state.kf:.3f}  |Q| {state.q:.3f} Å⁻¹")
 
+    def _draw_reach_overlay(self, painter):
+        """Analytic cursor-time constraint loci for the active typed gesture."""
+        mode = self.model._gesture
+        if mode is None:
+            return
+        start = self.model._drag_start
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(42, 157, 143, 105), 1, Qt.DashLine))
+        def circle(centre, radius):
+            x, y = self._point(centre); r = radius * self.model.scale
+            painter.drawEllipse(round(x-r), round(y-r), round(2*r), round(2*r))
+        if mode.kind == "q_circle":
+            circle((0., 0.), start.q)
+        elif mode.kind == "ki_circle":
+            circle((0., 0.), start.actual_ki)
+        elif mode.kind == "kf_circle":
+            circle(mode.pivot, start.actual_kf)
+        elif mode.kind == "delta_e_annulus":
+            circle((0., 0.), abs(start.actual_ki-start.actual_kf))
+            circle((0., 0.), start.actual_ki+start.actual_kf)
+        elif mode.kind == "delta_e_line":
+            q = (start.qx, start.qy)
+            q2 = q[0]*q[0] + q[1]*q[1]
+            if q2 > 1e-12:
+                target = (start.p2x*q[0]+start.p2y*q[1])/q2
+                point = (q[0]*target, q[1]*target)
+                direction = mode.line_direction or (1., 0.)
+                a = self._point((point[0]-50*direction[0], point[1]-50*direction[1]))
+                b = self._point((point[0]+50*direction[0], point[1]+50*direction[1]))
+                painter.drawLine(round(a[0]), round(a[1]), round(b[0]), round(b[1]))
+
+    def _draw_crystal_reach_overlay(self, painter):
+        """Dark/light red forbidden reach disks for the hovered active handle."""
+        handle = self._drag if self._drag in {"p1", "p2"} else self._hover_handle
+        reach = self.reach_overlay
+        if handle not in {"p1", "p2"} or not isinstance(reach, ReachOverlay):
+            return
+        state = self.model.preview
+        entries = []
+        if handle == "p1":
+            entries.append(((state.p2x, state.p2y), reach.ana_hard_radius, reach.ana_mechanical_radius))
+        else:
+            entries.extend((((0., 0.), reach.mono_hard_radius, reach.mono_mechanical_radius),
+                            ((state.qx, state.qy), reach.ana_hard_radius, reach.ana_mechanical_radius)))
+        for centre, hard, mechanical in entries:
+            x, y = self._point(centre)
+            hard_px = hard * self.model.scale
+            outer = max(hard, mechanical or hard) * self.model.scale
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(220, 38, 38, 55))
+            painter.drawEllipse(round(x-outer), round(y-outer), round(2*outer), round(2*outer))
+            painter.setBrush(QColor(127, 29, 29, 115))
+            painter.drawEllipse(round(x-hard_px), round(y-hard_px), round(2*hard_px), round(2*hard_px))
+
     @staticmethod
     def _double_arrow(painter, centre, direction, colour):
         """Draw a small double-ended movement cue centred on a handle."""
@@ -221,6 +279,9 @@ class ReciprocalCanvas(QWidget):
             radial = (point[0]-pivot[0], point[1]-pivot[1])
             if math.hypot(*radial) < 1e-9:
                 radial = (1., 0.)
+            if affordance.mode_kind == "delta_e_line" and affordance.line_direction is not None:
+                self._double_arrow(painter, point, affordance.line_direction, colour)
+                continue
             if affordance.radial:
                 self._double_arrow(painter, point, radial, colour)
             if affordance.tangential:
@@ -233,17 +294,25 @@ class ReciprocalCanvas(QWidget):
         if math.dist(pos, p2) <= 12: return "p2"
         return None
 
+    def _gesture_cursor(self, handle):
+        if handle is None:
+            return Qt.ArrowCursor
+        return Qt.OpenHandCursor
+
     def mousePressEvent(self, event):
         position = (event.position().x(), event.position().y())
         if event.button() == Qt.MiddleButton or (event.button() == Qt.LeftButton and self._space_pan):
             self._drag, self._last = "pan", position
+            self.setCursor(Qt.ClosedHandCursor)
             return
         if event.button() == Qt.LeftButton:
             hit = self._hit(position)
             if hit:
-                self._drag = hit; self._last = position; self.model.begin_drag()
+                self._drag = hit; self._last = position; self.model.begin_drag(hit)
+                self.setCursor(Qt.ClosedHandCursor)
             else:
                 self._drag, self._last = "pan", position
+                self.setCursor(Qt.ClosedHandCursor)
 
     def mouseMoveEvent(self, event):
         pos = (event.position().x(), event.position().y())
@@ -251,7 +320,7 @@ class ReciprocalCanvas(QWidget):
             self.model.pan((pos[0]-self._last[0], pos[1]-self._last[1])); self._last = pos; self.update(); return
         if self._drag not in {"p1", "p2"}:
             self._hover_handle = self._hit(pos)
-            self.setCursor(Qt.OpenHandCursor if self._hover_handle is None else Qt.CrossCursor)
+            self.setCursor(self._gesture_cursor(self._hover_handle))
             nearest = min(self.reflections, key=lambda item: math.dist(pos, self._point((item.qx, item.qy))), default=None)
             if nearest and math.dist(pos, self._point((nearest.qx, nearest.qy))) < 10:
                 self.status_changed.emit(f"Reflection {nearest.hkl_label}" + (f", F²={nearest.f_squared:.3g}" if nearest.f_squared is not None else " (centering fallback)"))
@@ -279,6 +348,7 @@ class ReciprocalCanvas(QWidget):
         self._hover_handle = None
         if drag in {"p1", "p2"}:
             self._flush_live_preview(force=True)
+            self.model.end_drag()
             self.move_committed.emit(self.model.preview)
         self.setCursor(Qt.ArrowCursor)
         self.unsnapped = self.snapped = None
@@ -420,7 +490,10 @@ class ReciprocalSpaceDock(BaseDockWidget):
         """Reflect advisory feasibility without replacing the active preview."""
         self.canvas.accept_live_result(result)
         if result.applied:
-            self._preview(result.state)
+            visible = (self.canvas.model.preview
+                       if self.canvas._drag in {"p1", "p2"}
+                       else result.state)
+            self._preview(visible)
         colour = {False: "#c1121f", None: "#d97706"}.get(result.feasible)
         style = f"QLineEdit {{ border: 2px solid {colour}; }}" if colour else ""
         for field in self.fields.values():

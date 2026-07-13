@@ -38,7 +38,9 @@ from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
 from tavi.journal import SessionJournal
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection)
-from tavi.reciprocal_interaction import LiveReciprocalResult, ReciprocalState, format_small
+from tavi.reciprocal_interaction import (LiveReciprocalResult, ReachOverlay,
+                                         ReciprocalState, format_small,
+                                         triangle_can_close)
 from tavi.space_groups import generate_allowed_reflections, get_space_group
 
 # Import GUI
@@ -1509,6 +1511,29 @@ class TAVIController(QObject):
         # single-shot runs after that transaction unwinds, so never discard it.
         self._reciprocal_snapshot_timer.start(0)
 
+    def _reciprocal_reach_overlay(self, vals):
+        """Build descriptor-only crystal/axis reach metadata for the canvas."""
+        try:
+            mono = next(spec for spec in self.descriptor.mono_crystals if spec.id == vals["monocris"])
+            ana = next(spec for spec in self.descriptor.ana_crystals if spec.id == vals["anacris"])
+            def mechanical_radius(crystal, axis_name, current_angle):
+                axis = self.descriptor.axis_limits.get(axis_name)
+                if axis is None:
+                    return None
+                bound = axis.upper if current_angle >= 0 else abs(axis.lower)
+                theta = min(math.pi / 2, math.radians(abs(bound) / 2))
+                if theta <= 1e-9:
+                    return None
+                return math.pi / crystal.d_spacing / math.sin(theta)
+            return ReachOverlay(
+                math.pi / mono.d_spacing, math.pi / ana.d_spacing,
+                mechanical_radius(mono, "A1", vals["mtt"]),
+                mechanical_radius(ana, "A4", vals["att"]),
+            )
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: reach overlay unavailable ({exc})")
+            return None
+
     def emit_reciprocal_snapshot(self, advisory_result=None):
         """Publish the scalar state consumed by the reciprocal dock.
 
@@ -1542,6 +1567,8 @@ class TAVIController(QObject):
                 "basis_u": (float(uq[0]), float(uq[1])), "basis_v": (float(vq[0]), float(vq[1])),
                 "plane_u_hkl": u_hkl, "plane_v_hkl": v_hkl,
                 "K_fixed": vals["K_fixed"],
+                "sense": getattr(self, "_reciprocal_sense", 1),
+                "reach_overlay": self._reciprocal_reach_overlay(vals),
             }
             if advisory_result is not None:
                 snapshot["reciprocal_advisory"] = advisory_result
@@ -1688,6 +1715,7 @@ class TAVIController(QObject):
         }
         previous_tracked = {name: self._previous_values.get(name) for name in previous}
         previous_p2 = getattr(self, "_reciprocal_p2", None)
+        previous_sense = getattr(self, "_reciprocal_sense", 1)
         previous_styles = {
             field: field.styleSheet() for field in (
                 self.window.scattering_dock.fixed_E_edit,
@@ -1721,7 +1749,7 @@ class TAVIController(QObject):
             canonical = ReciprocalState(
                 energy2k(fixed_e if vals["K_fixed"] == "Ki Fixed" else fixed_e + delta_e),
                 energy2k(fixed_e - delta_e if vals["K_fixed"] == "Ki Fixed" else fixed_e),
-                qx, qy, qz, state.p2x, state.p2y, state.basis_u, state.basis_v,
+                qx, qy, qz, state.p2x, state.p2y, state.basis_u, state.basis_v, state.sense,
             )
             feasible, reason = self._reciprocal_advisory(candidate_vals, canonical, delta_e)
             fields = (
@@ -1739,6 +1767,7 @@ class TAVIController(QObject):
                 field.setText(text)
                 self._update_tracked_value(name, value, displayed_text=text)
             self._reciprocal_p2 = (canonical.p2x, canonical.p2y)
+            self._reciprocal_sense = canonical.sense
             self._set_reciprocal_advisory_style(feasible)
         except Exception as exc:
             self.updating = True
@@ -1757,6 +1786,7 @@ class TAVIController(QObject):
                 else:
                     self._previous_values[name] = previous_tracked[name]
             self._reciprocal_p2 = previous_p2
+            self._reciprocal_sense = previous_sense
             for field, style in previous_styles.items():
                 field.setStyleSheet(style)
             self.updating = False
@@ -1800,8 +1830,15 @@ class TAVIController(QObject):
             q_direction = (state.qx / state.q, state.qy / state.q) if state.q > 1e-9 else (1.0, 0.0)
             if not math.isfinite(ki) or not math.isfinite(kf) or ki <= 0 or kf <= 0:
                 raise ValueError("ki and kf must be positive")
+            if not triangle_can_close(ki, kf, requested_q):
+                raise ValueError(
+                    f"|Q| must be between {abs(ki-kf):.4g} and {ki+kf:.4g} Å⁻¹ "
+                    "for the selected ki and kf"
+                )
             self.apply_reciprocal_move(type(state)(ki, kf, requested_q * q_direction[0],
-                                                   requested_q * q_direction[1], state.qz))
+                                                   requested_q * q_direction[1], state.qz,
+                                                   state.p2x, state.p2y, state.basis_u,
+                                                   state.basis_v, state.sense))
         except Exception as exc:
             self.print_to_message_center(f"Reciprocal energy edit rejected: {exc}")
             self.emit_reciprocal_snapshot()
