@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import math
+from fractions import Fraction
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,22 @@ class Reflection:
 @dataclass(frozen=True)
 class ProjectedReflection:
     qx: float; qy: float; f_squared: float | None; hkl_label: str; qz: float
+
+def primitive_miller(h: float, k: float, l: float, tolerance: float = 1e-8):
+    """Canonicalise proportional rational HKL, else decimal-normalise by max.
+
+    A half-integer vector such as ``(.5, 2, -2)`` becomes ``(1, 4, -4)``;
+    irrational directions intentionally retain a bounded decimal representation.
+    """
+    values = (float(h), float(k), float(l))
+    fractions = [Fraction(value).limit_denominator(96) for value in values]
+    if all(abs(float(frac) - value) <= tolerance for frac, value in zip(fractions, values)):
+        denominator = math.lcm(*(frac.denominator for frac in fractions))
+        integers = tuple(int(frac * denominator) for frac in fractions)
+        divisor = math.gcd(math.gcd(abs(integers[0]), abs(integers[1])), abs(integers[2])) or 1
+        return tuple(value // divisor for value in integers)
+    maximum = max(abs(value) for value in values) or 1.0
+    return tuple(round(value / maximum, 6) for value in values)
 
 
 def load_reflections(path: str | Path) -> list[Reflection]:
