@@ -367,6 +367,7 @@ def _normalize_mcstas_resources_path(path):
         p / "resources",
         p / "share" / "mcstas" / "resources",
         p / "Library" / "share" / "mcstas" / "resources",
+        p / "lib",  # classic standalone Windows install (C:\mcstas-X.Y\lib)
     ]
     for candidate in candidates:
         if candidate.is_dir() and ((candidate / "misc").exists() or (candidate / "monitors").exists() or (candidate / "sources").exists()):
@@ -393,13 +394,19 @@ def detect_mcstas():
     config = _load_local_config()
 
     # Strategy 0: Explicit environment variable from launcher/user.
-    env_mcstas = os.environ.get("MCSTAS") or os.environ.get("MCSTAS_COMPONENT_PATH")
-    env_mcstas = _normalize_mcstas_resources_path(env_mcstas)
+    # Only trust it if it actually contains the components TAVI needs; a stale
+    # MCSTAS var pointing at an incomplete/old install (a common machine-level
+    # leftover) must fall through to the later strategies rather than win blindly.
+    raw_env_mcstas = os.environ.get("MCSTAS") or os.environ.get("MCSTAS_COMPONENT_PATH")
+    env_mcstas = _normalize_mcstas_resources_path(raw_env_mcstas)
     if env_mcstas:
-        mcrun, _ = _probe_conda_env()
-        if mcrun:
-            print(f"[TAVI] Using McStas from environment: {env_mcstas}")
-            return mcrun, env_mcstas
+        if not _has_mcstas_component(env_mcstas, "Progress_bar"):
+            print(f"[TAVI] Ignoring MCSTAS env var (no components found): {raw_env_mcstas}")
+        else:
+            mcrun, _ = _probe_conda_env()
+            if mcrun:
+                print(f"[TAVI] Using McStas from environment: {env_mcstas}")
+                return mcrun, env_mcstas
 
     # Strategy 1: Explicit paths from config file
     explicit_mcrun = config.get("mcrun_path")
