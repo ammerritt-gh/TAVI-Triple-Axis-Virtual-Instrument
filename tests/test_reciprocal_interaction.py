@@ -8,7 +8,8 @@ from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState, ReachO
                                          ReciprocalState, tiny_zero, format_small,
                                          triangle_can_close)
 from tavi.reflection_catalog import load_reflections
-from tavi.reflection_catalog import plane_filtered_unique, ProjectedReflection, primitive_miller
+from tavi.reflection_catalog import (plane_filtered_unique, ProjectedReflection,
+                                     primitive_miller, reflection_label_is_clear)
 
 
 def test_p1_drag_preserves_out_of_plane_component_and_grid_snaps():
@@ -87,6 +88,19 @@ def test_floating_dock_gives_canvas_the_available_height(qapp):
         assert dock.canvas.height() > 500
     finally:
         dock.close()
+
+
+def test_space_group_reflections_default_to_centering_with_opt_in_signal(qapp):
+    from gui.docks.unified_sample_dock import UnifiedSampleDock
+    from instruments.puma_plugin import PUMAPlugin
+
+    dock = UnifiedSampleDock(descriptor=PUMAPlugin().descriptor())
+    changed = []
+    dock.reflection_source_changed.connect(changed.append)
+    assert not dock.use_sample_reflection_table_check.isChecked()
+    assert "Opt in" in dock.use_sample_reflection_table_check.toolTip()
+    dock.use_sample_reflection_table_check.setChecked(True)
+    assert changed == [True]
 
 
 def test_external_snapshot_cancels_preview_and_tiny_formatting_helpers():
@@ -395,7 +409,64 @@ def test_lau_parser_accepts_comments_and_f_squared(tmp_path):
     ]
 
 
+def test_reflection_parser_uses_metadata_or_fourth_column_not_laz_d_spacing(tmp_path):
+    laz = tmp_path / "table.laz"
+    laz.write_text("1 0 0 16 2.0\n", encoding="utf-8")
+    assert load_reflections(laz)[0].f_squared == 16.0
+    metadata = tmp_path / "metadata.laz"
+    metadata.write_text("# column_F2 5\n1 0 0 16 2.0\n", encoding="utf-8")
+    assert load_reflections(metadata)[0].f_squared == 2.0
+
+
+def test_reflection_parser_rejects_hkl_only_table(tmp_path):
+    path = tmp_path / "hkl-only.lau"
+    path.write_text("1 0 0\n2 0 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no usable positive F2"):
+        load_reflections(path)
+
+
+@pytest.mark.parametrize("column_number", [0, 1, 2, 3])
+def test_reflection_parser_rejects_f2_metadata_in_hkl_columns(tmp_path, column_number):
+    path = tmp_path / "invalid-metadata.lau"
+    path.write_text(
+        f"# column_F2 {column_number}\n1 0 0 16\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="column 4 or later"):
+        load_reflections(path)
+
+
+def test_reflection_parser_filters_nonpositive_f2_rows(tmp_path):
+    path = tmp_path / "filtered.lau"
+    path.write_text("1 0 0 0\n2 0 0 -1\n3 0 0 4\n", encoding="utf-8")
+    result = load_reflections(path)
+    assert [(item.h, item.f_squared) for item in result] == [(3.0, 4.0)]
+
+
+def test_reflection_parser_filters_nonfinite_hkl_rows(tmp_path):
+    path = tmp_path / "nonfinite-hkl.lau"
+    path.write_text("1e9999 0 0 4\n1 2 3 5\n", encoding="utf-8")
+    result = load_reflections(path)
+    assert [(item.h, item.k, item.l) for item in result] == [(1.0, 2.0, 3.0)]
+
+
+def test_reflection_parser_reports_invalid_utf8(tmp_path):
+    path = tmp_path / "invalid-utf8.lau"
+    path.write_bytes(b"\xff\xfe\x00\x00")
+    with pytest.raises(UnicodeError):
+        load_reflections(path)
+
+
 def test_reflection_plane_filter_and_dedup_preserves_first_row():
     rows = [ProjectedReflection(1., 2., 4., "(1,0,0)", .3), ProjectedReflection(1., 2., 9., "(9,9,9)", .3),
             ProjectedReflection(3., 4., 1., "(2,0,0)", .31)]
     assert plane_filtered_unique(rows, .3) == [rows[0]]
+
+
+def test_weak_table_reflection_labels_use_collision_policy_not_marker_radius():
+    used = []
+    # A weak F² entry uses a small marker, but is still label-eligible.
+    assert reflection_label_is_clear((100., 100.), used, 400., 300.)
+    used.append((100., 100.))
+    assert not reflection_label_is_clear((110., 100.), used, 400., 300.)
+    assert reflection_label_is_clear((130., 100.), used, 400., 300.)

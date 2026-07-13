@@ -5,7 +5,8 @@ Combines sample parameters and lattice configuration into a single dockable pane
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
                                 QGridLayout, QComboBox, QFrame,
-                                QCompleter, QDialog, QTextEdit, QDialogButtonBox)
+                                QCompleter, QDialog, QTextEdit, QDialogButtonBox,
+                                QCheckBox)
 from PySide6.QtCore import Qt, Signal
 
 from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
@@ -76,6 +77,7 @@ class UnifiedSampleDock(BaseDockWidget):
     
     # Signal emitted when space group changes
     space_group_changed = Signal(int)  # emits space group number
+    reflection_source_changed = Signal(bool)
     
     def __init__(self, parent=None, descriptor=None):
         super().__init__("Sample", parent, use_scroll_area=True)
@@ -148,6 +150,15 @@ class UnifiedSampleDock(BaseDockWidget):
         
         sg_combo_layout.addWidget(self.spacegroup_combo)
         spacegroup_layout.addLayout(sg_combo_layout)
+
+        self.use_sample_reflection_table_check = QCheckBox("Use sample reflection table when available")
+        self.use_sample_reflection_table_check.setChecked(False)
+        self.use_sample_reflection_table_check.setToolTip(
+            "Opt in to the selected sample's LAU/LAZ structure-factor table. "
+            "When unchecked, reciprocal reflections always use the selected "
+            "space group's centering rule. Missing tables fall back to that rule."
+        )
+        spacegroup_layout.addWidget(self.use_sample_reflection_table_check)
         
         # Crystal system info label
         self.crystal_system_label = QLabel("Crystal System: —")
@@ -324,6 +335,7 @@ class UnifiedSampleDock(BaseDockWidget):
         self.lattice_save_button.clicked.connect(self._on_lattice_save)
         self.lattice_discard_button.clicked.connect(self._on_lattice_discard)
         self.spacegroup_combo.currentIndexChanged.connect(self._on_spacegroup_changed)
+        self.use_sample_reflection_table_check.toggled.connect(self.reflection_source_changed)
         self.view_rules_button.clicked.connect(self._on_view_rules)
         
         # Connect lattice field changes to validation (only when unlocked)

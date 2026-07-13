@@ -115,3 +115,14 @@ def test_snapshot_request_is_not_lost_inside_a_controller_transaction():
     controller = Controller()
     namespace["request_reciprocal_snapshot"](controller)
     assert controller._reciprocal_snapshot_timer.intervals == [0]
+
+
+def test_reflection_table_is_explicit_opt_in_and_persisted_display_setting():
+    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    refresh = source[source.index("def refresh_reciprocal_reflections"):source.index("\n    @Slot", source.index("def refresh_reciprocal_reflections") + 1)]
+    assert "use_sample_reflection_table_check.isChecked()" in refresh
+    assert "if use_table and source:" in refresh
+    assert "selected space group" in refresh
+    assert "centering-only; not full structure-factor filtering" in refresh
+    assert '"use_sample_reflection_table_var"' in source
+    assert "reflection_source_changed.connect" in source

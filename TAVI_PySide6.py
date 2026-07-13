@@ -1377,6 +1377,7 @@ class TAVIController(QObject):
         # changes its selected space group.
         try:
             self.window.sample_dock.space_group_changed.connect(lambda _group: self.request_reciprocal_snapshot())
+            self.window.sample_dock.reflection_source_changed.connect(lambda _enabled: self.request_reciprocal_snapshot())
         except Exception as exc:
             self.print_to_message_center(f"Reciprocal view: space-group refresh unavailable ({exc})")
         
@@ -1619,26 +1620,37 @@ class TAVIController(QObject):
             spec = next((sample for sample in self.descriptor.samples if sample.id == key), None)
             projected = []
             source = getattr(spec, "reflection_source", None) if spec else None
-            if source:
+            use_table = bool(getattr(self.window.sample_dock, "use_sample_reflection_table_check", None)
+                             and self.window.sample_dock.use_sample_reflection_table_check.isChecked())
+            if use_table and source:
                 try:
                     for reflection in load_reflections(os.path.join(os.getcwd(), "components", source)):
                         qx, qy, qz = self._hkl_to_sample_q(reflection.h, reflection.k, reflection.l, vals)
                         projected.append(ProjectedReflection(qx, qy, reflection.f_squared, f"({reflection.h:g},{reflection.k:g},{reflection.l:g})", qz))
-                    dock.set_provenance(f"{len(projected)} structure-factor reflections")
-                except FileNotFoundError:
-                    if getattr(self, "_missing_reflection_source", None) != source:
-                        self._missing_reflection_source = source
-                        self.print_to_message_center(f"Reciprocal view: reflection table '{source}' is unavailable; using centering-rule fallback")
+                    if projected:
+                        dock.set_provenance(f"{len(projected)} sample structure-factor reflections ({source})")
+                    else:
+                        raise ValueError("reflection table contains no usable rows")
+                except (FileNotFoundError, OSError, UnicodeError, ValueError) as exc:
+                    issue = (source, str(exc))
+                    if getattr(self, "_reflection_table_issue", None) != issue:
+                        self._reflection_table_issue = issue
+                        self.print_to_message_center(
+                            f"Reciprocal view: reflection table '{source}' unavailable ({exc}); "
+                            "using selected space-group centering rule"
+                        )
             if not projected:
                 try:
                     group = get_space_group(int(self.window.sample_dock.spacegroup_combo.currentData()))
                     centering = group.centering
+                    group_label = f"selected space group {group.number} ({group.short_name}), {centering}-centering rule"
                 except Exception:
                     centering = "P"
+                    group_label = "selected space group unavailable, P-centering rule"
                 for h, k, l in generate_allowed_reflections(centering, 4, 4, 0):
                     qx, qy, qz = self._hkl_to_sample_q(h, k, l, vals)
                     projected.append(ProjectedReflection(qx, qy, None, f"({h},{k},{l})", qz))
-                dock.set_provenance("centering-rule fallback (not structure-factor filtered)")
+                dock.set_provenance(f"{group_label} (centering-only; not full structure-factor filtering)")
             displayed = plane_filtered_unique(projected, 0.0)
             dock.canvas.set_reflections(displayed)
         except Exception as exc:
@@ -4325,6 +4337,10 @@ class TAVIController(QObject):
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
             "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
+            "use_sample_reflection_table_var": bool(
+                getattr(self.window.sample_dock, "use_sample_reflection_table_check", None)
+                and self.window.sample_dock.use_sample_reflection_table_check.isChecked()
+            ),
             # UB matrix state
             "ub_matrix_state": self.ub_matrix.to_dict(),
             "ub_training_hash": self.window.ub_matrix_dock.load_hash_edit.text() if hasattr(self.window, 'ub_matrix_dock') else "",
@@ -4568,6 +4584,15 @@ class TAVIController(QObject):
                             self.window.sample_dock.spacegroup_combo.setCurrentIndex(idx)
                 except Exception:
                     pass
+                reflection_table_check = getattr(
+                    self.window.sample_dock,
+                    "use_sample_reflection_table_check",
+                    None,
+                )
+                if reflection_table_check is not None:
+                    reflection_table_check.setChecked(
+                        bool(parameters.get("use_sample_reflection_table_var", False))
+                    )
                 # Restore UB matrix state
                 ub_state = parameters.get("ub_matrix_state")
                 if ub_state:
