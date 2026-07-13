@@ -3,9 +3,10 @@ import math
 import itertools
 import pytest
 
-from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState,
+from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState, ReachOverlay,
                                          ReciprocalInteractionModel,
-                                         ReciprocalState, tiny_zero, format_small)
+                                         ReciprocalState, tiny_zero, format_small,
+                                         triangle_can_close)
 from tavi.reflection_catalog import load_reflections
 from tavi.reflection_catalog import plane_filtered_unique, ProjectedReflection, primitive_miller
 
@@ -117,6 +118,66 @@ def test_live_ack_updates_visible_state_without_changing_drag_pivot():
     assert LiveReciprocalResult(normalised, False, "limit").applied
 
 
+def test_live_ack_does_not_replace_full_precision_active_preview():
+    model = ReciprocalInteractionModel(ReciprocalState(2.66, 2.3, 1., 0.))
+    model.begin_drag("p1")
+    local = model.drag_p1((1.23456789, .2)).state
+    acknowledged = ReciprocalState(local.ki, local.kf, 1.2346, .2, local.qz,
+                                   local.p2x, local.p2y)
+    model.accept_live_update(acknowledged)
+    assert model.committed == acknowledged
+    assert model.preview == local
+
+
+def test_numeric_triangle_closure_rejects_impossible_q():
+    assert triangle_can_close(2.66, 2.66, 5.32)
+    assert not triangle_can_close(2.66, 2.66, 10.0)
+    assert not triangle_can_close(1.0, 3.0, 1.5)
+
+
+def test_exact_gesture_mode_lock_tables():
+    p1 = {
+        "0000": "free_q", "1000": "free_q", "0010": "q_circle", "1010": "q_circle",
+        "0001": "delta_e_annulus", "0101": "delta_e_annulus", "1001": "delta_e_annulus",
+        "0100": "kf_circle", "1100": "kf_circle", "1101": "kf_circle",
+    }
+    p2 = {
+        "0000": "free_p2", "0010": "free_p2", "1000": "ki_circle", "1010": "ki_circle",
+        "0100": "kf_circle", "0110": "kf_circle", "0001": "delta_e_line", "0011": "delta_e_line",
+    }
+    for bits in itertools.product((False, True), repeat=4):
+        mask = "".join("1" if bit else "0" for bit in bits)
+        model = ReciprocalInteractionModel(ReciprocalState(2.66, 2.3, 1., .2), LockState(*bits))
+        assert model.gesture_mode("p1").kind == p1.get(mask, "rigid_rotation")
+        assert model.gesture_mode("p2").kind == p2.get(mask, "rigid_rotation")
+
+
+def test_delta_e_annulus_preserves_both_arm_lengths_and_branch():
+    start = ReciprocalState(2.66, 2.3, 1., .2)
+    model = ReciprocalInteractionModel(start, LockState(delta_e=True))
+    model.begin_drag("p1")
+    result = model.drag_p1((20., 0.))
+    assert result.valid
+    assert math.isclose(result.state.actual_ki, start.actual_ki, rel_tol=1e-9)
+    assert math.isclose(result.state.actual_kf, start.actual_kf, rel_tol=1e-9)
+    assert result.state.p2x * result.state.qy - result.state.p2y * result.state.qx > 0
+
+
+def test_delta_e_p2_line_keeps_energy_identity_exactly():
+    start = ReciprocalState(2.66, 2.3, 1., .2)
+    model = ReciprocalInteractionModel(start, LockState(delta_e=True))
+    model.begin_drag("p2")
+    result = model.drag_p2((.4, 1.8))
+    assert result.valid
+    assert math.isclose(result.state.delta_e, start.delta_e, rel_tol=1e-10)
+    assert model.gesture_mode("p2").line_direction is not None
+
+
+def test_state_reconstruction_uses_snapshot_scattering_sense():
+    state = ReciprocalState(2.66, 2.3, 1., 0., p2x=None, p2y=None, sense=-1)
+    assert state.p2x * state.qy - state.p2y * state.qx < 0
+
+
 def test_canvas_release_accepts_or_rolls_back_synchronous_snapshot(qapp):
     from gui.docks.reciprocal_space_dock import ReciprocalCanvas
 
@@ -205,6 +266,64 @@ def test_dock_clears_external_advisory_but_retains_release_advisory(qapp):
     assert not dock.canvas._has_advisory
     dock.set_live_result(LiveReciprocalResult(state, True))
     assert dock.status.text() == "Angles current"
+
+
+def test_canvas_snapshot_carries_reach_metadata_and_standard_cursors(qapp):
+    from PySide6.QtCore import Qt
+    from gui.docks.reciprocal_space_dock import ReciprocalCanvas
+
+    canvas = ReciprocalCanvas()
+    reach = ReachOverlay(.9, 1.1, 1.2, 1.4)
+    canvas.set_snapshot({
+        "ki": 2.66, "kf": 2.3, "qx": 1., "qy": .2, "qz": 0.,
+        "p2": (None, None), "basis_u": (1., 0.), "basis_v": (0., 1.),
+        "sense": -1, "reach_overlay": reach,
+    })
+    assert canvas.reach_overlay == reach
+    assert canvas.model.committed.sense == -1
+    assert canvas._gesture_cursor(None) == Qt.ArrowCursor
+    assert canvas._gesture_cursor("p1") == Qt.OpenHandCursor
+
+
+def test_dense_circle_and_rigid_gestures_are_continuous():
+    start = ReciprocalState(2.66, 2.3, 1., .2)
+    cases = (
+        ("p1", LockState(q=True), lambda angle: (start.q*math.cos(angle), start.q*math.sin(angle)), "q"),
+        ("p2", LockState(ki=True), lambda angle: (start.ki*math.cos(angle), start.ki*math.sin(angle)), "ki"),
+        ("p2", LockState(kf=True), lambda angle: (start.qx + start.kf*math.cos(angle), start.qy + start.kf*math.sin(angle)), "kf"),
+        ("p1", LockState(ki=True, kf=True, q=True, delta_e=True), lambda angle: (start.q*math.cos(angle), start.q*math.sin(angle)), "rigid"),
+    )
+    angles = [index * 2*math.pi / 72 for index in range(73)]
+    for handle, locks, candidate, kind in cases:
+        model = ReciprocalInteractionModel(start, locks)
+        model.begin_drag(handle)
+        states = [(model.drag_p1(point) if handle == "p1" else model.drag_p2(point)).state for point in map(candidate, angles)]
+        assert all(math.isfinite(state.qx) and math.isfinite(state.p2x) for state in states)
+        assert max(math.dist((a.qx, a.qy), (b.qx, b.qy)) for a, b in zip(states, states[1:])) < 0.35
+        if kind == "q":
+            assert all(math.isclose(state.q, start.q, rel_tol=1e-8) for state in states)
+        elif kind == "ki":
+            assert all(math.isclose(state.actual_ki, start.actual_ki, rel_tol=1e-8) for state in states)
+        elif kind == "kf":
+            assert all(math.isclose(state.actual_kf, start.actual_kf, rel_tol=1e-8) for state in states)
+        else:
+            assert all(math.isclose(state.actual_ki, start.actual_ki, rel_tol=1e-8) for state in states)
+
+
+def test_delta_annulus_clamps_both_boundaries_and_direct_circle_crosses_sense():
+    start = ReciprocalState(2.66, 2.3, 1., .2)
+    model = ReciprocalInteractionModel(start, LockState(delta_e=True))
+    model.begin_drag("p1")
+    low = model.drag_p1((0., 0.)).state
+    high = model.drag_p1((100., 0.)).state
+    assert abs(start.actual_ki-start.actual_kf) <= low.q <= start.actual_ki+start.actual_kf
+    assert abs(start.actual_ki-start.actual_kf) <= high.q <= start.actual_ki+start.actual_kf
+    circle = ReciprocalInteractionModel(start, LockState(ki=True))
+    circle.begin_drag("p2")
+    senses = set()
+    for angle in [index * 2*math.pi / 24 for index in range(25)]:
+        senses.add(circle.drag_p2((start.ki*math.cos(angle), start.ki*math.sin(angle))).state.sense)
+    assert senses == {-1, 1}
 
 
 def test_camera_preserves_physical_geometry_with_skewed_uv_basis():

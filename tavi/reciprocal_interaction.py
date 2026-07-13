@@ -6,6 +6,18 @@ from tavi.neutron_conversions import k2energy, energy2k
 
 EPSILON = 1e-9
 
+
+def triangle_can_close(ki: float, kf: float, q: float,
+                       tolerance: float = EPSILON) -> bool:
+    """Return whether three non-negative side lengths form a TAS triangle."""
+    if not all(math.isfinite(value) for value in (ki, kf, q)):
+        return False
+    if ki <= 0.0 or kf <= 0.0 or q < 0.0:
+        return False
+    scale = max(1.0, ki, kf, q)
+    margin = tolerance * scale
+    return abs(ki - kf) - margin <= q <= ki + kf + margin
+
 def tiny_zero(value: float, tolerance: float = 1.0e-10) -> float:
     """Canonicalise numerical noise for labels and Miller-like coefficients."""
     return 0.0 if abs(value) < tolerance else value
@@ -30,10 +42,38 @@ class HandleAffordance:
     radial: bool = True
     tangential: bool = True
     pivot: tuple[float, float] | None = None
+    mode_kind: str = ""
+    line_direction: tuple[float, float] | None = None
+
+
+@dataclass(frozen=True)
+class GestureMode:
+    """The one lock-mask interpretation shared by drawing and solving."""
+    handle: str
+    kind: str
+    pivot: tuple[float, float]
+    preserves_handedness: bool
+    radial: bool
+    tangential: bool
+    line_direction: tuple[float, float] | None = None
+
+
+@dataclass(frozen=True)
+class ReachOverlay:
+    """Descriptor-derived reciprocal reach radii; ``None`` means no axis limit."""
+    mono_hard_radius: float
+    ana_hard_radius: float
+    mono_mechanical_radius: float | None = None
+    ana_mechanical_radius: float | None = None
 
 def _unit(point, fallback=(1., 0.)):
     length = math.hypot(*point)
-    return fallback if length < EPSILON else (point[0]/length, point[1]/length)
+    if length >= EPSILON:
+        return point[0]/length, point[1]/length
+    fallback_length = math.hypot(*fallback)
+    return (1., 0.) if fallback_length < EPSILON else (
+        fallback[0]/fallback_length, fallback[1]/fallback_length,
+    )
 
 def _intersections(c0, r0, c1, r1):
     dx, dy = c1[0]-c0[0], c1[1]-c0[1]; d = math.hypot(dx, dy)
@@ -48,6 +88,7 @@ class ReciprocalState:
     p2x: float | None = None; p2y: float | None = None
     basis_u: tuple[float, float] = (1., 0.)
     basis_v: tuple[float, float] = (0., 1.)
+    sense: int = 1
     def __post_init__(self):
         invalid = (self.p2x is None or self.p2y is None or
                    abs(math.hypot(self.p2x, self.p2y)-self.ki) > 1e-6 or
@@ -55,7 +96,8 @@ class ReciprocalState:
         if invalid:
             choices = _intersections((0., 0.), self.ki, (self.qx, self.qy), self.kf)
             preferred = (self.p2x, self.p2y) if self.p2x is not None and self.p2y is not None else (self.ki, 0.)
-            p2 = min(choices, key=lambda point: math.dist(point, preferred)) if choices else (self.ki, 0.)
+            signed = [point for point in choices if (point[0]*self.qy-point[1]*self.qx) * self.sense >= 0]
+            p2 = min(signed or choices, key=lambda point: math.dist(point, preferred)) if choices else (self.ki, 0.)
             object.__setattr__(self, "p2x", p2[0]); object.__setattr__(self, "p2y", p2[1])
     @property
     def q(self): return math.hypot(self.qx, self.qy)
@@ -91,20 +133,74 @@ class LiveReciprocalResult:
 
 class ReciprocalInteractionModel:
     def __init__(self, state, locks=None):
-        self.committed = self.preview = state; self.locks = locks or LockState(); self._drag_start = state
+        self.committed = self.preview = state; self.locks = locks or LockState(); self._drag_start = state; self._gesture = None
+        self._last_nonzero_sense = self._sense_of(state)
         self.scale = 80.; self.offset = (0., 0.)
-    def begin_drag(self): self._drag_start=self.committed; self.preview=self.committed
-    def cancel(self): self.preview=self.committed
+    def begin_drag(self, handle=None):
+        self._drag_start=self.committed; self.preview=self.committed
+        self._gesture = self.gesture_mode(handle) if handle else None
+        self._last_nonzero_sense = self._sense_of(self._drag_start) or self._last_nonzero_sense
+    def cancel(self): self.preview=self.committed; self._gesture = None
     def commit(self): self.committed=self.preview; return self.committed
     def set_state(self, state): self.committed=self.preview=state
     def cancel_external_update(self, state):
         """An authoritative controller snapshot always wins over a preview."""
         self._drag_start = state
         self.committed = self.preview = state
+        self._gesture = None
+        self._last_nonzero_sense = self._sense_of(state) or self._last_nonzero_sense
     def accept_live_update(self, state):
         """Record a controller acknowledgement without disturbing a drag pivot."""
         self.committed = state
-        self.preview = state
+        if self._gesture is None:
+            self.preview = state
+
+    def end_drag(self):
+        self._gesture = None
+
+    def _mask(self):
+        return "".join("1" if value else "0" for value in (
+            self.locks.ki, self.locks.kf, self.locks.q, self.locks.delta_e,
+        ))
+
+    def gesture_mode(self, handle: str | None) -> GestureMode:
+        """Return the approved vTAS single-analyser lock-mask gesture mode."""
+        handle = handle or "p1"
+        mask = self._mask()
+        start = self._drag_start
+        if handle == "p1":
+            if mask in {"0000", "1000"}:
+                kind = "free_q"
+            elif mask in {"0010", "1010"}:
+                kind = "q_circle"
+            elif mask in {"0001", "0101", "1001"}:
+                kind = "delta_e_annulus"
+            elif mask in {"0100", "1100", "1101"}:
+                kind = "kf_circle"
+            else:
+                kind = "rigid_rotation"
+            pivot = (start.p2x, start.p2y) if kind == "kf_circle" else (0., 0.)
+        elif handle == "p2":
+            if mask in {"0000", "0010"}:
+                kind = "free_p2"
+            elif mask in {"1000", "1010"}:
+                kind = "ki_circle"
+            elif mask in {"0100", "0110"}:
+                kind = "kf_circle"
+            elif mask in {"0001", "0011"}:
+                kind = "delta_e_line"
+            else:
+                kind = "rigid_rotation"
+            pivot = (start.qx, start.qy) if kind == "kf_circle" else (0., 0.)
+        else:
+            return GestureMode(str(handle), "disabled", (0., 0.), False, False, False)
+        radial = kind not in {"q_circle", "ki_circle", "kf_circle", "rigid_rotation"}
+        line_direction = None
+        if kind == "delta_e_line":
+            line_direction = _unit((-start.qy, start.qx))
+        return GestureMode(handle, kind, pivot,
+                           kind in {"delta_e_annulus", "rigid_rotation"},
+                           radial, True, line_direction)
     def _to_plane(self, point):
         u,v=self.preview.basis_u,self.preview.basis_v; det=u[0]*v[1]-u[1]*v[0]
         if abs(det)<EPSILON: return point
@@ -127,81 +223,111 @@ class ReciprocalInteractionModel:
 
     def handle_affordance(self, handle: str) -> HandleAffordance:
         if handle not in {"p1", "p2"}: return HandleAffordance(handle, False, "unknown handle")
-        if self.locks.ki and self.locks.kf and self.locks.q and self.locks.delta_e:
-            return HandleAffordance(handle, True, "orientation-only: ki, kf, |Q|, ΔE locked", False, True, (0., 0.))
-        if handle == "p1" and self.locks.q:
-            return HandleAffordance(handle, True, "|Q| locked", False, True, (0., 0.))
-        if handle == "p2" and self.locks.ki:
-            return HandleAffordance(handle, True, "ki locked", False, True, (0., 0.))
-        if self.locks.kf:
-            pivot = (self._drag_start.p2x, self._drag_start.p2y) if handle == "p1" else (self._drag_start.qx, self._drag_start.qy)
-            return HandleAffordance(handle, True, "kf locked", False, True, pivot)
-        # A delta-E-only P2 move is projected onto a line perpendicular to Q.
-        # Both screen-space components can respond locally, so show both cues;
-        # the solver remains authoritative about the exact coupled path.
-        if handle == "p2" and self.locks.delta_e:
-            return HandleAffordance(handle, True, "ΔE-coupled motion", True, True)
-        return HandleAffordance(handle, True)
+        mode = self.gesture_mode(handle)
+        labels = {
+            "free_q": "free Q", "free_p2": "free ki endpoint",
+            "q_circle": "|Q| locked", "ki_circle": "ki locked",
+            "kf_circle": "kf locked", "delta_e_annulus": "ΔE annulus",
+            "delta_e_line": "ΔE line", "rigid_rotation": "rigid rotation",
+        }
+        return HandleAffordance(handle, True, labels[mode.kind], mode.radial,
+                                mode.tangential, mode.pivot, mode.kind,
+                                mode.line_direction)
     def zoom_at(self, factor, cursor, centre):
         old=self.screen_to_world(cursor,centre); self.scale=max(10.,min(1000.,self.scale*factor)); new=self.world_to_screen(old,centre); self.offset=(self.offset[0]+cursor[0]-new[0],self.offset[1]+cursor[1]-new[1])
     def pan(self, delta): self.offset=(self.offset[0]+delta[0],self.offset[1]+delta[1])
     def fit(self, extent,size): self.scale=max(10.,min(size)/max(2*extent,EPSILON)); self.offset=(0.,0.)
     def _state(self,q,p2):
         start=self._drag_start
-        return ReciprocalState(math.hypot(*p2),math.dist(p2,q),q[0],q[1],start.qz,p2[0],p2[1],start.basis_u,start.basis_v)
+        area = p2[0]*q[1]-p2[1]*q[0]
+        sense = (1 if area > 1e-9 else -1 if area < -1e-9 else start.sense)
+        if self._gesture is not None and self._gesture.preserves_handedness:
+            sense = start.sense
+        return ReciprocalState(math.hypot(*p2),math.dist(p2,q),q[0],q[1],start.qz,p2[0],p2[1],start.basis_u,start.basis_v,sense)
     def _choose(self, choices, preferred): return min(choices,key=lambda p:math.dist(p,preferred)) if choices else None
+    @staticmethod
+    def _sense_of(state):
+        area = state.p2x * state.qy - state.p2y * state.qx
+        return 1 if area > 1e-9 else -1 if area < -1e-9 else 0
+    def _choose_branch(self, choices, preferred, q):
+        """Use the captured scattering branch for every constrained rebuild."""
+        desired = self._last_nonzero_sense
+        if desired:
+            matching = [point for point in choices if (1 if point[0]*q[1]-point[1]*q[0] > 0 else -1) == desired]
+            if matching:
+                choices = matching
+        return self._choose(choices, preferred)
+    def _update_free_sense(self, state):
+        sense = self._sense_of(state)
+        if sense:
+            self._last_nonzero_sense = sense
+    @staticmethod
+    def _rotate(point, angle):
+        c, s = math.cos(angle), math.sin(angle)
+        return point[0]*c-point[1]*s, point[0]*s+point[1]*c
+    def _rigid(self, candidate, handle):
+        start = self._drag_start
+        source = (start.qx, start.qy) if handle == "p1" else (start.p2x, start.p2y)
+        if math.hypot(*source) < EPSILON or math.hypot(*candidate) < EPSILON:
+            return DragResult(self.preview, False, "rigid rotation needs a non-zero handle")
+        angle = math.atan2(candidate[1], candidate[0]) - math.atan2(source[1], source[0])
+        q, p2 = self._rotate((start.qx, start.qy), angle), self._rotate((start.p2x, start.p2y), angle)
+        state = self._state(q, p2); self.preview = state
+        return DragResult(state, True)
     def drag_p1(self,candidate,*,snap_grid=None,reflections=(),capture=None):
-        start=self._drag_start; unsnapped=candidate; snapped=None
+        start=self._drag_start; unsnapped=candidate; snapped=None; mode = self._gesture or self.gesture_mode("p1")
         # inputs are physical Q, but grid coordinates are U/V r.l.u.
         if capture is not None:
             hits=[r for r in reflections if math.dist(candidate,r)<=capture]
             if hits: candidate=min(hits,key=lambda r:math.dist(candidate,r)); snapped=candidate
         if snapped is None and snap_grid:
             plane=self._to_plane(candidate); candidate=self._from_plane((round(plane[0]/snap_grid)*snap_grid,round(plane[1]/snap_grid)*snap_grid)); snapped=candidate
-        direction=_unit(candidate,_unit((start.qx,start.qy))); qmag=start.q if self.locks.q else math.hypot(*candidate); q=(direction[0]*qmag,direction[1]*qmag)
-        ki0,kf0=start.actual_ki,start.actual_kf; p2=(start.p2x,start.p2y)
-        # deltaE couples magnitudes: choose a fixed side if locked, otherwise
-        # retain ki and derive kf from the locked energy transfer.
-        if self.locks.delta_e:
-            ki=ki0
-            if self.locks.kf: kf=kf0; ki=energy2k(k2energy(kf)+start.delta_e)
-            else: kf=energy2k(k2energy(ki)-start.delta_e)
-            choices=_intersections((0.,0.),ki,q,kf); p2=self._choose(choices,p2)
-            if p2 is None:return DragResult(self.preview,False,"locked deltaE cannot close the triangle",snapped,unsnapped)
-        elif self.locks.ki and self.locks.kf:
-            p2=self._choose(_intersections((0.,0.),ki0,q,kf0),p2)
-            if p2 is None:return DragResult(self.preview,False,"locked ki/kf cannot reach this Q",snapped,unsnapped)
-        elif self.locks.kf:
-            # vTAS Kf-only P1 projection: preserve incident endpoint and
-            # project the dragged Q endpoint onto its fixed-Kf circle.
+        if mode.kind == "rigid_rotation":
+            return self._rigid(candidate, "p1")
+        p2=(start.p2x,start.p2y); ki0,kf0=start.actual_ki,start.actual_kf
+        if mode.kind == "free_q":
+            q = candidate
+        elif mode.kind == "q_circle":
+            q = tuple(value*start.q for value in _unit(candidate, (start.qx, start.qy)))
+        elif mode.kind == "kf_circle":
             direction = _unit((candidate[0]-p2[0], candidate[1]-p2[1]), _unit((start.qx-p2[0], start.qy-p2[1])))
-            if self.locks.q:
-                # Q radius wins; project P2 around the fixed Q instead.
-                p2 = (q[0] + direction[0]*kf0, q[1] + direction[1]*kf0)
-            else:
-                q = (p2[0] + direction[0]*kf0, p2[1] + direction[1]*kf0)
-        # ki lock or fully free keep the incident endpoint continuous.
-        result=self._state(q,p2); self.preview=result; return DragResult(result,True,snapped=snapped,unsnapped=unsnapped)
+            q = (p2[0] + direction[0]*kf0, p2[1] + direction[1]*kf0)
+        elif mode.kind == "delta_e_annulus":
+            direction = _unit(candidate, (start.qx, start.qy))
+            # Keep both captured arm lengths.  The triangle inequality gives
+            # the annulus; inset its edges slightly to avoid numerical tangency.
+            margin = 1e-7 * max(1., ki0, kf0)
+            lower, upper = abs(ki0-kf0) + margin, ki0+kf0-margin
+            if lower > upper:
+                lower, upper = abs(ki0-kf0), ki0+kf0
+            qmag = min(max(math.hypot(*candidate), lower), upper)
+            q = direction[0]*qmag, direction[1]*qmag
+            choices=_intersections((0.,0.),ki0,q,kf0); p2=self._choose_branch(choices,p2,q)
+            if p2 is None:return DragResult(self.preview,False,"locked deltaE cannot close the triangle",snapped,unsnapped)
+        result=self._state(q,p2); self.preview=result
+        if not mode.preserves_handedness:
+            self._update_free_sense(result)
+        # A snap marker promises the displayed Q target, not merely an input
+        # candidate that a later circle/annulus projection had to move away.
+        honest_snap = snapped if snapped is not None and math.dist((result.qx, result.qy), snapped) < 1e-8 else None
+        return DragResult(result, True, snapped=honest_snap, unsnapped=unsnapped)
     def drag_p2(self,candidate):
-        start=self._drag_start; q=(start.qx,start.qy); p2=candidate; ki0,kf0=start.actual_ki,start.actual_kf
-        if self.locks.ki: p2=tuple(value*ki0 for value in _unit(p2,(start.p2x,start.p2y)))
-        if self.locks.delta_e:
-            # A locked final arm wins over a free candidate magnitude; delta-E
-            # then derives ki.  With neither side fixed, candidate ki drives
-            # the coupled final magnitude.
-            if self.locks.kf:
-                kf = kf0; ki = energy2k(k2energy(kf)+start.delta_e)
-            else:
-                ki=math.hypot(*p2)
-                if self.locks.ki: ki=ki0
-                kf=energy2k(k2energy(ki)-start.delta_e)
-            p2=self._choose(_intersections((0.,0.),ki,q,kf),p2)
-            if p2 is None:return DragResult(self.preview,False,"locked deltaE cannot close the triangle")
-        elif self.locks.ki and self.locks.kf:
-            p2 = self._choose(_intersections((0., 0.), ki0, q, kf0), p2)
-            if p2 is None:return DragResult(self.preview,False,"locked ki/kf cannot close the triangle")
-        elif self.locks.kf:
-            # vTAS Kf-only P2 projection: candidate lies on circle about Q.
+        start=self._drag_start; q=(start.qx,start.qy); p2=candidate; ki0,kf0=start.actual_ki,start.actual_kf; mode = self._gesture or self.gesture_mode("p2")
+        if mode.kind == "rigid_rotation":
+            return self._rigid(candidate, "p2")
+        if mode.kind == "ki_circle":
+            p2=tuple(value*ki0 for value in _unit(p2,(start.p2x,start.p2y)))
+        elif mode.kind == "kf_circle":
             direction = _unit((p2[0]-q[0], p2[1]-q[1]), _unit((start.p2x-q[0], start.p2y-q[1])))
             p2 = (q[0] + direction[0]*kf0, q[1] + direction[1]*kf0)
-        result=self._state(q,p2); self.preview=result; return DragResult(result,True)
+        elif mode.kind == "delta_e_line":
+            q2 = q[0]*q[0] + q[1]*q[1]
+            if q2 < EPSILON:
+                return DragResult(self.preview, False, "ΔE line needs non-zero Q")
+            target = start.p2x*q[0] + start.p2y*q[1]
+            correction = (target - (p2[0]*q[0] + p2[1]*q[1])) / q2
+            p2 = (p2[0] + correction*q[0], p2[1] + correction*q[1])
+        result=self._state(q,p2); self.preview=result
+        if not mode.preserves_handedness:
+            self._update_free_sense(result)
+        return DragResult(result,True)
