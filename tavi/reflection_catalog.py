@@ -37,22 +37,43 @@ def primitive_miller(h: float, k: float, l: float, tolerance: float = 1e-8):
 
 
 def load_reflections(path: str | Path) -> list[Reflection]:
-    """Read a permissive McStas LAU/LAZ numeric table (H K L ... F2)."""
+    """Read usable McStas LAU/LAZ reflections with a positive finite F2.
+
+    ``column_F2`` metadata is one-based.  Without metadata, the conventional
+    fourth column is used.  HKL-only or otherwise unusable tables are rejected
+    so callers can fall back to the selected space group's centering rule
+    without claiming structure-factor filtering.
+    """
     source = Path(path)
     if not source.is_file():
         raise FileNotFoundError(f"reflection table not found: {source}")
     reflections = []
+    f2_column = None
     with source.open(encoding="utf-8") as handle:
         for line in handle:
+            metadata = re.search(r"#\s*column_F2\s+(\d+)", line, re.IGNORECASE)
+            if metadata:
+                column_number = int(metadata.group(1))
+                if column_number < 4:
+                    raise ValueError("column_F2 must identify column 4 or later")
+                f2_column = column_number - 1  # table metadata is 1-based
+                continue
             values = re.findall(r"[-+]?\d*\.?\d+(?:[Ee][-+]?\d+)?", line.split("#", 1)[0])
             if len(values) < 3:
                 continue
             try:
                 h, k, l = (float(value) for value in values[:3])
-                f2 = float(values[-1]) if len(values) >= 4 else None
-            except ValueError:
+                index = f2_column if f2_column is not None else 3
+                if len(values) <= index:
+                    continue
+                f2 = float(values[index])
+            except (ValueError, IndexError):
+                continue
+            if not all(math.isfinite(value) for value in (h, k, l, f2)) or f2 <= 0.0:
                 continue
             reflections.append(Reflection(h, k, l, f2))
+    if not reflections:
+        raise ValueError(f"reflection table contains no usable positive F2 rows: {source}")
     return reflections
 
 
@@ -89,3 +110,14 @@ def plane_filtered_unique(projected, qz: float, tolerance: float = 1.0e-5):
             seen.add(key)
             result.append(row)
     return result
+
+
+def reflection_label_is_clear(position, used_positions, width: float, height: float,
+                              minimum_distance: float = 22.0) -> bool:
+    """Screen-space label decluttering shared by all visible reflection strengths."""
+    x, y = position
+    return (
+        12 < x < width - 35
+        and 12 < y < height - 12
+        and all(math.dist((x, y), other) > minimum_distance for other in used_positions)
+    )

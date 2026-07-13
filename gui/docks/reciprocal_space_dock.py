@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QFormLayout, QFrame, QGridLayout,
                                QPushButton, QToolButton, QVBoxLayout, QWidget)
 
 from gui.docks.base_dock import BaseDockWidget
+from tavi.reflection_catalog import reflection_label_is_clear
 from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState,
                                          ReciprocalInteractionModel,
                                          ReachOverlay, ReciprocalState, format_small)
@@ -138,7 +139,7 @@ class ReciprocalCanvas(QWidget):
                 painter.setBrush(QColor("#a8dadc"))
             painter.drawEllipse(round(px-radius), round(py-radius), round(radius*2), round(radius*2))
             # Typed HKL labels are intentionally decluttered in screen space.
-            if radius >= 5 and 12 < px < self.width()-35 and 12 < py < self.height()-12 and all(math.dist((px, py), other) > 22 for other in used_labels):
+            if reflection_label_is_clear((px, py), used_labels, self.width(), self.height()):
                 painter.setPen(QPen(QColor("#58636b"), 1))
                 painter.drawText(round(px+radius+2), round(py-radius-2), label)
                 used_labels.append((px, py))
