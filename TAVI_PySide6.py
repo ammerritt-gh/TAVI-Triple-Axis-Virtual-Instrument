@@ -27,7 +27,7 @@ from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_component_q
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
-                            decode_training, generate_training_exercise, encode_training)
+                            decode_training, generate_training_exercise, encode_training, get_scattering_plane_info)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.machine_profile import machine_fingerprint
 from tavi.scan_jobs import (
@@ -36,6 +36,8 @@ from tavi.scan_jobs import (
 from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
                              MAX_WAITERS, parse_scan_engine, ALLOWED_ENGINES)
 from tavi.journal import SessionJournal
+from tavi.reflection_catalog import load_reflections, plane_filtered_unique, ProjectedReflection
+from tavi.space_groups import generate_allowed_reflections, get_space_group
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -821,6 +823,9 @@ class TAVIController(QObject):
     #   api_status_changed -- listening URL (may be "") + human state string
     api_activity = Signal(str)
     api_status_changed = Signal(str, str)
+    # Immutable scalar data for the reciprocal dock.  The dock never reads
+    # widgets directly, which keeps preview/persisted state separate.
+    reciprocal_state_changed = Signal(object)
 
     def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
@@ -924,6 +929,7 @@ class TAVIController(QObject):
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
+        self.emit_reciprocal_snapshot()
 
         # Start the remote API server last, after the message center and job
         # queue are ready (it reports status through print_to_message_center).
@@ -1254,6 +1260,13 @@ class TAVIController(QObject):
         if getattr(self.window.instrument_dock, "nmo_combo", None) is not None:
             self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
 
+        reciprocal_dock = getattr(self.window, "reciprocal_space_dock", None)
+        if reciprocal_dock is not None:
+            reciprocal_dock.move_requested.connect(self.apply_reciprocal_move)
+            reciprocal_dock.values_requested.connect(self.apply_reciprocal_values)
+            reciprocal_dock.plane_requested.connect(self.set_reciprocal_plane)
+            self.reciprocal_state_changed.connect(reciprocal_dock.set_snapshot)
+
         # Ideal focusing buttons
         self.window.instrument_dock.rhm_ideal_button.clicked.connect(
             lambda: self.apply_ideal_bending_value("rhm")
@@ -1298,14 +1311,21 @@ class TAVIController(QObject):
         self.window.scattering_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
         self.window.scattering_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
         self.window.scattering_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qx_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
+        self.window.scattering_dock.qy_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
+        self.window.scattering_dock.qz_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
         
         # HKL - update Q-space and angles
         self.window.scattering_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
         self.window.scattering_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
         self.window.scattering_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.H_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
+        self.window.scattering_dock.K_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
+        self.window.scattering_dock.L_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
         
         # DeltaE - update energies
         self.window.scattering_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
+        self.window.scattering_dock.deltaE_edit.editingFinished.connect(lambda: QTimer.singleShot(0, self.emit_reciprocal_snapshot))
         
         # Lattice parameters - only update via Save button (lock/unlock mechanism)
         # Connect the lattice save signal from the sample dock
@@ -1318,6 +1338,13 @@ class TAVIController(QObject):
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
         except Exception:
             pass
+
+        # Refresh centering-rule fallback circles as soon as the sample dock
+        # changes its selected space group.
+        try:
+            self.window.sample_dock.space_group_changed.connect(lambda _group: self.emit_reciprocal_snapshot())
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: space-group refresh unavailable ({exc})")
         
         # Scan command validation - check for conflicts and errors on text change and on focus out
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
@@ -1443,6 +1470,190 @@ class TAVIController(QObject):
         """Print message to the GUI message center."""
         self.message_printed.emit(message)
         print(message)  # Also print to console
+
+    def emit_reciprocal_snapshot(self):
+        """Publish the scalar state consumed by the reciprocal dock.
+
+        This deliberately copies values out of widgets on the GUI thread.  The
+        dock may paint repeatedly, but never needs to reach back into widgets.
+        """
+        try:
+            vals = self.get_gui_values()
+            if not vals:
+                return
+            fixed_e = float(vals["fixed_E"])
+            delta_e = float(vals["deltaE"])
+            if vals["K_fixed"] == "Ki Fixed":
+                ki, kf = energy2k(fixed_e), energy2k(fixed_e - delta_e)
+            else:
+                kf, ki = energy2k(fixed_e), energy2k(fixed_e + delta_e)
+            plane = get_scattering_plane_info(self.ub_matrix.U, self.ub_matrix.B)
+            u_hkl, v_hkl = plane["in_plane_vector1_hkl"], plane["in_plane_vector2_hkl"]
+            # User-selected view plane is deliberately controller-local: it
+            # projects through UB but never writes/remounts UB.
+            u_hkl, v_hkl = getattr(self, "_reciprocal_plane_hkl", (u_hkl, v_hkl))
+            uq = self._hkl_to_sample_q(*u_hkl, vals); vq = self._hkl_to_sample_q(*v_hkl, vals)
+            self.reciprocal_state_changed.emit({
+                "ki": float(ki), "kf": float(kf),
+                "qx": float(vals["qx"]), "qy": float(vals["qy"]), "qz": float(vals["qz"]),
+                "p2": getattr(self, "_reciprocal_p2", None),
+                "basis_u": (float(uq[0]), float(uq[1])), "basis_v": (float(vq[0]), float(vq[1])),
+                "plane_u_hkl": u_hkl, "plane_v_hkl": v_hkl,
+                "K_fixed": vals["K_fixed"],
+            })
+            self.refresh_reciprocal_reflections(vals)
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: could not refresh state ({exc})")
+
+    @Slot(object, object)
+    def set_reciprocal_plane(self, u_hkl, v_hkl):
+        """Set display-only HKL plane axes after validating their UB projection."""
+        try:
+            vals = self.get_gui_values()
+            u_q, v_q = self._hkl_to_sample_q(*u_hkl, vals), self._hkl_to_sample_q(*v_hkl, vals)
+            # The v1 canvas is the existing horizontal qx/qy projection.  Do
+            # not silently flatten arbitrary 3-D planes: that would make grid
+            # snapping lie about HKL.  A later 3-D projection can lift this.
+            if abs(u_q[2]) > 1e-7 * max(1.0, math.hypot(u_q[0], u_q[1])) or abs(v_q[2]) > 1e-7 * max(1.0, math.hypot(v_q[0], v_q[1])):
+                raise ValueError("U/V must lie in the current horizontal display plane")
+            if math.hypot(u_q[0], u_q[1]) < 1e-8 or math.hypot(v_q[0], v_q[1]) < 1e-8:
+                raise ValueError("U/V must have an in-plane component")
+            if abs(u_q[0]*v_q[1]-u_q[1]*v_q[0]) < 1e-8:
+                raise ValueError("U and V are collinear in the displayed plane")
+            self._reciprocal_plane_hkl = (tuple(u_hkl), tuple(v_hkl))
+            self.emit_reciprocal_snapshot()
+            dock = getattr(self.window, "reciprocal_space_dock", None)
+            if dock is not None:
+                dock.set_plane_status("Display plane updated (view only)")
+        except Exception as exc:
+            message = f"Display plane rejected: {exc}"
+            self.print_to_message_center(f"Reciprocal view: invalid display plane ({exc})")
+            dock = getattr(self.window, "reciprocal_space_dock", None)
+            if dock is not None:
+                dock.set_plane_status(message)
+
+    def refresh_reciprocal_reflections(self, vals=None):
+        """Project table reflections or an explicitly labelled centering fallback."""
+        dock = getattr(self.window, "reciprocal_space_dock", None)
+        if dock is None:
+            return
+        vals = vals or self.get_gui_values()
+        if not vals:
+            return
+        try:
+            key = self.window.sample_dock.get_selected_sample_key()
+            spec = next((sample for sample in self.descriptor.samples if sample.id == key), None)
+            projected = []
+            source = getattr(spec, "reflection_source", None) if spec else None
+            if source:
+                try:
+                    for reflection in load_reflections(os.path.join(os.getcwd(), "components", source)):
+                        qx, qy, qz = self._hkl_to_sample_q(reflection.h, reflection.k, reflection.l, vals)
+                        projected.append(ProjectedReflection(qx, qy, reflection.f_squared, f"({reflection.h:g},{reflection.k:g},{reflection.l:g})", qz))
+                    dock.set_provenance(f"{len(projected)} structure-factor reflections")
+                except FileNotFoundError:
+                    if getattr(self, "_missing_reflection_source", None) != source:
+                        self._missing_reflection_source = source
+                        self.print_to_message_center(f"Reciprocal view: reflection table '{source}' is unavailable; using centering-rule fallback")
+            if not projected:
+                try:
+                    group = get_space_group(int(self.window.sample_dock.spacegroup_combo.currentData()))
+                    centering = group.centering
+                except Exception:
+                    centering = "P"
+                for h, k, l in generate_allowed_reflections(centering, 4, 4, 0):
+                    qx, qy, qz = self._hkl_to_sample_q(h, k, l, vals)
+                    projected.append(ProjectedReflection(qx, qy, None, f"({h},{k},{l})", qz))
+                dock.set_provenance("centering-rule fallback (not structure-factor filtered)")
+            displayed = plane_filtered_unique(projected, 0.0)
+            dock.canvas.set_reflections(displayed)
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: could not refresh reflections ({exc})")
+
+    @Slot(object)
+    def apply_reciprocal_move(self, state):
+        """Atomically commit a drag after the existing TAS angle solve accepts it."""
+        if self.updating:
+            return
+        try:
+            vals = self.get_gui_values()
+            if not vals:
+                return
+            delta_e = k2energy(state.ki) - k2energy(state.kf)
+            fixed_e = k2energy(state.ki if vals["K_fixed"] == "Ki Fixed" else state.kf)
+            # Validate through the already-public plugin contract, exactly like
+            # scan/API preflight.  The throwaway config prevents a preview from
+            # mutating the live instrument state.
+            candidate_vals = dict(vals, fixed_E=fixed_e, deltaE=delta_e,
+                                  qx=state.qx, qy=state.qy, qz=state.qz)
+            sample_key = self.window.sample_dock.get_selected_sample_key()
+            config = self.instrument.scan_config(self.instrument_state, candidate_vals, sample_key,
+                                                 self.diagnostic_settings, self._build_sample_mount(candidate_vals))
+            feasible, reason = self.instrument.check_point_feasibility(
+                config, "momentum", [state.qx, state.qy, state.qz, delta_e], candidate_vals
+            )
+            if not feasible:
+                self.print_to_message_center("Reciprocal move rejected: " + (reason or "infeasible point"))
+                self.emit_reciprocal_snapshot()
+                return
+            h, k, l = self._sample_q_to_hkl(state.qx, state.qy, state.qz, vals)
+            self.updating = True
+            self.window.scattering_dock.fixed_E_edit.setText(f"{fixed_e:.6g}")
+            self.window.scattering_dock.deltaE_edit.setText(f"{delta_e:.6g}")
+            self.window.scattering_dock.qx_edit.setText(f"{state.qx:.6g}")
+            self.window.scattering_dock.qy_edit.setText(f"{state.qy:.6g}")
+            self.window.scattering_dock.qz_edit.setText(f"{state.qz:.6g}")
+            self.window.scattering_dock.H_edit.setText(f"{h:.6g}")
+            self.window.scattering_dock.K_edit.setText(f"{k:.6g}")
+            self.window.scattering_dock.L_edit.setText(f"{l:.6g}")
+            for name, value in (("fixed_E", fixed_e), ("deltaE", delta_e), ("qx", state.qx),
+                                ("qy", state.qy), ("qz", state.qz), ("H", h), ("K", k), ("L", l)):
+                self._update_tracked_value(name, value)
+            self._reciprocal_p2 = (state.p2x, state.p2y)
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal move rejected: {exc}")
+        finally:
+            self.updating = False
+        # Update dependent energy and angle controls only after all canonical
+        # fields have changed together.
+        self.update_all_variables()
+        self.update_angles_from_q()
+        self.emit_reciprocal_snapshot()
+
+    @Slot(object)
+    def apply_reciprocal_values(self, values):
+        """Apply dock numeric energy controls through the canonical fixed mode."""
+        try:
+            vals = self.get_gui_values()
+            if not vals:
+                return
+            state = self.window.reciprocal_space_dock.canvas.model.committed
+            ki = max(0.0, float(values.get("ki", state.ki)))
+            kf = max(0.0, float(values.get("kf", state.kf)))
+            # Ei/Ef are first-class dock edits too.  A changed energy field
+            # overrides its displayed k partner for this commit.
+            if abs(float(values.get("ei", k2energy(ki))) - k2energy(state.ki)) > 1e-8:
+                ki = energy2k(float(values["ei"]))
+            if abs(float(values.get("ef", k2energy(kf))) - k2energy(state.kf)) > 1e-8:
+                kf = energy2k(float(values["ef"]))
+            # Delta-E is independently editable in the dock.  Preserve the
+            # current fixed side while deriving the other side through the same
+            # energy conversion used by the canonical controller path.
+            requested_de = float(values.get("delta_e", state.delta_e))
+            if abs(requested_de - state.delta_e) > 1e-8:
+                if vals["K_fixed"] == "Ki Fixed":
+                    kf = energy2k(k2energy(ki) - requested_de)
+                else:
+                    ki = energy2k(k2energy(kf) + requested_de)
+            requested_q = max(0.0, float(values.get("q", state.q)))
+            q_direction = (state.qx / state.q, state.qy / state.q) if state.q > 1e-9 else (1.0, 0.0)
+            if not math.isfinite(ki) or not math.isfinite(kf) or ki <= 0 or kf <= 0:
+                raise ValueError("ki and kf must be positive")
+            self.apply_reciprocal_move(type(state)(ki, kf, requested_q * q_direction[0],
+                                                   requested_q * q_direction[1], state.qz))
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal energy edit rejected: {exc}")
+            self.emit_reciprocal_snapshot()
     
     @Slot(int, int)
     def update_progress(self, current, total):
@@ -2478,6 +2689,7 @@ class TAVIController(QObject):
         """Update all when K fixed mode changes."""
         self.update_all_variables()
         self.update_angles_from_q()
+        self.emit_reciprocal_snapshot()
     
     def on_fixed_E_changed(self):
         """Update all when fixed E changes."""

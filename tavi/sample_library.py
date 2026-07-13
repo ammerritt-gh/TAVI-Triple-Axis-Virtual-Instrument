@@ -61,6 +61,8 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
             split=10,
             component_name="Al_Bragg",  # legacy McStas instance capitalization
             lattice=_AL_LATTICE,
+            reflection_source="Al.lau",
+            space_group=225,
         ),
         SampleSpec(
             "Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
@@ -77,5 +79,7 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
             },
             split=10,
             lattice=(4.03893, 4.03893, 4.03893, 90.0, 90.0, 90.0),
+            reflection_source="Al_mp-134_symmetrized.laz",
+            space_group=225,
         ),
     )
