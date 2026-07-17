@@ -52,29 +52,40 @@ def _request(url, method="GET", data=None, headers=None, timeout=5):
 # A representative validation block, shaped exactly like the production
 # TaviApiBackend._build_validation output.
 def _validation_block(infeasible):
+    infeasible = list(infeasible)
+    bad_indices = {point["index"] for point in infeasible}
+    mask = [index not in bad_indices for index in range(3)]
     return {
-        "points": 3,
+        "requested_points": 3,
+        "feasible_points": sum(mask),
+        "partial": 0 < sum(mask) < 3,
+        "planned_feasible_mask": mask,
+        "feasible_segments": [],
+        "point_manifest": [],
         "per_command": [
             {"variable": "H", "count": 3, "values": [1.99, 2.0, 2.01]},
         ],
         "cost": {
             "pending_neutrons": 0.0, "budget": 1e10,
             "queued_jobs": 0, "max_queued": 10,
-            "points": 3, "neutrons_per_point": 1e5, "job_neutrons": 3e5,
+            "requested_points": 3, "feasible_points": sum(mask),
+            "neutrons_per_point": 1e5,
+            "job_neutrons": sum(mask) * 1e5,
         },
         "eta": {"estimated_seconds": 42.0, "confidence": "high", "samples": 11},
-        "infeasible": list(infeasible),
+        "infeasible": infeasible,
     }
 
 
 _INFEASIBLE_ONE = [{
     "index": 2, "values": {"H": 2.01},
+    "kind": "physical_infeasible",
     "reason": "scattering triangle does not close (|Q| unreachable for Ki, Kf)",
 }]
 
 
 class ValidationBackend:
-    """Fake backend mirroring the new validation/schema/allow_partial contract."""
+    """Fake backend mirroring the point-level partial-feasibility contract."""
 
     SCHEMA_GRAMMAR = (
         "VARIABLE start stop STEP. The third number (the last token) is the "
@@ -127,17 +138,14 @@ class ValidationBackend:
 
     # -- writes --
     def submit_scan(self, body, idempotency_key=None):
-        allow_partial = bool(body.get("allow_partial", False))
         validation = _validation_block(self.infeasible)
-        if self.infeasible and not allow_partial:
+        if validation["feasible_points"] == 0:
             raise ApiError(
-                400, "infeasible_points",
-                "%d scan point(s) are geometrically infeasible; resubmit with "
-                "\"allow_partial\": true to skip them" % len(self.infeasible),
+                400, "all_points_infeasible",
+                "No requested scan point is feasible",
                 details=validation,
             )
-        skipped = self.infeasible if (self.infeasible and allow_partial) else []
-        job = self._new_job(skipped_points=skipped)
+        job = self._new_job(skipped_points=self.infeasible)
         return {
             "job_id": job.job_id, "state": "queued", "position": 0,
             "eta": validation["eta"], "validation": validation,
@@ -145,13 +153,10 @@ class ValidationBackend:
 
     def submit_validate(self, body):
         self.validate_calls += 1
-        allow_partial = bool(body.get("allow_partial", False))
         validation = _validation_block(self.infeasible)
         blockers = []
-        if self.infeasible and not allow_partial:
-            blockers.append(
-                "infeasible_points: %d point(s) unreachable" % len(self.infeasible)
-            )
+        if validation["feasible_points"] == 0:
+            blockers.append("all_points_infeasible: no requested point is reachable")
         validation["would_queue"] = not blockers
         validation["blockers"] = blockers
         return validation
@@ -196,7 +201,8 @@ def test_scan_202_embeds_validation_block():
         status, body = _request(base + "/scan", method="POST", data={})
         assert status == 202
         v = body["validation"]
-        assert set(v) >= {"points", "per_command", "cost", "eta", "infeasible"}
+        assert set(v) >= {"requested_points", "feasible_points", "partial",
+                          "per_command", "cost", "eta", "infeasible"}
         assert v["infeasible"] == []
         assert v["per_command"][0]["variable"] == "H"
         assert v["cost"]["job_neutrons"] == 3e5
@@ -206,39 +212,32 @@ def test_scan_202_embeds_validation_block():
 
 
 # --------------------------------------------------------------------------
-# infeasible_points 400
+# partial feasibility
 # --------------------------------------------------------------------------
 
-def test_scan_infeasible_points_400_with_validation_body():
+def test_scan_partial_feasibility_queues_without_opt_in():
     backend = ValidationBackend(infeasible=_INFEASIBLE_ONE)
     srv, base = _start(backend)
     try:
         status, body = _request(base + "/scan", method="POST", data={})
-        assert status == 400
-        assert body["error"]["code"] == "infeasible_points"
-        details = body["error"]["details"]
-        assert details["infeasible"] == _INFEASIBLE_ONE
-        assert details["points"] == 3
-        # No job should have been queued on rejection.
-        assert backend.registry.recent() == []
+        assert status == 202
+        assert body["validation"]["partial"] is True
+        job_id = body["job_id"]
+        s_status, s_body = _request(base + "/scan/%s" % job_id)
+        assert s_status == 200
+        assert s_body["result"]["skipped_points"] == _INFEASIBLE_ONE
     finally:
         srv.stop()
 
 
-def test_scan_allow_partial_queues_and_records_skipped_points():
-    backend = ValidationBackend(infeasible=_INFEASIBLE_ONE)
+def test_scan_all_points_infeasible_rejected():
+    all_bad = [dict(_INFEASIBLE_ONE[0], index=i) for i in range(3)]
+    backend = ValidationBackend(infeasible=all_bad)
     srv, base = _start(backend)
     try:
-        status, body = _request(base + "/scan", method="POST",
-                                data={"allow_partial": True})
-        assert status == 202
-        job_id = body["job_id"]
-        # skipped points surface in both status and data snapshots.
-        s_status, s_body = _request(base + "/scan/%s" % job_id)
-        assert s_status == 200
-        assert s_body["result"]["skipped_points"] == _INFEASIBLE_ONE
-        d_status, d_body = _request(base + "/scan/%s/data" % job_id)
-        assert d_body["result"]["skipped_points"] == _INFEASIBLE_ONE
+        status, body = _request(base + "/scan", method="POST", data={})
+        assert status == 400
+        assert body["error"]["code"] == "all_points_infeasible"
     finally:
         srv.stop()
 
@@ -262,14 +261,14 @@ def test_validate_returns_would_queue_true_when_feasible():
         srv.stop()
 
 
-def test_validate_would_queue_false_and_never_queues_on_infeasible():
+def test_validate_would_queue_true_on_partial_feasibility():
     backend = ValidationBackend(infeasible=_INFEASIBLE_ONE)
     srv, base = _start(backend)
     try:
         status, body = _request(base + "/validate", method="POST", data={})
         assert status == 200
-        assert body["would_queue"] is False
-        assert any("infeasible_points" in b for b in body["blockers"])
+        assert body["would_queue"] is True
+        assert body["blockers"] == []
         assert backend.registry.recent() == []
         assert backend.validate_calls == 1
     finally:

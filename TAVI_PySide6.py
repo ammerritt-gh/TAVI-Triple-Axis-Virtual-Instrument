@@ -480,7 +480,6 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
-        allow_partial = bool(body.get("allow_partial", False))
         isolated = bool(body.get("isolated", False))
         # Execution-backend selection (docs/CONTROL_FEATURES_DESIGN.md §6.4).
         # Validated Qt-free; an unknown engine is a 400 with the allowed list.
@@ -488,31 +487,28 @@ class TaviApiBackend:
 
         result = self._bridge.call_on_gui(
             lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
-                                             allow_partial, isolated,
+                                             isolated,
                                              engine, seed, noiseless)
         )
         return result
 
-    def _build_validation(self, controller, launch_state, points, neutrons,
-                          allow_partial):
+    def _build_validation(self, controller, launch_state, points, neutrons):
         """Assemble the ``validation`` block for a launch state (points/cost/eta).
 
         Feasibility + per-command expansion come from the controller (GUI-thread
         angle math); budget/cost and ETA are folded in here since the backend
-        owns those. ``points`` is the total requested-point count; with
-        ``allow_partial`` the ETA is scaled to the points that will actually run.
+        owns those. ``points`` is the total requested-point count; ETA and cost
+        are scaled to the points that will actually run.
         Returns the ``validation`` dict embedded in 202/validate responses.
         """
         validation = controller.validate_scan_launch_state(launch_state)
-        infeasible = validation.get("infeasible", [])
-        run_points = points
-        if allow_partial:
-            run_points = max(0, points - len(infeasible))
+        run_points = int(validation.get("feasible_points", points))
         validation["cost"] = dict(
             self._budget_usage(),
-            points=points,
+            requested_points=points,
+            feasible_points=run_points,
             neutrons_per_point=neutrons,
-            job_neutrons=points * neutrons,
+            job_neutrons=run_points * neutrons,
         )
         engine = (launch_state or {}).get("engine") or "mcstas"
         try:
@@ -526,8 +522,8 @@ class TaviApiBackend:
         return validation
 
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
-                            allow_partial=False, isolated=False,
-                            engine="mcstas", seed=None, noiseless=False):
+                            isolated=False, engine="mcstas", seed=None,
+                            noiseless=False):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
@@ -604,24 +600,26 @@ class TaviApiBackend:
 
         # 4. Always-on feasibility validation (API path only). Build the
         #    validation block (per-command points + per-point feasibility +
-        #    cost + eta). Any infeasible point is a hard 400 unless the
-        #    caller opted into allow_partial, in which case the infeasible
-        #    points are recorded on the launch state so run_simulation skips
-        #    them and the result documents them under skipped_points.
+        #    cost + eta). Partial feasibility is unconditional: reject only
+        #    when no requested point can run.
         validation = self._build_validation(
-            controller, launch_state, points, neutrons, allow_partial
+            controller, launch_state, points, neutrons
         )
         infeasible = validation.get("infeasible", [])
-        if infeasible and not allow_partial:
+        feasible_points = int(validation.get("feasible_points", points))
+        if feasible_points <= 0:
             raise ApiError(
-                400, "infeasible_points",
-                "%d scan point(s) are geometrically infeasible; resubmit "
-                "with \"allow_partial\": true to skip them" % len(infeasible),
+                400, "all_points_infeasible",
+                "No requested scan point is feasible",
                 details=validation,
             )
-        if infeasible and allow_partial:
+        if infeasible:
             launch_state["skipped_indices"] = [e["index"] for e in infeasible]
             launch_state["skipped_points"] = infeasible
+        launch_state["planned_feasibility"] = validation.get("point_manifest", [])
+        launch_state["planned_feasible_mask"] = validation.get(
+            "planned_feasible_mask", [])
+        launch_state["feasible_segments"] = validation.get("feasible_segments", [])
 
         # 5. Budget + queue-depth enforcement (API-sourced jobs only).
         #    ``limits`` was resolved in step 3a for the over-limit guard.
@@ -636,7 +634,7 @@ class TaviApiBackend:
                     429, "limit_exceeded", reason,
                     details={"usage": self._budget_usage()},
                 )
-            reason = limits.check_submission(points, neutrons, pending_cost)
+            reason = limits.check_submission(feasible_points, neutrons, pending_cost)
             if reason is not None:
                 controller._journal.record("budget", "rejected: %s" % reason)
                 raise ApiError(
@@ -646,7 +644,7 @@ class TaviApiBackend:
 
         # 6. Enqueue and tag the job with its cost for future budget math.
         job = controller.submit_scan_job(launch_state, "api")
-        job._api_cost = points * neutrons
+        job._api_cost = feasible_points * neutrons
         if idempotency_key:
             registry.put_idempotent(idempotency_key, job.job_id)
 
@@ -675,12 +673,11 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
-        allow_partial = bool(body.get("allow_partial", False))
         return self._bridge.call_on_gui(
-            lambda: self._validate_scan_on_gui(patch, force, allow_partial)
+            lambda: self._validate_scan_on_gui(patch, force)
         )
 
-    def _validate_scan_on_gui(self, patch, force, allow_partial):
+    def _validate_scan_on_gui(self, patch, force):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
 
         Builds the launch state from widget-free defaults + the request patch
@@ -719,13 +716,19 @@ class TaviApiBackend:
                       % (points, limits.max_points))
             blockers.append("limit_exceeded: %s" % reason)
             return {
-                "points": points,
+                "requested_points": points,
+                "feasible_points": 0,
+                "partial": False,
+                "planned_feasible_mask": [],
+                "feasible_segments": [],
+                "point_manifest": [],
                 "per_command": [],
                 "infeasible": [],
                 "cost": dict(
-                    self._budget_usage(), points=points,
+                    self._budget_usage(), requested_points=points,
+                    feasible_points=0,
                     neutrons_per_point=neutrons,
-                    job_neutrons=points * neutrons,
+                    job_neutrons=0,
                 ),
                 "eta": {"estimated_seconds": None,
                         "confidence": "none", "samples": 0},
@@ -734,19 +737,19 @@ class TaviApiBackend:
             }
 
         validation = self._build_validation(
-            controller, launch_state, points, neutrons, allow_partial
+            controller, launch_state, points, neutrons
         )
-        infeasible = validation.get("infeasible", [])
-        if infeasible and not allow_partial:
+        feasible_points = int(validation.get("feasible_points", points))
+        if feasible_points <= 0:
             blockers.append(
-                "infeasible_points: %d point(s) unreachable" % len(infeasible)
+                "all_points_infeasible: no requested point is reachable"
             )
 
         if limits is not None:
             if self._queued_count() >= limits.max_queued:
                 blockers.append("limit_exceeded: queue is full")
             reason = limits.check_submission(
-                points, neutrons, self._pending_api_cost()
+                feasible_points, neutrons, self._pending_api_cost()
             )
             if reason is not None:
                 blockers.append("limit_exceeded: %s" % reason)
@@ -5804,9 +5807,9 @@ class TAVIController(QObject):
         the instrument's ``check_point_feasibility`` (the same angle math the run
         uses). API-side only -- the GUI Run path never calls this.
 
-        Returns ``{"points", "per_command", "infeasible"}`` where ``per_command``
+        Returns a point-level feasibility manifest where ``per_command``
         is a list of ``{"variable", "count", "values"}`` and ``infeasible`` is a
-        list of ``{"index", "values", "reason"}`` in run order (the linear index
+        list of ``{"index", "values", "kind", "reason"}`` in run order (the linear index
         matches ``run_simulation``'s ``scan_parameter_input`` order, so the
         skip-filter can drop exactly those points).
         """
@@ -5817,7 +5820,8 @@ class TAVIController(QObject):
         relative_mode_1 = launch_state.get('relative_mode_1', False)
         relative_mode_2 = launch_state.get('relative_mode_2', False)
 
-        result = {"points": 0, "per_command": [], "infeasible": []}
+        result = {"requested_points": 0, "per_command": [], "infeasible": [],
+                  "point_manifest": []}
 
         # Single-command swap matches run_simulation (a lone command 2 becomes 1).
         if cmd2 and not cmd1:
@@ -5834,12 +5838,24 @@ class TAVIController(QObject):
 
         def _feasible(scan_point):
             if not callable(feas_fn):
-                return True, None
+                return True, None, None
             try:
-                return feas_fn(scan_config, scan_mode, scan_point, vals)
+                feasible, reason = feas_fn(scan_config, scan_mode, scan_point, vals)
+                kind = None if feasible else "physical_infeasible"
+                return bool(feasible), reason, kind
             except Exception as exc:
-                # A solver blow-up is itself an infeasible point, surfaced.
-                return False, f"angle solve error: {exc}"
+                return False, f"angle solve error: {exc}", "geometry_solver_error"
+
+        def _record(index, values, scan_point):
+            feasible, reason, kind = _feasible(scan_point)
+            entry = {"index": index, "values": values, "feasible": feasible,
+                     "kind": kind, "reason": reason}
+            result["point_manifest"].append(entry)
+            if not feasible:
+                result["infeasible"].append({
+                    "index": index, "values": values, "kind": kind,
+                    "reason": reason,
+                })
 
         def _expand(cmd, relative):
             var, values = parse_scan_steps(cmd)
@@ -5858,14 +5874,8 @@ class TAVIController(QObject):
                 for idx, value1 in enumerate(values1):
                     scan_point = template[:]
                     scan_point[vi[var1]] = value1
-                    feasible, reason = _feasible(scan_point)
-                    if not feasible:
-                        result["infeasible"].append({
-                            "index": idx,
-                            "values": {var1: value1},
-                            "reason": reason,
-                        })
-                result["points"] = len(values1)
+                    _record(idx, {var1: value1}, scan_point)
+                result["requested_points"] = len(values1)
             elif cmd1 and cmd2:
                 var1, values1 = _expand(cmd1, relative_mode_1)
                 var2, values2 = _expand(cmd2, relative_mode_2)
@@ -5881,34 +5891,43 @@ class TAVIController(QObject):
                         scan_point = template[:]
                         scan_point[vi[var1]] = value1
                         scan_point[vi[var2]] = value2
-                        feasible, reason = _feasible(scan_point)
-                        if not feasible:
-                            result["infeasible"].append({
-                                "index": linear,
-                                "values": {var1: value1, var2: value2},
-                                "reason": reason,
-                            })
+                        _record(linear, {var1: value1, var2: value2}, scan_point)
                         linear += 1
-                result["points"] = len(values1) * len(values2)
+                result["requested_points"] = len(values1) * len(values2)
             else:
                 # Single point at current settings.
-                feasible, reason = _feasible(template[:])
-                if not feasible:
-                    result["infeasible"].append({
-                        "index": 0, "values": {}, "reason": reason
-                    })
-                result["points"] = 1
+                _record(0, {}, template[:])
+                result["requested_points"] = 1
         except Exception as exc:
             # Unparseable command (e.g. force-submitted): cannot expand, so report
             # no infeasible points and a best-effort count. run_simulation will
             # surface any downstream failure normally.
             self.print_to_message_center(f"Scan validation expansion failed: {exc}")
             try:
-                result["points"] = self._count_scan_points(cmd1, cmd2)
+                result["requested_points"] = self._count_scan_points(cmd1, cmd2)
             except Exception:
-                result["points"] = 1
+                result["requested_points"] = 1
             result["per_command"] = []
             result["infeasible"] = []
+            result["point_manifest"] = []
+
+        requested = int(result["requested_points"])
+        if result["point_manifest"]:
+            mask = [bool(entry["feasible"]) for entry in result["point_manifest"]]
+        else:
+            mask = [True] * requested
+        segments = []
+        start = None
+        for index, feasible in enumerate(mask + [False]):
+            if feasible and start is None:
+                start = index
+            elif not feasible and start is not None:
+                segments.append({"start_index": start, "end_index": index - 1})
+                start = None
+        result["planned_feasible_mask"] = mask
+        result["feasible_points"] = sum(mask)
+        result["partial"] = 0 < result["feasible_points"] < requested
+        result["feasible_segments"] = segments
 
         return result
 
@@ -6811,8 +6830,8 @@ class TAVIController(QObject):
                 'valid_mask_2d': None,
             })
 
-        # allow_partial (API only): the submission pre-determined some points
-        # geometrically infeasible and asked to skip them. Drop those points so
+        # API feasibility: submission pre-determined some points infeasible.
+        # Drop those points so
         # the prep thread never queues a snapshot for them; the result arrays
         # keep their None placeholders and job.result.skipped_points documents
         # exactly what was omitted (never silent gaps). The linear index matches
@@ -6827,12 +6846,18 @@ class TAVIController(QObject):
             ]
             self.message_printed.emit(
                 f"Skipping {len(skipped_indices)} infeasible point(s) "
-                f"(allow_partial); running {len(scan_parameter_input)}."
+                f"from the frozen feasibility manifest; running "
+                f"{len(scan_parameter_input)}."
             )
-        if job is not None and skipped_points:
+        if job is not None:
             with job.lock:
                 if job.result is not None:
                     job.result.skipped_points = list(skipped_points)
+                    planned = list(launch_state.get('planned_feasible_mask') or [])
+                    job.result.planned_feasible_mask = planned
+                    job.result.executed_feasible_mask = list(planned)
+                    job.result.feasible_segments = list(
+                        launch_state.get('feasible_segments') or [])
                 job.progress_total = len(scan_parameter_input)
 
         if is_2d_scan:
