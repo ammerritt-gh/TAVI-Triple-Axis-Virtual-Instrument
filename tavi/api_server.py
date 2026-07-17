@@ -155,10 +155,10 @@ def parse_scan_engine(body):
 # TODO.md "API polish". PATCH /parameters is deliberately excluded -- its whole
 # body IS the parameter dict, validated field-by-field against the field map.
 SCAN_BODY_KEYS = frozenset({
-    "parameters", "force", "allow_partial", "isolated",
+    "parameters", "force", "isolated",
     "engine", "seed", "noiseless",
 })
-VALIDATE_BODY_KEYS = frozenset({"parameters", "force", "allow_partial"})
+VALIDATE_BODY_KEYS = frozenset({"parameters", "force"})
 STOP_BODY_KEYS = frozenset({"clear_queue"})
 
 

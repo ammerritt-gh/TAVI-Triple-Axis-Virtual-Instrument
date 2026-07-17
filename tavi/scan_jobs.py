@@ -97,10 +97,14 @@ class ScanResult:
     max_counts: float = 0.0
     output_folder: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
-    # Points deliberately omitted from the run because they were pre-determined
-    # geometrically infeasible at submission and the job was queued with
-    # ``allow_partial``. Each entry is ``{"index", "values", "reason"}``. Empty
-    # for a normal job. Documented so a partial scan never has silent gaps.
+    # Submission-time feasibility is part of the result contract. The executed
+    # mask is separate so a future hardware backend can revalidate immediately
+    # before motion and record any drift from the submitted plan.
+    planned_feasible_mask: List[bool] = field(default_factory=list)
+    executed_feasible_mask: List[bool] = field(default_factory=list)
+    feasible_segments: List[Dict[str, Any]] = field(default_factory=list)
+    # Points deliberately omitted from the run. Each entry carries an index,
+    # coordinates, failure kind, and reason; a partial scan never has silent gaps.
     skipped_points: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
@@ -118,6 +122,9 @@ class ScanResult:
             'max_counts': _json_safe(self.max_counts),
             'output_folder': self.output_folder,
             'skipped_points': _json_safe(self.skipped_points),
+            'planned_feasible_mask': _json_safe(self.planned_feasible_mask),
+            'executed_feasible_mask': _json_safe(self.executed_feasible_mask),
+            'feasible_segments': _json_safe(self.feasible_segments),
         }
         if not include_data:
             return summary
