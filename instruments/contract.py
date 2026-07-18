@@ -2,7 +2,7 @@
 
 Part of the configurable-instruments effort (``docs/CONFIGURABLE_INSTRUMENTS.md``
 §5, §17). A registered instrument is any object satisfying ``InstrumentPlugin``;
-PUMA is the first implementation (``instruments/puma_plugin.py``, wrapping the
+PUMA is the first implementation (``instruments/puma/plugin.py``, wrapping the
 existing ``build_PUMA_instrument`` / ``compute_scan_snapshot`` /
 ``run_PUMA_point``); IN8 will be the second. The contract is intentionally free
 of PUMA-specific parameter names -- the parameter *set* lives in the descriptor,

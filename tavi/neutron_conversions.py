@@ -1,6 +1,6 @@
 """Instrument-independent neutron unit conversions (energy, momentum, Bragg angle).
 
-Moved verbatim from ``instruments/PUMA_instrument_definition.py`` (Phase 1 of
+Moved verbatim from the former PUMA definition module (Phase 1 of
 ``docs/CONFIGURABLE_INSTRUMENTS.md`` §17.2): these are pure Bragg / de-Broglie
 relations that take crystal d-spacing as an argument, so they belong with the
 general physics helpers in ``tavi/``. The PUMA module re-exports them so existing

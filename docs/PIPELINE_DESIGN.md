@@ -71,7 +71,7 @@ No artificial queue cap. The prep thread can compute and enqueue the full scan a
 
 ### Step 1: Split `run_PUMA_instrument()`
 
-Split into two functions in `instruments/PUMA_instrument_definition.py`:
+Split into two functions in `instruments/puma/model.py`:
 
 **`build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons)`**
 
@@ -122,7 +122,7 @@ This classification already exists implicitly — `add_parameter()` calls define
 
 ### Step 2: Define the params snapshot
 
-A function in `instruments/PUMA_instrument_definition.py` that takes the current scan point data and returns a dict:
+A function in `instruments/puma/model.py` that takes the current scan point data and returns a dict:
 
 ```python
 def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder, ...):
@@ -433,7 +433,7 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 
 | File | Changes |
 |------|---------|
-| `instruments/PUMA_instrument_definition.py` | Split `run_PUMA_instrument()` into `build_PUMA_instrument()` + `run_PUMA_point()`. Add `compute_scan_snapshot()` and the per-point snapshot contract used by the queue. |
+| `instruments/puma/model.py` | Split `run_PUMA_instrument()` into `build_PUMA_instrument()` + `run_PUMA_point()`. Add `compute_scan_snapshot()` and the per-point snapshot contract used by the queue. |
 | `TAVI_PySide6.py` | Refactor `run_simulation()` to use the prep thread, snapshot queue, and simulation loop. Replace `stop_flag` bool with `threading.Event`. Add `_prep_worker()` and emit per-point log messages from the simulation thread when each point starts. |
 | `tavi/mcstas_config.py` | Add centralized MPI launcher resolution for direct execution, with McStasScript configuration / `mccode_config.json` fallback and preference for a direct `mpiexec` binary over wrapper batch launchers when available. |
 | `tavi/runtime_tracker.py` | Add a heuristic `compilation_time` field to `ScanRecord` and `add_record()`, and update `get_estimates()` to prefer it when present. |

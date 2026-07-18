@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "panda",
+  "display_name": "PANDA (MLZ)",
+  "facility": "MLZ",
+  "status": "research",
+  "model_version": "0.1.0",
+  "model_date": "2026-07-18"
+}

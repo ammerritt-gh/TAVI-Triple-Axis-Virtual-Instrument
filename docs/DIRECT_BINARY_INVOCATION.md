@@ -31,7 +31,7 @@ Two Python interpreters, two cmd.exe shells, full module import chain — all re
 
 ## Solution
 
-Keep `run_PUMA_point()` in `instruments/PUMA_instrument_definition.py` as the execution seam called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`. The landed slice keeps the first point that reaches `backengine()` on a forced compile/materialization path so build-time settings are refreshed and diagnostic `McStasData` is retained, then uses direct process invocation with `subprocess.run` and a list (no shell) for later eligible points.
+Keep `run_PUMA_point()` in `instruments/puma/model.py` as the execution seam called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`. The landed slice keeps the first point that reaches `backengine()` on a forced compile/materialization path so build-time settings are refreshed and diagnostic `McStasData` is retained, then uses direct process invocation with `subprocess.run` and a list (no shell) for later eligible points.
 
 ## Key Facts
 
@@ -88,4 +88,4 @@ Key details:
 
 ## In-Progress Note
 
-Direct binary invocation is now partially implemented in the live run path. The controlling seam remains `run_PUMA_point()` in `instruments/PUMA_instrument_definition.py`, as called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`; the current slice keeps first-point `backengine()`, arms direct invocation only after a successful first point plus binary/MPI resolution, retains first-point diagnostic McStasData for diagnostic mode, and maps non-zero direct exits or missing `detector.dat` into the existing per-point failure path while surfacing stdout/stderr through the message center. Live McStas integration validation is still pending.
+Direct binary invocation is now partially implemented in the live run path. The controlling seam remains `run_PUMA_point()` in `instruments/puma/model.py`, as called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`; the current slice keeps first-point `backengine()`, arms direct invocation only after a successful first point plus binary/MPI resolution, retains first-point diagnostic McStasData for diagnostic mode, and maps non-zero direct exits or missing `detector.dat` into the existing per-point failure path while surfacing stdout/stderr through the message center. Live McStas integration validation is still pending.

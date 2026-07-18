@@ -111,7 +111,7 @@ pytest.importorskip("mcstasscript")
 def tas():
     # PUMA_Instrument: crystal_info() dispatches through the state object, so
     # the goldens exercise a concrete instrument (bare TAS_Instrument raises).
-    from instruments.PUMA_instrument_definition import PUMA_Instrument
+    from instruments.puma.model import PUMA_Instrument
 
     return PUMA_Instrument()
 
@@ -180,7 +180,7 @@ def test_p5_reverse_recovers_q_and_deltaE(tas):
 def test_instrument_senses_flip_mtt_att_and_recover_q():
     """A TAS state with IN8-style senses (+1, +1, -1) negates the affected
     angles and the reverse path still recovers (Q, deltaE)."""
-    from instruments.PUMA_instrument_definition import PUMA_Instrument
+    from instruments.puma.model import PUMA_Instrument
 
     flipped = PUMA_Instrument()
     flipped.sense_mono = 1
@@ -209,7 +209,8 @@ def test_instrument_senses_flip_mtt_att_and_recover_q():
 
 
 def test_default_instrument_senses_are_baked_convention():
-    from instruments.PUMA_instrument_definition import PUMA_Instrument, TAS_Instrument
+    from instruments.puma.model import PUMA_Instrument
+    from instruments.tas_runtime import TAS_Instrument
 
     for state in (TAS_Instrument(), PUMA_Instrument()):
         assert (state.sense_mono, state.sense_sample, state.sense_ana) == (1, -1, 1)
@@ -232,7 +233,7 @@ E_KI_4P1 = 34.833620     # k2energy(4.1)
 
 @pytest.fixture(scope="module")
 def in8():
-    from instruments.IN8_instrument_definition import IN8_Instrument
+    from instruments.in8.model import IN8_Instrument
 
     return IN8_Instrument()
 
@@ -297,7 +298,7 @@ def test_in8_v1_reverse_recovers_q(in8):
 
 def test_base_state_requires_instrument_dispatch():
     """The TAS base class must not silently resolve crystals against PUMA."""
-    from instruments.PUMA_instrument_definition import TAS_Instrument
+    from instruments.tas_runtime import TAS_Instrument
 
     with pytest.raises(NotImplementedError):
         TAS_Instrument().crystal_info("pg002", "pg002")
@@ -308,7 +309,7 @@ def test_base_state_requires_instrument_dispatch():
 def test_crystal_info_dict_shape_frozen():
     """The crystal-info dicts feed both the angle math and build(); the Phase-4
     dispatch refactor must not change their shape or the pg002 d-spacings."""
-    from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
+    from instruments.puma.model import mono_ana_crystals_setup
 
     mono_info, ana_info = mono_ana_crystals_setup("pg002", "pg002")
     assert sorted(mono_info) == [

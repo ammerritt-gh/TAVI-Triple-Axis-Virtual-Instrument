@@ -7,7 +7,7 @@ import-light plugin module; heavy tests import the IN8 definition module
 import pytest
 
 from instruments.contract import InstrumentPlugin, PointSnapshot
-from instruments.in8_plugin import (
+from instruments.in8.plugin import (
     _IN8_PARAMS,
     IN8_MCSTAS_NAME,
     IN8Plugin,
@@ -77,7 +77,7 @@ def _gui_vals(**overrides):
 
 def test_default_state_matches_descriptor_geometry():
     pytest.importorskip("mcstasscript")
-    from instruments.IN8_instrument_definition import IN8_Instrument
+    from instruments.in8.model import IN8_Instrument
 
     plugin = IN8Plugin()
     state = plugin.default_state()
@@ -91,7 +91,7 @@ def test_default_state_matches_descriptor_geometry():
 
 def test_mcstas_name_matches_definition_module():
     pytest.importorskip("mcstasscript")
-    from instruments.IN8_instrument_definition import MCSTAS_NAME
+    from instruments.in8.model import MCSTAS_NAME
 
     assert MCSTAS_NAME == IN8_MCSTAS_NAME
 

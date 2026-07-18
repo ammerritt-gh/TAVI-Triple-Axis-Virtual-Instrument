@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 import instruments.builtin  # noqa: F401
-from instruments.puma_plugin import _PUMA_MONITORS, puma_descriptor
+from instruments.puma.plugin import _PUMA_MONITORS, puma_descriptor
 from instruments.registry import get_instrument
 
 
@@ -128,7 +128,7 @@ def test_alpha2_collimators_follow_selection(diag_all_instrument, plain_instrume
 
 
 def test_alpha2_table_matches_descriptor_slot():
-    from instruments.PUMA_instrument_definition import _ALPHA2_COLLIMATORS
+    from instruments.puma.model import _ALPHA2_COLLIMATORS
 
     slot = next(s for s in puma_descriptor().collimation if s.id == "alpha_2")
     assert {d for d, *_ in _ALPHA2_COLLIMATORS} == {int(v) for v in slot.allowed}

@@ -92,7 +92,7 @@ def test_floating_dock_gives_canvas_the_available_height(qapp):
 
 def test_space_group_reflections_default_to_centering_with_opt_in_signal(qapp):
     from gui.docks.unified_sample_dock import UnifiedSampleDock
-    from instruments.puma_plugin import PUMAPlugin
+    from instruments.puma.plugin import PUMAPlugin
 
     dock = UnifiedSampleDock(descriptor=PUMAPlugin().descriptor())
     changed = []

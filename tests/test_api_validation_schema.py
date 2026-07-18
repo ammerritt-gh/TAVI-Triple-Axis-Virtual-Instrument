@@ -8,7 +8,7 @@ contract and the ``ScanResult.skipped_points`` data model.
 
 The controller-internal angle math (``check_point_feasibility`` /
 ``validate_scan_launch_state``) and the real ``build_api_schema`` string cannot
-be imported here: ``instruments.PUMA_instrument_definition`` imports
+be imported here: ``instruments.puma.model`` imports
 ``mcstasscript`` at module top, which is unavailable / crashes the interpreter on
 this machine. Those pieces are covered by ``py_compile`` and by the fake backends
 below reproducing the production contract. See the task notes.

@@ -55,7 +55,7 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
 def angles_to_q_lab(sth, saz, stt, ki, kf):
     """Convert instrument angles to Q vector in lab frame.
 
-    Uses the same public Q convention as PUMA_instrument_definition, then
+    Uses the same public Q convention as ``instruments.tas_runtime``, then
     converts into mounted component coordinates for UB fitting.
 
     Args:

@@ -12,7 +12,7 @@ are Python modules, not data files). The descriptor is deliberately small and
 serialization-friendly so a JSON export could be added later if ever needed.
 
 Field values in this file's docstrings reference the two reference instruments:
-PUMA (``instruments/PUMA_instrument_definition.py``) and IN8
+PUMA (``instruments/puma/model.py``) and IN8
 (``examples/vtas_reference/instruments_repository.xml``, from ILL vTAS).
 
 ID convention (review §16.3): every ``id`` is a stable slug used for config keys,

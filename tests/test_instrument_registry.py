@@ -81,8 +81,9 @@ def test_listing_is_lazy_no_mcstas_import():
         "assert any(i.id == 'puma' for i in infos), infos\n"
         "assert any(i.id == 'in8' for i in infos), infos\n"
         "for banned in ('mcstasscript', 'PySide6',\n"
-        "               'instruments.PUMA_instrument_definition',\n"
-        "               'instruments.IN8_instrument_definition'):\n"
+        "               'instruments.puma.model',\n"
+        "               'instruments.in8.model',\n"
+        "               'instruments.tas_runtime'):\n"
         "    assert banned not in sys.modules, f'{banned} was imported'\n"
         "print('lazy-ok')\n"
     )

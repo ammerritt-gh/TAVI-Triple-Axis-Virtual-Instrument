@@ -145,7 +145,7 @@ A scan command varies **exactly one** index of the 11-element `scan_point_templa
 
 ### 2.3 Design — a first-class scan mode, new point-generator only
 
-A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` already accepts a fully-populated 11-element `scan_point` and computes angles from `scan_point[:4]` (the `rlu`/`momentum` branches at `PUMA_instrument_definition.py:585`/:576). It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
+A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` in `instruments/tas_runtime.py` already accepts a fully-populated 11-element `scan_point` and computes angles from `scan_point[:4]`. It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
 
 Definition of a path scan:
 
@@ -169,7 +169,7 @@ for i in range(n):
 
 This is the **single insertion point**: it replaces the single-command branch (`~:4159`) when the scan mode is "path", producing the identical tuple shape the existing loop feeds to `compute_scan_snapshot`. Per-point feasibility (`check_state.calculate_angles`, the loop at :4176) runs unchanged and fills `valid_mask_1d` — a path may leave the accessible region partway along, and that is reported per point exactly as today. The scanned "variable_name" reported to the display and `ScanResult` is a synthetic `"path"` (or `"|q|"`, see §2.5).
 
-**Verified against the snapshot code:** `compute_scan_snapshot` reads `scans[:4]` for Q/HKL/E and `scans[4:11]` for bending/orientation; it never assumes only one of them changes. So no change to `instruments/PUMA_instrument_definition.py` is required — the brief's "new point-generator, not new physics" holds exactly.
+**Verified against the snapshot code:** `compute_scan_snapshot` reads `scans[:4]` for Q/HKL/E and `scans[4:11]` for bending/orientation; it never assumes only one of them changes. So no change to `instruments/puma/model.py` is required — the brief's "new point-generator, not new physics" holds exactly.
 
 ### 2.4 Surfaces
 
@@ -562,7 +562,7 @@ Throughout: preserve the analysis/control boundary of §0. If a proposed additio
 
 ## 10. Notes where the codebase shaped this design
 
-- **`compute_scan_snapshot` is already path-ready.** It consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** change to `instruments/PUMA_instrument_definition.py` — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
+- **`compute_scan_snapshot` is already path-ready.** It consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** change to `instruments/puma/model.py` — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
 - **The scan-command grammar is the real constraint**, not the physics: `_validate_single_scan_command` (:2090) and `parse_scan_steps` (`tavi/utilities.py:91`) hard-code "one variable, four tokens, last = step". Path scans deliberately sidestep this grammar with a structured `scan_path` body rather than extending the string syntax (which cannot express coupled variables cleanly).
 - **1D output sorts by x** (`write_1D_scan` via `argsort`, :4900) — fine for monotonic path fraction, but `display_dock._get_axis_label` (:672) has **no `"path"` case** and would mislabel the axis; a small addition is required (flagged in §2.5).
 - **`ScanResult.counts` uses `None` for unmeasured/invalid points**, so `compute_motion` must drop `None`/NaN before fitting — designed in (§1.3).
