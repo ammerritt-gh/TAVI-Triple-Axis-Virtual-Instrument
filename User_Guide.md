@@ -78,6 +78,27 @@ Diagnostic mode enables different monitors in the beam to check beam characteris
 ## Display Dock
 The display dock shows ongoing data collection as scans finished. If you run a single simulation (no scan commands), it will just display the final counts. For 1D scans, it shows a line graph, and for 2D a heatmap. The figure is saved automatically when all scans are done, but you can save it with more control using the "Save Plot" button.
 
+## Reciprocal Space Dock
+
+The **View → Reciprocal Space** panel provides an interactive horizontal
+reciprocal-space view of the current TAVI point. It can be tabbed with the
+Display panel or floated to another monitor; its position and visibility follow
+the normal saved dock layout.
+
+Drag **P1 / Q** to choose a Q target or **P2 / ki** to change the incident arm.
+The lock buttons beside `ki`, `kf`, `|Q|`, and `ΔE` constrain that gesture; a
+rejected move leaves the committed instrument state unchanged. The Ki-fixed,
+Kf-fixed, and Elastic buttons are convenient presets, not restrictions on using
+other lock combinations. During a valid drag, the controller's canonical Q,
+energy, and HKL fields update live; mouse release finalizes the gesture and its
+last live state.
+
+Use the mouse wheel to zoom at the pointer and middle-drag (or Space+left-drag)
+to pan. Snap-to-reflections has priority over the optional HKL grid. The view
+preserves the current `qz` and labels it when the point is outside the displayed
+plane. Bragg circles filled by a reflection table use its `F²`; hollow circles
+are explicitly a centering-rule fallback and are not structure-factor filtered.
+
 ## Message Log
 The message log gives information about the ongoing program, for example, during a scan it will read back all the instrument angles.
 
@@ -113,24 +134,4 @@ Computes the theoretical instrument resolution (FWHMs and projection ellipses) f
 
 ### Updates
 
-This user guide was last updated Jul. 6, 2026.
-# Reciprocal Space Dock
-
-The **View → Reciprocal Space** panel provides an interactive horizontal
-reciprocal-space view of the current TAVI point.  It can be tabbed with the
-Display panel or floated to another monitor; its position and visibility follow
-the normal saved dock layout.
-
-Drag **P1 / Q** to choose a Q target or **P2 / ki** to change the incident arm.
-The lock buttons beside `ki`, `kf`, `|Q|`, and `ΔE` constrain that gesture; a
-rejected move leaves the committed instrument state unchanged.  The Ki-fixed,
-Kf-fixed, and Elastic buttons are convenient presets, not restrictions on using
-other lock combinations.  During a valid drag, the controller's canonical Q,
-energy, and HKL fields update live; mouse release finalizes the gesture and its
-last live state.
-
-Use the mouse wheel to zoom at the pointer and middle-drag (or Space+left-drag)
-to pan.  Snap-to-reflections has priority over the optional HKL grid.  The view
-preserves the current `qz` and labels it when the point is outside the displayed
-plane.  Bragg circles filled by a reflection table use its `F²`; hollow circles
-are explicitly a centering-rule fallback and are not structure-factor filtered.
+This user guide was last updated Jul. 18, 2026.

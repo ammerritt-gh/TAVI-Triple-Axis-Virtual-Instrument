@@ -380,10 +380,18 @@ def _has_mcstas_component(mcstas_path, component_name):
     root = _normalize_mcstas_resources_path(mcstas_path)
     if not root:
         return False
-    try:
-        return any(Path(root).rglob(component_name + ".comp"))
-    except OSError:
-        return False
+    filename = component_name + ".comp"
+    component_dirs = (
+        "",
+        "misc",
+        "monitors",
+        "sources",
+        "optics",
+        "samples",
+        "contrib",
+        "union",
+    )
+    return any((Path(root) / folder / filename).is_file() for folder in component_dirs)
 
 
 def detect_mcstas():
