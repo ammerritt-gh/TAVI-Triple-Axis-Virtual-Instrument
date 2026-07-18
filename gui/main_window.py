@@ -73,10 +73,9 @@ class TAVIMainWindow(QMainWindow):
         # Store default layout state after initial setup
         self._store_default_state()
         
-        # Try to restore saved layout
-        restored = self._restore_layout_from_file()
-        if not restored:
-            self._show_default_reciprocal_window()
+        # Restore a saved layout when present. The default layout keeps the
+        # reciprocal-space panel closed until the user opens it from View.
+        self._restore_layout_from_file()
         
         # Set geometry after a small delay to avoid Qt geometry warnings
         QTimer.singleShot(0, lambda: self.setGeometry(100, 100, 1600, 900))
@@ -209,6 +208,7 @@ class TAVIMainWindow(QMainWindow):
         self.addDockWidget(Qt.LeftDockWidgetArea, self.reciprocal_space_dock)
         self.tabifyDockWidget(self.display_dock, self.reciprocal_space_dock)
         self.display_dock.raise_()
+        self.reciprocal_space_dock.setVisible(False)
         
         # Step 2: Create 3 columns by splitting horizontally
         # Split instrument from sample (instrument stays left, sample goes right)
@@ -433,12 +433,12 @@ class TAVIMainWindow(QMainWindow):
         self._default_geometry = self.saveGeometry()
     
     def restore_all_docks(self):
-        """Restore all docks to visible and docked state."""
+        """Show every panel, docking standard panels and floating Reciprocal Space."""
         for dock in self._all_docks:
             dock.setVisible(True)
             if dock is not self.reciprocal_space_dock:
                 dock.setFloating(False)
-        self._show_default_reciprocal_window()
+        self._show_reciprocal_window()
         self.statusBar().showMessage("All panels restored", 3000)
     
     def reset_to_default_layout(self):
@@ -447,12 +447,6 @@ class TAVIMainWindow(QMainWindow):
             self.restoreState(self._default_state)
         if self._default_geometry is not None:
             self.restoreGeometry(self._default_geometry)
-        
-        # Ensure all docks are visible
-        for dock in self._all_docks:
-            dock.setVisible(True)
-        self._show_default_reciprocal_window()
-        
         self.statusBar().showMessage("Layout reset to default", 3000)
     
     def save_layout_to_file(self):
@@ -513,18 +507,13 @@ class TAVIMainWindow(QMainWindow):
                     name = dock.objectName()
                     if name in layout_data["dock_visibility"]:
                         dock.setVisible(layout_data["dock_visibility"][name])
-            # v1 layouts predate the reciprocal dock.  Leave every existing
-            # placement intact and introduce only this dock as a visible float.
-            if layout_data.get("layout_version", 1) < self.LAYOUT_VERSION:
-                self._show_default_reciprocal_window()
-            
             return True
         except Exception as e:
             print(f"Warning: Failed to restore layout: {e}")
             return False
 
-    def _show_default_reciprocal_window(self):
-        """Give the canvas a usable first-run / reset workspace."""
+    def _show_reciprocal_window(self):
+        """Show the reciprocal-space canvas as a usable floating workspace."""
         dock = getattr(self, "reciprocal_space_dock", None)
         if dock is None:
             return
