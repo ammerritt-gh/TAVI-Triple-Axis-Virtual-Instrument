@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("mcstasscript")
 
-from instruments.in8_plugin import _IN8_MONITORS, IN8Plugin
+from instruments.in8.plugin import _IN8_MONITORS, IN8Plugin
 
 
 def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
@@ -68,7 +68,7 @@ def test_backbone_beam_order(plain_instrument):
 
 
 def test_declared_parameters_match_descriptor(plain_instrument):
-    from instruments.in8_plugin import _IN8_PARAMS
+    from instruments.in8.plugin import _IN8_PARAMS
 
     declared = {p.name for p in plain_instrument.parameters}
     assert declared == {p.name for p in _IN8_PARAMS}

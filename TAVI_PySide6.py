@@ -2134,7 +2134,7 @@ class TAVIController(QObject):
             check_state.monocris, check_state.anacris,
         )
         if error_flags:
-            from instruments.PUMA_instrument_definition import describe_scan_error_flags
+            from instruments.tas_runtime import describe_scan_error_flags
             reason = describe_scan_error_flags(error_flags) or (
                 "scattering triangle cannot close for this (Q, E) and fixed-k setup"
             )

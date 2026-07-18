@@ -11,15 +11,15 @@ sources, recorded per field below:
   SM +1 / SS +1 / SA -1, which overrides the stale repository XML values.
 - "ILL": the IN8 characteristics page (current Thermes hardware) -- arm
   lengths, crystal faces, collimators, detector aperture.
-- "paper": Hiess et al. 2006 / Piovano & Ivanov 2023 in ``examples/IN8/`` --
+- "paper": Hiess et al. 2006 / Piovano & Ivanov 2023 in ``instruments/in8/references/`` --
   virtual source, crystal slab subdivision.
 
 Placeholder values that need instrument-scientist input are marked
 "PLACEHOLDER" (they affect intensity/resolution, never angles).
 
-IMPORT-LIGHT RULE (same as instruments/puma_plugin.py): the top level imports
+IMPORT-LIGHT RULE (same as instruments/puma/plugin.py): the top level imports
 nothing heavier than ``instruments.descriptor``; every reference to the heavy
-``instruments.IN8_instrument_definition`` is function-local. Guarded by
+``instruments.in8.model`` is function-local. Guarded by
 ``tests/test_instrument_registry.py::test_listing_is_lazy_no_mcstas_import``.
 
 Targets Python 3.11 syntax.
@@ -46,7 +46,7 @@ from tavi.sample_library import default_sample_library
 IN8_ID = "in8"
 IN8_DISPLAY_NAME = "IN8 (ILL)"
 
-# Must equal IN8_instrument_definition.MCSTAS_NAME (asserted by
+# Must equal in8.model.MCSTAS_NAME (asserted by
 # tests/test_in8_plugin.py); duplicated to preserve the import-light rule.
 IN8_MCSTAS_NAME = "IN8_McScript"
 
@@ -229,7 +229,7 @@ class IN8Plugin:
 
     def default_state(self):
         """Fresh ``IN8_Instrument`` with IN8's defaults."""
-        from instruments.IN8_instrument_definition import IN8_Instrument
+        from instruments.in8.model import IN8_Instrument
 
         return IN8_Instrument()
 
@@ -307,7 +307,7 @@ class IN8Plugin:
         return hashlib.sha256(payload).hexdigest()
 
     def build(self, config, diagnostic_mode, diagnostic_settings, number_neutrons):
-        from instruments.IN8_instrument_definition import build_IN8_instrument
+        from instruments.in8.model import build_IN8_instrument
 
         return build_IN8_instrument(
             config, diagnostic_mode, diagnostic_settings, number_neutrons
@@ -316,7 +316,7 @@ class IN8Plugin:
     def compute_snapshot(self, scan_item, scan_index, scan_mode, config, vals,
                          data_folder, *, is_2d_scan=False, variable_name1="",
                          variable_name2="", scan_command1="", scan_command2=""):
-        from instruments.IN8_instrument_definition import compute_scan_snapshot
+        from instruments.tas_runtime import compute_scan_snapshot
 
         return compute_scan_snapshot(
             scan_item, scan_index, scan_mode, config, vals, data_folder,
@@ -329,7 +329,7 @@ class IN8Plugin:
 
     def run_point(self, instrument, snapshot, output_folder, number_neutrons,
                   execution_state, mpi_count=DEFAULT_MPI_COUNT):
-        from instruments.IN8_instrument_definition import run_tas_point
+        from instruments.tas_runtime import run_tas_point
 
         return run_tas_point(
             instrument, snapshot, output_folder, number_neutrons,
@@ -343,7 +343,7 @@ class IN8Plugin:
         feasibility helper (which reuses the per-point ``compute_snapshot``
         solve). Used by the remote API's always-on scan validation.
         """
-        from instruments.PUMA_instrument_definition import check_point_feasibility
+        from instruments.tas_runtime import check_point_feasibility
 
         return check_point_feasibility(config, scan_mode, scan_point, vals)
 

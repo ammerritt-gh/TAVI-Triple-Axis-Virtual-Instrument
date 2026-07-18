@@ -16,13 +16,20 @@ monitor-sizing bugs are fixed, and sample selection adopts the sample's own
 lattice into the GUI. **Phase 4 IMPLEMENTED (2026-07-02, spec §20):** IN8 is
 the second registered instrument — scattering senses threaded through the
 angle solvers (vTAS-verified for IN8: +1/+1/−1), crystal/point-param dispatch
-through the instrument state, `instruments/in8_plugin.py` +
-`instruments/IN8_instrument_definition.py` built on the shared helpers,
+through the instrument state, `instruments/in8/plugin.py` +
+`instruments/in8/model.py` built on the shared helpers,
 branch-signed crystal bending, startup picker active, end-to-end McStas smoke
 produces a real Bragg peak. 144 tests pass. `docs/INSTRUMENT_AUTHORING.md` is
 the authoring guide; the IN8 modules are the living template. The a3
 convention for the flipped sample sense is vTAS-verified too (Friedel/-Q
 branch; §20.5).
+**Unified packages IMPLEMENTED (2026-07-18):** runnable PUMA and IN8 code,
+plain-language documentation, evidence status, scientist review, and immutable
+references now live together under `instruments/<id>/`. PANDA and IN12 are
+research-only packages. Shared TAS state/snapshot/execution moved to
+`instruments/tas_runtime.py`, and `python -m instruments.package_validation`
+enforces the package contract. Sections below retain historical implementation
+context; current paths and authoring policy are in `docs/INSTRUMENT_AUTHORING.md`.
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -77,7 +84,7 @@ a visual instrument builder GUI, or arbitrary user C code beyond McStas componen
 
 | Module | Role | Notes |
 |---|---|---|
-| `TAS_Instrument` base class (`instruments/PUMA_instrument_definition.py:131`) | Generic TAS state + angle math (`calculate_angles`, `calculate_q_and_deltaE`, sample orientation, L1–L4, A1–A4) | Already the right abstraction layer. The *math* is general; it only takes crystal d-spacings as input. |
+| `TAS_Instrument` base class (`instruments/tas_runtime.py`) | Generic TAS state + angle math (`calculate_angles`, `calculate_q_and_deltaE`, sample orientation, L1–L4, A1–A4) | Shared by every runnable TAS package. |
 | `tavi/tas_geometry.py` | `solve_instrument_angles`, `q_instrument_from_angles`, Q↔angle conversions | General TAS geometry. Comments reference "PUMA convention" but the math is not PUMA-specific. |
 | `tavi/sample_mount.py`, `tavi/ub_matrix.py`, `tavi/reciprocal_space.py`, `tavi/space_groups.py` | Sample/reciprocal-space/UB | Fully general; no instrument coupling. |
 | `tavi/data_processing.py` | Detector file parsing, scan writing, plotting helpers | Reads `detector.dat`; assumes a single 1-D `Monitor` named `detector` (see §10.3). Otherwise general. |
@@ -89,7 +96,7 @@ a visual instrument builder GUI, or arbitrary user C code beyond McStas componen
 
 **A. The instrument component tree — the core problem.**
 `build_PUMA_instrument()` → `configure_component_tree()`
-(`instruments/PUMA_instrument_definition.py:859`–`1659`) is ~800 lines of
+(`instruments/puma/model.py:859`–`1659`) is ~800 lines of
 imperative McStasScript that bakes in *everything*:
 
 - Fixed arm geometry: `L1=2.150, L2=2.290, L3=0.880, L4=0.750` and many literal
@@ -100,21 +107,21 @@ imperative McStasScript that bakes in *everything*:
 - Slits: `postmono_slit`, `sample_slit`, `detector_slit`, `exit_beam_tube`,
   `NMO_slit` — fixed positions and dimensions.
 - NMO optics: two `FlatEllipse_finite_mirror_optimized` units with PUMA-specific
-  geometry, m-value files, rotation logic (`PUMA_instrument_definition.py:1094`–`1267`).
+  geometry, m-value files, rotation logic (historical PUMA definition lines 1094–1267).
 - Velocity selector: `V_selector` block gated on `V_selector_installed`.
 - Monochromator & analyzer: `Monochromator_curved`, dimensions from
   `mono_ana_crystals_setup()`.
 - Sample orientation arm hierarchy (`sample_gonio`/`sample_chi_arm`/
   `sample_cradle`/`sample_mount`) — this part is *generic TAS* and worth keeping.
 - Sample component: a hard-coded `if sample_key == ...` ladder of 4 Al samples
-  (`PUMA_instrument_definition.py:1400`–`1486`).
+  (historical PUMA definition lines 1400–1486).
 - ~19 diagnostic monitors, each gated on a `diagnostic_settings` key, at fixed
   positions.
 - The fixed McStas **parameter set** (`A1_param`, `A2_param`, … `dbl_hgap_param`,
   sample-orientation params) defined at `:878` and `:1324`.
 
 **B. Crystal library.** `mono_ana_crystals_setup()`
-(`PUMA_instrument_definition.py:68`) hard-codes only `PG[002]` (+ a "test"
+(the historical PUMA definition at line 68) hard-codes only `PG[002]` (+ a "test"
 variant) with inline dict literals. Duplicated again inside `validate_angles()`
 (`:1687`).
 
@@ -627,7 +634,7 @@ Phase 1.
 
 ## 13. Appendix — Key Source References
 
-- Component tree builder: `instruments/PUMA_instrument_definition.py:859`–`1659`.
+- Component tree builder: `instruments/puma/model.py:859`–`1659`.
 - Crystal library: `…:68` (and duplicate at `…:1687`).
 - Crystal bending / focus / selector: `…:426`, `…:480`, `…:524`.
 - Per-point snapshot: `…:524`, `…:557`.
@@ -913,12 +920,12 @@ differs from the sketch-level bullets in §11, this section wins.
    handlers plus init. Phase 1 delegates to the existing
    `mono_ana_crystals_setup()` via the plugin (same dicts, zero drift); Phase 2
    replaces it with descriptor lookups.
-4. **Lazy-import blocker.** `PUMA_instrument_definition.py` imports
+4. **Lazy-import blocker.** The former PUMA definition module imported
    `mcstasscript` at module level (`:3`). Therefore: registration stores only
-   `(id, display_name, factory)`; `instruments/puma_plugin.py` keeps **all**
+   `(id, display_name, factory)`; `instruments/puma/plugin.py` keeps **all**
    references to the heavy module function-local; a subprocess-based test
    asserts listing pulls in neither `mcstasscript`, `PySide6`, nor
-   `instruments.PUMA_instrument_definition`.
+   `instruments.puma.model`.
 5. **The Phase-0 example descriptor is 8 parameters short.** The real instrument
    declares **25** McStas parameters (`:878–893` + `:1324–1333`), matching
    `build_puma_point_params` (`:524`). Missing from `_PUMA_PARAMS`: `chi_param`,
@@ -936,7 +943,7 @@ differs from the sketch-level bullets in §11, this section wins.
    `k2energy`, `energy2k`, `energy2lambda` at `:41–66` take d-spacing as an
    argument). They move to a new `tavi/neutron_conversions.py`; the PUMA module
    re-exports them for backward compatibility. This also removes the seven
-   function-local `from instruments.PUMA_instrument_definition import …` lines
+   function-local `from instruments.puma.model import …` lines
    in the controller.
 
 ### 17.3 Pre-existing defects found (preserved verbatim in Phase 1)
@@ -944,14 +951,14 @@ differs from the sketch-level bullets in §11, this section wins.
 Byte-identical rule: none of these are fixed in the routing pass; they are
 recorded here so later phases pick them up deliberately.
 
-1. `validate_angles` (`PUMA_instrument_definition.py:1661`) duplicates the
+1. `validate_angles` (historical PUMA definition line 1661) duplicates the
    crystal table with **divergent values** (mono slabwidth 0.018 vs 0.0202;
    analyzer ncolumns/nrows swapped: 5/21 vs 21/5). Fix belongs to Phase 2's
    single crystal source.
 2. `TAVI_PySide6.py:2626` calls `set_misalignment(omega_m, chi_m, psi_m)` (3
    args) against a 2-parameter signature
    (`set_misalignment(mis_omega=None, mis_chi=None)`,
-   `PUMA_instrument_definition.py:186`); the `TypeError` is caught at `:2635`,
+   historical PUMA definition line 186); the `TypeError` is caught at `:2635`,
    so misalignment-hash restore from `parameters.json` silently fails today.
 3. `update_monocris_info`/`update_anacris_info` are each defined **twice** in
    the controller (`:577`/`:584` and `:1494`/`:1501`; the later definitions win
@@ -970,7 +977,7 @@ recorded here so later phases pick them up deliberately.
 | File | Purpose |
 |---|---|
 | `tavi/neutron_conversions.py` | K↔E/angle converters moved verbatim from the PUMA module (+ constants they use); PUMA re-exports |
-| `instruments/puma_plugin.py` | `PUMAPlugin` (import-light; heavy imports function-local); `puma_descriptor()` moves here with the 8 added params; `scan_config` gets the verbatim `_build_scan_puma_config` body |
+| `instruments/puma/plugin.py` | `PUMAPlugin` (import-light; heavy imports function-local); `puma_descriptor()` moves here with the 8 added params; `scan_config` gets the verbatim `_build_scan_puma_config` body |
 | `instruments/builtin.py` | Explicit lazy registration: `register("puma", "PUMA (FRM-II)", PUMAPlugin)` |
 | `instruments/validation.py` | `validate_descriptor` / `assert_valid_descriptor` (§17.6) |
 | `gui/dialogs/instrument_picker_dialog.py` | Minimal QDialog; only shown when >1 registered; `objectName("instrument_picker_dialog")` |
@@ -986,7 +993,7 @@ recorded here so later phases pick them up deliberately.
 - **`instruments/contract.py`** — adjusted contract per §5 (alias rename,
   `default_state`/`scan_config`/`crystal_info`); `RunExecutionState`, `build`,
   `compute_snapshot`, `run_point` unchanged from the draft.
-- **`instruments/PUMA_instrument_definition.py`** (mechanical only): delete the
+- **`instruments/puma/model.py`** (mechanical only): delete the
   `PUMARunExecutionState` dataclass → import `RunExecutionState` from the
   contract, keep `PUMARunExecutionState = RunExecutionState` alias (remove in
   Phase 3); add `MCSTAS_NAME = "PUMA_McScript"` used at `:874` and in the `:724`
@@ -1075,7 +1082,7 @@ Key assertions per file (see §17.4 for the file list):
 - **Registry:** roundtrip with `_FACTORIES` snapshot/restore fixture; duplicate
   id raises; unknown-id error lists available ids; `instruments.builtin`
   registers puma; **subprocess lazy test** — listing must not import
-  `mcstasscript`, `PySide6`, or `instruments.PUMA_instrument_definition`.
+  `mcstasscript`, `PySide6`, or `instruments.puma.model`.
 - **Validator:** PUMA runnable-valid; IN8 example-valid / runnable-invalid
   (assert error substrings); parametrized negatives via `dataclasses.replace`;
   **source-scan:** regex `add_parameter\(\s*"(\w+)"` over the PUMA module ==
@@ -1089,7 +1096,7 @@ Key assertions per file (see §17.4 for the file list):
   `PUMA_McScript.exe` and `SimpleNamespace(input_path=tmp, name="Foo")` →
   `Foo.exe`; `crystal_info` equals `mono_ana_crystals_setup`.
 - **Controller source-scan:** no case-sensitive `"PUMA"`, no
-  `"PUMA_instrument_definition"`, and positive presence of
+  the heavy PUMA model module, and positive presence of
   `self.instrument.build(` / `.compute_snapshot(` / `.run_point(`.
 - **Runtime tracker:** legacy `"PUMA"` records migrate/merge to `"puma"`;
   MAX_RECORDS trim still applies.
@@ -1411,7 +1418,7 @@ public in `tavi/instrument_helpers.py`. `update_diagnostic_settings` and the
 E0/energy-metadata logic moved onto the base class. `run_tas_point` aliases
 the (already binary-name-agnostic) run layer. All value-identical for PUMA.
 
-### 20.3 IN8 (`instruments/in8_plugin.py` + `instruments/IN8_instrument_definition.py`)
+### 20.3 IN8 (`instruments/in8/plugin.py` + `instruments/in8/model.py`)
 
 - **Data provenance:** arm lengths are ILL-current Thermes values
   (L1..L4 = 2.28/2.48/1.05/0.70 m) — a deliberate deviation from the vTAS
@@ -1443,7 +1450,7 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
   subdivision, hvs height, single vs double PG filter, no bending clamps,
   rva magnitude 0.31) are marked in-line in both modules. The full inventory
   of missing/placeholder data, with provenance and a priority order for the
-  next data pass, is `docs/IN8_MISSING_DATA.md`.
+  next data pass, is `instruments/in8/MODEL_STATUS.md`.
 
 ### 20.4 Verified
 
@@ -1461,9 +1468,9 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
 
 ### 20.5 Accepted couplings and follow-ups
 
-- IN8 imports `compute_scan_snapshot`/`run_tas_point`/`TAS_Instrument` from
-  `instruments/PUMA_instrument_definition.py`. Deliberate (anti-refactor
-  rule); **relocation trigger = a third instrument**.
+- **Resolved 2026-07-18:** IN8 and PUMA import
+  `compute_scan_snapshot`/`run_tas_point`/`TAS_Instrument` from the neutral
+  `instruments/tas_runtime.py`; neither model owns another instrument's runtime.
 - `TAVIController._compute_ideal_bending_values` still uses PUMA's
   parallel-beam mono formula and unsigned magnitudes for the advisory "Ideal:"
   labels — mildly wrong for IN8 (point-source + signed). Follow-up: route

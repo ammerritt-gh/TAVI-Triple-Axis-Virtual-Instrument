@@ -1,7 +1,7 @@
 """PUMA (FRM-II) as an ``InstrumentPlugin`` -- the first registered instrument.
 
 Wraps the existing imperative implementation in
-``instruments/PUMA_instrument_definition.py`` behind the contract of
+``instruments/puma/model.py`` behind the contract of
 ``instruments/contract.py`` (Phase 1 of ``docs/CONFIGURABLE_INSTRUMENTS.md`` §17):
 ``build``/``compute_snapshot``/``run_point``/``default_state``/``crystal_info``
 are thin delegations; ``scan_config`` carries the GUI->config mapping that used to
@@ -9,7 +9,7 @@ live in the controller's ``_build_scan_puma_config``.
 
 IMPORT-LIGHT RULE: this module's top level must import nothing heavier than
 ``instruments.descriptor`` (no mcstasscript, no PySide6, and no
-``instruments.PUMA_instrument_definition``, which imports mcstasscript at module
+``instruments.puma.model``, which imports mcstasscript at module
 level). Every reference to the heavy module is function-local so that listing
 instruments in the registry stays cheap. Guarded by
 ``tests/test_instrument_registry.py::test_listing_is_lazy_no_mcstas_import``.
@@ -39,14 +39,14 @@ from tavi.sample_library import default_sample_library
 PUMA_ID = "puma"
 PUMA_DISPLAY_NAME = "PUMA (FRM-II)"
 
-# Must equal PUMA_instrument_definition.MCSTAS_NAME (asserted by
+# Must equal puma.model.MCSTAS_NAME (asserted by
 # tests/test_puma_plugin.py); duplicated here because importing the heavy module
 # to read one string would break the import-light rule.
 PUMA_MCSTAS_NAME = "PUMA_McScript"
 
 # The full McStas parameter set the builder declares via add_parameter() -- the
 # per-point snapshot dict shape. Kept 1:1 with the add_parameter calls in
-# PUMA_instrument_definition.py (asserted by
+# puma/model.py (asserted by
 # tests/test_descriptor_validation.py::test_puma_build_declares_descriptor_params).
 _PUMA_PARAMS = (
     ParameterSpec("A1_param", "Monochromator 2-theta angle"),
@@ -178,7 +178,7 @@ _PUMA_MONITORS = (
 def puma_descriptor() -> InstrumentDescriptor:
     """PUMA (FRM-II) -- the GUI-facing knobs, fully specified.
 
-    Values mirror ``PUMA_instrument_definition.py`` (crystal tables, geometry,
+    Values mirror ``puma/model.py`` (crystal tables, geometry,
     modules) and the current ``gui/docks/instrument_dock.py`` option lists.
     """
     return InstrumentDescriptor(
@@ -275,7 +275,7 @@ class PUMAPlugin:
 
     def default_state(self):
         """Fresh ``PUMA_Instrument`` with PUMA's defaults."""
-        from instruments.PUMA_instrument_definition import PUMA_Instrument
+        from instruments.puma.model import PUMA_Instrument
 
         return PUMA_Instrument()
 
@@ -329,7 +329,7 @@ class PUMAPlugin:
 
     def crystal_info(self, mono_label, ana_label):
         """TRANSITIONAL: delegate to the legacy crystal table (see contract)."""
-        from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
+        from instruments.puma.model import mono_ana_crystals_setup
 
         return mono_ana_crystals_setup(mono_label, ana_label)
 
@@ -366,7 +366,7 @@ class PUMAPlugin:
         return hashlib.sha256(payload).hexdigest()
 
     def build(self, config, diagnostic_mode, diagnostic_settings, number_neutrons):
-        from instruments.PUMA_instrument_definition import build_PUMA_instrument
+        from instruments.puma.model import build_PUMA_instrument
 
         return build_PUMA_instrument(
             config, diagnostic_mode, diagnostic_settings, number_neutrons
@@ -375,7 +375,7 @@ class PUMAPlugin:
     def compute_snapshot(self, scan_item, scan_index, scan_mode, config, vals,
                          data_folder, *, is_2d_scan=False, variable_name1="",
                          variable_name2="", scan_command1="", scan_command2=""):
-        from instruments.PUMA_instrument_definition import compute_scan_snapshot
+        from instruments.tas_runtime import compute_scan_snapshot
 
         return compute_scan_snapshot(
             scan_item, scan_index, scan_mode, config, vals, data_folder,
@@ -388,9 +388,9 @@ class PUMAPlugin:
 
     def run_point(self, instrument, snapshot, output_folder, number_neutrons,
                   execution_state, mpi_count=DEFAULT_MPI_COUNT):
-        from instruments.PUMA_instrument_definition import run_PUMA_point
+        from instruments.tas_runtime import run_tas_point
 
-        return run_PUMA_point(
+        return run_tas_point(
             instrument, snapshot, output_folder, number_neutrons,
             execution_state, mpi_count,
         )
@@ -403,7 +403,7 @@ class PUMAPlugin:
         to reject or (with ``allow_partial``) skip geometrically unreachable
         scan points before queueing.
         """
-        from instruments.PUMA_instrument_definition import check_point_feasibility
+        from instruments.tas_runtime import check_point_feasibility
 
         return check_point_feasibility(config, scan_mode, scan_point, vals)
 

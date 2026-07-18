@@ -31,6 +31,8 @@ Contract tests for the configurable-instruments Phase 1
 - `test_instrument_registry.py` — registry behavior + a subprocess-based check
   that listing instruments never imports mcstasscript/PySide6/the heavy PUMA
   module.
+- `test_instrument_packages.py` — package metadata/doc/reference validation,
+  runnable-versus-research registration, and manifest/descriptor identity.
 - `test_descriptor_validation.py` — `validate_descriptor` rules against the
   PUMA descriptor and the IN8 example, plus a source-scan that the builder's
   `add_parameter` names match the descriptor exactly.
@@ -91,4 +93,4 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   emission, no PUMA-only components.
 - `test_descriptor_validation.py` / `test_instrument_registry.py` updated:
   IN8 is runnable-valid (rejection paths keep synthetic broken descriptors);
-  the lazy-import test lists in8 and bans `instruments.IN8_instrument_definition`.
+  the lazy-import test lists in8 and bans `instruments.in8.model`.

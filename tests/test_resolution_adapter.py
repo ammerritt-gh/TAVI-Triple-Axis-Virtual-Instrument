@@ -9,8 +9,8 @@ import math
 
 import pytest
 
-from instruments.in8_plugin import IN8Plugin
-from instruments.puma_plugin import PUMAPlugin
+from instruments.in8.plugin import IN8Plugin
+from instruments.puma.plugin import PUMAPlugin
 from tavi.resolution import cooper_nathans
 
 _EK = 2.072142

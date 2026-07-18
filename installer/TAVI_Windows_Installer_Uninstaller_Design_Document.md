@@ -413,7 +413,7 @@ NameError: No component named Progress_bar in McStas installation or current wor
 Future TAVI change option:
 
 - Replace `Progress_bar` with `Arm`, or
-- Add fallback logic in `PUMA_instrument_definition.py`.
+- Add fallback logic in `instruments/puma/model.py`.
 
 If TAVI stops depending on `Progress_bar`, update this validation check accordingly.
 
@@ -510,7 +510,7 @@ is application source and must be committed.
 
 It should not be in `.gitignore`.
 
-Reason: `PUMA_instrument_definition.py` imports:
+Reason: `instruments/puma/model.py` imports:
 
 ```python
 from tavi.mcstas_config import resolve_mpi_launcher_argv
