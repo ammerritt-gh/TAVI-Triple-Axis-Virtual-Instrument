@@ -158,7 +158,7 @@ SCAN_BODY_KEYS = frozenset({
     "parameters", "force", "allow_partial", "isolated",
     "engine", "seed", "noiseless",
 })
-VALIDATE_BODY_KEYS = frozenset({"parameters", "force", "allow_partial"})
+VALIDATE_BODY_KEYS = frozenset({"parameters", "force"})
 STOP_BODY_KEYS = frozenset({"clear_queue"})
 
 

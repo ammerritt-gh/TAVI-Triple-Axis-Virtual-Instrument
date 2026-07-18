@@ -27,7 +27,7 @@ def test_no_puma_literal_in_controller():
 
 
 def test_no_direct_puma_import_in_controller():
-    assert "PUMA_instrument_definition" not in _controller_source()
+    assert "instruments.puma.model" not in _controller_source()
 
 
 def test_controller_routes_through_plugin():

@@ -26,7 +26,11 @@ TAVI models a TAS instrument with source, monochromator, sample, analyzer, and d
 
 ### McStasScript Instrument Generation
 
-`instruments/PUMA_instrument_definition.py` owns the PUMA instrument definition, TAS angle calculations, McStasScript component setup, and the active scan API: `build_PUMA_instrument()`, `compute_scan_snapshot()`, and `run_PUMA_point()`. Scannable values should generally be McStas parameters so scans do not force recompilation. Changes that alter included components or sample/component structure can require recompilation. Read `docs/MCSTAS_PARAMETERS.md` before changing parameter behavior.
+Each runnable package's `model.py` owns its instrument-specific state, physics,
+and McStas component tree. `instruments/tas_runtime.py` owns shared TAS angle
+state, snapshot preparation, feasibility, and execution. Scannable values
+should generally be McStas parameters so scans do not force recompilation.
+Read `docs/MCSTAS_PARAMETERS.md` before changing parameter behavior.
 
 ### GUI Controller and Docks
 
@@ -52,7 +56,7 @@ Long simulations run in a Python worker thread started by `TAVIController.run_si
 |---|---|
 | GUI layout, docks, menus, panel visibility | `gui/main_window.py`, `gui/docks/base_dock.py`, and one similar dock |
 | Simulation orchestration or scan execution | `TAVI_PySide6.py`, especially `TAVIController` and `run_simulation()` |
-| PUMA instrument geometry or McStasScript setup | `docs/INSTRUMENT_LAYOUT.md`, `docs/MCSTAS_PARAMETERS.md`, `instruments/PUMA_instrument_definition.py` |
+| PUMA instrument geometry or McStasScript setup | `docs/INSTRUMENT_LAYOUT.md`, `docs/MCSTAS_PARAMETERS.md`, `instruments/puma/model.py` |
 | Instrument plugins, registry, descriptors, IN8, adding an instrument | `docs/CONFIGURABLE_INSTRUMENTS.md`, `docs/INSTRUMENT_AUTHORING.md`, `tests/README.md` |
 | McStas path detection/configuration | `tavi/mcstas_config.py`, `config/TAVI-McStas-Path-Resolution.md`, `config/mcstas_config.json` |
 | Reciprocal-space or HKL/Q conversion | `tavi/reciprocal_space.py`, `tavi/ub_matrix.py`, `docs/INSTRUMENT_LAYOUT.md` |
@@ -76,7 +80,11 @@ TAVI/
 |   |-- docks/                   # PySide6 dock panels for instrument, sample, simulation, display, output
 |   `-- dialogs/                 # Modal dialogs, currently diagnostic configuration
 |-- instruments/
-|   `-- PUMA_instrument_definition.py  # PUMA TAS model and McStasScript instrument setup
+|   |-- tas_runtime.py           # Shared TAS state, snapshot, feasibility, execution
+|   |-- puma/                    # Runnable PUMA plugin, model, review package
+|   |-- in8/                     # Runnable IN8 plugin, model, review package
+|   |-- panda/                   # Research-only instrument package
+|   `-- in12/                    # Research-only instrument package
 |-- tavi/                        # Core Python helpers and domain logic
 |-- components/                  # Custom McStas components, headers, and related data
 |-- config/                      # Local JSON config and McStas path notes
@@ -100,9 +108,9 @@ TAVIController in TAVI_PySide6.py
     |
     +--> tavi/ helpers for HKL/Q, UB matrix, scan parsing, runtime estimates
     |
-            +--> PUMA_Instrument plus build_PUMA_instrument()
-                                    compute_scan_snapshot()
-                                    run_PUMA_point()
+            +--> active InstrumentPlugin
+                    +--> package model/build
+                    `--> shared tas_runtime snapshot/run
             |
             v
       McStasScript / McStas compile and run
@@ -118,7 +126,7 @@ TAVIController in TAVI_PySide6.py
 
 1. **The GUI is dock-based PySide6.** New panels should follow the existing `BaseDockWidget` and stable `objectName()` pattern so layout persistence keeps working.
 2. **`TAVIController` coordinates UI and backend state.** Keep orchestration in the controller unless an existing helper module already owns the calculation.
-3. **PUMA instrument construction belongs in `instruments/PUMA_instrument_definition.py`.** Do not duplicate McStasScript component setup in GUI code.
+3. **PUMA instrument construction belongs in `instruments/puma/model.py`.** Do not duplicate McStasScript component setup in GUI code.
 4. **Scannable McStas values should remain parameters when practical.** This preserves scan speed by avoiding unnecessary recompilation.
 5. **Runtime config and output are local generated state.** Do not treat user paths, saved layouts, runtime estimates, or scan output as stable project fixtures unless a task explicitly says so.
 
@@ -140,7 +148,7 @@ TAVIController in TAVI_PySide6.py
 
 ### `instruments/`
 
-**Owns:** TAS/PUMA instrument classes, angle and energy relationships tied to the instrument, McStasScript component placement, and `build_PUMA_instrument()` / `compute_scan_snapshot()` / `run_PUMA_point()`.
+**Owns:** the registry/contract, shared TAS runtime, and one package per instrument. Runnable packages own their descriptor/plugin, instrument-specific state and physics, McStas tree, evidence record, and scientist review surface. Research packages contain evidence and review documents but are not registered.
 
 **Does not own:** PySide6 widget access or GUI layout state.
 
@@ -188,7 +196,7 @@ TAVIController in TAVI_PySide6.py
 
 - **Direct UI calls from simulation threads.** Use Qt signals to cross from worker threads to the GUI thread.
 - **Matplotlib GUI operations in the worker thread.** Emit the existing diagnostic/display signals and handle plotting on the main thread.
-- **Duplicating PUMA instrument construction outside `instruments/PUMA_instrument_definition.py`.**
+- **Duplicating PUMA instrument construction outside `instruments/puma/model.py`.**
 - **Changing scannable values from McStas parameters to declared/internal values without reading `docs/MCSTAS_PARAMETERS.md`.**
 - **Treating generated `config/`, `output/`, or McStas build artifacts as ordinary source files.**
 - **Editing `archive/` as if it were the active implementation path without confirming the task explicitly targets archived code.**
@@ -228,7 +236,10 @@ For Python changes, use the smallest relevant checks available:
 
 Pipelined scan execution is implemented in the live codebase. `TAVIController.run_simulation()` uses a prep thread plus `Queue(maxsize=2)` to overlap snapshot preparation with simulation, while postprocessing remains inline in the simulation thread.
 
-The active instrument-side API in `instruments/PUMA_instrument_definition.py` is `build_PUMA_instrument()` for one-time instrument construction, `compute_scan_snapshot()` for per-point snapshot generation, and `run_PUMA_point()` for per-point `set_parameters()` plus `backengine()` execution.
+Instrument-specific construction lives in each runnable package's `model.py`.
+Shared `compute_scan_snapshot()`, `check_point_feasibility()`, and
+`run_tas_point()` live in `instruments/tas_runtime.py`; plugins are the
+controller-facing API.
 
 The current pipeline passes snapshot dicts through the queue so the simulation thread consumes per-point data prepared ahead of time instead of reading mutable shared scan state directly.
 
@@ -254,4 +265,5 @@ API scan submissions are always validated before queueing (parse, budget, per-po
 
 ---
 
-*Last updated: 2026-07-12 (repo moved to `Github\Science\TAVI` — launcher/config paths fixed; test-suite section updated to the real pytest suite; configurable-instruments routing row added; stale `CODEX.md` snapshot deleted). Known drift to fix on next pass: the instrument-plugin architecture (registry, descriptors, IN8) is live in the codebase but Domain Concepts / Module Ownership above still describe the PUMA-only era — trust `docs/CONFIGURABLE_INSTRUMENTS.md` over this file where they disagree.*
+*Last updated: 2026-07-18 (unified runnable and research instrument packages;
+shared TAS runtime extracted from the former PUMA module).*

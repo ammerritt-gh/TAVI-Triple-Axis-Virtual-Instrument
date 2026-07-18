@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 from tavi.mcstas_config import (
+    _has_mcstas_component,
     _normalize_mpi_launcher_argv,
     _read_mpirun_from_mccode_config,
 )
@@ -46,3 +47,20 @@ def test_read_mpirun_missing(tmp_path):
 def test_normalize_strips_size_arguments():
     assert _normalize_mpi_launcher_argv("mpiexec -np 4") == ["mpiexec"]
     assert _normalize_mpi_launcher_argv("") == []
+
+
+def test_component_probe_checks_known_resource_folders(tmp_path):
+    misc = tmp_path / "misc"
+    misc.mkdir()
+    (misc / "Progress_bar.comp").write_text("", encoding="utf-8")
+
+    assert _has_mcstas_component(tmp_path, "Progress_bar")
+
+
+def test_component_probe_does_not_walk_resource_tree(tmp_path):
+    (tmp_path / "misc").mkdir()
+    unrelated = tmp_path / "vendor" / "nested"
+    unrelated.mkdir(parents=True)
+    (unrelated / "Progress_bar.comp").write_text("", encoding="utf-8")
+
+    assert not _has_mcstas_component(tmp_path, "Progress_bar")

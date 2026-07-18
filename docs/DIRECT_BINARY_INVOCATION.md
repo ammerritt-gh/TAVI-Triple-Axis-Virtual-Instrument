@@ -1,7 +1,7 @@
 # Direct McStas Binary Invocation — Bypassing mcrun.py
 
 *Date: 2026-05-20*
-*Status: First implementation slice landed. `TAVIController.run_simulation()` still executes through `run_PUMA_point()`, but that seam now arms and uses a direct-binary path after the first successful `backengine()` materializes the executable. This has not yet been integration-validated in a live McStas environment.*
+*Status: First implementation slice landed. `TAVIController.run_simulation()` executes through `InstrumentPlugin.run_point()`, which delegates TAS execution to `instruments.tas_runtime.run_tas_point()`. That seam arms and uses a direct-binary path after the first successful `backengine()` materializes the executable. This has not yet been integration-validated in a live McStas environment.*
 
 > **Forward note (2026-07-02):** the configurable-instruments Phase 1
 > (`docs/CONFIGURABLE_INSTRUMENTS.md` §17) routes this seam through the
@@ -31,12 +31,12 @@ Two Python interpreters, two cmd.exe shells, full module import chain — all re
 
 ## Solution
 
-Keep `run_PUMA_point()` in `instruments/PUMA_instrument_definition.py` as the execution seam called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`. The landed slice keeps the first point that reaches `backengine()` on a forced compile/materialization path so build-time settings are refreshed and diagnostic `McStasData` is retained, then uses direct process invocation with `subprocess.run` and a list (no shell) for later eligible points.
+Keep `InstrumentPlugin.run_point()` as the controller-facing execution seam. PUMA's plugin delegates it to the shared `run_tas_point()` implementation in `instruments/tas_runtime.py`. The landed slice keeps the first point that reaches `backengine()` on a forced compile/materialization path so build-time settings are refreshed and diagnostic `McStasData` is retained, then uses direct process invocation with `subprocess.run` and a list (no shell) for later eligible points.
 
 ## Key Facts
 
 - The compiled binary lives in the instrument `input_path` directory passed to `ms.McStas_instr("PUMA_McScript", input_path=data_dir)`, where `data_dir` resolves the repository `components/` directory to an absolute path from the module location
-- `run_PUMA_point()` now takes a scan-local `PUMARunExecutionState` that tracks first-point materialization, whether direct execution is armed, the resolved binary path/cwd, and the MPI launcher argv
+- `run_tas_point()` takes a scan-local `RunExecutionState` that tracks first-point materialization, whether direct execution is armed, the resolved binary path/cwd, and the MPI launcher argv
 - After the first successful `backengine()` call materializes the executable, the code resolves and retains its absolute path from `instrument.input_path` + instrument name + `.exe`
 - The direct path is not keyed off run number alone; it only activates once the first `backengine()` succeeded, direct execution is armed, the expected binary exists on disk, and MPI launcher resolution succeeded
 - `tavi/mcstas_config.py` now centralizes MPI launcher resolution for direct execution. It resolves from McStasScript configuration with fallback to nearby `mccode_config.json`, and prefers a direct `mpiexec` binary over wrapper `.bat` / `.cmd` launchers when possible
@@ -55,7 +55,7 @@ The params snapshot dict already carries the exact McStas runtime parameter name
 
 ## Implementation
 
-Current implementation in `run_PUMA_point()`:
+Current implementation in `run_tas_point()`:
 
 - Invalid snapshots still return through the existing skipped-point path.
 - The first point that reaches `backengine()` in a scan uses `instrument.settings(... force_compile=not execution_state.first_backengine_succeeded ...)`, `instrument.set_parameters(...)`, and `instrument.backengine()` to force initial compile/materialization, then records the binary path, binary cwd, MPI launcher argv, and whether direct execution became armed.
@@ -72,7 +72,7 @@ Key details:
 
 ## What Changes in the Pipeline
 
-1. `TAVIController.run_simulation()` continues to call `run_PUMA_point()` once per snapshot; any direct path belongs behind that seam.
+1. `TAVIController.run_simulation()` calls the active plugin's `run_point()` once per snapshot; TAS plugins delegate to `run_tas_point()`, and the direct path remains behind that seam.
 2. The first executed point still needs `instrument.set_parameters()` + `instrument.backengine()` to materialize the executable and preserve the retained diagnostic `McStasData`.
 3. Later points can reuse `params_snapshot['params']` directly as CLI args because those keys (for example `A1_param`, `rhm_param`) are already the correct McStas parameter names.
 
@@ -88,4 +88,4 @@ Key details:
 
 ## In-Progress Note
 
-Direct binary invocation is now partially implemented in the live run path. The controlling seam remains `run_PUMA_point()` in `instruments/PUMA_instrument_definition.py`, as called from `TAVIController.run_simulation()` in `TAVI_PySide6.py`; the current slice keeps first-point `backengine()`, arms direct invocation only after a successful first point plus binary/MPI resolution, retains first-point diagnostic McStasData for diagnostic mode, and maps non-zero direct exits or missing `detector.dat` into the existing per-point failure path while surfacing stdout/stderr through the message center. Live McStas integration validation is still pending.
+Direct binary invocation is now partially implemented in the live run path. The controller calls `InstrumentPlugin.run_point()`, and TAS plugins delegate to `run_tas_point()` in `instruments/tas_runtime.py`; the current slice keeps first-point `backengine()`, arms direct invocation only after a successful first point plus binary/MPI resolution, retains first-point diagnostic McStasData for diagnostic mode, and maps launch errors, non-zero direct exits, or missing `detector.dat` into the existing per-point failure path while surfacing details through the message center. Live McStas integration validation is still pending.

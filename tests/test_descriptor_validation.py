@@ -1,7 +1,7 @@
 """Descriptor validator tests (docs/CONFIGURABLE_INSTRUMENTS.md §17.6/§17.7).
 
 Includes the builder<->descriptor source-scan: the ``add_parameter`` names in
-``instruments/PUMA_instrument_definition.py`` must equal the descriptor's
+``instruments/puma/model.py`` must equal the descriptor's
 ``scannable_parameters`` exactly. Pure text scan -- no mcstasscript import.
 """
 import dataclasses
@@ -12,7 +12,7 @@ import pytest
 
 from instruments._descriptor_examples import in8_descriptor
 from instruments.descriptor import AxisLimits
-from instruments.puma_plugin import puma_descriptor
+from instruments.puma.plugin import puma_descriptor
 from instruments.validation import (
     DescriptorValidationError,
     assert_valid_descriptor,
@@ -20,7 +20,7 @@ from instruments.validation import (
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PUMA_MODULE_PATH = os.path.join(REPO_ROOT, "instruments", "PUMA_instrument_definition.py")
+PUMA_MODULE_PATH = os.path.join(REPO_ROOT, "instruments", "puma", "model.py")
 
 
 def test_puma_descriptor_valid_runnable():

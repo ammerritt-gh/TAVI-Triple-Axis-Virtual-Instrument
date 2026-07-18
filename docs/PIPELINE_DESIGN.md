@@ -1,13 +1,14 @@
 # Pipelined Scan Execution — Design Document
 
 *Date: 2026-05-20*
-*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, per-stage timing capture, and the first direct-binary invocation slice behind `run_PUMA_point()`; direct compile-time measurement still remains future work and is inferred from execution timings, and the direct path has not yet been integration-validated in a live McStas environment*
+*Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, per-stage timing capture, and the first direct-binary invocation slice behind `InstrumentPlugin.run_point()` and shared `run_tas_point()`; direct compile-time measurement still remains future work and is inferred from execution timings, and the direct path has not yet been integration-validated in a live McStas environment*
 
 > **Forward note (2026-07-02):** the configurable-instruments Phase 1
 > (`docs/CONFIGURABLE_INSTRUMENTS.md` §17) lifts the functions described here
 > behind an `InstrumentPlugin` contract: the controller calls
 > `self.instrument.build/compute_snapshot/run_point` instead of importing
-> `build_PUMA_instrument`/`compute_scan_snapshot`/`run_PUMA_point` directly, and
+> `InstrumentPlugin.build()`/`compute_snapshot()`/`run_point()` directly, with
+> shared TAS preparation and execution supplied by `instruments.tas_runtime`, and
 > `PUMARunExecutionState` becomes an alias of the shared `RunExecutionState`
 > (`instruments/contract.py`). The pipeline architecture in this document —
 > threads, queue, stop-event drain semantics — is unchanged by that work.
@@ -23,14 +24,14 @@ Keep the McStas simulation binary running at near-100% CPU utilization throughou
 Two threads, one queue:
 
 ```
-                    Queue(unbounded)
+                    Queue(maxsize=2)
   [Prep Thread] ──────────────────────► [Simulation Thread]
   produces snapshots                    consumes snapshots
   (pure Python, GIL-bound)              calls backengine() (subprocess, GIL released)
                                         does inline postprocessing after each point
 ```
 
-The prep thread runs continuously, computing parameter snapshots and pushing them onto an unbounded queue. The simulation thread pulls snapshots and executes them. This lets prep run as far ahead as it can without waiting for buffer space, so the queue can hold the full scan if prep outruns simulation. With 30 MPI threads for McStas and 32 CPU threads available, the prep thread borrowing one core intermittently has negligible impact.
+The prep thread computes parameter snapshots and pushes them onto a two-item queue. The simulation thread pulls snapshots and executes them. This keeps preparation slightly ahead while bounding memory and stale work; timed queue puts re-check cancellation under backpressure.
 
 Postprocessing stays inline in the simulation thread (no third stage). Postprocessing is lightweight — reading a small detector file, writing a small parameter file, emitting Qt signals — and separating it would add a thread, a second queue, and out-of-order handling complexity for negligible gain.
 
@@ -63,17 +64,17 @@ The drain model means: stop accepting new prep work, finish the in-flight simula
 
 `run_PUMA_instrument()` is split into two functions as part of this change, not deferred. This eliminates ~780 lines of redundant per-point component tree construction and makes the params-dict interface natural.
 
-### 3.5 Queue size: unbounded
+### 3.5 Queue size: bounded
 
-No artificial queue cap. The prep thread can compute and enqueue the full scan ahead of the simulation thread, which removes queue backpressure from prep timing. Memory cost is still modest for the current snapshot payloads, and the code keeps the existing stop-event drain behavior if cancellation is requested.
+The prep thread uses `Queue(maxsize=2)`, allowing useful overlap without preparing an entire scan ahead of execution. Queue puts poll the stop event so cancellation cannot leave the prep thread permanently blocked by backpressure.
 
 ## 4. Refactoring Plan
 
 ### Step 1: Split `run_PUMA_instrument()`
 
-Split into two functions in `instruments/PUMA_instrument_definition.py`:
+Split into two functions in `instruments/puma/model.py`:
 
-**`build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, number_neutrons)`**
+**`InstrumentPlugin.build(config, diagnostic_mode, diagnostic_settings, number_neutrons)`**
 
 - Takes PUMA instrument configuration (arm lengths, crystal types, NMO setting, sample type, collimator selection, source type, diagnostic settings) — everything that affects which components are included.
 - Calls `ms.McStas_instr(...)`, adds all parameters via `add_parameter()`, adds all components via `add_component()`, and returns the reusable instrument object.
@@ -81,15 +82,15 @@ Split into two functions in `instruments/PUMA_instrument_definition.py`:
 - If diagnostic settings include "Show Instrument Diagram", the caller emits `instrument_diagram_requested` with the instrument object once after this function returns.
 - Called **once** at scan start, before any simulation.
 
-**`run_PUMA_point(instrument, params_snapshot, output_folder, number_neutrons, execution_state, mpi_count=30)`**
+**`InstrumentPlugin.run_point(instrument, snapshot, output_folder, number_neutrons, execution_state, mpi_count=30)`**
 
-- Takes the reusable instrument object, the per-point snapshot dict, the output folder path, and the neutron count.
+- Takes the reusable instrument object, a `PointSnapshot`, the output folder path, and the neutron count.
 - This is the active per-point execution seam, called from `TAVIController.run_simulation()`.
-- The live code also passes a scan-local `PUMARunExecutionState` that tracks whether direct execution is armed, the resolved binary path/cwd, and the resolved MPI launcher argv.
+- The live code also passes a scan-local `RunExecutionState` that tracks whether direct execution is armed, the resolved binary path/cwd, and the resolved MPI launcher argv.
 - Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=not execution_state.first_backengine_succeeded, increment_folder_name=False)`.
     - The first point that reaches `backengine()` in a scan therefore forces compilation/materialization so build-time settings are refreshed before later points reuse the materialized binary/direct path.
     - **Critical**: `increment_folder_name=False` is required because `ManagedMcrun` defaults to `True`, which would silently create `scan_0000_0` instead of `scan_0000` if the folder already exists, resulting in postprocessing reading from the wrong folder.
-- Calls `instrument.set_parameters(**params_snapshot['params'])`.
+- Calls `instrument.set_parameters(**snapshot.params)`.
 - Calls `instrument.backengine()`. The first executed point still relies on this path to materialize the executable and preserve McStasData behavior used elsewhere in the controller.
 - The landed direct-binary fast path also lives behind this seam and only activates after the first `backengine()` call succeeded, the execution state is armed, and the expected binary exists on disk.
 - Returns `(data, error_flag_array, execution_info)`. `execution_info` carries controller-facing logging/timing metadata including execution mode, direct return code, binary path, launcher argv, and whether the previous `backengine()` point armed direct execution. The instrument object is still not returned.
@@ -118,11 +119,12 @@ Per-point (McStas parameters, set via `set_parameters()`):
 
 This classification already exists implicitly — `add_parameter()` calls define the per-point set, `add_component()` calls with conditionals define the build-time set. The refactor makes it explicit at the function boundary.
 
-**Note on lines 925–934:** The `add_parameter("chi_param", value=...)` calls with explicit values are misleading. These values are overwritten by `set_parameters()` before `backengine()` runs. After the split, `build_PUMA_instrument` should declare these parameters without default values (or with zero/placeholder defaults), since their actual values come from the params snapshot. This removes the false impression that the build-time values matter.
+**Parameter defaults:** `add_parameter("chi_param", value=...)` defaults are overwritten by `set_parameters()` before `backengine()` runs. Instrument builders should use zero/placeholder defaults because actual point values come from `PointSnapshot.params`.
 
 ### Step 2: Define the params snapshot
 
-A function in `instruments/PUMA_instrument_definition.py` that takes the current scan point data and returns a dict:
+A shared function in `instruments/tas_runtime.py`, exposed by each plugin through
+`compute_snapshot`, that takes the current scan point data and returns a snapshot:
 
 ```python
 def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder, ...):
@@ -174,17 +176,17 @@ run_simulation(launch_state):
     # launch_state['vals'], build scan_parameter_input list, etc.
     
     # --- NEW: Build instrument once ---
-    instrument = build_PUMA_instrument(self.PUMA, diagnostic_mode, 
-                                       self.diagnostic_settings)
+    instrument = instrument_plugin.build(scan_config, diagnostic_mode,
+                                         diagnostic_settings, number_neutrons)
     
     # --- NEW: Create pipeline primitives ---
-    snapshot_queue = queue.Queue()
+    snapshot_queue = queue.Queue(maxsize=2)
     stop_event = threading.Event()
     
     # --- NEW: Start prep thread ---
     prep_thread = threading.Thread(
         target=self._prep_worker,
-        args=(scan_parameter_input, scan_mode, self.PUMA, vals,
+        args=(scan_parameter_input, scan_mode, scan_config, vals,
               data_folder, snapshot_queue, stop_event),
         daemon=True
     )
@@ -202,14 +204,14 @@ run_simulation(launch_state):
             break
         
         # --- Simulation ---
-        if not snapshot['error_flags']:
-            data, error_flags = run_PUMA_point(
-                instrument, snapshot['params'],
-                snapshot['output_folder'], i
+        if not snapshot.error_flags:
+            data, error_flags, execution_info = instrument_plugin.run_point(
+                instrument, snapshot, snapshot.output_folder,
+                number_neutrons, execution_state
             )
         else:
             data = math.nan
-            error_flags = snapshot['error_flags']
+            error_flags = snapshot.error_flags
             # Log the error
             self.message_printed.emit(
                 f"Point {i}: skipped, error flags: {error_flags}"
@@ -228,20 +230,19 @@ run_simulation(launch_state):
 The prep worker:
 
 ```
-def _prep_worker(self, scan_parameter_input, scan_mode, puma, vals,
+def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, vals,
                  data_folder, snapshot_queue, stop_event):
     """Prep thread: compute snapshots and feed the queue."""
     for i, scan_item in enumerate(scan_parameter_input):
         if stop_event.is_set():
             break
         
-        snapshot = compute_scan_snapshot(
-            scan_item, scan_mode, puma, vals, data_folder, i
+        snapshot = instrument_plugin.compute_snapshot(
+            scan_item, i, scan_mode, scan_config, vals, data_folder
         )
         
-        # Enqueues without waiting so prep can run ahead of simulation
-        # and fill the queue with the full scan if it finishes first
-        snapshot_queue.put(snapshot)
+        # Timed puts re-check stop_event while the bounded queue is full.
+        put_unless_stopped(snapshot_queue, snapshot, stop_event)
     
     # Signal end-of-input
     snapshot_queue.put(None)  # Sentinel
@@ -249,9 +250,9 @@ def _prep_worker(self, scan_parameter_input, scan_mode, puma, vals,
 
 ### Step 4: Adapt progress and timing
 
-The simulation loop already owns progress emission (it runs after each point's postprocessing). In the current implementation, first-point timing still includes the lazy McStas compile that occurs on the first `run_PUMA_point()` call. Compilation time is therefore still inferred from first-point timing rather than measured independently.
+The simulation loop already owns progress emission (it runs after each point's postprocessing). In the current implementation, first-point timing still includes the lazy McStas compile that occurs on the first plugin `run_point()` call. Compilation time is therefore still inferred from first-point timing rather than measured independently.
 
-The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compilation_time` field for new records, derived from `first_scan_time - avg_subsequent_time` on multi-point scans. The live code still relies on first-point timing because McStas compilation occurs lazily inside the first `run_PUMA_point()` call. Current behavior:
+The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compilation_time` field for new records, derived from `first_scan_time - avg_subsequent_time` on multi-point scans. The live code still relies on first-point timing because McStas compilation occurs lazily inside the first shared `run_tas_point()` call. Current behavior:
 
 1. **`compilation_time` field** exists on `ScanRecord` with a default of `0.0` for backward compatibility with existing `runtimes.json` records.
 
@@ -263,7 +264,7 @@ The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compi
 
 5. **Queue progress vs runtime estimates are now tracked separately**: `progress_updated(processed_points, total_scans)` still reports controller progress across all queued snapshots, including invalid/skipped points. Runtime-facing estimates use the executable subset instead: the pre-scan historical estimate is based on the validated `estimated_runtime_points` count, the live remaining-time label is driven by `remaining_runtime_points` plus `executed_scan_times`, and `RuntimeTracker.add_record()` stores `num_points=len(executed_scan_times)`. Queued-invalid points still appear in progress, but they no longer inflate remaining-time estimates or stored runtime history.
 
-6. **Per-stage timing capture is now recorded for each run**: the prep thread records `prep_duration_s` from snapshot preparation start until the snapshot is successfully queued; the simulation thread records `simulation_duration_s` around `run_PUMA_point()`; and the controller records `postprocessing_duration_s` from the end of `run_PUMA_point()` until point bookkeeping, file writes, and UI signal emission complete. These per-point records are written to `stage_timing_summary.json` in the run output folder, along with run-level averages. Compile timing is still inferred rather than directly measured: when there are at least two successful simulated points, the summary records `compile_duration_s = first_simulation_duration - avg(subsequent_simulation_durations)`.
+6. **Per-stage timing capture is now recorded for each run**: the prep thread records `prep_duration_s` from snapshot preparation start until the snapshot is successfully queued; the simulation thread records `simulation_duration_s` around plugin `run_point()`; and the controller records `postprocessing_duration_s` from the end of `run_point()` until point bookkeeping, file writes, and UI signal emission complete. These per-point records are written to `stage_timing_summary.json` in the run output folder, along with run-level averages. Compile timing is still inferred rather than directly measured: when there are at least two successful simulated points, the summary records `compile_duration_s = first_simulation_duration - avg(subsequent_simulation_durations)`.
 
 ### Step 5: Update stop mechanism
 
@@ -281,15 +282,15 @@ Main Thread (Qt event loop)
 │
 ├── Simulation Thread (existing threading.Thread from run_simulation_thread)
 │   ├── Starts with frozen launch_state captured on the GUI thread
-│   ├── Owns the instrument object after build_PUMA_instrument()
+│   ├── Owns the instrument object after plugin build()
 │   ├── Pulls snapshots from queue
-│   ├── Calls run_PUMA_point() → subprocess.run() (GIL released)
+│   ├── Calls InstrumentPlugin.run_point() → run_tas_point() → subprocess.run() (GIL released)
 │   ├── Does inline postprocessing
 │   └── Emits Qt signals for UI updates
 │
 └── Prep Thread (new, daemon, started by simulation thread)
     ├── Computes param snapshots from scan_parameter_input
-    ├── Pushes snapshots onto an unbounded Queue()
+    ├── Pushes snapshots onto Queue(maxsize=2)
     └── Exits when all points computed or stop_event set
 ```
 
@@ -310,8 +311,8 @@ Scan start
 │
 ├─ parse scan commands from frozen launch values → scan_parameter_input list
 │
-├─ build_PUMA_instrument(PUMA, diag, settings) → reusable instrument object
-│  (one-time; McStas compilation remains lazy and occurs on the first run_PUMA_point()/backengine() call)
+├─ plugin.build(config, diag, settings, ncount) → reusable instrument object
+│  (one-time; McStas compilation remains lazy and occurs on the first plugin run_point()/backengine() call)
 │
 ├─ Start prep thread
 │
@@ -319,7 +320,7 @@ Scan start
 │   ───────────                          ─────────────────
 │   for each scan_item:                  for i in range(total_scans):
 │     snapshot = compute_scan_snapshot()    snapshot = queue.get()  ◄── blocks until ready
-│     queue.put(snapshot)  ──────────►     run_PUMA_point(instrument, snapshot)
+│     queue.put(snapshot)  ──────────►     plugin.run_point(instrument, snapshot)
 │                                         postprocess(snapshot, data)
 │                                          emit signals
 │   queue.put(None)  ──── sentinel ──►   break on None
@@ -413,27 +414,28 @@ Mitigation: wrap the prep worker body in try/except. On exception, put an error 
 
 ### 8.2 Simulation thread crashes
 
-If `run_PUMA_point()` or postprocessing raises an unhandled exception, the simulation thread dies while the prep thread may still be running (blocked on `queue.put()`).
+If plugin `run_point()` or postprocessing raises an unhandled exception, the simulation thread dies while the prep thread may still be running (blocked on `queue.put()`).
 
 Mitigation: wrap the simulation loop in try/except/finally. In the finally block, set `stop_event` (unblocks prep thread's `stop_event.is_set()` check) and join the prep thread. The prep thread sees the event and exits.
 
 ### 8.3 Queue deadlock
 
-With the current unbounded `Queue()`, there is no queue-full backpressure path to deadlock on. The simulation thread only waits on `queue.get()`, and the prep thread holds no locks while preparing snapshots, so the queue remains the only synchronization primitive.
+The bounded queue adds backpressure, so queue puts use short timeouts and re-check `stop_event`. The simulation thread only waits on `queue.get()`, and the prep thread holds no controller locks while preparing snapshots.
 
 ### 8.4 Subprocess failure (McStas crash)
 
-Per-point execution now runs through a mixed path behind `run_PUMA_point()`: first-point materialization still goes through `instrument.backengine()`, while later eligible points may run the compiled binary directly. A non-zero direct process return code or missing `detector.dat` is treated as a per-point execution failure, and stdout/stderr is surfaced through the existing message-center logging path before the point is marked failed. Live integration validation of this direct path is still pending.
+Per-point execution now runs through a mixed path behind plugin `run_point()` and shared `run_tas_point()`: first-point materialization still goes through `instrument.backengine()`, while later eligible points may run the compiled binary directly. A non-zero direct process return code, launch `OSError`, or missing `detector.dat` is treated as a per-point execution failure, and stdout/stderr or the launch exception is surfaced through the existing message-center logging path before the point is marked failed. Live integration validation of this direct path is still pending.
 
 ### 8.5 Stale instrument object
 
-The instrument object from `build_PUMA_instrument()` is used by the simulation thread for all points. If something mutates it unexpectedly (McStasScript internal state corruption), subsequent points could fail. Mitigation: `run_PUMA_point()` only calls `settings()`, `set_parameters()`, and `backengine()` on the instrument — no component tree modification. McStasScript's `backengine()` is designed to be called repeatedly on the same instrument object with different parameters and output paths.
+The instrument object from plugin `build()` is used by the simulation thread for all points. If something mutates it unexpectedly (McStasScript internal state corruption), subsequent points could fail. Mitigation: shared `run_tas_point()` only calls `settings()`, `set_parameters()`, and `backengine()` on the instrument — no component tree modification. McStasScript's `backengine()` is designed to be called repeatedly on the same instrument object with different parameters and output paths.
 
 ## 9. Files Changed
 
 | File | Changes |
 |------|---------|
-| `instruments/PUMA_instrument_definition.py` | Split `run_PUMA_instrument()` into `build_PUMA_instrument()` + `run_PUMA_point()`. Add `compute_scan_snapshot()` and the per-point snapshot contract used by the queue. |
+| `instruments/puma/model.py` | Own the PUMA-specific state, focusing behavior, and McStas component tree used by `PUMAPlugin.build()`. |
+| `instruments/tas_runtime.py` | Own shared `compute_scan_snapshot()` preparation and `run_tas_point()` execution, exposed through the plugin contract. |
 | `TAVI_PySide6.py` | Refactor `run_simulation()` to use the prep thread, snapshot queue, and simulation loop. Replace `stop_flag` bool with `threading.Event`. Add `_prep_worker()` and emit per-point log messages from the simulation thread when each point starts. |
 | `tavi/mcstas_config.py` | Add centralized MPI launcher resolution for direct execution, with McStasScript configuration / `mccode_config.json` fallback and preference for a direct `mpiexec` binary over wrapper batch launchers when available. |
 | `tavi/runtime_tracker.py` | Add a heuristic `compilation_time` field to `ScanRecord` and `add_record()`, and update `get_estimates()` to prefer it when present. |
@@ -444,37 +446,37 @@ The instrument object from `build_PUMA_instrument()` is used by the simulation t
 - **DisplayDock**: results still arrive in order (simulation thread processes points sequentially). No out-of-order handling needed.
 - **Signal semantics**: `scan_point_updated_1d/2d`, `scan_completed`, `progress_updated` are emitted from the simulation thread exactly as before, at the same logical points.
 - **Output file format**: `scan_parameters.txt`, detector files, `.instr` copy — all unchanged.
-- **Diagnostic mode**: instrument diagram request is emitted once after `build_PUMA_instrument()`. Diagnostic monitors are build-time decisions, frozen at `build_PUMA_instrument()`. The direct-binary slice keeps diagnostic plotting on the retained first-point `backengine()` McStasData; later direct-invocation points do not replace that retained diagnostic data.
+- **Diagnostic mode**: instrument diagram request is emitted once after plugin `build()`. Diagnostic monitors are build-time decisions, frozen at build time. The direct-binary slice keeps diagnostic plotting on the retained first-point `backengine()` McStasData; later direct-invocation points do not replace that retained diagnostic data.
 - **Single-point scans**: work identically; the prep thread computes one snapshot and exits.
 - **Progress signal semantics**: `progress_updated` still reports queued controller progress in command order, including skipped points. The timing labels and runtime history now use only executable points, so queue progress and runtime estimates are intentionally distinct.
 
 ## 11. Sequencing
 
-1. Split `run_PUMA_instrument()` → `build_PUMA_instrument()` + `run_PUMA_point()`. Implemented.
+1. Split the legacy monolithic PUMA runner into build and point-execution phases; these now live behind the plugin contract and shared TAS runtime. Implemented.
 2. Implement `compute_scan_snapshot()`. Implemented.
 3. Replace `stop_flag` with `threading.Event`. Implemented.
 4. Implement the pipeline (prep thread, queue, modified simulation loop). Implemented.
 5. Update `RuntimeTracker` to separate compilation time. Implemented in heuristic Option A form.
-6. Land the first direct-binary invocation slice behind `run_PUMA_point()`. Implemented in code, pending live-environment validation.
+6. Land the first direct-binary invocation slice behind plugin `run_point()` and shared `run_tas_point()`. Implemented in code, pending live-environment validation.
 7. Update `CLAUDE.md`. Implemented.
 
 ## Implementation Notes
 
 ### 2026-05-12
 
-- `build_PUMA_instrument()` and `run_PUMA_point()` are now implemented in code, and `TAVIController.run_simulation()` uses a prep thread plus an unbounded `Queue()` to overlap snapshot preparation with simulation.
+- Plugin `build()` and `run_point()` are implemented for runnable instruments, and `TAVIController.run_simulation()` uses a prep thread plus a bounded `Queue(maxsize=2)` to overlap snapshot preparation with simulation.
 - `compute_scan_snapshot()` is now the active per-point API for snapshot generation, and `self.stop_flag` has been replaced by `self.stop_event` (`threading.Event`) in the simulation control path.
 - Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
 - The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
 - `run_simulation_thread()` now freezes launch state on the GUI thread before the worker starts, calls `save_parameters()` before thread launch, and sets display scan metadata from the frozen launch values. Main-thread folder-label and pre-scan-estimate updates are routed through controller signals during the run.
 - The live run path now enqueues every requested scan point in command order. The display is initialized optimistically, and impossible points are marked invalid dynamically when the simulation thread processes a snapshot with error flags.
 - Queue progress and timing estimates now diverge by design: `processed_points / total_scans` still reflects all queued snapshots, while the pre-scan estimate, remaining-time estimate, and stored runtime history are driven by executable-point counts (`estimated_runtime_points`, `remaining_runtime_points`, and `executed_scan_times`).
-- Stage timing data is now captured per run: prep time is measured in `_prep_worker()`, simulation time is measured around `run_PUMA_point()`, postprocessing time is measured in the simulation thread after `run_PUMA_point()` returns, and a `stage_timing_summary.json` file is written under the output folder with per-point timings plus run-level averages. Compile timing in that summary remains inferred from first-versus-steady-state simulation durations rather than directly observed from a separate compile callback.
+- Stage timing data is now captured per run: prep time is measured in `_prep_worker()`, simulation time is measured around plugin `run_point()`, postprocessing time is measured in the simulation thread after `run_point()` returns, and a `stage_timing_summary.json` file is written under the output folder with per-point timings plus run-level averages. Compile timing in that summary remains inferred from first-versus-steady-state simulation durations rather than directly observed from a separate compile callback.
 - Controller logging now records when a first successful `backengine()` point arms direct execution and when later points run in direct mode.
 - The per-point timing records written to `stage_timing_summary.json` now include `execution_mode`, `direct_returncode`, and `direct_binary_path` alongside the stage durations.
-- McStasScript compilation still happens lazily on the first `backengine()` call. `build_PUMA_instrument()` builds the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
+- McStasScript compilation still happens lazily on the first `backengine()` call. Plugin `build()` creates the reusable instrument object once, but it does not perform a standalone compile step because `mcstasscript` writes and compiles the instrument from `backengine()`, not from `settings()`.
 - `tavi/runtime_tracker.py` now records a heuristic `compilation_time` field for new runs. Compile remains bundled into the first executed point, so this is still an inferred estimate rather than an independently measured compile phase.
-- The first direct-binary slice is now live behind `run_PUMA_point()`: it reuses `params_snapshot['params']` for CLI `name=value` arguments, resolves the MPI launcher from McStasScript's configured McStas state after setup with fallback to the same `mccode_config.json` used by `mcrun.py`, resolves the binary to an absolute path after first successful materialization, uses the binary directory as subprocess `cwd`, switches only when first-point `backengine()` succeeded and the direct-run-ready state plus binary-exists check are both satisfied, retains first-point diagnostic McStasData for diagnostic mode, and treats non-zero direct exits or missing `detector.dat` as ordinary per-point failures while surfacing stdout/stderr through the message center.
+- The first direct-binary slice is live behind plugin `run_point()` and shared `run_tas_point()`: it reuses `PointSnapshot.params` for CLI `name=value` arguments, resolves the MPI launcher from McStasScript's configured McStas state after setup with fallback to the same `mccode_config.json` used by `mcrun.py`, resolves the binary to an absolute path after first successful materialization, uses the binary directory as subprocess `cwd`, switches only when first-point `backengine()` succeeded and the direct-run-ready state plus binary-exists check are both satisfied, retains first-point diagnostic McStasData for diagnostic mode, and treats launch errors, non-zero direct exits, or missing `detector.dat` as ordinary per-point failures while surfacing details through the message center.
 - This direct-execution path is documented from the code, but it has not yet been integration-validated in a live McStas environment, so runtime behavior should still be treated as provisional until that smoke test is completed.
 
 Steps 1–4, the controller GUI-state freeze boundary, the stop-event conversion, and the first direct-binary execution slice are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement and live-environment validation of the direct path still require follow-up.

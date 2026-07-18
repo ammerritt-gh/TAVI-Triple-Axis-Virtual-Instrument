@@ -1,15 +1,53 @@
-# Adding an Instrument to TAVI
+# Instrument Packages and Authoring
 
-How to author a new triple-axis instrument. The **living template** is the
-IN8 pair added in Phase 4 — read these side by side with this guide:
+Every instrument has one directory under `instruments/<id>/`. The directory is
+both its TAVI implementation package and the review bundle that can be sent to
+an instrument scientist.
 
-- `instruments/in8_plugin.py` — descriptor + `InstrumentPlugin` (import-light)
-- `instruments/IN8_instrument_definition.py` — state class + McStas `build()`
+There are two deliberately different roles:
 
-PUMA (`instruments/puma_plugin.py`, `instruments/PUMA_instrument_definition.py`)
-is the fuller example: modules (NMO, velocity selector), stacked collimators,
-19 monitors. Design rationale lives in `docs/CONFIGURABLE_INSTRUMENTS.md`
-(§5 contract, §16 decisions, §20 the IN8 record).
+- **Instrument scientists** only need `SCIENTIST_REVIEW.md`. They may comment
+  anywhere, in any format, and may add source files under `references/`. Their
+  comments are evidence; they never alter executable settings automatically.
+- **TAVI maintainers** reconcile comments and sources, update
+  `MODEL_STATUS.md`, implement descriptor/model changes, bump the model version
+  in `instrument.json`, and run validation before registration.
+
+The living runnable template is IN8:
+
+- `instruments/in8/plugin.py` — descriptor + `InstrumentPlugin` (import-light)
+- `instruments/in8/model.py` — state class + McStas `build()`
+- `instruments/in8/README.md` — plain-language component description
+- `instruments/in8/MODEL_STATUS.md` — evidence comparison and gaps
+- `instruments/in8/SCIENTIST_REVIEW.md` — low-effort scientist handoff
+
+PUMA (`instruments/puma/plugin.py`, `instruments/puma/model.py`) is the fuller
+runtime example: modules, stacked collimators, and 19 monitors. PANDA and IN12
+show research-only packages; they must not be registered until runnable.
+
+Run `python -m instruments.package_validation` before and after package work.
+It validates metadata, required documents, references, status/registration,
+and runtime descriptor identity.
+
+## Package files and versioning
+
+`instrument.json` is maintainer-owned. It records schema version, stable id,
+display name, facility, status (`runnable`, `research`, or `retired`), semantic
+model version, and model date. A model version changes only when executable
+simulation behavior changes: patch for corrected values, minor for compatible
+new capabilities, and major for an incompatible model contract/topology.
+
+External evidence snapshots are immutable and use
+`YYYY-MM-DD__source-id__vNN.ext`. If only a publication year is known, use
+January 1 and say explicitly in `references/SOURCES.md` that the day is
+normalized. If the upstream date is unknown, use the repository capture date.
+Never overwrite a captured source; add the next `vNN` and mark supersession in
+`SOURCES.md`.
+
+All built-in McStas components and data remain in the central `components/`
+tree. An instrument README names its dependencies; packages do not duplicate
+assets. The descriptor retains `component_path` compatibility for external
+plugins, but built-in packages use the central path.
 
 ---
 
@@ -23,22 +61,24 @@ is the fuller example: modules (NMO, velocity selector), stacked collimators,
    Startup calls `assert_valid_descriptor(runnable=True)` and exits on
    failure. Run `python -m instruments._descriptor_examples` for a printout.
 3. **State class** — subclass `TAS_Instrument`
-   (`instruments/PUMA_instrument_definition.py`): set L1–L4, the senses, and
+   (`instruments/tas_runtime.py`): set L1–L4, the senses, and
    instrument fields in `__init__`; implement `crystal_info()`,
    `build_point_params()`, and `calculate_crystal_bending()`.
 4. **`build_<ID>_instrument()`** — the McStas component tree, in beam order,
    through the shared emitters of `tavi/instrument_helpers.py` wherever a
    category exists there. `add_parameter` names must match the descriptor's
    `scannable_parameters` 1:1 (build-tree test).
-5. **Plugin** — `<ID>Plugin` implementing `instruments/contract.py`:
+5. **Plugin** — `<ID>Plugin` in `instruments/<id>/plugin.py`, implementing
+   `instruments/contract.py`:
    `default_state`, `scan_config` (the GUI→state mapping), `crystal_info`,
    `build_fingerprint`, and function-local delegations for
    `build`/`compute_snapshot`/`run_point`.
-6. **Register** — one `register(...)` line in `instruments/builtin.py`. The
+6. **Register** — only after the package is runnable-valid, add one
+   `register(...)` line in `instruments/builtin.py`. The
    startup picker appears automatically once more than one instrument is
    registered; `config/parameters.json` grows a namespaced block on first
    save.
-7. **Tests** — copy the IN8 test files: plugin conformance
+7. **Tests** — copy the IN8 test patterns: plugin conformance
    (`tests/test_in8_plugin.py`), object-level build tree
    (`tests/test_in8_build_tree.py`), angle goldens
    (`tests/test_sign_conventions.py`). Extend the lazy-import test's banned
@@ -58,7 +98,7 @@ PySide6, no instrument-definition module**. Every reference to the heavy
 module is function-local. This keeps listing instruments (and the picker)
 instant. Enforced by
 `tests/test_instrument_registry.py::test_listing_is_lazy_no_mcstas_import`,
-which bans the heavy modules by name — add yours.
+which bans every registered package's `model` module by name — add yours.
 
 Duplicate the McStas name as a plugin constant (`IN8_MCSTAS_NAME`) and assert
 it equals the definition module's `MCSTAS_NAME` in a heavy test.
@@ -125,10 +165,9 @@ instrument repeats the source pattern, that is the signal to extract it.
 ## Component files and data
 
 Shared custom components live in `components/` (the build passes it as
-`input_path`). An instrument needing private components can set the
-descriptor's `component_path`; the validator then requires the directory to
-exist. Reflectivity data referenced by stock names (`HOPG.rfl`) resolves from
-the McStas data dir.
+`input_path`). Built-in instruments add new assets there and document their
+use in the package README and evidence record. Reflectivity data referenced by
+stock names (`HOPG.rfl`) resolves from the McStas data directory.
 
 ## Gotchas (each of these cost real debugging time)
 

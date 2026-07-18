@@ -14,6 +14,7 @@ repository size.
 
 Everything TAVI actually derived from vTAS (IN8 senses, angle conventions,
 crystal table values) is recorded with provenance in
-`docs/CONFIGURABLE_INSTRUMENTS.md` §20 and `docs/IN8_MISSING_DATA.md`. To
+`docs/CONFIGURABLE_INSTRUMENTS.md` §20 and
+`instruments/in8/MODEL_STATUS.md`. To
 recreate the local reference, download vTAS from the ILL website and decompile
 the jar with any Java decompiler (CFR was used).

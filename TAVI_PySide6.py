@@ -27,7 +27,7 @@ from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_component_q
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
-                            decode_training, generate_training_exercise, encode_training)
+                            decode_training, generate_training_exercise, encode_training, get_scattering_plane_info)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.machine_profile import machine_fingerprint
 from tavi.scan_jobs import (
@@ -36,6 +36,12 @@ from tavi.scan_jobs import (
 from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
                              MAX_WAITERS, parse_scan_engine, ALLOWED_ENGINES)
 from tavi.journal import SessionJournal
+from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
+                                     primitive_miller, ProjectedReflection)
+from tavi.reciprocal_interaction import (LiveReciprocalResult, ReachOverlay,
+                                         ReciprocalState, format_small,
+                                         triangle_can_close)
+from tavi.space_groups import generate_allowed_reflections, get_space_group
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
@@ -47,6 +53,19 @@ E_CHARGE = 1.602176634e-19  # electron charge
 K_B = 0.08617333262  # Boltzmann's constant in meV/K
 HBAR_meV = 6.582119569e-13  # H-bar in meV*s
 HBAR = 1.05459e-34  # H-bar in J*s
+
+
+def format_editable_number(value: float, places: int = 4) -> str:
+    """Format editable numeric fields with compact fixed-decimal text."""
+    number = float(value)
+    if math.isnan(number):
+        return "nan"
+    if math.isinf(number):
+        return "inf" if number > 0 else "-inf"
+    rounded = round(number, places)
+    if abs(rounded) < 0.5 * 10 ** (-places):
+        rounded = 0.0
+    return f"{rounded:.{places}f}".rstrip("0").rstrip(".") or "0"
 
 
 class _GuiCall:
@@ -461,39 +480,38 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
-        allow_partial = bool(body.get("allow_partial", False))
         isolated = bool(body.get("isolated", False))
+        allow_partial = body.get("allow_partial", False)
+        if not isinstance(allow_partial, bool):
+            raise ApiError(400, "bad_request", "'allow_partial' must be a boolean")
         # Execution-backend selection (docs/CONTROL_FEATURES_DESIGN.md §6.4).
         # Validated Qt-free; an unknown engine is a 400 with the allowed list.
         engine, seed, noiseless = parse_scan_engine(body)
 
         result = self._bridge.call_on_gui(
             lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
-                                             allow_partial, isolated,
+                                             isolated, allow_partial,
                                              engine, seed, noiseless)
         )
         return result
 
-    def _build_validation(self, controller, launch_state, points, neutrons,
-                          allow_partial):
+    def _build_validation(self, controller, launch_state, points, neutrons):
         """Assemble the ``validation`` block for a launch state (points/cost/eta).
 
         Feasibility + per-command expansion come from the controller (GUI-thread
         angle math); budget/cost and ETA are folded in here since the backend
-        owns those. ``points`` is the total requested-point count; with
-        ``allow_partial`` the ETA is scaled to the points that will actually run.
+        owns those. ``points`` is the total requested-point count; ETA and cost
+        are scaled to the points that will actually run.
         Returns the ``validation`` dict embedded in 202/validate responses.
         """
         validation = controller.validate_scan_launch_state(launch_state)
-        infeasible = validation.get("infeasible", [])
-        run_points = points
-        if allow_partial:
-            run_points = max(0, points - len(infeasible))
+        run_points = int(validation.get("feasible_points", points))
         validation["cost"] = dict(
             self._budget_usage(),
-            points=points,
+            requested_points=points,
+            feasible_points=run_points,
             neutrons_per_point=neutrons,
-            job_neutrons=points * neutrons,
+            job_neutrons=run_points * neutrons,
         )
         engine = (launch_state or {}).get("engine") or "mcstas"
         try:
@@ -507,8 +525,9 @@ class TaviApiBackend:
         return validation
 
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
-                            allow_partial=False, isolated=False,
-                            engine="mcstas", seed=None, noiseless=False):
+                            isolated=False, allow_partial=False,
+                            engine="mcstas", seed=None,
+                            noiseless=False):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
@@ -585,24 +604,32 @@ class TaviApiBackend:
 
         # 4. Always-on feasibility validation (API path only). Build the
         #    validation block (per-command points + per-point feasibility +
-        #    cost + eta). Any infeasible point is a hard 400 unless the
-        #    caller opted into allow_partial, in which case the infeasible
-        #    points are recorded on the launch state so run_simulation skips
-        #    them and the result documents them under skipped_points.
+        #    cost + eta). Partial feasibility is opt-in; by default any
+        #    infeasible point rejects the whole submission.
         validation = self._build_validation(
-            controller, launch_state, points, neutrons, allow_partial
+            controller, launch_state, points, neutrons
         )
         infeasible = validation.get("infeasible", [])
+        feasible_points = int(validation.get("feasible_points", points))
+        if feasible_points <= 0:
+            raise ApiError(
+                400, "all_points_infeasible",
+                "No requested scan point is feasible",
+                details=validation,
+            )
         if infeasible and not allow_partial:
             raise ApiError(
                 400, "infeasible_points",
-                "%d scan point(s) are geometrically infeasible; resubmit "
-                "with \"allow_partial\": true to skip them" % len(infeasible),
+                "One or more requested scan points are infeasible",
                 details=validation,
             )
-        if infeasible and allow_partial:
+        if infeasible:
             launch_state["skipped_indices"] = [e["index"] for e in infeasible]
             launch_state["skipped_points"] = infeasible
+        launch_state["planned_feasibility"] = validation.get("point_manifest", [])
+        launch_state["planned_feasible_mask"] = validation.get(
+            "planned_feasible_mask", [])
+        launch_state["feasible_segments"] = validation.get("feasible_segments", [])
 
         # 5. Budget + queue-depth enforcement (API-sourced jobs only).
         #    ``limits`` was resolved in step 3a for the over-limit guard.
@@ -617,7 +644,7 @@ class TaviApiBackend:
                     429, "limit_exceeded", reason,
                     details={"usage": self._budget_usage()},
                 )
-            reason = limits.check_submission(points, neutrons, pending_cost)
+            reason = limits.check_submission(feasible_points, neutrons, pending_cost)
             if reason is not None:
                 controller._journal.record("budget", "rejected: %s" % reason)
                 raise ApiError(
@@ -627,7 +654,7 @@ class TaviApiBackend:
 
         # 6. Enqueue and tag the job with its cost for future budget math.
         job = controller.submit_scan_job(launch_state, "api")
-        job._api_cost = points * neutrons
+        job._api_cost = feasible_points * neutrons
         if idempotency_key:
             registry.put_idempotent(idempotency_key, job.job_id)
 
@@ -656,12 +683,11 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
-        allow_partial = bool(body.get("allow_partial", False))
         return self._bridge.call_on_gui(
-            lambda: self._validate_scan_on_gui(patch, force, allow_partial)
+            lambda: self._validate_scan_on_gui(patch, force)
         )
 
-    def _validate_scan_on_gui(self, patch, force, allow_partial):
+    def _validate_scan_on_gui(self, patch, force):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
 
         Builds the launch state from widget-free defaults + the request patch
@@ -700,13 +726,19 @@ class TaviApiBackend:
                       % (points, limits.max_points))
             blockers.append("limit_exceeded: %s" % reason)
             return {
-                "points": points,
+                "requested_points": points,
+                "feasible_points": 0,
+                "partial": False,
+                "planned_feasible_mask": [],
+                "feasible_segments": [],
+                "point_manifest": [],
                 "per_command": [],
                 "infeasible": [],
                 "cost": dict(
-                    self._budget_usage(), points=points,
+                    self._budget_usage(), requested_points=points,
+                    feasible_points=0,
                     neutrons_per_point=neutrons,
-                    job_neutrons=points * neutrons,
+                    job_neutrons=0,
                 ),
                 "eta": {"estimated_seconds": None,
                         "confidence": "none", "samples": 0},
@@ -715,19 +747,19 @@ class TaviApiBackend:
             }
 
         validation = self._build_validation(
-            controller, launch_state, points, neutrons, allow_partial
+            controller, launch_state, points, neutrons
         )
-        infeasible = validation.get("infeasible", [])
-        if infeasible and not allow_partial:
+        feasible_points = int(validation.get("feasible_points", points))
+        if feasible_points <= 0:
             blockers.append(
-                "infeasible_points: %d point(s) unreachable" % len(infeasible)
+                "all_points_infeasible: no requested point is reachable"
             )
 
         if limits is not None:
             if self._queued_count() >= limits.max_queued:
                 blockers.append("limit_exceeded: queue is full")
             reason = limits.check_submission(
-                points, neutrons, self._pending_api_cost()
+                feasible_points, neutrons, self._pending_api_cost()
             )
             if reason is not None:
                 blockers.append("limit_exceeded: %s" % reason)
@@ -821,6 +853,10 @@ class TAVIController(QObject):
     #   api_status_changed -- listening URL (may be "") + human state string
     api_activity = Signal(str)
     api_status_changed = Signal(str, str)
+    # Immutable scalar data for the reciprocal dock.  The dock never reads
+    # widgets directly, which keeps preview/persisted state separate.
+    reciprocal_state_changed = Signal(object)
+    reciprocal_live_result = Signal(object)
 
     def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
@@ -892,6 +928,12 @@ class TAVIController(QObject):
         self._scan_update_timer.setSingleShot(True)
         self._scan_update_timer.setInterval(300)  # 300ms debounce
         self._scan_update_timer.timeout.connect(self._update_scan_estimates)
+        # Several linked controls can settle from one user gesture.  Publish a
+        # single authoritative reciprocal snapshot after that burst, never from
+        # the 30 Hz live-drag path (which uses reciprocal_live_result instead).
+        self._reciprocal_snapshot_timer = QTimer(self)
+        self._reciprocal_snapshot_timer.setSingleShot(True)
+        self._reciprocal_snapshot_timer.timeout.connect(self.emit_reciprocal_snapshot)
         
         # Initialize crystal info with the descriptor's first mono/ana crystals
         self.monocris_info, self.anacris_info = self.instrument.crystal_info(
@@ -924,6 +966,7 @@ class TAVIController(QObject):
         
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
+        self.emit_reciprocal_snapshot()
 
         # Start the remote API server last, after the message center and job
         # queue are ready (it reports status through print_to_message_center).
@@ -1254,6 +1297,15 @@ class TAVIController(QObject):
         if getattr(self.window.instrument_dock, "nmo_combo", None) is not None:
             self.window.instrument_dock.nmo_combo.currentTextChanged.connect(self.update_ideal_bending_buttons)
 
+        reciprocal_dock = getattr(self.window, "reciprocal_space_dock", None)
+        if reciprocal_dock is not None:
+            reciprocal_dock.move_requested.connect(self.apply_reciprocal_move)
+            reciprocal_dock.live_move_requested.connect(self.apply_reciprocal_live_move)
+            reciprocal_dock.values_requested.connect(self.apply_reciprocal_values)
+            reciprocal_dock.plane_requested.connect(self.set_reciprocal_plane)
+            self.reciprocal_state_changed.connect(reciprocal_dock.set_snapshot)
+            self.reciprocal_live_result.connect(reciprocal_dock.set_live_result)
+
         # Ideal focusing buttons
         self.window.instrument_dock.rhm_ideal_button.clicked.connect(
             lambda: self.apply_ideal_bending_value("rhm")
@@ -1293,19 +1345,34 @@ class TAVIController(QObject):
         # K fixed mode and fixed E - update all related values
         self.window.scattering_dock.K_fixed_combo.currentTextChanged.connect(self.on_K_fixed_changed)
         self.window.scattering_dock.fixed_E_edit.editingFinished.connect(self.on_fixed_E_changed)
+        self.window.scattering_dock.K_fixed_combo.currentTextChanged.connect(self.request_reciprocal_snapshot)
+        self.window.scattering_dock.fixed_E_edit.editingFinished.connect(self.request_reciprocal_snapshot)
         
         # Q-space - update HKL and angles
         self.window.scattering_dock.qx_edit.editingFinished.connect(self.on_Q_changed)
         self.window.scattering_dock.qy_edit.editingFinished.connect(self.on_Q_changed)
         self.window.scattering_dock.qz_edit.editingFinished.connect(self.on_Q_changed)
+        self.window.scattering_dock.qx_edit.editingFinished.connect(self.request_reciprocal_snapshot)
+        self.window.scattering_dock.qy_edit.editingFinished.connect(self.request_reciprocal_snapshot)
+        self.window.scattering_dock.qz_edit.editingFinished.connect(self.request_reciprocal_snapshot)
         
         # HKL - update Q-space and angles
         self.window.scattering_dock.H_edit.editingFinished.connect(self.on_HKL_changed)
         self.window.scattering_dock.K_edit.editingFinished.connect(self.on_HKL_changed)
         self.window.scattering_dock.L_edit.editingFinished.connect(self.on_HKL_changed)
+        self.window.scattering_dock.H_edit.editingFinished.connect(self.request_reciprocal_snapshot)
+        self.window.scattering_dock.K_edit.editingFinished.connect(self.request_reciprocal_snapshot)
+        self.window.scattering_dock.L_edit.editingFinished.connect(self.request_reciprocal_snapshot)
         
         # DeltaE - update energies
         self.window.scattering_dock.deltaE_edit.editingFinished.connect(self.on_deltaE_changed)
+        self.window.scattering_dock.deltaE_edit.editingFinished.connect(self.request_reciprocal_snapshot)
+
+        for field in (
+            self.window.instrument_dock.Ki_edit, self.window.instrument_dock.Ei_edit,
+            self.window.instrument_dock.Kf_edit, self.window.instrument_dock.Ef_edit,
+        ):
+            field.editingFinished.connect(self.request_reciprocal_snapshot)
         
         # Lattice parameters - only update via Save button (lock/unlock mechanism)
         # Connect the lattice save signal from the sample dock
@@ -1318,6 +1385,14 @@ class TAVIController(QObject):
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
         except Exception:
             pass
+
+        # Refresh centering-rule fallback circles as soon as the sample dock
+        # changes its selected space group.
+        try:
+            self.window.sample_dock.space_group_changed.connect(lambda _group: self.request_reciprocal_snapshot())
+            self.window.sample_dock.reflection_source_changed.connect(lambda _enabled: self.request_reciprocal_snapshot())
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: space-group refresh unavailable ({exc})")
         
         # Scan command validation - check for conflicts and errors on text change and on focus out
         self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
@@ -1443,6 +1518,355 @@ class TAVIController(QObject):
         """Print message to the GUI message center."""
         self.message_printed.emit(message)
         print(message)  # Also print to console
+
+    def request_reciprocal_snapshot(self, *_args):
+        """Coalesce ordinary widget-originated reciprocal refreshes."""
+        # A lattice/UB transaction calls this while ``updating`` is true.  The
+        # single-shot runs after that transaction unwinds, so never discard it.
+        self._reciprocal_snapshot_timer.start(0)
+
+    def _reciprocal_reach_overlay(self, vals):
+        """Build descriptor-only crystal/axis reach metadata for the canvas."""
+        try:
+            mono = next(spec for spec in self.descriptor.mono_crystals if spec.id == vals["monocris"])
+            ana = next(spec for spec in self.descriptor.ana_crystals if spec.id == vals["anacris"])
+            def mechanical_radius(crystal, axis_name, current_angle):
+                axis = self.descriptor.axis_limits.get(axis_name)
+                if axis is None:
+                    return None
+                bound = axis.upper if current_angle >= 0 else abs(axis.lower)
+                theta = min(math.pi / 2, math.radians(abs(bound) / 2))
+                if theta <= 1e-9:
+                    return None
+                return math.pi / crystal.d_spacing / math.sin(theta)
+            return ReachOverlay(
+                math.pi / mono.d_spacing, math.pi / ana.d_spacing,
+                mechanical_radius(mono, "A1", vals["mtt"]),
+                mechanical_radius(ana, "A4", vals["att"]),
+            )
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: reach overlay unavailable ({exc})")
+            return None
+
+    def emit_reciprocal_snapshot(self, advisory_result=None):
+        """Publish the scalar state consumed by the reciprocal dock.
+
+        This deliberately copies values out of widgets on the GUI thread.  The
+        dock may paint repeatedly, but never needs to reach back into widgets.
+        """
+        try:
+            if advisory_result is None:
+                self._set_reciprocal_advisory_style(True)
+            vals = self.get_gui_values()
+            if not vals:
+                return
+            fixed_e = float(vals["fixed_E"])
+            delta_e = float(vals["deltaE"])
+            if vals["K_fixed"] == "Ki Fixed":
+                ki, kf = energy2k(fixed_e), energy2k(fixed_e - delta_e)
+            else:
+                kf, ki = energy2k(fixed_e), energy2k(fixed_e + delta_e)
+            plane = get_scattering_plane_info(self.ub_matrix.U, self.ub_matrix.B)
+            u_hkl, v_hkl = plane["in_plane_vector1_hkl"], plane["in_plane_vector2_hkl"]
+            # User-selected view plane is deliberately controller-local: it
+            # projects through UB but never writes/remounts UB.
+            u_hkl, v_hkl = getattr(self, "_reciprocal_plane_hkl", (u_hkl, v_hkl))
+            u_hkl = primitive_miller(*u_hkl)
+            v_hkl = primitive_miller(*v_hkl)
+            uq = self._hkl_to_sample_q(*u_hkl, vals); vq = self._hkl_to_sample_q(*v_hkl, vals)
+            snapshot = {
+                "ki": float(ki), "kf": float(kf),
+                "qx": float(vals["qx"]), "qy": float(vals["qy"]), "qz": float(vals["qz"]),
+                "p2": getattr(self, "_reciprocal_p2", None),
+                "basis_u": (float(uq[0]), float(uq[1])), "basis_v": (float(vq[0]), float(vq[1])),
+                "plane_u_hkl": u_hkl, "plane_v_hkl": v_hkl,
+                "K_fixed": vals["K_fixed"],
+                "sense": getattr(self, "_reciprocal_sense", 1),
+                "reach_overlay": self._reciprocal_reach_overlay(vals),
+            }
+            if advisory_result is not None:
+                snapshot["reciprocal_advisory"] = advisory_result
+            self.reciprocal_state_changed.emit(snapshot)
+            self.refresh_reciprocal_reflections(vals)
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: could not refresh state ({exc})")
+
+    @Slot(object, object)
+    def set_reciprocal_plane(self, u_hkl, v_hkl):
+        """Set display-only HKL plane axes after validating their UB projection."""
+        try:
+            u_hkl = primitive_miller(*u_hkl)
+            v_hkl = primitive_miller(*v_hkl)
+            vals = self.get_gui_values()
+            u_q, v_q = self._hkl_to_sample_q(*u_hkl, vals), self._hkl_to_sample_q(*v_hkl, vals)
+            # The v1 canvas is the existing horizontal qx/qy projection.  Do
+            # not silently flatten arbitrary 3-D planes: that would make grid
+            # snapping lie about HKL.  A later 3-D projection can lift this.
+            if abs(u_q[2]) > 1e-7 * max(1.0, math.hypot(u_q[0], u_q[1])) or abs(v_q[2]) > 1e-7 * max(1.0, math.hypot(v_q[0], v_q[1])):
+                raise ValueError("U/V must lie in the current horizontal display plane")
+            if math.hypot(u_q[0], u_q[1]) < 1e-8 or math.hypot(v_q[0], v_q[1]) < 1e-8:
+                raise ValueError("U/V must have an in-plane component")
+            if abs(u_q[0]*v_q[1]-u_q[1]*v_q[0]) < 1e-8:
+                raise ValueError("U and V are collinear in the displayed plane")
+            self._reciprocal_plane_hkl = (tuple(u_hkl), tuple(v_hkl))
+            self.emit_reciprocal_snapshot()
+            dock = getattr(self.window, "reciprocal_space_dock", None)
+            if dock is not None:
+                dock.set_plane_status("Display plane updated (view only)")
+        except Exception as exc:
+            message = f"Display plane rejected: {exc}"
+            self.print_to_message_center(f"Reciprocal view: invalid display plane ({exc})")
+            dock = getattr(self.window, "reciprocal_space_dock", None)
+            if dock is not None:
+                dock.set_plane_status(message)
+
+    def refresh_reciprocal_reflections(self, vals=None):
+        """Project table reflections or an explicitly labelled centering fallback."""
+        dock = getattr(self.window, "reciprocal_space_dock", None)
+        if dock is None:
+            return
+        vals = vals or self.get_gui_values()
+        if not vals:
+            return
+        try:
+            key = self.window.sample_dock.get_selected_sample_key()
+            spec = next((sample for sample in self.descriptor.samples if sample.id == key), None)
+            projected = []
+            source = getattr(spec, "reflection_source", None) if spec else None
+            use_table = bool(getattr(self.window.sample_dock, "use_sample_reflection_table_check", None)
+                             and self.window.sample_dock.use_sample_reflection_table_check.isChecked())
+            if use_table and source:
+                try:
+                    for reflection in load_reflections(os.path.join(os.getcwd(), "components", source)):
+                        qx, qy, qz = self._hkl_to_sample_q(reflection.h, reflection.k, reflection.l, vals)
+                        projected.append(ProjectedReflection(qx, qy, reflection.f_squared, f"({reflection.h:g},{reflection.k:g},{reflection.l:g})", qz))
+                    if projected:
+                        dock.set_provenance(f"{len(projected)} sample structure-factor reflections ({source})")
+                    else:
+                        raise ValueError("reflection table contains no usable rows")
+                except (FileNotFoundError, OSError, UnicodeError, ValueError) as exc:
+                    issue = (source, str(exc))
+                    if getattr(self, "_reflection_table_issue", None) != issue:
+                        self._reflection_table_issue = issue
+                        self.print_to_message_center(
+                            f"Reciprocal view: reflection table '{source}' unavailable ({exc}); "
+                            "using selected space-group centering rule"
+                        )
+            if not projected:
+                try:
+                    group = get_space_group(int(self.window.sample_dock.spacegroup_combo.currentData()))
+                    centering = group.centering
+                    group_label = f"selected space group {group.number} ({group.short_name}), {centering}-centering rule"
+                except Exception:
+                    centering = "P"
+                    group_label = "selected space group unavailable, P-centering rule"
+                for h, k, l in generate_allowed_reflections(centering, 4, 4, 4):
+                    qx, qy, qz = self._hkl_to_sample_q(h, k, l, vals)
+                    projected.append(ProjectedReflection(qx, qy, None, f"({h},{k},{l})", qz))
+                dock.set_provenance(f"{group_label} (centering-only; not full structure-factor filtering)")
+            displayed = plane_filtered_unique(projected, 0.0)
+            dock.canvas.set_reflections(displayed)
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal view: could not refresh reflections ({exc})")
+
+    @Slot(object)
+    def apply_reciprocal_move(self, state):
+        """Flush a released drag and publish one ordinary authoritative snapshot."""
+        result = self._apply_reciprocal_state(state)
+        self.reciprocal_live_result.emit(result)
+        # The release is the one point that deliberately replaces the local
+        # preview.  Live acknowledgements use the separate signal above.
+        self.emit_reciprocal_snapshot(result)
+
+    @Slot(object)
+    def apply_reciprocal_live_move(self, state):
+        """Apply a coalesced drag preview without sending a cancelling snapshot."""
+        result = self._apply_reciprocal_state(state)
+        self.reciprocal_live_result.emit(result)
+
+    def _reciprocal_advisory(self, candidate_vals, state, delta_e):
+        """Run the existing feasibility check as advisory-only live feedback."""
+        try:
+            sample_key = self.window.sample_dock.get_selected_sample_key()
+            config = self.instrument.scan_config(
+                self.instrument_state, candidate_vals, sample_key,
+                self.diagnostic_settings, self._build_sample_mount(candidate_vals),
+            )
+            feasible, reason = self.instrument.check_point_feasibility(
+                config, "momentum", [candidate_vals["qx"], candidate_vals["qy"], candidate_vals["qz"], delta_e], candidate_vals,
+            )
+            return bool(feasible), reason
+        except Exception as exc:
+            return None, f"feasibility check unavailable ({exc})"
+
+    def _set_reciprocal_advisory_style(self, feasible):
+        """Colour canonical fields without changing their values or feedback state."""
+        colour = {False: "#c1121f", None: "#d97706"}.get(feasible)
+        style = f"QLineEdit {{ border: 2px solid {colour}; }}" if colour else ""
+        for field in (
+            self.window.scattering_dock.fixed_E_edit,
+            self.window.scattering_dock.deltaE_edit,
+            self.window.scattering_dock.qx_edit,
+            self.window.scattering_dock.qy_edit,
+            self.window.scattering_dock.H_edit,
+            self.window.scattering_dock.K_edit,
+            self.window.scattering_dock.L_edit,
+        ):
+            field.setStyleSheet(style)
+        for field in (
+            self.window.instrument_dock.mtt_edit, self.window.instrument_dock.stt_edit,
+            self.window.instrument_dock.omega_edit, self.window.instrument_dock.chi_edit,
+            self.window.instrument_dock.att_edit,
+        ):
+            field.setStyleSheet(style)
+
+    def _apply_reciprocal_state(self, state):
+        """Atomically apply a live triangle state; infeasibility is not rejection."""
+        if self.updating:
+            return LiveReciprocalResult(state, None, "controller is updating", applied=False)
+        vals = self.get_gui_values()
+        if not vals:
+            return LiveReciprocalResult(state, None, "no reciprocal values available", applied=False)
+        previous = {
+            name: field.text() for name, field in (
+                ("fixed_E", self.window.scattering_dock.fixed_E_edit),
+                ("deltaE", self.window.scattering_dock.deltaE_edit),
+                ("qx", self.window.scattering_dock.qx_edit),
+                ("qy", self.window.scattering_dock.qy_edit),
+                ("H", self.window.scattering_dock.H_edit),
+                ("K", self.window.scattering_dock.K_edit),
+                ("L", self.window.scattering_dock.L_edit),
+            )
+        }
+        previous_tracked = {name: self._previous_values.get(name) for name in previous}
+        previous_p2 = getattr(self, "_reciprocal_p2", None)
+        previous_sense = getattr(self, "_reciprocal_sense", 1)
+        previous_styles = {
+            field: field.styleSheet() for field in (
+                self.window.scattering_dock.fixed_E_edit,
+                self.window.scattering_dock.deltaE_edit,
+                self.window.scattering_dock.qx_edit,
+                self.window.scattering_dock.qy_edit,
+                self.window.scattering_dock.H_edit,
+                self.window.scattering_dock.K_edit,
+                self.window.scattering_dock.L_edit,
+                self.window.instrument_dock.mtt_edit,
+                self.window.instrument_dock.stt_edit,
+                self.window.instrument_dock.omega_edit,
+                self.window.instrument_dock.chi_edit,
+                self.window.instrument_dock.att_edit,
+            )
+        }
+        try:
+            # qz belongs to the physical point but an in-plane drag has no
+            # authority to rewrite its widget.  Preserve the canonical text.
+            qz = float(vals["qz"])
+            delta_e = k2energy(state.ki) - k2energy(state.kf)
+            fixed_e = k2energy(state.ki if vals["K_fixed"] == "Ki Fixed" else state.kf)
+            qx = float(format_editable_number(state.qx))
+            qy = float(format_editable_number(state.qy))
+            fixed_e = float(format_editable_number(fixed_e))
+            delta_e = float(format_editable_number(delta_e))
+            h, k, l = self._sample_q_to_hkl(qx, qy, qz, vals)
+            h, k, l = (float(format_editable_number(value)) for value in (h, k, l))
+            candidate_vals = dict(vals, fixed_E=fixed_e, deltaE=delta_e, qx=qx, qy=qy, qz=qz,
+                                  H=h, K=k, L=l)
+            canonical = ReciprocalState(
+                energy2k(fixed_e if vals["K_fixed"] == "Ki Fixed" else fixed_e + delta_e),
+                energy2k(fixed_e - delta_e if vals["K_fixed"] == "Ki Fixed" else fixed_e),
+                qx, qy, qz, state.p2x, state.p2y, state.basis_u, state.basis_v, state.sense,
+            )
+            feasible, reason = self._reciprocal_advisory(candidate_vals, canonical, delta_e)
+            fields = (
+                ("fixed_E", self.window.scattering_dock.fixed_E_edit, fixed_e),
+                ("deltaE", self.window.scattering_dock.deltaE_edit, delta_e),
+                ("qx", self.window.scattering_dock.qx_edit, qx),
+                ("qy", self.window.scattering_dock.qy_edit, qy),
+                ("H", self.window.scattering_dock.H_edit, h),
+                ("K", self.window.scattering_dock.K_edit, k),
+                ("L", self.window.scattering_dock.L_edit, l),
+            )
+            self.updating = True
+            for name, field, value in fields:
+                text = format_editable_number(value)
+                field.setText(text)
+                self._update_tracked_value(name, value, displayed_text=text)
+            self._reciprocal_p2 = (canonical.p2x, canonical.p2y)
+            self._reciprocal_sense = canonical.sense
+            self._set_reciprocal_advisory_style(feasible)
+        except Exception as exc:
+            self.updating = True
+            for name, field in (
+                ("fixed_E", self.window.scattering_dock.fixed_E_edit),
+                ("deltaE", self.window.scattering_dock.deltaE_edit),
+                ("qx", self.window.scattering_dock.qx_edit),
+                ("qy", self.window.scattering_dock.qy_edit),
+                ("H", self.window.scattering_dock.H_edit),
+                ("K", self.window.scattering_dock.K_edit),
+                ("L", self.window.scattering_dock.L_edit),
+            ):
+                field.setText(previous[name])
+                if previous_tracked[name] is None:
+                    self._previous_values.pop(name, None)
+                else:
+                    self._previous_values[name] = previous_tracked[name]
+            self._reciprocal_p2 = previous_p2
+            self._reciprocal_sense = previous_sense
+            for field, style in previous_styles.items():
+                field.setStyleSheet(style)
+            self.updating = False
+            return LiveReciprocalResult(state, None, f"reciprocal update rolled back ({exc})", applied=False)
+        finally:
+            self.updating = False
+        # Linked energy controls should follow the canonical widgets for every
+        # retained point.  An infeasible/unknown point deliberately leaves
+        # angle widgets stale; only a feasible check asks for a new solve.
+        self.update_all_variables()
+        if feasible:
+            self.update_angles_from_q()
+        return LiveReciprocalResult(canonical, feasible, reason)
+
+    @Slot(object)
+    def apply_reciprocal_values(self, values):
+        """Apply dock numeric energy controls through the canonical fixed mode."""
+        try:
+            vals = self.get_gui_values()
+            if not vals:
+                return
+            state = self.window.reciprocal_space_dock.canvas.model.committed
+            ki = max(0.0, float(values.get("ki", state.ki)))
+            kf = max(0.0, float(values.get("kf", state.kf)))
+            # Ei/Ef are first-class dock edits too.  A changed energy field
+            # overrides its displayed k partner for this commit.
+            if abs(float(values.get("ei", k2energy(ki))) - k2energy(state.ki)) > 1e-8:
+                ki = energy2k(float(values["ei"]))
+            if abs(float(values.get("ef", k2energy(kf))) - k2energy(state.kf)) > 1e-8:
+                kf = energy2k(float(values["ef"]))
+            # Delta-E is independently editable in the dock.  Preserve the
+            # current fixed side while deriving the other side through the same
+            # energy conversion used by the canonical controller path.
+            requested_de = float(values.get("delta_e", state.delta_e))
+            if abs(requested_de - state.delta_e) > 1e-8:
+                if vals["K_fixed"] == "Ki Fixed":
+                    kf = energy2k(k2energy(ki) - requested_de)
+                else:
+                    ki = energy2k(k2energy(kf) + requested_de)
+            requested_q = max(0.0, float(values.get("q", state.q)))
+            q_direction = (state.qx / state.q, state.qy / state.q) if state.q > 1e-9 else (1.0, 0.0)
+            if not math.isfinite(ki) or not math.isfinite(kf) or ki <= 0 or kf <= 0:
+                raise ValueError("ki and kf must be positive")
+            if not triangle_can_close(ki, kf, requested_q):
+                raise ValueError(
+                    f"|Q| must be between {abs(ki-kf):.4g} and {ki+kf:.4g} Å⁻¹ "
+                    "for the selected ki and kf"
+                )
+            self.apply_reciprocal_move(type(state)(ki, kf, requested_q * q_direction[0],
+                                                   requested_q * q_direction[1], state.qz,
+                                                   state.p2x, state.p2y, state.basis_u,
+                                                   state.basis_v, state.sense))
+        except Exception as exc:
+            self.print_to_message_center(f"Reciprocal energy edit rejected: {exc}")
+            self.emit_reciprocal_snapshot()
     
     @Slot(int, int)
     def update_progress(self, current, total):
@@ -1720,7 +2144,7 @@ class TAVIController(QObject):
             check_state.monocris, check_state.anacris,
         )
         if error_flags:
-            from instruments.PUMA_instrument_definition import describe_scan_error_flags
+            from instruments.tas_runtime import describe_scan_error_flags
             reason = describe_scan_error_flags(error_flags) or (
                 "scattering triangle cannot close for this (Q, E) and fixed-k setup"
             )
@@ -1963,7 +2387,7 @@ class TAVIController(QObject):
         if self.updating:
             return
         try:
-            formatted = f"{float(value):.{precision}f}".rstrip('0').rstrip('.')
+            formatted = format_editable_number(value, precision)
             widget.setText(formatted)
         except (ValueError, TypeError):
             pass
@@ -2014,9 +2438,17 @@ class TAVIController(QObject):
             return True
         return False
     
-    def _update_tracked_value(self, field_name: str, value: float):
+    def _update_tracked_value(self, field_name: str, value: float, precision: int = 4,
+                              displayed_text: str | None = None):
         """Update the tracked value for a field (use when setting field programmatically)."""
-        self._previous_values[field_name] = value
+        text = displayed_text if displayed_text is not None else format_editable_number(value, precision)
+        self._previous_values[field_name] = float(text)
+
+    def _set_tracked_angle_text(self, field_name, edit, value):
+        """Set a derived angle and track the exact numeric text being displayed."""
+        text = format_editable_number(value)
+        edit.setText(text)
+        self._update_tracked_value(field_name, value, displayed_text=edit.text())
     
     def update_all_variables(self, skip_crystal_angles=False):
         """
@@ -2055,18 +2487,20 @@ class TAVIController(QObject):
             deltaE = Ei - Ef
             
             # Update energy-related GUI fields
-            self.window.instrument_dock.Ei_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.Ef_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.Ki_edit.setText(f"{Ki:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Ei_edit.setText(format_editable_number(Ei))
+            self.window.instrument_dock.Ef_edit.setText(format_editable_number(Ef))
+            self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
+            self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            for key, value in (("Ei", Ei), ("Ef", Ef), ("Ki", Ki), ("Kf", Kf), ("deltaE", deltaE), ("fixed_E", vals['fixed_E'])):
+                self._update_tracked_value(key, value)
             
             # Only update crystal angles if not skipping (angles are not the source of truth)
             if not skip_crystal_angles:
                 mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
                 att = 2 * k2angle(Kf, self.anacris_info['da'])
-                self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+                self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
+                self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
         except (ValueError, KeyError) as e:
             pass
@@ -2255,7 +2689,7 @@ class TAVIController(QObject):
 
     def _format_field_value(self, value, precision=4):
         """Format numeric field value consistently."""
-        return f"{float(value):.{precision}f}".rstrip('0').rstrip('.')
+        return format_editable_number(value, precision)
 
     def _update_locked_field_if_needed(self, line_edit, value):
         """Update locked field only if the value changed."""
@@ -2280,9 +2714,38 @@ class TAVIController(QObject):
 
     def _load_bending_parameters(self, parameters):
         """Load absolute bending radii from the saved parameter block."""
-        self.window.instrument_dock.rhm_edit.setText(str(parameters.get("rhm_var", "0")))
-        self.window.instrument_dock.rvm_edit.setText(str(parameters.get("rvm_var", "0")))
-        self.window.instrument_dock.rha_edit.setText(str(parameters.get("rha_var", "0")))
+        self.window.instrument_dock.rhm_edit.setText(format_editable_number(parameters.get("rhm_var", "0")))
+        self.window.instrument_dock.rvm_edit.setText(format_editable_number(parameters.get("rvm_var", "0")))
+        self.window.instrument_dock.rha_edit.setText(format_editable_number(parameters.get("rha_var", "0")))
+
+    def _normalise_loaded_numbers(self, parameters):
+        """Replace malformed saved numeric values with documented defaults.
+
+        The subsequent loader can keep direct widget writes while malformed or
+        null JSON values become visible warnings rather than startup crashes.
+        """
+        defaults = {
+            "rhm_var": 0, "rvm_var": 0, "rha_var": 0,
+            "mtt_var": 41.167, "stt_var": -71.2502, "omega_var": -35.6251,
+            "chi_var": 0, "att_var": 41.167, "Ki_var": 2.6634, "Kf_var": 2.6634,
+            "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
+            "qx_var": 3.1028, "qy_var": 0, "qz_var": 0, "H_var": 2, "K_var": 0,
+            "L_var": 0, "deltaE_var": 0, "kappa_var": 0, "psi_offset_var": 0,
+            "lattice_a_var": 4.05, "lattice_b_var": 4.05, "lattice_c_var": 4.05,
+            "lattice_alpha_var": 90, "lattice_beta_var": 90, "lattice_gamma_var": 90,
+        }
+        result = dict(parameters)
+        for key, default in defaults.items():
+            if key not in result:
+                continue
+            try:
+                number = float(result[key])
+                if not math.isfinite(number):
+                    raise ValueError("non-finite value")
+            except (TypeError, ValueError):
+                self.print_to_message_center(f"Parameters load: invalid {key}; using {default}")
+                result[key] = default
+        return result
 
     def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked):
         """Apply lock state for ideal bending buttons."""
@@ -2314,17 +2777,21 @@ class TAVIController(QObject):
             Ki = angle2k(vals['mtt'] / 2, self.monocris_info['dm'])
             Ei = k2energy(Ki)
             
-            self.window.instrument_dock.Ki_edit.setText(f"{Ki:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.Ei_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
+            self.window.instrument_dock.Ei_edit.setText(format_editable_number(Ei))
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scattering_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ei))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_tracked_value('Ki', Ki)
+            self._update_tracked_value('Ei', Ei)
+            self._update_tracked_value('fixed_E', Ei if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
+            self._update_tracked_value('deltaE', deltaE)
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -2347,17 +2814,21 @@ class TAVIController(QObject):
             Kf = angle2k(vals['att'] / 2, self.anacris_info['da'])
             Ef = k2energy(Kf)
             
-            self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.Ef_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
+            self.window.instrument_dock.Ef_edit.setText(format_editable_number(Ef))
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scattering_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ef))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_tracked_value('Kf', Kf)
+            self._update_tracked_value('Ef', Ef)
+            self._update_tracked_value('fixed_E', Ef if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
+            self._update_tracked_value('deltaE', deltaE)
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -2369,23 +2840,28 @@ class TAVIController(QObject):
         vals = self.get_gui_values()
         if not vals or not self.monocris_info:
             return
+        if not self._field_value_changed('Ki', vals['Ki']):
+            return
         
         try:
             self.updating = True
             Ei = k2energy(vals['Ki'])
             mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
             
-            self.window.instrument_dock.Ei_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Ei_edit.setText(format_editable_number(Ei))
+            self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scattering_dock.fixed_E_edit.setText(f"{Ei:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ei))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_tracked_value('Ei', Ei)
+            self._update_tracked_value('fixed_E', Ei if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
+            self._update_tracked_value('deltaE', deltaE)
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -2397,23 +2873,28 @@ class TAVIController(QObject):
         vals = self.get_gui_values()
         if not vals or not self.monocris_info:
             return
+        if not self._field_value_changed('Ei', vals['Ei']):
+            return
         
         try:
             self.updating = True
             Ki = energy2k(vals['Ei'])
             mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
             
-            self.window.instrument_dock.Ki_edit.setText(f"{Ki:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
+            self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
-                self.window.scattering_dock.fixed_E_edit.setText(f"{vals['Ei']:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(vals['Ei']))
             
             # Update deltaE
             Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
             deltaE = vals['Ei'] - Ef
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_tracked_value('Ki', Ki)
+            self._update_tracked_value('fixed_E', vals['Ei'] if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
+            self._update_tracked_value('deltaE', deltaE)
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -2425,23 +2906,28 @@ class TAVIController(QObject):
         vals = self.get_gui_values()
         if not vals or not self.anacris_info:
             return
+        if not self._field_value_changed('Kf', vals['Kf']):
+            return
         
         try:
             self.updating = True
             Ef = k2energy(vals['Kf'])
             att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
             
-            self.window.instrument_dock.Ef_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Ef_edit.setText(format_editable_number(Ef))
+            self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scattering_dock.fixed_E_edit.setText(f"{Ef:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ef))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_tracked_value('Ef', Ef)
+            self._update_tracked_value('fixed_E', Ef if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
+            self._update_tracked_value('deltaE', deltaE)
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -2453,23 +2939,28 @@ class TAVIController(QObject):
         vals = self.get_gui_values()
         if not vals or not self.anacris_info:
             return
+        if not self._field_value_changed('Ef', vals['Ef']):
+            return
         
         try:
             self.updating = True
             Kf = energy2k(vals['Ef'])
             att = 2 * k2angle(Kf, self.anacris_info['da'])
             
-            self.window.instrument_dock.Kf_edit.setText(f"{Kf:.4f}".rstrip('0').rstrip('.'))
-            self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+            self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
+            self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
-                self.window.scattering_dock.fixed_E_edit.setText(f"{vals['Ef']:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(vals['Ef']))
             
             # Update deltaE
             Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
             deltaE = Ei - vals['Ef']
-            self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_tracked_value('Kf', Kf)
+            self._update_tracked_value('fixed_E', vals['Ef'] if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
+            self._update_tracked_value('deltaE', deltaE)
         finally:
             self.updating = False
             self.update_ideal_bending_buttons()
@@ -2478,14 +2969,21 @@ class TAVIController(QObject):
         """Update all when K fixed mode changes."""
         self.update_all_variables()
         self.update_angles_from_q()
+        self.request_reciprocal_snapshot()
     
     def on_fixed_E_changed(self):
         """Update all when fixed E changes."""
+        vals = self.get_gui_values()
+        if not vals or not self._field_value_changed('fixed_E', vals['fixed_E']):
+            return
         self.update_all_variables()
         self.update_angles_from_q()
     
     def on_deltaE_changed(self):
         """Update energies when deltaE changes."""
+        vals = self.get_gui_values()
+        if not vals or not self._field_value_changed('deltaE', vals['deltaE']):
+            return
         self.update_all_variables()
         # Keep sample angles in sync with updated deltaE
         self.update_angles_from_q()
@@ -2527,10 +3025,10 @@ class TAVIController(QObject):
             )
             if not error_flags:
                 qx, qy, qz, deltaE = q_vals
-                self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
-                self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
-                self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
-                self.window.scattering_dock.deltaE_edit.setText(f"{deltaE:.4f}".rstrip('0').rstrip('.'))
+                self.window.scattering_dock.qx_edit.setText(format_editable_number(qx))
+                self.window.scattering_dock.qy_edit.setText(format_editable_number(qy))
+                self.window.scattering_dock.qz_edit.setText(format_editable_number(qz))
+                self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
                 # Update tracked Q values since we just set them
                 self._update_tracked_value('qx', qx)
                 self._update_tracked_value('qy', qy)
@@ -2571,9 +3069,9 @@ class TAVIController(QObject):
         try:
             self.updating = True
             H, K, L = self._sample_q_to_hkl(vals['qx'], vals['qy'], vals['qz'], vals)
-            self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.H_edit.setText(format_editable_number(H))
+            self.window.scattering_dock.K_edit.setText(format_editable_number(K))
+            self.window.scattering_dock.L_edit.setText(format_editable_number(L))
             # Update tracked values for HKL since we just set them
             self._update_tracked_value('H', H)
             self._update_tracked_value('K', K)
@@ -2610,9 +3108,9 @@ class TAVIController(QObject):
             
             self.updating = True
             qx, qy, qz = self._hkl_to_sample_q(H, K, L, vals)
-            self.window.scattering_dock.qx_edit.setText(f"{qx:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.qy_edit.setText(f"{qy:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.qz_edit.setText(f"{qz:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.qx_edit.setText(format_editable_number(qx))
+            self.window.scattering_dock.qy_edit.setText(format_editable_number(qy))
+            self.window.scattering_dock.qz_edit.setText(format_editable_number(qz))
             # Update tracked values for Q since we just set them
             self._update_tracked_value('qx', qx)
             self._update_tracked_value('qy', qy)
@@ -2645,9 +3143,9 @@ class TAVIController(QObject):
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
             H, K, L = self._sample_q_to_hkl(qx, qy, qz, vals)
-            self.window.scattering_dock.H_edit.setText(f"{H:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.K_edit.setText(f"{K:.4f}".rstrip('0').rstrip('.'))
-            self.window.scattering_dock.L_edit.setText(f"{L:.4f}".rstrip('0').rstrip('.'))
+            self.window.scattering_dock.H_edit.setText(format_editable_number(H))
+            self.window.scattering_dock.K_edit.setText(format_editable_number(K))
+            self.window.scattering_dock.L_edit.setText(format_editable_number(L))
             # Update tracked values for HKL since we just set them
             self._update_tracked_value('H', H)
             self._update_tracked_value('K', K)
@@ -2656,6 +3154,7 @@ class TAVIController(QObject):
             self.print_to_message_center(
                 f"Lattice updated: HKL = ({H:.4f}, {K:.4f}, {L:.4f}) for Q = ({qx:.4f}, {qy:.4f}, {qz:.4f}) Å⁻¹"
             )
+            self.request_reciprocal_snapshot()
         except Exception as e:
             self.print_to_message_center(f"Error updating HKL from lattice: {e}")
         finally:
@@ -2677,17 +3176,15 @@ class TAVIController(QObject):
             )
             if not error_flags:
                 mtt, stt, sth, saz, att = angles_array
-                self.window.instrument_dock.mtt_edit.setText(f"{mtt:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.stt_edit.setText(f"{stt:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.omega_edit.setText(f"{sth:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.chi_edit.setText(f"{saz:.4f}".rstrip('0').rstrip('.'))
-                self.window.instrument_dock.att_edit.setText(f"{att:.4f}".rstrip('0').rstrip('.'))
+                self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
+                self.window.instrument_dock.stt_edit.setText(format_editable_number(stt))
+                self.window.instrument_dock.omega_edit.setText(format_editable_number(sth))
+                self.window.instrument_dock.chi_edit.setText(format_editable_number(saz))
+                self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
                 # Update tracked values for angles since we just set them
                 self._update_tracked_value('omega', sth)
                 self._update_tracked_value('chi', saz)
                 self._update_tracked_value('stt', stt)
-                self._update_tracked_value('mtt', mtt)
-                self._update_tracked_value('att', att)
         except Exception:
             pass
         finally:
@@ -3435,12 +3932,12 @@ class TAVIController(QObject):
             if dlg.exec():
                 # Apply refined lattice to sample dock
                 a, b, c, alpha, beta, gamma = refined
-                self.window.sample_dock.lattice_a_edit.setText(f"{a:.4f}".rstrip('0').rstrip('.'))
-                self.window.sample_dock.lattice_b_edit.setText(f"{b:.4f}".rstrip('0').rstrip('.'))
-                self.window.sample_dock.lattice_c_edit.setText(f"{c:.4f}".rstrip('0').rstrip('.'))
-                self.window.sample_dock.lattice_alpha_edit.setText(f"{alpha:.4f}".rstrip('0').rstrip('.'))
-                self.window.sample_dock.lattice_beta_edit.setText(f"{beta:.4f}".rstrip('0').rstrip('.'))
-                self.window.sample_dock.lattice_gamma_edit.setText(f"{gamma:.4f}".rstrip('0').rstrip('.'))
+                self.window.sample_dock.lattice_a_edit.setText(format_editable_number(a, 6))
+                self.window.sample_dock.lattice_b_edit.setText(format_editable_number(b, 6))
+                self.window.sample_dock.lattice_c_edit.setText(format_editable_number(c, 6))
+                self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(alpha, 6))
+                self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(beta, 6))
+                self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(gamma, 6))
                 self.on_lattice_changed()
                 self.print_to_message_center(
                     f"Refined lattice applied: a={a:.4f}, b={b:.4f}, c={c:.4f}, "
@@ -3525,6 +4022,7 @@ class TAVIController(QObject):
             self.window.sample_dock.update_ub_indicator(not self.ub_matrix.is_identity)
         # Refresh angles from Q since UB affects the mapping
         self.update_angles_from_q()
+        self.request_reciprocal_snapshot()
 
     # ===== UB Training Methods =====
 
@@ -3856,6 +4354,10 @@ class TAVIController(QObject):
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
             "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
+            "use_sample_reflection_table_var": bool(
+                getattr(self.window.sample_dock, "use_sample_reflection_table_check", None)
+                and self.window.sample_dock.use_sample_reflection_table_check.isChecked()
+            ),
             # UB matrix state
             "ub_matrix_state": self.ub_matrix.to_dict(),
             "ub_training_hash": self.window.ub_matrix_dock.load_hash_edit.text() if hasattr(self.window, 'ub_matrix_dock') else "",
@@ -3973,8 +4475,9 @@ class TAVIController(QObject):
     def load_parameters(self):
         """Load parameters from JSON file."""
         if os.path.exists("config/parameters.json"):
-            with open("config/parameters.json", "r") as file:
+            with open("config/parameters.json", "r", encoding="utf-8") as file:
                 parameters = self._parameters_block(json.load(file))
+                parameters = self._normalise_loaded_numbers(parameters)
 
                 # No saved block for this instrument (fresh install or a
                 # pre-namespacing file): use the full default path so derived
@@ -3998,19 +4501,25 @@ class TAVIController(QObject):
                 self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
                     parameters.get("anacris_var"), self.descriptor.ana_crystals
                 ))
-                self.window.instrument_dock.mtt_edit.setText(str(parameters.get("mtt_var", "41.167")))
-                self.window.instrument_dock.stt_edit.setText(str(parameters.get("stt_var", "-71.2502")))
-                self.window.instrument_dock.omega_edit.setText(str(parameters.get("omega_var", "-35.6251")))
-                self.window.instrument_dock.chi_edit.setText(str(parameters.get("chi_var", 0)))
-                self.window.instrument_dock.att_edit.setText(str(parameters.get("att_var", "41.167")))
-                self.window.instrument_dock.Ki_edit.setText(str(parameters.get("Ki_var", "2.6634")))
-                self.window.instrument_dock.Kf_edit.setText(str(parameters.get("Kf_var", "2.6634")))
-                self.window.instrument_dock.Ei_edit.setText(str(parameters.get("Ei_var", "14.7")))
-                self.window.instrument_dock.Ef_edit.setText(str(parameters.get("Ef_var", "14.7")))
+                self._set_tracked_angle_text(
+                    'mtt', self.window.instrument_dock.mtt_edit,
+                    parameters.get("mtt_var", "41.167"),
+                )
+                self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", "-71.2502")))
+                self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", "-35.6251")))
+                self.window.instrument_dock.chi_edit.setText(format_editable_number(parameters.get("chi_var", 0)))
+                self._set_tracked_angle_text(
+                    'att', self.window.instrument_dock.att_edit,
+                    parameters.get("att_var", "41.167"),
+                )
+                self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
+                self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
+                self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("Ei_var", "14.7")))
+                self.window.instrument_dock.Ef_edit.setText(format_editable_number(parameters.get("Ef_var", "14.7")))
                 self.window.instrument_dock.set_source_id(
                     parameters.get("source_type_var", self.descriptor.source_types[0].id)
                 )
-                self.window.instrument_dock.source_dE_edit.setText(str(parameters.get("source_dE_var", "2")))
+                self.window.instrument_dock.source_dE_edit.setText(format_editable_number(parameters.get("source_dE_var", "2")))
                 # Descriptor-driven categories (nested containers; legacy flat
                 # keys from pre-Phase-2 files migrate through the fallbacks)
                 self.window.instrument_dock.set_module_values(
@@ -4035,23 +4544,23 @@ class TAVIController(QObject):
                 
                 self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
                 self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
-                self.window.scattering_dock.fixed_E_edit.setText(str(parameters.get("fixed_E_var", 14.7)))
-                self.window.scattering_dock.qx_edit.setText(str(parameters.get("qx_var", "3.1028")))
-                self.window.scattering_dock.qy_edit.setText(str(parameters.get("qy_var", 0)))
-                self.window.scattering_dock.qz_edit.setText(str(parameters.get("qz_var", 0)))
+                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(parameters.get("fixed_E_var", 14.7)))
+                self.window.scattering_dock.qx_edit.setText(format_editable_number(parameters.get("qx_var", "3.1028")))
+                self.window.scattering_dock.qy_edit.setText(format_editable_number(parameters.get("qy_var", 0)))
+                self.window.scattering_dock.qz_edit.setText(format_editable_number(parameters.get("qz_var", 0)))
                 # HKL values
-                self.window.scattering_dock.H_edit.setText(str(parameters.get("H_var", 2)))
-                self.window.scattering_dock.K_edit.setText(str(parameters.get("K_var", 0)))
-                self.window.scattering_dock.L_edit.setText(str(parameters.get("L_var", 0)))
-                self.window.scattering_dock.deltaE_edit.setText(str(parameters.get("deltaE_var", 0)))
+                self.window.scattering_dock.H_edit.setText(format_editable_number(parameters.get("H_var", 2)))
+                self.window.scattering_dock.K_edit.setText(format_editable_number(parameters.get("K_var", 0)))
+                self.window.scattering_dock.L_edit.setText(format_editable_number(parameters.get("L_var", 0)))
+                self.window.scattering_dock.deltaE_edit.setText(format_editable_number(parameters.get("deltaE_var", 0)))
                 self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
                 # Default scan: H-scan around Al (200) Bragg peak
                 self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
                 self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
                 
                 # Sample alignment offsets (kappa and psi)
-                self.window.sample_dock.kappa_edit.setText(str(parameters.get("kappa_var", 0)))
-                self.window.sample_dock.psi_edit.setText(str(parameters.get("psi_offset_var", 0)))
+                self.window.sample_dock.kappa_edit.setText(format_editable_number(parameters.get("kappa_var", 0)))
+                self.window.sample_dock.psi_edit.setText(format_editable_number(parameters.get("psi_offset_var", 0)))
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
@@ -4083,12 +4592,12 @@ class TAVIController(QObject):
                 # Saved lattice values are applied AFTER the sample restore: the
                 # sample-change handler adopts the sample's own lattice, and the
                 # user's saved (possibly hand-edited) values must win on reload.
-                self.window.sample_dock.lattice_a_edit.setText(str(parameters.get("lattice_a_var", "4.05")))
-                self.window.sample_dock.lattice_b_edit.setText(str(parameters.get("lattice_b_var", "4.05")))
-                self.window.sample_dock.lattice_c_edit.setText(str(parameters.get("lattice_c_var", "4.05")))
-                self.window.sample_dock.lattice_alpha_edit.setText(str(parameters.get("lattice_alpha_var", "90")))
-                self.window.sample_dock.lattice_beta_edit.setText(str(parameters.get("lattice_beta_var", "90")))
-                self.window.sample_dock.lattice_gamma_edit.setText(str(parameters.get("lattice_gamma_var", "90")))
+                self.window.sample_dock.lattice_a_edit.setText(format_editable_number(parameters.get("lattice_a_var", "4.05"), 6))
+                self.window.sample_dock.lattice_b_edit.setText(format_editable_number(parameters.get("lattice_b_var", "4.05"), 6))
+                self.window.sample_dock.lattice_c_edit.setText(format_editable_number(parameters.get("lattice_c_var", "4.05"), 6))
+                self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(parameters.get("lattice_alpha_var", "90"), 6))
+                self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(parameters.get("lattice_beta_var", "90"), 6))
+                self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(parameters.get("lattice_gamma_var", "90"), 6))
                 # Restore space group selection
                 try:
                     sg_number = parameters.get("space_group_number_var")
@@ -4098,6 +4607,15 @@ class TAVIController(QObject):
                             self.window.sample_dock.spacegroup_combo.setCurrentIndex(idx)
                 except Exception:
                     pass
+                reflection_table_check = getattr(
+                    self.window.sample_dock,
+                    "use_sample_reflection_table_check",
+                    None,
+                )
+                if reflection_table_check is not None:
+                    reflection_table_check.setChecked(
+                        bool(parameters.get("use_sample_reflection_table_var", False))
+                    )
                 # Restore UB matrix state
                 ub_state = parameters.get("ub_matrix_state")
                 if ub_state:
@@ -4148,6 +4666,10 @@ class TAVIController(QObject):
                 # Unblock signals after all parameters are loaded
                 self.window.simulation_dock.scan_command_1_edit.blockSignals(False)
                 self.window.simulation_dock.scan_command_2_edit.blockSignals(False)
+                loaded_values = self.get_gui_values() or {}
+                for key in ("Ki", "Kf", "Ei", "Ef", "fixed_E", "deltaE"):
+                    if key in loaded_values:
+                        self._update_tracked_value(key, loaded_values[key])
                 
             self.print_to_message_center("Parameters loaded successfully")
         else:
@@ -4264,11 +4786,11 @@ class TAVIController(QObject):
         
         self.window.instrument_dock.set_mono_id(self.descriptor.mono_crystals[0].id)
         self.window.instrument_dock.set_ana_id(self.descriptor.ana_crystals[0].id)
-        self.window.instrument_dock.mtt_edit.setText("41.167")
+        self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, "41.167")
         self.window.instrument_dock.stt_edit.setText("-71.2502")
         self.window.instrument_dock.omega_edit.setText("-35.6251")
         self.window.instrument_dock.chi_edit.setText("0")
-        self.window.instrument_dock.att_edit.setText("41.167")
+        self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, "41.167")
         self.window.instrument_dock.Ki_edit.setText("2.6634")
         self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
@@ -4298,12 +4820,12 @@ class TAVIController(QObject):
         self.window.scattering_dock.deltaE_edit.setText("0")
         self.window.simulation_dock.diagnostic_mode_check.setChecked(True)
         
-        self.window.sample_dock.lattice_a_edit.setText("4.05")
-        self.window.sample_dock.lattice_b_edit.setText("4.05")
-        self.window.sample_dock.lattice_c_edit.setText("4.05")
-        self.window.sample_dock.lattice_alpha_edit.setText("90")
-        self.window.sample_dock.lattice_beta_edit.setText("90")
-        self.window.sample_dock.lattice_gamma_edit.setText("90")
+        self.window.sample_dock.lattice_a_edit.setText(format_editable_number(4.05, 6))
+        self.window.sample_dock.lattice_b_edit.setText(format_editable_number(4.05, 6))
+        self.window.sample_dock.lattice_c_edit.setText(format_editable_number(4.05, 6))
+        self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(90, 6))
+        self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(90, 6))
+        self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(90, 6))
         # Sample alignment offset defaults
         self.window.sample_dock.kappa_edit.setText("0")
         self.window.sample_dock.psi_edit.setText("0")
@@ -5305,9 +5827,9 @@ class TAVIController(QObject):
         the instrument's ``check_point_feasibility`` (the same angle math the run
         uses). API-side only -- the GUI Run path never calls this.
 
-        Returns ``{"points", "per_command", "infeasible"}`` where ``per_command``
+        Returns a point-level feasibility manifest where ``per_command``
         is a list of ``{"variable", "count", "values"}`` and ``infeasible`` is a
-        list of ``{"index", "values", "reason"}`` in run order (the linear index
+        list of ``{"index", "values", "kind", "reason"}`` in run order (the linear index
         matches ``run_simulation``'s ``scan_parameter_input`` order, so the
         skip-filter can drop exactly those points).
         """
@@ -5318,7 +5840,8 @@ class TAVIController(QObject):
         relative_mode_1 = launch_state.get('relative_mode_1', False)
         relative_mode_2 = launch_state.get('relative_mode_2', False)
 
-        result = {"points": 0, "per_command": [], "infeasible": []}
+        result = {"requested_points": 0, "per_command": [], "infeasible": [],
+                  "point_manifest": []}
 
         # Single-command swap matches run_simulation (a lone command 2 becomes 1).
         if cmd2 and not cmd1:
@@ -5335,12 +5858,24 @@ class TAVIController(QObject):
 
         def _feasible(scan_point):
             if not callable(feas_fn):
-                return True, None
+                return True, None, None
             try:
-                return feas_fn(scan_config, scan_mode, scan_point, vals)
+                feasible, reason = feas_fn(scan_config, scan_mode, scan_point, vals)
+                kind = None if feasible else "physical_infeasible"
+                return bool(feasible), reason, kind
             except Exception as exc:
-                # A solver blow-up is itself an infeasible point, surfaced.
-                return False, f"angle solve error: {exc}"
+                return False, f"angle solve error: {exc}", "geometry_solver_error"
+
+        def _record(index, values, scan_point):
+            feasible, reason, kind = _feasible(scan_point)
+            entry = {"index": index, "values": values, "feasible": feasible,
+                     "kind": kind, "reason": reason}
+            result["point_manifest"].append(entry)
+            if not feasible:
+                result["infeasible"].append({
+                    "index": index, "values": values, "kind": kind,
+                    "reason": reason,
+                })
 
         def _expand(cmd, relative):
             var, values = parse_scan_steps(cmd)
@@ -5359,14 +5894,8 @@ class TAVIController(QObject):
                 for idx, value1 in enumerate(values1):
                     scan_point = template[:]
                     scan_point[vi[var1]] = value1
-                    feasible, reason = _feasible(scan_point)
-                    if not feasible:
-                        result["infeasible"].append({
-                            "index": idx,
-                            "values": {var1: value1},
-                            "reason": reason,
-                        })
-                result["points"] = len(values1)
+                    _record(idx, {var1: value1}, scan_point)
+                result["requested_points"] = len(values1)
             elif cmd1 and cmd2:
                 var1, values1 = _expand(cmd1, relative_mode_1)
                 var2, values2 = _expand(cmd2, relative_mode_2)
@@ -5382,34 +5911,43 @@ class TAVIController(QObject):
                         scan_point = template[:]
                         scan_point[vi[var1]] = value1
                         scan_point[vi[var2]] = value2
-                        feasible, reason = _feasible(scan_point)
-                        if not feasible:
-                            result["infeasible"].append({
-                                "index": linear,
-                                "values": {var1: value1, var2: value2},
-                                "reason": reason,
-                            })
+                        _record(linear, {var1: value1, var2: value2}, scan_point)
                         linear += 1
-                result["points"] = len(values1) * len(values2)
+                result["requested_points"] = len(values1) * len(values2)
             else:
                 # Single point at current settings.
-                feasible, reason = _feasible(template[:])
-                if not feasible:
-                    result["infeasible"].append({
-                        "index": 0, "values": {}, "reason": reason
-                    })
-                result["points"] = 1
+                _record(0, {}, template[:])
+                result["requested_points"] = 1
         except Exception as exc:
             # Unparseable command (e.g. force-submitted): cannot expand, so report
             # no infeasible points and a best-effort count. run_simulation will
             # surface any downstream failure normally.
             self.print_to_message_center(f"Scan validation expansion failed: {exc}")
             try:
-                result["points"] = self._count_scan_points(cmd1, cmd2)
+                result["requested_points"] = self._count_scan_points(cmd1, cmd2)
             except Exception:
-                result["points"] = 1
+                result["requested_points"] = 1
             result["per_command"] = []
             result["infeasible"] = []
+            result["point_manifest"] = []
+
+        requested = int(result["requested_points"])
+        if result["point_manifest"]:
+            mask = [bool(entry["feasible"]) for entry in result["point_manifest"]]
+        else:
+            mask = [True] * requested
+        segments = []
+        start = None
+        for index, feasible in enumerate(mask + [False]):
+            if feasible and start is None:
+                start = index
+            elif not feasible and start is not None:
+                segments.append({"start_index": start, "end_index": index - 1})
+                start = None
+        result["planned_feasible_mask"] = mask
+        result["feasible_points"] = sum(mask)
+        result["partial"] = 0 < result["feasible_points"] < requested
+        result["feasible_segments"] = segments
 
         return result
 
@@ -5542,6 +6080,7 @@ class TAVIController(QObject):
             self.current_sample_settings = {"sample_label": label, "sample_key": key}
             self.print_to_message_center(f"Sample selection changed: {label} ({key})")
             self._adopt_sample_lattice(key)
+            self.request_reciprocal_snapshot()
         except Exception as e:
             self.print_to_message_center(f"Sample selection change failed: {e}")
 
@@ -5661,6 +6200,21 @@ class TAVIController(QObject):
                         break
                     continue
     
+    @staticmethod
+    def _mark_executed_result_point(result, *, is_2d_scan,
+                                    is_single_point_scan, idx_1d, idx_x, idx_y):
+        """Mark one successfully stored point in original request order."""
+        if result is None or not result.executed_feasible_mask:
+            return
+        if is_2d_scan:
+            original_index = idx_y * len(result.scan_values_1) + idx_x
+        elif is_single_point_scan:
+            original_index = 0
+        else:
+            original_index = idx_1d
+        if 0 <= original_index < len(result.executed_feasible_mask):
+            result.executed_feasible_mask[original_index] = True
+
     def _run_scan_deterministic(self, launch_state, job, scan_parameter_input,
                                 scan_mode, scan_config, is_2d_scan,
                                 is_single_point_scan, variable_name1,
@@ -5892,6 +6446,12 @@ class TAVIController(QObject):
                                 res.counts[idx_1d] = counts
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
+                            self._mark_executed_result_point(
+                                res,
+                                is_2d_scan=is_2d_scan,
+                                is_single_point_scan=is_single_point_scan,
+                                idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            )
                         if is_2d_scan:
                             self._publish_api_event('point', {
                                 'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
@@ -6311,8 +6871,8 @@ class TAVIController(QObject):
                 'valid_mask_2d': None,
             })
 
-        # allow_partial (API only): the submission pre-determined some points
-        # geometrically infeasible and asked to skip them. Drop those points so
+        # API feasibility: submission pre-determined some points infeasible.
+        # Drop those points so
         # the prep thread never queues a snapshot for them; the result arrays
         # keep their None placeholders and job.result.skipped_points documents
         # exactly what was omitted (never silent gaps). The linear index matches
@@ -6327,12 +6887,18 @@ class TAVIController(QObject):
             ]
             self.message_printed.emit(
                 f"Skipping {len(skipped_indices)} infeasible point(s) "
-                f"(allow_partial); running {len(scan_parameter_input)}."
+                f"from the frozen feasibility manifest; running "
+                f"{len(scan_parameter_input)}."
             )
-        if job is not None and skipped_points:
+        if job is not None:
             with job.lock:
                 if job.result is not None:
                     job.result.skipped_points = list(skipped_points)
+                    planned = list(launch_state.get('planned_feasible_mask') or [])
+                    job.result.planned_feasible_mask = planned
+                    job.result.executed_feasible_mask = [False] * len(planned)
+                    job.result.feasible_segments = list(
+                        launch_state.get('feasible_segments') or [])
                 job.progress_total = len(scan_parameter_input)
 
         if is_2d_scan:
@@ -6679,6 +7245,12 @@ class TAVIController(QObject):
                                 res.counts[idx_1d] = float(counts)
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
+                            self._mark_executed_result_point(
+                                res,
+                                is_2d_scan=is_2d_scan,
+                                is_single_point_scan=is_single_point_scan,
+                                idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            )
 
                         # Publish the per-point SSE event (outside the lock).
                         if is_2d_scan:
