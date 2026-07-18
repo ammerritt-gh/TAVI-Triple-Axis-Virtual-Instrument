@@ -73,6 +73,16 @@ Simulation results are saved in the `output` directory with the following struct
 
 TAVI includes an optional remote API that lets external programs — scripts, notebooks, `curl`, or LLM agents — drive a running TAVI GUI over a local HTTP port. You can read the full instrument state, set any parameter, submit scans, stream live per-point results, and fetch complete scan data. The server binds `127.0.0.1:8642` by default and is controlled from the **Remote API** dock (Allow control / Read-only / Off). See `docs/API_USER_GUIDE.md` for the complete guide, including copy-paste examples for both humans and LLM agents.
 
+## Instrument packages
+
+Each instrument lives under `instruments/<id>/` with its runtime model (when
+runnable), a plain-language overview, evidence status, immutable reference
+snapshots where available (or documented snapshot gaps where none exists), and
+one low-effort scientist review document. PUMA and IN8 are
+runnable; PANDA and IN12 are research packages and do not appear in the
+instrument picker. See `docs/INSTRUMENT_AUTHORING.md` and validate packages
+with `python -m instruments.package_validation`.
+
 ## Troubleshooting
 
 **"No module named 'mcstasscript'"**
@@ -83,7 +93,6 @@ TAVI includes an optional remote API that lets external programs — scripts, no
 
 ## TODO List
 TAVI is still in development, and several major features still need to be integrated:
-- Dynamic loading of different instruments
 - Improved integration of varied samples and sample configuration
 - Tutorial documentation
 - Package development for deployment

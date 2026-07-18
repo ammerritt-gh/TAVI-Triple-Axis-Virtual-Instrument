@@ -432,7 +432,7 @@ def test_scan_known_top_level_keys_pass():
         status, body, _ = _request(
             base + "/scan", method="POST",
             data={"parameters": {"Ei": 14.0}, "force": True,
-                  "allow_partial": True, "isolated": True,
+                  "isolated": True,
                   "engine": "mcstas", "seed": 7, "noiseless": False})
         assert status == 202
         assert body["job_id"] == "j-0001"

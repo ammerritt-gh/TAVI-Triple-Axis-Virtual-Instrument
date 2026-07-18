@@ -2,9 +2,9 @@
 
 Part of the configurable-instruments effort (``docs/CONFIGURABLE_INSTRUMENTS.md``
 §5, §17). A registered instrument is any object satisfying ``InstrumentPlugin``;
-PUMA is the first implementation (``instruments/puma_plugin.py``, wrapping the
-existing ``build_PUMA_instrument`` / ``compute_scan_snapshot`` /
-``run_PUMA_point``); IN8 will be the second. The contract is intentionally free
+PUMA is the first implementation (``instruments/puma/plugin.py``, wrapping its
+package-local builder plus the shared TAS preparation/execution runtime); IN8
+is the second. The contract is intentionally free
 of PUMA-specific parameter names -- the parameter *set* lives in the descriptor,
 and a snapshot's ``params`` is just "this instrument's parameters".
 
@@ -99,9 +99,9 @@ class InstrumentPlugin(Protocol):
     """Contract every instrument plugin satisfies.
 
     Methods mirror the original PUMA functions, lifted behind a stable interface:
-      - ``build``            <- ``build_PUMA_instrument``
+      - ``build``            <- the package-local McStas tree builder
       - ``compute_snapshot`` <- ``compute_scan_snapshot``
-      - ``run_point``        <- ``run_PUMA_point``
+      - ``run_point``        <- shared ``run_tas_point`` execution
     plus ``descriptor`` (the GUI knobs), ``default_state`` (fresh state),
     ``scan_config`` (frozen GUI -> scan config), and the transitional
     ``crystal_info``.

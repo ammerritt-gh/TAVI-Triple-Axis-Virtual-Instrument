@@ -2,9 +2,8 @@
 
 The second TAVI instrument, and the template for further ones: the TAS state
 base class, the per-point snapshot pipeline, and the run layer are all shared
-with ``instruments/PUMA_instrument_definition.py`` (accepted Phase-4 coupling;
-relocation to a neutral module is deferred until a third instrument needs it,
-design record §20). What lives here is only what is genuinely IN8's:
+with ``instruments/tas_runtime.py``. What lives here is only what is genuinely
+IN8's:
 
 - ``IN8_Instrument``: geometry, verified scattering senses (+1, +1, -1),
   point-source focusing formulas, and the per-point parameter dict.
@@ -21,10 +20,10 @@ import os
 
 import mcstasscript as ms
 
-from instruments.PUMA_instrument_definition import (
+from instruments.paths import COMPONENTS_DIR
+from instruments.tas_runtime import (
     TAS_Instrument,
     compute_scan_snapshot,  # noqa: F401  (re-export: the IN8 plugin's snapshot path)
-    data_dir,
     run_tas_point,  # noqa: F401  (re-export: the IN8 plugin's run path)
 )
 from tavi.instrument_helpers import (
@@ -38,8 +37,9 @@ from tavi.instrument_helpers import (
 )
 
 # McStas instrument name: drives the generated .instr/.c/.exe filenames and must
-# match the descriptor's mcstas_name (instruments/in8_plugin.py).
+# match the descriptor's mcstas_name (instruments/in8/plugin.py).
 MCSTAS_NAME = "IN8_McScript"
+data_dir = COMPONENTS_DIR
 
 
 class IN8_Instrument(TAS_Instrument):
@@ -52,7 +52,7 @@ class IN8_Instrument(TAS_Instrument):
         self.L3 = 1.05   # sample - analyzer (ILL Thermes; vTAS says 1.35)
         self.L4 = 0.70   # analyzer - detector (ILL Thermes; vTAS says 0.65)
         # Verified live vTAS run 2026-07-02: senses (+1, +1, -1); see the
-        # descriptor Geometry in instruments/in8_plugin.py.
+        # descriptor Geometry in instruments/in8/plugin.py.
         self.sense_mono = 1
         self.sense_sample = 1
         self.sense_ana = -1
@@ -82,7 +82,7 @@ class IN8_Instrument(TAS_Instrument):
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
     def crystal_info(self, monocris, anacris):
-        from instruments.in8_plugin import in8_descriptor
+        from instruments.in8.plugin import in8_descriptor
 
         return crystal_info_from_descriptor(in8_descriptor(), monocris, anacris)
 
@@ -118,7 +118,7 @@ class IN8_Instrument(TAS_Instrument):
     def build_point_params(self, deltaE):
         """Build the runtime parameter snapshot for one instrument point.
 
-        Keys mirror instruments/in8_plugin.py::_IN8_PARAMS exactly.
+        Keys mirror instruments/in8/plugin.py::_IN8_PARAMS exactly.
         """
         sample_angles = self.get_sample_angle_components()
         mount_rx, mount_ry, mount_rz = self.sample_mount.mount_euler_deg
@@ -175,7 +175,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
 
     monochromator_info, analyzer_info = IN8.crystal_info(IN8.monocris, IN8.anacris)
 
-    from instruments.in8_plugin import _IN8_MONITORS
+    from instruments.in8.plugin import _IN8_MONITORS
     from tavi.sample_library import default_sample_library
 
     monitor = {m.id: m for m in _IN8_MONITORS}

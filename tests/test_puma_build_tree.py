@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 import instruments.builtin  # noqa: F401
-from instruments.puma_plugin import _PUMA_MONITORS, puma_descriptor
+from instruments.puma.plugin import _PUMA_MONITORS, puma_descriptor
 from instruments.registry import get_instrument
 
 
@@ -128,7 +128,7 @@ def test_alpha2_collimators_follow_selection(diag_all_instrument, plain_instrume
 
 
 def test_alpha2_table_matches_descriptor_slot():
-    from instruments.PUMA_instrument_definition import _ALPHA2_COLLIMATORS
+    from instruments.puma.model import _ALPHA2_COLLIMATORS
 
     slot = next(s for s in puma_descriptor().collimation if s.id == "alpha_2")
     assert {d for d, *_ in _ALPHA2_COLLIMATORS} == {int(v) for v in slot.allowed}
@@ -164,3 +164,21 @@ def test_no_sample_build_warns_and_adds_nothing(capsys, plain_instrument):
     # sanity: mount hierarchy still present
     for arm in ("sample_gonio", "sample_chi_arm", "sample_cradle", "sample_mount"):
         assert arm in _component_names(plain_instrument)
+
+
+def test_horizontal_nmo_offset_applies_only_when_both_units_are_installed():
+    horizontal_only = _build(nmo="Horizontal")
+    both = _build(nmo="Both")
+    horizontal = next(
+        component for component in horizontal_only.component_list
+        if component.name == "horizontal_focusing_NMO"
+    )
+    horizontal_after_vertical = next(
+        component for component in both.component_list
+        if component.name == "horizontal_focusing_NMO"
+    )
+
+    assert horizontal.AT_data[2] == pytest.approx(1.29)
+    assert horizontal.LEnd == pytest.approx(1.0)
+    assert horizontal_after_vertical.AT_data[2] == pytest.approx(1.441)
+    assert horizontal_after_vertical.LEnd == pytest.approx(0.849)

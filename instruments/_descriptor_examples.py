@@ -4,7 +4,7 @@ Purpose: prove the ``InstrumentDescriptor`` of ``instruments/descriptor.py``
 captures both reference instruments *without* baking in PUMA's shape -- the
 "design against PUMA and IN8" check from ``docs/CONFIGURABLE_INSTRUMENTS.md``
 §12.5. Neither descriptor is defined here anymore: PUMA's lives in
-``instruments/puma_plugin.py`` and IN8's in ``instruments/in8_plugin.py``
+``instruments/puma/plugin.py`` and IN8's in ``instruments/in8/plugin.py``
 (single sources of truth, both runnable); they are re-imported for the
 comparison printout:
 
@@ -20,8 +20,8 @@ Targets Python 3.11 syntax.
 from __future__ import annotations
 
 from instruments.descriptor import ParameterSpec
-from instruments.in8_plugin import in8_descriptor  # noqa: F401  (re-export)
-from instruments.puma_plugin import puma_descriptor  # noqa: F401  (re-export)
+from instruments.in8.plugin import in8_descriptor  # noqa: F401  (re-export)
+from instruments.puma.plugin import puma_descriptor  # noqa: F401  (re-export)
 
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
 # (slits, bending, selector) are appended per instrument. The sample-orientation /

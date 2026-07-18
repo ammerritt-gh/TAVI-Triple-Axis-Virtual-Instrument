@@ -1,15 +1,19 @@
-# IN8: Missing and Placeholder Data
+# IN8 Model Status
+
+- Model version: **1.0.0**
+- Model date: **2026-07-18**
+- Runtime status: **runnable**
+- Last evidence review: **2026-07-18**
 
 Status of the IN8 model added in Phase 4 (`docs/CONFIGURABLE_INSTRUMENTS.md`
 §20). The **kinematics are verified** — every item below affects intensity,
 resolution, or capability, never the computed angles. Code locations:
-`instruments/in8_plugin.py` (descriptor) and
-`instruments/IN8_instrument_definition.py` (build); placeholders are marked
-`PLACEHOLDER` in-line.
+`instruments/in8/plugin.py` (descriptor) and `instruments/in8/model.py`
+(build); placeholders are marked `PLACEHOLDER` in-line.
 
 Sources used so far: a live vTAS run (angles + senses + a3 convention), the
 ILL IN8 characteristics page ("ILL"), Hiess et al. 2006 and Piovano & Ivanov
-2023 in `examples/IN8/` ("2006"/"2023"), and the vTAS repository XML
+2023 in `instruments/in8/references/` ("2006"/"2023"), and the vTAS repository XML
 ("vTAS"). Anything marked *needs IS* wants instrument-scientist numbers or
 drawings.
 

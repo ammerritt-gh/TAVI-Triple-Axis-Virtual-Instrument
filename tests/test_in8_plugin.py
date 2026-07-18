@@ -7,7 +7,7 @@ import-light plugin module; heavy tests import the IN8 definition module
 import pytest
 
 from instruments.contract import InstrumentPlugin, PointSnapshot
-from instruments.in8_plugin import (
+from instruments.in8.plugin import (
     _IN8_PARAMS,
     IN8_MCSTAS_NAME,
     IN8Plugin,
@@ -77,7 +77,7 @@ def _gui_vals(**overrides):
 
 def test_default_state_matches_descriptor_geometry():
     pytest.importorskip("mcstasscript")
-    from instruments.IN8_instrument_definition import IN8_Instrument
+    from instruments.in8.model import IN8_Instrument
 
     plugin = IN8Plugin()
     state = plugin.default_state()
@@ -91,7 +91,7 @@ def test_default_state_matches_descriptor_geometry():
 
 def test_mcstas_name_matches_definition_module():
     pytest.importorskip("mcstasscript")
-    from instruments.IN8_instrument_definition import MCSTAS_NAME
+    from instruments.in8.model import MCSTAS_NAME
 
     assert MCSTAS_NAME == IN8_MCSTAS_NAME
 
@@ -162,6 +162,37 @@ def test_snapshot_params_match_descriptor(tmp_path):
     assert set(snapshot.params) == descriptor_names
     assert "nu_param" not in snapshot.params      # no velocity selector on IN8
     assert "vbl_hgap_param" not in snapshot.params
+
+
+def test_angle_feasibility_enforces_raw_axis_limits():
+    pytest.importorskip("mcstasscript")
+    plugin = IN8Plugin()
+    state = plugin.default_state()
+    scans = [110.01, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+
+    feasible, reason = plugin.check_point_feasibility(
+        state, "angle", scans, {"deltaE": 0.0, "chi": 0.0}
+    )
+
+    assert feasible is False
+    assert reason is not None and "A1" in reason and "outside" in reason
+
+
+def test_momentum_feasibility_enforces_solved_axis_limits():
+    pytest.importorskip("mcstasscript")
+    plugin = IN8Plugin()
+    state = plugin.default_state()
+    state.monocris = state.anacris = "pg002"
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 14.68
+    scans = [5.2, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+
+    feasible, reason = plugin.check_point_feasibility(
+        state, "momentum", scans, {"deltaE": 0.0, "chi": 0.0}
+    )
+
+    assert feasible is False
+    assert reason is not None and "A2" in reason and "outside" in reason
 
 
 def test_crystal_bending_is_point_source_and_branch_signed():

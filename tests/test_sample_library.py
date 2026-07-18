@@ -3,7 +3,7 @@
 Samples move between instruments, so the specs live in
 ``tavi/sample_library.py`` and instruments mount them by reference.
 """
-from instruments.puma_plugin import puma_descriptor
+from instruments.puma.plugin import puma_descriptor
 from tavi.sample_library import default_sample_library
 
 

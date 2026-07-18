@@ -12,7 +12,7 @@ are Python modules, not data files). The descriptor is deliberately small and
 serialization-friendly so a JSON export could be added later if ever needed.
 
 Field values in this file's docstrings reference the two reference instruments:
-PUMA (``instruments/PUMA_instrument_definition.py``) and IN8
+PUMA (``instruments/puma/model.py``) and IN8
 (``examples/vtas_reference/instruments_repository.xml``, from ILL vTAS).
 
 ID convention (review §16.3): every ``id`` is a stable slug used for config keys,
@@ -139,6 +139,11 @@ class SampleSpec:
     # the lattice fields on user sample selection so instrument angles match the
     # component's internal crystal (e.g. Phonon_DFT bakes a=4.03893).
     lattice: tuple[float, float, float, float, float, float] | None = None
+    # Optional crystallographic display data.  It is intentionally separate
+    # from ``properties``: GUI code must not infer reflection provenance from a
+    # McStas component's arbitrary parameter dictionary.
+    reflection_source: str | None = None
+    space_group: int | None = None
     change_impact: ChangeImpact = ChangeImpact.BUILD  # sample choice changes the tree
 
 

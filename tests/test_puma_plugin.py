@@ -9,7 +9,7 @@ import os
 import pytest
 
 from instruments.contract import InstrumentPlugin, RunExecutionState
-from instruments.puma_plugin import PUMA_MCSTAS_NAME, PUMAPlugin, puma_descriptor
+from instruments.puma.plugin import PUMA_MCSTAS_NAME, PUMAPlugin, puma_descriptor
 
 
 # ---------------------------------------------------------------- light tests
@@ -66,7 +66,7 @@ def _gui_vals(**overrides):
 
 def test_default_state_matches_legacy_defaults():
     pytest.importorskip("mcstasscript")
-    from instruments.PUMA_instrument_definition import PUMA_Instrument
+    from instruments.puma.model import PUMA_Instrument
 
     plugin = PUMAPlugin()
     state = plugin.default_state()
@@ -147,26 +147,24 @@ def test_snapshot_params_match_descriptor(tmp_path):
 
 def test_run_execution_state_is_shared():
     pytest.importorskip("mcstasscript")
-    import instruments.PUMA_instrument_definition as pid
+    import instruments.tas_runtime as runtime
 
     # No instrument-specific execution-state type: the shared contract class is it.
-    assert not hasattr(pid, "PUMARunExecutionState")
+    assert not hasattr(runtime, "PUMARunExecutionState")
     assert RunExecutionState is not None
 
 
-def test_binary_fallback_uses_mcstas_name(tmp_path):
+def test_binary_path_is_derived_from_built_instrument(tmp_path):
     pytest.importorskip("mcstasscript")
     from types import SimpleNamespace
 
-    from instruments.PUMA_instrument_definition import (
-        MCSTAS_NAME,
-        _resolve_materialized_binary_path,
-        data_dir,
-    )
+    from instruments.puma.model import MCSTAS_NAME
+    from instruments.tas_runtime import _resolve_materialized_binary_path
 
     assert MCSTAS_NAME == PUMA_MCSTAS_NAME
-    fallback = _resolve_materialized_binary_path(SimpleNamespace(input_path=None, name=None))
-    assert fallback == os.path.abspath(os.path.join(data_dir, f"{MCSTAS_NAME}.exe"))
+    assert _resolve_materialized_binary_path(
+        SimpleNamespace(input_path=None, name=None)
+    ) is None
     derived = _resolve_materialized_binary_path(
         SimpleNamespace(input_path=str(tmp_path), name="Foo")
     )
@@ -190,7 +188,7 @@ _GOLDEN_PG002_ANA = {
 
 def test_crystal_adapter_matches_golden_dicts():
     pytest.importorskip("mcstasscript")
-    from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
+    from instruments.puma.model import mono_ana_crystals_setup
 
     mono, ana = mono_ana_crystals_setup("pg002", "pg002")
     assert mono == _GOLDEN_PG002_MONO
@@ -207,7 +205,7 @@ def test_crystal_adapter_matches_golden_dicts():
 
 def test_crystal_info_matches_adapter():
     pytest.importorskip("mcstasscript")
-    from instruments.PUMA_instrument_definition import mono_ana_crystals_setup
+    from instruments.puma.model import mono_ana_crystals_setup
 
     plugin = PUMAPlugin()
     assert plugin.crystal_info("pg002", "pg002") == mono_ana_crystals_setup(

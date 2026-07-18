@@ -181,10 +181,11 @@ def test_skipped_points_default_empty_and_in_summary():
 
 
 def test_skipped_points_serialized_in_snapshot():
-    # An allow_partial job records infeasible points; they must survive the
+    # A partial job records infeasible points; they must survive the
     # JSON-safe snapshot in both summary and data views.
     skipped = [
         {"index": 2, "values": {"H": 2.01},
+         "kind": "physical_infeasible",
          "reason": "scattering triangle does not close"},
     ]
     job = _job_with_result([1.0, 2.0, None])

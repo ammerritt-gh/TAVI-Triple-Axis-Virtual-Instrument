@@ -145,7 +145,7 @@ A scan command varies **exactly one** index of the 11-element `scan_point_templa
 
 ### 2.3 Design — a first-class scan mode, new point-generator only
 
-A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` already accepts a fully-populated 11-element `scan_point` and computes angles from `scan_point[:4]` (the `rlu`/`momentum` branches at `PUMA_instrument_definition.py:585`/:576). It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
+A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` in `instruments/tas_runtime.py` already accepts a fully-populated 11-element `scan_point` and computes angles from `scan_point[:4]`. It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
 
 Definition of a path scan:
 
@@ -169,7 +169,7 @@ for i in range(n):
 
 This is the **single insertion point**: it replaces the single-command branch (`~:4159`) when the scan mode is "path", producing the identical tuple shape the existing loop feeds to `compute_scan_snapshot`. Per-point feasibility (`check_state.calculate_angles`, the loop at :4176) runs unchanged and fills `valid_mask_1d` — a path may leave the accessible region partway along, and that is reported per point exactly as today. The scanned "variable_name" reported to the display and `ScanResult` is a synthetic `"path"` (or `"|q|"`, see §2.5).
 
-**Verified against the snapshot code:** `compute_scan_snapshot` reads `scans[:4]` for Q/HKL/E and `scans[4:11]` for bending/orientation; it never assumes only one of them changes. So no change to `instruments/PUMA_instrument_definition.py` is required — the brief's "new point-generator, not new physics" holds exactly.
+**Verified against the snapshot code:** `compute_scan_snapshot` in `instruments/tas_runtime.py` reads `scans[:4]` for Q/HKL/E and `scans[4:11]` for bending/orientation; it never assumes only one of them changes. So no change to the shared TAS runtime is required — the brief's "new point-generator, not new physics" holds exactly.
 
 ### 2.4 Surfaces
 
@@ -436,7 +436,7 @@ GET /scan/j-0021/data → result carries "engine": "deterministic" in metadata/p
 
 The deterministic engine stays firmly on the **control side** of §0. It evaluates the *instrument-plus-sample model* — a property of the configured spectrometer and its ground-truth sample — and interprets **no measured data**. It is the simulation backend, not an analyst: it produces counts, exactly as McStas does, and makes no scientific decision about them.
 
-**Touched modules:** `tavi/resolution.py` (§5, prerequisite — the convolution kernel); a new pure evaluator, likely `tavi/deterministic_engine.py` (Qt-free, numpy-only S(Q,ω) + Poisson noise); instrument plugins (a second execution path alongside `run_PUMA_point`, plus the shared sample-config projection); `TAVI_PySide6.py` (engine selection in `launch_state`, worker dispatch on `engine`, provenance in the result); `tavi/scan_jobs.py` (`engine` field on `ScanJob`); `tavi/api_server.py` (accept `engine`, advertise in `/schema`); `gui/docks/unified_simulation_dock.py` (engine selector).
+**Touched modules:** `tavi/resolution.py` (§5, prerequisite — the convolution kernel); `tavi/deterministic_engine.py` (Qt-free, numpy-only S(Q,ω) + Poisson noise); instrument plugins (the McStas execution path delegates through shared `instruments.tas_runtime.run_tas_point`, plus the shared sample-config projection); `TAVI_PySide6.py` (engine selection in `launch_state`, worker dispatch on `engine`, provenance in the result); `tavi/scan_jobs.py` (`engine` field on `ScanJob`); `tavi/api_server.py` (accept `engine`, advertise in `/schema`); `gui/docks/unified_simulation_dock.py` (engine selector).
 
 **Open questions:** Where does the analytic S(Q,ω) evaluator live — a `tavi/` helper consumed by a second instrument-plugin execution path (keeps the math instrument-agnostic, mirroring `resolution.py`), or inside each plugin? Engine switch **per-session** (a mode) vs **per-job** (an `engine` field, more flexible, chosen above as the lean)? Should the GUI expose it at all (lean **yes** — the teaching payoff is large)? How is the shared sample config authored and versioned so both engines provably read the same numbers?
 
@@ -562,7 +562,7 @@ Throughout: preserve the analysis/control boundary of §0. If a proposed additio
 
 ## 10. Notes where the codebase shaped this design
 
-- **`compute_scan_snapshot` is already path-ready.** It consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** change to `instruments/PUMA_instrument_definition.py` — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
+- **`compute_scan_snapshot` is already path-ready.** The shared implementation in `instruments/tas_runtime.py` consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** TAS-runtime change — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
 - **The scan-command grammar is the real constraint**, not the physics: `_validate_single_scan_command` (:2090) and `parse_scan_steps` (`tavi/utilities.py:91`) hard-code "one variable, four tokens, last = step". Path scans deliberately sidestep this grammar with a structured `scan_path` body rather than extending the string syntax (which cannot express coupled variables cleanly).
 - **1D output sorts by x** (`write_1D_scan` via `argsort`, :4900) — fine for monotonic path fraction, but `display_dock._get_axis_label` (:672) has **no `"path"` case** and would mislabel the axis; a small addition is required (flagged in §2.5).
 - **`ScanResult.counts` uses `None` for unmeasured/invalid points**, so `compute_motion` must drop `None`/NaN before fitting — designed in (§1.3).

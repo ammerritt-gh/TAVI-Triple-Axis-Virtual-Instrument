@@ -89,7 +89,17 @@ class _StubController:
     def validate_scan_launch_state(self, launch_state):
         self.expansion_calls += 1
         self.feasibility_solves += self._npoints
-        return {"points": self._npoints, "per_command": [], "infeasible": []}
+        return {
+            "requested_points": self._npoints,
+            "feasible_points": self._npoints,
+            "partial": False,
+            "planned_feasible_mask": [True] * self._npoints,
+            "feasible_segments": [
+                {"start_index": 0, "end_index": self._npoints - 1}],
+            "point_manifest": [],
+            "per_command": [],
+            "infeasible": [],
+        }
 
     def print_to_message_center(self, msg):
         self.messages.append(msg)
@@ -122,8 +132,8 @@ def test_over_limit_validate_rejects_without_expansion():
     assert ctrl.expansion_calls == 0
     assert ctrl.feasibility_solves == 0
     # Response is still well-shaped.
-    assert result["points"] == 594
-    assert result["cost"]["points"] == 594
+    assert result["requested_points"] == 594
+    assert result["cost"]["requested_points"] == 594
 
 
 def test_over_limit_submit_rejects_without_expansion_or_enqueue():
@@ -174,3 +184,55 @@ def test_at_limit_boundary_is_allowed():
     validation = backend.submit_validate({})
     assert validation["would_queue"] is True
     assert ctrl.expansion_calls == 1
+
+
+class _ExplodingInstrument:
+    """Reproduce the isolated angle-solver exception seen at 4.657 meV."""
+
+    def check_point_feasibility(self, scan_config, scan_mode, point, vals):
+        if abs(float(point[3]) - 4.657) < 1e-9:
+            raise OSError(22, "Invalid argument")
+        return True, None
+
+
+class _ManifestController:
+    _SCAN_VARIABLE_TO_INDEX = {"deltaE": 3}
+    instrument = _ExplodingInstrument()
+
+    def _determine_scan_mode(self, cmd1, cmd2):
+        return "rlu"
+
+    def _build_scan_point_template(self, scan_mode, vals):
+        return [2.0, 0.0, 0.0, 0.0]
+
+    def normalize_scan_variable(self, variable):
+        return variable
+
+    def print_to_message_center(self, message):
+        raise AssertionError("manifest expansion unexpectedly failed: %s" % message)
+
+
+def test_isolated_4657_solver_error_is_masked_not_scan_fatal():
+    launch_state = {
+        "vals": {
+            "scan_command1": "deltaE 4.557 4.757 0.1",
+            "scan_command2": "",
+        },
+        "scan_config": object(),
+        "relative_mode_1": False,
+        "relative_mode_2": False,
+    }
+
+    result = controller_module.TAVIController.validate_scan_launch_state(
+        _ManifestController(), launch_state)
+
+    assert result["requested_points"] == 3
+    assert result["feasible_points"] == 2
+    assert result["partial"] is True
+    assert result["planned_feasible_mask"] == [True, False, True]
+    assert result["infeasible"] == [{
+        "index": 1,
+        "values": {"deltaE": pytest.approx(4.657)},
+        "kind": "geometry_solver_error",
+        "reason": "angle solve error: [Errno 22] Invalid argument",
+    }]
