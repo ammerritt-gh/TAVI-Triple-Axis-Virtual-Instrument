@@ -7,6 +7,8 @@ import re
 import math
 from fractions import Fraction
 
+from tavi.space_groups import get_space_group, is_reflection_allowed
+
 
 @dataclass(frozen=True)
 class Reflection:
@@ -78,19 +80,20 @@ def load_reflections(path: str | Path) -> list[Reflection]:
 
 
 def centering_allowed(h: int, k: int, l: int, space_group: int | None) -> bool:
-    """Conservative centering-only fallback for common cubic/hexagonal groups.
+    """Conservative centering-only fallback derived from the space-group catalog.
 
     It intentionally does not claim structure-factor or screw/glide absences.
     """
     if space_group is None:
         return True
-    # F-centred cubic: Fm-3m 225 and related common F groups.
-    if 196 <= space_group <= 230:
-        return (h % 2 == k % 2 == l % 2)
-    # I-centred tetragonal/cubic families.
-    if space_group in {79, 80, 82, 87, 88, 97, 98, 107, 108, 109, 110, 119, 120, 121, 122, 139, 140, 141, 142, 197, 199, 204, 206, 211, 214, 217, 220, 229, 230}:
-        return (h + k + l) % 2 == 0
-    return True
+    try:
+        group = get_space_group(space_group)
+    except (KeyError, ValueError):
+        return True
+    if group is None:
+        return True
+    centering = group.centering
+    return is_reflection_allowed(h, k, l, centering)
 
 
 def plane_filtered_unique(projected, qz: float, tolerance: float = 1.0e-5):

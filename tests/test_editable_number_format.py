@@ -42,6 +42,22 @@ def test_linked_energy_handlers_use_formatter_and_tracking_updates():
         assert "_update_tracked_value(" in block
 
 
+def test_internal_angle_writes_track_exact_displayed_text():
+    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    start = source.index("def _set_tracked_angle_text")
+    helper = source[start:source.index("\n    def ", start + 1)]
+    assert "text = format_editable_number(value)" in helper
+    assert "edit.setText(text)" in helper
+    assert "displayed_text=edit.text()" in helper
+    assert "mtt_edit.setText(" not in source
+    assert "att_edit.setText(" not in source
+    # Every internal load/default/derivation uses the helper, so a later focus
+    # event compares against the rounded text already on screen rather than
+    # treating that rounding as a new user edit and recomputing energy.
+    assert source.count("_set_tracked_angle_text('mtt'") >= 5
+    assert source.count("_set_tracked_angle_text('att'") >= 5
+
+
 def test_load_normalization_and_api_precision_contract_are_present():
     source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
     assert "def _normalise_loaded_numbers" in source

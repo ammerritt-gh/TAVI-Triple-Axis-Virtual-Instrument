@@ -305,13 +305,13 @@ class TAS_Instrument:
         if K_fixed == "Ki Fixed":
             ki = energy2k(fixed_E)
             Ei = fixed_E
-            kf = angle2k(att / 2, analyzer_info['da'])  # Compute scattered wavevector from analyzer angle
+            kf = angle2k(att / (2 * self.sense_ana), analyzer_info['da'])  # Remove signed readout sense before Bragg inversion
             Ef = k2energy(kf)
             deltaE = Ei - Ef
         elif K_fixed == "Kf Fixed":
             kf = energy2k(fixed_E)
             Ef = fixed_E
-            ki = angle2k(mtt / 2, monochromator_info['dm'])  # Compute incident wavevector from monochromator angle
+            ki = angle2k(mtt / (2 * self.sense_mono), monochromator_info['dm'])  # Remove signed readout sense before Bragg inversion
             Ei = k2energy(ki)
             deltaE = Ei - Ef
         else:
@@ -425,15 +425,15 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     }
 
 
-def check_point_feasibility(state, scan_mode, scan_point, vals):
+def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None):
     """Return ``(feasible: bool, reason: str | None)`` for one scan point.
 
     Reuses ``_solve_point_geometry`` -- the same Q/angle solve
     ``compute_scan_snapshot`` runs per point -- so a point flagged infeasible
     here is exactly a point the real scan would skip. A point is infeasible
     when ``calculate_angles`` emits any error flag (scattering triangle cannot
-    close, Bragg condition unreachable, zero Q, unknown crystal). ``angle``-mode
-    scans set raw instrument angles directly and are always feasible.
+    close, Bragg condition unreachable, zero Q, unknown crystal), or when an
+    optional axis-limit mapping excludes a solved or raw readout angle.
 
     ``state`` must be a solved scan-config state (it carries ``fixed_E``,
     ``K_fixed``, ``monocris``, ``anacris`` and, for rlu mode, ``sample_mount``).
@@ -442,9 +442,21 @@ def check_point_feasibility(state, scan_mode, scan_point, vals):
     point_state = copy.deepcopy(state)
     geom = _solve_point_geometry(point_state, scan_mode, scan_point, vals)
     error_flags = geom["error_flags"]
-    if not error_flags:
-        return True, None
-    return False, describe_scan_error_flags(error_flags)
+    if error_flags:
+        return False, describe_scan_error_flags(error_flags)
+
+    axis_fields = {"A1": "mtt", "A2": "stt", "A4": "att"}
+    for axis_name, field_name in axis_fields.items():
+        limits = (axis_limits or {}).get(axis_name)
+        if limits is None:
+            continue
+        value = float(geom[field_name])
+        if value < limits.lower or value > limits.upper:
+            return False, (
+                f"{axis_name} ({field_name}) {value:.4g}° is outside "
+                f"[{limits.lower:.4g}, {limits.upper:.4g}]°"
+            )
+    return True, None
 
 
 def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_folder,
@@ -642,14 +654,25 @@ def run_tas_point(instrument, params_snapshot, output_folder, number_neutrons, e
     )
 
     if can_run_direct:
-        result = _run_point_direct(
-            execution_state,
-            params_snapshot,
-            output_folder,
-            number_neutrons,
-            mpi_count,
-        )
         execution_state.last_execution_mode = "direct"
+        try:
+            result = _run_point_direct(
+                execution_state,
+                params_snapshot,
+                output_folder,
+                number_neutrons,
+                mpi_count,
+            )
+        except OSError as exc:
+            error_flag_array.append("direct_run_failed")
+            execution_info = _build_execution_info(
+                "direct",
+                output_folder,
+                binary_path=execution_state.binary_path,
+                error_message=f"Direct McStas launch failed: {exc}",
+                launcher_argv=execution_state.mpi_launcher_argv,
+            )
+            return math.nan, error_flag_array, execution_info
         execution_info = _build_execution_info(
             "direct",
             output_folder,

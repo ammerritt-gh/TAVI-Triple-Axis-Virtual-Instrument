@@ -77,7 +77,8 @@ TAVI includes an optional remote API that lets external programs — scripts, no
 
 Each instrument lives under `instruments/<id>/` with its runtime model (when
 runnable), a plain-language overview, evidence status, immutable reference
-snapshots, and one low-effort scientist review document. PUMA and IN8 are
+snapshots where available (or documented snapshot gaps where none exists), and
+one low-effort scientist review document. PUMA and IN8 are
 runnable; PANDA and IN12 are research packages and do not appear in the
 instrument picker. See `docs/INSTRUMENT_AUTHORING.md` and validate packages
 with `python -m instruments.package_validation`.

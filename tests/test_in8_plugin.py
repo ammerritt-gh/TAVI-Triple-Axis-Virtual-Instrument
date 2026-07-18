@@ -164,6 +164,37 @@ def test_snapshot_params_match_descriptor(tmp_path):
     assert "vbl_hgap_param" not in snapshot.params
 
 
+def test_angle_feasibility_enforces_raw_axis_limits():
+    pytest.importorskip("mcstasscript")
+    plugin = IN8Plugin()
+    state = plugin.default_state()
+    scans = [110.01, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+
+    feasible, reason = plugin.check_point_feasibility(
+        state, "angle", scans, {"deltaE": 0.0, "chi": 0.0}
+    )
+
+    assert feasible is False
+    assert reason is not None and "A1" in reason and "outside" in reason
+
+
+def test_momentum_feasibility_enforces_solved_axis_limits():
+    pytest.importorskip("mcstasscript")
+    plugin = IN8Plugin()
+    state = plugin.default_state()
+    state.monocris = state.anacris = "pg002"
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 14.68
+    scans = [5.2, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
+
+    feasible, reason = plugin.check_point_feasibility(
+        state, "momentum", scans, {"deltaE": 0.0, "chi": 0.0}
+    )
+
+    assert feasible is False
+    assert reason is not None and "A2" in reason and "outside" in reason
+
+
 def test_crystal_bending_is_point_source_and_branch_signed():
     pytest.importorskip("mcstasscript")
     import math

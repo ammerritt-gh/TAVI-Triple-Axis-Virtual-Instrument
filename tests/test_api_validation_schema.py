@@ -55,12 +55,20 @@ def _validation_block(infeasible):
     infeasible = list(infeasible)
     bad_indices = {point["index"] for point in infeasible}
     mask = [index not in bad_indices for index in range(3)]
+    segments = []
+    segment_start = None
+    for index, feasible in enumerate(mask + [False]):
+        if feasible and segment_start is None:
+            segment_start = index
+        elif not feasible and segment_start is not None:
+            segments.append({"start_index": segment_start, "end_index": index - 1})
+            segment_start = None
     return {
         "requested_points": 3,
         "feasible_points": sum(mask),
         "partial": 0 < sum(mask) < 3,
         "planned_feasible_mask": mask,
-        "feasible_segments": [],
+        "feasible_segments": segments,
         "point_manifest": [],
         "per_command": [
             {"variable": "H", "count": 3, "values": [1.99, 2.0, 2.01]},
@@ -138,11 +146,23 @@ class ValidationBackend:
 
     # -- writes --
     def submit_scan(self, body, idempotency_key=None):
+        allow_partial = body.get("allow_partial", False)
+        if not isinstance(allow_partial, bool):
+            raise ApiError(
+                400, "bad_request", "'allow_partial' must be a boolean"
+            )
         validation = _validation_block(self.infeasible)
         if validation["feasible_points"] == 0:
             raise ApiError(
                 400, "all_points_infeasible",
                 "No requested scan point is feasible",
+                details=validation,
+            )
+        if validation["partial"] and not allow_partial:
+            raise ApiError(
+                400, "infeasible_points",
+                "Some requested scan points are infeasible; set "
+                "allow_partial=true to queue only feasible points",
                 details=validation,
             )
         job = self._new_job(skipped_points=self.infeasible)
@@ -206,6 +226,7 @@ def test_scan_202_embeds_validation_block():
         assert v["infeasible"] == []
         assert v["per_command"][0]["variable"] == "H"
         assert v["cost"]["job_neutrons"] == 3e5
+        assert v["feasible_segments"] == [{"start_index": 0, "end_index": 2}]
         assert set(v["eta"]) == {"estimated_seconds", "confidence", "samples"}
     finally:
         srv.stop()
@@ -215,17 +236,49 @@ def test_scan_202_embeds_validation_block():
 # partial feasibility
 # --------------------------------------------------------------------------
 
-def test_scan_partial_feasibility_queues_without_opt_in():
+def test_scan_partial_feasibility_rejected_without_opt_in():
     backend = ValidationBackend(infeasible=_INFEASIBLE_ONE)
     srv, base = _start(backend)
     try:
         status, body = _request(base + "/scan", method="POST", data={})
+        assert status == 400
+        assert body["error"]["code"] == "infeasible_points"
+        assert body["error"]["details"]["partial"] is True
+        assert backend.registry.recent() == []
+    finally:
+        srv.stop()
+
+
+def test_scan_partial_feasibility_queues_with_explicit_opt_in():
+    backend = ValidationBackend(infeasible=_INFEASIBLE_ONE)
+    srv, base = _start(backend)
+    try:
+        status, body = _request(
+            base + "/scan", method="POST", data={"allow_partial": True}
+        )
         assert status == 202
         assert body["validation"]["partial"] is True
+        assert body["validation"]["feasible_segments"] == [
+            {"start_index": 0, "end_index": 1}
+        ]
         job_id = body["job_id"]
         s_status, s_body = _request(base + "/scan/%s" % job_id)
         assert s_status == 200
         assert s_body["result"]["skipped_points"] == _INFEASIBLE_ONE
+    finally:
+        srv.stop()
+
+
+def test_scan_rejects_non_boolean_allow_partial():
+    backend = ValidationBackend(infeasible=[])
+    srv, base = _start(backend)
+    try:
+        status, body = _request(
+            base + "/scan", method="POST", data={"allow_partial": "true"}
+        )
+        assert status == 400
+        assert body["error"]["code"] == "bad_request"
+        assert backend.registry.recent() == []
     finally:
         srv.stop()
 

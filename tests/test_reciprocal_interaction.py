@@ -7,9 +7,10 @@ from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState, ReachO
                                          ReciprocalInteractionModel,
                                          ReciprocalState, tiny_zero, format_small,
                                          triangle_can_close)
-from tavi.reflection_catalog import load_reflections
+from tavi.reflection_catalog import centering_allowed, load_reflections
 from tavi.reflection_catalog import (plane_filtered_unique, ProjectedReflection,
                                      primitive_miller, reflection_label_is_clear)
+from tavi.space_groups import generate_allowed_reflections
 
 
 def test_p1_drag_preserves_out_of_plane_component_and_grid_snaps():
@@ -147,6 +148,11 @@ def test_numeric_triangle_closure_rejects_impossible_q():
     assert triangle_can_close(2.66, 2.66, 5.32)
     assert not triangle_can_close(2.66, 2.66, 10.0)
     assert not triangle_can_close(1.0, 3.0, 1.5)
+
+
+def test_nonclosing_state_is_rejected_instead_of_fabricating_endpoint():
+    with pytest.raises(ValueError, match="does not close"):
+        ReciprocalState(1.0, 1.0, 3.0, 0.0)
 
 
 def test_exact_gesture_mode_lock_tables():
@@ -299,6 +305,66 @@ def test_canvas_snapshot_carries_reach_metadata_and_standard_cursors(qapp):
     assert canvas._gesture_cursor("p1") == Qt.OpenHandCursor
 
 
+def test_canvas_click_acquires_strong_focus_for_space_pan(qapp):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from gui.docks.reciprocal_space_dock import ReciprocalCanvas
+
+    canvas = ReciprocalCanvas()
+    canvas.resize(300, 200)
+    canvas.show()
+    qapp.processEvents()
+    try:
+        assert canvas.focusPolicy() == Qt.StrongFocus
+        QTest.mouseClick(canvas, Qt.LeftButton, pos=QPoint(150, 100))
+        qapp.processEvents()
+        assert canvas.hasFocus()
+        QTest.keyPress(canvas, Qt.Key_Space)
+        assert canvas._space_pan is True
+        QTest.keyRelease(canvas, Qt.Key_Space)
+        assert canvas._space_pan is False
+    finally:
+        canvas.close()
+
+
+def test_dock_rejects_invalid_snapshot_and_retains_prior_state(qapp):
+    from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
+
+    dock = ReciprocalSpaceDock()
+    prior = dock.canvas.model.committed
+    dock.set_snapshot({
+        "ki": 1.0, "kf": 1.0, "qx": 3.0, "qy": 0.0, "qz": 0.0,
+        "p2": (None, None), "basis_u": (1.0, 0.0), "basis_v": (0.0, 1.0),
+    })
+    assert dock.canvas.model.committed == prior
+    assert "rejected" in dock.status.text().lower()
+
+
+def test_dock_malformed_numeric_controls_do_not_emit_requests(qapp):
+    from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
+
+    dock = ReciprocalSpaceDock()
+    emitted = []
+    dock.values_requested.connect(emitted.append)
+    dock.fields["ki"].setText("not-a-number")
+    dock._request_values()
+    assert emitted == []
+    assert "invalid numeric" in dock.status.text().lower()
+
+    planes = []
+    dock.plane_requested.connect(lambda u, v: planes.append((u, v)))
+    for field in (*dock.u_fields, *dock.v_fields):
+        field.setText("0")
+    dock.u_fields[0].setText("bad")
+    dock._validate_plane()
+    assert planes == []
+    assert "display plane is invalid" in dock.status.text().lower()
+
+    dock.grid_step.setText("bad")
+    dock._set_grid_step()
+    assert "grid step is invalid" in dock.status.text().lower()
+
+
 def test_dense_circle_and_rigid_gestures_are_continuous():
     start = ReciprocalState(2.66, 2.3, 1., .2)
     cases = (
@@ -384,10 +450,10 @@ def test_kf_only_projects_each_dragged_endpoint_to_fixed_kf_circle():
 
 def test_reconstructed_state_stays_on_supplied_scattering_branch():
     base = ReciprocalState(2.66, 2.3, 1., 0.)
-    opposite = (base.p2x, -abs(base.p2y))
+    opposite = (base.p2x, abs(base.p2y))
     rebuilt = ReciprocalState(
         base.ki + 2e-6, base.kf + 2e-6, base.qx, base.qy,
-        p2x=opposite[0], p2y=opposite[1],
+        p2x=opposite[0], p2y=opposite[1], sense=-1,
     )
     assert math.dist((rebuilt.p2x, rebuilt.p2y), opposite) < 1e-4
 
@@ -461,6 +527,21 @@ def test_reflection_plane_filter_and_dedup_preserves_first_row():
     rows = [ProjectedReflection(1., 2., 4., "(1,0,0)", .3), ProjectedReflection(1., 2., 9., "(9,9,9)", .3),
             ProjectedReflection(3., 4., 1., "(2,0,0)", .31)]
     assert plane_filtered_unique(rows, .3) == [rows[0]]
+
+
+def test_centering_fallback_uses_space_group_catalog_for_p_f_and_i():
+    assert centering_allowed(1, 0, 0, 221)       # Pm-3m: primitive
+    assert centering_allowed(1, 1, 1, 225)       # Fm-3m: all odd
+    assert not centering_allowed(1, 0, 0, 225)   # mixed parity
+    for group in (197, 229):                     # I23 and Im-3m
+        assert centering_allowed(1, 1, 0, group)
+        assert not centering_allowed(1, 0, 0, group)
+
+
+def test_centering_enumeration_includes_nonzero_l_for_hhl_planes():
+    reflections = generate_allowed_reflections("P", 4, 4, 4)
+    assert (1, 1, 1) in reflections
+    assert any(l != 0 for _h, _k, l in reflections)
 
 
 def test_weak_table_reflection_labels_use_collision_policy_not_marker_radius():

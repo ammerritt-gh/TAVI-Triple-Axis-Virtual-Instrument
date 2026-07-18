@@ -97,7 +97,11 @@ class ReciprocalState:
             choices = _intersections((0., 0.), self.ki, (self.qx, self.qy), self.kf)
             preferred = (self.p2x, self.p2y) if self.p2x is not None and self.p2y is not None else (self.ki, 0.)
             signed = [point for point in choices if (point[0]*self.qy-point[1]*self.qx) * self.sense >= 0]
-            p2 = min(signed or choices, key=lambda point: math.dist(point, preferred)) if choices else (self.ki, 0.)
+            if not choices:
+                raise ValueError(
+                    "reciprocal triangle does not close for the supplied ki, kf, and Q"
+                )
+            p2 = min(signed or choices, key=lambda point: math.dist(point, preferred))
             object.__setattr__(self, "p2x", p2[0]); object.__setattr__(self, "p2y", p2[1])
     @property
     def q(self): return math.hypot(self.qx, self.qy)
