@@ -481,13 +481,16 @@ class TaviApiBackend:
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
         isolated = bool(body.get("isolated", False))
+        allow_partial = body.get("allow_partial", False)
+        if not isinstance(allow_partial, bool):
+            raise ApiError(400, "bad_request", "'allow_partial' must be a boolean")
         # Execution-backend selection (docs/CONTROL_FEATURES_DESIGN.md §6.4).
         # Validated Qt-free; an unknown engine is a 400 with the allowed list.
         engine, seed, noiseless = parse_scan_engine(body)
 
         result = self._bridge.call_on_gui(
             lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
-                                             isolated,
+                                             isolated, allow_partial,
                                              engine, seed, noiseless)
         )
         return result
@@ -522,7 +525,8 @@ class TaviApiBackend:
         return validation
 
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
-                            isolated=False, engine="mcstas", seed=None,
+                            isolated=False, allow_partial=False,
+                            engine="mcstas", seed=None,
                             noiseless=False):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
@@ -600,8 +604,8 @@ class TaviApiBackend:
 
         # 4. Always-on feasibility validation (API path only). Build the
         #    validation block (per-command points + per-point feasibility +
-        #    cost + eta). Partial feasibility is unconditional: reject only
-        #    when no requested point can run.
+        #    cost + eta). Partial feasibility is opt-in; by default any
+        #    infeasible point rejects the whole submission.
         validation = self._build_validation(
             controller, launch_state, points, neutrons
         )
@@ -611,6 +615,12 @@ class TaviApiBackend:
             raise ApiError(
                 400, "all_points_infeasible",
                 "No requested scan point is feasible",
+                details=validation,
+            )
+        if infeasible and not allow_partial:
+            raise ApiError(
+                400, "infeasible_points",
+                "One or more requested scan points are infeasible",
                 details=validation,
             )
         if infeasible:
@@ -1650,7 +1660,7 @@ class TAVIController(QObject):
                 except Exception:
                     centering = "P"
                     group_label = "selected space group unavailable, P-centering rule"
-                for h, k, l in generate_allowed_reflections(centering, 4, 4, 0):
+                for h, k, l in generate_allowed_reflections(centering, 4, 4, 4):
                     qx, qy, qz = self._hkl_to_sample_q(h, k, l, vals)
                     projected.append(ProjectedReflection(qx, qy, None, f"({h},{k},{l})", qz))
                 dock.set_provenance(f"{group_label} (centering-only; not full structure-factor filtering)")
@@ -2433,6 +2443,12 @@ class TAVIController(QObject):
         """Update the tracked value for a field (use when setting field programmatically)."""
         text = displayed_text if displayed_text is not None else format_editable_number(value, precision)
         self._previous_values[field_name] = float(text)
+
+    def _set_tracked_angle_text(self, field_name, edit, value):
+        """Set a derived angle and track the exact numeric text being displayed."""
+        text = format_editable_number(value)
+        edit.setText(text)
+        self._update_tracked_value(field_name, value, displayed_text=edit.text())
     
     def update_all_variables(self, skip_crystal_angles=False):
         """
@@ -2483,8 +2499,8 @@ class TAVIController(QObject):
             if not skip_crystal_angles:
                 mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
                 att = 2 * k2angle(Kf, self.anacris_info['da'])
-                self.window.instrument_dock.mtt_edit.setText(format_editable_number(mtt))
-                self.window.instrument_dock.att_edit.setText(format_editable_number(att))
+                self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
+                self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
         except (ValueError, KeyError) as e:
             pass
@@ -2833,7 +2849,7 @@ class TAVIController(QObject):
             mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
             
             self.window.instrument_dock.Ei_edit.setText(format_editable_number(Ei))
-            self.window.instrument_dock.mtt_edit.setText(format_editable_number(mtt))
+            self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
@@ -2866,7 +2882,7 @@ class TAVIController(QObject):
             mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
             
             self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
-            self.window.instrument_dock.mtt_edit.setText(format_editable_number(mtt))
+            self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
             
             # Update fixed_E if Ki Fixed mode
             if vals['K_fixed'] == "Ki Fixed":
@@ -2899,7 +2915,7 @@ class TAVIController(QObject):
             att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
             
             self.window.instrument_dock.Ef_edit.setText(format_editable_number(Ef))
-            self.window.instrument_dock.att_edit.setText(format_editable_number(att))
+            self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
@@ -2932,7 +2948,7 @@ class TAVIController(QObject):
             att = 2 * k2angle(Kf, self.anacris_info['da'])
             
             self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
-            self.window.instrument_dock.att_edit.setText(format_editable_number(att))
+            self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
             # Update fixed_E if Kf Fixed mode
             if vals['K_fixed'] == "Kf Fixed":
@@ -3160,17 +3176,15 @@ class TAVIController(QObject):
             )
             if not error_flags:
                 mtt, stt, sth, saz, att = angles_array
-                self.window.instrument_dock.mtt_edit.setText(format_editable_number(mtt))
+                self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
                 self.window.instrument_dock.stt_edit.setText(format_editable_number(stt))
                 self.window.instrument_dock.omega_edit.setText(format_editable_number(sth))
                 self.window.instrument_dock.chi_edit.setText(format_editable_number(saz))
-                self.window.instrument_dock.att_edit.setText(format_editable_number(att))
+                self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
                 # Update tracked values for angles since we just set them
                 self._update_tracked_value('omega', sth)
                 self._update_tracked_value('chi', saz)
                 self._update_tracked_value('stt', stt)
-                self._update_tracked_value('mtt', mtt)
-                self._update_tracked_value('att', att)
         except Exception:
             pass
         finally:
@@ -4487,11 +4501,17 @@ class TAVIController(QObject):
                 self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
                     parameters.get("anacris_var"), self.descriptor.ana_crystals
                 ))
-                self.window.instrument_dock.mtt_edit.setText(format_editable_number(parameters.get("mtt_var", "41.167")))
+                self._set_tracked_angle_text(
+                    'mtt', self.window.instrument_dock.mtt_edit,
+                    parameters.get("mtt_var", "41.167"),
+                )
                 self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", "-71.2502")))
                 self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", "-35.6251")))
                 self.window.instrument_dock.chi_edit.setText(format_editable_number(parameters.get("chi_var", 0)))
-                self.window.instrument_dock.att_edit.setText(format_editable_number(parameters.get("att_var", "41.167")))
+                self._set_tracked_angle_text(
+                    'att', self.window.instrument_dock.att_edit,
+                    parameters.get("att_var", "41.167"),
+                )
                 self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
                 self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
                 self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("Ei_var", "14.7")))
@@ -4766,11 +4786,11 @@ class TAVIController(QObject):
         
         self.window.instrument_dock.set_mono_id(self.descriptor.mono_crystals[0].id)
         self.window.instrument_dock.set_ana_id(self.descriptor.ana_crystals[0].id)
-        self.window.instrument_dock.mtt_edit.setText("41.167")
+        self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, "41.167")
         self.window.instrument_dock.stt_edit.setText("-71.2502")
         self.window.instrument_dock.omega_edit.setText("-35.6251")
         self.window.instrument_dock.chi_edit.setText("0")
-        self.window.instrument_dock.att_edit.setText("41.167")
+        self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, "41.167")
         self.window.instrument_dock.Ki_edit.setText("2.6634")
         self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
@@ -6180,6 +6200,21 @@ class TAVIController(QObject):
                         break
                     continue
     
+    @staticmethod
+    def _mark_executed_result_point(result, *, is_2d_scan,
+                                    is_single_point_scan, idx_1d, idx_x, idx_y):
+        """Mark one successfully stored point in original request order."""
+        if result is None or not result.executed_feasible_mask:
+            return
+        if is_2d_scan:
+            original_index = idx_y * len(result.scan_values_1) + idx_x
+        elif is_single_point_scan:
+            original_index = 0
+        else:
+            original_index = idx_1d
+        if 0 <= original_index < len(result.executed_feasible_mask):
+            result.executed_feasible_mask[original_index] = True
+
     def _run_scan_deterministic(self, launch_state, job, scan_parameter_input,
                                 scan_mode, scan_config, is_2d_scan,
                                 is_single_point_scan, variable_name1,
@@ -6411,6 +6446,12 @@ class TAVIController(QObject):
                                 res.counts[idx_1d] = counts
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
+                            self._mark_executed_result_point(
+                                res,
+                                is_2d_scan=is_2d_scan,
+                                is_single_point_scan=is_single_point_scan,
+                                idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            )
                         if is_2d_scan:
                             self._publish_api_event('point', {
                                 'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
@@ -6855,7 +6896,7 @@ class TAVIController(QObject):
                     job.result.skipped_points = list(skipped_points)
                     planned = list(launch_state.get('planned_feasible_mask') or [])
                     job.result.planned_feasible_mask = planned
-                    job.result.executed_feasible_mask = list(planned)
+                    job.result.executed_feasible_mask = [False] * len(planned)
                     job.result.feasible_segments = list(
                         launch_state.get('feasible_segments') or [])
                 job.progress_total = len(scan_parameter_input)
@@ -7204,6 +7245,12 @@ class TAVIController(QObject):
                                 res.counts[idx_1d] = float(counts)
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
+                            self._mark_executed_result_point(
+                                res,
+                                is_2d_scan=is_2d_scan,
+                                is_single_point_scan=is_single_point_scan,
+                                idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            )
 
                         # Publish the per-point SSE event (outside the lock).
                         if is_2d_scan:

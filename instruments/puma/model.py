@@ -512,9 +512,12 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         # to avoid physical overlap when both are installed
         #
         if PUMA.NMO_installed == "Horizontal" or PUMA.NMO_installed == "Both":
-            # Offset to place horizontal NMO after vertical NMO
+            # Offset only when both units are present, to place the horizontal
+            # NMO after the vertical NMO without overlap.
             mirror_length = lEnd - lStart  # 0.150m
-            h_nmo_offset = mirror_length + 0.001  # Small gap to prevent overlap
+            h_nmo_offset = (
+                mirror_length + 0.001 if PUMA.NMO_installed == "Both" else 0.0
+            )
             
             horizontal_focusing_NMO = instrument.add_component(
                 "horizontal_focusing_NMO", 

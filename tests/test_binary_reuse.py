@@ -6,13 +6,16 @@ tested without Qt: `_can_reuse_binary` (may this scan skip the rebuild?) and
 TAVI_PySide6 needs PySide6 + mcstasscript, so the module skips when either is
 unavailable.
 """
+import math
+
 import pytest
 
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 import TAVI_PySide6 as controller_module
-from instruments.contract import RunExecutionState
+from instruments.contract import PointSnapshot, RunExecutionState
+from instruments.tas_runtime import run_tas_point
 
 FINGERPRINT = "abc123"
 
@@ -109,3 +112,33 @@ def test_missing_instr_archive_recorded_as_none(tmp_path):
     cache = update(None, False, FINGERPRINT, object(), _armed_state(binary),
                    str(tmp_path / "does_not_exist.instr"))
     assert cache["instr_path"] is None
+
+
+def test_direct_launch_oserror_returns_structured_failure(tmp_path, monkeypatch):
+    binary = tmp_path / "instrument.exe"
+    binary.write_bytes(b"")
+    state = RunExecutionState(
+        first_backengine_succeeded=True,
+        direct_run_ready=True,
+        binary_path=str(binary),
+        binary_cwd=str(tmp_path),
+        mpi_launcher_argv=["mpiexec"],
+    )
+    snapshot = PointSnapshot(
+        params={"mtt": 1.0}, output_folder=str(tmp_path / "point"),
+        scan_index=0, deltaE=0.0, error_flags=[], metadata={},
+        indices={"idx_1d": 0, "idx_x": -1, "idx_y": -1}, log_message="",
+    )
+
+    def fail_launch(*args, **kwargs):
+        raise OSError("launcher missing")
+
+    monkeypatch.setattr("instruments.tas_runtime._run_point_direct", fail_launch)
+    data, flags, info = run_tas_point(
+        object(), snapshot, snapshot.output_folder, 1000, state
+    )
+
+    assert math.isnan(data)
+    assert flags == ["direct_run_failed"]
+    assert info["mode"] == "direct"
+    assert "launcher missing" in info["error_message"]

@@ -164,3 +164,21 @@ def test_no_sample_build_warns_and_adds_nothing(capsys, plain_instrument):
     # sanity: mount hierarchy still present
     for arm in ("sample_gonio", "sample_chi_arm", "sample_cradle", "sample_mount"):
         assert arm in _component_names(plain_instrument)
+
+
+def test_horizontal_nmo_offset_applies_only_when_both_units_are_installed():
+    horizontal_only = _build(nmo="Horizontal")
+    both = _build(nmo="Both")
+    horizontal = next(
+        component for component in horizontal_only.component_list
+        if component.name == "horizontal_focusing_NMO"
+    )
+    horizontal_after_vertical = next(
+        component for component in both.component_list
+        if component.name == "horizontal_focusing_NMO"
+    )
+
+    assert horizontal.AT_data[2] == pytest.approx(1.29)
+    assert horizontal.LEnd == pytest.approx(1.0)
+    assert horizontal_after_vertical.AT_data[2] == pytest.approx(1.441)
+    assert horizontal_after_vertical.LEnd == pytest.approx(0.849)

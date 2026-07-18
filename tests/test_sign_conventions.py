@@ -208,6 +208,32 @@ def test_instrument_senses_flip_mtt_att_and_recover_q():
     assert q_and_e[3] == pytest.approx(0.0, abs=1e-6)
 
 
+@pytest.mark.parametrize(
+    ("fixed_mode", "delta_e"),
+    [("Ki Fixed", -5.0), ("Kf Fixed", 5.0)],
+)
+def test_negative_analyzer_sense_inelastic_round_trip(fixed_mode, delta_e):
+    """Signed readout angles must be unsigned before inverse Bragg conversion."""
+    from instruments.puma.model import PUMA_Instrument
+
+    state = PUMA_Instrument()
+    state.sense_mono = 1
+    state.sense_sample = 1
+    state.sense_ana = -1
+    angles, error_flags = state.calculate_angles(
+        2 * TAU, 0.0, 0.0, delta_e, 14.7, fixed_mode, "pg002", "pg002"
+    )
+    assert error_flags == []
+
+    q_and_e, error_flags = state.calculate_q_and_deltaE(
+        *angles, 14.7, fixed_mode, "pg002", "pg002"
+    )
+
+    assert error_flags == []
+    assert q_and_e[:3] == pytest.approx([2 * TAU, 0.0, 0.0], abs=1e-6)
+    assert q_and_e[3] == pytest.approx(delta_e, abs=1e-6)
+
+
 def test_default_instrument_senses_are_baked_convention():
     from instruments.puma.model import PUMA_Instrument
     from instruments.tas_runtime import TAS_Instrument

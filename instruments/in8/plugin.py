@@ -345,7 +345,10 @@ class IN8Plugin:
         """
         from instruments.tas_runtime import check_point_feasibility
 
-        return check_point_feasibility(config, scan_mode, scan_point, vals)
+        return check_point_feasibility(
+            config, scan_mode, scan_point, vals,
+            axis_limits=in8_descriptor().axis_limits,
+        )
 
     def resolution_config(self, vals, q0, w):
         """Build a theoretical-resolution config for IN8 (see contract).

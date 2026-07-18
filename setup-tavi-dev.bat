@@ -9,6 +9,7 @@ setlocal DisableDelayedExpansion
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
+set "MAMBA_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
 set "ENV_NAME=tavi-dev"
 
 set "REPO_DIR=%~dp0"
@@ -53,10 +54,24 @@ if not exist "%MICROMAMBA_EXE%" (
     curl -L -o "%MICROMAMBA_EXE%.tmp" "https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64"
     if errorlevel 1 (
         echo [ERROR] Failed to download micromamba.
+        del "%MICROMAMBA_EXE%.tmp" >nul 2>nul
+        pause
+        exit /b 1
+    )
+    certutil -hashfile "%MICROMAMBA_EXE%.tmp" SHA256 | findstr /i /c:"%MAMBA_SHA256%" >nul
+    if errorlevel 1 (
+        echo [ERROR] Micromamba checksum verification failed.
+        del "%MICROMAMBA_EXE%.tmp" >nul 2>nul
         pause
         exit /b 1
     )
     move /Y "%MICROMAMBA_EXE%.tmp" "%MICROMAMBA_EXE%" >nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to install verified micromamba executable.
+        del "%MICROMAMBA_EXE%.tmp" >nul 2>nul
+        pause
+        exit /b 1
+    )
 )
 if not exist "%MICROMAMBA_EXE%" (
     echo [ERROR] micromamba.exe not found at %MICROMAMBA_EXE%
@@ -135,7 +150,13 @@ echo [OK] mcrun directory : %MCRUN_DIR%
 >> "%TEMP%\tavidev_config.py" echo c.set_mcstas_path(r"%MCSTAS_RESOURCES%")
 >> "%TEMP%\tavidev_config.py" echo print("[TAVI] McStasScript configured")
 "%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%TEMP%\tavidev_config.py"
+set "MCSTAS_CONFIG_EXIT=%ERRORLEVEL%"
 del "%TEMP%\tavidev_config.py" >nul 2>nul
+if not "%MCSTAS_CONFIG_EXIT%"=="0" (
+    echo [ERROR] McStasScript path configuration failed.
+    pause
+    exit /b %MCSTAS_CONFIG_EXIT%
+)
 
 echo [INFO] Writing config\mcstas_config.json to point at this environment...
 set "MCSTAS_JSON=%MCSTAS_RESOURCES:\=/%"

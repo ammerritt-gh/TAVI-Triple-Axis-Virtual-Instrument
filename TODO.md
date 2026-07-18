@@ -84,5 +84,7 @@ Roadmap order per CONTROL_FEATURES §9:
 
 
 Others:
-- vTAS style graphical interface
+- vTAS style graphical interface [STARTED]
+  - Resolution function display
+  - E-mode
 - HKL cut-along-areas with saved data?

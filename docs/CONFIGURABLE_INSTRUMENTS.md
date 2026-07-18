@@ -1384,7 +1384,8 @@ smoke before registration was declared done.
   `solve_instrument_angles` take `sense_sample` (default −1 = the historical
   baked branch, bit-for-bit identical); `TAS_Instrument` carries
   `sense_mono/sense_sample/sense_ana` and `calculate_angles` applies them.
-  `calculate_q_and_deltaE` was already sign-safe.
+  `calculate_q_and_deltaE` removes mono/analyzer readout senses before inverse
+  Bragg conversion, so negative-sense inelastic round trips recover Q and ΔE.
 - **PUMA's descriptor was self-inconsistent** — it declared
   `sense_sample=LEFT` while the code has always produced stt < 0. Corrected to
   `RIGHT`; TAVI's existing behavior is the contract (whether the physical PUMA

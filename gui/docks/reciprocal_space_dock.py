@@ -21,11 +21,11 @@ from tavi.reciprocal_interaction import (LiveReciprocalResult, LockState,
 from tavi.neutron_conversions import k2energy
 
 
-def _number(text: str, fallback: float = 0.0) -> float:
+def _number(text: str) -> float | None:
     try:
         return float(text)
     except ValueError:
-        return fallback
+        return None
 
 
 class ReciprocalCanvas(QWidget):
@@ -39,6 +39,7 @@ class ReciprocalCanvas(QWidget):
         super().__init__(parent)
         self.setMinimumHeight(300)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.model = ReciprocalInteractionModel(ReciprocalState(2.66, 2.66, 1.0, 0.0))
         self.reflections = []
         self.snap_grid = 0.1
@@ -301,6 +302,7 @@ class ReciprocalCanvas(QWidget):
         return Qt.OpenHandCursor
 
     def mousePressEvent(self, event):
+        self.setFocus(Qt.MouseFocusReason)
         position = (event.position().x(), event.position().y())
         if event.button() == Qt.MiddleButton or (event.button() == Qt.LeftButton and self._space_pan):
             self._drag, self._last = "pan", position
@@ -444,7 +446,7 @@ class ReciprocalSpaceDock(BaseDockWidget):
         snap_layout.addWidget(self.snap_reflections, 0, 0, 1, 2); snap_layout.addWidget(self.snap_grid, 1, 0); snap_layout.addWidget(self.grid_step, 1, 1)
         self.snap_reflections.toggled.connect(lambda value: setattr(self.canvas, "snap_reflections_enabled", value))
         self.snap_grid.toggled.connect(lambda value: setattr(self.canvas, "snap_grid_enabled", value))
-        self.grid_step.editingFinished.connect(lambda: setattr(self.canvas, "snap_grid", max(0.001, _number(self.grid_step.text(), .1))))
+        self.grid_step.editingFinished.connect(self._set_grid_step)
         advanced_layout.addWidget(snap)
         self.advanced_widget.setVisible(False); self.advanced_toggle.toggled.connect(lambda visible: (self.advanced_widget.setVisible(visible), self.advanced_toggle.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)))
         self.content_layout.addWidget(self.advanced_widget)
@@ -466,10 +468,19 @@ class ReciprocalSpaceDock(BaseDockWidget):
             values = {key: _number(field.text()) for key, field in self.fields.items()}
             values["ei"] = _number(self.energy_readouts["ki"].text())
             values["ef"] = _number(self.energy_readouts["kf"].text())
+            invalid = [key for key, value in values.items() if value is None]
+            if invalid:
+                self.status.setText(
+                    "Invalid numeric value: " + ", ".join(invalid)
+                )
+                return
             self.values_requested.emit(values)
 
     def _validate_plane(self):
         u = [_number(field.text()) for field in self.u_fields]; v = [_number(field.text()) for field in self.v_fields]
+        if any(value is None for value in (*u, *v)):
+            self.status.setText("Display plane is invalid: U and V must contain numbers")
+            return
         cross = (u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0])
         if math.sqrt(sum(x*x for x in cross)) < 1e-8:
             self.status.setText("Display plane is invalid: U and V must be non-zero and non-collinear")
@@ -477,6 +488,13 @@ class ReciprocalSpaceDock(BaseDockWidget):
             self.status.setText("Checking display plane…")
             self._plane_request_pending = True
             self.plane_requested.emit(tuple(u), tuple(v))
+
+    def _set_grid_step(self):
+        value = _number(self.grid_step.text())
+        if value is None:
+            self.status.setText("Grid step is invalid: enter a number")
+            return
+        self.canvas.snap_grid = max(0.001, value)
 
     def set_plane_status(self, message: str) -> None:
         """Receive controller-side UB projection validation feedback."""
@@ -515,7 +533,11 @@ class ReciprocalSpaceDock(BaseDockWidget):
     def set_snapshot(self, snapshot: dict):
         self._updating = True
         try:
-            self.canvas.set_snapshot(snapshot)
+            try:
+                self.canvas.set_snapshot(snapshot)
+            except ValueError as exc:
+                self.status.setText(f"Reciprocal snapshot rejected: {exc}")
+                return
             advisory = snapshot.get("reciprocal_advisory")
             if advisory is not None:
                 self.set_live_result(advisory)

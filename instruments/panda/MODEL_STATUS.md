@@ -13,6 +13,7 @@
 | Collimation, slits, filters | Not yet curated | missing | Obtain an instrument configuration table or drawing. |
 | Detector and output contract | Not selected for TAVI | missing | Define the initial single-detector scope. |
 | Runtime implementation | No descriptor, plugin, model, or verification points | missing | Complete scientist review before implementation. |
+| Historical `vpanda.instr` quality | `atx` is unused; defaulted `kf` shadows explicit `ki`; parameter descriptions contain placeholder units; scattering-sense inputs are unused; fallback ΔE uses the wrong momentum relationship | conflicting | Preserve the immutable snapshot, treat it as comparison-only, and resolve each issue from authoritative evidence before implementing PANDA. |
 
 No value in the historical McStas file is accepted as current merely because
 it is executable.

@@ -125,7 +125,9 @@ Drag **P1 / Q** to choose a Q target or **P2 / ki** to change the incident arm.
 The lock buttons beside `ki`, `kf`, `|Q|`, and `ΔE` constrain that gesture; a
 rejected move leaves the committed instrument state unchanged.  The Ki-fixed,
 Kf-fixed, and Elastic buttons are convenient presets, not restrictions on using
-other lock combinations.  Changes commit only when the mouse is released.
+other lock combinations.  During a valid drag, the controller's canonical Q,
+energy, and HKL fields update live; mouse release finalizes the gesture and its
+last live state.
 
 Use the mouse wheel to zoom at the pointer and middle-drag (or Space+left-drag)
 to pan.  Snap-to-reflections has priority over the optional HKL grid.  The view
