@@ -381,8 +381,10 @@ class BudgetLimits:
     """
     max_queued: int = 10
     max_points: int = 200
-    max_neutrons_per_point: float = 1e8
-    queue_neutron_budget: float = 1e10
+    # Keep in step with the api_server defaults; whichever binds first is the effective ceiling, so
+    # raising only one silently changes nothing. See the note there for the count-yield measurement.
+    max_neutrons_per_point: float = 1e10
+    queue_neutron_budget: float = 1e11
 
     def check_submission(self, points: int, neutrons_per_point: float,
                          pending_cost: float) -> Optional[str]:

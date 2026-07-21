@@ -687,7 +687,10 @@ def test_config_partial_merges_per_key(tmp_path):
     assert cfg["limits"]["max_points"] == 5
     # Un-overridden nested keys retain defaults.
     assert cfg["limits"]["max_queued"] == 10
-    assert cfg["limits"]["queue_neutron_budget"] == 1e10
+    # Track the default rather than a literal: this asserts that un-overridden keys pass through,
+    # not what the neutron budget happens to be.
+    assert (cfg["limits"]["queue_neutron_budget"]
+            == DEFAULT_CONFIG["limits"]["queue_neutron_budget"])
     # Un-overridden top-level keys retain defaults.
     assert cfg["mode"] == "allow"
     assert cfg["host"] == "127.0.0.1"
