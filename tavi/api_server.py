@@ -75,8 +75,13 @@ DEFAULT_CONFIG = {
     "limits": {
         "max_queued": 10,
         "max_points": 200,
-        "max_neutrons_per_point": 1e8,
-        "queue_neutron_budget": 1e10,
+        # Measured 2026-07-21 on the Al_phonon_DFT sample: ~4 peak counts per 1e8 neutrons, so a
+        # 1e8 ceiling could not resolve two modes ~2 meV apart at any allowed exposure and stalled
+        # ISAR campaigns. 1e10 gives order 400 peak counts and takes about 6.5 min/point.
+        "max_neutrons_per_point": 1e10,
+        # Total across the queue. Must stay well above the per-point cap or a single point can
+        # consume the whole campaign's budget: a 21-point path needs headroom for many points.
+        "queue_neutron_budget": 1e11,
     },
 }
 
