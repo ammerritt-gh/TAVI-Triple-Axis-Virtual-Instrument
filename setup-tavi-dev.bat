@@ -85,15 +85,23 @@ echo.
 echo [Step 3/5] Creating or updating environment '%ENV_NAME%'...
 echo [INFO] Packages:
 echo        %CONDA_PACKAGES%
-"%MICROMAMBA_EXE%" env list > "%TEMP%\tavidev_envs.txt" 2>nul
-findstr /r /c:"^%ENV_NAME%[ ]" "%TEMP%\tavidev_envs.txt" >nul 2>nul
-if "%ERRORLEVEL%"=="0" (
-    del "%TEMP%\tavidev_envs.txt" >nul 2>nul
+:: Detect an existing env by its conda-meta directory, NOT by parsing
+:: "micromamba env list": that output format is version-dependent (2.x indents
+:: every row, so a "^name " findstr never matches), and a missed match sends an
+:: EXISTING env down the create path -- "micromamba create -y" clears the prefix
+:: first, so a cancelled run leaves a half-deleted, unusable environment.
+if exist "%ENV_PREFIX%\conda-meta" (
     echo [INFO] Environment '%ENV_NAME%' exists; updating in place.
     "%MICROMAMBA_EXE%" install -n %ENV_NAME% %CONDA_PACKAGES% -c conda-forge -c nodefaults -y
     if errorlevel 1 echo [WARN] Conda update reported an error; continuing to pip step.
 ) else (
-    del "%TEMP%\tavidev_envs.txt" >nul 2>nul
+    if exist "%ENV_PREFIX%" (
+        echo [ERROR] %ENV_PREFIX%
+        echo         exists but is not a conda environment - likely the residue of an
+        echo         interrupted create/remove. Delete or rename it, then rerun this script.
+        pause
+        exit /b 1
+    )
     echo [INFO] Creating environment '%ENV_NAME%'.
     "%MICROMAMBA_EXE%" create -n %ENV_NAME% %CONDA_PACKAGES% -c conda-forge -c nodefaults -y
     if errorlevel 1 (
