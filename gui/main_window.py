@@ -14,6 +14,7 @@ from gui.docks.unified_simulation_dock import UnifiedSimulationDock
 from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
 from gui.docks.display_dock import DisplayDock
+from gui.docks.fitting_dock import FittingDock
 from gui.docks.misalignment_dock import MisalignmentDock
 from gui.docks.ub_matrix_dock import UBMatrixDock
 from gui.docks.api_dock import ApiDock
@@ -114,6 +115,12 @@ class TAVIMainWindow(QMainWindow):
         # Display Panel (column 3, top) - Real-time plot display
         self.display_dock = DisplayDock(self)
 
+        # Fitting Panel (column 3, bottom) - quick peak fit of the displayed
+        # 1D scan plus the scan-derived goto buttons. It reads the scan through
+        # display_dock.scan_snapshot() and draws its overlay on that dock's
+        # axes, so it must be created after the display dock.
+        self.fitting_dock = FittingDock(self, display_dock=self.display_dock)
+
         # Interactive reciprocal-space canvas.  It is a normal dock so users
         # can tab, float, maximise, and persist it with the existing layout.
         self.reciprocal_space_dock = ReciprocalSpaceDock(self)
@@ -136,6 +143,7 @@ class TAVIMainWindow(QMainWindow):
             self.ub_matrix_dock,
             self.simulation_dock,
             self.display_dock,
+            self.fitting_dock,
             self.reciprocal_space_dock,
             self.output_dock,
             self.data_control_dock,
@@ -163,7 +171,18 @@ class TAVIMainWindow(QMainWindow):
         self.ub_matrix_dock.ub_matrix_changed.connect(
             self.sample_dock.update_ub_indicator
         )
-    
+
+        # Fitting dock follows the displayed dataset: a reset drops its overlay
+        # and cached fit (the display dock has already cleared the axes), a
+        # finish refreshes the COM/MAX readouts. The fit itself is never
+        # re-run automatically.
+        self.display_dock.scan_data_reset.connect(
+            self.fitting_dock.on_scan_reset
+        )
+        self.display_dock.scan_data_finished.connect(
+            self.fitting_dock.on_scan_finished
+        )
+
     def _on_open_misalignment_dock(self):
         """Handle request to open the misalignment dock."""
         # Show and raise the misalignment dock
@@ -236,6 +255,12 @@ class TAVIMainWindow(QMainWindow):
         # Remote API tabbed with Data Control (column 3, bottom)
         self.addDockWidget(Qt.RightDockWidgetArea, self.api_dock)
         self.tabifyDockWidget(self.data_control_dock, self.api_dock)
+
+        # Fitting tabbed alongside them, deliberately NOT with the Display
+        # dock: its overlay is drawn on the Display plot, so both have to be
+        # visible at once.
+        self.addDockWidget(Qt.RightDockWidgetArea, self.fitting_dock)
+        self.tabifyDockWidget(self.api_dock, self.fitting_dock)
         self.data_control_dock.raise_()
 
         # Misalignment dock is added and configured elsewhere to avoid duplicate layout entries.

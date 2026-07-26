@@ -78,6 +78,78 @@ Diagnostic mode enables different monitors in the beam to check beam characteris
 ## Display Dock
 The display dock shows ongoing data collection as scans finished. If you run a single simulation (no scan commands), it will just display the final counts. For 1D scans, it shows a line graph, and for 2D a heatmap. The figure is saved automatically when all scans are done, but you can save it with more control using the "Save Plot" button.
 
+## Fitting Dock
+
+The **Fitting** dock (tabbed with Data Control and Remote API, below the plot)
+fits a peak in the 1D scan currently shown in the Display dock and lets you
+drive the scanned variable straight to it — the same "run a scan, go to the
+peak" move you would make on a real instrument, without reading a number off
+the screen and retyping it.
+
+**Workflow**
+
+1. Run a 1D scan. The dock follows whatever the Display dock is showing, so a
+   scan you load from disk works too. It is inactive for 2D scans and says so.
+2. *(Optional)* Restrict the range. Press **Select range** and drag across the
+   plot, or type a min and max. The chosen window is shaded on the plot and
+   everything below uses only the points inside it. **Clear** goes back to the
+   whole scan. Note that pan and zoom are switched off while range selection is
+   active, and are not switched back on for you.
+3. Press **Fit**. Nothing is fitted until you do — a running scan never refits
+   itself under you, so the numbers on screen always belong to a fit you asked
+   for. You *can* fit part-way through a scan; only the points measured so far
+   are used, so press Fit again later to use the rest.
+4. Read the result. The fit curve is drawn over your data in red with a dashed
+   line at the centre, and the grid lists centre, FWHM, height, area, the
+   pseudo-Voigt mixing parameter `eta`, background, reduced deviance, and the
+   point/degree-of-freedom count, each with its uncertainty.
+5. Press **Go to CEN**, **Go to COM**, or **Go to MAX**. The scanned variable's
+   parameter field is set to that value, exactly as if you had typed it — you
+   will see it change, and it is recorded in the message log and the session
+   journal.
+
+**COM and MAX** do not need a fit — they appear as soon as the scan has counts.
+COM is the counts-weighted centre of mass over raw counts (no background
+subtraction — the same convention `spec` uses). The small **Copy** button next
+to each puts the value on the clipboard at full precision.
+
+They are not live per point. They are recomputed when the scan finishes, when a
+scan starts or stops, when you change the range, and when you press Fit — so
+during a running scan the numbers on screen can lag the plot. The **Go to COM**
+and **Go to MAX** buttons do not use the displayed number: they recompute from
+the current data at the moment you click, so the instrument always moves to a
+value derived from everything measured so far, even if the readout above was a
+few points behind.
+
+**MAX is a bin, not a peak position.** It is the abscissa of the highest
+measured point, with no interpolation, so it can only ever be as accurate as
+your step size — the tooltip tells you what that step is. Use CEN when you want
+a position better than one step.
+
+**Amber "Go to CEN" means "look at the plot before you press it."** The fit
+converged and the value is usable, but something about it deserves a glance:
+the peak sits near the edge of the range, the centre uncertainty is large
+compared to the width, the peak is weak against the background, there may be
+more than one peak, or there were few degrees of freedom. Hover the button to
+see which. TAVI does not refuse the move — you can see the fit curve on your
+data and are better placed to judge it than the software is. The button is only
+*disabled* when there is no converged fit at all (you have not pressed Fit yet,
+the range changed since you did, or the fit failed); the tooltip says which.
+
+The goto buttons are also disabled while any scan is queued or running — the
+instrument is not moved out from under a measurement — and for scan variables
+that have no settable field to move (`chi`, `rva`, and anything unrecognised),
+which the tooltip names.
+
+**Revert** undoes the last goto, restoring the field to the value it had
+beforehand. It is one level deep: one goto, one revert.
+
+**Noiseless runs.** If the last scan was run on the deterministic engine with
+noise switched off, the status line says `noiseless run - σ nominal`. The fit
+treats the values as counts and the quoted uncertainties assume Poisson
+statistics, so on noiseless data they describe a hypothetical measurement, not
+this one. The fitted centre is still meaningful; its error bar is not.
+
 ## Reciprocal Space Dock
 
 The **View → Reciprocal Space** panel provides an interactive horizontal

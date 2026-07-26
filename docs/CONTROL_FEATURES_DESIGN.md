@@ -1,7 +1,7 @@
 # Control Features — Design Document
 
 *Date: 2026-07-03*
-*Status: **Draft**, updated 2026-07-06 — §5 (resolution ellipsoids: `tavi/resolution.py`, Cooper–Nathans and Popovici, `GET /resolution`) and §6 (deterministic engine: `tavi/deterministic_engine.py`, `POST /scan` with `engine: "deterministic"`) are now implemented and live. §1–4 (goto/path/campaigns), §7 (virtual clock), and §8 (point-list scans) remain proposed future work; where those sections reference new symbols (e.g. `tavi/scan_fits.py`, `POST /goto`, `CampaignRegistry`) they do not exist yet.*
+*Status: **Draft**, updated 2026-07-26 — §5 (resolution ellipsoids: `tavi/resolution.py`, Cooper–Nathans and Popovici, `GET /resolution`) and §6 (deterministic engine: `tavi/deterministic_engine.py`, `POST /scan` with `engine: "deterministic"`) are implemented and live. **§1 (goto CEN) is implemented on the GUI side** — `tavi/scan_fits.py` and `gui/docks/fitting_dock.py` exist; several decisions supersede the §1 text and the `POST /goto` API surface (§1.5) is deferred, both recorded in **§1.7 Implementation status**, which is authoritative where it disagrees with §1.1–1.6. §2–4 (path scans/campaigns/intents), §7 (virtual clock), and §8 (point-list scans) remain proposed future work; where those sections reference new symbols (e.g. `POST /goto`, `CampaignRegistry`) they do not exist yet.*
 
 > Companion documents: `docs/API_SERVER_DESIGN.md` (the live remote-API architecture this builds on), `docs/API_USER_GUIDE.md` (client-facing endpoint/field reference), `docs/PIPELINE_DESIGN.md` (per-point prep/run pipeline), `docs/INSTRUMENT_LAYOUT.md` (TAS geometry, angles, scan modes), `docs/MCSTAS_PARAMETERS.md` (build-time vs run-time parameter split).
 
@@ -129,6 +129,52 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 **Open questions:** Should COM use a background-subtracted window rather than the whole scan? What multi-peak threshold is right for TAS lineshapes? Should `cen` fall back to `com` automatically, or always refuse and let the client choose (current lean: refuse — automatic fallback hides which reduction was used, which harms transfer)?
 
 **Dependencies:** the live `ScanResult`/`JobRegistry` model and the `apply_parameters`/`ApiBridge` write path. No new third-party dependency (numpy only).
+
+### 1.7 Implementation status (2026-07-26)
+
+**The GUI half of §1 is implemented and live.** The sections above are kept as written — they are the design as proposed, not a description of the code. Where the two disagree, this note wins. Five decisions taken during implementation supersede the sketch:
+
+1. **scipy is a dependency now** (`scipy>=1.7.0` in `requirements.txt`). §1.3 constrained the helper to "numpy only" and §1.6 proposed a hand-rolled Gauss–Newton. Hand-rolling a bounded optimiser and its covariance is a numerics liability we would own forever — bound handling, line search, and Hessian conditioning are exactly the parts that fail quietly on real data. `tavi/scan_fits.py` uses `scipy.optimize.minimize(method="L-BFGS-B")`. scipy is already an indirect dependency of the plotting/analysis stack, so this costs nothing at install time.
+2. **Pseudo-Voigt with a Baker–Cousins Poisson deviance, not Gaussian least-squares** (operator request). TAS lineshapes are rarely pure Gaussians, and the data are raw counts: least-squares on counts mis-weights the tails. The model is an area-parameterised pseudo-Voigt (shared FWHM, mixing parameter `eta`, flat background); `eta` on a boundary triggers a refit with it frozen so the covariance is not taken across the constraint. Reported per parameter: value ± error from the numerical Hessian of the deviance, plus reduced deviance and dof.
+3. **Soft gating supersedes the §1.6 hard-refusal ladder.** §1.6 refused to return a value for an edge peak, multiple peaks, a weak peak, or a poor fit. In practice those are exactly the cases an operator can adjudicate in one glance at the plot, and a refusal leaves them retyping the number by hand — the transcription error the feature exists to remove. So those conditions became **warnings** on an otherwise valid `QuickFitResult`; `converged=False` is reserved for a genuine failure (bad input, too few points, optimiser failure). In the GUI, only a failed or absent fit disables "Go to CEN". A converged fit with warnings stays enabled, turns amber, and lists its warnings in the tooltip — with the fit curve overlaid on the plot the operator is looking at. The operator judges; the software refuses to move only when it has nothing to move to.
+4. **Mid-scan fitting is allowed; the goto stays idle-only.** Fitting reads the measured-and-valid prefix of the live scan, so an operator can watch a peak form and fit it early. Moving the instrument is still refused while any job is queued or running (`TAVIController._scan_busy()`, the same guard `PATCH /parameters` uses).
+5. **`POST /goto` is deliberately deferred.** §1.5 is unimplemented. The reason is sequencing, not doubt: the GUI surface answers the operator's daily complaint today, and the fit result objects (`QuickFitResult`, `GotoPlan`) were shaped as API payloads — flat, JSON-safe fields plus an explicit `ok`/`converged` + `reason` — so the endpoint is a serialisation layer over the existing code rather than a second implementation.
+
+**What shipped where** (this replaces the "Touched modules" line above):
+
+| Module | Role |
+|---|---|
+| `tavi/scan_fits.py` (new) | `com`, `peak_max`, `fit_peak`, `SCAN_VARIABLE_TO_FIELD` / `field_for_scan_variable`, `plan_goto`, `format_goto_message` / `format_revert_message`. Qt-free, controller-free, never raises. |
+| `TAVI_PySide6.py` | `TAVIController.goto_scan_variable(variable, value, label)`, `revert_last_goto()`, `can_revert_goto()`, `_scan_busy()`. Thin adapters onto the existing `apply_parameters` path; all policy is in `scan_fits`. |
+| `gui/docks/fitting_dock.py` (new) | The operator surface: range selection, Fit, COM/MAX readouts, the results grid, and the goto/revert row. |
+| `gui/docks/display_dock.py` | `scan_snapshot()` (the one public read accessor) plus the `scan_data_reset` / `scan_data_finished` lifecycle signals. |
+| `gui/main_window.py` | Dock registration and layout. |
+
+**A dedicated dock, not buttons under the plot.** §1.4 put three buttons in `display_dock.py`. The feature grew a range selector, a results grid, and status text; putting that in the display dock would have made the plot dock own an analysis UI and grown its already-large file. `FittingDock` is tabbed with the Data Control / Remote API group so the Display plot stays visible above it — the fit overlay is drawn on that plot, so both must be on screen at once. The display dock keeps its ownership rule: it computes nothing and hands out copies.
+
+**Revert.** Not in the original design. `goto_scan_variable` snapshots the field's previous value and `revert_last_goto()` restores it — single level, one goto one revert. A goto is a motion the operator may want to take back immediately after seeing where it landed.
+
+#### The scan-variable → field table
+
+`SCAN_VARIABLE_TO_FIELD` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes. It is derived from the scan-point template (`_build_scan_point_template`) and `_SCAN_VARIABLE_TO_INDEX`; a `None` means *known variable, not goto-able*, which is a different refusal from *unknown variable*.
+
+| Scan variable | Field | Note |
+|---|---|---|
+| `H`, `K`, `L`, `deltaE` | same name | Reciprocal-space and energy targets. |
+| `qx`, `qy`, `qz` | same name | |
+| `A1` | `mtt` | Angle-mode template slots are `[mtt, stt, omega, att]`. |
+| `A2`, `2theta` | `stt` | |
+| `A3` | `omega` | |
+| `A4` | `att` | |
+| `omega` | `psi` | **Both** `omega` and `psi` step template slot 10, which is seeded from the `psi` field. A scan named `omega` therefore moves `psi`; mapping it to an `omega` field would move the wrong axis. |
+| `psi`, `kappa` | same name | |
+| `rhm`, `rvm`, `rha` | same name | Bender curvatures. |
+| `chi` | `None` | Template slot 8 is hardcoded `0` rather than seeded from the `chi` field, so the field↔slot relationship is unverified — a goto could double-apply an offset. Refused until that is settled. |
+| `rva` | `None` | No settable field exists in `_api_field_map`. |
+
+An unknown variable also returns `None`. The GUI disables all three goto buttons with the reason in their tooltip.
+
+**Verification.** `tavi/scan_fits.py` is unit-tested in `tests/test_scan_fits.py`. The controller adapters and the dock boundary are guarded by source-scan tests (`tests/test_goto_controller.py`, `tests/test_fitting_dock.py`) because this suite does not import Qt.
 
 ---
 
