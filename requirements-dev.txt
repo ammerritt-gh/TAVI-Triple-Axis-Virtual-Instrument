@@ -2,3 +2,5 @@
 # Install into the dev environment, e.g.:
 #   micromamba run -n tavi-dev python -m pip install -r requirements-dev.txt
 pytest
+# tests/test_reciprocal_interaction.py uses pytest-qt's qapp fixture.
+pytest-qt
