@@ -36,6 +36,7 @@ from tavi.scan_jobs import (
 from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
                              MAX_WAITERS, parse_scan_engine, ALLOWED_ENGINES)
 from tavi.journal import SessionJournal
+from tavi import scan_fits
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection)
 from tavi.reciprocal_interaction import (LiveReciprocalResult, ReachOverlay,
@@ -424,11 +425,8 @@ class TaviApiBackend:
     # ---- write endpoints ----------------------------------------------
 
     def _has_active_or_queued(self):
-        for job in self._controller._job_registry.all_jobs():
-            with job.lock:
-                if job.state in (JobState.QUEUED, JobState.RUNNING):
-                    return True
-        return False
+        # Single source of truth, shared with the GUI-side goto (sec 8).
+        return self._controller._scan_busy()
 
     def patch_parameters(self, patch, force):
         """PATCH /parameters -- apply a partial parameter set (sec 6, sec 8).
@@ -894,6 +892,10 @@ class TAVIController(QObject):
         self._job_queue = queue.Queue()
         self._active_job = None  # job currently RUNNING in the worker (or None)
         self.last_scan_result = None  # ScanResult from the most recent finished job
+        # Single-level undo for goto_scan_variable: {'field', 'old_value',
+        # 'variable'} of the last successful goto, or None when there is
+        # nothing to revert. Cleared once reverted.
+        self._last_goto = None
         # Job ids of the benchmark plan currently in flight (set by
         # run_benchmark, drained by _on_job_state_changed when all are terminal).
         self._benchmark_job_ids = []
@@ -1218,7 +1220,17 @@ class TAVIController(QObject):
             # Any job transition (from either thread) refreshes the job table
             # and budget readout via the controller's pull helpers.
             self.job_state_changed.connect(api_dock.refresh_jobs)
-        
+
+        # Fitting-dock wiring (docs/CONTROL_FEATURES_DESIGN.md sec 1). The dock
+        # reads the scan through display_dock.scan_snapshot() and moves the
+        # instrument only through goto_scan_variable/revert_last_goto; the one
+        # thing it needs from the controller side is a nudge whenever the busy
+        # state changes, so the goto buttons enable/disable with the queue.
+        fitting_dock = getattr(self.window, "fitting_dock", None)
+        if fitting_dock is not None:
+            fitting_dock.set_controller(self)
+            self.job_state_changed.connect(fitting_dock.refresh_gating)
+
         # Parameter buttons (moved to right panel)
         self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
         self.window.simulation_dock.load_button.clicked.connect(self.load_parameters)
@@ -5691,6 +5703,109 @@ class TAVIController(QObject):
         'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
         'mtt', 'stt', 'omega', 'chi', 'att',
     )
+
+    def _scan_busy(self):
+        """True when any scan job is queued or running.
+
+        Single source of truth for the "don't move the instrument now" guard,
+        shared by the API's PATCH /parameters busy check
+        (``TaviApiBackend._has_active_or_queued``) and the GUI-side goto. A
+        RUNNING job is exactly ``self._active_job``, so scanning the registry
+        covers both.
+        """
+        for job in self._job_registry.all_jobs():
+            with job.lock:
+                if job.state in (JobState.QUEUED, JobState.RUNNING):
+                    return True
+        return False
+
+    def goto_scan_variable(self, variable, value, label="goto"):
+        """Move the instrument by setting the scanned variable's parameter field.
+
+        Policy (which variables are goto-able, what refusals say, how the
+        result is worded) lives in ``tavi.scan_fits``; this method only does
+        the widget work: snapshot the old reading, patch the one field through
+        ``apply_parameters``, and report.
+
+        ``label`` names the origin of the target ("goto CEN", "goto FIT", ...)
+        and opens every message this call produces.
+
+        Returns ``(ok: bool, message: str)``. GUI-thread only.
+        """
+        plan = scan_fits.plan_goto(variable, value, busy=self._scan_busy())
+        if not plan.ok:
+            message = f"{label} refused: {plan.reason}"
+            self.print_to_message_center(message)
+            return False, message
+
+        # get_gui_values() returns None when a widget will not parse. Either
+        # way the old reading may be unavailable: the goto still runs, but
+        # there is then nothing to revert to.
+        current = self.get_gui_values()
+        old_value = current.get(plan.field) if current else None
+
+        applied, errors = self.apply_parameters({plan.field: plan.value})
+        if errors or plan.field not in applied:
+            detail = errors.get(plan.field) or "field was not applied"
+            message = f"{label} failed: {plan.field}: {detail}"
+            self.print_to_message_center(message)
+            return False, message
+
+        self._last_goto = {
+            "field": plan.field,
+            "old_value": old_value,
+            "variable": plan.variable,
+        }
+
+        message = scan_fits.format_goto_message(
+            label, plan.variable, plan.field, old_value, plan.value
+        )
+        self.print_to_message_center(message)
+        self._journal.record("parameter", "goto: " + message)
+        return True, message
+
+    def revert_last_goto(self):
+        """Restore the field value from before the last goto.
+
+        Single level only: one goto, one revert. Returns ``(ok, message)``.
+        GUI-thread only.
+        """
+        snapshot = self._last_goto
+        if snapshot is None:
+            message = "revert refused: nothing to revert"
+            self.print_to_message_center(message)
+            return False, message
+        if self._scan_busy():
+            message = "revert refused: a scan is running or queued"
+            self.print_to_message_center(message)
+            return False, message
+
+        field = snapshot["field"]
+        old_value = snapshot["old_value"]
+        if old_value is None:
+            # Nothing to restore to; drop the snapshot so the button stops
+            # offering an action that cannot work.
+            self._last_goto = None
+            message = f"revert refused: previous value of {field} unknown"
+            self.print_to_message_center(message)
+            return False, message
+
+        applied, errors = self.apply_parameters({field: old_value})
+        if errors or field not in applied:
+            detail = errors.get(field) or "field was not applied"
+            message = f"revert failed: {field}: {detail}"
+            self.print_to_message_center(message)
+            return False, message  # snapshot kept: the user may retry
+
+        self._last_goto = None
+        message = scan_fits.format_revert_message(field, old_value)
+        self.print_to_message_center(message)
+        self._journal.record("parameter", message)
+        return True, message
+
+    def can_revert_goto(self):
+        """True when :meth:`revert_last_goto` has a value to restore."""
+        return bool(self._last_goto) and self._last_goto.get("old_value") is not None
 
     def apply_parameters(self, patch: dict):
         """Apply a parameter patch to the GUI widgets. GUI-thread only.

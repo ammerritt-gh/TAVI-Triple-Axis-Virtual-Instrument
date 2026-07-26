@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                                 QFileDialog, QWidget, QSizePolicy, QDialog,
                                 QLineEdit, QCheckBox, QGroupBox, QGridLayout,
                                 QDialogButtonBox, QScrollArea, QFrame, QSplitter)
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, Signal
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -597,7 +597,17 @@ class SavePlotDialog(QDialog):
 
 class DisplayDock(BaseDockWidget):
     """Dock widget for real-time plot display during scans."""
-    
+
+    # Dataset lifecycle, for docks that decorate this plot or analyse its data
+    # (currently gui/docks/fitting_dock.py). These describe *the displayed
+    # dataset*, not the job: ``scan_data_reset`` fires whenever the arrays and
+    # the axes are replaced (a new scan, a loaded scan, a single-point result),
+    # and ``scan_data_finished`` whenever the displayed scan stops accumulating.
+    # A consumer must treat any artist it added to ``ax`` as destroyed after a
+    # reset -- ``initialize_scan`` clears the axes.
+    scan_data_reset = Signal()
+    scan_data_finished = Signal()
+
     # Constants for plot states
     STATE_UNMEASURED = 0  # White - to be measured
     STATE_IMPOSSIBLE = -1  # Black - cannot be measured
@@ -727,7 +737,59 @@ class DisplayDock(BaseDockWidget):
         
         self.status_label.setText(f"Scan initialized: 0/{self._get_total_valid_points()} points")
         self.canvas.draw()
-    
+        # The axes were rebuilt above; anything another dock drew on them is
+        # gone, so announce it before any new point arrives.
+        self.scan_data_reset.emit()
+
+    def scan_snapshot(self):
+        """Read-only view of the currently displayed scan.
+
+        The single public accessor for docks that *analyse* what is plotted
+        (``gui/docks/fitting_dock.py``), so they never reach into the private
+        arrays. Returns a dict with copies -- the caller may keep or mutate it
+        without affecting the live plot:
+
+        ``mode``          '1D', '2D', or ``None`` when nothing is displayed.
+        ``variable_name`` the first (x-axis) scan variable's name.
+        ``x``             abscissa values (1D only, else ``None``).
+        ``counts``        raw counts, NaN where unmeasured (1D only).
+        ``mask``          per-point "usable" flags: measured AND valid AND
+                          finite. Mid-scan this is the measured prefix, which
+                          is exactly what a mid-scan fit should see.
+        ``n_measured``    number of ``True`` entries in ``mask``.
+        """
+        snapshot = {
+            'mode': self._mode,
+            'variable_name': self._variable_name_1,
+            'x': None,
+            'counts': None,
+            'mask': None,
+            'n_measured': 0,
+        }
+        if self._mode != '1D' or self._scan_values_1 is None or self._counts is None:
+            return snapshot
+
+        x = np.asarray(self._scan_values_1, dtype=float).copy()
+        counts = np.asarray(self._counts, dtype=float).copy()
+        if x.size != counts.size:
+            # Shape disagreement means the plot state is mid-rebuild; report
+            # "nothing usable" rather than handing out a misaligned pair.
+            return snapshot
+
+        mask = np.isfinite(x) & np.isfinite(counts)
+        for flags in (self._measured_mask, self._valid_mask):
+            if flags is None:
+                continue
+            flags = np.asarray(flags, dtype=bool)
+            if flags.size == x.size:
+                mask &= flags
+
+        snapshot['x'] = x
+        snapshot['counts'] = counts
+        snapshot['mask'] = mask
+        snapshot['n_measured'] = int(np.count_nonzero(mask))
+        return snapshot
+
     def _get_total_valid_points(self):
         """Get total number of valid (reachable) points."""
         if self._valid_mask is None:
@@ -1054,8 +1116,9 @@ class DisplayDock(BaseDockWidget):
         total = self._get_total_valid_points()
         measured = self._get_measured_count()
         self.status_label.setText(f"Scan complete: {measured}/{total} points")
-        
+
         self.canvas.draw_idle()
+        self.scan_data_finished.emit()
     
     def auto_save_plot(self):
         """Automatically save the plot with full parameters to the data folder.
@@ -1288,7 +1351,9 @@ class DisplayDock(BaseDockWidget):
         
         self.canvas.draw()
         self.status_label.setText("Single point measurement complete")
-    
+        # No scan arrays remain and the axes were cleared.
+        self.scan_data_reset.emit()
+
     @Slot()
     def clear_plot(self):
         """Clear the plot and reset state."""
@@ -1312,9 +1377,10 @@ class DisplayDock(BaseDockWidget):
             except (ValueError, AttributeError):
                 pass
             self._colorbar = None
-        
+
         self._show_empty_plot()
-    
+        self.scan_data_reset.emit()
+
     def _on_save_plot(self):
         """Handle save plot button click."""
         if self._mode is None:
