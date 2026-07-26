@@ -1461,6 +1461,7 @@ class TAVIController(QObject):
             self.window.simulation_dock.scan_command_1_edit,
             self.window.simulation_dock.scan_command_2_edit,
         ])
+        self._feedback_line_edits = line_edits
         
         # Apply visual feedback to all line edits
         for line_edit in line_edits:
@@ -1474,12 +1475,17 @@ class TAVIController(QObject):
         
         # Connect to textChanged to show pending state
         def on_text_changed():
-            if not self.updating:  # Only show pending if not programmatically updating
-                original = line_edit.property("original_value")
-                current = line_edit.text()
-                if current != original:
-                    # Show pending state with orange border
-                    line_edit.setStyleSheet("QLineEdit { border: 2px solid #FF8C00; }")
+            if self.updating:
+                # A controller transaction owns this text change.  Its caller
+                # will make the new value the feedback baseline once the
+                # calculation has completed; it is never a pending user edit.
+                line_edit.setProperty("programmatic_change", True)
+                return
+            original = line_edit.property("original_value")
+            current = line_edit.text()
+            if current != original:
+                # Show pending state with orange border
+                line_edit.setStyleSheet("QLineEdit { border: 2px solid #FF8C00; }")
         
         line_edit.textChanged.connect(on_text_changed)
         
@@ -1509,6 +1515,30 @@ class TAVIController(QObject):
             QTimer.singleShot(10, on_editing_finished)
         
         line_edit.editingFinished.connect(delayed_on_editing_finished)
+
+    def _commit_programmatic_feedback(self, line_edits=None, flash=False):
+        """Make controller-written edits visibly committed, never pending.
+
+        ``textChanged`` deliberately cannot tell a user edit from a
+        ``setText`` call.  Controller transactions mark the latter while
+        ``updating`` is true; this is the single place that advances the
+        visual-feedback baseline afterwards.  Passing explicit edits supports
+        direct API/goto writes, while the default consumes derived changes
+        accumulated by an after-handler.
+        """
+        if line_edits is None:
+            line_edits = getattr(self, "_feedback_line_edits", ())
+            line_edits = [
+                edit for edit in line_edits
+                if edit.property("programmatic_change")
+            ]
+        for line_edit in line_edits:
+            line_edit.setProperty("original_value", line_edit.text())
+            line_edit.setProperty("programmatic_change", False)
+            if flash:
+                self._flash_field_saved(line_edit)
+            else:
+                line_edit.setStyleSheet(line_edit.property("original_style") or "")
     
     def quit_application(self):
         """Quit the application."""
@@ -2461,6 +2491,7 @@ class TAVIController(QObject):
         text = format_editable_number(value)
         edit.setText(text)
         self._update_tracked_value(field_name, value, displayed_text=edit.text())
+        self._commit_programmatic_feedback([edit])
     
     def update_all_variables(self, skip_crystal_angles=False):
         """
@@ -2517,6 +2548,7 @@ class TAVIController(QObject):
         except (ValueError, KeyError) as e:
             pass
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
 
@@ -2689,13 +2721,20 @@ class TAVIController(QObject):
         if self.updating and not force:
             return
         try:
-            self.updating = True
-            formatted = self._format_field_value(value)
-            line_edit.setText(formatted)
-            line_edit.setProperty("original_value", line_edit.text())
-            self._flash_field_saved(line_edit)
+            self._set_and_confirm_text(
+                line_edit, self._format_field_value(value), force=force
+            )
         except (ValueError, TypeError):
             pass
+
+    def _set_and_confirm_text(self, line_edit, text, force=False):
+        """Set text through the committed programmatic-update lifecycle."""
+        if self.updating and not force:
+            return
+        try:
+            self.updating = True
+            line_edit.setText(str(text))
+            self._commit_programmatic_feedback([line_edit], flash=True)
         finally:
             self.updating = False
 
@@ -2716,11 +2755,29 @@ class TAVIController(QObject):
     def _flash_field_saved(self, line_edit):
         """Flash field to indicate programmatic update accepted."""
         original_style = line_edit.property("original_style") or ""
+        flash_token = int(line_edit.property("feedback_flash_token") or 0) + 1
+        line_edit.setProperty("feedback_flash_token", flash_token)
         line_edit.setStyleSheet("QLineEdit { border: 2px solid #FF8C00; }")
 
+        def _restore_if_still_committed():
+            if line_edit.property("feedback_flash_token") != flash_token:
+                return
+            if line_edit.text() != line_edit.property("original_value"):
+                # A human edit arrived while the accepted-change animation was
+                # pending.  Keep its unsaved state visible rather than letting
+                # this older timer erase it.
+                line_edit.setStyleSheet("QLineEdit { border: 2px solid #FF8C00; }")
+                return
+            line_edit.setStyleSheet(original_style)
+
         def _bold_then_reset():
+            if line_edit.property("feedback_flash_token") != flash_token:
+                return
+            if line_edit.text() != line_edit.property("original_value"):
+                _restore_if_still_committed()
+                return
             line_edit.setStyleSheet("QLineEdit { border: 3px solid #000000; }")
-            QTimer.singleShot(300, lambda: line_edit.setStyleSheet(original_style))
+            QTimer.singleShot(300, _restore_if_still_committed)
 
         QTimer.singleShot(150, _bold_then_reset)
 
@@ -2805,6 +2862,7 @@ class TAVIController(QObject):
             self._update_tracked_value('fixed_E', Ei if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
             self._update_tracked_value('deltaE', deltaE)
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -2842,6 +2900,7 @@ class TAVIController(QObject):
             self._update_tracked_value('fixed_E', Ef if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
             self._update_tracked_value('deltaE', deltaE)
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -2875,6 +2934,7 @@ class TAVIController(QObject):
             self._update_tracked_value('fixed_E', Ei if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
             self._update_tracked_value('deltaE', deltaE)
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -2908,6 +2968,7 @@ class TAVIController(QObject):
             self._update_tracked_value('fixed_E', vals['Ei'] if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
             self._update_tracked_value('deltaE', deltaE)
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -2941,6 +3002,7 @@ class TAVIController(QObject):
             self._update_tracked_value('fixed_E', Ef if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
             self._update_tracked_value('deltaE', deltaE)
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -2974,6 +3036,7 @@ class TAVIController(QObject):
             self._update_tracked_value('fixed_E', vals['Ef'] if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
             self._update_tracked_value('deltaE', deltaE)
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -3048,6 +3111,7 @@ class TAVIController(QObject):
         except Exception:
             pass
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             # Update HKL based on new Q values, but skip recalculating angles
             # since the angles are the source of truth here
@@ -3091,6 +3155,7 @@ class TAVIController(QObject):
         except:
             pass
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             # Update sample/instrument angles based on Q (skip if change originated from angles)
             if not skip_angle_update:
@@ -3130,6 +3195,7 @@ class TAVIController(QObject):
         except:
             pass
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             # Update sample/instrument angles based on Q
             self.update_angles_from_q()
@@ -3170,6 +3236,7 @@ class TAVIController(QObject):
         except Exception as e:
             self.print_to_message_center(f"Error updating HKL from lattice: {e}")
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
 
     def update_angles_from_q(self):
@@ -3200,6 +3267,7 @@ class TAVIController(QObject):
         except Exception:
             pass
         finally:
+            self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
     
@@ -4682,6 +4750,12 @@ class TAVIController(QObject):
                 for key in ("Ki", "Kf", "Ei", "Ef", "fixed_E", "deltaE"):
                     if key in loaded_values:
                         self._update_tracked_value(key, loaded_values[key])
+                # Loading replaces the complete controller state.  All tracked
+                # fields therefore have a new committed baseline, without the
+                # per-field flash reserved for direct commands/API patches.
+                self._commit_programmatic_feedback(
+                    getattr(self, "_feedback_line_edits", ())
+                )
                 
             self.print_to_message_center("Parameters loaded successfully")
         else:
@@ -4870,6 +4944,9 @@ class TAVIController(QObject):
         # Unblock signals after all parameters are set
         self.window.simulation_dock.scan_command_1_edit.blockSignals(False)
         self.window.simulation_dock.scan_command_2_edit.blockSignals(False)
+        self._commit_programmatic_feedback(
+            getattr(self, "_feedback_line_edits", ())
+        )
         
         self.print_to_message_center("Default parameters loaded")
     
@@ -5612,7 +5689,7 @@ class TAVIController(QObject):
 
         # --- line-edit setter factory (numeric) ---
         def set_text(edit):
-            return lambda v: edit.setText(self._api_fmt(v))
+            return lambda v: self._set_and_confirm_text(edit, self._api_fmt(v))
 
         # --- bending after-handler factory (unlock ideal + refresh labels) ---
         def bend_after(key):
@@ -5685,8 +5762,8 @@ class TAVIController(QObject):
             'slits_mm': (p_dict, idock.set_slit_values_mm, None),
             # simulation control
             'number_neutrons': (p_int_pos, sim.set_number_neutrons, None),
-            'scan_command1': (p_str, sim.scan_command_1_edit.setText, self.validate_scan_commands),
-            'scan_command2': (p_str, sim.scan_command_2_edit.setText, self.validate_scan_commands),
+            'scan_command1': (p_str, lambda v: self._set_and_confirm_text(sim.scan_command_1_edit, v), self.validate_scan_commands),
+            'scan_command2': (p_str, lambda v: self._set_and_confirm_text(sim.scan_command_2_edit, v), self.validate_scan_commands),
             'diagnostic_mode': (p_bool, sim.diagnostic_mode_check.setChecked, None),
         }
 
@@ -5864,6 +5941,12 @@ class TAVIController(QObject):
                     f"API: after-update handler {getattr(handler, '__name__', handler)} "
                     f"failed: {exc}"
                 )
+
+        # Direct writes already flashed through _set_and_confirm_text().  The
+        # handlers may have written dependent fields while ``updating`` was
+        # true; make those baselines current without giving every derived
+        # value a separate success flash.
+        self._commit_programmatic_feedback()
 
         # (d) Summary to the message center.
         if applied:
