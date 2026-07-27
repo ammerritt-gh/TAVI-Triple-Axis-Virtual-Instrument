@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt
 
 from gui.docks.base_dock import BaseDockWidget
+from tavi.background import PRESETS as BACKGROUND_PRESETS
 
 
 # Define linked parameter groups - parameters within a group control the same thing
@@ -226,6 +227,40 @@ class UnifiedSimulationDock(BaseDockWidget):
         engine_row.addWidget(self.engine_combo)
         engine_row.addStretch()
         scan_layout.addLayout(engine_row)
+
+        # Background profile row (tavi/background.py). Enable toggle + preset
+        # only: numeric overrides are an API-only capability, so a GUI edit
+        # always sends the plain preset form. The label is a read-only echo of
+        # the resolved terms, written by the controller after every change.
+        background_row = QHBoxLayout()
+        background_row.addWidget(QLabel("Background:"))
+        self.background_enable_check = QCheckBox("On")
+        self.background_enable_check.setToolTip(
+            "Plant the selected background profile into generated scans.\n"
+            "Off: scans contain signal only (identical counts to a "
+            "background-free engine)."
+        )
+        background_row.addWidget(self.background_enable_check)
+        self.background_preset_combo = QComboBox()
+        # userData carries the registry preset name; each item's tooltip is the
+        # registry description, so the roster documents itself.
+        for name, entry in BACKGROUND_PRESETS.items():
+            self.background_preset_combo.addItem(name, name)
+            self.background_preset_combo.setItemData(
+                self.background_preset_combo.count() - 1,
+                entry.get("description", ""), Qt.ToolTipRole,
+            )
+        background_row.addWidget(self.background_preset_combo)
+        self._background_summary_text = ""
+        self.background_summary_label = QLabel("")
+        self.background_summary_label.setStyleSheet(
+            "color: #666666; font-size: 10px;"
+        )
+        self.background_summary_label.setSizePolicy(
+            QSizePolicy.Ignored, QSizePolicy.Preferred
+        )
+        background_row.addWidget(self.background_summary_label, 1)
+        scan_layout.addLayout(background_row)
 
         main_layout.addWidget(scan_group)
         
@@ -573,6 +608,50 @@ class UnifiedSimulationDock(BaseDockWidget):
             return data if data in ("mcstas", "deterministic") else "mcstas"
         except Exception:
             return "mcstas"
+
+    def get_background_spec(self) -> dict:
+        """Preset-form background spec from the row (never carries overrides).
+
+        Numeric overrides are reachable only through the API, so what the row
+        can express is exactly ``{enabled, preset, overrides: {}}``.
+        """
+        preset = self.background_preset_combo.currentData()
+        return {
+            "enabled": bool(self.background_enable_check.isChecked()),
+            "preset": preset if isinstance(preset, str) else "none",
+            "overrides": {},
+        }
+
+    def set_background_display(self, enabled, preset, summary: str):
+        """Show a resolved background profile without emitting change signals.
+
+        The controller owns the profile; this is a pure display sync, so the
+        widgets can never disagree with the stored spec. A profile delivered in
+        the frozen numeric form has no ``preset`` -- the combo then keeps its
+        current entry and the summary label carries the real content.
+        """
+        widgets = (self.background_enable_check, self.background_preset_combo)
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            self.background_enable_check.setChecked(bool(enabled))
+            index = self.background_preset_combo.findData(preset)
+            if index >= 0:
+                self.background_preset_combo.setCurrentIndex(index)
+            self._background_summary_text = summary or ""
+            self._update_background_summary_label()
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+
+    def _update_background_summary_label(self):
+        """Elide the summary into the label's width; full text in the tooltip."""
+        metrics = self.background_summary_label.fontMetrics()
+        width = max(120, self.background_summary_label.width())
+        self.background_summary_label.setText(
+            metrics.elidedText(self._background_summary_text, Qt.ElideRight, width)
+        )
+        self.background_summary_label.setToolTip(self._background_summary_text)
 
     def get_number_neutrons(self) -> int:
         """Get the combined number of neutrons from mantissa × 10^exponent.

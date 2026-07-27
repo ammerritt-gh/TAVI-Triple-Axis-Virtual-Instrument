@@ -231,6 +231,13 @@ class ScanJob:
             summary['seed'] = _json_safe(ls.get('seed'))
         if ls.get('noiseless'):
             summary['noiseless'] = True
+        # Background provenance (tavi/background.py): the requested spec and its
+        # delivery tag, surfaced only when the launch state carries them so a
+        # job predating background support keeps a byte-identical summary.
+        if ls.get('background') is not None:
+            summary['background'] = _json_safe(ls.get('background'))
+        if ls.get('background_source'):
+            summary['background_source'] = ls.get('background_source')
         return summary
 
     def snapshot(self, include_data: bool = False) -> Dict[str, Any]:
