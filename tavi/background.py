@@ -54,6 +54,14 @@ METHODS = ("analytic", "simulated")
 
 SHAPES = ("flat", "linear_e", "elastic_incoherent", "elastic_tail")
 
+# Distinctive stream key for the Monte-Carlo background overlay's per-point RNG,
+# seeded as ``(background_seed, BACKGROUND_STREAM, point_index)``. The middle
+# element exists so a background draw can never collide with a plain
+# ``(seed, index)`` stream (the deterministic engine's signal noise uses that
+# two-element form); the value itself is arbitrary but must stay fixed, because
+# changing it changes every previously drawn overlay.
+BACKGROUND_STREAM = 0x6B67
+
 # Explicit zero point of the linear-in-E shape. Named so nobody has to guess
 # whether the slope is anchored at the scan's first point.
 REFERENCE_ENERGY_MEV = 0.0
@@ -677,6 +685,44 @@ def mean_counts(resolved: ResolvedBackground,
     if missing_required:
         raise SampleScaleUnavailable(missing_required)
     return float(sum(per_term.values())), per_term, tuple(skipped)
+
+
+def poisson_overlay(resolved: ResolvedBackground,
+                    w_meV: float,
+                    sigma_e_meV: Optional[float],
+                    number_neutrons: float,
+                    sample_scale: Optional[float],
+                    seed: int,
+                    index: int,
+                    stream: int = BACKGROUND_STREAM,
+                    rng_factory=np.random.default_rng) -> int:
+    """Integer background counts to add to one Monte-Carlo point.
+
+    The Monte-Carlo engine plants background as an *analytic additive Poisson
+    overlay* on the ray-traced counts: the mean comes from :func:`mean_counts`,
+    the draw from a dedicated per-point stream
+    ``rng_factory((seed, stream, index))``. ``stream`` keys that draw away from
+    every other ``(seed, index)`` stream in the codebase, so a background draw
+    can never consume a signal stream's numbers or vice versa; ``index`` keys it
+    per point, so a skipped point never shifts a later point's overlay.
+
+    Zero cost when there is nothing to plant: a disabled profile or a
+    non-positive mean returns ``0`` **without** constructing an RNG, which is
+    what keeps a background-free Monte-Carlo scan bit-identical to a
+    pre-background one.
+
+    The draw is always Poisson, never a bare mean added to integer counts --
+    ``noiseless`` is a deterministic-engine concept that McStas ignores.
+    """
+    if not resolved.enabled:
+        return 0
+    mean, _, _ = mean_counts(
+        resolved, w_meV, sigma_e_meV, number_neutrons, sample_scale
+    )
+    if not math.isfinite(mean) or mean <= 0.0:
+        return 0
+    rng = rng_factory((int(seed), int(stream), int(index)))
+    return int(rng.poisson(mean))
 
 
 def metadata_block(resolved: ResolvedBackground,

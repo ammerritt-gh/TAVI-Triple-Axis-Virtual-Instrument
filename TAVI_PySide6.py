@@ -7561,6 +7561,74 @@ class TAVIController(QObject):
                 start_time=time.time(),
             )
 
+        # -- background (McStas path): planted truth resolved once for the whole
+        #    scan, exactly as the deterministic branch does, then overlaid on the
+        #    ray-traced counts as an additive analytic Poisson term. No ray
+        #    tracing of the background itself -- that is the schema-reserved
+        #    method "simulated". A per-scan override replaces the controller
+        #    profile wholesale (never merges); its absence means config default.
+        import zlib
+        background_spec = (
+            launch_state['background'] if 'background' in launch_state
+            else getattr(self, 'background_profile', None)
+        )
+        background_source = (
+            launch_state.get('background_source') or 'config_default'
+        )
+        # Sample scale via the controller helper /validate uses, so the McStas
+        # path refuses (or skips) exactly where validation said it would; the
+        # analytic ground-truth model is never built on this path.
+        background_scale = self._background_sample_scale(
+            launch_state.get('sample_key')
+        )
+        # Frozen background seed: an explicit body seed wins, else a stable hash
+        # of the job id (crc32 is deterministic across processes, unlike Python's
+        # salted hash()), mirroring the deterministic branch. Frozen into the
+        # launch state so a replay of this launch redraws the same overlay.
+        background_seed = launch_state.get('seed')
+        if background_seed is None:
+            _job_id = getattr(job, 'job_id', '') if job is not None else ''
+            background_seed = int(zlib.crc32((_job_id or '').encode('utf-8')))
+        background_seed = int(background_seed)
+        launch_state['background_seed'] = background_seed
+        try:
+            background = _background.resolve(background_spec)
+            # Fail fast: the skipped-term set and the sample-scale refusal depend
+            # only on the sample scale, so one probe settles both before any
+            # compile rather than failing halfway through a scan.
+            _, _, background_skipped = _background.mean_counts(
+                background, 0.0, None, number_neutrons, background_scale
+            )
+        except (_background.SampleScaleUnavailable, ValueError) as exc:
+            reason = (
+                "sample_background_scale_unavailable: %s" % exc
+                if isinstance(exc, _background.SampleScaleUnavailable)
+                else "invalid background profile: %s" % exc
+            )
+            self.message_printed.emit("McStas engine: %s -- job failed." % reason)
+            if job is not None:
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = reason
+                    job.finished_at = time.time()
+                    job.notify_state_change()
+            # Every other exit of this method emits scan_completed even on
+            # failure; without it display_dock never leaves its in-progress state.
+            self.scan_completed.emit()
+            return data_folder
+        # sigma_E is only needed by resolution-width terms; computing it costs a
+        # resolution solve plus a 4x4 inversion per point, so it stays off unless
+        # a term reads it (a McStas point computes no resolution matrix itself).
+        background_needs_sigma = background.enabled and any(
+            term.shape == 'elastic_incoherent' for term in background.terms
+        )
+        if background.enabled:
+            self.message_printed.emit(
+                "Background overlay: preset=%s, seed=%d, fingerprint=%s"
+                % (background.preset, background_seed,
+                   _background.profile_fingerprint(background))
+            )
+
         # Run the scans
         start_time = time.time()
         total_scans = len(scan_parameter_input)
@@ -7845,11 +7913,51 @@ class TAVIController(QObject):
                     full_params = {**vals, **scan_point_params}
                     write_parameters_to_file(scan_folder, full_params)
                     
-                    # Read detector file to get counts
+                    # Read detector file to get counts. `intensity` (McStas I) is
+                    # an independent weighted reading, not derived from `counts`
+                    # (N), so the background overlay below leaves it untouched.
                     intensity, intensity_error, counts = read_1Ddetector_file(scan_folder)
+
+                    # Additive analytic background overlay on the ray-traced
+                    # counts (docs plan stage 6). Always Poisson-drawn: a bare
+                    # mean must never be added to integer McStas counts, and
+                    # `noiseless` stays a deterministic-engine concept that
+                    # McStas ignores. Zero work when the profile is disabled.
+                    if background.enabled and counts is not None:
+                        sigma_e = None
+                        if background_needs_sigma:
+                            # Only an elastic_incoherent term reads sigma_E, so
+                            # the resolution solve happens under that flag alone.
+                            try:
+                                from tavi.deterministic_engine import sigma_e_mev as _sigma_e_mev
+                                from tavi.resolution import resolution as _resolution
+                                if qx is not None:
+                                    q0 = math.sqrt(qx * qx + qy * qy + qz * qz)
+                                else:
+                                    q0 = 0.0
+                                sigma_e = _sigma_e_mev(
+                                    _resolution(
+                                        self.instrument.resolution_config(
+                                            vals, q0, float(deltaE)
+                                        )
+                                    )
+                                )
+                            except Exception as exc:
+                                self.message_printed.emit(
+                                    f"Point {i}: background resolution width "
+                                    f"unavailable ({exc}); using the term's "
+                                    f"sigma_fallback_meV"
+                                )
+                        bg_counts = _background.poisson_overlay(
+                            background, float(deltaE), sigma_e, number_neutrons,
+                            background_scale, background_seed, i,
+                        )
+                        if bg_counts:
+                            counts = counts + bg_counts
+
                     message = f"Final counts at detector: {int(counts)}"
                     self.message_printed.emit(message)
-                    
+
                     # Update counts
                     total_counts += counts
                     max_counts = max(max_counts, counts)
@@ -8181,6 +8289,24 @@ class TAVIController(QObject):
             if monitors_enabled and retained_diagnostic_data is not None and retained_diagnostic_data is not math.nan:
                 # Emit signal to display plots on main thread (matplotlib requires this)
                 self.diagnostic_plot_requested.emit(retained_diagnostic_data)
+
+        # Stamp the background provenance into result.metadata via the shared
+        # helper, so a McStas scan record carries the same block a deterministic
+        # one does. Stamped even when the profile is disabled -- absence of
+        # background is provenance too -- and covers the single-point branch,
+        # which finalizes here like every other scan mode. The seed is recorded
+        # only when something was actually drawn.
+        if job is not None and job.result is not None \
+                and simulation_error_message is None:
+            with job.lock:
+                job.result.metadata['background'] = _background.metadata_block(
+                    background, background_source,
+                    sample_scale=background_scale,
+                    skipped_terms=background_skipped,
+                    background_seed=(
+                        background_seed if background.enabled else None
+                    ),
+                )
 
         # Finalize job bookkeeping: pick the terminal state from the same flags
         # the display/output paths above already used. The worker loop emits the
