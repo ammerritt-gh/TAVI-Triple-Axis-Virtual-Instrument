@@ -51,8 +51,22 @@ def test_background_null_is_none():
 
 
 def test_background_preset_form_accepted():
-    spec = {"enabled": True, "preset": "flat_low", "overrides": {}}
+    spec = {"enabled": True, "preset": "flat", "overrides": {}}
     assert parse_scan_background({"background": spec}) == spec
+
+
+def test_background_scale_accepted_in_both_forms():
+    """The strength knob is a first-class spec field, not an unknown one."""
+    preset_form = {"enabled": True, "preset": "flat", "overrides": {}, "scale": 2.5}
+    assert parse_scan_background({"background": preset_form}) == preset_form
+    frozen_form = {
+        "enabled": True,
+        "scale": 0.1,
+        "terms": [{"name": "floor", "shape": "flat", "origin": "instrument",
+                   "params": {"rate": 1e-10}}],
+    }
+    assert parse_scan_background({"background": frozen_form}) == frozen_form
+    assert "scale" in BACKGROUND_SPEC_KEYS
 
 
 def test_background_frozen_form_accepted():
@@ -66,14 +80,14 @@ def test_background_frozen_form_accepted():
 
 def test_background_non_dict_is_400():
     with pytest.raises(ApiError) as ei:
-        parse_scan_background({"background": "flat_low"})
+        parse_scan_background({"background": "flat"})
     assert ei.value.status == 400
     assert "background" in ei.value.message
 
 
 def test_background_unknown_field_is_400_with_allowed_list():
     with pytest.raises(ApiError) as ei:
-        parse_scan_background({"background": {"preset": "flat_low", "rate": 1.0}})
+        parse_scan_background({"background": {"preset": "flat", "rate": 1.0}})
     err = ei.value
     assert err.status == 400
     assert err.code == "bad_request"
@@ -104,7 +118,7 @@ def test_background_in_scan_and_validate_body_keys():
 
 def test_background_spec_keys_match_the_contract():
     assert BACKGROUND_SPEC_KEYS == frozenset(
-        {"enabled", "preset", "overrides", "terms"}
+        {"enabled", "preset", "overrides", "terms", "scale"}
     )
 
 
@@ -131,7 +145,7 @@ def test_launch_summary_without_background_is_unchanged():
 
 
 def test_launch_summary_surfaces_background_when_present():
-    spec = {"enabled": True, "preset": "flat_low", "overrides": {}}
+    spec = {"enabled": True, "preset": "flat", "overrides": {}}
     summary = _job({
         "vals": {"scan_command1": "H 1 2 0.5"},
         "engine": "deterministic",
@@ -263,7 +277,7 @@ def test_get_put_background_round_trip():
         assert body["spec"]["preset"] == "none"
         assert body["resolved"]["enabled"] is False
 
-        spec = {"enabled": True, "preset": "flat_low", "overrides": {}}
+        spec = {"enabled": True, "preset": "flat", "overrides": {}}
         status, body = _request(base + "/background", method="PUT", data=spec)
         assert status == 200
         assert body["spec"] == spec
@@ -284,10 +298,41 @@ def test_put_background_rejects_unknown_top_level_key():
     try:
         status, body = _request(
             base + "/background", method="PUT",
-            data={"enabled": True, "preset": "flat_low", "rate": 1.0},
+            data={"enabled": True, "preset": "flat", "rate": 1.0},
         )
         assert status == 400
         assert body["error"]["details"]["unknown"] == ["rate"]
+    finally:
+        srv.stop()
+
+
+def test_put_background_accepts_the_scale_knob():
+    srv, base = _start(_BackgroundBackend())
+    try:
+        spec = {"enabled": True, "preset": "flat", "overrides": {}, "scale": 2.5}
+        status, body = _request(base + "/background", method="PUT", data=spec)
+        assert status == 200
+        assert body["spec"] == spec
+        assert body["resolved"]["scale"] == 2.5
+        # It really is a different background, not a cosmetic field.
+        plain = dict(spec, scale=1.0)
+        _, plain_body = _request(base + "/background", method="PUT", data=plain)
+        assert (plain_body["resolved"]["profile_fingerprint"]
+                != body["resolved"]["profile_fingerprint"])
+    finally:
+        srv.stop()
+
+
+def test_put_background_rejects_a_negative_scale_400():
+    srv, base = _start(_BackgroundBackend())
+    try:
+        status, body = _request(
+            base + "/background", method="PUT",
+            data={"enabled": True, "preset": "flat", "scale": -1.0},
+        )
+        assert status == 400
+        assert body["error"]["code"] == "invalid_background"
+        assert "scale" in body["error"]["message"]
     finally:
         srv.stop()
 
@@ -307,7 +352,7 @@ def test_put_background_readonly_is_403():
     srv, base = _start(_BackgroundBackend(), mode="readonly")
     try:
         status, body = _request(base + "/background", method="PUT",
-                                data={"enabled": True, "preset": "flat_low"})
+                                data={"enabled": True, "preset": "flat"})
         assert status == 403
         assert body["error"]["code"] == "read_only"
         # The read stays available in read-only mode.
@@ -366,7 +411,7 @@ def test_scan_rejects_malformed_background():
     srv, base = _start(_BackgroundBackend())
     try:
         status, body = _request(base + "/scan", method="POST",
-                                data={"background": "flat_low"})
+                                data={"background": "flat"})
         assert status == 400
         assert body["error"]["code"] == "bad_request"
 
@@ -381,7 +426,7 @@ def test_scan_rejects_malformed_background():
 def test_validate_accepts_background_and_reports_the_block():
     srv, base = _start(_BackgroundBackend())
     try:
-        spec = {"enabled": True, "preset": "flat_low", "overrides": {}}
+        spec = {"enabled": True, "preset": "flat", "overrides": {}}
         status, body = _request(base + "/validate", method="POST",
                                 data={"background": spec})
         assert status == 200
@@ -417,9 +462,14 @@ def test_schema_advertises_the_background_block():
         assert block["methods"] == {"analytic": "implemented",
                                     "simulated": "reserved"}
         # Presets carry full numerics, so a client can freeze one.
-        flat_low = block["presets"]["flat_low"]["terms"][0]
-        assert flat_low["params"]["rate"] > 0.0
+        flat_preset = block["presets"]["flat"]["terms"][0]
+        assert flat_preset["params"]["rate"] > 0.0
         assert set(block["shapes"]) == set(background.SHAPES)
+        # The merged roster: the strength knob replaced the low/high pair.
+        assert "flat" in block["presets"]
+        assert "flat_low" not in block["presets"]
+        assert "flat_high" not in block["presets"]
+        assert block["preset_registry_version"] == 2
         names = {f["name"] for f in body["scan_body_fields"]}
         assert "background" in names
         routes = {(e["method"], e["path"]) for e in body["endpoints"]}
@@ -441,6 +491,10 @@ def test_controller_schema_declares_the_background_block():
     assert '"simulated": "reserved"' in source
     assert '"sample": "counts = N * diffuse_background * rate"' in source
     assert '{"method": "PUT", "path": "/background"' in source
+    # The strength knob is advertised in both spec forms and on its own.
+    spec_forms = source.split('"spec_forms": {', 1)[1].split('"spec_fields"', 1)[0]
+    assert spec_forms.count('"scale": "number >= 0 (default 1.0)"') == 2
+    assert '"default": _background.DEFAULT_SCALE' in source
 
 
 def test_controller_injects_background_into_both_launch_builders():
@@ -487,3 +541,20 @@ def test_simulation_dock_has_the_background_row():
     assert "def set_background_display(self" in source
     # GUI edits never carry overrides -- that channel is API-only.
     assert '"overrides": {},' in source
+    # ... but the profile-level strength knob *is* a user control.
+    assert "self.background_scale_spin = QDoubleSpinBox()" in source
+    assert "self.background_scale_spin.setKeyboardTracking(False)" in source
+    assert '"Multiplies every background term (S/N knob)"' in source
+    assert '"scale": float(self.background_scale_spin.value()),' in source
+    # The display sync blocks the knob's signals too, so it cannot loop back.
+    blocked = source.split("def set_background_display", 1)[1]
+    assert "self.background_scale_spin)" in blocked.split("blockSignals(True)", 1)[0]
+
+
+def test_controller_wires_the_background_scale_knob():
+    source = _read(CONTROLLER_PATH)
+    assert "background_scale_spin.valueChanged.connect(" in source
+    assert "_on_background_row_changed" in source
+    # The row refresh pushes the resolved scale back into the widget.
+    refresh = source.split("def _refresh_background_row", 1)[1].split("def ", 1)[0]
+    assert "resolved.scale," in refresh

@@ -9,6 +9,9 @@ else:
 * the **preset registry** (:data:`PRESETS`) plus :func:`resolve`, which turns a
   request spec -- preset+overrides *or* a frozen numeric term list -- into a
   fully numeric :class:`ResolvedBackground`,
+* the profile-level **strength knob** ``scale``, one number multiplying every
+  term's rate uniformly, so a user dials signal-to-background without editing
+  per-term numerics,
 * the **identity fingerprints** (:func:`profile_fingerprint`,
   :func:`effective_fingerprint`), which hash the numerics and deliberately not
   the delivery source or the preset label, so a config default and a per-scan
@@ -27,6 +30,14 @@ Background terms are planted *without* resolution convolution: the elastic
 Gaussian is written directly at the per-point resolution width ``sigma_E`` (or
 a preset fallback when the resolution matrix is invalid), and the elastic tail
 is a bare Lorentzian pinned at ``E = 0``.
+
+Every preset is anchored to a **signal-to-background ratio of about 10:1**: the
+``Al_phonon_DFT`` sample peaks at ~4e-8 counts per monitor count, so a preset's
+characteristic background rate is ~4e-9. ``scale`` moves that anchor without
+touching the numbers -- ``scale = 0.1`` is a 100:1 experiment, ``scale = 10`` a
+1:1 one. It is applied at *evaluation* time and never folded into the term
+params, so a stamped scan record reads "the preset's numbers, times 2.5" rather
+than an opaque retuned term list.
 """
 from __future__ import annotations
 
@@ -43,7 +54,24 @@ BACKGROUND_SCHEMA = "tavi.background/1"
 
 # Bumped whenever a preset's numerics change, so a stored fingerprint that no
 # longer matches a preset name can be explained rather than silently re-tuned.
-PRESET_REGISTRY_VERSION = 1
+# v2 (2026-07-27): roster re-anchored to S/N ~10:1 and 'flat_low'/'flat_high'
+# merged into a single 'flat' preset, the strength knob having replaced them.
+PRESET_REGISTRY_VERSION = 2
+
+# Anchor for every preset magnitude: the Al_phonon_DFT sample peaks at about
+# 4 counts per 1e8 neutrons (see tavi/api_server.py limits note), i.e. a peak
+# signal rate of ~4e-8 counts per monitor count.
+PEAK_SIGNAL_RATE = 4.0e-8
+
+# Default signal-to-background ratio the roster is tuned to at ``scale = 1``:
+# a preset's characteristic background rate is PEAK_SIGNAL_RATE / 10.
+DEFAULT_SIGNAL_TO_BACKGROUND = 10.0
+
+# The rate every preset is anchored on (4.0e-9 counts per monitor count).
+ANCHOR_BACKGROUND_RATE = PEAK_SIGNAL_RATE / DEFAULT_SIGNAL_TO_BACKGROUND
+
+# Neutral value of the profile-level strength knob: multiply nothing.
+DEFAULT_SCALE = 1.0
 
 # Origin fixes the scaling base (see module docstring); it is not decoration.
 ORIGINS = ("instrument", "sample_environment", "sample")
@@ -175,91 +203,97 @@ class ResolvedBackground:
     whether a label can still explain it. ``overrides_applied`` echoes exactly
     what was merged, so a scan record shows the deviation from the preset
     without the reader having to diff numbers.
+
+    ``scale`` is the profile-level strength knob. It is deliberately *not*
+    folded into ``terms``: the terms stay the preset's published numbers and the
+    multiplier is reported beside them, so a reader sees "realistic x 2.5"
+    instead of a term list nobody can trace back to a preset.
     """
 
     enabled: bool
     preset: Optional[str]
     overrides_applied: Dict[str, Dict[str, float]]
     terms: Tuple[BackgroundTerm, ...]
+    scale: float = DEFAULT_SCALE
 
 
 def _preset(*terms: BackgroundTerm) -> Tuple[BackgroundTerm, ...]:
     return tuple(terms)
 
 
-# Preset roster. Anchor for every magnitude below: the Al_phonon_DFT sample
-# peaks at about 4 counts per 1e8 neutrons (see tavi/api_server.py limits note),
-# i.e. a peak signal rate of ~4e-8 counts per monitor count.
+# Preset roster, registry version 2. Every magnitude below is anchored on
+# ANCHOR_BACKGROUND_RATE = 4.0e-9 counts per monitor count -- 10% of the
+# Al_phonon_DFT peak rate, i.e. a default signal-to-background of 10:1. There is
+# deliberately no "low"/"high" variant of any preset: the profile-level ``scale``
+# knob covers that axis, so a preset chooses the *character* of a background and
+# the knob chooses its strength.
 PRESETS: Dict[str, Dict[str, Any]] = {
     "none": {
         "description": "No background terms (enabled or not, this profile plants nothing).",
         "terms": _preset(),
     },
-    "flat_low": {
+    "flat": {
         "description": (
-            "Weak flat instrument background, ~0.5% of the Al_phonon_DFT peak rate."
+            "Featureless flat instrument background at 10% of the Al_phonon_DFT peak "
+            "rate (signal-to-background 10:1). Use the profile 'scale' knob to make "
+            "it weaker or stronger -- there is no separate low/high preset."
         ),
         "terms": _preset(
             BackgroundTerm(
                 name="instrument_flat",
                 shape="flat",
                 origin="instrument",
-                params={"rate": 2.0e-10},
-            ),
-        ),
-    },
-    "flat_high": {
-        "description": (
-            "Strong flat instrument background, ~12% of the Al_phonon_DFT peak rate."
-        ),
-        "terms": _preset(
-            BackgroundTerm(
-                name="instrument_flat",
-                shape="flat",
-                origin="instrument",
-                params={"rate": 5.0e-9},
+                # ANCHOR_BACKGROUND_RATE exactly: S/N = 10:1 at scale = 1.
+                params={"rate": 4.0e-9},
             ),
         ),
     },
     "sloped": {
         "description": (
-            "flat_low plus a sample-environment term falling linearly with energy "
-            "transfer; the slope clamps the term to zero above 25 meV."
+            "Flat instrument floor plus a sample-environment term falling linearly "
+            "with energy transfer; the slope clamps the term to zero above 25 meV. "
+            "Sums to the 10:1 anchor rate at E = 0."
         ),
         "terms": _preset(
             BackgroundTerm(
                 name="instrument_flat",
                 shape="flat",
                 origin="instrument",
-                params={"rate": 2.0e-10},
+                params={"rate": 1.0e-9},
             ),
             BackgroundTerm(
                 name="environment_slope",
                 shape="linear_e",
                 origin="sample_environment",
-                params={"rate0": 1.0e-9, "slope_per_meV": -4.0e-11},
+                # 3.0e-9 + 1.0e-9 = the 4.0e-9 anchor at E = 0; the slope still
+                # reaches zero at 25 meV.
+                params={"rate0": 3.0e-9, "slope_per_meV": -1.2e-10},
             ),
         ),
     },
     "strong_elastic": {
         "description": (
             "Incoherent elastic line at every q (sample environment) plus a broad "
-            "instrument elastic tail; the line peaks ~15x flat_low at sigma_E = 0.5 meV."
+            "instrument elastic tail. The tail carries the 10:1 anchor rate; the "
+            "elastic line is dominant by design, peaking ~30% of the Al_phonon_DFT "
+            "peak rate at sigma_E = 0.5 meV."
         ),
         "terms": _preset(
             BackgroundTerm(
                 name="environment_elastic",
                 shape="elastic_incoherent",
                 origin="sample_environment",
-                # Peak = rate_integrated / (sigma * sqrt(2 pi)) = 3.0e-9 at sigma = 0.5 meV.
-                params={"rate_integrated": 3.76e-9, "sigma_fallback_meV": 0.5},
+                # Peak = rate_integrated / (sigma * sqrt(2 pi)) = 1.2e-8 at
+                # sigma = 0.5 meV, i.e. 3x the anchor: the line is meant to dominate.
+                params={"rate_integrated": 1.5e-8, "sigma_fallback_meV": 0.5},
             ),
             BackgroundTerm(
                 name="instrument_elastic_tail",
                 shape="elastic_tail",
                 origin="instrument",
-                # Peak = rate_integrated / (pi * gamma) = 9.5e-10 at gamma = 2 meV.
-                params={"rate_integrated": 6.0e-9, "gamma_meV": 2.0},
+                # Peak = rate_integrated / (pi * gamma) = 3.98e-9 at gamma = 2 meV,
+                # i.e. the anchor rate.
+                params={"rate_integrated": 2.5e-8, "gamma_meV": 2.0},
             ),
         ),
     },
@@ -274,9 +308,9 @@ PRESETS: Dict[str, Dict[str, Any]] = {
                 name="sample_diffuse",
                 shape="flat",
                 origin="sample",
-                # Multiplies diffuse_background: 0.05 * 1e-8 = 5e-10 counts/monitor
-                # for Al_phonon_DFT, ~2.5x flat_low.
-                params={"rate": 0.05},
+                # Multiplies diffuse_background: 0.4 * 1e-8 = 4.0e-9 counts/monitor
+                # for Al_phonon_DFT, i.e. the 10:1 anchor rate.
+                params={"rate": 0.4},
                 optional=True,
             ),
         ),
@@ -285,38 +319,41 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         "description": (
             "Combination profile: weak flat instrument floor, mild sample-environment "
             "slope, incoherent elastic line, broad elastic tail, and an optional "
-            "sample diffuse term."
+            "sample diffuse term. Away from the elastic line the mix sums to about "
+            "the 10:1 anchor rate (~3.9e-9 at E = 10 meV with the Al_phonon_DFT "
+            "diffuse channel); the elastic line rides above it."
         ),
         "terms": _preset(
             BackgroundTerm(
                 name="instrument_flat",
                 shape="flat",
                 origin="instrument",
-                params={"rate": 2.0e-10},
+                params={"rate": 6.0e-10},
             ),
             BackgroundTerm(
                 name="environment_slope",
                 shape="linear_e",
                 origin="sample_environment",
-                params={"rate0": 8.0e-10, "slope_per_meV": -2.0e-11},
+                params={"rate0": 2.4e-9, "slope_per_meV": -6.0e-11},
             ),
             BackgroundTerm(
                 name="environment_elastic",
                 shape="elastic_incoherent",
                 origin="sample_environment",
-                params={"rate_integrated": 1.5e-9, "sigma_fallback_meV": 0.5},
+                params={"rate_integrated": 4.5e-9, "sigma_fallback_meV": 0.5},
             ),
             BackgroundTerm(
                 name="instrument_elastic_tail",
                 shape="elastic_tail",
                 origin="instrument",
-                params={"rate_integrated": 2.0e-9, "gamma_meV": 2.0},
+                params={"rate_integrated": 6.0e-9, "gamma_meV": 2.0},
             ),
             BackgroundTerm(
                 name="sample_diffuse",
                 shape="flat",
                 origin="sample",
-                params={"rate": 0.05},
+                # 0.15 * 1e-8 = 1.5e-9 for Al_phonon_DFT.
+                params={"rate": 0.15},
                 optional=True,
             ),
         ),
@@ -338,6 +375,30 @@ def _as_float(value: Any, *, term: str, param: str) -> float:
     if not math.isfinite(number):
         raise ValueError(
             f"background term {term!r} parameter {param!r} must be finite, got {number!r}"
+        )
+    return number
+
+
+def _validate_scale(value: Any) -> float:
+    """Check the profile-level strength knob.
+
+    Same rules as a rate parameter -- a number, finite, and not negative, since
+    a negative multiplier would subtract counts. Booleans are rejected outright:
+    ``True`` silently meaning 1.0 would hide a client bug.
+    """
+    if isinstance(value, bool) or not isinstance(
+        value, (int, float, np.floating, np.integer)
+    ):
+        raise ValueError(
+            f"background 'scale' must be a number, got {type(value).__name__}"
+        )
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"background 'scale' must be finite, got {number!r}")
+    if number < 0.0:
+        raise ValueError(
+            "background 'scale' must be >= 0 (a negative scale would subtract "
+            f"counts), got {number!r}"
         )
     return number
 
@@ -421,7 +482,8 @@ def _validate_term(name: str, shape: Any, origin: Any, method: Any,
     )
 
 
-def _resolve_preset_form(spec: Mapping[str, Any], enabled: bool) -> ResolvedBackground:
+def _resolve_preset_form(spec: Mapping[str, Any], enabled: bool,
+                         scale: float) -> ResolvedBackground:
     preset_name = spec.get("preset", "none")
     if not isinstance(preset_name, str) or preset_name not in PRESETS:
         raise ValueError(
@@ -470,10 +532,12 @@ def _resolve_preset_form(spec: Mapping[str, Any], enabled: bool) -> ResolvedBack
         preset=preset_name,
         overrides_applied=applied,
         terms=tuple(resolved_terms),
+        scale=scale,
     )
 
 
-def _resolve_frozen_form(spec: Mapping[str, Any], enabled: bool) -> ResolvedBackground:
+def _resolve_frozen_form(spec: Mapping[str, Any], enabled: bool,
+                         scale: float) -> ResolvedBackground:
     raw_terms = spec.get("terms")
     if not isinstance(raw_terms, (list, tuple)):
         raise ValueError(
@@ -512,6 +576,7 @@ def _resolve_frozen_form(spec: Mapping[str, Any], enabled: bool) -> ResolvedBack
         preset=None,
         overrides_applied={},
         terms=tuple(terms),
+        scale=scale,
     )
 
 
@@ -528,6 +593,10 @@ def resolve(spec: Optional[Mapping[str, Any]]) -> ResolvedBackground:
       self-contained form campaigns stamp onto every scan so they never depend
       on a mutable server-side default or on preset retuning.
 
+    Both forms accept the optional top-level ``"scale"`` (float, finite, >= 0,
+    default ``1.0``): the strength knob, applied uniformly to every term's rate
+    at evaluation time.
+
     ``None`` resolves to the disabled ``none`` preset. Every rejection raises
     ``ValueError`` with a message naming the allowed values, which the API layer
     turns into a 400. ``enabled=False`` still resolves and validates the terms,
@@ -541,7 +610,7 @@ def resolve(spec: Optional[Mapping[str, Any]]) -> ResolvedBackground:
         raise ValueError(
             f"background spec must be a mapping, got {type(spec).__name__}"
         )
-    allowed_keys = {"enabled", "preset", "overrides", "terms"}
+    allowed_keys = {"enabled", "preset", "overrides", "terms", "scale"}
     unknown = sorted(set(spec) - allowed_keys)
     if unknown:
         raise ValueError(
@@ -558,9 +627,10 @@ def resolve(spec: Optional[Mapping[str, Any]]) -> ResolvedBackground:
         raise ValueError(
             f"background 'enabled' must be a boolean, got {type(enabled_raw).__name__}"
         )
+    scale = _validate_scale(spec.get("scale", DEFAULT_SCALE))
     if "terms" in spec:
-        return _resolve_frozen_form(spec, enabled_raw)
-    return _resolve_preset_form(spec, enabled_raw)
+        return _resolve_frozen_form(spec, enabled_raw, scale)
+    return _resolve_preset_form(spec, enabled_raw, scale)
 
 
 def _fingerprint_payload(resolved: ResolvedBackground) -> Dict[str, Any]:
@@ -568,11 +638,14 @@ def _fingerprint_payload(resolved: ResolvedBackground) -> Dict[str, Any]:
 
     Deliberately excludes the preset name and the delivery source -- two specs
     that resolve to identical physics must fingerprint identically whether they
-    arrived as a config default or a per-scan override.
+    arrived as a config default or a per-scan override. ``scale`` *is* included:
+    a different multiplier is different planted physics, so it must be a
+    different background identity.
     """
     return {
         "background_schema": BACKGROUND_SCHEMA,
         "enabled": bool(resolved.enabled),
+        "scale": float(resolved.scale),
         "terms": [
             term.to_dict()
             for term in sorted(resolved.terms, key=lambda t: t.name)
@@ -666,10 +739,15 @@ def mean_counts(resolved: ResolvedBackground,
     declared ``optional`` (recorded in ``skipped``) and raises
     :class:`SampleScaleUnavailable` for the rest -- there is no implicit
     fallback scale. A disabled profile contributes nothing at all.
+
+    The profile-level ``resolved.scale`` multiplies *every* term uniformly,
+    whatever its origin or shape -- it is the last factor applied here, and it
+    is never folded back into the term parameters.
     """
     if not resolved.enabled:
         return 0.0, {}, ()
     neutrons = float(number_neutrons)
+    strength = float(resolved.scale)
     per_term: Dict[str, float] = {}
     skipped: list[str] = []
     missing_required: list[str] = []
@@ -681,7 +759,7 @@ def mean_counts(resolved: ResolvedBackground,
             scale = neutrons * float(sample_scale)
         else:
             scale = neutrons
-        per_term[term.name] = scale * term_rate(term, w_meV, sigma_e_meV)
+        per_term[term.name] = strength * scale * term_rate(term, w_meV, sigma_e_meV)
     if missing_required:
         raise SampleScaleUnavailable(missing_required)
     return float(sum(per_term.values())), per_term, tuple(skipped)
@@ -706,10 +784,13 @@ def poisson_overlay(resolved: ResolvedBackground,
     can never consume a signal stream's numbers or vice versa; ``index`` keys it
     per point, so a skipped point never shifts a later point's overlay.
 
-    Zero cost when there is nothing to plant: a disabled profile or a
-    non-positive mean returns ``0`` **without** constructing an RNG, which is
-    what keeps a background-free Monte-Carlo scan bit-identical to a
-    pre-background one.
+    The profile's ``scale`` reaches the draw through :func:`mean_counts`, so a
+    scaled overlay is a differently-drawn overlay, not a rescaled one.
+
+    Zero cost when there is nothing to plant: a disabled profile, ``scale = 0``,
+    or any other non-positive mean returns ``0`` **without** constructing an
+    RNG, which is what keeps a background-free Monte-Carlo scan bit-identical to
+    a pre-background one.
 
     The draw is always Poisson, never a bare mean added to integer counts --
     ``noiseless`` is a deterministic-engine concept that McStas ignores.
@@ -737,6 +818,11 @@ def metadata_block(resolved: ResolvedBackground,
     (``config_default`` | ``per_scan_override``); it is recorded but excluded
     from both fingerprints. A disabled profile still stamps a short block --
     absence of background is provenance too.
+
+    ``scale`` is reported beside the terms rather than multiplied into them, so
+    the block reads "these preset numbers, times this knob". It appears in the
+    disabled short block too, for the same reason ``preset`` does: it is a
+    spec-level property of the profile, not a per-term detail.
     """
     profile = profile_fingerprint(resolved)
     effective = effective_fingerprint(resolved, sample_scale, skipped_terms)
@@ -745,6 +831,7 @@ def metadata_block(resolved: ResolvedBackground,
             "background_schema": BACKGROUND_SCHEMA,
             "enabled": False,
             "preset": resolved.preset,
+            "scale": float(resolved.scale),
             "source": source,
             "profile_fingerprint": profile,
             "effective_fingerprint": effective,
@@ -759,6 +846,7 @@ def metadata_block(resolved: ResolvedBackground,
         "preset_registry_version": PRESET_REGISTRY_VERSION,
         "enabled": True,
         "preset": resolved.preset,
+        "scale": float(resolved.scale),
         "source": source,
         "overrides_applied": {
             name: dict(params)

@@ -6,10 +6,11 @@ and progress tracking into a single dockable panel.
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QComboBox, QGroupBox, QPushButton,
                                 QGridLayout, QCheckBox, QFormLayout, QProgressBar,
-                                QWidget, QSizePolicy)
+                                QWidget, QSizePolicy, QDoubleSpinBox)
 from PySide6.QtCore import Qt
 
 from gui.docks.base_dock import BaseDockWidget
+from tavi.background import DEFAULT_SCALE as BACKGROUND_DEFAULT_SCALE
 from tavi.background import PRESETS as BACKGROUND_PRESETS
 
 
@@ -251,6 +252,22 @@ class UnifiedSimulationDock(BaseDockWidget):
                 entry.get("description", ""), Qt.ToolTipRole,
             )
         background_row.addWidget(self.background_preset_combo)
+        # Strength knob: one multiplier over every term of the chosen preset, so
+        # the roster carries the character of a background and this carries its
+        # strength. keyboardTracking off means typing "2.5" emits one change at
+        # the end, not one per keystroke (each would round-trip the profile).
+        self.background_scale_spin = QDoubleSpinBox()
+        self.background_scale_spin.setDecimals(2)
+        self.background_scale_spin.setRange(0.0, 10000.0)
+        self.background_scale_spin.setSingleStep(0.1)
+        self.background_scale_spin.setValue(BACKGROUND_DEFAULT_SCALE)
+        self.background_scale_spin.setKeyboardTracking(False)
+        self.background_scale_spin.setPrefix("x ")
+        self.background_scale_spin.setToolTip(
+            "Multiplies every background term (S/N knob)"
+        )
+        self.background_scale_spin.setMaximumWidth(90)
+        background_row.addWidget(self.background_scale_spin)
         self._background_summary_text = ""
         self.background_summary_label = QLabel("")
         self.background_summary_label.setStyleSheet(
@@ -612,17 +629,21 @@ class UnifiedSimulationDock(BaseDockWidget):
     def get_background_spec(self) -> dict:
         """Preset-form background spec from the row (never carries overrides).
 
-        Numeric overrides are reachable only through the API, so what the row
-        can express is exactly ``{enabled, preset, overrides: {}}``.
+        Per-term numeric overrides are reachable only through the API, so what
+        the row can express is exactly ``{enabled, preset, overrides: {}, scale}``
+        -- the profile-level strength knob is a user control, unlike the
+        per-term numerics.
         """
         preset = self.background_preset_combo.currentData()
         return {
             "enabled": bool(self.background_enable_check.isChecked()),
             "preset": preset if isinstance(preset, str) else "none",
             "overrides": {},
+            "scale": float(self.background_scale_spin.value()),
         }
 
-    def set_background_display(self, enabled, preset, summary: str):
+    def set_background_display(self, enabled, preset, summary: str,
+                               scale=BACKGROUND_DEFAULT_SCALE):
         """Show a resolved background profile without emitting change signals.
 
         The controller owns the profile; this is a pure display sync, so the
@@ -630,7 +651,8 @@ class UnifiedSimulationDock(BaseDockWidget):
         the frozen numeric form has no ``preset`` -- the combo then keeps its
         current entry and the summary label carries the real content.
         """
-        widgets = (self.background_enable_check, self.background_preset_combo)
+        widgets = (self.background_enable_check, self.background_preset_combo,
+                   self.background_scale_spin)
         for widget in widgets:
             widget.blockSignals(True)
         try:
@@ -638,6 +660,13 @@ class UnifiedSimulationDock(BaseDockWidget):
             index = self.background_preset_combo.findData(preset)
             if index >= 0:
                 self.background_preset_combo.setCurrentIndex(index)
+            try:
+                self.background_scale_spin.setValue(float(scale))
+            except (TypeError, ValueError) as exc:
+                # A display sync must never raise; show the neutral knob and say why.
+                print(f"Background scale {scale!r} is not displayable ({exc}); "
+                      f"showing {BACKGROUND_DEFAULT_SCALE}")
+                self.background_scale_spin.setValue(BACKGROUND_DEFAULT_SCALE)
             self._background_summary_text = summary or ""
             self._update_background_summary_label()
         finally:

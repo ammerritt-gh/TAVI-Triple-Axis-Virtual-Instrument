@@ -14,7 +14,11 @@ import pytest
 from instruments.descriptor import AnalyticCalibration
 from tavi import background as bg
 from tavi.background import (
+    ANCHOR_BACKGROUND_RATE,
     BACKGROUND_SCHEMA,
+    DEFAULT_SCALE,
+    DEFAULT_SIGNAL_TO_BACKGROUND,
+    PEAK_SIGNAL_RATE,
     PRESET_REGISTRY_VERSION,
     PRESETS,
     REFERENCE_ENERGY_MEV,
@@ -60,19 +64,62 @@ def test_preset_fingerprints_are_pinned():
 
     Bump ``PRESET_REGISTRY_VERSION`` alongside any update to these values.
     """
-    assert PRESET_REGISTRY_VERSION == 1
-    assert profile_fingerprint(resolve({"enabled": True, "preset": "flat_low"})) == (
-        "8979ff9018e1757f"
+    assert PRESET_REGISTRY_VERSION == 2
+    assert profile_fingerprint(resolve({"enabled": True, "preset": "flat"})) == (
+        "080b17334cec7409"
     )
     assert profile_fingerprint(resolve({"enabled": True, "preset": "realistic"})) == (
-        "90d99960a5c45aaf"
+        "dfcea26fb5b81af6"
     )
+    # The knob is part of the identity, so its pin is separate from the roster's.
+    assert profile_fingerprint(
+        resolve({"enabled": True, "preset": "realistic", "scale": 2.5})
+    ) == "f19e8eb83a6a8822"
+
+
+def test_low_high_flat_presets_were_merged_into_one():
+    """The strength knob replaced the low/high pair; both names must be gone."""
+    assert "flat" in PRESETS
+    assert "flat_low" not in PRESETS
+    assert "flat_high" not in PRESETS
+
+
+def test_preset_roster_is_anchored_at_ten_to_one():
+    """Default S/N anchor: a preset's characteristic rate is 10% of the peak."""
+    assert PEAK_SIGNAL_RATE == 4.0e-8
+    assert DEFAULT_SIGNAL_TO_BACKGROUND == 10.0
+    assert ANCHOR_BACKGROUND_RATE == pytest.approx(4.0e-9)
+    assert ANCHOR_BACKGROUND_RATE == pytest.approx(0.1 * PEAK_SIGNAL_RATE)
+
+    # 'flat' *is* the anchor, exactly.
+    assert PRESETS["flat"]["terms"][0].params["rate"] == 4.0e-9
+
+    def total_rate(preset, w, sample_scale=1.0e-8):
+        # Per-monitor-count rate: mean_counts with N = 1.
+        return mean_counts(
+            resolve({"enabled": True, "preset": preset}), w, 0.5, 1.0,
+            sample_scale=sample_scale,
+        )[0]
+
+    # 'sloped' and 'sample_diffuse' hit the anchor on the nose at E = 0 ...
+    assert total_rate("sloped", 0.0) == pytest.approx(ANCHOR_BACKGROUND_RATE)
+    assert total_rate("sample_diffuse", 0.0) == pytest.approx(ANCHOR_BACKGROUND_RATE)
+    # ... 'realistic' away from its elastic line, at a typical phonon position ...
+    assert total_rate("realistic", 10.0) == pytest.approx(
+        ANCHOR_BACKGROUND_RATE, rel=0.05
+    )
+    # ... and 'strong_elastic' carries the anchor in its tail while the elastic
+    # line stays dominant by design.
+    tail = PRESETS["strong_elastic"]["terms"][1]
+    assert bg.term_rate(tail, 0.0) == pytest.approx(ANCHOR_BACKGROUND_RATE, rel=0.01)
+    assert total_rate("strong_elastic", 0.0) > 3.0 * ANCHOR_BACKGROUND_RATE
 
 
 def test_preset_roster_shapes_and_origins():
     by_name = {name: PRESETS[name]["terms"] for name in PRESETS}
     assert by_name["none"] == ()
-    assert by_name["flat_low"][0].params["rate"] < by_name["flat_high"][0].params["rate"]
+    assert by_name["flat"][0].shape == "flat"
+    assert by_name["flat"][0].origin == "instrument"
     assert any(t.shape == "linear_e" for t in by_name["sloped"])
     assert {t.shape for t in by_name["strong_elastic"]} == {
         "elastic_incoherent", "elastic_tail"
@@ -138,8 +185,8 @@ def test_term_order_does_not_change_the_fingerprint():
 
 
 def test_enabled_flag_is_part_of_the_identity():
-    on = resolve({"enabled": True, "preset": "flat_low"})
-    off = resolve({"enabled": False, "preset": "flat_low"})
+    on = resolve({"enabled": True, "preset": "flat"})
+    off = resolve({"enabled": False, "preset": "flat"})
     assert profile_fingerprint(on) != profile_fingerprint(off)
 
 
@@ -156,7 +203,7 @@ def test_unknown_preset_names_the_allowed_values():
 
 def test_unknown_override_term_names_the_allowed_terms():
     with pytest.raises(ValueError) as excinfo:
-        resolve({"enabled": True, "preset": "flat_low",
+        resolve({"enabled": True, "preset": "flat",
                  "overrides": {"instrument_flatt": {"rate": 1e-9}}})
     message = str(excinfo.value)
     assert "instrument_flatt" in message
@@ -165,7 +212,7 @@ def test_unknown_override_term_names_the_allowed_terms():
 
 def test_unknown_parameter_names_the_allowed_parameters():
     with pytest.raises(ValueError) as excinfo:
-        resolve({"enabled": True, "preset": "flat_low",
+        resolve({"enabled": True, "preset": "flat",
                  "overrides": {"instrument_flat": {"rate_per_meV": 1e-9}}})
     message = str(excinfo.value)
     assert "rate_per_meV" in message
@@ -174,7 +221,7 @@ def test_unknown_parameter_names_the_allowed_parameters():
 
 def test_negative_rate_is_refused():
     with pytest.raises(ValueError, match=r">= 0"):
-        resolve({"enabled": True, "preset": "flat_low",
+        resolve({"enabled": True, "preset": "flat",
                  "overrides": {"instrument_flat": {"rate": -1e-9}}})
 
 
@@ -188,7 +235,7 @@ def test_negative_slope_is_allowed_but_negative_intercept_is_not():
 
 def test_non_finite_parameter_is_refused():
     with pytest.raises(ValueError, match="finite"):
-        resolve({"enabled": True, "preset": "flat_low",
+        resolve({"enabled": True, "preset": "flat",
                  "overrides": {"instrument_flat": {"rate": float("nan")}}})
     with pytest.raises(ValueError, match="finite"):
         resolve({"enabled": True, "terms": [
@@ -245,12 +292,12 @@ def test_missing_required_parameter_is_refused():
 
 def test_mixed_spec_forms_are_refused():
     with pytest.raises(ValueError, match="exactly one"):
-        resolve({"enabled": True, "preset": "flat_low", "terms": []})
+        resolve({"enabled": True, "preset": "flat", "terms": []})
 
 
 def test_unknown_spec_field_is_refused():
     with pytest.raises(ValueError, match="lockdown"):
-        resolve({"enabled": True, "preset": "flat_low", "lockdown": True})
+        resolve({"enabled": True, "preset": "flat", "lockdown": True})
 
 
 def test_duplicate_frozen_term_names_are_refused():
@@ -275,9 +322,99 @@ def test_frozen_form_rejects_non_boolean_optional(optional):
 @pytest.mark.parametrize("enabled", ["true", 1, 0, None])
 def test_non_boolean_enabled_is_refused_in_both_forms(enabled):
     with pytest.raises(ValueError, match="'enabled' must be a boolean"):
-        resolve({"enabled": enabled, "preset": "flat_low"})
+        resolve({"enabled": enabled, "preset": "flat"})
     with pytest.raises(ValueError, match="'enabled' must be a boolean"):
         resolve({"enabled": enabled, "terms": []})
+
+
+# --- the strength knob ----------------------------------------------------
+
+def test_scale_defaults_to_one_in_every_form():
+    assert DEFAULT_SCALE == 1.0
+    assert resolve({"enabled": True, "preset": "flat"}).scale == 1.0
+    assert resolve({"enabled": True, "terms": []}).scale == 1.0
+    assert resolve(None).scale == 1.0
+
+
+@pytest.mark.parametrize("bad", [-1e-9, -1.0, float("nan"), float("inf"),
+                                 True, False, "2", None, [2.0]])
+def test_scale_rejects_negative_non_finite_and_non_numbers(bad):
+    with pytest.raises(ValueError, match="'scale'"):
+        resolve({"enabled": True, "preset": "flat", "scale": bad})
+
+
+def test_scale_zero_is_allowed_and_plants_nothing():
+    """0 is a valid knob position -- 'enabled, but turned all the way down'."""
+    resolved = resolve({"enabled": True, "preset": "realistic", "scale": 0.0})
+    assert resolved.scale == 0.0
+    total, per_term, _ = mean_counts(resolved, 1.0, 0.5, N, sample_scale=1.0e-8)
+    assert total == 0.0
+    assert set(per_term) == {term.name for term in resolved.terms}
+    assert all(value == 0.0 for value in per_term.values())
+
+
+@pytest.mark.parametrize("scale", [0.25, 1.0, 2.5, 100.0])
+def test_scale_multiplies_every_origin_uniformly(scale):
+    """One knob, all origins and shapes -- including sample-scaled terms."""
+    base = resolve({"enabled": True, "preset": "realistic"})
+    scaled = resolve({"enabled": True, "preset": "realistic", "scale": scale})
+    for w in (0.0, 2.0, 12.5):
+        base_total, base_terms, _ = mean_counts(base, w, 0.5, N, sample_scale=1.0e-8)
+        scaled_total, scaled_terms, _ = mean_counts(
+            scaled, w, 0.5, N, sample_scale=1.0e-8
+        )
+        assert scaled_total == pytest.approx(scale * base_total, rel=1e-12)
+        assert set(scaled_terms) == set(base_terms)
+        for name, value in base_terms.items():
+            assert scaled_terms[name] == pytest.approx(scale * value, rel=1e-12)
+    # The origins really are all represented in that check.
+    assert {term.origin for term in base.terms} == set(bg.ORIGINS)
+
+
+def test_scale_does_not_touch_the_term_params():
+    """The knob is applied at evaluation time, never folded into the numbers."""
+    scaled = resolve({"enabled": True, "preset": "flat", "scale": 7.0})
+    assert scaled.terms[0].params["rate"] == PRESETS["flat"]["terms"][0].params["rate"]
+    assert scaled.overrides_applied == {}
+
+
+def test_scale_changes_both_fingerprints():
+    base = resolve({"enabled": True, "preset": "flat"})
+    scaled = resolve({"enabled": True, "preset": "flat", "scale": 2.0})
+    assert profile_fingerprint(base) != profile_fingerprint(scaled)
+    assert (effective_fingerprint(base, 1.0e-8, ())
+            != effective_fingerprint(scaled, 1.0e-8, ()))
+    # An explicit scale of 1.0 is the default, so it is the *same* background.
+    assert profile_fingerprint(
+        resolve({"enabled": True, "preset": "flat", "scale": 1.0})
+    ) == profile_fingerprint(base)
+
+
+def test_scale_survives_the_frozen_form_round_trip():
+    scaled = resolve({"enabled": True, "preset": "realistic", "scale": 3.0})
+    frozen = _frozen_form(scaled)
+    frozen["scale"] = scaled.scale
+    assert profile_fingerprint(resolve(frozen)) == profile_fingerprint(scaled)
+
+
+def test_scale_is_orthogonal_to_a_per_term_override():
+    """A doubled knob and a doubled term are different profiles, not aliases."""
+    knob = resolve({"enabled": True, "preset": "flat", "scale": 2.0})
+    override = resolve({"enabled": True, "preset": "flat",
+                        "overrides": {"instrument_flat": {"rate": 8.0e-9}}})
+    assert mean_counts(knob, 0.0, 0.5, N)[0] == pytest.approx(
+        mean_counts(override, 0.0, 0.5, N)[0]
+    )
+    assert profile_fingerprint(knob) != profile_fingerprint(override)
+
+
+def test_scale_turns_the_ten_to_one_anchor_into_any_ratio():
+    """The point of the knob: S/N is set by one number the user types."""
+    for ratio in (2.0, 10.0, 100.0):
+        scale = DEFAULT_SIGNAL_TO_BACKGROUND / ratio
+        resolved = resolve({"enabled": True, "preset": "flat", "scale": scale})
+        rate = mean_counts(resolved, 0.0, 0.5, 1.0)[0]
+        assert PEAK_SIGNAL_RATE / rate == pytest.approx(ratio)
 
 
 # --- overrides ------------------------------------------------------------
@@ -305,15 +442,15 @@ def test_override_merge_is_exact_and_echoed():
 
 
 def test_overrides_do_not_mutate_the_registry():
-    before = dict(PRESETS["flat_low"]["terms"][0].params)
-    resolve({"enabled": True, "preset": "flat_low",
+    before = dict(PRESETS["flat"]["terms"][0].params)
+    resolve({"enabled": True, "preset": "flat",
              "overrides": {"instrument_flat": {"rate": 9.9e-9}}})
-    assert PRESETS["flat_low"]["terms"][0].params == before
+    assert PRESETS["flat"]["terms"][0].params == before
 
 
 def test_override_changes_the_fingerprint():
-    base = resolve({"enabled": True, "preset": "flat_low"})
-    tweaked = resolve({"enabled": True, "preset": "flat_low",
+    base = resolve({"enabled": True, "preset": "flat"})
+    tweaked = resolve({"enabled": True, "preset": "flat",
                        "overrides": {"instrument_flat": {"rate": 3.0e-10}}})
     assert profile_fingerprint(base) != profile_fingerprint(tweaked)
 
@@ -511,6 +648,7 @@ def test_metadata_block_full_contents():
     assert block["preset_registry_version"] == PRESET_REGISTRY_VERSION
     assert block["enabled"] is True
     assert block["preset"] == "realistic"
+    assert block["scale"] == 1.0
     assert block["source"] == "config_default"
     assert block["overrides_applied"] == {"instrument_flat": {"rate": 4.0e-10}}
     assert block["sample_scale"] == 1.0e-8
@@ -529,15 +667,29 @@ def test_metadata_block_full_contents():
 
 
 def test_metadata_block_disabled_form_is_short_but_still_provenance():
-    resolved = resolve({"enabled": False, "preset": "flat_low"})
+    resolved = resolve({"enabled": False, "preset": "flat", "scale": 2.5})
     block = metadata_block(resolved, source="per_scan_override")
+    # ``scale`` is spec-level provenance like ``preset``, so the short block
+    # carries it too.
     assert set(block) == {
-        "background_schema", "enabled", "preset", "source",
+        "background_schema", "enabled", "preset", "scale", "source",
         "profile_fingerprint", "effective_fingerprint",
     }
     assert block["enabled"] is False
-    assert block["preset"] == "flat_low"
+    assert block["preset"] == "flat"
+    assert block["scale"] == 2.5
     assert block["source"] == "per_scan_override"
+
+
+def test_metadata_block_reports_scale_beside_unscaled_terms():
+    """A reader must see 'the preset's numbers, times the knob' -- not opaque ones."""
+    resolved = resolve({"enabled": True, "preset": "flat", "scale": 2.5})
+    block = metadata_block(resolved, source="config_default")
+    assert block["scale"] == 2.5
+    assert block["terms"][0]["params"]["rate"] == (
+        PRESETS["flat"]["terms"][0].params["rate"]
+    )
+    json.dumps(block, allow_nan=False)
 
 
 def test_metadata_block_records_skips_and_seed_when_given():
@@ -556,7 +708,7 @@ def test_metadata_block_records_skips_and_seed_when_given():
 
 
 def test_metadata_block_does_not_alias_the_resolved_profile():
-    resolved = resolve({"enabled": True, "preset": "flat_low"})
+    resolved = resolve({"enabled": True, "preset": "flat"})
     block = metadata_block(resolved, source="config_default")
     block["terms"][0]["params"]["rate"] = 1.0
-    assert resolved.terms[0].params["rate"] == 2.0e-10
+    assert resolved.terms[0].params["rate"] == 4.0e-9

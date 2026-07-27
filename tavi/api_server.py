@@ -156,8 +156,11 @@ def parse_scan_engine(body):
 
 
 # Top-level fields of a background request spec (``tavi.background.resolve``
-# accepts the preset form and the frozen numeric form; both draw from this set).
-BACKGROUND_SPEC_KEYS = frozenset({"enabled", "preset", "overrides", "terms"})
+# accepts the preset form and the frozen numeric form; both draw from this set,
+# and both accept the profile-level strength knob ``scale``).
+BACKGROUND_SPEC_KEYS = frozenset(
+    {"enabled", "preset", "overrides", "terms", "scale"}
+)
 
 
 def parse_scan_background(body):
