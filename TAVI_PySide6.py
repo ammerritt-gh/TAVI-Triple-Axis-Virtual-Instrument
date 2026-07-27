@@ -1378,6 +1378,9 @@ class TAVIController(QObject):
         self.window.simulation_dock.background_preset_combo.currentIndexChanged.connect(
             self._on_background_row_changed
         )
+        self.window.simulation_dock.background_scale_spin.valueChanged.connect(
+            self._on_background_row_changed
+        )
         self._refresh_background_row()
         
         # Sample configuration button
@@ -2377,8 +2380,8 @@ class TAVIController(QObject):
         self._refresh_background_row()
         self._journal.record(
             "parameter",
-            "background profile: enabled=%s preset=%s fingerprint=%s"
-            % (resolved.enabled, resolved.preset,
+            "background profile: enabled=%s preset=%s scale=%g fingerprint=%s"
+            % (resolved.enabled, resolved.preset, resolved.scale,
                _background.profile_fingerprint(resolved)),
         )
         return {
@@ -2426,12 +2429,19 @@ class TAVIController(QObject):
 
     @staticmethod
     def _background_summary(resolved):
-        """Short human echo of a resolved profile for the GUI row."""
+        """Short human echo of a resolved profile for the GUI row.
+
+        The strength knob is named only when it is doing something: an "x 1"
+        on every profile would be noise in an already-elided label.
+        """
         if not resolved.terms:
             return "no terms"
-        return ", ".join(
+        summary = ", ".join(
             "%s (%s)" % (term.name, term.shape) for term in resolved.terms
         )
+        if resolved.scale != _background.DEFAULT_SCALE:
+            summary = "%s  [all terms x %g]" % (summary, resolved.scale)
+        return summary
 
     def _refresh_background_row(self):
         """Sync the simulation dock's background row with the stored profile.
@@ -2449,6 +2459,7 @@ class TAVIController(QObject):
             dock.set_background_display(
                 resolved.enabled, resolved.preset,
                 self._background_summary(resolved),
+                resolved.scale,
             )
         except Exception as exc:
             self.print_to_message_center(
@@ -2456,10 +2467,11 @@ class TAVIController(QObject):
             )
 
     def _on_background_row_changed(self, *_args):
-        """GUI background row -> controller profile (preset form only).
+        """GUI background row -> controller profile (preset form + scale knob).
 
-        Numeric overrides are an API-only capability, so a GUI edit always
-        sends the plain preset form. A rejected spec is logged and the row is
+        Per-term numeric overrides are an API-only capability, so a GUI edit
+        always sends the plain preset form plus the profile-level ``scale``
+        knob, which is a user control. A rejected spec is logged and the row is
         re-synced from the stored profile, so the widgets can never disagree
         with what will actually be planted.
 
@@ -6610,11 +6622,25 @@ class TAVIController(QObject):
                         "enabled": "boolean",
                         "preset": "string (one of 'presets')",
                         "overrides": "{term name: {parameter: number}}",
+                        "scale": "number >= 0 (default 1.0)",
                     },
                     "frozen": {
                         "enabled": "boolean",
                         "terms": "[{name, shape, origin, method, params, optional}]",
+                        "scale": "number >= 0 (default 1.0)",
                     },
+                },
+                "scale": {
+                    "default": _background.DEFAULT_SCALE,
+                    "description": (
+                        "Profile strength knob: multiplies every term's rate "
+                        "uniformly, whatever its origin or shape. The preset "
+                        "roster is anchored at a signal-to-background ratio of "
+                        "%g:1 against the Al_phonon_DFT peak rate (%g counts "
+                        "per monitor count) at scale 1."
+                        % (_background.DEFAULT_SIGNAL_TO_BACKGROUND,
+                           _background.PEAK_SIGNAL_RATE)
+                    ),
                 },
                 "spec_fields": sorted(BACKGROUND_SPEC_KEYS),
             },

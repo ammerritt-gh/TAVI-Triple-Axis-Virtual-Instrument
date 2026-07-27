@@ -34,9 +34,11 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
       points still count background) and overlaid on McStas counts as an additive analytic
       Poisson draw from a dedicated seeded stream. Surfaces: `GET`/`PUT /background`,
       per-scan `background` override on `POST /scan` **and** `POST /validate` (parity),
-      preset registry in `GET /schema`, GUI enable+preset row, `parameters.json`
+      preset registry in `GET /schema`, GUI enable+preset+scale row, `parameters.json`
       persistence. Default-off: an unconfigured session is bit-identical to
-      pre-background TAVI.
+      pre-background TAVI. Registry v2 adds the user-facing `scale` strength knob
+      (multiplies every term uniformly, part of the fingerprint) and anchors the roster
+      at a signal-to-background ratio of 10:1.
       → CONTROL_FEATURES §6.7, ANALYTIC_ENGINE *Background generation*, API guide
       `GET`/`PUT /background`. ISAR keeps fingerprint-only provenance and redacts the
       numerics (truth firewall); campaigns stamp the frozen per-scan form (ISAR
@@ -49,11 +51,18 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
 - [ ] **Live McStas background end-to-end check** — the overlay is unit-tested, but no
       full compiled-McStas run with an enabled profile has been recorded. Run one, confirm
       the metadata block, `background_seed`, and that intensity columns stay untouched.
-- [ ] **Tune the preset numerics against real fitting campaigns** — current magnitudes are
-      anchored to the `Al_phonon_DFT` peak rate by construction, not to measured
-      signal-to-background. Retune once ISAR campaigns say what is realistic, and bump
-      `PRESET_REGISTRY_VERSION` when the numbers move, so a stored fingerprint that no
-      longer matches a preset name is explainable rather than silently re-tuned.
+- [ ] **Tune the preset numerics against real fitting campaigns** — *addressed in part.*
+      Registry version **2** re-anchored the whole roster to a default
+      signal-to-background of **10:1** against the `Al_phonon_DFT` peak rate (~`4e-8`
+      counts per monitor count, so ~`4e-9` of background), replacing the old ~0.5%
+      anchor, and added the profile-level `scale` knob so a user sets strength with one
+      number instead of waiting for a retune — which also let `flat_low`/`flat_high`
+      merge into a single `flat` preset. Still open: the *shape* of the mix (relative
+      weights of slope / elastic line / tail / diffuse) is still anchored by
+      construction, not to measured signal-to-background. Retune once ISAR campaigns say
+      what is realistic, and bump `PRESET_REGISTRY_VERSION` again when the numbers move,
+      so a stored fingerprint that no longer matches a preset name is explainable rather
+      than silently re-tuned.
 - [ ] **Virtual instrument clock** — per-axis velocities in the descriptor; per-job
       `experimental_time` = counting + axes-movement (angle-map metric); session total
       in /state and journal. Needed for honest driver benchmarking.

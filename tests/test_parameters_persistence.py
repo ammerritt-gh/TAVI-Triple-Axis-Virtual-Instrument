@@ -107,9 +107,30 @@ def _background_controller_stub():
 
 def test_saved_background_profile_round_trips():
     controller = _background_controller_stub()
-    spec = {"enabled": True, "preset": "flat_low", "overrides": {}}
+    spec = {"enabled": True, "preset": "flat", "overrides": {}}
     assert controller._saved_background_profile({"background_profile": spec}) == spec
     assert controller.messages == []
+
+
+def test_saved_background_scale_survives_the_round_trip():
+    """The strength knob is part of the stored spec, not a transient widget value."""
+    controller = _background_controller_stub()
+    spec = {"enabled": True, "preset": "realistic", "overrides": {}, "scale": 2.5}
+    restored = controller._saved_background_profile({"background_profile": spec})
+    assert restored == spec
+    assert restored["scale"] == 2.5
+    assert controller.messages == []
+
+
+def test_saved_background_profile_with_a_bad_scale_defaults_off_and_logs():
+    """A hand-edited negative scale must fall back, not start a broken session."""
+    controller = _background_controller_stub()
+    profile = controller._saved_background_profile(
+        {"background_profile": {"enabled": True, "preset": "flat", "scale": -1.0}}
+    )
+    assert profile == {"enabled": False, "preset": "none", "overrides": {}}
+    assert len(controller.messages) == 1
+    assert "background disabled" in controller.messages[0]
 
 
 def test_saved_background_profile_absent_defaults_off():

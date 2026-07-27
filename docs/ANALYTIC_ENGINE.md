@@ -246,9 +246,37 @@ provenance never depends on which engine produced it. Scientific interpretation
 of a background (fitting it, subtracting it) remains outside TAVI
 (`docs/CONTROL_FEATURES_DESIGN.md` §0, §6.7).
 
-A profile is a list of additive terms. It is **default-off**: an unconfigured
-session plants nothing, and a disabled or empty profile reproduces the
-background-free counts bit-identically.
+A profile is a list of additive terms plus one strength knob. It is
+**default-off**: an unconfigured session plants nothing, and a disabled or empty
+profile reproduces the background-free counts bit-identically.
+
+### Strength: the `scale` knob and the 10:1 anchor
+
+Every preset in registry version 2 is anchored on a **signal-to-background ratio
+of 10:1**. The `Al_phonon_DFT` sample peaks at ~`4e-8` counts per monitor count,
+so a preset's characteristic background rate is ~`4e-9` — the `flat` preset is
+exactly that, and the others sum to about it away from their elastic features.
+
+`scale` (optional, float, finite, `>= 0`, default `1.0`) is the user-facing knob
+on top of that anchor. It multiplies **every** term's rate uniformly, whatever
+its origin or shape, so a whole profile moves with one number: `scale = 0.1` is a
+100:1 experiment, `scale = 10` a 1:1 one, `scale = 0` plants nothing while still
+fingerprinting as the profile it is.
+
+Two properties make it safe to reason about:
+
+- It is applied at **evaluation** time (in `mean_counts`, and so in the Monte
+  Carlo overlay too), never folded into the term parameters. A stamped scan
+  record therefore reads *"the preset's published numbers, times this knob"*
+  rather than an opaque retuned term list nobody can trace to a preset.
+- It is part of the **profile fingerprint** (below): a different multiplier is
+  different planted physics, hence a different background identity — never a
+  cosmetic field two otherwise-identical profiles can disagree on.
+
+Because the knob exists, the roster carries no low/high variants: a preset
+chooses the *character* of a background, `scale` chooses its *strength*. That is
+why registry version 2 merged the former `flat_low` / `flat_high` pair into one
+`flat` preset.
 
 ### Term shapes
 
@@ -280,6 +308,9 @@ rate would subtract counts.
 | `instrument` | `N * rate(E)` |
 | `sample_environment` | `N * rate(E)` |
 | `sample` | `N * diffuse_background * rate(E)` |
+
+The profile's `scale` multiplies each of those, so the full expression for a
+term is `scale × (base) × rate(E)`.
 
 `diffuse_background` is the sample's own explicit `AnalyticCalibration`
 channel. Sample-origin terms **never** borrow the phonon or elastic factor —
@@ -341,7 +372,7 @@ version accepts.
 Two 16-hex-character digests identify a background:
 
 - **`profile_fingerprint`** — the pre-sample-scaling numerics (schema id,
-  enabled flag, sorted terms).
+  enabled flag, `scale`, sorted terms).
 - **`effective_fingerprint`** — the same, plus the sample scale actually applied
   and the terms skipped for want of one. This is the pooling identity: two scans
   sharing a profile but differing in effective sample scaling must never pool.
@@ -354,8 +385,9 @@ Every scan's `result.metadata` carries a `background` block built by the one
 shared helper `background.metadata_block()` — including when the profile is
 disabled, because absence of background is provenance too. It records the schema
 id, preset registry version, enabled flag, preset name (`null` for a frozen
-numeric profile), the delivery `source` (`config_default` / `per_scan_override`),
-the applied overrides, the fully numeric terms with their units, the sample
+numeric profile), the `scale` knob, the delivery `source` (`config_default` /
+`per_scan_override`), the applied overrides, the fully numeric (**unscaled**)
+terms with their units, the sample
 scale, the skipped terms, both fingerprints, and — on a Monte Carlo scan with
 background enabled — `background_seed`. The client-facing field list is in
 [`API_USER_GUIDE.md`](API_USER_GUIDE.md).

@@ -21,7 +21,7 @@ CONTROLLER_PATH = os.path.join(REPO_ROOT, "TAVI_PySide6.py")
 N = 1.0e8
 
 # Flat rate used by the draw tests. Deliberately far above the preset roster
-# (~2e-10) so N * rate is a mean of 500 counts: a realistic rate would draw zero
+# (~4e-9) so N * rate is a mean of 500 counts: a realistic rate would draw zero
 # almost every time and test nothing about the stream.
 RATE = 5.0e-6
 MEAN = N * RATE
@@ -32,8 +32,8 @@ def _read(path):
         return handle.read()
 
 
-def _flat(rate, enabled=True):
-    return background.resolve({
+def _flat(rate, enabled=True, scale=None):
+    spec = {
         "enabled": enabled,
         "terms": [{
             "name": "instrument_flat",
@@ -41,7 +41,10 @@ def _flat(rate, enabled=True):
             "origin": "instrument",
             "params": {"rate": rate},
         }],
-    })
+    }
+    if scale is not None:
+        spec["scale"] = scale
+    return background.resolve(spec)
 
 
 class _ExplodingFactory:
@@ -146,6 +149,40 @@ def test_overlay_mean_agrees_with_the_resolved_rate():
     assert abs(draws.mean() - expected) < 5.0
     # Poisson, not a constant: the sample variance tracks the mean.
     assert 0.7 * expected < draws.var() < 1.4 * expected
+
+
+def test_overlay_honors_the_profile_scale():
+    """The knob reaches the draw through the mean, on the Monte-Carlo path too."""
+    resolved = _flat(RATE, scale=2.0)
+    draws = np.array([
+        background.poisson_overlay(resolved, 0.0, None, N, None, 4242, i)
+        for i in range(2000)
+    ], dtype=float)
+    # 2 * 500 counts; standard error ~0.7, so 8 counts is a wide-but-safe band.
+    assert abs(draws.mean() - 2.0 * MEAN) < 8.0
+    # A scaled overlay is a differently-drawn overlay, not a rescaled one.
+    plain = background.poisson_overlay(_flat(RATE), 0.0, None, N, None, 4242, 0)
+    assert background.poisson_overlay(resolved, 0.0, None, N, None, 4242, 0) != plain
+
+
+def test_scale_zero_draws_nothing_and_builds_no_rng():
+    """Turning the knob to 0 is as cheap as disabling: no RNG is constructed."""
+    factory = _ExplodingFactory()
+    resolved = _flat(RATE, scale=0.0)
+    assert background.poisson_overlay(
+        resolved, 1.0, None, N, None, 1, 0, rng_factory=factory
+    ) == 0
+    assert factory.calls == []
+
+
+def test_disabled_profile_ignores_the_scale_entirely():
+    """A scale on a disabled profile still draws nothing and builds no RNG."""
+    factory = _ExplodingFactory()
+    resolved = _flat(RATE, enabled=False, scale=1000.0)
+    assert background.poisson_overlay(
+        resolved, 1.0, None, N, None, 1, 0, rng_factory=factory
+    ) == 0
+    assert factory.calls == []
 
 
 def test_overlay_uses_sigma_e_for_the_elastic_line():

@@ -381,8 +381,9 @@ both engines. Omit it (or send `null`) to run the session's configured profile.
 
 The object is a background *spec* in one of the two forms described under
 `PUT /background`: the preset form (`enabled` / `preset` / `overrides`) or the
-frozen numeric form (`enabled` / `terms`). Mixing the two, an unknown field, or
-an out-of-range number → `400`.
+frozen numeric form (`enabled` / `terms`). Either form may carry the strength
+knob `scale`. Mixing the two forms, an unknown field, or an out-of-range number
+→ `400`.
 
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
@@ -524,13 +525,14 @@ identical to a background-free TAVI.
 curl http://127.0.0.1:8642/api/v1/background
 ```
 ```json
-{"spec": {"enabled": true, "preset": "realistic", "overrides": {}},
+{"spec": {"enabled": true, "preset": "realistic", "overrides": {}, "scale": 1.0},
  "resolved": {
-   "background_schema": "tavi.background/1", "preset_registry_version": 1,
-   "enabled": true, "preset": "realistic", "source": "config_default",
+   "background_schema": "tavi.background/1", "preset_registry_version": 2,
+   "enabled": true, "preset": "realistic", "scale": 1.0,
+   "source": "config_default",
    "overrides_applied": {},
    "terms": [{"name": "instrument_flat", "shape": "flat", "origin": "instrument",
-              "method": "analytic", "params": {"rate": 2.0e-10}, "optional": false,
+              "method": "analytic", "params": {"rate": 6.0e-10}, "optional": false,
               "units": {"rate": "counts per monitor count"}},
              {"...": "one entry per term"}],
    "parameter_units": {"flat": {"rate": "counts per monitor count"}, "...": "..."},
@@ -544,8 +546,12 @@ curl http://127.0.0.1:8642/api/v1/background
   **profile resolution only**: no scan sample is chosen at config level, so
   `sample_scale` is `null` and nothing is skipped. Effective sample scaling
   exists per scan.
+- `terms` are the profile's **unscaled** numbers: `scale` is reported beside
+  them, not multiplied into them, so the block stays readable as "the preset's
+  published numbers, times this knob". Multiply by `scale` yourself if you want
+  the rate actually planted.
 - A disabled profile returns a short `resolved` block —
-  `background_schema`, `enabled: false`, `preset`, `source`, and both
+  `background_schema`, `enabled: false`, `preset`, `scale`, `source`, and both
   fingerprints — because absence of background is provenance too.
 
 ### PUT /background
@@ -572,11 +578,33 @@ curl -X PUT http://127.0.0.1:8642/api/v1/background \
   -H "Content-Type: application/json" \
   -d '{"enabled": true, "terms": [
         {"name": "instrument_flat", "shape": "flat", "origin": "instrument",
-         "params": {"rate": 2.0e-10}}]}'
+         "params": {"rate": 4.0e-9}}]}'
 ```
+
+**Strength knob (`scale`)** — optional in *both* forms; a number, finite,
+`>= 0`, default `1.0`. It multiplies every term's rate uniformly, whatever its
+origin or shape, so one number sets the signal-to-background of the whole
+profile:
+```bash
+curl -X PUT http://127.0.0.1:8642/api/v1/background \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "preset": "realistic", "scale": 2.5}'
+```
+
+The preset roster (registry version **2**) is anchored at a **signal-to-background
+ratio of 10:1** at `scale = 1`: the `Al_phonon_DFT` sample peaks at ~`4e-8`
+counts per monitor count, and a preset's characteristic background rate is
+~`4e-9`. So `scale` reads directly as a ratio divider — `0.1` gives 100:1, `10`
+gives 1:1, `0` plants nothing. Because the knob covers strength, there is no
+low/high variant of any preset: registry version 2 merged the former `flat_low`
+and `flat_high` into a single **`flat`** preset at exactly the anchor rate.
 
 Rules:
 - Exactly one form per spec: mixing `terms` with `preset`/`overrides` → `400`.
+- `scale` is part of the background's **identity**: two profiles differing only
+  in `scale` have different fingerprints, because they plant different physics.
+  It is *not* folded into `terms`, so `overrides` and `scale` compose without
+  ambiguity.
 - `enabled: false` still validates and fingerprints the terms, so a disabled
   profile has a meaningful identity.
 - Per-term fields are `name`, `shape`, `origin`, `method` (default `"analytic"`),
@@ -598,12 +626,13 @@ Errors:
   `501 not_implemented`.
 - Any other HTTP method on this path → `405 method_not_allowed`.
 
-The profile also has a GUI surface — an **enable** checkbox and a **preset**
-dropdown in the simulation dock, with a read-only summary of the resolved terms
-— and it persists in `config/parameters.json` across sessions. The GUI row can
-only express the preset form: editing it while an API client has set a frozen
-numeric profile replaces that profile with the chosen preset, and says so in the
-message centre rather than doing it silently. A stored profile that no longer
+The profile also has a GUI surface — an **enable** checkbox, a **preset**
+dropdown, and a **scale** spin box in the simulation dock, with a read-only
+summary of the resolved terms — and it persists in `config/parameters.json`
+across sessions. The GUI row can only express the preset form plus `scale`
+(per-term `overrides` stay an API-only channel): editing it while an API client
+has set a frozen numeric profile replaces that profile with the chosen preset,
+and says so in the message centre rather than doing it silently. A stored profile that no longer
 resolves falls back to default-off with a logged message instead of failing
 startup.
 
@@ -677,12 +706,12 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
    {"name": "noiseless", "type": "boolean", "default": false},
    {"name": "background", "type": "object", "default": null}],
  "background": {"background_schema": "tavi.background/1",
-   "preset_registry_version": 1,
+   "preset_registry_version": 2,
    "presets": {"none": {"description": "...", "terms": []},
-     "flat_low": {"description": "...", "terms": [{"name": "instrument_flat",
+     "flat": {"description": "...", "terms": [{"name": "instrument_flat",
        "shape": "flat", "origin": "instrument", "method": "analytic",
-       "params": {"rate": 2.0e-10}, "optional": false}]},
-     "...": "flat_high, sloped, strong_elastic, sample_diffuse, realistic"},
+       "params": {"rate": 4.0e-9}, "optional": false}]},
+     "...": "sloped, strong_elastic, sample_diffuse, realistic"},
    "shapes": ["flat", "linear_e", "elastic_incoherent", "elastic_tail"],
    "origins": ["instrument", "sample_environment", "sample"],
    "parameter_units": {"flat": {"rate": "counts per monitor count"}, "...": "..."},
@@ -691,10 +720,13 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
      "sample_environment": "counts = N * rate",
      "sample": "counts = N * diffuse_background * rate"},
    "spec_forms": {"preset": {"enabled": "boolean", "preset": "string (one of 'presets')",
-       "overrides": "{term name: {parameter: number}}"},
+       "overrides": "{term name: {parameter: number}}",
+       "scale": "number >= 0 (default 1.0)"},
      "frozen": {"enabled": "boolean",
-       "terms": "[{name, shape, origin, method, params, optional}]"}},
-   "spec_fields": ["enabled", "overrides", "preset", "terms"]},
+       "terms": "[{name, shape, origin, method, params, optional}]",
+       "scale": "number >= 0 (default 1.0)"}},
+   "scale": {"default": 1.0, "description": "Profile strength knob: ..."},
+   "spec_fields": ["enabled", "overrides", "preset", "scale", "terms"]},
  "scan_command_grammar": "VARIABLE start stop STEP. The third number (the last
    token) is the STEP SIZE, not the number of points. ...",
  "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
@@ -715,11 +747,14 @@ generator (`GET`/`PUT /background`): every preset **with its complete
 numerics** — so a client can freeze a preset into the self-contained `terms`
 form instead of depending on this server's registry — the shape and origin
 vocabularies, per-parameter units, the two spec forms with their allowed
-fields, the per-origin scaling rules, and the method map, in which
-`"simulated"` (ray-traced background) is `"reserved"` and not implemented.
+fields, the `scale` knob and its default, the per-origin scaling rules, and the
+method map, in which `"simulated"` (ray-traced background) is `"reserved"` and
+not implemented.
 `preset_registry_version` is bumped whenever a preset's numerics change, so a
 stored fingerprint that no longer matches a preset name can be explained rather
-than silently re-tuned.
+than silently re-tuned. It is currently **2**: the roster was re-anchored to a
+10:1 signal-to-background default and `flat_low`/`flat_high` merged into `flat`
+when the `scale` knob landed.
 
 **Idempotency-Key** (optional request header). Send an `Idempotency-Key: <string>`
 header to make retries safe. The first request with a given key queues a job as
@@ -834,16 +869,17 @@ on which engine ran:
 | Key | Meaning |
 |-----|---------|
 | `background_schema` | Wire identity of the contract (`"tavi.background/1"`). |
-| `enabled` | Whether anything was planted. A `false` block stops here, plus `preset`, `source` and both fingerprints. |
+| `enabled` | Whether anything was planted. A `false` block stops here, plus `preset`, `scale`, `source` and both fingerprints. |
 | `preset` | Preset name, or `null` for a frozen numeric profile. |
+| `scale` | Profile strength knob: the factor every term's rate was multiplied by. Reported beside the terms, **not** folded into them. |
 | `preset_registry_version` | Registry version the preset numerics came from. |
 | `source` | Delivery tag: `"config_default"` or `"per_scan_override"`. |
 | `overrides_applied` | Exactly which per-term parameters were overridden, `{term: {param: value}}`. |
-| `terms` | The fully numeric terms actually used, each with `name`, `shape`, `origin`, `method`, `params`, `optional`, and its per-parameter `units`. |
+| `terms` | The fully numeric terms actually used, each with `name`, `shape`, `origin`, `method`, `params`, `optional`, and its per-parameter `units`. Rates are **unscaled**: multiply by `scale` for what was planted. |
 | `parameter_units` | Units table for every shape (so the record is readable standalone). |
 | `sample_scale` | The sample `diffuse_background` scale applied to `sample`-origin terms, or `null`. |
 | `skipped_terms` | Optional `sample`-origin terms dropped for want of that scale. |
-| `profile_fingerprint` | Identity of the profile numerics — excludes the preset name **and** the delivery source, so a session default and a per-scan override describing the same physics fingerprint identically. |
+| `profile_fingerprint` | Identity of the profile numerics (terms **and** `scale`) — excludes the preset name **and** the delivery source, so a session default and a per-scan override describing the same physics fingerprint identically. |
 | `effective_fingerprint` | Identity as applied: adds `sample_scale` and `skipped_terms`. Use this as the pooling key. |
 | `background_seed` | Monte Carlo scans only, and only when background was enabled: the seed of the overlay's dedicated RNG stream. Equal to the body `seed` when one was given, else a stable hash of the job id. |
 
