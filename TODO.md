@@ -4,7 +4,7 @@ Living list. Grouped by theme, roughly dependency-ordered within each group.
 Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first),
 `docs/CONTROL_FEATURES_DESIGN.md` (feature designs + roadmap §9),
 `docs/LLM_HARNESS_DESIGN.md` (measurement driver), `docs/API_USER_GUIDE.md`
-(live API reference). Last updated: 2026-07-03.
+(live API reference). Last updated: 2026-07-27.
 
 ## Closed-loop enablers (drive the ISAR/driver integration)
 
@@ -24,6 +24,36 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
       provenance + `_run_scan_deterministic` worker branch), milestone 8 (GUI engine
       selector, API guide, this list). Deterministic result stamps `cn_valid` +
       `invalidations`; brightness is a documented per-sample calibration.
+- [x] **Background generation** — `tavi/background.py` (`tavi.background/1`): four term
+      shapes (flat / linear-in-E / incoherent elastic line / elastic tail), origin
+      taxonomy fixing the scaling base (`sample` terms scale by the new
+      `AnalyticCalibration.diffuse_background`, never the phonon factor), preset registry
+      plus a frozen numeric spec form for campaign stamping, source-independent
+      profile/effective fingerprints, one shared metadata block. Planted by the
+      deterministic engine (added after the signal-only validity clamp; invalid-resolution
+      points still count background) and overlaid on McStas counts as an additive analytic
+      Poisson draw from a dedicated seeded stream. Surfaces: `GET`/`PUT /background`,
+      per-scan `background` override on `POST /scan` **and** `POST /validate` (parity),
+      preset registry in `GET /schema`, GUI enable+preset row, `parameters.json`
+      persistence. Default-off: an unconfigured session is bit-identical to
+      pre-background TAVI.
+      → CONTROL_FEATURES §6.7, ANALYTIC_ENGINE *Background generation*, API guide
+      `GET`/`PUT /background`. ISAR keeps fingerprint-only provenance and redacts the
+      numerics (truth firewall); campaigns stamp the frozen per-scan form (ISAR
+      DECISIONS T4).
+- [ ] **Ray-traced background for McStas (`method: "simulated"`)** — environment/shielding
+      scattering simulated rather than added analytically. Reserved in the schema and
+      rejected by the current version; needs component work plus a cost story (it is
+      ray-tracing time, not a per-point closed form).
+      → CONTROL_FEATURES §6.5 fidelity-gap row.
+- [ ] **Live McStas background end-to-end check** — the overlay is unit-tested, but no
+      full compiled-McStas run with an enabled profile has been recorded. Run one, confirm
+      the metadata block, `background_seed`, and that intensity columns stay untouched.
+- [ ] **Tune the preset numerics against real fitting campaigns** — current magnitudes are
+      anchored to the `Al_phonon_DFT` peak rate by construction, not to measured
+      signal-to-background. Retune once ISAR campaigns say what is realistic, and bump
+      `PRESET_REGISTRY_VERSION` when the numbers move, so a stored fingerprint that no
+      longer matches a preset name is explainable rather than silently re-tuned.
 - [ ] **Virtual instrument clock** — per-axis velocities in the descriptor; per-job
       `experimental_time` = counting + axes-movement (angle-map metric); session total
       in /state and journal. Needed for honest driver benchmarking.

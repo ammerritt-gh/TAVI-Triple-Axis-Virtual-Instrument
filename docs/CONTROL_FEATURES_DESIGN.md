@@ -1,7 +1,7 @@
 # Control Features — Design Document
 
 *Date: 2026-07-03*
-*Status: **Draft**, updated 2026-07-26 — §5 (resolution ellipsoids: `tavi/resolution.py`, Cooper–Nathans and Popovici, `GET /resolution`) and §6 (deterministic engine: `tavi/deterministic_engine.py`, `POST /scan` with `engine: "deterministic"`) are implemented and live. **§1 (goto CEN) is implemented on the GUI side** — `tavi/scan_fits.py` and `gui/docks/fitting_dock.py` exist; several decisions supersede the §1 text and the `POST /goto` API surface (§1.5) is deferred, both recorded in **§1.7 Implementation status**, which is authoritative where it disagrees with §1.1–1.6. §2–4 (path scans/campaigns/intents), §7 (virtual clock), and §8 (point-list scans) remain proposed future work; where those sections reference new symbols (e.g. `POST /goto`, `CampaignRegistry`) they do not exist yet.*
+*Status: **Draft**, updated 2026-07-27 — §5 (resolution ellipsoids: `tavi/resolution.py`, Cooper–Nathans and Popovici, `GET /resolution`), §6 (deterministic engine: `tavi/deterministic_engine.py`, `POST /scan` with `engine: "deterministic"`) and §6.7 (background generation: `tavi/background.py`, `GET`/`PUT /background`, planted by both engines) are implemented and live. **§1 (goto CEN) is implemented on the GUI side** — `tavi/scan_fits.py` and `gui/docks/fitting_dock.py` exist; several decisions supersede the §1 text and the `POST /goto` API surface (§1.5) is deferred, both recorded in **§1.7 Implementation status**, which is authoritative where it disagrees with §1.1–1.6. §2–4 (path scans/campaigns/intents), §7 (virtual clock), and §8 (point-list scans) remain proposed future work; where those sections reference new symbols (e.g. `POST /goto`, `CampaignRegistry`) they do not exist yet.*
 
 > Companion documents: `docs/API_SERVER_DESIGN.md` (the live remote-API architecture this builds on), `docs/API_USER_GUIDE.md` (client-facing endpoint/field reference), `docs/PIPELINE_DESIGN.md` (per-point prep/run pipeline), `docs/INSTRUMENT_LAYOUT.md` (TAS geometry, angles, scan modes), `docs/MCSTAS_PARAMETERS.md` (build-time vs run-time parameter split).
 
@@ -12,7 +12,8 @@
 TAVI is an **instrument plus control system**, not a data analyst. This is the line every feature below is designed against:
 
 - **Scan-derived motion is control-system territory and belongs in TAVI.** Every real triple-axis control system — SPEC/`spec` at older reactor sources, SPICE at HFIR, NICOS at FRM-II/MLZ — lets the operator run a scan and then *drive a motor to a value derived from that scan* (peak center, centre-of-mass, maximum). That is a control action ("go to the top of the peak"), not a scientific conclusion. TAVI simulates the same instrument those control systems drive, so it should offer the same control primitives.
-- **Scientific interpretation is the client's job.** Dispersion fitting, background modelling, deciding whether a peak is "real", statistical advice on counting time — none of that lives in TAVI. It lives in the client: a human at the GUI, or a purpose-built LLM measurement driver talking to the API.
+- **Scientific interpretation is the client's job.** Dispersion fitting, deciding whether a peak is "real", statistical advice on counting time — none of that lives in TAVI. It lives in the client: a human at the GUI, or a purpose-built LLM measurement driver talking to the API.
+- **Background is the one word that cuts both ways — generation is TAVI's, analysis is not.** TAVI *generates* configured background truth, because a simulated instrument that never counts background is not a realistic instrument: a session-level default profile plus an optional per-scan override, planted by both engines, with the resolved profile always stamped into the scan's metadata (`tavi/background.py`; see §6.7 and `docs/ANALYTIC_ENGINE.md`). TAVI never *analyses* a background — it does not fit one, subtract one, or infer one from measured counts. Truth is planted from configuration and declared; interpreting it back out of the data is the client's job.
 - **The payoff is transfer.** A driver (human or LLM) written against TAVI's control surface uses the *same verbs* it would use against a real PUMA/NICOS instrument: set parameters, scan a variable, go to the center, scan again. If TAVI stays honest about the control/analysis boundary, that driver moves to the real instrument unchanged. The moment TAVI starts making scientific decisions, the driver learns habits that do not transfer.
 
 **Every feature in this document is designed for two surfaces at once:** a GUI control for the human operator and an API endpoint for the programmatic/LLM client. Neither is an afterthought. Where the two surfaces differ, both are specified.
@@ -328,7 +329,7 @@ The API dock's job table (`gui/docks/api_dock.py`) gains a **campaign grouping**
 
 Common measurements are fixed compositions of the primitives above. Naming them server-side lets a thin client (human macro button, or LLM issuing one call) invoke a standard *control procedure* without re-deriving it each time — and, crucially, invoke the **same named procedure it would on a real instrument**, so the recipe transfers.
 
-These are **control recipes, not analysis.** A recipe strings together goto-CEN + validation + a standard scan pattern. It never fits a dispersion, never models background, never decides if a result is "good". Those remain the client's job.
+These are **control recipes, not analysis.** A recipe strings together goto-CEN + validation + a standard scan pattern. It never fits a dispersion, never fits or subtracts a background, never decides if a result is "good". Those remain the client's job.
 
 ### 4.2 Proposed recipes (all composed from §1–3)
 
@@ -459,7 +460,7 @@ A **selectable execution backend**: instead of compiling and running McStas, the
 
 ### 6.3 Key design constraint — one ground-truth sample config
 
-**Both engines consume a single source-of-truth sample configuration.** `SampleSpec.component_type` selects the analytic projection. A `Phonon_DFT` spec supplies the same `dispersion`, `reflections`, `tessellate`, temperature, linewidth, and lattice properties used to build McStas; relative files resolve beneath `components/`, while absolute files are allowed. `AnalyticCalibration(phonon, elastic)` is the only analytic-only addition because absolute analytic normalization is empirical. The loader strictly rejects incomplete, duplicate, non-regular, non-finite, or non-contiguous grids, and caches by resolved path, byte size, and modification time so an edited map reloads without restarting TAVI.
+**Both engines consume a single source-of-truth sample configuration.** `SampleSpec.component_type` selects the analytic projection. A `Phonon_DFT` spec supplies the same `dispersion`, `reflections`, `tessellate`, temperature, linewidth, and lattice properties used to build McStas; relative files resolve beneath `components/`, while absolute files are allowed. `AnalyticCalibration(phonon, elastic)` is the only analytic-only addition because absolute analytic normalization is empirical. A third, optional channel — `diffuse_background` — was added with §6.7; it scales `sample`-origin background terms and is never touched by the signal channels. The loader strictly rejects incomplete, duplicate, non-regular, non-finite, or non-contiguous grids, and caches by resolved path, byte size, and modification time so an edited map reloads without restarting TAVI.
 
 At Γ, a mode with `|E| < 1e-10` contributes no one-phonon intensity, matching `Phonon_DFT.comp`. The elastic peak comes from the reflection table instead of an artificial zero-energy regularization. A missing file explicitly configured for `Phonon_DFT` fails the deterministic job visibly. The legacy `Single_crystal` sample alone retains a centering-rule/unit-F² fallback when its McStas-owned reflection table cannot be found, and provenance identifies that fallback.
 
@@ -483,7 +484,8 @@ GET /scan/j-0021/data → result carries "engine": "deterministic" in metadata/p
 |---|---|
 | Sample type outside regular-grid `Phonon_DFT` or `Single_crystal` (continua, diffuse scattering, magnetic model types) | Refuse with `no analytic ground truth for sample 'X'`. These need a future model implementation; the engine does not reinterpret them as phonons. |
 | Configured `Phonon_DFT` dispersion/reflection file is missing or malformed | Fail the deterministic job with the loader's concrete filename/validation reason. There is no equation or centering fallback for an explicitly configured composite model. |
-| Sample feature the analytic model cannot express (incoherent background, multiple scattering, full one-phonon structure factor) | Documented **fidelity gap, not an error** — the deterministic result is honestly labelled as an idealized model. Provenance (`engine: "deterministic"`) is the client's signal not to expect MC-level realism. |
+| Sample feature the analytic model cannot express (multiple scattering, full one-phonon structure factor) | Documented **fidelity gap, not an error** — the deterministic result is honestly labelled as an idealized model. Provenance (`engine: "deterministic"`) is the client's signal not to expect MC-level realism. |
+| Incoherent / instrumental / sample-environment background | **No longer a gap in what can be expressed:** it is planted from the configured background profile (§6.7) as an analytic superposition, on both engines. What remains a gap is *ray-traced* background — environment and shielding scattering simulated by McStas rather than added analytically — reserved in the schema as the term method `"simulated"` and not implemented. |
 | Resolution matrix undefined (degenerate geometry, A4 → 0) | Refuse with the **same reason strings as §5** ("resolution undefined at this geometry") — one vocabulary across resolution and deterministic execution. |
 | (Q, E) point infeasible | Same feasibility refusal as MC — geometry is checked identically; the engine switch changes only how counts are produced, never whether a point is reachable. |
 
@@ -496,6 +498,23 @@ The deterministic engine stays firmly on the **control side** of §0. It evaluat
 **Future fidelity work:** Bragg peaks are resolution-limited analytic deltas. Reproducing the broader full-McStas Bragg shape and `delta_d_d` Ewald weighting is deliberately separate from the Γ-dip repair.
 
 **Dependencies:** **§5 (resolution) is a hard prerequisite** — its Cooper–Nathans matrix is the convolution kernel. Otherwise independent of §1–§4. Naturally consumed by the autonomous driver in `docs/LLM_HARNESS_DESIGN.md`, which uses the fidelity ladder directly.
+
+### 6.7 Background generation — *implemented*
+
+A simulated instrument that counts no background is not a realistic instrument: a driver (or an analysis engine such as ISAR) trained against clean peaks learns habits that fail on the first real scan. So TAVI **generates** background truth, from configuration, on both engines. It still analyses none (§0).
+
+The contract is `tavi/background.py`, wire identity `tavi.background/1`. Its shape is deliberately small:
+
+- **Four term shapes** — `flat`, `linear_e` (linear in energy transfer, clamped at zero), `elastic_incoherent` (Gaussian at `E = 0` written at the point's marginalized resolution width), `elastic_tail` (Lorentzian at `E = 0`) — each with per-parameter units, not one blanket unit per shape.
+- **An origin taxonomy that fixes the scaling base**, not a label: `instrument` and `sample_environment` terms count as `N × rate`; `sample` terms count as `N × diffuse_background × rate`, using the sample's own explicit calibration channel and **never** the phonon factor. No sample scale means required sample terms **refuse the scan** (`sample_background_scale_unavailable`) and optional ones are skipped and recorded — guessing a scale would silently invent truth.
+- **Two spec forms, one profile:** a *preset* form (`preset` + numeric `overrides`, deep-merged) for humans and a *frozen numeric* form (an explicit `terms` list) that a campaign stamps onto every scan so it never depends on a mutable server-side default or on preset retuning.
+- **Two fingerprints** — profile (pre-sample-scaling numerics) and effective (plus the sample scale actually applied and the terms skipped for want of one). Both deliberately exclude the preset label and the delivery source, so a config default and a per-scan override describing the same physics are the *same* background.
+
+Surfaces: `GET`/`PUT /background` (session profile), an optional `background` object on `POST /scan` **and** `POST /validate` (wholesale replacement, never a merge; validated identically on both, so a validated body cannot be refused later for a background reason), the preset registry with full numerics in `GET /schema`, the resolved block in `GET /state` and in every scan's `result.metadata`, and an enable + preset row in the simulation dock persisted through `parameters.json`. Client-facing detail is `docs/API_USER_GUIDE.md`; the generation model and both engines' planting rules are `docs/ANALYTIC_ENGINE.md` § *Background generation*.
+
+**Default-off.** An unconfigured session plants nothing and produces counts bit-identical to a background-free TAVI, on both engines. Absence of background is still stamped as provenance.
+
+**Touched modules:** `tavi/background.py` (the contract); `tavi/deterministic_engine.py` (`background_mean` added after the signal-only validity clamp, `sigma_e_mev`); `TAVI_PySide6.py` (per-scan resolution, fail-fast, metadata stamping on both engine branches, GUI row, persistence); `tavi/api_server.py` (`/background`, the `background` body field); `tavi/scan_jobs.py` (launch-summary provenance); `gui/docks/unified_simulation_dock.py` (background row).
 
 ---
 

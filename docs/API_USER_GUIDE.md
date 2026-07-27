@@ -46,8 +46,10 @@ KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...40 fields...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
   POST /validate  body {same as /scan}  -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates)
-  POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool} -> 202 {job_id, state, position, eta, validation}
+  POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
               engine "deterministic" = fast analytic S(Q,w) x resolution + seeded Poisson (validator); check result.metadata.cn_valid
+              "background" = per-scan background profile; REPLACES the session profile for this job (never merges)
+  GET/PUT /background       -> read/replace the session background profile {"spec":...,"resolved":...}; PUT needs write access
   GET  /scan/{id}?wait=N     -> block up to N s for terminal state; body carries "timed_out":bool
   GET  /scan/{id}/data       -> result + scan_values_1, counts (or counts_grid), skipped_points
   GET  /scan/{id}/plot.png   -> 512x512 PNG of current arrays (409 no_data if nothing renderable yet)
@@ -88,6 +90,8 @@ RULES:
     report the .message to the user, and do not retry in a loop.
   - When retrying a POST /scan you are unsure completed, send the SAME "Idempotency-Key: <str>"
     header — a repeat returns the original job (HTTP 200) instead of creating a duplicate.
+  - TAVI GENERATES background (a configured profile planted into the counts, default OFF, always
+    stamped in result.metadata.background). It never fits or subtracts one — that is your job.
   - Lost track of state? GET /journal to recover what happened this session.
   - Errors come as {"error":{"code":...,"message":...,"details":...}}. Read .message.
 ```
@@ -209,13 +213,16 @@ Liveness probe. No auth required, even when a token is set.
 ### GET /state
 Full snapshot: instrument id, access mode, busy flag, the currently running job
 id (or `null`), the list of queued job ids, the complete parameter dict (all 40
-fields — see §6), the configured limits (if any), and current budget usage.
+fields — see §6), the configured limits (if any), current budget usage, and the
+session's background profile (the same object `GET /background` returns).
 ```json
 {"instrument": "puma", "mode": "allow", "busy": true, "current_job": "j-0003",
  "queue": ["j-0004", "j-0005"], "parameters": {"Ei": 14.7, "...": "..."},
  "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
  "queue_neutron_budget": 1e10},
- "budget": {"pending_neutrons": 3.0e8, "budget": 1e10, "queued_jobs": 2, "max_queued": 10}}
+ "budget": {"pending_neutrons": 3.0e8, "budget": 1e10, "queued_jobs": 2, "max_queued": 10},
+ "background": {"spec": {"enabled": false, "preset": "none", "overrides": {}},
+  "resolved": {"...": "see GET /background"}}}
 ```
 
 ### GET /parameters
@@ -300,7 +307,7 @@ to submit.
 - In read-only mode → `403 read_only`.
 - **Unknown top-level body key → `400 bad_request`.** The `POST /scan` body
   accepts only `parameters`, `force`, `allow_partial`, `isolated`, `engine`,
-  `seed`, and `noiseless`; any other top-level key is rejected (the error names
+  `seed`, `noiseless`, and `background`; any other top-level key is rejected (the error names
   the offending key and lists the allowed set). This is a guard against typos
   such as sending `scan_command1` at the top level instead of nesting it under
   `parameters` — which would otherwise silently run the GUI's current scan.
@@ -367,9 +374,49 @@ curl -X POST http://127.0.0.1:8642/api/v1/scan \
        "engine": "deterministic", "seed": 1, "noiseless": false}'
 ```
 
+**`background`** (optional object, default `null`). A per-scan background
+profile for **this job only**. It **replaces** the session profile
+(`GET`/`PUT /background`) wholesale — it never merges with it — and applies to
+both engines. Omit it (or send `null`) to run the session's configured profile.
+
+The object is a background *spec* in one of the two forms described under
+`PUT /background`: the preset form (`enabled` / `preset` / `overrides`) or the
+frozen numeric form (`enabled` / `terms`). Mixing the two, an unknown field, or
+an out-of-range number → `400`.
+
+```bash
+curl -X POST http://127.0.0.1:8642/api/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"parameters": {"scan_command1": "deltaE 0.5 3.0 0.125"},
+       "engine": "deterministic",
+       "background": {"enabled": true, "preset": "realistic",
+                      "overrides": {"instrument_flat": {"rate": 4.0e-10}}}}'
+```
+
+The spec is resolved against **this scan's sample** before the job is queued, so
+a background problem is a submission-time `400`, never a job that fails
+halfway:
+
+- a spec that does not resolve → `400 invalid_background`;
+- a required `sample`-origin term with no usable sample `diffuse_background`
+  calibration → `400 sample_background_scale_unavailable`.
+
+Either way the error `details` carries `{"background": <the background block
+described under POST /validate>}`, whose `error` object names the failure and,
+for a scale refusal, lists the offending `terms`.
+
+`POST /validate` runs exactly the same check (see below), so a body that
+validates cannot later be refused for a background reason.
+
+A campaign that must not depend on this server's mutable defaults should stamp
+the **frozen numeric form** on every scan: it is self-contained and immune to
+preset retuning.
+
 **Provenance.** The chosen engine is recorded on the job: the `launch` summary
 (`GET /scan/{id}`, `/data`, and the saved JSON) carries `"engine"`, plus `"seed"`
-and `"noiseless"` when the deterministic engine ran. A deterministic job's
+and `"noiseless"` when the deterministic engine ran, plus `"background"` (the
+requested spec) and `"background_source"` (`"config_default"` or
+`"per_scan_override"`) once the launch state carries them. A deterministic job's
 `result.metadata` is additionally stamped with `engine`, `seed`, `method`,
 `cn_valid`, and `invalidations` (see below). `metadata.analytic_model` records
 the channel names, branch/reflection counts, configured and resolved filenames,
@@ -411,9 +458,9 @@ dispersion-file contract are documented in
 
 ### POST /validate
 Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
-feasibility, budget, and ETA — **without queueing anything and without mutating
-any parameter**. The body is identical to `POST /scan` (optional `parameters`,
-`force`, `allow_partial`). Any inline `parameters` patch is applied to a private
+feasibility, budget, background resolution, and ETA — **without queueing
+anything and without mutating any parameter**. The body is identical to
+`POST /scan` (optional `parameters`, `force`, `allow_partial`, `background`). Any inline `parameters` patch is applied to a private
 copy of the GUI state and rolled back before returning, so (unlike `POST /scan`)
 `/validate` never leaves parameter changes behind. Non-mutating, so it is
 **allowed in read-only mode**.
@@ -434,8 +481,131 @@ Returns the `validation` object (§5 *Validation object*) plus two extra fields:
   "max_queued": 10, "points": 5, "neutrons_per_point": 100000.0,
   "job_neutrons": 500000.0},
  "eta": {"estimated_seconds": 70.0, "confidence": "high", "samples": 11},
- "infeasible": [], "would_queue": true, "blockers": []}
+ "infeasible": [],
+ "background": {"enabled": true, "source": "per_scan_override",
+  "profile_fingerprint": "9d1f0c5b2a734e86", "effective_fingerprint": "41b7c0a9e5d3f218",
+  "sample_scale": 1e-08, "skipped_terms": []},
+ "would_queue": true, "blockers": []}
 ```
+
+**Background parity.** `/validate` resolves the background exactly as `POST
+/scan` would — same spec, same sample scale from the launch state's frozen
+`sample_key` — and reports it in a `background` block (also present in the
+`POST /scan` 202 `validation` object):
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Whether anything will be planted (`null` if the spec did not resolve). |
+| `source` | `"config_default"` or `"per_scan_override"`. |
+| `profile_fingerprint` | Identity of the profile numerics (excludes preset name and source). |
+| `effective_fingerprint` | Identity as actually applied: adds the sample scale used and the terms skipped. |
+| `sample_scale` | The sample's `diffuse_background` calibration, or `null` when none applies. |
+| `skipped_terms` | Optional `sample`-origin terms dropped for want of a sample scale. |
+| `error` | Present only on a refusal: `{"id", "message"}` (plus `terms` for a scale refusal). |
+
+Two background blockers can appear in `blockers`, and are the same two codes
+`POST /scan` returns as a `400`:
+
+- `invalid_background: <reason>` — the spec does not resolve.
+- `sample_background_scale_unavailable: <reason>` — a required `sample`-origin
+  term has no usable sample `diffuse_background` calibration.
+
+### GET /background
+The session's configured background profile. Read-only, no side effects,
+**allowed in read-only mode**.
+
+TAVI *generates* background: a configured profile is planted into the counts of
+every scan by both engines and stamped into the scan's metadata. TAVI never
+*analyses* a background — it does not fit, subtract, or infer one. The profile
+is **default-off**: an unconfigured session plants nothing and produces counts
+identical to a background-free TAVI.
+
+```bash
+curl http://127.0.0.1:8642/api/v1/background
+```
+```json
+{"spec": {"enabled": true, "preset": "realistic", "overrides": {}},
+ "resolved": {
+   "background_schema": "tavi.background/1", "preset_registry_version": 1,
+   "enabled": true, "preset": "realistic", "source": "config_default",
+   "overrides_applied": {},
+   "terms": [{"name": "instrument_flat", "shape": "flat", "origin": "instrument",
+              "method": "analytic", "params": {"rate": 2.0e-10}, "optional": false,
+              "units": {"rate": "counts per monitor count"}},
+             {"...": "one entry per term"}],
+   "parameter_units": {"flat": {"rate": "counts per monitor count"}, "...": "..."},
+   "sample_scale": null, "skipped_terms": [],
+   "profile_fingerprint": "9d1f0c5b2a734e86",
+   "effective_fingerprint": "41b7c0a9e5d3f218"}}
+```
+
+- `spec` is the request spec as stored (what you would `PUT` back).
+- `resolved` is the same block that lands in a scan's `result.metadata`, but at
+  **profile resolution only**: no scan sample is chosen at config level, so
+  `sample_scale` is `null` and nothing is skipped. Effective sample scaling
+  exists per scan.
+- A disabled profile returns a short `resolved` block —
+  `background_schema`, `enabled: false`, `preset`, `source`, and both
+  fingerprints — because absence of background is provenance too.
+
+### PUT /background
+Replace the session background profile **wholesale** (it never merges with the
+stored one). Write-gated. Returns the same `{"spec", "resolved"}` object as
+`GET /background`.
+
+Two spec forms are accepted, and only two:
+
+**Preset form** — a named preset plus optional per-term numeric overrides, which
+deep-merge (an unspecified parameter keeps its preset value):
+```bash
+curl -X PUT http://127.0.0.1:8642/api/v1/background \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "preset": "sloped",
+       "overrides": {"environment_slope": {"rate0": 1.5e-9}}}'
+```
+
+**Frozen numeric form** — a self-contained term list, with no dependence on this
+server's preset registry. This is what a campaign stamps per scan so preset
+retuning can never move its truth:
+```bash
+curl -X PUT http://127.0.0.1:8642/api/v1/background \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "terms": [
+        {"name": "instrument_flat", "shape": "flat", "origin": "instrument",
+         "params": {"rate": 2.0e-10}}]}'
+```
+
+Rules:
+- Exactly one form per spec: mixing `terms` with `preset`/`overrides` → `400`.
+- `enabled: false` still validates and fingerprints the terms, so a disabled
+  profile has a meaningful identity.
+- Per-term fields are `name`, `shape`, `origin`, `method` (default `"analytic"`),
+  `params`, `optional` (default `false`). `method: "simulated"` is reserved in
+  the schema for future ray-traced background and is **rejected** by this
+  version rather than silently treated as analytic.
+- Rate parameters may not be negative (a negative rate would subtract counts);
+  widths must be strictly positive. An unknown parameter is an error, never
+  silently ignored.
+- `GET /schema` carries the whole preset registry with full numerics, the shape
+  and origin vocabularies, per-parameter units, and the scaling rules.
+
+Errors:
+- Unknown top-level spec field, or any spec `tavi/background.py` rejects →
+  `400 invalid_background` / `400 bad_request`, with the message naming the
+  allowed values. The stored profile is left untouched.
+- Read-only mode → `403 read_only`.
+- Backend handler unavailable (should not occur in a shipped build) →
+  `501 not_implemented`.
+- Any other HTTP method on this path → `405 method_not_allowed`.
+
+The profile also has a GUI surface — an **enable** checkbox and a **preset**
+dropdown in the simulation dock, with a read-only summary of the resolved terms
+— and it persists in `config/parameters.json` across sessions. The GUI row can
+only express the preset form: editing it while an API client has set a frozen
+numeric profile replaces that profile with the chosen preset, and says so in the
+message centre rather than doing it silently. A stored profile that no longer
+resolves falls back to default-off with a logged message instead of failing
+startup.
 
 ### GET /resolution
 Theoretical triple-axis **resolution** (Cooper–Nathans / Popovici) at one
@@ -504,7 +674,27 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
    {"name": "engine", "type": "string", "allowed": ["mcstas", "deterministic"],
     "default": "mcstas"},
    {"name": "seed", "type": "integer", "default": null},
-   {"name": "noiseless", "type": "boolean", "default": false}],
+   {"name": "noiseless", "type": "boolean", "default": false},
+   {"name": "background", "type": "object", "default": null}],
+ "background": {"background_schema": "tavi.background/1",
+   "preset_registry_version": 1,
+   "presets": {"none": {"description": "...", "terms": []},
+     "flat_low": {"description": "...", "terms": [{"name": "instrument_flat",
+       "shape": "flat", "origin": "instrument", "method": "analytic",
+       "params": {"rate": 2.0e-10}, "optional": false}]},
+     "...": "flat_high, sloped, strong_elastic, sample_diffuse, realistic"},
+   "shapes": ["flat", "linear_e", "elastic_incoherent", "elastic_tail"],
+   "origins": ["instrument", "sample_environment", "sample"],
+   "parameter_units": {"flat": {"rate": "counts per monitor count"}, "...": "..."},
+   "methods": {"analytic": "implemented", "simulated": "reserved"},
+   "scaling": {"instrument": "counts = N * rate",
+     "sample_environment": "counts = N * rate",
+     "sample": "counts = N * diffuse_background * rate"},
+   "spec_forms": {"preset": {"enabled": "boolean", "preset": "string (one of 'presets')",
+       "overrides": "{term name: {parameter: number}}"},
+     "frozen": {"enabled": "boolean",
+       "terms": "[{name, shape, origin, method, params, optional}]"}},
+   "spec_fields": ["enabled", "overrides", "preset", "terms"]},
  "scan_command_grammar": "VARIABLE start stop STEP. The third number (the last
    token) is the STEP SIZE, not the number of points. ...",
  "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
@@ -517,8 +707,19 @@ Each field carries `name`, `type`, `units` (where known), and `allowed` (the
 permitted values for choice fields — crystal ids, `K_fixed` modes, source types).
 `engines` is the list of execution backends selectable via the `POST /scan`
 `engine` body field; `scan_body_fields` documents the optional top-level scan
-body fields (`engine`, `seed`, `noiseless`) beyond `parameters`.
+body fields (`engine`, `seed`, `noiseless`, `background`) beyond `parameters`.
 `examples` names the worked examples elsewhere in this guide.
+
+The `background` block is the full self-description of the background
+generator (`GET`/`PUT /background`): every preset **with its complete
+numerics** — so a client can freeze a preset into the self-contained `terms`
+form instead of depending on this server's registry — the shape and origin
+vocabularies, per-parameter units, the two spec forms with their allowed
+fields, the per-origin scaling rules, and the method map, in which
+`"simulated"` (ray-traced background) is `"reserved"` and not implemented.
+`preset_registry_version` is bumped whenever a preset's numerics change, so a
+stored fingerprint that no longer matches a preset name can be explained rather
+than silently re-tuned.
 
 **Idempotency-Key** (optional request header). Send an `Idempotency-Key: <string>`
 header to make retries safe. The first request with a given key queues a job as
@@ -558,8 +759,10 @@ response (and returned by `POST /validate`) has:
 "eta": {ETA object}, "infeasible": [{"index", "values", "reason"}, ...]}`.
 `infeasible` is empty when every point's scattering triangle closes; each entry
 names a point that is geometrically unreachable and why (e.g. `"scattering
-triangle does not close"`, `"analyzer angle out of range"`). `POST /validate`
-adds `would_queue` (bool) and `blockers` (list of strings).
+triangle does not close"`, `"analyzer angle out of range"`). It also carries a
+`background` block (see `POST /validate`) describing the profile this job will
+plant. `POST /validate` adds `would_queue` (bool) and `blockers` (list of
+strings).
 
 **Long-poll — `?wait=N`.** Add `?wait=N` (seconds, float allowed, clamped to 120)
 to block until the job reaches a terminal state (`done`/`failed`/`stopped`/
@@ -622,6 +825,34 @@ downstream analysis (e.g. reconstructing the theoretical resolution offline):
 These are populated from the same instrument descriptor + sample library the
 theoretical-resolution adapter reads; they are absent only for an instrument that
 does not implement resolution support.
+
+**Background block in `result.metadata`.** Every finished scan — from either
+engine, and **even when no background was planted** — carries a `background`
+object stamped by the one shared helper, so background provenance never depends
+on which engine ran:
+
+| Key | Meaning |
+|-----|---------|
+| `background_schema` | Wire identity of the contract (`"tavi.background/1"`). |
+| `enabled` | Whether anything was planted. A `false` block stops here, plus `preset`, `source` and both fingerprints. |
+| `preset` | Preset name, or `null` for a frozen numeric profile. |
+| `preset_registry_version` | Registry version the preset numerics came from. |
+| `source` | Delivery tag: `"config_default"` or `"per_scan_override"`. |
+| `overrides_applied` | Exactly which per-term parameters were overridden, `{term: {param: value}}`. |
+| `terms` | The fully numeric terms actually used, each with `name`, `shape`, `origin`, `method`, `params`, `optional`, and its per-parameter `units`. |
+| `parameter_units` | Units table for every shape (so the record is readable standalone). |
+| `sample_scale` | The sample `diffuse_background` scale applied to `sample`-origin terms, or `null`. |
+| `skipped_terms` | Optional `sample`-origin terms dropped for want of that scale. |
+| `profile_fingerprint` | Identity of the profile numerics — excludes the preset name **and** the delivery source, so a session default and a per-scan override describing the same physics fingerprint identically. |
+| `effective_fingerprint` | Identity as applied: adds `sample_scale` and `skipped_terms`. Use this as the pooling key. |
+| `background_seed` | Monte Carlo scans only, and only when background was enabled: the seed of the overlay's dedicated RNG stream. Equal to the body `seed` when one was given, else a stable hash of the job id. |
+
+On the deterministic engine the background mean is added to the signal mean
+before the Poisson draw, and `noiseless: true` returns the exact means
+*including* background. On the McStas engine the background is an additive
+Poisson overlay drawn on top of the ray-traced counts, always drawn
+(`noiseless` is a deterministic-engine concept). McStas intensity columns are
+independent of counts and are left untouched.
 
 ### GET /scan/{id}/plot.png
 A rendered PNG image (512×512 px) of the job's current result arrays. **1D**
@@ -699,6 +930,8 @@ Server-Sent Events stream. See §8.
 | 400 | `bad_request` | Malformed JSON body, non-object body, or a PATCH field whose value is not a scalar/object. |
 | 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) had an unknown field or a bad value. `details` lists `applied` and `errors`. |
 | 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, step larger than range). Bypass with `"force": true`. |
+| 400 | `invalid_background` | A background spec (`PUT /background`, or the `background` field of `POST /scan` / `POST /validate`) failed to resolve — unknown preset, unknown field or term, mixed spec forms, bad number. On `PUT` the stored profile is untouched; on `POST /scan` `details.background` is the background block. |
+| 400 | `sample_background_scale_unavailable` | `POST /scan` (or a `/validate` blocker): a required `sample`-origin background term has no usable sample `diffuse_background` calibration. `details.background.error.terms` names the offending terms. There is deliberately no fallback scale. |
 | 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
 | 401 | `unauthorized` | A token is configured and the `Authorization: Bearer <token>` header is missing or wrong. |
 | 403 | `read_only` | A write endpoint was called while the server is in read-only mode. |
