@@ -97,6 +97,50 @@ def test_saved_lattice_wins_over_sample_lattice_adoption():
     assert "_adopt_sample_lattice" in handler
 
 
+def _background_controller_stub():
+    """Controller stub that captures message-centre lines instead of a widget."""
+    controller = _controller_stub()
+    controller.messages = []
+    controller.print_to_message_center = controller.messages.append
+    return controller
+
+
+def test_saved_background_profile_round_trips():
+    controller = _background_controller_stub()
+    spec = {"enabled": True, "preset": "flat_low", "overrides": {}}
+    assert controller._saved_background_profile({"background_profile": spec}) == spec
+    assert controller.messages == []
+
+
+def test_saved_background_profile_absent_defaults_off():
+    controller = _background_controller_stub()
+    profile = controller._saved_background_profile({})
+    assert profile == {"enabled": False, "preset": "none", "overrides": {}}
+    assert controller.messages == []
+
+
+def test_saved_background_profile_invalid_defaults_off_and_logs():
+    """A retired preset or hand-edited file must not stop the session starting."""
+    controller = _background_controller_stub()
+    profile = controller._saved_background_profile(
+        {"background_profile": {"enabled": True, "preset": "retired_preset"}}
+    )
+    assert profile == {"enabled": False, "preset": "none", "overrides": {}}
+    assert len(controller.messages) == 1
+    assert "background disabled" in controller.messages[0]
+
+
+def test_background_profile_is_saved_and_restored():
+    import inspect
+
+    saved = inspect.getsource(controller_module.TAVIController.save_parameters)
+    assert '"background_profile": copy.deepcopy(self.background_profile)' in saved
+    loaded = inspect.getsource(controller_module.TAVIController.load_parameters)
+    assert "self._saved_background_profile(parameters)" in loaded
+    # The restore must reach the GUI row, or the widgets outlive the profile.
+    assert "self._refresh_background_row()" in loaded
+
+
 def test_saved_module_values_container():
     values = controller_module.TAVIController._saved_module_values(
         {"modules": {"nmo": "Both", "v_selector": True}}

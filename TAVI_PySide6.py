@@ -34,7 +34,10 @@ from tavi.scan_jobs import (
     BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
 )
 from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
-                             MAX_WAITERS, parse_scan_engine, ALLOWED_ENGINES)
+                             MAX_WAITERS, parse_scan_engine,
+                             parse_scan_background, ALLOWED_ENGINES,
+                             BACKGROUND_SPEC_KEYS)
+from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
@@ -211,7 +214,35 @@ class TaviApiBackend:
         if limits is not None:
             state["limits"] = limits
         state["budget"] = self._budget_usage()
+        state["background"] = self._controller.background_profile_state()
         return state
+
+    def get_background(self):
+        """GET /background -- the instrument's configured background profile.
+
+        The profile is a plain dict on the controller, not a widget, so this
+        needs no GUI hop (same reasoning as :meth:`get_journal`). The response
+        is profile resolution only: no scan sample is chosen at config level,
+        so it carries no sample scaling.
+        """
+        return self._controller.background_profile_state()
+
+    def set_background(self, body):
+        """PUT /background -- replace the profile wholesale (never merges).
+
+        Bridged onto the GUI thread because the write refreshes the dock's
+        background row. A spec ``tavi.background.resolve`` rejects surfaces as
+        400 ``invalid_background``, mirroring how :meth:`patch_parameters`
+        turns field validation failures into 400 ``invalid_parameters``.
+        """
+        if not isinstance(body, dict):
+            raise ApiError(400, "bad_request", "Request body must be a JSON object")
+        try:
+            return self._bridge.call_on_gui(
+                lambda: self._controller.set_background_profile(body)
+            )
+        except ValueError as exc:
+            raise ApiError(400, "invalid_background", str(exc))
 
     # ---- budget accounting (thread-safe registry reads) ----------------
 
@@ -485,11 +516,15 @@ class TaviApiBackend:
         # Execution-backend selection (docs/CONTROL_FEATURES_DESIGN.md §6.4).
         # Validated Qt-free; an unknown engine is a 400 with the allowed list.
         engine, seed, noiseless = parse_scan_engine(body)
+        # Per-scan background override: shape-checked Qt-free here, resolved
+        # numerically on the GUI thread by the engine that plants it.
+        background = parse_scan_background(body)
 
         result = self._bridge.call_on_gui(
             lambda: self._submit_scan_on_gui(patch, force, idempotency_key,
                                              isolated, allow_partial,
-                                             engine, seed, noiseless)
+                                             engine, seed, noiseless,
+                                             background)
         )
         return result
 
@@ -522,10 +557,76 @@ class TaviApiBackend:
         validation["eta"] = eta
         return validation
 
+    @staticmethod
+    def _apply_background_to_launch_state(controller, launch_state, background):
+        """Stamp the effective background spec and its delivery source.
+
+        A per-scan override REPLACES the controller's configured profile
+        wholesale -- it never merges -- so the source tag fully explains which
+        of the two the scan ran with.
+        """
+        launch_state['background'] = copy.deepcopy(
+            background if background is not None
+            else controller.background_profile
+        )
+        launch_state['background_source'] = (
+            'per_scan_override' if background is not None else 'config_default'
+        )
+
+    def _background_validation(self, controller, launch_state):
+        """``(block, blocker)`` for the launch state's background at /validate.
+
+        Resolves the profile against the sample scale the deterministic engine
+        would apply for this launch state's frozen ``sample_key``, so a
+        validated body cannot be rejected at scan time for a background reason.
+        ``blocker`` is ``None`` when the profile is applicable, else the
+        blockers-list entry (``invalid_background`` for a spec ``resolve``
+        rejects; ``sample_background_scale_unavailable`` when a required
+        sample-origin term has no ``diffuse_background`` calibration).
+        """
+        source = launch_state.get('background_source') or 'config_default'
+        block = {
+            "enabled": None,
+            "source": source,
+            "profile_fingerprint": None,
+            "effective_fingerprint": None,
+            "sample_scale": None,
+            "skipped_terms": [],
+        }
+        try:
+            resolved = _background.resolve(launch_state.get('background'))
+        except ValueError as exc:
+            block["error"] = {"id": "invalid_background", "message": str(exc)}
+            return block, "invalid_background: %s" % exc
+
+        block["enabled"] = bool(resolved.enabled)
+        block["profile_fingerprint"] = _background.profile_fingerprint(resolved)
+        scale = controller._background_sample_scale(launch_state.get('sample_key'))
+        try:
+            # Zero neutrons: only the skipped-term set and the sample-scale
+            # refusal are wanted here, never a count.
+            _, _, skipped = _background.mean_counts(
+                resolved, 0.0, None, 0.0, scale
+            )
+        except _background.SampleScaleUnavailable as exc:
+            block["error"] = {
+                "id": "sample_background_scale_unavailable",
+                "message": str(exc),
+                "terms": list(exc.terms),
+            }
+            return block, "sample_background_scale_unavailable: %s" % exc
+
+        block["sample_scale"] = scale
+        block["skipped_terms"] = list(skipped)
+        block["effective_fingerprint"] = _background.effective_fingerprint(
+            resolved, scale, skipped
+        )
+        return block, None
+
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
                             isolated=False, allow_partial=False,
                             engine="mcstas", seed=None,
-                            noiseless=False):
+                            noiseless=False, background=None):
         """Atomic scan submission body -- runs on the GUI thread via the bridge.
 
         Returns the 202 payload dict or raises ``ApiError`` (which the bridge
@@ -564,6 +665,7 @@ class TaviApiBackend:
         launch_state["engine"] = engine
         launch_state["seed"] = seed
         launch_state["noiseless"] = bool(noiseless)
+        self._apply_background_to_launch_state(controller, launch_state, background)
         vals = launch_state["vals"]
         cmd1 = vals.get("scan_command1", "")
         cmd2 = vals.get("scan_command2", "")
@@ -573,6 +675,20 @@ class TaviApiBackend:
             msg = controller._validate_scan_commands_text(cmd1, cmd2)
             if msg:
                 raise ApiError(400, "scan_validation", msg)
+
+        # 2a. Resolve the background against this scan's sample -- the same
+        #     check /validate runs, so a body that validates cannot be rejected
+        #     at scan time for a background reason, and a doomed job is never
+        #     queued. Cheap (no per-point work) and already on the GUI thread.
+        background_block, background_blocker = self._background_validation(
+            controller, launch_state
+        )
+        if background_blocker is not None:
+            raise ApiError(
+                400, background_block["error"]["id"],
+                background_block["error"]["message"],
+                details={"background": background_block},
+            )
 
         # 3. Compute this job's cost.
         try:
@@ -607,6 +723,7 @@ class TaviApiBackend:
         validation = self._build_validation(
             controller, launch_state, points, neutrons
         )
+        validation["background"] = background_block
         infeasible = validation.get("infeasible", [])
         feasible_points = int(validation.get("feasible_points", points))
         if feasible_points <= 0:
@@ -681,11 +798,12 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
+        background = parse_scan_background(body)
         return self._bridge.call_on_gui(
-            lambda: self._validate_scan_on_gui(patch, force)
+            lambda: self._validate_scan_on_gui(patch, force, background)
         )
 
-    def _validate_scan_on_gui(self, patch, force):
+    def _validate_scan_on_gui(self, patch, force, background=None):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
 
         Builds the launch state from widget-free defaults + the request patch
@@ -695,11 +813,17 @@ class TaviApiBackend:
         controller = self._controller
 
         launch_state = controller.build_api_launch_state(patch)
+        self._apply_background_to_launch_state(controller, launch_state, background)
         vals = launch_state["vals"]
         cmd1 = vals.get("scan_command1", "")
         cmd2 = vals.get("scan_command2", "")
 
         blockers = []
+        background_block, background_blocker = self._background_validation(
+            controller, launch_state
+        )
+        if background_blocker is not None:
+            blockers.append(background_blocker)
         scan_msg = ""
         if not force:
             scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
@@ -740,6 +864,7 @@ class TaviApiBackend:
                 ),
                 "eta": {"estimated_seconds": None,
                         "confidence": "none", "samples": 0},
+                "background": background_block,
                 "would_queue": False,
                 "blockers": blockers,
             }
@@ -762,6 +887,7 @@ class TaviApiBackend:
             if reason is not None:
                 blockers.append("limit_exceeded: %s" % reason)
 
+        validation["background"] = background_block
         validation["would_queue"] = not blockers
         validation["blockers"] = blockers
         return validation
@@ -915,9 +1041,7 @@ class TAVIController(QObject):
         # Default-off: an unconfigured session plants no background and produces
         # counts identical to a background-free engine. A per-scan override in
         # the launch state replaces this wholesale; it never merges.
-        self.background_profile = {
-            "enabled": False, "preset": "none", "overrides": {},
-        }
+        self.background_profile = copy.deepcopy(self.DEFAULT_BACKGROUND_PROFILE)
         # Cross-scan binary reuse (design record §18.5): the last compiled
         # instrument, its execution state, and the build fingerprint it was
         # compiled from. Populated after a scan that actually compiled.
@@ -1245,6 +1369,16 @@ class TAVIController(QObject):
         
         # Diagnostics button
         self.window.simulation_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
+
+        # Background row -> controller profile. set_background_display blocks
+        # these signals, so a programmatic sync never loops back.
+        self.window.simulation_dock.background_enable_check.toggled.connect(
+            self._on_background_row_changed
+        )
+        self.window.simulation_dock.background_preset_combo.currentIndexChanged.connect(
+            self._on_background_row_changed
+        )
+        self._refresh_background_row()
         
         # Sample configuration button
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
@@ -2208,6 +2342,149 @@ class TAVIController(QObject):
         from tavi.resolution import resolution
         return resolution(cfg, method=method).to_dict()
 
+    def background_profile_state(self):
+        """``{"spec", "resolved"}`` view of the stored background profile.
+
+        Profile resolution only: ``sample_scale`` is ``None`` and no term is
+        skipped, because no scan sample is chosen at config level. Effective
+        sample scaling exists per scan and appears in scan metadata.
+        """
+        resolved = _background.resolve(self.background_profile)
+        return {
+            "spec": copy.deepcopy(self.background_profile),
+            "resolved": _background.metadata_block(
+                resolved, "config_default", sample_scale=None, skipped_terms=()
+            ),
+        }
+
+    def set_background_profile(self, spec):
+        """Validate and store the instrument-level background profile.
+
+        ``spec`` is a ``tavi.background`` request spec (preset form or frozen
+        numeric form) and REPLACES the stored profile wholesale -- it never
+        merges. A ``ValueError`` from ``resolve`` propagates to the caller (the
+        API turns it into a 400) with the stored profile untouched.
+
+        Returns ``{"spec", "resolved"}`` with the same profile-only resolution
+        as :meth:`background_profile_state`: ``sample_scale=None`` and no
+        skipped terms, since no scan sample is chosen yet.
+        """
+        resolved = _background.resolve(spec)
+        self.background_profile = (
+            copy.deepcopy(spec) if spec is not None
+            else copy.deepcopy(self.DEFAULT_BACKGROUND_PROFILE)
+        )
+        self._refresh_background_row()
+        self._journal.record(
+            "parameter",
+            "background profile: enabled=%s preset=%s fingerprint=%s"
+            % (resolved.enabled, resolved.preset,
+               _background.profile_fingerprint(resolved)),
+        )
+        return {
+            "spec": copy.deepcopy(self.background_profile),
+            "resolved": _background.metadata_block(
+                resolved, "config_default", sample_scale=None, skipped_terms=()
+            ),
+        }
+
+    def _background_sample_scale(self, sample_key):
+        """Sample ``diffuse_background`` scale the deterministic engine applies.
+
+        Mirrors ``deterministic_engine.ground_truth`` /
+        ``_validated_calibration`` without building the (asset-loading) model,
+        so /validate refuses exactly where a scan would: the no-sample path,
+        an uncalibrated sample, and an unusable stored value all yield ``None``
+        rather than a guessed scale.
+        """
+        try:
+            spec = next(
+                (s for s in self.descriptor.samples if s.id == sample_key), None
+            )
+        except Exception as exc:
+            self.print_to_message_center(
+                f"Could not look up sample '{sample_key}' for background scaling: {exc}"
+            )
+            return None
+        if spec is None or getattr(spec, "component_type", None) is None:
+            return None
+        calibration = getattr(spec, "analytic_calibration", None)
+        diffuse = getattr(calibration, "diffuse_background", None)
+        if diffuse is None:
+            return None
+        try:
+            diffuse = float(diffuse)
+        except (TypeError, ValueError) as exc:
+            self.print_to_message_center(
+                f"Sample '{sample_key}' has an unusable diffuse_background ({exc}); "
+                "sample-origin background terms will be refused or skipped"
+            )
+            return None
+        if not math.isfinite(diffuse) or diffuse < 0.0:
+            return None
+        return diffuse
+
+    @staticmethod
+    def _background_summary(resolved):
+        """Short human echo of a resolved profile for the GUI row."""
+        if not resolved.terms:
+            return "no terms"
+        return ", ".join(
+            "%s (%s)" % (term.name, term.shape) for term in resolved.terms
+        )
+
+    def _refresh_background_row(self):
+        """Sync the simulation dock's background row with the stored profile.
+
+        A no-op before the window exists (controller construction, headless
+        tests). Any other failure is logged rather than raised: a display
+        refresh must not undo an already-validated profile write.
+        """
+        dock = getattr(getattr(self, "window", None), "simulation_dock", None)
+        if dock is None:
+            return
+        try:
+            profile = self.background_profile or {}
+            resolved = _background.resolve(profile)
+            dock.set_background_display(
+                resolved.enabled, resolved.preset,
+                self._background_summary(resolved),
+            )
+        except Exception as exc:
+            self.print_to_message_center(
+                f"Could not refresh the background row: {exc}"
+            )
+
+    def _on_background_row_changed(self, *_args):
+        """GUI background row -> controller profile (preset form only).
+
+        Numeric overrides are an API-only capability, so a GUI edit always
+        sends the plain preset form. A rejected spec is logged and the row is
+        re-synced from the stored profile, so the widgets can never disagree
+        with what will actually be planted.
+
+        The row cannot express a frozen numeric profile (one an API client set
+        with an explicit ``terms`` list), so a GUI edit replaces it with the
+        chosen preset. That replacement is announced rather than silent.
+        """
+        try:
+            spec = self.window.simulation_dock.get_background_spec()
+        except Exception as exc:
+            self.print_to_message_center(f"Could not read the background row: {exc}")
+            self._refresh_background_row()
+            return
+        if isinstance(self.background_profile, dict) and \
+                "terms" in self.background_profile:
+            self.print_to_message_center(
+                "Replacing the frozen numeric background profile with preset "
+                f"'{spec['preset']}' (the GUI row has no numeric form)"
+            )
+        try:
+            self.set_background_profile(spec)
+        except ValueError as exc:
+            self.print_to_message_center(f"Background profile rejected: {exc}")
+            self._refresh_background_row()
+
     def build_api_launch_state(self, patch):
         """Freeze an API scan launch state from defaults + patch, GUI-independent.
 
@@ -2377,6 +2654,10 @@ class TAVIController(QObject):
             'relative_mode_1': self.window.simulation_dock.relative_1_button.isChecked(),
             'relative_mode_2': self.window.simulation_dock.relative_2_button.isChecked(),
             'compact_save_enabled': self.window.data_control_dock.compact_save_check.isChecked(),
+            # A GUI-launched scan always runs the configured profile; the
+            # per-scan override is an API-only channel.
+            'background': copy.deepcopy(self.background_profile),
+            'background_source': 'config_default',
         }
 
     def _enrich_launch_parameters(self, vals, sample_key):
@@ -4440,6 +4721,9 @@ class TAVIController(QObject):
             "load_folder_var": self.window.data_control_dock.load_folder_edit.text(),
             "diagnostic_settings": self.diagnostic_settings,
             "current_sample_settings": self.current_sample_settings,
+            # Background profile request spec (tavi/background.py); absent in
+            # files written before background support -> default-off on load.
+            "background_profile": copy.deepcopy(self.background_profile),
             "space_group_number_var": self.window.sample_dock.spacegroup_combo.currentData() if hasattr(self.window.sample_dock, 'spacegroup_combo') else None,
             "use_sample_reflection_table_var": bool(
                 getattr(self.window.sample_dock, "use_sample_reflection_table_check", None)
@@ -4558,6 +4842,31 @@ class TAVIController(QObject):
                 ),
             }
         return cache
+
+    # Default-off background profile: an unconfigured session plants nothing.
+    DEFAULT_BACKGROUND_PROFILE = {
+        "enabled": False, "preset": "none", "overrides": {},
+    }
+
+    def _saved_background_profile(self, parameters):
+        """Background profile from a saved block, defaulting off on any problem.
+
+        A stored spec that no longer resolves (retired preset, hand-edited
+        file) must never stop the session from starting, so it is logged and
+        replaced by the default-off profile rather than raised.
+        """
+        default = copy.deepcopy(self.DEFAULT_BACKGROUND_PROFILE)
+        spec = parameters.get("background_profile")
+        if spec is None:
+            return default
+        try:
+            _background.resolve(spec)
+        except (ValueError, TypeError) as exc:
+            self.print_to_message_center(
+                f"Saved background profile is invalid ({exc}); background disabled"
+            )
+            return default
+        return copy.deepcopy(spec)
 
     def load_parameters(self):
         """Load parameters from JSON file."""
@@ -4747,6 +5056,8 @@ class TAVIController(QObject):
                 # Merge: use loaded value if present, else default
                 self.diagnostic_settings = {**default_diag, **loaded_diag}
                 self.current_sample_settings = parameters.get("current_sample_settings", {})
+                self.background_profile = self._saved_background_profile(parameters)
+                self._refresh_background_row()
 
                 self.update_ideal_bending_buttons()
                 
@@ -6239,6 +6550,10 @@ class TAVIController(QObject):
                 {"name": "noiseless", "type": "boolean", "default": False,
                  "description": "Deterministic engine only: return exact means "
                                 "(no Poisson noise)."},
+                {"name": "background", "type": "object", "default": None,
+                 "description": "Per-scan background profile; replaces the "
+                                "configured profile wholesale (never merges). "
+                                "See the top-level 'background' block."},
             ],
             "scan_variables": [
                 "H", "K", "L", "qx", "qy", "qz", "deltaE",
@@ -6268,7 +6583,41 @@ class TAVIController(QObject):
                 {"method": "GET", "path": "/jobs", "description": "Recent job snapshots."},
                 {"method": "GET", "path": "/schema", "description": "This machine-readable API self-description."},
                 {"method": "GET", "path": "/events", "description": "Server-Sent Events live stream."},
+                {"method": "GET", "path": "/background", "description": "Configured background profile (spec + resolved)."},
+                {"method": "PUT", "path": "/background", "description": "Replace the background profile wholesale."},
             ],
+            # Generated background truth (tavi/background.py). Presets carry
+            # full numerics so a client can freeze one into the self-contained
+            # 'terms' form instead of depending on this server's registry.
+            "background": {
+                "background_schema": _background.BACKGROUND_SCHEMA,
+                "preset_registry_version": _background.PRESET_REGISTRY_VERSION,
+                "presets": _background.preset_catalog(),
+                "shapes": list(_background.SHAPES),
+                "origins": list(_background.ORIGINS),
+                "parameter_units": {
+                    shape: dict(units)
+                    for shape, units in _background.PARAMETER_UNITS.items()
+                },
+                "methods": {"analytic": "implemented", "simulated": "reserved"},
+                "scaling": {
+                    "instrument": "counts = N * rate",
+                    "sample_environment": "counts = N * rate",
+                    "sample": "counts = N * diffuse_background * rate",
+                },
+                "spec_forms": {
+                    "preset": {
+                        "enabled": "boolean",
+                        "preset": "string (one of 'presets')",
+                        "overrides": "{term name: {parameter: number}}",
+                    },
+                    "frozen": {
+                        "enabled": "boolean",
+                        "terms": "[{name, shape, origin, method, params, optional}]",
+                    },
+                },
+                "spec_fields": sorted(BACKGROUND_SPEC_KEYS),
+            },
             "examples": [
                 "align-on-bragg-peak",
                 "elastic-h-scan",

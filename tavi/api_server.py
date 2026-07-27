@@ -25,6 +25,8 @@ Backend protocol
 - ``get_job_data(job_id: str) -> dict``
 - ``get_job_plot_png(job_id: str) -> bytes``   (rendered scan plot; 409 no_data)
 - ``get_journal(limit: int) -> dict``   (session-narrative ring buffer)
+- ``get_background() -> dict``   (instrument background profile: spec + resolved)
+- ``set_background(body: dict) -> dict``   (replace the profile wholesale)
 - ``stop_job(job_id: str) -> dict``
 - ``stop_all(clear_queue: bool) -> dict``
 - ``list_jobs() -> list``
@@ -153,6 +155,39 @@ def parse_scan_engine(body):
     return engine, seed, noiseless
 
 
+# Top-level fields of a background request spec (``tavi.background.resolve``
+# accepts the preset form and the frozen numeric form; both draw from this set).
+BACKGROUND_SPEC_KEYS = frozenset({"enabled", "preset", "overrides", "terms"})
+
+
+def parse_scan_background(body):
+    """Validate the optional ``background`` POST /scan and /validate field.
+
+    Qt-free **shape** check only -- the numerics are validated by
+    ``tavi.background.resolve`` on the GUI thread, which owns the preset
+    registry. Absent or ``null`` returns ``None`` (the scan uses the
+    instrument's configured profile); a present spec replaces that profile
+    wholesale and never merges with it.
+    """
+    if not isinstance(body, dict):
+        raise ApiError(400, "bad_request", "Request body must be a JSON object")
+
+    spec = body.get("background")
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ApiError(400, "bad_request", "'background' must be a JSON object")
+    unknown = sorted(k for k in spec if k not in BACKGROUND_SPEC_KEYS)
+    if unknown:
+        raise ApiError(
+            400, "bad_request",
+            "Unknown background field(s): %s; allowed: %s"
+            % (", ".join(unknown), ", ".join(sorted(BACKGROUND_SPEC_KEYS))),
+            details={"unknown": unknown, "allowed": sorted(BACKGROUND_SPEC_KEYS)},
+        )
+    return spec
+
+
 # Allowed top-level keys for each JSON-body POST endpoint. An unknown top-level
 # key is rejected with 400 rather than silently ignored: a typo'd key (e.g.
 # "scan_commands" instead of nesting the write under "parameters") must fail
@@ -161,9 +196,12 @@ def parse_scan_engine(body):
 # body IS the parameter dict, validated field-by-field against the field map.
 SCAN_BODY_KEYS = frozenset({
     "parameters", "force", "allow_partial", "isolated",
-    "engine", "seed", "noiseless",
+    "engine", "seed", "noiseless", "background",
 })
-VALIDATE_BODY_KEYS = frozenset({"parameters", "force"})
+# "background" is accepted here as well as in SCAN_BODY_KEYS: /validate must run
+# the same checks as the submission it dry-runs, or a caller validates a body
+# that POST /scan would reject.
+VALIDATE_BODY_KEYS = frozenset({"parameters", "force", "background"})
 STOP_BODY_KEYS = frozenset({"clear_queue"})
 
 
@@ -510,6 +548,9 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         self._dispatch("PATCH")
 
+    def do_PUT(self):
+        self._dispatch("PUT")
+
     def _dispatch(self, method):
         """Top-level dispatcher with a catch-all 500 for unexpected errors."""
         try:
@@ -595,6 +636,24 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             reject_unknown_body_keys(body, VALIDATE_BODY_KEYS)
             self._send_json(200, self._call_backend("submit_validate", body))
             return
+
+        if segments == ["background"]:
+            # Instrument-level background profile (tavi/background.py). GET is a
+            # pure read; PUT replaces the stored profile wholesale (it never
+            # merges) and so is gated on write access. Both return
+            # {"spec": ..., "resolved": ...} -- profile resolution only, since
+            # no scan sample is chosen at config level.
+            if method == "GET":
+                self._send_json(200, self._call_backend("get_background"))
+                return
+            if method == "PUT":
+                if not self._check_writable():
+                    return
+                body = self._read_json_body()
+                reject_unknown_body_keys(body, BACKGROUND_SPEC_KEYS)
+                self._send_json(200, self._call_backend("set_background", body))
+                return
+            raise ApiError(405, "method_not_allowed", "Method not allowed: %s" % method)
 
         if segments == ["resolution"]:
             # Theoretical TAS resolution at one (H, K, L, deltaE) point. Read-only
