@@ -6468,9 +6468,19 @@ class TAVIController(QObject):
             )
         except Exception:
             spec = None
-        sqw = _det.ground_truth(spec) if spec is not None else None
+        analytic_model_error = None
+        try:
+            sqw = _det.ground_truth(spec) if spec is not None else None
+        except Exception as exc:
+            sqw = None
+            analytic_model_error = str(exc)
         if sqw is None:
-            reason = "no analytic ground truth for sample %r" % (sample_key,)
+            reason = (
+                "failed to load analytic ground truth for sample %r: %s"
+                % (sample_key, analytic_model_error)
+                if analytic_model_error
+                else "no analytic ground truth for sample %r" % (sample_key,)
+            )
             self.message_printed.emit(
                 "Deterministic engine: %s -- job failed." % reason
             )
@@ -6486,7 +6496,6 @@ class TAVIController(QObject):
             self.scan_completed.emit()
             return data_folder
 
-        brightness = _det._brightness_for(sqw)
         self.message_printed.emit(
             "Deterministic engine: sample '%s', seed %d%s"
             % (getattr(sqw, 'sample_id', '?'), seed,
@@ -6609,7 +6618,7 @@ class TAVIController(QObject):
 
                     rng = None if noiseless else np.random.default_rng((int(seed), i))
                     out = _det.evaluate_point(
-                        rr, sqw, hkl, w, number_neutrons, brightness,
+                        rr, sqw, hkl, w, number_neutrons,
                         rng=rng, noiseless=noiseless,
                     )
                     counts = float(out['counts'])
@@ -6693,7 +6702,9 @@ class TAVIController(QObject):
                 and simulation_error_message is None:
             with job.lock:
                 job.result.metadata.update(
-                    _det.engine_metadata(seed, meta_res, method="analytic")
+                    _det.engine_metadata(
+                        seed, meta_res, method="analytic", sqw=sqw
+                    )
                 )
                 job.result.metadata['noiseless'] = noiseless
 

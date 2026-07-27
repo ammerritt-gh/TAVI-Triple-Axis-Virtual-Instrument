@@ -13,14 +13,10 @@
 * dispersions and CIF-derived structure factors.
 *
 * %D
-* Phase 1b: Bragg scattering kernel with incoherent channel.
-* Reads a CIF or LAU/LAZ reflection file (via cif2hkl) and scatters
-* neutrons elastically from Bragg reflections using a simplified Ewald
-* sphere model with Gaussian mosaic (delta_d_d).
-*
-* This component is designed as the foundation for a "universal sample"
-* that will later incorporate phonon scattering from DFT dispersion grids,
-* multi-BZ intensity variation, and magnetic excitations.
+* Reads a CIF or LAU/LAZ reflection file (via cif2hkl) for elastic Bragg
+* scattering and a regular H-K-L dispersion grid for coherent one-phonon
+* Stokes/anti-Stokes scattering. The dispersion grid supports a dynamic
+* branch count, periodic tessellation, and an optional per-point linewidth.
 *
 * The Bragg model is intentionally simpler than Single_crystal: we use
 * a single isotropic delta_d_d mosaic width rather than the full
@@ -32,7 +28,7 @@
 * Algorithm (Bragg channel):
 *   1. Intersect neutron with sample geometry
 *   2. Compute ki, find all reflections within Ewald sphere proximity
-*   3. Choose channel: Bragg vs incoherent (vs phonon in future)
+*   3. Choose channel: phonon vs Bragg/incoherent
 *   4. If Bragg: select reflection weighted by F2, compute kf = ki - tau
 *   5. Apply mosaic perturbation, normalize |kf| = |ki| (elastic)
 *   6. Compute weight corrections (absorption, cross section, path length)
@@ -44,6 +40,7 @@
 * xwidth: [m]            Width of box sample
 * zdepth: [m]            Depth of box sample
 * reflections: [string]  CIF, LAU, or LAZ reflection file (or "" for incoherent only)
+* dispersion: [string]   Regular H-K-L phonon grid (or "" for no phonon channel)
 * sigma_abs: [barns]     Absorption cross section per unit cell at 2200 m/s
 * sigma_inc: [barns]     Incoherent scattering cross section per unit cell
 * a: [AA]                Lattice parameter a
@@ -64,19 +61,22 @@
 * delta_d_d: [1]         Relative d-spacing width (Gaussian RMS), for mosaic broadening
 * barns: [1]             Flag: 1 if F2 is in barns (laz files), 0 if in fm^2 (lau files)
 * debye_waller: [1]      Global Debye-Waller factor (1 = no DW correction)
-* T: [K]                 Temperature (for future phonon Bose factor; currently unused)
+* T: [K]                 Temperature for the phonon Bose factor
 * p_interact: [1]        MC probability for scattering (remainder is transmission)
+* p_phonon: [1]          MC probability for selecting phonons when Bragg/incoherent is active
 * target_x: [m]          Focusing target x
 * target_y: [m]          Focusing target y
 * target_z: [m]          Focusing target z
 * target_index: [1]      Relative index of component to focus at
 * phonon_gamma: [meV]    Intrinsic phonon linewidth Gamma (Lorentzian FWHM). 0=delta function (root-finding), >0=Lorentzian spectral function. Per-point Gamma from column 7 of dispersion file overrides this value when present.
+* tessellate: [1]        Periodically fold HKL into the dispersion-grid range
+* phonon_e_steps: [1]    Energy-conservation bracketing steps in delta-function mode
 *
 * OUTPUT PARAMETERS:
 * (none - scattering modifies the neutron state in-place via SCATTER/ABSORB)
 *
 * %L
-* Designed for combined elastic/inelastic scattering. Phonon kernel coming in Phase 1a.
+* TAVI-owned component and file contract: components/PHONON_DFT.md
 *
 * %E
 ******************************************************************************/

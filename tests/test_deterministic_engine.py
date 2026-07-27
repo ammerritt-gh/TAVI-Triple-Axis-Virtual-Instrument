@@ -8,17 +8,23 @@ A real ResolutionResult is built from the validated CN goldens
 import json
 import math
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from instruments.descriptor import SampleSpec
+from instruments.descriptor import AnalyticCalibration, SampleSpec
+from tavi.sample_library import default_sample_library
 from tavi.resolution import ResolutionConfig, cooper_nathans
 import tavi.deterministic_engine as de
 
 
-_GOLDENS = json.loads((Path(__file__).parent / "data" / "cn_goldens.json").read_text())
+_GOLDENS = json.loads(
+    (Path(__file__).parent / "data" / "cn_goldens.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 
 def _res(name="puma_pg002_kf2.662_inelastic", **over):
@@ -36,10 +42,16 @@ def _res(name="puma_pg002_kf2.662_inelastic", **over):
 
 
 def _phonon_spec():
-    return SampleSpec(
-        "Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
-        properties={"a": 4.03893, "T": 200.0, "phonon_gamma": 0.2},
-        lattice=(4.03893, 4.03893, 4.03893, 90.0, 90.0, 90.0),
+    return next(
+        sample
+        for sample in default_sample_library()
+        if sample.id == "Al_phonon_DFT"
+    )
+
+
+def _bragg_spec():
+    return next(
+        sample for sample in default_sample_library() if sample.id == "Al_bragg"
     )
 
 
@@ -52,10 +64,8 @@ ANCHOR_HKL = (2.15, 0.0, 0.0)
 
 # --------------------------------------------------------------------------- factory
 def test_ground_truth_known_ids():
-    assert isinstance(de.ground_truth(_phonon_spec()), de.PhononSQW)
-    bragg = SampleSpec("Al_bragg", "AL: Bragg", "Single_crystal",
-                       properties={"mosaic": 5}, lattice=(4.05,) * 3 + (90.0,) * 3)
-    assert isinstance(de.ground_truth(bragg), de.BraggSQW)
+    assert isinstance(de.ground_truth(_phonon_spec()), de.PhononDFTSQW)
+    assert isinstance(de.ground_truth(_bragg_spec()), de.BraggSQW)
     none = SampleSpec("none", "No sample", None)
     assert isinstance(de.ground_truth(none), de.ZeroSQW)
 
@@ -65,15 +75,137 @@ def test_ground_truth_unknown_returns_none():
     assert de.ground_truth(unknown) is None
 
 
+def test_ground_truth_dispatches_phonon_dft_by_component_type():
+    renamed = replace(_phonon_spec(), id="renamed_al_map")
+    assert isinstance(de.ground_truth(renamed), de.PhononDFTSQW)
+
+
 # --------------------------------------------------------------------------- dispersion
-def test_dispersion_matches_analytic_form_at_anchor():
-    # q=0.15 acoustic: E = 6*sin(pi*0.15/2) = 1.4004 meV (CLOSED_LOOP §7).
+def test_real_dispersion_map_matches_saved_anchor_values():
     sqw = _phonon_sqw()
-    e_ac = sqw._omega_branch(ANCHOR_HKL, 0)
-    assert abs(e_ac - 6.0 * math.sin(math.pi * 0.15 / 2)) < 1e-9
-    assert abs(e_ac - 1.4004) < 1e-3
-    e_op = sqw._omega_branch(ANCHOR_HKL, 1)
-    assert abs(e_op - (6.0 + 2.0 * math.sin(math.pi * 0.15 / 2))) < 1e-9
+    modes = sqw._phonon.dispersion_map.evaluate(ANCHOR_HKL, tessellate=True)
+    assert modes[0].energy_mev == pytest.approx(1.3963545)
+    assert modes[1].energy_mev == pytest.approx(6.4654515)
+    assert modes[0].intensity == pytest.approx(1.0)
+    assert modes[1].intensity == pytest.approx(1.0)
+
+
+def test_phonon_dft_bragg_table_and_gamma_policy():
+    sqw = _phonon_sqw()
+    allowed = [
+        feature
+        for feature in sqw.elastic((2, 0, 0))
+        if np.linalg.norm(feature.dq) < 1.0e-12
+    ]
+    forbidden = [
+        feature
+        for feature in sqw.elastic((1, 0, 0))
+        if np.linalg.norm(feature.dq) < 1.0e-12
+    ]
+    assert len(allowed) == 1
+    assert allowed[0].weight == pytest.approx(1.903296)
+    assert forbidden == []
+
+    gamma_branches = sqw.branches((2, 0, 0))
+    assert len(gamma_branches) == 2
+    assert sorted(branch.omega0 for branch in gamma_branches) == pytest.approx(
+        [-6.0, 6.0]
+    )
+
+
+def test_h_scan_bragg_center_repairs_false_dip():
+    sqw = _phonon_sqw()
+    resolution = _res("puma_pg002_kf2.662_elastic")
+    hs = (1.95, 1.99, 2.0, 2.01, 2.05)
+    means = de.run_deterministic_scan(
+        [((h, 0.0, 0.0), 0.0) for h in hs],
+        resolution,
+        sqw,
+        1.0e7,
+        seed=0,
+        noiseless=True,
+    )
+    center = means[2]
+    assert means.index(max(means)) == 2
+    assert 4400.0 < center < 4650.0
+    assert center > means[1]
+    assert center > means[3]
+
+
+def _three_branch_grid() -> str:
+    lines = [
+        "# grid_nx 2",
+        "# grid_ny 2",
+        "# grid_nz 2",
+        "# num_branches 3",
+    ]
+    for h in (0.0, 1.0):
+        for k in (0.0, 1.0):
+            for l in (0.0, 1.0):
+                for branch in range(3):
+                    energy = 1.0 + branch + h + k + l
+                    lines.append(
+                        f"{h:g} {k:g} {l:g} {energy:g} 1 {branch} 0.2"
+                    )
+    return "\n".join(lines) + "\n"
+
+
+def _custom_phonon_spec(dispersion: Path, reflections: Path) -> SampleSpec:
+    return SampleSpec(
+        "custom_map",
+        "Custom map",
+        "Phonon_DFT",
+        properties={
+            "a": 4.0,
+            "T": 200.0,
+            "phonon_gamma": 0.2,
+            "tessellate": 1,
+            "dispersion": str(dispersion),
+            "reflections": str(reflections),
+        },
+        lattice=(4.0, 4.0, 4.0, 90.0, 90.0, 90.0),
+        analytic_calibration=AnalyticCalibration(phonon=1.0, elastic=1.0),
+    )
+
+
+def test_third_grid_branch_produces_pair_without_engine_change(tmp_path):
+    dispersion = tmp_path / "three.dat"
+    dispersion.write_text(_three_branch_grid(), encoding="utf-8")
+    reflections = tmp_path / "one.laz"
+    reflections.write_text(
+        "# column_F2 4\n2 0 0 1.0\n", encoding="utf-8"
+    )
+    sqw = de.ground_truth(_custom_phonon_spec(dispersion, reflections))
+    branches = sqw.branches((0.5, 0.5, 0.5))
+    assert len(branches) == 6
+    assert sorted(branch.omega0 for branch in branches) == pytest.approx(
+        [-4.5, -3.5, -2.5, 2.5, 3.5, 4.5]
+    )
+
+
+def test_configured_phonon_dft_assets_fail_visibly(tmp_path):
+    missing_dispersion = tmp_path / "missing.dat"
+    reflections = tmp_path / "one.laz"
+    reflections.write_text(
+        "# column_F2 4\n2 0 0 1.0\n", encoding="utf-8"
+    )
+    with pytest.raises(FileNotFoundError, match="dispersion map not found"):
+        de.ground_truth(_custom_phonon_spec(missing_dispersion, reflections))
+
+    dispersion = tmp_path / "three.dat"
+    dispersion.write_text(_three_branch_grid(), encoding="utf-8")
+    missing_reflections = tmp_path / "missing.laz"
+    with pytest.raises(FileNotFoundError, match="reflection table not found"):
+        de.ground_truth(
+            _custom_phonon_spec(dispersion, missing_reflections)
+        )
+
+    malformed_reflections = tmp_path / "malformed.laz"
+    malformed_reflections.write_text("2 0 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="no usable positive F2"):
+        de.ground_truth(
+            _custom_phonon_spec(dispersion, malformed_reflections)
+        )
 
 
 # --------------------------------------------------------------------------- seeding
@@ -100,16 +232,18 @@ def test_per_point_stream_isolated():
     full = de.run_deterministic_scan(pts, res, sqw, 1e8, seed=7)
     # recompute point 10 alone with its own index-keyed stream
     rng = np.random.default_rng((7, 10))
-    out = de.evaluate_point(res, sqw, pts[10][0], pts[10][1], 1e8,
-                            de.BRIGHTNESS["Al_phonon_DFT"], rng=rng)
+    out = de.evaluate_point(
+        res, sqw, pts[10][0], pts[10][1], 1e8, rng=rng
+    )
     assert out["counts"] == full[10]
 
 
 # --------------------------------------------------------------------------- noiseless
 def test_noiseless_returns_means_no_rng():
     res, sqw = _res(), _phonon_sqw()
-    out = de.evaluate_point(res, sqw, ANCHOR_HKL, 1.5, 1e8,
-                            de.BRIGHTNESS["Al_phonon_DFT"], noiseless=True)
+    out = de.evaluate_point(
+        res, sqw, ANCHOR_HKL, 1.5, 1e8, noiseless=True
+    )
     assert out["counts"] == out["mean"]
     assert out["mean"] > 0
     # noiseless scan is deterministic and float-valued (means, not ints)
@@ -125,7 +259,7 @@ def test_deltaE_scan_peak_at_dispersion_energy():
     pts = [(ANCHOR_HKL, float(w)) for w in ws]
     means = de.run_deterministic_scan(pts, res, sqw, 1e8, seed=0, noiseless=True)
     peak_w = ws[int(np.argmax(means))]
-    expected = 6.0 * math.sin(math.pi * 0.15 / 2)   # 1.4004 meV
+    expected = 1.3963545
     assert abs(peak_w - expected) < 0.1             # resolution-limited tolerance
 
 
@@ -163,12 +297,15 @@ def test_analytic_vs_mc_agree():
 def test_mc_method_smoke():
     # the evaluate_point mc path runs and returns a positive mean near analytic
     res, sqw = _res(), _phonon_sqw()
-    bright = de.BRIGHTNESS["Al_phonon_DFT"]
     rng = np.random.default_rng(5)
-    out = de.evaluate_point(res, sqw, ANCHOR_HKL, 1.4, 1e8, bright,
-                            rng=rng, noiseless=True, method="mc")
-    a = de.evaluate_point(res, sqw, ANCHOR_HKL, 1.4, 1e8, bright,
-                          noiseless=True, method="analytic")["mean"]
+    out = de.evaluate_point(
+        res, sqw, ANCHOR_HKL, 1.4, 1e8,
+        rng=rng, noiseless=True, method="mc",
+    )
+    a = de.evaluate_point(
+        res, sqw, ANCHOR_HKL, 1.4, 1e8,
+        noiseless=True, method="analytic",
+    )["mean"]
     assert out["mean"] > 0 and abs(out["mean"] - a) / a < 0.2
 
 
@@ -176,7 +313,7 @@ def test_mc_method_smoke():
 def test_bose_anti_stokes_weaker_than_stokes():
     # The integrated area ratio (widths cancel) equals n/(n+1) = exp(-omega0/kT).
     res, sqw = _res(), _phonon_sqw()
-    omega0 = 6.0 * math.sin(math.pi * 0.15 / 2)
+    omega0 = 1.3963545
     ws = np.linspace(-4.0, 4.0, 4001)          # symmetric window: full both peaks
     means = np.array(de.run_deterministic_scan(
         [(ANCHOR_HKL, float(w)) for w in ws], res, sqw, 1e8, seed=0, noiseless=True))
@@ -191,26 +328,44 @@ def test_bose_anti_stokes_weaker_than_stokes():
 
 # --------------------------------------------------------------------------- Bragg
 def test_bragg_peak_at_integer_hkl_zero_away():
-    bragg_spec = SampleSpec("Al_bragg", "AL: Bragg", "Single_crystal",
-                            properties={"mosaic": 5},
-                            lattice=(4.05,) * 3 + (90.0,) * 3)
-    sqw = de.ground_truth(bragg_spec)
+    sqw = de.ground_truth(_bragg_spec())
     res = _res("puma_pg002_kf2.662_elastic")
-    bright = de.BRIGHTNESS["Al_bragg"]
-    on = de.evaluate_point(res, sqw, (2, 0, 0), 0.0, 1e8, bright, noiseless=True)["mean"]
-    off_q = de.evaluate_point(res, sqw, (2.3, 0, 0), 0.0, 1e8, bright, noiseless=True)["mean"]
-    off_e = de.evaluate_point(res, sqw, (2, 0, 0), 3.0, 1e8, bright, noiseless=True)["mean"]
+    on = de.evaluate_point(
+        res, sqw, (2, 0, 0), 0.0, 1e8, noiseless=True
+    )["mean"]
+    off_q = de.evaluate_point(
+        res, sqw, (2.3, 0, 0), 0.0, 1e8, noiseless=True
+    )["mean"]
+    off_e = de.evaluate_point(
+        res, sqw, (2, 0, 0), 3.0, 1e8, noiseless=True
+    )["mean"]
     assert on > 0
     assert off_q < 1e-6 * on
     assert off_e < 1e-3 * on
 
 
+def test_single_crystal_missing_table_stamps_legacy_fallback():
+    sqw = de.ground_truth(_bragg_spec())
+    metadata = sqw.analytic_metadata()
+    assert metadata["reflection_mode"] == "centering_unit_f2_fallback"
+    assert metadata["reflections"]["configured_filename"] == "Al.lau"
+    assert metadata["reflections"]["resolved_path"] is None
+    assert any(
+        np.linalg.norm(feature.dq) < 1.0e-12
+        for feature in sqw.elastic((2, 0, 0))
+    )
+    assert not any(
+        np.linalg.norm(feature.dq) < 1.0e-12
+        for feature in sqw.elastic((1, 0, 0))
+    )
+
+
 # --------------------------------------------------------------------------- calibration
-def test_brightness_anchor_gives_about_61_counts():
+def test_phonon_calibration_anchor_gives_about_61_counts():
     res, sqw = _res(), _phonon_sqw()
     conv = de.anchor_convolved_intensity(res, sqw)
     mean = (de.MCSTAS_ANCHOR["number_neutrons"]
-            * de.BRIGHTNESS["Al_phonon_DFT"] * conv)
+            * sqw.calibration.phonon * conv)
     assert 40 < mean < 90   # rough calibration to the ~61-count McStas reference
 
 
@@ -218,26 +373,41 @@ def test_brightness_anchor_gives_about_61_counts():
 def test_zero_negative_mean_guard():
     res = _res()
     zero = de.ground_truth(SampleSpec("none", "No sample", None))
-    out = de.evaluate_point(res, zero, (2.15, 0, 0), 1.5, 1e8, 0.0,
-                            rng=np.random.default_rng(0))
+    out = de.evaluate_point(
+        res, zero, (2.15, 0, 0), 1.5, 1e8,
+        rng=np.random.default_rng(0),
+    )
     assert out["mean"] == 0.0 and out["counts"] == 0
     # infeasible resolution -> zero, no crash
     bad = _res(q0=99.0)   # triangle cannot close
     assert not bad.ok
-    out2 = de.evaluate_point(bad, _phonon_sqw(), (2.15, 0, 0), 1.5, 1e8, 1e-7,
-                             rng=np.random.default_rng(0))
+    out2 = de.evaluate_point(
+        bad, _phonon_sqw(), (2.15, 0, 0), 1.5, 1e8,
+        rng=np.random.default_rng(0),
+    )
     assert out2["mean"] == 0.0
 
 
 # --------------------------------------------------------------------------- metadata
 def test_engine_metadata():
     res = _res()
-    md = de.engine_metadata(seed=99, res_result=res, method="analytic")
+    md = de.engine_metadata(
+        seed=99, res_result=res, method="analytic", sqw=_phonon_sqw()
+    )
     assert md["engine"] == "deterministic"
     assert md["seed"] == 99
     assert md["cn_valid"] is True
     assert md["resolution_method"] == "cooper_nathans"
     assert isinstance(md["invalidations"], list)
+    assert md["analytic_model"]["channels"] == ["phonon", "elastic"]
+    assert md["analytic_model"]["branch_count"] == 2
+    assert md["analytic_model"]["reflection_count"] > 0
+    assert (
+        md["analytic_model"]["zero_energy_policy"]
+        == "match_phonon_dft_skip"
+    )
+    assert len(md["analytic_model"]["dispersion"]["sha256"]) == 64
+    assert len(md["analytic_model"]["reflections"]["sha256"]) == 64
 
 
 def test_engine_metadata_never_evaluated_is_not_invalid():

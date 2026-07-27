@@ -20,7 +20,7 @@ default Al 4.05 lattice misses its Bragg condition entirely).
 """
 from __future__ import annotations
 
-from instruments.descriptor import SampleSpec
+from instruments.descriptor import AnalyticCalibration, SampleSpec
 
 _AL_LATTICE = (4.05, 4.05, 4.05, 90.0, 90.0, 90.0)
 
@@ -63,6 +63,7 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
             lattice=_AL_LATTICE,
             reflection_source="Al.lau",
             space_group=225,
+            analytic_calibration=AnalyticCalibration(phonon=0.0, elastic=1.0e-5),
         ),
         SampleSpec(
             "Al_phonon_DFT", "Al: Phonon DFT", "Phonon_DFT",
@@ -81,5 +82,11 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
             lattice=(4.03893, 4.03893, 4.03893, 90.0, 90.0, 90.0),
             reflection_source="Al_mp-134_symmetrized.laz",
             space_group=225,
+            analytic_calibration=AnalyticCalibration(
+                phonon=6.41e-8,
+                # Mean of three saved McStas scans: 4507 counts at (200),
+                # 0 meV, 1e7 neutrons; normalized by F2(200)=1.903296.
+                elastic=0.00023679974108073573,
+            ),
         ),
     )

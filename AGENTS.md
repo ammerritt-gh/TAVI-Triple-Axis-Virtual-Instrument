@@ -64,9 +64,10 @@ Long simulations run in a Python worker thread started by `TAVIController.run_si
 | Runtime estimates | `tavi/runtime_tracker.py`, `config/runtimes.json` behavior |
 | Detector parsing, saved scan files, plotting helpers | `tavi/data_processing.py`, `gui/docks/display_dock.py` |
 | Peak fitting, COM/MAX, "goto CEN" and the Fitting dock | `tavi/scan_fits.py`, `docs/CONTROL_FEATURES_DESIGN.md` §1 (read §1.7 first — it supersedes §1.1–1.6), `gui/docks/fitting_dock.py` |
+| Deterministic analytic engine, calibration, or provenance | `docs/ANALYTIC_ENGINE.md`, `tavi/deterministic_engine.py`, `tavi/dispersion_map.py` |
 | Remote API server, routes, auth, SSE, budgets | `tavi/api_server.py`, `tavi/scan_jobs.py`, `docs/API_SERVER_DESIGN.md`, `docs/API_USER_GUIDE.md` |
 | API scan jobs, GUI-side backend/field map | `TAVI_PySide6.py` (`TaviApiBackend`, `apply_parameters`, `_api_field_map`, `submit_scan_job`), `gui/docks/api_dock.py` |
-| Custom McStas components | `components/README.md` and the relevant `.comp` or header docs |
+| Custom McStas components | `components/README.md` and the relevant `.comp` or header docs; for `Phonon_DFT`, read `components/PHONON_DFT.md` first |
 | Installation and launch scripts | `README.md`, `installer/TAVI-Installation-README.md`, `run-tavi-dev.bat` |
 
 ---
@@ -226,7 +227,9 @@ For Python changes, use the smallest relevant checks available:
 - `docs/PIPELINE_DESIGN.md` - pipelined scan execution design and implementation status (May 2026).
 - `docs/API_SERVER_DESIGN.md` - remote API server design and architecture (implemented 2026-07-03).
 - `docs/API_USER_GUIDE.md` - remote API user guide for humans and LLM agents (endpoints, fields, scan syntax, SSE).
+- `docs/ANALYTIC_ENGINE.md` - canonical TAVI-owned deterministic engine behavior, calibration, provenance, and limitations.
 - `components/README.md` - custom McStas component overview.
+- `components/PHONON_DFT.md` - canonical TAVI-owned `Phonon_DFT` component and shared dispersion-file contract.
 - `config/TAVI-McStas-Path-Resolution.md` - McStas path-resolution notes.
 - `installer/TAVI-Installation-README.md` - Windows installation and launcher details.
 - `.github/instructions/copilot-instructions.md` - tactical code-style and local-convention rules.
