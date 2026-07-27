@@ -124,6 +124,26 @@ def test_zero_mean_draws_nothing_and_builds_no_rng():
     assert background.poisson_overlay(
         zero_rate, 1.0, None, N, None, 1, 0, rng_factory=factory
     ) == 0
+    # The strength knob at zero is the same "nothing to plant" case.
+    zero_scale = _flat(RATE, scale=0.0)
+    assert background.poisson_overlay(
+        zero_scale, 1.0, None, N, None, 1, 0, rng_factory=factory
+    ) == 0
+    # ... including over a required sample-origin term with no sample scale,
+    # which at nonzero strength would raise SampleScaleUnavailable.
+    zero_scale_sample = background.resolve({
+        "enabled": True,
+        "scale": 0.0,
+        "terms": [{
+            "name": "needed",
+            "shape": "flat",
+            "origin": "sample",
+            "params": {"rate": 0.05},
+        }],
+    })
+    assert background.poisson_overlay(
+        zero_scale_sample, 1.0, None, N, None, 1, 0, rng_factory=factory
+    ) == 0
     assert factory.calls == []
 
 
