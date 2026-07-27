@@ -15,7 +15,9 @@ else:
 * the **identity fingerprints** (:func:`profile_fingerprint`,
   :func:`effective_fingerprint`), which hash the numerics and deliberately not
   the delivery source or the preset label, so a config default and a per-scan
-  override describing the same physics are the same background, and
+  override describing the same physics are the same background -- the effective
+  fingerprint adds the sample scale only when a ``sample``-origin term actually
+  contributed, so a pure instrument profile pools across samples, and
 * the **count math** (:func:`mean_counts`) and the shared metadata stamping
   helper (:func:`metadata_block`) that both engines must use, so a scan record
   never depends on which engine produced it.
@@ -665,6 +667,27 @@ def profile_fingerprint(resolved: ResolvedBackground) -> str:
     return _digest(_fingerprint_payload(resolved))
 
 
+def _plants_anything(resolved: ResolvedBackground) -> bool:
+    """Whether this profile can contribute a single count.
+
+    A disabled profile and a ``scale = 0`` profile are the same thing at the
+    counts level: nothing is planted, nothing is refused, nothing is skipped.
+    """
+    return bool(resolved.enabled) and float(resolved.scale) > 0.0
+
+
+def _sample_scale_is_load_bearing(resolved: ResolvedBackground,
+                                  skipped: Sequence[str]) -> bool:
+    """Whether the sample scale actually multiplied a planted count."""
+    if not _plants_anything(resolved):
+        return False
+    skipped_set = set(skipped)
+    return any(
+        term.origin == "sample" and term.name not in skipped_set
+        for term in resolved.terms
+    )
+
+
 def effective_fingerprint(resolved: ResolvedBackground,
                           sample_scale: Optional[float],
                           skipped_terms: Sequence[str] = ()) -> str:
@@ -673,12 +696,32 @@ def effective_fingerprint(resolved: ResolvedBackground,
     Adds the sample scale that was really used and the set of terms skipped for
     want of one, so two scans that share a profile but differ in effective
     sample scaling never pool together.
+
+    "Really used" is meant strictly, because this is a *pooling* key and an
+    over-separated key silently splits evidence that belongs together. The
+    sample scale enters the payload only when it was load-bearing -- the profile
+    is enabled, ``scale > 0``, and at least one ``sample``-origin term was not
+    skipped. A pure instrument/environment profile therefore fingerprints
+    identically across samples whose ``diffuse_background`` calibrations differ
+    but never touched a count; otherwise the payload carries ``None``.
+
+    A profile that plants nothing (disabled, or ``scale = 0``) also has no
+    skips -- :func:`mean_counts` returns an empty skip tuple for it -- so the
+    ``skipped`` payload is normalized to empty in that case, whatever the caller
+    passed. :func:`metadata_block` still *reports* the raw ``sample_scale`` and
+    ``skipped_terms`` it was given: execution info is provenance, not identity.
     """
     payload = _fingerprint_payload(resolved)
+    if _plants_anything(resolved):
+        skipped = sorted(str(name) for name in skipped_terms)
+        load_bearing = _sample_scale_is_load_bearing(resolved, skipped)
+    else:
+        skipped = []
+        load_bearing = False
     payload["sample_scale"] = (
-        None if sample_scale is None else float(sample_scale)
+        float(sample_scale) if (load_bearing and sample_scale is not None) else None
     )
-    payload["skipped"] = sorted(str(name) for name in skipped_terms)
+    payload["skipped"] = skipped
     return _digest(payload)
 
 
@@ -743,8 +786,15 @@ def mean_counts(resolved: ResolvedBackground,
     The profile-level ``resolved.scale`` multiplies *every* term uniformly,
     whatever its origin or shape -- it is the last factor applied here, and it
     is never folded back into the term parameters.
+
+    ``scale = 0`` is "turned all the way down", and it is checked *before* the
+    sample-scale requirement: a profile that plants nothing must also refuse
+    nothing, so it returns ``(0.0, {}, ())`` rather than raising
+    :class:`SampleScaleUnavailable` over a term whose rate would have been
+    multiplied by zero. A profile with any nonzero strength keeps the strict
+    refusal.
     """
-    if not resolved.enabled:
+    if not resolved.enabled or float(resolved.scale) <= 0.0:
         return 0.0, {}, ()
     neutrons = float(number_neutrons)
     strength = float(resolved.scale)
@@ -823,6 +873,11 @@ def metadata_block(resolved: ResolvedBackground,
     the block reads "these preset numbers, times this knob". It appears in the
     disabled short block too, for the same reason ``preset`` does: it is a
     spec-level property of the profile, not a per-term detail.
+
+    ``sample_scale`` and ``skipped_terms`` are reported exactly as given, even
+    when :func:`effective_fingerprint` drops them from the identity payload for
+    not being load-bearing: what the run saw is provenance, and provenance is
+    not identity.
     """
     profile = profile_fingerprint(resolved)
     effective = effective_fingerprint(resolved, sample_scale, skipped_terms)

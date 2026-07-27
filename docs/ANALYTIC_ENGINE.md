@@ -261,7 +261,10 @@ exactly that, and the others sum to about it away from their elastic features.
 on top of that anchor. It multiplies **every** term's rate uniformly, whatever
 its origin or shape, so a whole profile moves with one number: `scale = 0.1` is a
 100:1 experiment, `scale = 10` a 1:1 one, `scale = 0` plants nothing while still
-fingerprinting as the profile it is.
+fingerprinting as the profile it is. `scale = 0` plants nothing **and refuses
+nothing**: the sample-scale requirement below is checked after the strength
+knob, so a profile turned all the way down never rejects a scan over a term
+whose rate would have been multiplied by zero.
 
 Two properties make it safe to reason about:
 
@@ -376,6 +379,13 @@ Two 16-hex-character digests identify a background:
 - **`effective_fingerprint`** — the same, plus the sample scale actually applied
   and the terms skipped for want of one. This is the pooling identity: two scans
   sharing a profile but differing in effective sample scaling must never pool.
+  The sample scale enters this digest **only when a `sample`-origin term
+  actually contributed** — the profile is enabled, `scale > 0`, and at least one
+  such term was not skipped — so a pure instrument/environment profile pools
+  across samples whose `diffuse_background` calibrations differ but never
+  touched a count. A profile that plants nothing likewise has no skips to
+  record. The metadata block still *reports* the raw `sample_scale` and
+  `skipped_terms` it was given: what a run saw is provenance, not identity.
 
 Both deliberately exclude the preset name and the delivery source, so a session
 default and a per-scan override that describe the same physics fingerprint

@@ -344,13 +344,39 @@ def test_scale_rejects_negative_non_finite_and_non_numbers(bad):
 
 
 def test_scale_zero_is_allowed_and_plants_nothing():
-    """0 is a valid knob position -- 'enabled, but turned all the way down'."""
+    """0 is a valid knob position -- 'enabled, but turned all the way down'.
+
+    It returns the same empty result as a disabled profile: no per-term
+    entries, no skips. A profile that plants nothing has nothing to itemize.
+    """
     resolved = resolve({"enabled": True, "preset": "realistic", "scale": 0.0})
     assert resolved.scale == 0.0
-    total, per_term, _ = mean_counts(resolved, 1.0, 0.5, N, sample_scale=1.0e-8)
-    assert total == 0.0
-    assert set(per_term) == {term.name for term in resolved.terms}
-    assert all(value == 0.0 for value in per_term.values())
+    assert mean_counts(resolved, 1.0, 0.5, N, sample_scale=1.0e-8) == (0.0, {}, ())
+
+
+def test_scale_zero_refuses_nothing_even_with_a_required_sample_term():
+    """Planting nothing must also refuse nothing -- the /validate probe path.
+
+    The applicability probe calls ``mean_counts`` with zero neutrons purely to
+    learn the skip set and the refusal; at ``scale = 0`` no sample scale can
+    change a single count, so demanding one would reject a scan over a term
+    multiplied by zero.
+    """
+    spec = {
+        "enabled": True,
+        "terms": [
+            {"name": "needed", "shape": "flat", "origin": "sample",
+             "params": {"rate": 0.05}},
+        ],
+    }
+    zero = resolve(dict(spec, scale=0.0))
+    assert mean_counts(zero, 0.0, 0.5, N, sample_scale=None) == (0.0, {}, ())
+    assert mean_counts(zero, 0.0, None, 0.0, None) == (0.0, {}, ())
+    # Any nonzero strength keeps the strict refusal exactly as before.
+    for strength in (1e-12, 1.0):
+        with pytest.raises(SampleScaleUnavailable):
+            mean_counts(resolve(dict(spec, scale=strength)),
+                        0.0, 0.5, N, sample_scale=None)
 
 
 @pytest.mark.parametrize("scale", [0.25, 1.0, 2.5, 100.0])
@@ -628,6 +654,53 @@ def test_effective_fingerprint_tracks_sample_scale_and_skips():
     assert effective_fingerprint(resolved, None, ("b", "a")) == (
         effective_fingerprint(resolved, None, ("a", "b"))
     )
+
+
+def test_pure_instrument_profile_pools_across_sample_scales():
+    """The sample scale is identity only when it multiplied a planted count.
+
+    Two scans of different samples through the same instrument-only profile
+    planted the same background; separating them would split pooled evidence
+    over a calibration number that never entered the arithmetic.
+    """
+    resolved = resolve({"enabled": True, "preset": "flat"})
+    assert {term.origin for term in resolved.terms} == {"instrument"}
+    baseline = effective_fingerprint(resolved, None, ())
+    assert effective_fingerprint(resolved, 1.0e-8, ()) == baseline
+    assert effective_fingerprint(resolved, 2.0e-8, ()) == baseline
+
+
+def test_contributing_sample_term_keeps_the_scale_in_the_identity():
+    """The converse: a term that really was scaled must still separate."""
+    resolved = resolve({"enabled": True, "preset": "sample_diffuse"})
+    assert any(term.origin == "sample" for term in resolved.terms)
+    assert (effective_fingerprint(resolved, 1.0e-8, ())
+            != effective_fingerprint(resolved, 2.0e-8, ()))
+
+
+def test_only_skipped_sample_terms_means_the_scale_is_ignored():
+    """Every sample term skipped -> nothing was sample-scaled -> not identity."""
+    resolved = resolve({"enabled": True, "preset": "realistic"})
+    skipped = ("sample_diffuse",)
+    assert {t.name for t in resolved.terms if t.origin == "sample"} == set(skipped)
+    baseline = effective_fingerprint(resolved, None, skipped)
+    assert effective_fingerprint(resolved, 1.0e-8, skipped) == baseline
+    assert effective_fingerprint(resolved, 5.0e-8, skipped) == baseline
+    # ... but the skip itself is still identity: those counts are missing.
+    assert effective_fingerprint(resolved, 1.0e-8, ()) != baseline
+
+
+@pytest.mark.parametrize("spec", [
+    {"enabled": True, "preset": "realistic", "scale": 0.0},
+    {"enabled": False, "preset": "realistic"},
+])
+def test_profile_planting_nothing_has_no_scale_and_no_skips_in_its_identity(spec):
+    """A profile that plants nothing has no execution detail to separate on."""
+    resolved = resolve(spec)
+    baseline = effective_fingerprint(resolved, None, ())
+    assert effective_fingerprint(resolved, 1.0e-8, ()) == baseline
+    assert effective_fingerprint(resolved, 1.0e-8, ("sample_diffuse",)) == baseline
+    assert effective_fingerprint(resolved, None, ("sample_diffuse",)) == baseline
 
 
 # --- metadata block -------------------------------------------------------

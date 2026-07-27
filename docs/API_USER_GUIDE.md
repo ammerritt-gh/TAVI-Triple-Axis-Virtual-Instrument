@@ -499,7 +499,7 @@ Returns the `validation` object (§5 *Validation object*) plus two extra fields:
 | `enabled` | Whether anything will be planted (`null` if the spec did not resolve). |
 | `source` | `"config_default"` or `"per_scan_override"`. |
 | `profile_fingerprint` | Identity of the profile numerics (excludes preset name and source). |
-| `effective_fingerprint` | Identity as actually applied: adds the sample scale used and the terms skipped. |
+| `effective_fingerprint` | Identity as actually applied: adds the terms skipped, and the sample scale only when a `sample`-origin term actually contributed. |
 | `sample_scale` | The sample's `diffuse_background` calibration, or `null` when none applies. |
 | `skipped_terms` | Optional `sample`-origin terms dropped for want of a sample scale. |
 | `error` | Present only on a refusal: `{"id", "message"}` (plus `terms` for a scale refusal). |
@@ -880,7 +880,7 @@ on which engine ran:
 | `sample_scale` | The sample `diffuse_background` scale applied to `sample`-origin terms, or `null`. |
 | `skipped_terms` | Optional `sample`-origin terms dropped for want of that scale. |
 | `profile_fingerprint` | Identity of the profile numerics (terms **and** `scale`) — excludes the preset name **and** the delivery source, so a session default and a per-scan override describing the same physics fingerprint identically. |
-| `effective_fingerprint` | Identity as applied: adds `sample_scale` and `skipped_terms`. Use this as the pooling key. |
+| `effective_fingerprint` | Identity as applied: adds `skipped_terms`, and `sample_scale` **only when a `sample`-origin term actually contributed** (profile enabled, `scale > 0`, term not skipped) — so a pure instrument profile pools across samples with different `diffuse_background` calibrations. Use this as the pooling key. |
 | `background_seed` | Monte Carlo scans only, and only when background was enabled: the seed of the overlay's dedicated RNG stream. Equal to the body `seed` when one was given, else a stable hash of the job id. |
 
 On the deterministic engine the background mean is added to the signal mean
