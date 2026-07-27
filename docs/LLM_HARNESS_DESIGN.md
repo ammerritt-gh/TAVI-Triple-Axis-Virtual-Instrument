@@ -62,8 +62,13 @@ hard boundary. This split is a decision, not an option.
 Executes and validates; **never analyzes**. It sets parameters, checks per-point
 geometric feasibility, runs scans, and hands back raw counts, a monitor
 normalization, geometry validity, and a frozen parameter snapshot. It does not
-fit a peak, model a background, judge whether a peak is "real", or advise a
-counting time — that is the boundary `docs/CONTROL_FEATURES_DESIGN.md` §0 draws,
+fit a peak, fit or subtract a background, judge whether a peak is "real", or
+advise a counting time. (It does *generate* background — a configured
+instrument/environment/sample background profile planted into the counts and
+declared in the scan metadata, `docs/CONTROL_FEATURES_DESIGN.md` §6.7. That is
+instrument realism, produced from configuration; inferring a background back out
+of measured counts is what stays on the analysis side.) That is the boundary
+`docs/CONTROL_FEATURES_DESIGN.md` §0 draws,
 and TAVI holds it deliberately so a driver that learns to lean on a control-side
 analysis feature does not learn a habit that fails to transfer.
 

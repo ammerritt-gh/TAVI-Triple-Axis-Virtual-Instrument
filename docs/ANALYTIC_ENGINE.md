@@ -42,7 +42,10 @@ it supplies valid dispersion and reflection assets.
 Analytic support is deliberately not a general scattering-model plugin
 registry. Regular `Phonon_DFT` grids are supported; unrelated continua,
 diffuse-scattering models, magnetic component types, and arbitrary McStas
-components are not.
+components are not. This limit is about *sample* models. Instrument, sample
+environment, and sample diffuse **background** is a separate additive mechanism
+configured per session or per scan — see *Background generation* below — not a
+sample scattering model.
 
 ## Architecture and ownership
 
@@ -79,15 +82,28 @@ per-point resolution convolution
 phonon calibration + elastic calibration
     |
     v
-sum channel means
+sum signal channel means
+    |
+    v
++ planted background mean (tavi/background.py)
     |
     v
 optional seeded Poisson draw
 ```
 
+- `tavi/background.py` owns the background contract: term shapes, the origin
+  taxonomy and its scaling rules, the preset registry, the fingerprints, the
+  count math, and the shared metadata block. It is engine-independent and is
+  consumed by the Monte Carlo path as well.
+
 `PhononDFTSQW` is a composite model containing private phonon and Bragg models.
 Those channels remain separate through convolution and calibration; their
 calibrated means are summed only immediately before optional Poisson noise.
+
+Background is never derived from the sample model. It arrives at
+`evaluate_point` as an already-computed per-point mean and is added *after* the
+signal's validity clamp, so a background-free profile leaves every count
+bit-identical to a pre-background TAVI.
 
 ## Asset resolution and failure policy
 
@@ -187,15 +203,21 @@ Sample normalization is data, not an engine-global sample-name lookup.
 `SampleSpec.analytic_calibration` contains:
 
 ```text
-AnalyticCalibration(phonon=<factor>, elastic=<factor>)
+AnalyticCalibration(phonon=<factor>, elastic=<factor>,
+                    diffuse_background=<factor or None>)
 ```
+
+`diffuse_background` is optional and belongs to the background model below; it
+never enters the signal channels.
 
 For a point simulated with `N` neutrons:
 
 ```text
-mean_counts =
+signal_mean =
     N * (phonon_factor * convolved_phonon
        + elastic_factor * convolved_elastic)
+
+mean_counts = signal_mean + background_mean
 ```
 
 The built-in `Al_phonon_DFT` calibration is:
@@ -208,10 +230,135 @@ scans: approximately 4,507 counts at `(2,0,0)`, zero energy transfer, and
 `10^7` neutrons, normalized by the reflection's raw
 `F^2 = 1.903296`.
 
-With noise disabled, the engine returns the calibrated means. With noise
-enabled, it applies a Poisson draw after summing the channel means. Each point
-uses NumPy's reproducible generator initialized from `(job seed, point index)`,
-preserving seeded scan reproducibility.
+With noise disabled, the engine returns the calibrated means — including the
+background mean, so a noiseless scan is the exact analytic expectation of what
+the instrument would count, background and all. With noise enabled, it applies a
+Poisson draw after summing the channel means. Each point uses NumPy's
+reproducible generator initialized from `(job seed, point index)`, preserving
+seeded scan reproducibility.
+
+## Background generation
+
+TAVI *generates* background truth and never infers it. The contract is
+`tavi/background.py`, wire identity `tavi.background/1` — one module shared by
+both engines, the API server, and the GUI, so a scan record's background
+provenance never depends on which engine produced it. Scientific interpretation
+of a background (fitting it, subtracting it) remains outside TAVI
+(`docs/CONTROL_FEATURES_DESIGN.md` §0, §6.7).
+
+A profile is a list of additive terms. It is **default-off**: an unconfigured
+session plants nothing, and a disabled or empty profile reproduces the
+background-free counts bit-identically.
+
+### Term shapes
+
+Each term evaluates to a *rate* in counts per monitor count at the point's
+energy transfer `E`. Units are declared per parameter, not per shape, so a
+reader of a stamped scan record can tell counts/monitor from
+counts/monitor/meV.
+
+| Shape | Rate at energy transfer `E` | Parameters (units) |
+|---|---|---|
+| `flat` | `rate` | `rate` — counts per monitor count |
+| `linear_e` | `max(0, rate0 + slope_per_meV * (E - 0))` | `rate0` — counts/monitor at `E_ref = 0 meV`; `slope_per_meV` — counts/monitor/meV |
+| `elastic_incoherent` | `rate_integrated * N(E; 0, sigma_E)` | `rate_integrated` — counts/monitor integrated over `E`; `sigma_fallback_meV` — meV (default `0.5`) |
+| `elastic_tail` | `rate_integrated * L(E; 0, gamma_meV)` | `rate_integrated` — counts/monitor integrated over `E`; `gamma_meV` — Lorentzian HWHM |
+
+`N` and `L` are unit-area Gaussian and Lorentzian profiles centred at `E = 0`,
+so integrating a planted elastic rate over all `E` returns `rate_integrated`
+exactly. `linear_e` is anchored at an explicit reference energy of `0 meV` (not
+the scan's first point) and clamps at zero rather than going negative. Rate-like
+parameters may not be negative and widths must be strictly positive: a negative
+rate would subtract counts.
+
+### Origin and the two scaling bases
+
+`origin` is not decoration — it fixes the scaling base of the term:
+
+| Origin | Mean counts at a point |
+|---|---|
+| `instrument` | `N * rate(E)` |
+| `sample_environment` | `N * rate(E)` |
+| `sample` | `N * diffuse_background * rate(E)` |
+
+`diffuse_background` is the sample's own explicit `AnalyticCalibration`
+channel. Sample-origin terms **never** borrow the phonon or elastic factor —
+diffuse scattering does not scale with a one-phonon cross-section.
+
+When the selected sample has no usable `diffuse_background` (no sample, no
+calibration, or a non-finite/negative stored value), there is no implicit
+fallback scale, because guessing one would invent truth. Instead:
+
+- a **required** sample-origin term refuses the scan with
+  `sample_background_scale_unavailable` (raised as `SampleScaleUnavailable`,
+  surfaced by `POST /scan` and `POST /validate` as a 400 / blocker), and
+- an **optional** term (`"optional": true`) is silently skipped in the counts
+  but loudly recorded — the skipped-term list appears in the metadata block and
+  enters the effective fingerprint.
+
+### Planting is not resolution-convolved
+
+Signal channels are convolved with the four-dimensional resolution function.
+Background terms are **not**: they are written directly in the observed energy
+coordinate.
+
+- `elastic_incoherent` is written at the point's *marginalized* energy
+  resolution width, `sigma_E = sqrt(inv(M)[3,3])` where `M` is the
+  FWHM-normalized precision matrix (`deterministic_engine.sigma_e_mev`). That is
+  the vanadium-like width an instrument actually sees, **not** `1/sqrt(M[3,3])`,
+  which is the conditional width at zero momentum offset and is narrower.
+  `sigma_E` is computed lazily — only when an `elastic_incoherent` term is
+  present, since it costs a 4×4 inversion per point — and falls back to the
+  term's own `sigma_fallback_meV` when the resolution solve fails.
+- `elastic_tail` is a bare Lorentzian pinned at `E = 0`; its width is a declared
+  instrument property, not a resolution consequence.
+
+A point whose resolution solve failed still counts background: a real instrument
+counts background wherever it counts at all, so only the signal channels drop to
+zero there, and `channel_means['background']` is always present.
+
+### Monte Carlo overlay
+
+The McStas engine plants the same truth as an **additive analytic Poisson
+overlay** on the ray-traced counts: the mean comes from the same
+`background.mean_counts`, and the integer draw comes from a dedicated per-point
+stream `default_rng((background_seed, BACKGROUND_STREAM, point_index))`. The
+stream constant (`0x6B67`) keys background draws away from every plain
+`(seed, index)` signal stream and is fixed forever — changing it would change
+every previously drawn overlay. `background_seed` is the request's `seed` when
+given, otherwise a CRC-32 of the job id, and is frozen into the launch state so
+a replay redraws the same overlay. A disabled profile constructs no RNG at all.
+
+The overlay is always Poisson-drawn: `noiseless` is a deterministic-engine
+concept the Monte Carlo path ignores. McStas intensity columns are independent
+of counts and are left untouched. Ray-traced background — simulating the
+environment rather than adding it — is the schema-reserved term method
+`"simulated"` and is **not implemented**; `"analytic"` is the only method this
+version accepts.
+
+### Fingerprints and provenance
+
+Two 16-hex-character digests identify a background:
+
+- **`profile_fingerprint`** — the pre-sample-scaling numerics (schema id,
+  enabled flag, sorted terms).
+- **`effective_fingerprint`** — the same, plus the sample scale actually applied
+  and the terms skipped for want of one. This is the pooling identity: two scans
+  sharing a profile but differing in effective sample scaling must never pool.
+
+Both deliberately exclude the preset name and the delivery source, so a session
+default and a per-scan override that describe the same physics fingerprint
+identically.
+
+Every scan's `result.metadata` carries a `background` block built by the one
+shared helper `background.metadata_block()` — including when the profile is
+disabled, because absence of background is provenance too. It records the schema
+id, preset registry version, enabled flag, preset name (`null` for a frozen
+numeric profile), the delivery `source` (`config_default` / `per_scan_override`),
+the applied overrides, the fully numeric terms with their units, the sample
+scale, the skipped terms, both fingerprints, and — on a Monte Carlo scan with
+background enabled — `background_seed`. The client-facing field list is in
+[`API_USER_GUIDE.md`](API_USER_GUIDE.md).
 
 ## Result provenance
 
@@ -227,7 +374,9 @@ Deterministic results add an `analytic_model` metadata object. It records:
 - the zero-energy policy.
 
 These fields are additive. Existing API endpoints, scan commands, and GUI
-surfaces do not change.
+surfaces do not change. Background provenance is a sibling `background` block
+(see *Background generation*), stamped by both engines through the same helper
+and present even when no background was planted.
 
 Provenance is part of the scientific result. If a new analytic channel, asset,
 fallback, or calibration can change a count, its identity must be represented
@@ -254,7 +403,13 @@ Primary tests are:
 - `tests/test_deterministic_engine.py` for channels, resolution convolution,
   calibration, Gamma-point behavior, seeded noise, and timing; and
 - `tests/test_engine_dispatch.py` for scan-engine selection and result
-  integration.
+  integration;
+- `tests/test_background.py` for the background contract (shapes, scaling,
+  resolution, fingerprints, count math, metadata block);
+- `tests/test_background_api.py` for `GET`/`PUT /background`, the per-scan
+  override, and `POST /validate` parity; and
+- `tests/test_mc_background.py` for the Monte Carlo Poisson overlay and its
+  seeded stream.
 
 When changing analytic behavior:
 
