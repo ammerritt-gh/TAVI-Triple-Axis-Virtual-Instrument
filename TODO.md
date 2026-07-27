@@ -51,6 +51,15 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
 - [ ] **Live McStas background end-to-end check** — the overlay is unit-tested, but no
       full compiled-McStas run with an enabled profile has been recorded. Run one, confirm
       the metadata block, `background_seed`, and that intensity columns stay untouched.
+- [ ] **Profile-resolution surface for frozen-form canonicalization** — a read-only
+      endpoint (or `/validate`-adjacent call) that resolves a background spec into its
+      fully-defaulted canonical frozen form without mutating config, so a client (ISAR's
+      campaign freeze) can store the *canonical* numerics instead of its raw declaration.
+      Today a raw frozen-form profile could resolve differently after a future default
+      change while the client's pre-spend drift comparison still sees identical JSON.
+      Not currently dangerous — preset expansion carries full numeric terms — but the
+      durable contract wants TAVI to own its own canonicalization. (External review
+      2026-07-27.)
 - [ ] **Tune the preset numerics against real fitting campaigns** — *addressed in part.*
       Registry version **2** re-anchored the whole roster to a default
       signal-to-background of **10:1** against the `Al_phonon_DFT` peak rate (~`4e-8`
