@@ -8,8 +8,26 @@ This folder contains modified and custom McStas components used in the TAVI simu
 |-----------|----------|-------------------|
 | `FlatEllipse_finite_mirror_optimized.comp` | Custom NMO component | Mirror table files, MPI fixes, binary search optimization |
 | `Optic_Phonon_simple.comp` | `Phonon_simple.comp` | Optic phonon dispersion, SCATTER keyword |
+| `Phonon_DFT.comp` | TAVI custom component | Regular-grid multi-branch phonons plus table-backed Bragg scattering |
 | `Phonon_simple_SCATTER.comp` | `Phonon_simple.comp` | Added SCATTER keyword |
 | `Source_div_Maxwellian_v2.comp` | `Source_div.comp` | Proper Maxwellian sampling, multiple distribution options |
+
+---
+
+## Phonon_DFT.comp
+
+### Purpose
+
+Models coherent one-phonon Stokes/anti-Stokes scattering from a regular H-K-L
+dispersion map together with coherent elastic Bragg scattering from a
+reflection table. TAVI's deterministic analytic engine reads the same two
+assets.
+
+This component, its shared map format, and its documentation are owned and
+maintained by the TAVI project, not upstream McStas. The canonical component
+and file-contract reference is [`PHONON_DFT.md`](PHONON_DFT.md); the analytic
+backend is documented in
+[`docs/ANALYTIC_ENGINE.md`](../docs/ANALYTIC_ENGINE.md).
 
 ---
 
@@ -155,6 +173,7 @@ A rectangular neutron source with Gaussian or uniform divergence and multiple en
 ### Documentation
 - `Header_Files_Analysis.md`: Detailed analysis of header file modifications
 - `NMO_Component_Documentation.md`: Extended documentation for NMO components
+- `PHONON_DFT.md`: Canonical `Phonon_DFT` component and dispersion-file contract
 
 ---
 

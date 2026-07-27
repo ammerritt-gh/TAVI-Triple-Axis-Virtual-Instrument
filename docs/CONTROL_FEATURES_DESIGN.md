@@ -440,9 +440,14 @@ The rare feature that verifies *itself against the rest of TAVI*: simulate an el
 
 These three sections (§6–§8) come from the **TAVI × ISAR integration design** — an external automated analysis engine plus an autonomous measurement driver sitting on TAVI's control surface. The benchmarking framework of *Teixeira Parente et al., 2022* (Front. Mater. 8:772014), which pairs an exactly-evaluable intensity function with a movement-aware cost metric, motivates both this engine and the clock in §7.
 
+The canonical maintained implementation reference is
+[`ANALYTIC_ENGINE.md`](ANALYTIC_ENGINE.md). The TAVI-owned `Phonon_DFT`
+component and shared data-file contract are documented in
+[`components/PHONON_DFT.md`](../components/PHONON_DFT.md).
+
 ### 6.1 What it is
 
-A **selectable execution backend**: instead of compiling and running McStas, the worker evaluates an **analytic intensity model** and reports counts through the identical result pipeline. The model is S(Q,ω) built from the **same sample configuration that parameterizes the McStas sample** — an acoustic-phonon branch, an optic-phonon branch, and a Bragg peak, each tunable — convolved with the Cooper–Nathans resolution matrix from `tavi/resolution.py` (§5), plus seeded Poisson counting noise (or noiseless, a flag). Everything above the per-point evaluation is unchanged: **same scan commands, same path/point-list generators (§2, §8), same serial job queue, same SSE events, same `ScanResult`, same plots and PNG endpoint.** A job simply records which backend produced it — `engine: "deterministic" | "mcstas"` in its launch summary and result provenance — so a client can tell tiers apart. Cost per point drops from seconds-to-minutes (McStas) to **milliseconds** (a matrix convolution).
+A **selectable execution backend**: instead of compiling and running McStas, the worker evaluates an **analytic intensity model** and reports counts through the identical result pipeline. For `Phonon_DFT`, analytic mode reads the component's configured regular H-K-L dispersion grid and LAU/LAZ reflection table directly. Every contiguous branch in the grid becomes a Stokes/anti-Stokes pair; the branch count is data, not engine code. Table reflections become a separate resolution-limited elastic channel with their raw F² weights. `Single_crystal` remains Bragg-only. Both channels are convolved with the Cooper–Nathans resolution matrix from `tavi/resolution.py` (§5), calibrated separately, summed, and then given seeded Poisson counting noise (or noiseless means). Everything above the per-point evaluation is unchanged: **same scan commands, same path/point-list generators (§2, §8), same serial job queue, same SSE events, same `ScanResult`, same plots and PNG endpoint.** A job simply records which backend produced it — `engine: "deterministic" | "mcstas"` in its launch summary and result provenance — so a client can tell tiers apart. Cost per point drops from seconds-to-minutes (McStas) to **milliseconds** (a matrix convolution).
 
 **§5 (resolution) is promoted to an explicit prerequisite: it is this engine's core.** The Cooper–Nathans matrix that §5 computes for the overlay/readout is exactly the kernel a deterministic S(Q,ω) is convolved against. §6 cannot land before §5 is validated.
 
@@ -454,7 +459,9 @@ A **selectable execution backend**: instead of compiling and running McStas, the
 
 ### 6.3 Key design constraint — one ground-truth sample config
 
-**Both engines must consume a single source-of-truth sample configuration.** The deterministic S(Q,ω) evaluator and the McStas sample component are parameterized from the *same* dispersion/peak parameters, so a deterministic scan and an MC scan of the same setup are comparing like with like. If the two drifted apart, cross-tier comparison (the whole point of the ladder) would be meaningless. This is the one non-negotiable in the design: the sample model is authored once and projected into both backends.
+**Both engines consume a single source-of-truth sample configuration.** `SampleSpec.component_type` selects the analytic projection. A `Phonon_DFT` spec supplies the same `dispersion`, `reflections`, `tessellate`, temperature, linewidth, and lattice properties used to build McStas; relative files resolve beneath `components/`, while absolute files are allowed. `AnalyticCalibration(phonon, elastic)` is the only analytic-only addition because absolute analytic normalization is empirical. The loader strictly rejects incomplete, duplicate, non-regular, non-finite, or non-contiguous grids, and caches by resolved path, byte size, and modification time so an edited map reloads without restarting TAVI.
+
+At Γ, a mode with `|E| < 1e-10` contributes no one-phonon intensity, matching `Phonon_DFT.comp`. The elastic peak comes from the reflection table instead of an artificial zero-energy regularization. A missing file explicitly configured for `Phonon_DFT` fails the deterministic job visibly. The legacy `Single_crystal` sample alone retains a centering-rule/unit-F² fallback when its McStas-owned reflection table cannot be found, and provenance identifies that fallback.
 
 ### 6.4 Surfaces
 
@@ -474,7 +481,9 @@ GET /scan/j-0021/data → result carries "engine": "deterministic" in metadata/p
 
 | Situation | Behavior |
 |---|---|
-| Sample feature the analytic model cannot express (incoherent background, multiple scattering, phonon linewidth from anharmonicity) | Documented **fidelity gap, not an error** — the deterministic result is honestly labelled as an idealized model. Provenance (`engine: "deterministic"`) is the client's signal not to expect MC-level realism. |
+| Sample type outside regular-grid `Phonon_DFT` or `Single_crystal` (continua, diffuse scattering, magnetic model types) | Refuse with `no analytic ground truth for sample 'X'`. These need a future model implementation; the engine does not reinterpret them as phonons. |
+| Configured `Phonon_DFT` dispersion/reflection file is missing or malformed | Fail the deterministic job with the loader's concrete filename/validation reason. There is no equation or centering fallback for an explicitly configured composite model. |
+| Sample feature the analytic model cannot express (incoherent background, multiple scattering, full one-phonon structure factor) | Documented **fidelity gap, not an error** — the deterministic result is honestly labelled as an idealized model. Provenance (`engine: "deterministic"`) is the client's signal not to expect MC-level realism. |
 | Resolution matrix undefined (degenerate geometry, A4 → 0) | Refuse with the **same reason strings as §5** ("resolution undefined at this geometry") — one vocabulary across resolution and deterministic execution. |
 | (Q, E) point infeasible | Same feasibility refusal as MC — geometry is checked identically; the engine switch changes only how counts are produced, never whether a point is reachable. |
 
@@ -482,9 +491,9 @@ GET /scan/j-0021/data → result carries "engine": "deterministic" in metadata/p
 
 The deterministic engine stays firmly on the **control side** of §0. It evaluates the *instrument-plus-sample model* — a property of the configured spectrometer and its ground-truth sample — and interprets **no measured data**. It is the simulation backend, not an analyst: it produces counts, exactly as McStas does, and makes no scientific decision about them.
 
-**Touched modules:** `tavi/resolution.py` (§5, prerequisite — the convolution kernel); `tavi/deterministic_engine.py` (Qt-free, numpy-only S(Q,ω) + Poisson noise); instrument plugins (the McStas execution path delegates through shared `instruments.tas_runtime.run_tas_point`, plus the shared sample-config projection); `TAVI_PySide6.py` (engine selection in `launch_state`, worker dispatch on `engine`, provenance in the result); `tavi/scan_jobs.py` (`engine` field on `ScanJob`); `tavi/api_server.py` (accept `engine`, advertise in `/schema`); `gui/docks/unified_simulation_dock.py` (engine selector).
+**Touched modules:** `tavi/resolution.py` (§5, prerequisite — the convolution kernel); `tavi/dispersion_map.py` (strict cached regular-grid parser/interpolator); `tavi/deterministic_engine.py` (Qt-free composite S(Q,ω) + channel calibration + Poisson noise); `instruments/descriptor.py` / `tavi/sample_library.py` (analytic channel calibration and shared asset configuration); instrument plugins (the McStas execution path delegates through shared `instruments.tas_runtime.run_tas_point`); `TAVI_PySide6.py` (engine selection in `launch_state`, worker dispatch on `engine`, provenance in the result); `tavi/scan_jobs.py` (`engine` field on `ScanJob`); `tavi/api_server.py` (accept `engine`, advertise in `/schema`); `gui/docks/unified_simulation_dock.py` (engine selector).
 
-**Open questions:** Where does the analytic S(Q,ω) evaluator live — a `tavi/` helper consumed by a second instrument-plugin execution path (keeps the math instrument-agnostic, mirroring `resolution.py`), or inside each plugin? Engine switch **per-session** (a mode) vs **per-job** (an `engine` field, more flexible, chosen above as the lean)? Should the GUI expose it at all (lean **yes** — the teaching payoff is large)? How is the shared sample config authored and versioned so both engines provably read the same numbers?
+**Future fidelity work:** Bragg peaks are resolution-limited analytic deltas. Reproducing the broader full-McStas Bragg shape and `delta_d_d` Ewald weighting is deliberately separate from the Γ-dip repair.
 
 **Dependencies:** **§5 (resolution) is a hard prerequisite** — its Cooper–Nathans matrix is the convolution kernel. Otherwise independent of §1–§4. Naturally consumed by the autonomous driver in `docs/LLM_HARNESS_DESIGN.md`, which uses the fidelity ladder directly.
 

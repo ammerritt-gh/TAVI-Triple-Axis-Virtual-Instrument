@@ -336,10 +336,12 @@ backend for this job. `GET /schema` advertises the allowed list under `engines`.
 
 - **`"mcstas"`** — the full Monte-Carlo simulation. This is the default and the
   reference; nothing changes for existing clients.
-- **`"deterministic"`** — a **fast analytic check**: the same ground-truth
-  S(Q,ω) that parameterizes the McStas sample component, convolved with the
-  theoretical Cooper–Nathans / Popovici resolution ellipsoid, plus seeded
-  Poisson counting. Milliseconds per point instead of seconds-to-minutes. It
+- **`"deterministic"`** — a **fast analytic check**. For a `Phonon_DFT`
+  sample it reads the same configured regular H-K-L dispersion grid and LAU/LAZ
+  reflection table as McStas, evaluates every branch in the file, and combines
+  separately calibrated phonon and elastic channels after resolution
+  convolution. `Single_crystal` is Bragg-only. Milliseconds per point instead
+  of seconds-to-minutes. It
   runs through the identical job/queue/SSE pipeline: the same `scan_initialized`,
   `point`, `point_invalid`, and `progress` events, the same `result.counts` /
   `counts_grid` arrays, the same feasibility skipping. Use it to sanity-check
@@ -369,7 +371,10 @@ curl -X POST http://127.0.0.1:8642/api/v1/scan \
 (`GET /scan/{id}`, `/data`, and the saved JSON) carries `"engine"`, plus `"seed"`
 and `"noiseless"` when the deterministic engine ran. A deterministic job's
 `result.metadata` is additionally stamped with `engine`, `seed`, `method`,
-`cn_valid`, and `invalidations` (see below).
+`cn_valid`, and `invalidations` (see below). `metadata.analytic_model` records
+the channel names, branch/reflection counts, configured and resolved filenames,
+SHA-256 hashes, channel calibrations, reflection mode, and the Γ policy
+`"zero_energy_policy": "match_phonon_dft_skip"`.
 
 **Honesty stamps.** Theoretical resolution is only valid when the analytic
 assumptions hold. Configurations that break them (e.g. nested-mirror optics
@@ -378,15 +383,31 @@ engine still runs, but stamps `metadata.cn_valid = false` and lists each reason
 in `metadata.invalidations`. Treat those results as a fidelity gap, not an error
 — always check `cn_valid` before trusting deterministic intensities.
 
-**Brightness caveat.** Absolute deterministic counts depend on a **calibrated**
-brightness constant per sample model (anchored to a single McStas reference
-point), *not* a first-principles normalization. Peak positions, relative
-intensities across a scan, and widths are meaningful; the absolute count scale is
-an approximation. For absolute counts, run McStas.
+**Calibration caveat.** Absolute deterministic counts depend on separate
+**calibrated phonon and elastic constants** in the selected sample specification,
+*not* a first-principles normalization. Peak positions, relative intensities
+across a scan, and widths are meaningful; the absolute count scale is an
+approximation. For absolute counts, run McStas.
 
 The deterministic engine requires a sample with a registered analytic ground
 truth. An unknown sample fails the job cleanly with reason `no analytic ground
 truth for sample 'X'` (a failed job with a message, never a crash).
+
+Analytic support is intentionally limited to valid regular-grid `Phonon_DFT`
+maps and Bragg-only `Single_crystal` samples. A grid may contain any positive
+number of contiguous, zero-indexed branches; adding a branch to the file does
+not require rebuilding the analytic engine. Optional column 7 supplies a
+per-point linewidth (FWHM), otherwise the component's global `phonon_gamma` is
+used. Missing rows, duplicate cells, irregular dimensions, non-finite values,
+non-contiguous branches, or a missing configured dispersion/reflection file
+fail the deterministic job visibly. This is not a general analytic-model
+registry: unrelated continua, diffuse scattering, and magnetic component types
+remain unsupported.
+
+The maintained implementation reference is
+[`ANALYTIC_ENGINE.md`](ANALYTIC_ENGINE.md). The TAVI-owned component and shared
+dispersion-file contract are documented in
+[`components/PHONON_DFT.md`](../components/PHONON_DFT.md).
 
 ### POST /validate
 Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
@@ -1257,6 +1278,10 @@ curl "http://127.0.0.1:8642/api/v1/journal?limit=6"
 ## 14. Related documents
 
 - `docs/API_SERVER_DESIGN.md` — the design and architecture behind this API.
+- `docs/ANALYTIC_ENGINE.md` — deterministic model behavior, calibration,
+  provenance, and limitations.
+- `components/PHONON_DFT.md` — the custom component and shared dispersion-file
+  contract.
 - `docs/INSTRUMENT_LAYOUT.md` — TAS/PUMA geometry, angles, and scan modes.
 - `docs/MCSTAS_PARAMETERS.md` — which parameters are build-time vs run-time.
 - `User_Guide.md` — the interactive GUI workflow.

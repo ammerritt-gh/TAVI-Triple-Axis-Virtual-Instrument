@@ -38,5 +38,15 @@ def test_lattices_match_component_internals():
                 assert spec.lattice[0] == spec.properties["a"]
 
 
+def test_analytic_calibration_is_sample_owned():
+    by_id = {sample.id: sample for sample in default_sample_library()}
+    phonon = by_id["Al_phonon_DFT"].analytic_calibration
+    bragg = by_id["Al_bragg"].analytic_calibration
+    assert phonon.phonon == 6.41e-8
+    assert phonon.elastic > phonon.phonon
+    assert bragg.phonon == 0.0
+    assert bragg.elastic == 1.0e-5
+
+
 def test_puma_mounts_the_shared_library():
     assert puma_descriptor().samples == default_sample_library()

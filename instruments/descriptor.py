@@ -118,6 +118,14 @@ class CrystalSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalyticCalibration:
+    """Counts normalization for the analytic sample model's independent channels."""
+
+    phonon: float
+    elastic: float
+
+
+@dataclass(frozen=True, slots=True)
 class SampleSpec:
     """A selectable sample component: id -> McStas component type + properties.
 
@@ -144,6 +152,7 @@ class SampleSpec:
     # McStas component's arbitrary parameter dictionary.
     reflection_source: str | None = None
     space_group: int | None = None
+    analytic_calibration: AnalyticCalibration | None = None
     change_impact: ChangeImpact = ChangeImpact.BUILD  # sample choice changes the tree
 
 
