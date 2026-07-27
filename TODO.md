@@ -48,9 +48,13 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
       rejected by the current version; needs component work plus a cost story (it is
       ray-tracing time, not a per-point closed form).
       → CONTROL_FEATURES §6.5 fidelity-gap row.
-- [ ] **Live McStas background end-to-end check** — the overlay is unit-tested, but no
-      full compiled-McStas run with an enabled profile has been recorded. Run one, confirm
-      the metadata block, `background_seed`, and that intensity columns stay untouched.
+- [x] **Live McStas background end-to-end check** — done 2026-07-27 against a live
+      compiled-McStas instance (puma): paired 3-point scans at H=2.05, N=1e6, per-scan
+      override `flat` × 1e4. Background-off counts [0,0,0]; background-on [37,40,38]
+      against a planted mean of 40 ± 6.3 — Poisson draws around exactly the planted
+      rate. Metadata block stamped with `background_seed` (= launch seed), source
+      `per_scan_override`, both fingerprints; disabled scan stamps its block without a
+      seed; intensity columns untouched.
 - [ ] **Profile-resolution surface for frozen-form canonicalization** — a read-only
       endpoint (or `/validate`-adjacent call) that resolves a background spec into its
       fully-defaulted canonical frozen form without mutating config, so a client (ISAR's
