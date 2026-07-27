@@ -420,6 +420,131 @@ def test_engine_metadata_never_evaluated_is_not_invalid():
     assert md["resolution_ok"] is False
 
 
+# --------------------------------------------------------------------------- background
+def test_background_channel_present_and_zero_by_default():
+    res, sqw = _res(), _phonon_sqw()
+    out = de.evaluate_point(res, sqw, ANCHOR_HKL, 1.5, 1e8, noiseless=True)
+    # Always present, so a reader never has to distinguish "no background" from
+    # "engine that predates background".
+    assert out["channel_means"]["background"] == 0.0
+
+
+def test_background_adds_exactly_when_noiseless():
+    res, sqw = _res(), _phonon_sqw()
+    signal = de.evaluate_point(res, sqw, ANCHOR_HKL, 1.5, 1e8, noiseless=True)
+    with_bg = de.evaluate_point(
+        res, sqw, ANCHOR_HKL, 1.5, 1e8, noiseless=True, background_mean=3.25
+    )
+    assert with_bg["mean"] == signal["mean"] + 3.25
+    assert with_bg["counts"] == with_bg["mean"]
+    assert with_bg["channel_means"]["background"] == 3.25
+    # background is additive only: the signal channels are untouched.
+    assert with_bg["channel_means"]["phonon"] == signal["channel_means"]["phonon"]
+    assert with_bg["channel_means"]["elastic"] == signal["channel_means"]["elastic"]
+
+
+def test_background_seeded_counts_reproducible_and_shifted():
+    res, sqw = _res(), _phonon_sqw()
+    draw = lambda bg: de.evaluate_point(       # noqa: E731 - one-line fixture
+        res, sqw, ANCHOR_HKL, 1.5, 1e8,
+        rng=np.random.default_rng((11, 3)), background_mean=bg,
+    )["counts"]
+    assert draw(40.0) == draw(40.0)
+    assert draw(40.0) != draw(0.0)
+
+
+def test_background_survives_invalid_resolution():
+    # A feasible point whose resolution solve failed still counts background:
+    # real instruments do. Only the signal channels drop to zero.
+    bad = _res(q0=99.0)
+    assert not bad.ok
+    out = de.evaluate_point(
+        bad, _phonon_sqw(), ANCHOR_HKL, 1.5, 1e8,
+        noiseless=True, background_mean=7.5,
+    )
+    assert out["mean"] == 7.5
+    assert out["counts"] == 7.5
+    assert out["channel_means"] == {
+        "phonon": 0.0, "elastic": 0.0, "background": 7.5,
+    }
+    draws = [
+        de.evaluate_point(
+            bad, _phonon_sqw(), ANCHOR_HKL, 1.5, 1e8,
+            rng=np.random.default_rng((5, index)), background_mean=25.0,
+        )["counts"]
+        for index in range(40)
+    ]
+    assert all(isinstance(count, int) for count in draws)
+    assert 15 < np.mean(draws) < 35
+
+
+def test_background_means_none_matches_explicit_zeros():
+    # Default-off regression: threading the argument must not perturb a single
+    # count, so the no-background call and an all-zero background agree exactly.
+    res, sqw = _res(), _phonon_sqw()
+    pts = [(ANCHOR_HKL, float(w)) for w in np.linspace(-3, 4, 21)]
+    absent = de.run_deterministic_scan(pts, res, sqw, 1e8, seed=42)
+    zeros = de.run_deterministic_scan(
+        pts, res, sqw, 1e8, seed=42, background_means=[0.0] * len(pts)
+    )
+    assert absent == zeros
+    means_absent = de.run_deterministic_scan(
+        pts, res, sqw, 1e8, seed=42, noiseless=True
+    )
+    means_zeros = de.run_deterministic_scan(
+        pts, res, sqw, 1e8, seed=42, noiseless=True,
+        background_means=[0.0] * len(pts),
+    )
+    assert means_absent == means_zeros
+
+
+def test_background_means_threaded_per_point():
+    res, sqw = _res(), _phonon_sqw()
+    pts = [(ANCHOR_HKL, float(w)) for w in np.linspace(-3, 4, 5)]
+    bgs = [0.0, 1.0, 2.0, 3.0, 4.0]
+    base = de.run_deterministic_scan(pts, res, sqw, 1e8, seed=0, noiseless=True)
+    with_bg = de.run_deterministic_scan(
+        pts, res, sqw, 1e8, seed=0, noiseless=True, background_means=bgs
+    )
+    assert with_bg == pytest.approx([m + b for m, b in zip(base, bgs)])
+
+
+def test_sigma_e_is_marginalized_width():
+    res = _res()
+    covariance = np.linalg.inv(np.asarray(res.matrix, dtype=float))
+    assert de.sigma_e_mev(res) == pytest.approx(math.sqrt(covariance[3, 3]))
+    # the conditional width 1/sqrt(M[3,3]) is narrower and is NOT what we want
+    assert de.sigma_e_mev(res) > 1.0 / math.sqrt(res.matrix[3][3])
+    assert de.sigma_e_mev(_res(q0=99.0)) is None
+    assert de.sigma_e_mev(None) is None
+
+
+def test_validated_calibration_carries_diffuse_background():
+    spec = _phonon_spec()
+    calibrated = replace(
+        spec,
+        analytic_calibration=AnalyticCalibration(
+            phonon=1.0, elastic=2.0, diffuse_background=3.0e-8
+        ),
+    )
+    assert de._validated_calibration(calibrated).diffuse_background == 3.0e-8
+    # An unusable scale becomes None -- background then refuses or skips
+    # explicitly instead of a signal-only scan dying on an optional channel.
+    for bad in (-1.0, float("nan"), float("inf")):
+        broken = replace(
+            spec,
+            analytic_calibration=AnalyticCalibration(
+                phonon=1.0, elastic=2.0, diffuse_background=bad
+            ),
+        )
+        assert de._validated_calibration(broken).diffuse_background is None
+    missing = replace(
+        spec,
+        analytic_calibration=AnalyticCalibration(phonon=1.0, elastic=2.0),
+    )
+    assert de._validated_calibration(missing).diffuse_background is None
+
+
 # --------------------------------------------------------------------------- timing
 def test_timing_smoke_21_points_under_100ms():
     res, sqw = _res(), _phonon_sqw()

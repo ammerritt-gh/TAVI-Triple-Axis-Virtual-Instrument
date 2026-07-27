@@ -9,7 +9,12 @@ At Gamma, modes with ``|E| < 1e-10`` are skipped exactly as in
 ``components/Phonon_DFT.comp``; the table-backed Bragg channel supplies the
 resolution-limited elastic peak. The engine remains an idealized fast tier: it
 does not reproduce the full one-phonon structure factor, sample geometry,
-incoherent background, ``delta_d_d`` Ewald weighting, or finite Bragg mosaic.
+``delta_d_d`` Ewald weighting, or finite Bragg mosaic.
+
+Background is never inferred from the sample model. It arrives as an already
+computed per-point mean (``background_mean``, from ``tavi/background.py``) and is
+added to the signal mean after the signal's own validity clamp, so a disabled
+profile leaves every count bit-identical to a background-free engine.
 """
 from __future__ import annotations
 
@@ -378,7 +383,20 @@ def _validated_calibration(sample_spec) -> AnalyticCalibration:
     values = (float(calibration.phonon), float(calibration.elastic))
     if not all(math.isfinite(value) and value >= 0.0 for value in values):
         raise ValueError("analytic calibration values must be finite and non-negative")
-    return AnalyticCalibration(phonon=values[0], elastic=values[1])
+    # The background scaling channel is optional and must survive the rebuild:
+    # dropping it would silently turn a calibrated sample into one whose
+    # sample-origin background terms are skipped or refused. An unusable value
+    # becomes None rather than an exception, so a bad diffuse_background never
+    # kills a signal-only scan -- background then refuses explicitly through
+    # SampleScaleUnavailable ("sample_background_scale_unavailable").
+    diffuse = getattr(calibration, "diffuse_background", None)
+    if diffuse is not None:
+        diffuse = float(diffuse)
+        if not math.isfinite(diffuse) or diffuse < 0.0:
+            diffuse = None
+    return AnalyticCalibration(
+        phonon=values[0], elastic=values[1], diffuse_background=diffuse
+    )
 
 
 def _load_reflection_asset(
@@ -506,6 +524,26 @@ def ground_truth(
 def _covariance(res_result) -> np.ndarray:
     matrix = np.asarray(res_result.matrix, dtype=float)
     return np.linalg.inv(matrix)
+
+
+def sigma_e_mev(res_result) -> Optional[float]:
+    """Marginalized resolution width in energy, or ``None`` when unavailable.
+
+    The width background terms need is the *marginalized* one,
+    ``sqrt(inv(M)[3,3])`` -- not ``1/sqrt(M[3,3])``, which is the conditional
+    width at zero momentum offset and is narrower. Callers compute this only
+    when a shape actually needs it: the matrix inversion is not free.
+    """
+    if res_result is None or not getattr(res_result, "ok", False) \
+            or getattr(res_result, "matrix", None) is None:
+        return None
+    try:
+        variance = float(_covariance(res_result)[3, 3])
+    except np.linalg.LinAlgError:
+        return None
+    if not math.isfinite(variance) or variance <= 0.0:
+        return None
+    return math.sqrt(variance)
 
 
 def _gaussian(delta: float, sigma: float) -> float:
@@ -650,13 +688,33 @@ def evaluate_point(
     rng=None,
     noiseless=False,
     method="analytic",
+    *,
+    background_mean=0.0,
 ) -> dict:
-    """Evaluate one point using the selected model's channel calibration."""
+    """Evaluate one point using the selected model's channel calibration.
+
+    ``background_mean`` is planted truth computed by the caller
+    (``tavi.background.mean_counts``) and added to the signal mean. It defaults
+    to zero, which reproduces the background-free counts exactly. A point whose
+    resolution solve failed still carries background -- a real instrument counts
+    background wherever it counts at all -- so only the signal channels drop to
+    zero there; a point that was never executed never reaches this function.
+    """
+    background_mean = float(background_mean)
     if not getattr(res_result, "ok", False) or res_result.matrix is None:
+        counts = (
+            background_mean
+            if noiseless or rng is None
+            else int(rng.poisson(background_mean))
+        )
         return {
-            "mean": 0.0,
-            "counts": 0.0,
-            "channel_means": {"phonon": 0.0, "elastic": 0.0},
+            "mean": background_mean,
+            "counts": counts,
+            "channel_means": {
+                "phonon": 0.0,
+                "elastic": 0.0,
+                "background": background_mean,
+            },
         }
     if method == "mc":
         phonon, elastic = _convolved_channels_mc(
@@ -670,11 +728,15 @@ def evaluate_point(
     elastic_mean = (
         float(number_neutrons) * float(sqw.calibration.elastic) * elastic
     )
-    mean = phonon_mean + elastic_mean
-    if not math.isfinite(mean) or mean < 0.0:
-        mean = 0.0
+    signal_mean = phonon_mean + elastic_mean
+    # The validity clamp guards the SIGNAL only: background is already validated
+    # non-negative and finite by tavi.background, and must not be discarded by a
+    # signal-side failure.
+    if not math.isfinite(signal_mean) or signal_mean < 0.0:
+        signal_mean = 0.0
         phonon_mean = 0.0
         elastic_mean = 0.0
+    mean = signal_mean + background_mean
     counts = (
         mean
         if noiseless or rng is None
@@ -686,6 +748,7 @@ def evaluate_point(
         "channel_means": {
             "phonon": phonon_mean,
             "elastic": elastic_mean,
+            "background": background_mean,
         },
     }
 
@@ -714,8 +777,14 @@ def run_deterministic_scan(
     seed,
     noiseless=False,
     method="analytic",
+    background_means: Optional[Sequence[float]] = None,
 ) -> list:
-    """Run a scan with an index-keyed RNG stream for every point."""
+    """Run a scan with an index-keyed RNG stream for every point.
+
+    ``background_means`` is the per-point planted background, positionally
+    aligned with ``points``; ``None`` means no background at all, which yields
+    the same counts as an explicit sequence of zeros.
+    """
     counts = []
     for index, (hkl, w) in enumerate(points):
         resolution = (
@@ -737,6 +806,9 @@ def run_deterministic_scan(
             rng=rng,
             noiseless=noiseless,
             method=method,
+            background_mean=(
+                0.0 if background_means is None else float(background_means[index])
+            ),
         )
         counts.append(result["counts"])
     return counts

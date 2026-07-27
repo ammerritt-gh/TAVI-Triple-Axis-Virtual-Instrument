@@ -911,6 +911,13 @@ class TAVIController(QObject):
 
         self.diagnostic_settings = {}
         self.current_sample_settings = {}
+        # Instrument-level background profile (tavi/background.py spec form).
+        # Default-off: an unconfigured session plants no background and produces
+        # counts identical to a background-free engine. A per-scan override in
+        # the launch state replaces this wholesale; it never merges.
+        self.background_profile = {
+            "enabled": False, "preset": "none", "overrides": {},
+        }
         # Cross-scan binary reuse (design record §18.5): the last compiled
         # instrument, its execution state, and the build fingerprint it was
         # compiled from. Populated after a scan that actually compiled.
@@ -6446,6 +6453,7 @@ class TAVIController(QObject):
         import numpy as np
         import zlib
         from tavi.resolution import resolution as _resolution
+        from tavi import background as _background
         from tavi import deterministic_engine as _det
 
         # -- seed: explicit body seed, else a stable hash of the job id so a
@@ -6500,6 +6508,61 @@ class TAVIController(QObject):
             "Deterministic engine: sample '%s', seed %d%s"
             % (getattr(sqw, 'sample_id', '?'), seed,
                ", noiseless" if noiseless else "")
+        )
+
+        # -- background: planted truth resolved once for the whole scan. A
+        #    per-scan override replaces the controller profile wholesale (never
+        #    merges); its absence from the launch state means config default.
+        #    The sample scale comes from the validated analytic calibration, so
+        #    sample-origin terms never borrow the phonon factor.
+        background_spec = (
+            launch_state['background'] if 'background' in launch_state
+            else getattr(self, 'background_profile', None)
+        )
+        background_source = (
+            launch_state.get('background_source') or 'config_default'
+        )
+        background_scale = getattr(
+            getattr(sqw, 'calibration', None), 'diffuse_background', None
+        )
+        try:
+            background = _background.resolve(background_spec)
+            # Fail fast: the skipped-term set and the sample-scale refusal depend
+            # only on the sample scale, so one probe settles both for every point
+            # rather than failing halfway through a scan.
+            _, _, background_skipped = _background.mean_counts(
+                background, 0.0, None, number_neutrons, background_scale
+            )
+        except _background.SampleScaleUnavailable as exc:
+            reason = "sample_background_scale_unavailable: %s" % exc
+            self.message_printed.emit(
+                "Deterministic engine: %s -- job failed." % reason
+            )
+            if job is not None:
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = reason
+                    job.finished_at = time.time()
+                    job.notify_state_change()
+            self.scan_completed.emit()
+            return data_folder
+        except ValueError as exc:
+            reason = "invalid background profile: %s" % exc
+            self.message_printed.emit(
+                "Deterministic engine: %s -- job failed." % reason
+            )
+            if job is not None:
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = reason
+                    job.finished_at = time.time()
+                    job.notify_state_change()
+            self.scan_completed.emit()
+            return data_folder
+        # sigma_E is only needed by resolution-width terms; computing it costs a
+        # 4x4 inversion per point, so it stays off unless a term reads it.
+        background_needs_sigma = background.enabled and any(
+            term.shape == 'elastic_incoherent' for term in background.terms
         )
 
         total_scans = len(scan_parameter_input)
@@ -6613,13 +6676,23 @@ class TAVIController(QObject):
                         meta_res = rr
                     except Exception as exc:
                         self.message_printed.emit(
-                            "Point %d: resolution unavailable (%s); counts=0" % (i, exc)
+                            "Point %d: resolution unavailable (%s); signal counts=0"
+                            % (i, exc)
                         )
+
+                    sigma_e = (
+                        _det.sigma_e_mev(rr) if background_needs_sigma else None
+                    )
+                    bg_mean, _, _ = _background.mean_counts(
+                        background, w, sigma_e, number_neutrons,
+                        background_scale,
+                    )
 
                     rng = None if noiseless else np.random.default_rng((int(seed), i))
                     out = _det.evaluate_point(
                         rr, sqw, hkl, w, number_neutrons,
                         rng=rng, noiseless=noiseless,
+                        background_mean=bg_mean,
                     )
                     counts = float(out['counts'])
                     self.message_printed.emit(
@@ -6707,6 +6780,13 @@ class TAVIController(QObject):
                     )
                 )
                 job.result.metadata['noiseless'] = noiseless
+                # Stamped even when the profile is disabled and even when
+                # cn_valid is false: absence of background is provenance too.
+                job.result.metadata['background'] = _background.metadata_block(
+                    background, background_source,
+                    sample_scale=background_scale,
+                    skipped_terms=background_skipped,
+                )
 
         # One data file (parity with McStas output; the folder already exists and
         # its parameters file was written by the shared section). No per-point
