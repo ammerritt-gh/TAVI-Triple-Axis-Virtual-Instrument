@@ -383,20 +383,7 @@ def _validated_calibration(sample_spec) -> AnalyticCalibration:
     values = (float(calibration.phonon), float(calibration.elastic))
     if not all(math.isfinite(value) and value >= 0.0 for value in values):
         raise ValueError("analytic calibration values must be finite and non-negative")
-    # The background scaling channel is optional and must survive the rebuild:
-    # dropping it would silently turn a calibrated sample into one whose
-    # sample-origin background terms are skipped or refused. An unusable value
-    # becomes None rather than an exception, so a bad diffuse_background never
-    # kills a signal-only scan -- background then refuses explicitly through
-    # SampleScaleUnavailable ("sample_background_scale_unavailable").
-    diffuse = getattr(calibration, "diffuse_background", None)
-    if diffuse is not None:
-        diffuse = float(diffuse)
-        if not math.isfinite(diffuse) or diffuse < 0.0:
-            diffuse = None
-    return AnalyticCalibration(
-        phonon=values[0], elastic=values[1], diffuse_background=diffuse
-    )
+    return AnalyticCalibration(phonon=values[0], elastic=values[1])
 
 
 def _load_reflection_asset(
@@ -526,24 +513,51 @@ def _covariance(res_result) -> np.ndarray:
     return np.linalg.inv(matrix)
 
 
-def sigma_e_mev(res_result) -> Optional[float]:
-    """Marginalized resolution width in energy, or ``None`` when unavailable.
+_MARGINAL_AXIS_INDEX = {
+    "dq_par": 0,
+    "q": 0,
+    "dq_perp": 1,
+    "dq_z": 2,
+    "dE": 3,
+    "energy": 3,
+}
 
-    The width background terms need is the *marginalized* one,
-    ``sqrt(inv(M)[3,3])`` -- not ``1/sqrt(M[3,3])``, which is the conditional
-    width at zero momentum offset and is narrower. Callers compute this only
-    when a shape actually needs it: the matrix inversion is not free.
+
+def marginal_sigma(res_result, axis) -> Optional[float]:
+    """Return ``sqrt(inv(M)[axis,axis])``, or ``None`` when unavailable.
+
+    The resolution basis is ``(dQ_par, dQ_perp, dQ_z, dE)``. String axis
+    aliases keep callers independent of the numeric ordering; integer indices
+    0 through 3 remain useful for compact numerical code.
     """
+    if isinstance(axis, str):
+        if axis not in _MARGINAL_AXIS_INDEX:
+            raise ValueError(
+                "unknown resolution axis %r; expected one of %s"
+                % (axis, ", ".join(_MARGINAL_AXIS_INDEX))
+            )
+        axis_index = _MARGINAL_AXIS_INDEX[axis]
+    elif isinstance(axis, int) and not isinstance(axis, bool) and 0 <= axis < 4:
+        axis_index = axis
+    else:
+        raise ValueError(
+            f"resolution axis must be an index 0..3 or known name, got {axis!r}"
+        )
     if res_result is None or not getattr(res_result, "ok", False) \
             or getattr(res_result, "matrix", None) is None:
         return None
     try:
-        variance = float(_covariance(res_result)[3, 3])
-    except np.linalg.LinAlgError:
+        variance = float(_covariance(res_result)[axis_index, axis_index])
+    except (IndexError, TypeError, ValueError, np.linalg.LinAlgError):
         return None
     if not math.isfinite(variance) or variance <= 0.0:
         return None
     return math.sqrt(variance)
+
+
+def sigma_e_mev(res_result) -> Optional[float]:
+    """Compatibility wrapper for the marginalized energy width."""
+    return marginal_sigma(res_result, "dE")
 
 
 def _gaussian(delta: float, sigma: float) -> float:

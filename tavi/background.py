@@ -1,658 +1,534 @@
-"""Sample-independent background profiles for TAVI-generated scans.
+"""Independent generated-background sources for TAVI scans.
 
-Pure Python + numpy, no Qt imports -- this module is the single contract both
-engines, the API server, and the GUI consume. It owns four things and nothing
-else:
+This Qt-free module is the single background interface used by the GUI,
+remote interface, deterministic engine, and Monte Carlo overlay. Background is
+planted truth: TAVI never fits or subtracts it.
 
-* the **term model** (:class:`BackgroundTerm`, the shape/origin/method
-  vocabularies and their per-parameter units),
-* the **preset registry** (:data:`PRESETS`) plus :func:`resolve`, which turns a
-  request spec -- preset+overrides *or* a frozen numeric term list -- into a
-  fully numeric :class:`ResolvedBackground`,
-* the profile-level **strength knob** ``scale``, one number multiplying every
-  term's rate uniformly, so a user dials signal-to-background without editing
-  per-term numerics,
-* the **identity fingerprints** (:func:`profile_fingerprint`,
-  :func:`effective_fingerprint`), which hash the numerics and deliberately not
-  the delivery source or the preset label, so a config default and a per-scan
-  override describing the same physics are the same background -- the effective
-  fingerprint adds the sample scale only when a ``sample``-origin term actually
-  contributed, so a pure instrument profile pools across samples, and
-* the **count math** (:func:`mean_counts`) and the shared metadata stamping
-  helper (:func:`metadata_block`) that both engines must use, so a scan record
-  never depends on which engine produced it.
-
-Backgrounds are *generated truth*: TAVI plants them from configuration and
-never infers them from measured data. Term ``origin`` fixes the scaling base --
-``instrument`` and ``sample_environment`` terms scale as ``N * rate``, while
-``sample`` terms additionally scale by the sample's explicit
-``AnalyticCalibration.diffuse_background`` channel, never by the phonon factor.
-
-Background terms are planted *without* resolution convolution: the elastic
-Gaussian is written directly at the per-point resolution width ``sigma_E`` (or
-a preset fallback when the resolution matrix is invalid), and the elastic tail
-is a bare Lorentzian pinned at ``E = 0``.
-
-Every preset is anchored to a **signal-to-background ratio of about 10:1**: the
-``Al_phonon_DFT`` sample peaks at ~4e-8 counts per monitor count, so a preset's
-characteristic background rate is ~4e-9. ``scale`` moves that anchor without
-touching the numbers -- ``scale = 0.1`` is a 100:1 experiment, ``scale = 10`` a
-1:1 one. It is applied at *evaluation* time and never folded into the term
-params, so a stamped scan record reads "the preset's numbers, times 2.5" rather
-than an opaque retuned term list.
+The wire contract remains ``tavi.background/2``. Catalog version 2 separates
+smooth mean sources from sparse event sources and gives the aluminum powder
+lines McStas-derived relative strengths. Callers provide one immutable point
+context; this module owns all catalog shapes, source scaling, and event
+randomness.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
-# Wire-format identity of the background contract. Consumers (ISAR) key on this.
-BACKGROUND_SCHEMA = "tavi.background/1"
 
-# Bumped whenever a preset's numerics change, so a stored fingerprint that no
-# longer matches a preset name can be explained rather than silently re-tuned.
-# v2 (2026-07-27): roster re-anchored to S/N ~10:1 and 'flat_low'/'flat_high'
-# merged into a single 'flat' preset, the strength knob having replaced them.
-PRESET_REGISTRY_VERSION = 2
-
-# Anchor for every preset magnitude: the Al_phonon_DFT sample peaks at about
-# 4 counts per 1e8 neutrons (see tavi/api_server.py limits note), i.e. a peak
-# signal rate of ~4e-8 counts per monitor count.
-PEAK_SIGNAL_RATE = 4.0e-8
-
-# Default signal-to-background ratio the roster is tuned to at ``scale = 1``:
-# a preset's characteristic background rate is PEAK_SIGNAL_RATE / 10.
-DEFAULT_SIGNAL_TO_BACKGROUND = 10.0
-
-# The rate every preset is anchored on (4.0e-9 counts per monitor count).
-ANCHOR_BACKGROUND_RATE = PEAK_SIGNAL_RATE / DEFAULT_SIGNAL_TO_BACKGROUND
-
-# Neutral value of the profile-level strength knob: multiply nothing.
-DEFAULT_SCALE = 1.0
-
-# Origin fixes the scaling base (see module docstring); it is not decoration.
-ORIGINS = ("instrument", "sample_environment", "sample")
-
-# ``simulated`` is schema-reserved for a future Monte-Carlo-generated term; v1
-# rejects it rather than silently treating it as analytic.
-METHODS = ("analytic", "simulated")
-
-SHAPES = ("flat", "linear_e", "elastic_incoherent", "elastic_tail")
-
-# Distinctive stream key for the Monte-Carlo background overlay's per-point RNG,
-# seeded as ``(background_seed, BACKGROUND_STREAM, point_index)``. The middle
-# element exists so a background draw can never collide with a plain
-# ``(seed, index)`` stream (the deterministic engine's signal noise uses that
-# two-element form); the value itself is arbitrary but must stay fixed, because
-# changing it changes every previously drawn overlay.
+BACKGROUND_SCHEMA = "tavi.background/2"
+CATALOG_VERSION = 2
+DEFAULT_SOURCE_SCALE = 1.0
 BACKGROUND_STREAM = 0x6B67
-
-# Explicit zero point of the linear-in-E shape. Named so nobody has to guess
-# whether the slope is anchored at the scan's first point.
+BACKGROUND_EVENT_STREAM = 0xC05C
 REFERENCE_ENERGY_MEV = 0.0
 
-# Per-parameter units, not one blanket string per shape: a reader of a stamped
-# scan record must be able to tell counts/monitor from counts/monitor/meV.
-PARAMETER_UNITS: Dict[str, Dict[str, str]] = {
-    "flat": {
-        "rate": "counts per monitor count",
-    },
-    "linear_e": {
-        "rate0": "counts per monitor count at E_ref = 0 meV",
-        "slope_per_meV": "counts per monitor count per meV",
-    },
-    "elastic_incoherent": {
-        # Integrated area of the Gaussian: contribution(E) =
-        # rate_integrated * N(E; 0, sigma_E), so integrating the planted rate
-        # over all E returns rate_integrated exactly.
-        "rate_integrated": "counts per monitor count (integrated over E, meV)",
-        "sigma_fallback_meV": "meV (Gaussian sigma used when resolution sigma_E is unavailable)",
-    },
-    "elastic_tail": {
-        # Integrated area of the Lorentzian, same convention as above.
-        "rate_integrated": "counts per monitor count (integrated over E, meV)",
-        "gamma_meV": "meV (Lorentzian half-width at half-maximum)",
-    },
-}
+ALUMINUM_LATTICE_A_ANG = 4.0495
+ALUMINUM_REFLECTIONS = (
+    # hkl, powder multiplicity j, |F| in sqrt(barn), from McStas Al.laz.
+    ((1, 1, 1), 8, 1.32),
+    ((2, 0, 0), 6, 1.30),
+    ((2, 2, 0), 12, 1.22),
+    ((3, 1, 1), 24, 1.17),
+    ((2, 2, 2), 8, 1.15),
+    ((4, 0, 0), 6, 1.08),
+)
 
-# Required and defaulted-optional parameters per shape. Anything else is an
-# error: a typo'd parameter must never be silently ignored.
-_REQUIRED_PARAMS: Dict[str, Tuple[str, ...]] = {
-    "flat": ("rate",),
-    "linear_e": ("rate0", "slope_per_meV"),
-    "elastic_incoherent": ("rate_integrated",),
-    "elastic_tail": ("rate_integrated", "gamma_meV"),
-}
-
-_DEFAULT_PARAMS: Dict[str, Dict[str, float]] = {
-    "flat": {},
-    "linear_e": {},
-    "elastic_incoherent": {"sigma_fallback_meV": 0.5},
-    "elastic_tail": {},
-}
-
-# Parameters that may not be negative (a negative rate would subtract counts)
-# and parameters that must be strictly positive (widths).
-_NON_NEGATIVE_PARAMS = frozenset({"rate", "rate0", "rate_integrated"})
-_POSITIVE_PARAMS = frozenset({"sigma_fallback_meV", "gamma_meV"})
+CATEGORIES = ("environment", "instrument", "sample")
+CATEGORY_LABELS: Mapping[str, str] = MappingProxyType({
+    "environment": "Environment",
+    "instrument": "Instrument",
+    "sample": "Sample",
+})
+MEAN_SHAPES = (
+    "flat",
+    "linear_e",
+    "powder_elastic",
+    "elastic_incoherent",
+    "elastic_tail",
+)
+EVENT_SHAPES = ("cosmic_spike",)
+SHAPES = MEAN_SHAPES + EVENT_SHAPES
 
 
-class SampleScaleUnavailable(ValueError):
-    """A required ``sample``-origin term had no ``diffuse_background`` scale.
+def _freeze(value: Any) -> Any:
+    """Recursively freeze JSON-like catalog values."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
 
-    Raised by :func:`mean_counts` when the selected sample carries no explicit
-    diffuse-background calibration and the profile contains a non-optional
-    sample-origin term. Callers surface this as the validation refusal
-    ``sample_background_scale_unavailable``; there is deliberately no implicit
-    fallback, because guessing a sample scale would silently invent truth.
-    """
 
-    def __init__(self, terms: Sequence[str]):
-        self.terms: Tuple[str, ...] = tuple(terms)
-        super().__init__(
-            "sample-origin background terms require a sample diffuse_background "
-            f"calibration, which is unavailable: {', '.join(self.terms)}"
-        )
+def _json_safe(value: Any) -> Any:
+    """Return a detached JSON-safe view of a frozen catalog value."""
+    if isinstance(value, Mapping):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _aluminum_lines() -> Tuple[Mapping[str, Any], ...]:
+    scale = 2.0 * math.pi / ALUMINUM_LATTICE_A_ANG
+    raw_weights = tuple(
+        multiplicity * structure_factor ** 2
+        / (scale * math.sqrt(sum(index * index for index in hkl)))
+        for hkl, multiplicity, structure_factor in ALUMINUM_REFLECTIONS
+    )
+    reference_weight = raw_weights[0]
+    return tuple(
+        MappingProxyType({
+            "hkl": tuple(hkl),
+            "label": f"Al ({hkl[0]}{hkl[1]}{hkl[2]})",
+            "q_inv_ang": scale * math.sqrt(sum(index * index for index in hkl)),
+            "multiplicity": multiplicity,
+            "structure_factor_sqrt_barn": structure_factor,
+            "relative_weight": raw_weight / reference_weight,
+        })
+        for (
+            (hkl, multiplicity, structure_factor),
+            raw_weight,
+        ) in zip(ALUMINUM_REFLECTIONS, raw_weights)
+    )
 
 
 @dataclass(frozen=True, slots=True)
-class BackgroundTerm:
-    """One additive background component.
+class BackgroundPointContext:
+    """Physics and exposure values needed to evaluate one executed point."""
 
-    ``params`` is copied into a plain ``dict`` of floats at construction, so a
-    term cannot be mutated through the mapping the caller passed in. Frozen
-    dataclasses are not hashable with a dict field; identity is carried by the
-    fingerprints, not by ``hash()``.
-    """
+    q_inv_ang: float
+    w_meV: float
+    sigma_q_inv_ang: Optional[float]
+    sigma_e_meV: Optional[float]
+    number_neutrons: float
 
-    name: str
+    def __post_init__(self) -> None:
+        q_value = float(self.q_inv_ang)
+        w_value = float(self.w_meV)
+        neutrons = float(self.number_neutrons)
+        if not math.isfinite(q_value) or q_value < 0.0:
+            raise ValueError(
+                "background |Q| must be finite and >= 0, "
+                f"got {q_value!r}"
+            )
+        if not math.isfinite(w_value):
+            raise ValueError(
+                f"background energy transfer must be finite, got {w_value!r}"
+            )
+        if not math.isfinite(neutrons) or neutrons < 0.0:
+            raise ValueError(
+                "background monitor counts must be finite and >= 0, "
+                f"got {neutrons!r}"
+            )
+        object.__setattr__(self, "q_inv_ang", q_value)
+        object.__setattr__(self, "w_meV", w_value)
+        object.__setattr__(self, "number_neutrons", neutrons)
+        for field_name in ("sigma_q_inv_ang", "sigma_e_meV"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, float(value))
+
+
+@dataclass(frozen=True, slots=True)
+class BackgroundSource:
+    """One immutable catalog source definition."""
+
+    source_id: str
+    category: str
+    label: str
+    description: str
+    scale_meaning: str
     shape: str
-    origin: str
-    method: str = "analytic"
-    params: Dict[str, float] = field(default_factory=dict)
-    optional: bool = False
+    base_numerics: Mapping[str, Any]
+    units: Mapping[str, str]
 
-    def __post_init__(self):
-        object.__setattr__(self, "params", {k: v for k, v in dict(self.params).items()})
+    def __post_init__(self) -> None:
+        if self.category not in CATEGORIES:
+            raise ValueError(f"unknown background category {self.category!r}")
+        if self.shape not in SHAPES:
+            raise ValueError(f"unknown background shape {self.shape!r}")
+        object.__setattr__(self, "base_numerics", _freeze(self.base_numerics))
+        object.__setattr__(self, "units", _freeze(self.units))
 
-    def to_dict(self) -> Dict[str, Any]:
-        """JSON-safe dict view (fingerprint payload and metadata alike)."""
+    @property
+    def is_event(self) -> bool:
+        return self.shape in EVENT_SHAPES
+
+    def to_catalog_dict(self) -> Dict[str, Any]:
+        """Return the JSON-safe discovery view."""
         return {
-            "name": self.name,
+            "category": self.category,
+            "label": self.label,
+            "description": self.description,
+            "scale_meaning": self.scale_meaning,
             "shape": self.shape,
-            "origin": self.origin,
-            "method": self.method,
-            "params": dict(self.params),
-            "optional": bool(self.optional),
+            "base_numerics": _json_safe(self.base_numerics),
+            "units": _json_safe(self.units),
         }
 
-    def units(self) -> Dict[str, str]:
-        """Per-parameter units for this term's shape."""
-        return dict(PARAMETER_UNITS[self.shape])
+
+def _source(
+    source_id: str,
+    category: str,
+    label: str,
+    description: str,
+    scale_meaning: str,
+    shape: str,
+    base_numerics: Mapping[str, Any],
+    units: Mapping[str, str],
+) -> BackgroundSource:
+    return BackgroundSource(
+        source_id=source_id,
+        category=category,
+        label=label,
+        description=description,
+        scale_meaning=scale_meaning,
+        shape=shape,
+        base_numerics=base_numerics,
+        units=units,
+    )
+
+
+SOURCES: Mapping[str, BackgroundSource] = MappingProxyType({
+    "environment_flat": _source(
+        "environment_flat",
+        "environment",
+        "Flat floor",
+        (
+            "Featureless ambient counting floor, assumed independent of "
+            "instrument and sample."
+        ),
+        "Scale multiplies the ambient floor rate.",
+        "flat",
+        {"rate": 6.0e-10},
+        {"rate": "counts per monitor count"},
+    ),
+    "environment_slope": _source(
+        "environment_slope",
+        "environment",
+        "Energy-dependent slope",
+        (
+            "Ambient background that falls with energy transfer and clamps to "
+            "zero above 40 meV; instrument- and sample-independent."
+        ),
+        "Scale multiplies the complete energy-dependent ambient rate.",
+        "linear_e",
+        {"rate0": 2.4e-9, "slope_per_meV": -6.0e-11},
+        {
+            "rate0": "counts per monitor count at E_ref = 0 meV",
+            "slope_per_meV": "counts per monitor count per meV",
+        },
+    ),
+    "environment_cosmic_spikes": _source(
+        "environment_cosmic_spikes",
+        "environment",
+        "Cosmic-ray spikes",
+        (
+            "Sparse high-count detector events attributed to cosmic rays. "
+            "They are planted after ordinary counting noise, including in "
+            "noiseless deterministic scans."
+        ),
+        (
+            "Scale changes event incidence only; it does not change the "
+            "amplitude distribution of individual spikes."
+        ),
+        "cosmic_spike",
+        {
+            "events_per_1e10_monitor": 0.005,
+            "amplitude_median_counts": 1000.0,
+            "amplitude_log_sigma": 0.8,
+            "amplitude_cap_counts": 100000,
+        },
+        {
+            "events_per_1e10_monitor": "expected events per 1e10 monitor counts",
+            "amplitude_median_counts": "detector counts per event (log-normal median)",
+            "amplitude_log_sigma": "natural-log standard deviation",
+            "amplitude_cap_counts": "detector counts per event",
+        },
+    ),
+    "instrument_aluminum_powder": _source(
+        "instrument_aluminum_powder",
+        "instrument",
+        "Aluminum powder lines",
+        (
+            "Six synthetic fcc-aluminum powder reflections from aluminum "
+            "mounting or machinery caught in the beam. Their relative "
+            "strengths follow the McStas Al.laz/PowderN j|F|²/Q convention, "
+            "normalized to Al (111). At ×1, N=1e8, sigma_E=0.5 meV, and the "
+            "Al (111) Q/E center, the source contributes about 500 counts "
+            "(about 1% of TAVI's current 50000-count Bragg reference). This "
+            "visibility is not transferable or cross-section calibrated, and "
+            "Q-E covariance is intentionally ignored."
+        ),
+        (
+            "One scale multiplies all six aluminum lines together, preserving "
+            "their McStas-derived relative weights."
+        ),
+        "powder_elastic",
+        {
+            "lattice_a_ang": ALUMINUM_LATTICE_A_ANG,
+            "lines": _aluminum_lines(),
+            "rate_integrated_111": 6.25e-6,
+            "sigma_q_fallback_inv_ang": 0.03,
+            "sigma_e_fallback_meV": 0.5,
+        },
+        {
+            "lattice_a_ang": "angstrom",
+            "lines": (
+                "hkl labels, centers in inverse angstrom, powder multiplicity, "
+                "|F| in barn^0.5, and dimensionless j|F|^2/Q weight relative "
+                "to Al (111)"
+            ),
+            "rate_integrated_111": (
+                "counts per monitor count (integrated over E, meV) at Al (111)"
+            ),
+            "sigma_q_fallback_inv_ang": "inverse angstrom (Gaussian sigma)",
+            "sigma_e_fallback_meV": "meV (Gaussian sigma)",
+        },
+    ),
+    "sample_elastic": _source(
+        "sample_elastic",
+        "sample",
+        "Elastic incoherent line",
+        (
+            "Resolution-width elastic scattering centered at zero energy and "
+            "attributed to the sample."
+        ),
+        "Scale multiplies the integrated elastic-line rate.",
+        "elastic_incoherent",
+        {"rate_integrated": 4.5e-9, "sigma_fallback_meV": 0.5},
+        {
+            "rate_integrated": (
+                "counts per monitor count (integrated over E, meV)"
+            ),
+            "sigma_fallback_meV": (
+                "meV (Gaussian sigma used when resolution sigma_E is unavailable)"
+            ),
+        },
+    ),
+    "sample_elastic_tail": _source(
+        "sample_elastic_tail",
+        "sample",
+        "Broad elastic tail",
+        (
+            "Broad Lorentzian tail around zero energy and attributed to the "
+            "sample."
+        ),
+        "Scale multiplies the integrated broad-tail rate.",
+        "elastic_tail",
+        {"rate_integrated": 6.0e-9, "gamma_meV": 2.0},
+        {
+            "rate_integrated": (
+                "counts per monitor count (integrated over E, meV)"
+            ),
+            "gamma_meV": "meV (Lorentzian half-width at half-maximum)",
+        },
+    ),
+})
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSource:
+    """Remembered state for one catalog source."""
+
+    source_id: str
+    enabled: bool
+    scale: float
+
+    @property
+    def definition(self) -> BackgroundSource:
+        return SOURCES[self.source_id]
+
+    def to_spec_dict(self) -> Dict[str, Any]:
+        return {"enabled": bool(self.enabled), "scale": float(self.scale)}
 
 
 @dataclass(frozen=True, slots=True)
 class ResolvedBackground:
-    """A fully numeric background profile.
+    """Complete normalized background configuration."""
 
-    ``preset`` is the registry name when the profile came from the preset form
-    and ``None`` for the frozen numeric form -- a resolved profile always knows
-    whether a label can still explain it. ``overrides_applied`` echoes exactly
-    what was merged, so a scan record shows the deviation from the preset
-    without the reader having to diff numbers.
-
-    ``scale`` is the profile-level strength knob. It is deliberately *not*
-    folded into ``terms``: the terms stay the preset's published numbers and the
-    multiplier is reported beside them, so a reader sees "realistic x 2.5"
-    instead of a term list nobody can trace back to a preset.
-    """
-
+    catalog_version: int
     enabled: bool
-    preset: Optional[str]
-    overrides_applied: Dict[str, Dict[str, float]]
-    terms: Tuple[BackgroundTerm, ...]
-    scale: float = DEFAULT_SCALE
+    sources: Tuple[ResolvedSource, ...]
+
+    def source(self, source_id: str) -> ResolvedSource:
+        """Return one normalized source state."""
+        if source_id not in SOURCES:
+            raise KeyError(source_id)
+        return self.sources[tuple(SOURCES).index(source_id)]
 
 
-def _preset(*terms: BackgroundTerm) -> Tuple[BackgroundTerm, ...]:
-    return tuple(terms)
+def source_catalog() -> Dict[str, Dict[str, Any]]:
+    """Return the full JSON-safe catalog keyed by stable source ID."""
+    return {
+        source_id: source.to_catalog_dict()
+        for source_id, source in SOURCES.items()
+    }
 
 
-# Preset roster, registry version 2. Every magnitude below is anchored on
-# ANCHOR_BACKGROUND_RATE = 4.0e-9 counts per monitor count -- 10% of the
-# Al_phonon_DFT peak rate, i.e. a default signal-to-background of 10:1. There is
-# deliberately no "low"/"high" variant of any preset: the profile-level ``scale``
-# knob covers that axis, so a preset chooses the *character* of a background and
-# the knob chooses its strength.
-PRESETS: Dict[str, Dict[str, Any]] = {
-    "none": {
-        "description": "No background terms (enabled or not, this profile plants nothing).",
-        "terms": _preset(),
-    },
-    "flat": {
-        "description": (
-            "Featureless flat instrument background at 10% of the Al_phonon_DFT peak "
-            "rate (signal-to-background 10:1). Use the profile 'scale' knob to make "
-            "it weaker or stronger -- there is no separate low/high preset."
-        ),
-        "terms": _preset(
-            BackgroundTerm(
-                name="instrument_flat",
-                shape="flat",
-                origin="instrument",
-                # ANCHOR_BACKGROUND_RATE exactly: S/N = 10:1 at scale = 1.
-                params={"rate": 4.0e-9},
-            ),
-        ),
-    },
-    "sloped": {
-        "description": (
-            "Flat instrument floor plus a sample-environment term falling linearly "
-            "with energy transfer; the slope clamps the term to zero above 25 meV. "
-            "Sums to the 10:1 anchor rate at E = 0."
-        ),
-        "terms": _preset(
-            BackgroundTerm(
-                name="instrument_flat",
-                shape="flat",
-                origin="instrument",
-                params={"rate": 1.0e-9},
-            ),
-            BackgroundTerm(
-                name="environment_slope",
-                shape="linear_e",
-                origin="sample_environment",
-                # 3.0e-9 + 1.0e-9 = the 4.0e-9 anchor at E = 0; the slope still
-                # reaches zero at 25 meV.
-                params={"rate0": 3.0e-9, "slope_per_meV": -1.2e-10},
-            ),
-        ),
-    },
-    "strong_elastic": {
-        "description": (
-            "Incoherent elastic line at every q (sample environment) plus a broad "
-            "instrument elastic tail. The tail carries the 10:1 anchor rate; the "
-            "elastic line is dominant by design, peaking ~30% of the Al_phonon_DFT "
-            "peak rate at sigma_E = 0.5 meV."
-        ),
-        "terms": _preset(
-            BackgroundTerm(
-                name="environment_elastic",
-                shape="elastic_incoherent",
-                origin="sample_environment",
-                # Peak = rate_integrated / (sigma * sqrt(2 pi)) = 1.2e-8 at
-                # sigma = 0.5 meV, i.e. 3x the anchor: the line is meant to dominate.
-                params={"rate_integrated": 1.5e-8, "sigma_fallback_meV": 0.5},
-            ),
-            BackgroundTerm(
-                name="instrument_elastic_tail",
-                shape="elastic_tail",
-                origin="instrument",
-                # Peak = rate_integrated / (pi * gamma) = 3.98e-9 at gamma = 2 meV,
-                # i.e. the anchor rate.
-                params={"rate_integrated": 2.5e-8, "gamma_meV": 2.0},
-            ),
-        ),
-    },
-    "sample_diffuse": {
-        "description": (
-            "Flat diffuse scattering from the sample itself, scaled by the sample's "
-            "AnalyticCalibration.diffuse_background channel; optional, so samples "
-            "without that calibration skip it instead of refusing the scan."
-        ),
-        "terms": _preset(
-            BackgroundTerm(
-                name="sample_diffuse",
-                shape="flat",
-                origin="sample",
-                # Multiplies diffuse_background: 0.4 * 1e-8 = 4.0e-9 counts/monitor
-                # for Al_phonon_DFT, i.e. the 10:1 anchor rate.
-                params={"rate": 0.4},
-                optional=True,
-            ),
-        ),
-    },
-    "realistic": {
-        "description": (
-            "Combination profile: weak flat instrument floor, mild sample-environment "
-            "slope, incoherent elastic line, broad elastic tail, and an optional "
-            "sample diffuse term. Away from the elastic line the mix sums to about "
-            "the 10:1 anchor rate (~3.9e-9 at E = 10 meV with the Al_phonon_DFT "
-            "diffuse channel); the elastic line rides above it."
-        ),
-        "terms": _preset(
-            BackgroundTerm(
-                name="instrument_flat",
-                shape="flat",
-                origin="instrument",
-                params={"rate": 6.0e-10},
-            ),
-            BackgroundTerm(
-                name="environment_slope",
-                shape="linear_e",
-                origin="sample_environment",
-                params={"rate0": 2.4e-9, "slope_per_meV": -6.0e-11},
-            ),
-            BackgroundTerm(
-                name="environment_elastic",
-                shape="elastic_incoherent",
-                origin="sample_environment",
-                params={"rate_integrated": 4.5e-9, "sigma_fallback_meV": 0.5},
-            ),
-            BackgroundTerm(
-                name="instrument_elastic_tail",
-                shape="elastic_tail",
-                origin="instrument",
-                params={"rate_integrated": 6.0e-9, "gamma_meV": 2.0},
-            ),
-            BackgroundTerm(
-                name="sample_diffuse",
-                shape="flat",
-                origin="sample",
-                # 0.15 * 1e-8 = 1.5e-9 for Al_phonon_DFT.
-                params={"rate": 0.15},
-                optional=True,
-            ),
-        ),
-    },
-}
+def default_spec() -> Dict[str, Any]:
+    """New-session state: existing smooth mixture prepared behind an off gate."""
+    prepared = {
+        "environment_flat",
+        "environment_slope",
+        "sample_elastic",
+        "sample_elastic_tail",
+    }
+    return {
+        "catalog_version": CATALOG_VERSION,
+        "enabled": False,
+        "sources": {
+            source_id: {
+                "enabled": source_id in prepared,
+                "scale": DEFAULT_SOURCE_SCALE,
+            }
+            for source_id in SOURCES
+        },
+    }
 
 
-def _allowed(values: Iterable[str]) -> str:
-    return ", ".join(sorted(values))
+def normalized_spec(resolved: ResolvedBackground) -> Dict[str, Any]:
+    """Return the complete canonical request form."""
+    return {
+        "catalog_version": int(resolved.catalog_version),
+        "enabled": bool(resolved.enabled),
+        "sources": {
+            state.source_id: state.to_spec_dict()
+            for state in resolved.sources
+        },
+    }
 
 
-def _as_float(value: Any, *, term: str, param: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.floating, np.integer)):
-        raise ValueError(
-            f"background term {term!r} parameter {param!r} must be a number, "
-            f"got {type(value).__name__}"
-        )
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(
-            f"background term {term!r} parameter {param!r} must be finite, got {number!r}"
-        )
-    return number
-
-
-def _validate_scale(value: Any) -> float:
-    """Check the profile-level strength knob.
-
-    Same rules as a rate parameter -- a number, finite, and not negative, since
-    a negative multiplier would subtract counts. Booleans are rejected outright:
-    ``True`` silently meaning 1.0 would hide a client bug.
-    """
+def _validate_scale(value: Any, source_id: str) -> float:
     if isinstance(value, bool) or not isinstance(
         value, (int, float, np.floating, np.integer)
     ):
         raise ValueError(
-            f"background 'scale' must be a number, got {type(value).__name__}"
+            f"background source {source_id!r} field 'scale' must be a number, "
+            f"got {type(value).__name__}"
         )
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"background 'scale' must be finite, got {number!r}")
-    if number < 0.0:
+    scale = float(value)
+    if not math.isfinite(scale):
         raise ValueError(
-            "background 'scale' must be >= 0 (a negative scale would subtract "
-            f"counts), got {number!r}"
+            f"background source {source_id!r} field 'scale' must be finite, "
+            f"got {scale!r}"
         )
-    return number
-
-
-def _validate_params(shape: str, term_name: str,
-                     params: Mapping[str, Any]) -> Dict[str, float]:
-    """Return the checked, defaulted numeric parameter set for one term."""
-    required = _REQUIRED_PARAMS[shape]
-    defaults = _DEFAULT_PARAMS[shape]
-    allowed = set(required) | set(defaults)
-    unknown = sorted(set(params) - allowed)
-    if unknown:
+    if scale < 0.0:
         raise ValueError(
-            f"unknown parameter(s) {', '.join(unknown)} for background term "
-            f"{term_name!r} of shape {shape!r}; allowed parameters: {_allowed(allowed)}"
+            f"background source {source_id!r} field 'scale' must be >= 0, "
+            f"got {scale!r}"
         )
-    missing = [name for name in required if name not in params]
-    if missing:
-        raise ValueError(
-            f"background term {term_name!r} of shape {shape!r} is missing required "
-            f"parameter(s) {', '.join(missing)}; required parameters: {_allowed(required)}"
-        )
-    resolved: Dict[str, float] = dict(defaults)
-    for key, value in params.items():
-        resolved[key] = _as_float(value, term=term_name, param=key)
-    for key, value in resolved.items():
-        if key in _NON_NEGATIVE_PARAMS and value < 0.0:
-            raise ValueError(
-                f"background term {term_name!r} parameter {key!r} must be >= 0 "
-                f"(a negative rate would subtract counts), got {value!r}"
-            )
-        if key in _POSITIVE_PARAMS and value <= 0.0:
-            raise ValueError(
-                f"background term {term_name!r} parameter {key!r} must be > 0, got {value!r}"
-            )
-    return resolved
-
-
-def _validate_term(name: str, shape: Any, origin: Any, method: Any,
-                   params: Mapping[str, Any], optional: Any) -> BackgroundTerm:
-    if not isinstance(name, str) or not name:
-        raise ValueError("every background term needs a non-empty string 'name'")
-    if shape not in SHAPES:
-        raise ValueError(
-            f"unknown background shape {shape!r} for term {name!r}; "
-            f"allowed shapes: {_allowed(SHAPES)}"
-        )
-    if origin not in ORIGINS:
-        raise ValueError(
-            f"unknown background origin {origin!r} for term {name!r}; "
-            f"allowed origins: {_allowed(ORIGINS)}"
-        )
-    if method not in METHODS:
-        raise ValueError(
-            f"unknown background method {method!r} for term {name!r}; "
-            f"allowed methods: {_allowed(METHODS)}"
-        )
-    if method != "analytic":
-        raise ValueError(
-            f"background method {method!r} is reserved by {BACKGROUND_SCHEMA} but not "
-            f"implemented for term {name!r}; the only method available in this version "
-            f"is 'analytic'"
-        )
-    if not isinstance(optional, bool):
-        raise ValueError(
-            f"background term {name!r} field 'optional' must be a boolean, "
-            f"got {type(optional).__name__}"
-        )
-    if not isinstance(params, Mapping):
-        raise ValueError(
-            f"background term {name!r} field 'params' must be a mapping, "
-            f"got {type(params).__name__}"
-        )
-    return BackgroundTerm(
-        name=name,
-        shape=shape,
-        origin=origin,
-        method=method,
-        params=_validate_params(shape, name, params),
-        optional=optional,
-    )
-
-
-def _resolve_preset_form(spec: Mapping[str, Any], enabled: bool,
-                         scale: float) -> ResolvedBackground:
-    preset_name = spec.get("preset", "none")
-    if not isinstance(preset_name, str) or preset_name not in PRESETS:
-        raise ValueError(
-            f"unknown background preset {preset_name!r}; "
-            f"allowed presets: {_allowed(PRESETS)}"
-        )
-    overrides = spec.get("overrides", {}) or {}
-    if not isinstance(overrides, Mapping):
-        raise ValueError(
-            f"background 'overrides' must be a mapping of term name -> parameters, "
-            f"got {type(overrides).__name__}"
-        )
-    base_terms = PRESETS[preset_name]["terms"]
-    by_name = {term.name: term for term in base_terms}
-    unknown = sorted(set(overrides) - set(by_name))
-    if unknown:
-        raise ValueError(
-            f"unknown background term(s) {', '.join(unknown)} in overrides for preset "
-            f"{preset_name!r}; allowed terms: "
-            f"{_allowed(by_name) if by_name else '(this preset has no terms)'}"
-        )
-    applied: Dict[str, Dict[str, float]] = {}
-    resolved_terms = []
-    for term in base_terms:
-        override = overrides.get(term.name)
-        if override is None:
-            resolved_terms.append(term)
-            continue
-        if not isinstance(override, Mapping):
-            raise ValueError(
-                f"background override for term {term.name!r} must be a mapping of "
-                f"parameter -> number, got {type(override).__name__}"
-            )
-        # Deep-merge numerics: unspecified parameters keep their preset value.
-        merged = dict(term.params)
-        merged.update(override)
-        resolved = _validate_term(
-            term.name, term.shape, term.origin, term.method, merged, term.optional
-        )
-        resolved_terms.append(resolved)
-        applied[term.name] = {
-            key: resolved.params[key] for key in override
-        }
-    return ResolvedBackground(
-        enabled=enabled,
-        preset=preset_name,
-        overrides_applied=applied,
-        terms=tuple(resolved_terms),
-        scale=scale,
-    )
-
-
-def _resolve_frozen_form(spec: Mapping[str, Any], enabled: bool,
-                         scale: float) -> ResolvedBackground:
-    raw_terms = spec.get("terms")
-    if not isinstance(raw_terms, (list, tuple)):
-        raise ValueError(
-            f"background 'terms' must be a list of term objects, "
-            f"got {type(raw_terms).__name__}"
-        )
-    terms = []
-    seen = set()
-    for index, raw in enumerate(raw_terms):
-        if not isinstance(raw, Mapping):
-            raise ValueError(
-                f"background term at index {index} must be a mapping, "
-                f"got {type(raw).__name__}"
-            )
-        allowed_keys = {"name", "shape", "origin", "method", "params", "optional"}
-        unknown = sorted(set(raw) - allowed_keys)
-        if unknown:
-            raise ValueError(
-                f"unknown field(s) {', '.join(unknown)} on background term at index "
-                f"{index}; allowed fields: {_allowed(allowed_keys)}"
-            )
-        term = _validate_term(
-            raw.get("name", ""),
-            raw.get("shape"),
-            raw.get("origin"),
-            raw.get("method", "analytic"),
-            raw.get("params", {}),
-            raw.get("optional", False),
-        )
-        if term.name in seen:
-            raise ValueError(f"duplicate background term name {term.name!r}")
-        seen.add(term.name)
-        terms.append(term)
-    return ResolvedBackground(
-        enabled=enabled,
-        preset=None,
-        overrides_applied={},
-        terms=tuple(terms),
-        scale=scale,
-    )
+    return scale
 
 
 def resolve(spec: Optional[Mapping[str, Any]]) -> ResolvedBackground:
-    """Resolve a background request spec into a fully numeric profile.
+    """Validate and normalize one catalog-v2 request.
 
-    Two accepted forms, and only two:
-
-    * **preset form** ``{"enabled": bool, "preset": str, "overrides": {term: {param: value}}}``
-      -- overrides deep-merge into the named preset's terms, so an unspecified
-      parameter keeps its preset value, and the merge is echoed back in
-      ``overrides_applied``.
-    * **frozen numeric form** ``{"enabled": bool, "terms": [term dicts]}`` -- the
-      self-contained form campaigns stamp onto every scan so they never depend
-      on a mutable server-side default or on preset retuning.
-
-    Both forms accept the optional top-level ``"scale"`` (float, finite, >= 0,
-    default ``1.0``): the strength knob, applied uniformly to every term's rate
-    at evaluation time.
-
-    ``None`` resolves to the disabled ``none`` preset. Every rejection raises
-    ``ValueError`` with a message naming the allowed values, which the API layer
-    turns into a 400. ``enabled=False`` still resolves and validates the terms,
-    so a disabled profile has a meaningful fingerprint.
+    Explicit requests must contain exactly ``catalog_version``, ``enabled``,
+    and ``sources``. Source entries must contain exactly ``enabled`` and
+    ``scale``. Omitted source IDs normalize as disabled at scale 1.0.
     """
     if spec is None:
-        return ResolvedBackground(
-            enabled=False, preset="none", overrides_applied={}, terms=()
-        )
+        spec = default_spec()
     if not isinstance(spec, Mapping):
         raise ValueError(
             f"background spec must be a mapping, got {type(spec).__name__}"
         )
-    allowed_keys = {"enabled", "preset", "overrides", "terms", "scale"}
-    unknown = sorted(set(spec) - allowed_keys)
+    required = {"catalog_version", "enabled", "sources"}
+    unknown = sorted(set(spec) - required)
+    missing = sorted(required - set(spec))
     if unknown:
         raise ValueError(
-            f"unknown background spec field(s) {', '.join(unknown)}; "
-            f"allowed fields: {_allowed(allowed_keys)}"
+            "unknown background spec field(s) "
+            f"{', '.join(unknown)}; allowed fields: "
+            "catalog_version, enabled, sources"
         )
-    if "terms" in spec and ("preset" in spec or "overrides" in spec):
+    if missing:
         raise ValueError(
-            "background spec mixes the frozen numeric form ('terms') with the preset "
-            "form ('preset'/'overrides'); supply exactly one of them"
+            f"background spec is missing required field(s) {', '.join(missing)}"
         )
-    enabled_raw = spec.get("enabled", True)
-    if not isinstance(enabled_raw, bool):
+
+    version = spec["catalog_version"]
+    if isinstance(version, bool) or not isinstance(version, int):
         raise ValueError(
-            f"background 'enabled' must be a boolean, got {type(enabled_raw).__name__}"
+            "background 'catalog_version' must be integer "
+            f"{CATALOG_VERSION}, got {version!r}"
         )
-    scale = _validate_scale(spec.get("scale", DEFAULT_SCALE))
-    if "terms" in spec:
-        return _resolve_frozen_form(spec, enabled_raw, scale)
-    return _resolve_preset_form(spec, enabled_raw, scale)
+    if version != CATALOG_VERSION:
+        raise ValueError(
+            f"background catalog version mismatch: expected {CATALOG_VERSION}, "
+            f"got {version}"
+        )
 
+    enabled = spec["enabled"]
+    if not isinstance(enabled, bool):
+        raise ValueError(
+            f"background 'enabled' must be a boolean, got {type(enabled).__name__}"
+        )
+    raw_sources = spec["sources"]
+    if not isinstance(raw_sources, Mapping):
+        raise ValueError(
+            "background 'sources' must be a mapping of source ID to state, "
+            f"got {type(raw_sources).__name__}"
+        )
+    unknown_sources = sorted(set(raw_sources) - set(SOURCES))
+    if unknown_sources:
+        raise ValueError(
+            f"unknown background source(s) {', '.join(unknown_sources)}; "
+            f"allowed sources: {', '.join(SOURCES)}"
+        )
 
-def _fingerprint_payload(resolved: ResolvedBackground) -> Dict[str, Any]:
-    """Canonical, source-independent payload: schema, enabled flag, numerics.
-
-    Deliberately excludes the preset name and the delivery source -- two specs
-    that resolve to identical physics must fingerprint identically whether they
-    arrived as a config default or a per-scan override. ``scale`` *is* included:
-    a different multiplier is different planted physics, so it must be a
-    different background identity.
-    """
-    return {
-        "background_schema": BACKGROUND_SCHEMA,
-        "enabled": bool(resolved.enabled),
-        "scale": float(resolved.scale),
-        "terms": [
-            term.to_dict()
-            for term in sorted(resolved.terms, key=lambda t: t.name)
-        ],
-    }
+    states = []
+    for source_id in SOURCES:
+        raw_state = raw_sources.get(source_id)
+        if raw_state is None:
+            states.append(
+                ResolvedSource(source_id, False, DEFAULT_SOURCE_SCALE)
+            )
+            continue
+        if not isinstance(raw_state, Mapping):
+            raise ValueError(
+                f"background source {source_id!r} must be a mapping, "
+                f"got {type(raw_state).__name__}"
+            )
+        state_fields = {"enabled", "scale"}
+        unknown_state = sorted(set(raw_state) - state_fields)
+        missing_state = sorted(state_fields - set(raw_state))
+        if unknown_state:
+            raise ValueError(
+                f"unknown field(s) {', '.join(unknown_state)} for background "
+                f"source {source_id!r}; allowed fields: enabled, scale"
+            )
+        if missing_state:
+            raise ValueError(
+                f"background source {source_id!r} is missing required field(s) "
+                f"{', '.join(missing_state)}"
+            )
+        source_enabled = raw_state["enabled"]
+        if not isinstance(source_enabled, bool):
+            raise ValueError(
+                f"background source {source_id!r} field 'enabled' must be a "
+                f"boolean, got {type(source_enabled).__name__}"
+            )
+        states.append(
+            ResolvedSource(
+                source_id=source_id,
+                enabled=source_enabled,
+                scale=_validate_scale(raw_state["scale"], source_id),
+            )
+        )
+    return ResolvedBackground(
+        catalog_version=CATALOG_VERSION,
+        enabled=enabled,
+        sources=tuple(states),
+    )
 
 
 def _digest(payload: Mapping[str, Any]) -> str:
@@ -662,271 +538,290 @@ def _digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+def _definition_fingerprint_view(definition: BackgroundSource) -> Dict[str, Any]:
+    return {
+        "category": definition.category,
+        "shape": definition.shape,
+        "base_numerics": _json_safe(definition.base_numerics),
+    }
+
+
 def profile_fingerprint(resolved: ResolvedBackground) -> str:
-    """Stable 16-hex-char identity of the pre-sample-scaling profile numerics."""
-    return _digest(_fingerprint_payload(resolved))
+    """Identity of all remembered settings and their catalog definitions."""
+    return _digest({
+        "background_schema": BACKGROUND_SCHEMA,
+        **normalized_spec(resolved),
+        "definitions": {
+            source_id: _definition_fingerprint_view(definition)
+            for source_id, definition in SOURCES.items()
+        },
+    })
 
 
-def _plants_anything(resolved: ResolvedBackground) -> bool:
-    """Whether this profile can contribute a single count.
-
-    A disabled profile and a ``scale = 0`` profile are the same thing at the
-    counts level: nothing is planted, nothing is refused, nothing is skipped.
-    """
-    return bool(resolved.enabled) and float(resolved.scale) > 0.0
-
-
-def _sample_scale_is_load_bearing(resolved: ResolvedBackground,
-                                  skipped: Sequence[str]) -> bool:
-    """Whether the sample scale actually multiplied a planted count."""
-    if not _plants_anything(resolved):
-        return False
-    skipped_set = set(skipped)
-    return any(
-        term.origin == "sample" and term.name not in skipped_set
-        for term in resolved.terms
+def _active_sources(resolved: ResolvedBackground) -> Tuple[ResolvedSource, ...]:
+    if not resolved.enabled:
+        return ()
+    return tuple(
+        state
+        for state in resolved.sources
+        if state.enabled and state.scale > 0.0
     )
 
 
-def effective_fingerprint(resolved: ResolvedBackground,
-                          sample_scale: Optional[float],
-                          skipped_terms: Sequence[str] = ()) -> str:
-    """Identity of the background as actually applied -- the pooling identity.
-
-    Adds the sample scale that was really used and the set of terms skipped for
-    want of one, so two scans that share a profile but differ in effective
-    sample scaling never pool together.
-
-    "Really used" is meant strictly, because this is a *pooling* key and an
-    over-separated key silently splits evidence that belongs together. The
-    sample scale enters the payload only when it was load-bearing -- the profile
-    is enabled, ``scale > 0``, and at least one ``sample``-origin term was not
-    skipped. A pure instrument/environment profile therefore fingerprints
-    identically across samples whose ``diffuse_background`` calibrations differ
-    but never touched a count; otherwise the payload carries ``None``.
-
-    A profile that plants nothing (disabled, or ``scale = 0``) also has no
-    skips -- :func:`mean_counts` returns an empty skip tuple for it -- so the
-    ``skipped`` payload is normalized to empty in that case, whatever the caller
-    passed. :func:`metadata_block` still *reports* the raw ``sample_scale`` and
-    ``skipped_terms`` it was given: execution info is provenance, not identity.
-    """
-    payload = _fingerprint_payload(resolved)
-    if _plants_anything(resolved):
-        skipped = sorted(str(name) for name in skipped_terms)
-        load_bearing = _sample_scale_is_load_bearing(resolved, skipped)
-    else:
-        skipped = []
-        load_bearing = False
-    payload["sample_scale"] = (
-        float(sample_scale) if (load_bearing and sample_scale is not None) else None
+def active_mean_sources(
+    resolved: ResolvedBackground,
+) -> Tuple[ResolvedSource, ...]:
+    """Return active smooth sources in stable catalog order."""
+    return tuple(
+        state for state in _active_sources(resolved)
+        if not state.definition.is_event
     )
-    payload["skipped"] = skipped
-    return _digest(payload)
 
 
-def _gaussian_pdf(w_meV: float, sigma: float) -> float:
-    """Unit-area Gaussian centred at E = 0."""
+def active_event_sources(
+    resolved: ResolvedBackground,
+) -> Tuple[ResolvedSource, ...]:
+    """Return active event sources in stable catalog order."""
+    return tuple(
+        state for state in _active_sources(resolved)
+        if state.definition.is_event
+    )
+
+
+def effective_fingerprint(resolved: ResolvedBackground) -> str:
+    """Identity of only the source physics actually eligible to plant counts."""
+    sources = {}
+    for state in _active_sources(resolved):
+        sources[state.source_id] = {
+            "scale": float(state.scale),
+            **_definition_fingerprint_view(state.definition),
+        }
+    return _digest({
+        "background_schema": BACKGROUND_SCHEMA,
+        "catalog_version": CATALOG_VERSION,
+        "sources": sources,
+    })
+
+
+def _positive_width(value: Optional[float], fallback: float) -> float:
+    if value is None:
+        return float(fallback)
+    width = float(value)
+    if not math.isfinite(width) or width <= 0.0:
+        return float(fallback)
+    return width
+
+
+def _gaussian_pdf(value: float, sigma: float) -> float:
+    """Unit-area Gaussian centered at zero."""
     return float(
-        np.exp(-0.5 * (w_meV / sigma) ** 2) / (sigma * math.sqrt(2.0 * math.pi))
+        np.exp(-0.5 * (value / sigma) ** 2)
+        / (sigma * math.sqrt(2.0 * math.pi))
     )
 
 
-def _lorentzian_pdf(w_meV: float, gamma: float) -> float:
-    """Unit-area Lorentzian centred at E = 0 (``gamma`` is the HWHM)."""
-    return float(gamma / (math.pi * (w_meV ** 2 + gamma ** 2)))
+def _lorentzian_pdf(value: float, gamma: float) -> float:
+    """Unit-area Lorentzian centered at zero (gamma is HWHM)."""
+    return float(gamma / (math.pi * (value ** 2 + gamma ** 2)))
 
 
-def term_rate(term: BackgroundTerm, w_meV: float,
-              sigma_e_meV: Optional[float] = None) -> float:
-    """Rate (counts per monitor count) of one term at energy transfer ``w_meV``.
-
-    ``sigma_e_meV`` is the point's marginalized resolution width; ``None`` (an
-    invalid resolution matrix) makes ``elastic_incoherent`` fall back to its
-    ``sigma_fallback_meV`` parameter rather than dropping the term.
-    """
-    params = term.params
-    if term.shape == "flat":
+def source_rate(
+    source: BackgroundSource,
+    context: BackgroundPointContext,
+) -> float:
+    """Smooth rate in counts per monitor count for one fixed source."""
+    params = source.base_numerics
+    if source.shape in EVENT_SHAPES:
+        raise ValueError(
+            f"event source {source.source_id!r} has no smooth mean rate"
+        )
+    if source.shape == "flat":
         return float(params["rate"])
-    if term.shape == "linear_e":
+    if source.shape == "linear_e":
         value = params["rate0"] + params["slope_per_meV"] * (
-            float(w_meV) - REFERENCE_ENERGY_MEV
+            context.w_meV - REFERENCE_ENERGY_MEV
         )
         return max(0.0, float(value))
-    if term.shape == "elastic_incoherent":
-        sigma = sigma_e_meV
-        if sigma is None or not math.isfinite(float(sigma)) or float(sigma) <= 0.0:
-            sigma = params["sigma_fallback_meV"]
-        return params["rate_integrated"] * _gaussian_pdf(float(w_meV), float(sigma))
-    if term.shape == "elastic_tail":
-        return params["rate_integrated"] * _lorentzian_pdf(
-            float(w_meV), params["gamma_meV"]
+    if source.shape == "elastic_incoherent":
+        sigma_e = _positive_width(
+            context.sigma_e_meV, params["sigma_fallback_meV"]
+        )
+        return float(params["rate_integrated"]) * _gaussian_pdf(
+            context.w_meV, sigma_e
+        )
+    if source.shape == "elastic_tail":
+        return float(params["rate_integrated"]) * _lorentzian_pdf(
+            context.w_meV, float(params["gamma_meV"])
+        )
+    if source.shape == "powder_elastic":
+        sigma_q = _positive_width(
+            context.sigma_q_inv_ang, params["sigma_q_fallback_inv_ang"]
+        )
+        sigma_e = _positive_width(
+            context.sigma_e_meV, params["sigma_e_fallback_meV"]
+        )
+        q_factor = sum(
+            float(line["relative_weight"]) * math.exp(
+                -0.5 * (
+                    (context.q_inv_ang - float(line["q_inv_ang"])) / sigma_q
+                ) ** 2
+            )
+            for line in params["lines"]
+        )
+        return (
+            float(params["rate_integrated_111"])
+            * q_factor
+            * _gaussian_pdf(context.w_meV, sigma_e)
         )
     raise ValueError(
-        f"unknown background shape {term.shape!r}; allowed shapes: {_allowed(SHAPES)}"
+        f"unknown background shape {source.shape!r}; "
+        f"allowed mean shapes: {', '.join(MEAN_SHAPES)}"
     )
 
 
-def mean_counts(resolved: ResolvedBackground,
-                w_meV: float,
-                sigma_e_meV: Optional[float],
-                number_neutrons: float,
-                sample_scale: Optional[float] = None
-                ) -> Tuple[float, Dict[str, float], Tuple[str, ...]]:
-    """Mean background counts at one point.
-
-    Returns ``(total, per_term, skipped)``. ``instrument`` and
-    ``sample_environment`` terms contribute ``N * rate(E)``; ``sample`` terms
-    contribute ``N * sample_scale * rate(E)`` using the sample's explicit
-    ``diffuse_background`` channel. A missing ``sample_scale`` skips terms
-    declared ``optional`` (recorded in ``skipped``) and raises
-    :class:`SampleScaleUnavailable` for the rest -- there is no implicit
-    fallback scale. A disabled profile contributes nothing at all.
-
-    The profile-level ``resolved.scale`` multiplies *every* term uniformly,
-    whatever its origin or shape -- it is the last factor applied here, and it
-    is never folded back into the term parameters.
-
-    ``scale = 0`` is "turned all the way down", and it is checked *before* the
-    sample-scale requirement: a profile that plants nothing must also refuse
-    nothing, so it returns ``(0.0, {}, ())`` rather than raising
-    :class:`SampleScaleUnavailable` over a term whose rate would have been
-    multiplied by zero. A profile with any nonzero strength keeps the strict
-    refusal.
-    """
-    if not resolved.enabled or float(resolved.scale) <= 0.0:
-        return 0.0, {}, ()
-    neutrons = float(number_neutrons)
-    strength = float(resolved.scale)
-    per_term: Dict[str, float] = {}
-    skipped: list[str] = []
-    missing_required: list[str] = []
-    for term in resolved.terms:
-        if term.origin == "sample":
-            if sample_scale is None:
-                (skipped if term.optional else missing_required).append(term.name)
-                continue
-            scale = neutrons * float(sample_scale)
-        else:
-            scale = neutrons
-        per_term[term.name] = strength * scale * term_rate(term, w_meV, sigma_e_meV)
-    if missing_required:
-        raise SampleScaleUnavailable(missing_required)
-    return float(sum(per_term.values())), per_term, tuple(skipped)
+def term_rate(
+    source: BackgroundSource,
+    context: BackgroundPointContext,
+) -> float:
+    """Compatibility name for :func:`source_rate`."""
+    return source_rate(source, context)
 
 
-def poisson_overlay(resolved: ResolvedBackground,
-                    w_meV: float,
-                    sigma_e_meV: Optional[float],
-                    number_neutrons: float,
-                    sample_scale: Optional[float],
-                    seed: int,
-                    index: int,
-                    stream: int = BACKGROUND_STREAM,
-                    rng_factory=np.random.default_rng) -> int:
-    """Integer background counts to add to one Monte-Carlo point.
+def mean_counts(
+    resolved: ResolvedBackground,
+    context: BackgroundPointContext,
+) -> Tuple[float, Dict[str, float]]:
+    """Return ``(total, per_source)`` smooth mean at one executed point."""
+    per_source = {
+        state.source_id: (
+            context.number_neutrons
+            * float(state.scale)
+            * source_rate(state.definition, context)
+        )
+        for state in active_mean_sources(resolved)
+    }
+    return float(sum(per_source.values())), per_source
 
-    The Monte-Carlo engine plants background as an *analytic additive Poisson
-    overlay* on the ray-traced counts: the mean comes from :func:`mean_counts`,
-    the draw from a dedicated per-point stream
-    ``rng_factory((seed, stream, index))``. ``stream`` keys that draw away from
-    every other ``(seed, index)`` stream in the codebase, so a background draw
-    can never consume a signal stream's numbers or vice versa; ``index`` keys it
-    per point, so a skipped point never shifts a later point's overlay.
 
-    The profile's ``scale`` reaches the draw through :func:`mean_counts`, so a
-    scaled overlay is a differently-drawn overlay, not a rescaled one.
-
-    Zero cost when there is nothing to plant: a disabled profile, ``scale = 0``,
-    or any other non-positive mean returns ``0`` **without** constructing an
-    RNG, which is what keeps a background-free Monte-Carlo scan bit-identical to
-    a pre-background one.
-
-    The draw is always Poisson, never a bare mean added to integer counts --
-    ``noiseless`` is a deterministic-engine concept that McStas ignores.
-    """
-    if not resolved.enabled:
-        return 0
-    mean, _, _ = mean_counts(
-        resolved, w_meV, sigma_e_meV, number_neutrons, sample_scale
-    )
-    if not math.isfinite(mean) or mean <= 0.0:
+def poisson_overlay(
+    resolved: ResolvedBackground,
+    context: BackgroundPointContext,
+    seed: int,
+    index: int,
+    stream: int = BACKGROUND_STREAM,
+    rng_factory=np.random.default_rng,
+) -> int:
+    """Draw the smooth additive overlay from its dedicated RNG stream."""
+    mean, _ = mean_counts(resolved, context)
+    if mean <= 0.0:
         return 0
     rng = rng_factory((int(seed), int(stream), int(index)))
     return int(rng.poisson(mean))
 
 
-def metadata_block(resolved: ResolvedBackground,
-                   source: str,
-                   sample_scale: Optional[float] = None,
-                   skipped_terms: Sequence[str] = (),
-                   background_seed: Optional[int] = None) -> Dict[str, Any]:
-    """Build the scan-metadata background block -- the one stamping helper.
+def stable_source_key(source_id: str) -> int:
+    """Stable 32-bit event-stream key for a source ID."""
+    digest = hashlib.sha256(source_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], byteorder="big", signed=False)
 
-    Both engines must call this, so a scan record's background provenance never
-    depends on which engine produced it. ``source`` is the delivery tag
-    (``config_default`` | ``per_scan_override``); it is recorded but excluded
-    from both fingerprints. A disabled profile still stamps a short block --
-    absence of background is provenance too.
 
-    ``scale`` is reported beside the terms rather than multiplied into them, so
-    the block reads "these preset numbers, times this knob". It appears in the
-    disabled short block too, for the same reason ``preset`` does: it is a
-    spec-level property of the profile, not a per-term detail.
+def draw_event_overlay(
+    resolved: ResolvedBackground,
+    context: BackgroundPointContext,
+    seed: int,
+    index: int,
+    stream: int = BACKGROUND_EVENT_STREAM,
+    rng_factory=np.random.default_rng,
+) -> Tuple[int, list[Dict[str, Any]]]:
+    """Draw sparse source-keyed events and return counts plus provenance rows."""
+    added_total = 0
+    realized = []
+    if context.number_neutrons <= 0.0:
+        return 0, realized
 
-    ``sample_scale`` and ``skipped_terms`` are reported exactly as given, even
-    when :func:`effective_fingerprint` drops them from the identity payload for
-    not being load-bearing: what the run saw is provenance, and provenance is
-    not identity.
-    """
-    profile = profile_fingerprint(resolved)
-    effective = effective_fingerprint(resolved, sample_scale, skipped_terms)
-    if not resolved.enabled:
-        return {
-            "background_schema": BACKGROUND_SCHEMA,
-            "enabled": False,
-            "preset": resolved.preset,
-            "scale": float(resolved.scale),
-            "source": source,
-            "profile_fingerprint": profile,
-            "effective_fingerprint": effective,
+    for state in active_event_sources(resolved):
+        source = state.definition
+        params = source.base_numerics
+        if source.shape != "cosmic_spike":
+            raise ValueError(
+                f"unknown background event shape {source.shape!r}; "
+                f"allowed event shapes: {', '.join(EVENT_SHAPES)}"
+            )
+        expected_events = (
+            float(state.scale)
+            * float(params["events_per_1e10_monitor"])
+            * context.number_neutrons
+            / 1.0e10
+        )
+        if expected_events <= 0.0:
+            continue
+        rng = rng_factory((
+            int(seed),
+            int(stream),
+            int(index),
+            stable_source_key(state.source_id),
+        ))
+        event_count = int(rng.poisson(expected_events))
+        if event_count <= 0:
+            continue
+        amplitudes = np.asarray(
+            rng.lognormal(
+                mean=math.log(float(params["amplitude_median_counts"])),
+                sigma=float(params["amplitude_log_sigma"]),
+                size=event_count,
+            ),
+            dtype=float,
+        )
+        cap = int(params["amplitude_cap_counts"])
+        rounded = np.clip(np.rint(amplitudes), 1, cap).astype(np.int64)
+        added_counts = int(np.sum(rounded, dtype=np.int64))
+        added_total += added_counts
+        realized.append({
+            "point_index": int(index),
+            "source_id": state.source_id,
+            "event_count": event_count,
+            "added_counts": added_counts,
+        })
+    return added_total, realized
+
+
+def metadata_block(
+    resolved: ResolvedBackground,
+    delivery_source: str,
+    background_seed: Optional[int] = None,
+    realized_events: Optional[list[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build the engine-independent ``tavi.background/2`` provenance block."""
+    sources: Dict[str, Dict[str, Any]] = {}
+    for state in resolved.sources:
+        definition = state.definition
+        sources[state.source_id] = {
+            "enabled": bool(state.enabled),
+            "scale": float(state.scale),
+            **definition.to_catalog_dict(),
         }
-    terms = []
-    for term in resolved.terms:
-        entry = term.to_dict()
-        entry["units"] = term.units()
-        terms.append(entry)
     block: Dict[str, Any] = {
         "background_schema": BACKGROUND_SCHEMA,
-        "preset_registry_version": PRESET_REGISTRY_VERSION,
-        "enabled": True,
-        "preset": resolved.preset,
-        "scale": float(resolved.scale),
-        "source": source,
-        "overrides_applied": {
-            name: dict(params)
-            for name, params in resolved.overrides_applied.items()
-        },
-        "terms": terms,
-        "parameter_units": {
-            shape: dict(units) for shape, units in PARAMETER_UNITS.items()
-        },
-        "sample_scale": None if sample_scale is None else float(sample_scale),
-        "skipped_terms": sorted(str(name) for name in skipped_terms),
-        "profile_fingerprint": profile,
-        "effective_fingerprint": effective,
+        "catalog_version": CATALOG_VERSION,
+        "enabled": bool(resolved.enabled),
+        "delivery_source": str(delivery_source),
+        "sources": sources,
+        "profile_fingerprint": profile_fingerprint(resolved),
+        "effective_fingerprint": effective_fingerprint(resolved),
     }
     if background_seed is not None:
         block["background_seed"] = int(background_seed)
-    return block
-
-
-def preset_catalog() -> Dict[str, Any]:
-    """Registry view for ``GET /schema``: every preset with full numerics."""
-    return {
-        name: {
-            "description": entry["description"],
-            "terms": [term.to_dict() for term in entry["terms"]],
+    sparse_events = [
+        {
+            "point_index": int(row["point_index"]),
+            "source_id": str(row["source_id"]),
+            "event_count": int(row["event_count"]),
+            "added_counts": int(row["added_counts"]),
         }
-        for name, entry in PRESETS.items()
-    }
+        for row in (realized_events or ())
+        if int(row.get("event_count", 0)) > 0
+        and int(row.get("added_counts", 0)) > 0
+    ]
+    if sparse_events:
+        block["realized_events"] = sparse_events
+    return block

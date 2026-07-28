@@ -123,13 +123,6 @@ class AnalyticCalibration:
 
     phonon: float
     elastic: float
-    # Scaling channel for ``origin="sample"`` background terms (tavi/background.py).
-    # Explicitly separate from ``phonon``: sample-borne diffuse background is not a
-    # fraction of the phonon cross-section, and reusing that factor would tie planted
-    # background truth to the signal magnitude. ``None`` means the sample has no
-    # diffuse-background calibration, so required sample-origin terms refuse the scan
-    # and optional ones are skipped -- never silently defaulted.
-    diffuse_background: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

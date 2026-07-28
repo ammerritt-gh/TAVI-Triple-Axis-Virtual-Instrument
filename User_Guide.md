@@ -67,6 +67,42 @@ Scan commands use the current setup of the instrument and *then* override it wit
 
 TAVI tries to inform you if you use the wrong commands, the wrong format, or if something looks off, but it will not catch everything.
 
+### Background
+
+The Simulation row places **Background** beside the execution-engine selector.
+Its checkbox is the global on/off switch and applies immediately. New sessions
+start with it off, so scans initially contain no planted background.
+
+Use **Background configuration…** to prepare the mix even while the global
+switch is off. The modal dialog groups the fixed sources by their assumed
+origin:
+
+- **Environment** — ambient effects assumed independent of the instrument and
+  sample, including sparse cosmic-ray spikes.
+- **Instrument** — sample-environment, mounting, or instrument-related effects,
+  including one control for six synthetic aluminum powder reflections from
+  aluminum caught in the beam.
+- **Sample** — elastic incoherent and broad-tail effects attributed to the
+  sample. Diffuse scattering is not offered because it is measured sample
+  physics, not background.
+
+Each available source has its own enable checkbox and scale multiplier. Hover
+over its label or scale control for a description of what the source represents.
+**Apply** commits every staged source setting; **Cancel** discards the dialog
+edits. Disabled sources retain their scales, and the button tooltip summarizes
+the configured sources. TAVI plants these configured sources into both McStas
+and deterministic scans; it does not fit or subtract background from data.
+The aluminum multiplier scales all six lines together. Their relative
+strengths follow McStas's aluminum powder convention; the Al (111) absolute
+reference is tuned for visible contamination (about 1% of the current
+reference Bragg peak), not claimed as a calibrated cross section. The cosmic
+multiplier changes event incidence only, not spike amplitude, and cosmic
+events remain present in noiseless deterministic scans.
+
+For the physical interpretation, equations, numerical calibration, and
+limitations of every source, see
+[`docs/BACKGROUND_MODEL.md`](docs/BACKGROUND_MODEL.md).
+
 ### Runtimes Cache
 TAVI keeps a local log of the last 100 scans and their runtimes, and uses these to estimate how long scans will take. If there is an issue with the time estimations, you can clear this log with the "Clear Runtimes" button. Note that scans under different conditions do have different times, and the times are only an estimate.
 
@@ -206,4 +242,4 @@ Computes the theoretical instrument resolution (FWHMs and projection ellipses) f
 
 ### Updates
 
-This user guide was last updated Jul. 18, 2026.
+This user guide was last updated Jul. 28, 2026.

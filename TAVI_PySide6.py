@@ -25,7 +25,11 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import parse_scan_steps, incremented_path_writing
 from tavi.sample_mount import SampleMount
-from tavi.tas_geometry import component_q_to_instrument_q, instrument_q_to_component_q
+from tavi.tas_geometry import (
+    component_q_to_instrument_q,
+    instrument_q_to_component_q,
+    lab_q_from_stt,
+)
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info)
 from tavi.runtime_tracker import RuntimeTracker
@@ -49,6 +53,7 @@ from tavi.space_groups import generate_allowed_reflections, get_space_group
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
+from gui.dialogs.background_config_dialog import BackgroundConfigDialog
 from gui.dialogs.diagnostic_config_dialog import DiagnosticConfigDialog
 
 # Physical constants
@@ -57,6 +62,23 @@ E_CHARGE = 1.602176634e-19  # electron charge
 K_B = 0.08617333262  # Boltzmann's constant in meV/K
 HBAR_meV = 6.582119569e-13  # H-bar in meV*s
 HBAR = 1.05459e-34  # H-bar in J*s
+
+
+def _background_q_magnitude(metadata):
+    """Return |Q| for any executed scan mode from frozen point metadata."""
+    q_components = (
+        metadata.get("qx"),
+        metadata.get("qy"),
+        metadata.get("qz"),
+    )
+    if all(value is not None for value in q_components):
+        return math.sqrt(sum(float(value) ** 2 for value in q_components))
+    q_lab = lab_q_from_stt(
+        float(metadata["Ki"]),
+        float(metadata["Kf"]),
+        float(metadata["stt"]),
+    )
+    return math.sqrt(sum(float(value) ** 2 for value in q_lab))
 
 
 def format_editable_number(value: float, places: int = 4) -> str:
@@ -222,8 +244,8 @@ class TaviApiBackend:
 
         The profile is a plain dict on the controller, not a widget, so this
         needs no GUI hop (same reasoning as :meth:`get_journal`). The response
-        is profile resolution only: no scan sample is chosen at config level,
-        so it carries no sample scaling.
+        is the complete normalized catalog-backed configuration and resolved
+        provenance block.
         """
         return self._controller.background_profile_state()
 
@@ -567,7 +589,11 @@ class TaviApiBackend:
         """
         launch_state['background'] = copy.deepcopy(
             background if background is not None
-            else controller.background_profile
+            else getattr(
+                controller,
+                'background_profile',
+                _background.default_spec(),
+            )
         )
         launch_state['background_source'] = (
             'per_scan_override' if background is not None else 'config_default'
@@ -576,52 +602,24 @@ class TaviApiBackend:
     def _background_validation(self, controller, launch_state):
         """``(block, blocker)`` for the launch state's background at /validate.
 
-        Resolves the profile against the sample scale the deterministic engine
-        would apply for this launch state's frozen ``sample_key``, so a
-        validated body cannot be rejected at scan time for a background reason.
-        ``blocker`` is ``None`` when the profile is applicable, else the
-        blockers-list entry (``invalid_background`` for a spec ``resolve``
-        rejects; ``sample_background_scale_unavailable`` when a required
-        sample-origin term has no ``diffuse_background`` calibration).
+        Background sources are sample-independent configuration in schema v2,
+        so validation only needs to resolve the complete request. ``blocker`` is
+        ``None`` when it resolves and ``invalid_background`` otherwise.
         """
         source = launch_state.get('background_source') or 'config_default'
-        block = {
-            "enabled": None,
-            "source": source,
-            "profile_fingerprint": None,
-            "effective_fingerprint": None,
-            "sample_scale": None,
-            "skipped_terms": [],
-        }
         try:
             resolved = _background.resolve(launch_state.get('background'))
         except ValueError as exc:
+            block = {
+                "enabled": None,
+                "delivery_source": source,
+                "profile_fingerprint": None,
+                "effective_fingerprint": None,
+            }
             block["error"] = {"id": "invalid_background", "message": str(exc)}
             return block, "invalid_background: %s" % exc
-
-        block["enabled"] = bool(resolved.enabled)
-        block["profile_fingerprint"] = _background.profile_fingerprint(resolved)
-        scale = controller._background_sample_scale(launch_state.get('sample_key'))
-        try:
-            # Zero neutrons: only the skipped-term set and the sample-scale
-            # refusal are wanted here, never a count.
-            _, _, skipped = _background.mean_counts(
-                resolved, 0.0, None, 0.0, scale
-            )
-        except _background.SampleScaleUnavailable as exc:
-            block["error"] = {
-                "id": "sample_background_scale_unavailable",
-                "message": str(exc),
-                "terms": list(exc.terms),
-            }
-            return block, "sample_background_scale_unavailable: %s" % exc
-
-        block["sample_scale"] = scale
-        block["skipped_terms"] = list(skipped)
-        block["effective_fingerprint"] = _background.effective_fingerprint(
-            resolved, scale, skipped
-        )
-        return block, None
+        launch_state['background'] = _background.normalized_spec(resolved)
+        return _background.metadata_block(resolved, source), None
 
     def _submit_scan_on_gui(self, patch, force, idempotency_key=None,
                             isolated=False, allow_partial=False,
@@ -1370,16 +1368,13 @@ class TAVIController(QObject):
         # Diagnostics button
         self.window.simulation_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
 
-        # Background row -> controller profile. set_background_display blocks
-        # these signals, so a programmatic sync never loops back.
+        # Global background gate applies immediately.  Per-source edits are
+        # staged in the modal configuration dialog until the user accepts it.
         self.window.simulation_dock.background_enable_check.toggled.connect(
-            self._on_background_row_changed
+            self._on_background_enabled_toggled
         )
-        self.window.simulation_dock.background_preset_combo.currentIndexChanged.connect(
-            self._on_background_row_changed
-        )
-        self.window.simulation_dock.background_scale_spin.valueChanged.connect(
-            self._on_background_row_changed
+        self.window.simulation_dock.background_config_button.clicked.connect(
+            self.configure_background
         )
         self._refresh_background_row()
         
@@ -2346,102 +2341,53 @@ class TAVIController(QObject):
         return resolution(cfg, method=method).to_dict()
 
     def background_profile_state(self):
-        """``{"spec", "resolved"}`` view of the stored background profile.
-
-        Profile resolution only: ``sample_scale`` is ``None`` and no term is
-        skipped, because no scan sample is chosen at config level. Effective
-        sample scaling exists per scan and appears in scan metadata.
-        """
+        """Return the complete canonical configuration and resolved metadata."""
         resolved = _background.resolve(self.background_profile)
         return {
-            "spec": copy.deepcopy(self.background_profile),
+            "spec": _background.normalized_spec(resolved),
             "resolved": _background.metadata_block(
-                resolved, "config_default", sample_scale=None, skipped_terms=()
+                resolved, "config_default"
             ),
         }
 
     def set_background_profile(self, spec):
         """Validate and store the instrument-level background profile.
 
-        ``spec`` is a ``tavi.background`` request spec (preset form or frozen
-        numeric form) and REPLACES the stored profile wholesale -- it never
-        merges. A ``ValueError`` from ``resolve`` propagates to the caller (the
-        API turns it into a 400) with the stored profile untouched.
-
-        Returns ``{"spec", "resolved"}`` with the same profile-only resolution
-        as :meth:`background_profile_state`: ``sample_scale=None`` and no
-        skipped terms, since no scan sample is chosen yet.
+        A request REPLACES the stored configuration wholesale -- it never
+        merges.  Sparse source maps are normalized to the complete catalog
+        before storage. A ``ValueError`` from ``resolve`` propagates with the
+        previous state untouched.
         """
         resolved = _background.resolve(spec)
-        self.background_profile = (
-            copy.deepcopy(spec) if spec is not None
-            else copy.deepcopy(self.DEFAULT_BACKGROUND_PROFILE)
-        )
+        self.background_profile = _background.normalized_spec(resolved)
         self._refresh_background_row()
+        active = sum(1 for state in resolved.sources if state.enabled)
         self._journal.record(
             "parameter",
-            "background profile: enabled=%s preset=%s scale=%g fingerprint=%s"
-            % (resolved.enabled, resolved.preset, resolved.scale,
+            "background configuration: enabled=%s active_sources=%d fingerprint=%s"
+            % (resolved.enabled, active,
                _background.profile_fingerprint(resolved)),
         )
         return {
-            "spec": copy.deepcopy(self.background_profile),
+            "spec": _background.normalized_spec(resolved),
             "resolved": _background.metadata_block(
-                resolved, "config_default", sample_scale=None, skipped_terms=()
+                resolved, "config_default"
             ),
         }
 
-    def _background_sample_scale(self, sample_key):
-        """Sample ``diffuse_background`` scale the deterministic engine applies.
-
-        Mirrors ``deterministic_engine.ground_truth`` /
-        ``_validated_calibration`` without building the (asset-loading) model,
-        so /validate refuses exactly where a scan would: the no-sample path,
-        an uncalibrated sample, and an unusable stored value all yield ``None``
-        rather than a guessed scale.
-        """
-        try:
-            spec = next(
-                (s for s in self.descriptor.samples if s.id == sample_key), None
-            )
-        except Exception as exc:
-            self.print_to_message_center(
-                f"Could not look up sample '{sample_key}' for background scaling: {exc}"
-            )
-            return None
-        if spec is None or getattr(spec, "component_type", None) is None:
-            return None
-        calibration = getattr(spec, "analytic_calibration", None)
-        diffuse = getattr(calibration, "diffuse_background", None)
-        if diffuse is None:
-            return None
-        try:
-            diffuse = float(diffuse)
-        except (TypeError, ValueError) as exc:
-            self.print_to_message_center(
-                f"Sample '{sample_key}' has an unusable diffuse_background ({exc}); "
-                "sample-origin background terms will be refused or skipped"
-            )
-            return None
-        if not math.isfinite(diffuse) or diffuse < 0.0:
-            return None
-        return diffuse
-
     @staticmethod
     def _background_summary(resolved):
-        """Short human echo of a resolved profile for the GUI row.
-
-        The strength knob is named only when it is doing something: an "x 1"
-        on every profile would be noise in an already-elided label.
-        """
-        if not resolved.terms:
-            return "no terms"
+        """Concise configuration-button tooltip for enabled source knobs."""
+        enabled = [state for state in resolved.sources if state.enabled]
+        if not enabled:
+            return "No background sources are enabled."
         summary = ", ".join(
-            "%s (%s)" % (term.name, term.shape) for term in resolved.terms
+            "%s ×%g" % (state.definition.label, state.scale)
+            for state in enabled
         )
-        if resolved.scale != _background.DEFAULT_SCALE:
-            summary = "%s  [all terms x %g]" % (summary, resolved.scale)
-        return summary
+        if not resolved.enabled:
+            return "Global background is off. Configured: " + summary
+        return "Active: " + summary
 
     def _refresh_background_row(self):
         """Sync the simulation dock's background row with the stored profile.
@@ -2454,47 +2400,43 @@ class TAVIController(QObject):
         if dock is None:
             return
         try:
-            profile = self.background_profile or {}
-            resolved = _background.resolve(profile)
+            resolved = _background.resolve(self.background_profile)
             dock.set_background_display(
-                resolved.enabled, resolved.preset,
-                self._background_summary(resolved),
-                resolved.scale,
+                resolved.enabled, self._background_summary(resolved)
             )
         except Exception as exc:
             self.print_to_message_center(
                 f"Could not refresh the background row: {exc}"
             )
 
-    def _on_background_row_changed(self, *_args):
-        """GUI background row -> controller profile (preset form + scale knob).
-
-        Per-term numeric overrides are an API-only capability, so a GUI edit
-        always sends the plain preset form plus the profile-level ``scale``
-        knob, which is a user control. A rejected spec is logged and the row is
-        re-synced from the stored profile, so the widgets can never disagree
-        with what will actually be planted.
-
-        The row cannot express a frozen numeric profile (one an API client set
-        with an explicit ``terms`` list), so a GUI edit replaces it with the
-        chosen preset. That replacement is announced rather than silent.
-        """
+    def _on_background_enabled_toggled(self, enabled):
+        """Apply the global gate immediately while retaining all source knobs."""
         try:
-            spec = self.window.simulation_dock.get_background_spec()
+            resolved = _background.resolve(self.background_profile)
+            spec = _background.normalized_spec(resolved)
+            spec["enabled"] = bool(enabled)
+            self.set_background_profile(spec)
         except Exception as exc:
-            self.print_to_message_center(f"Could not read the background row: {exc}")
-            self._refresh_background_row()
-            return
-        if isinstance(self.background_profile, dict) and \
-                "terms" in self.background_profile:
             self.print_to_message_center(
-                "Replacing the frozen numeric background profile with preset "
-                f"'{spec['preset']}' (the GUI row has no numeric form)"
+                f"Could not update the global background switch: {exc}"
             )
+            self._refresh_background_row()
+
+    def configure_background(self):
+        """Open the staged per-source editor and apply only an accepted result."""
+        spec = BackgroundConfigDialog.configure(
+            copy.deepcopy(self.background_profile), parent=self.window
+        )
+        if spec is None:
+            self.print_to_message_center("Background configuration cancelled")
+            return
         try:
             self.set_background_profile(spec)
+            self.print_to_message_center("Background configuration applied")
         except ValueError as exc:
-            self.print_to_message_center(f"Background profile rejected: {exc}")
+            self.print_to_message_center(
+                f"Background configuration rejected: {exc}"
+            )
             self._refresh_background_row()
 
     def build_api_launch_state(self, patch):
@@ -4855,30 +4797,29 @@ class TAVIController(QObject):
             }
         return cache
 
-    # Default-off background profile: an unconfigured session plants nothing.
-    DEFAULT_BACKGROUND_PROFILE = {
-        "enabled": False, "preset": "none", "overrides": {},
-    }
+    # Default-off gate with the complete realistic catalog prepared at x1.
+    DEFAULT_BACKGROUND_PROFILE = _background.default_spec()
 
     def _saved_background_profile(self, parameters):
         """Background profile from a saved block, defaulting off on any problem.
 
-        A stored spec that no longer resolves (retired preset, hand-edited
-        file) must never stop the session from starting, so it is logged and
-        replaced by the default-off profile rather than raised.
+        Only the current catalog is accepted. Pre-catalog, old-version, and
+        malformed state is visibly discarded and replaced by the safe
+        default-off configuration; no released background campaign depends on
+        preserving those experimental settings.
         """
         default = copy.deepcopy(self.DEFAULT_BACKGROUND_PROFILE)
         spec = parameters.get("background_profile")
         if spec is None:
             return default
         try:
-            _background.resolve(spec)
+            return _background.normalized_spec(_background.resolve(spec))
         except (ValueError, TypeError) as exc:
             self.print_to_message_center(
-                f"Saved background profile is invalid ({exc}); background disabled"
+                "Saved background profile is incompatible with the current "
+                f"catalog ({exc}); reset to safe defaults with background disabled"
             )
             return default
-        return copy.deepcopy(spec)
 
     def load_parameters(self):
         """Load parameters from JSON file."""
@@ -6598,49 +6539,24 @@ class TAVIController(QObject):
                 {"method": "GET", "path": "/background", "description": "Configured background profile (spec + resolved)."},
                 {"method": "PUT", "path": "/background", "description": "Replace the background profile wholesale."},
             ],
-            # Generated background truth (tavi/background.py). Presets carry
-            # full numerics so a client can freeze one into the self-contained
-            # 'terms' form instead of depending on this server's registry.
+            # Generated background truth (tavi/background.py).  Clients pin the
+            # catalog version and request each stable source id independently.
             "background": {
                 "background_schema": _background.BACKGROUND_SCHEMA,
-                "preset_registry_version": _background.PRESET_REGISTRY_VERSION,
-                "presets": _background.preset_catalog(),
-                "shapes": list(_background.SHAPES),
-                "origins": list(_background.ORIGINS),
-                "parameter_units": {
-                    shape: dict(units)
-                    for shape, units in _background.PARAMETER_UNITS.items()
-                },
-                "methods": {"analytic": "implemented", "simulated": "reserved"},
-                "scaling": {
-                    "instrument": "counts = N * rate",
-                    "sample_environment": "counts = N * rate",
-                    "sample": "counts = N * diffuse_background * rate",
-                },
-                "spec_forms": {
-                    "preset": {
-                        "enabled": "boolean",
-                        "preset": "string (one of 'presets')",
-                        "overrides": "{term name: {parameter: number}}",
-                        "scale": "number >= 0 (default 1.0)",
+                "catalog_version": _background.CATALOG_VERSION,
+                "categories": list(_background.CATEGORIES),
+                "sources": _background.source_catalog(),
+                "request": {
+                    "catalog_version": "required integer matching catalog_version",
+                    "enabled": "required boolean global gate",
+                    "sources": {
+                        "<source id>": {
+                            "enabled": "required boolean",
+                            "scale": "required finite number >= 0",
+                        }
                     },
-                    "frozen": {
-                        "enabled": "boolean",
-                        "terms": "[{name, shape, origin, method, params, optional}]",
-                        "scale": "number >= 0 (default 1.0)",
-                    },
-                },
-                "scale": {
-                    "default": _background.DEFAULT_SCALE,
-                    "description": (
-                        "Profile strength knob: multiplies every term's rate "
-                        "uniformly, whatever its origin or shape. The preset "
-                        "roster is anchored at a signal-to-background ratio of "
-                        "%g:1 against the Al_phonon_DFT peak rate (%g counts "
-                        "per monitor count) at scale 1."
-                        % (_background.DEFAULT_SIGNAL_TO_BACKGROUND,
-                           _background.PEAK_SIGNAL_RATE)
-                    ),
+                    "omitted_sources": "disabled at scale 1.0",
+                    "replacement_semantics": "wholesale; never merges",
                 },
                 "spec_fields": sorted(BACKGROUND_SPEC_KEYS),
             },
@@ -6886,10 +6802,8 @@ class TAVIController(QObject):
         )
 
         # -- background: planted truth resolved once for the whole scan. A
-        #    per-scan override replaces the controller profile wholesale (never
-        #    merges); its absence from the launch state means config default.
-        #    The sample scale comes from the validated analytic calibration, so
-        #    sample-origin terms never borrow the phonon factor.
+        #    per-scan override replaces the controller configuration wholesale
+        #    (never merges); all source strengths are independent of the sample.
         background_spec = (
             launch_state['background'] if 'background' in launch_state
             else getattr(self, 'background_profile', None)
@@ -6897,30 +6811,8 @@ class TAVIController(QObject):
         background_source = (
             launch_state.get('background_source') or 'config_default'
         )
-        background_scale = getattr(
-            getattr(sqw, 'calibration', None), 'diffuse_background', None
-        )
         try:
             background = _background.resolve(background_spec)
-            # Fail fast: the skipped-term set and the sample-scale refusal depend
-            # only on the sample scale, so one probe settles both for every point
-            # rather than failing halfway through a scan.
-            _, _, background_skipped = _background.mean_counts(
-                background, 0.0, None, number_neutrons, background_scale
-            )
-        except _background.SampleScaleUnavailable as exc:
-            reason = "sample_background_scale_unavailable: %s" % exc
-            self.message_printed.emit(
-                "Deterministic engine: %s -- job failed." % reason
-            )
-            if job is not None:
-                with job.lock:
-                    job.state = JobState.FAILED
-                    job.error = reason
-                    job.finished_at = time.time()
-                    job.notify_state_change()
-            self.scan_completed.emit()
-            return data_folder
         except ValueError as exc:
             reason = "invalid background profile: %s" % exc
             self.message_printed.emit(
@@ -6934,10 +6826,18 @@ class TAVIController(QObject):
                     job.notify_state_change()
             self.scan_completed.emit()
             return data_folder
-        # sigma_E is only needed by resolution-width terms; computing it costs a
-        # 4x4 inversion per point, so it stays off unless a term reads it.
-        background_needs_sigma = background.enabled and any(
-            term.shape == 'elastic_incoherent' for term in background.terms
+        # Marginal widths require a 4x4 inversion per point, so compute them
+        # only when an active smooth source consumes one.
+        active_mean_shapes = {
+            state.definition.shape
+            for state in _background.active_mean_sources(background)
+        }
+        background_needs_sigma_e = bool(
+            active_mean_shapes & {'elastic_incoherent', 'powder_elastic'}
+        )
+        background_needs_sigma_q = 'powder_elastic' in active_mean_shapes
+        background_has_events = bool(
+            _background.active_event_sources(background)
         )
 
         total_scans = len(scan_parameter_input)
@@ -6962,6 +6862,7 @@ class TAVIController(QObject):
         meta_res = None
         simulation_stopped = False
         simulation_error_message = None
+        realized_background_events = []
 
         # Accumulators for the output data file (parity with the McStas path).
         if is_2d_scan:
@@ -7038,10 +6939,7 @@ class TAVIController(QObject):
                         hkl = tuple(self._sample_q_to_hkl(qx, qy, qz, vals))
                     else:
                         hkl = (0.0, 0.0, 0.0)
-                    if qx is not None:
-                        q0 = math.sqrt(qx * qx + qy * qy + qz * qz)
-                    else:
-                        q0 = 0.0
+                    q0 = _background_q_magnitude(md)
 
                     # Resolution kernel for this point (cheap: one config + solve).
                     rr = None
@@ -7055,12 +6953,23 @@ class TAVIController(QObject):
                             % (i, exc)
                         )
 
-                    sigma_e = (
-                        _det.sigma_e_mev(rr) if background_needs_sigma else None
+                    sigma_q = (
+                        _det.marginal_sigma(rr, 'dq_par')
+                        if background_needs_sigma_q else None
                     )
-                    bg_mean, _, _ = _background.mean_counts(
-                        background, w, sigma_e, number_neutrons,
-                        background_scale,
+                    sigma_e = (
+                        _det.marginal_sigma(rr, 'dE')
+                        if background_needs_sigma_e else None
+                    )
+                    background_context = _background.BackgroundPointContext(
+                        q_inv_ang=q0,
+                        w_meV=w,
+                        sigma_q_inv_ang=sigma_q,
+                        sigma_e_meV=sigma_e,
+                        number_neutrons=number_neutrons,
+                    )
+                    bg_mean, _ = _background.mean_counts(
+                        background, background_context
                     )
 
                     rng = None if noiseless else np.random.default_rng((int(seed), i))
@@ -7070,6 +6979,17 @@ class TAVIController(QObject):
                         background_mean=bg_mean,
                     )
                     counts = float(out['counts'])
+                    if background_has_events:
+                        event_counts, point_events = (
+                            _background.draw_event_overlay(
+                                background,
+                                background_context,
+                                seed,
+                                i,
+                            )
+                        )
+                        counts += event_counts
+                        realized_background_events.extend(point_events)
                     self.message_printed.emit(
                         "Final counts (analytic): %s" % (counts,)
                     )
@@ -7158,9 +7078,14 @@ class TAVIController(QObject):
                 # Stamped even when the profile is disabled and even when
                 # cn_valid is false: absence of background is provenance too.
                 job.result.metadata['background'] = _background.metadata_block(
-                    background, background_source,
-                    sample_scale=background_scale,
-                    skipped_terms=background_skipped,
+                    background,
+                    background_source,
+                    background_seed=(
+                        seed
+                        if background_has_events and number_neutrons > 0
+                        else None
+                    ),
+                    realized_events=realized_background_events,
                 )
 
         # One data file (parity with McStas output; the folder already exists and
@@ -7601,12 +7526,6 @@ class TAVIController(QObject):
         background_source = (
             launch_state.get('background_source') or 'config_default'
         )
-        # Sample scale via the controller helper /validate uses, so the McStas
-        # path refuses (or skips) exactly where validation said it would; the
-        # analytic ground-truth model is never built on this path.
-        background_scale = self._background_sample_scale(
-            launch_state.get('sample_key')
-        )
         # Frozen background seed: an explicit body seed wins, else a stable hash
         # of the job id (crc32 is deterministic across processes, unlike Python's
         # salted hash()), mirroring the deterministic branch. Frozen into the
@@ -7619,18 +7538,8 @@ class TAVIController(QObject):
         launch_state['background_seed'] = background_seed
         try:
             background = _background.resolve(background_spec)
-            # Fail fast: the skipped-term set and the sample-scale refusal depend
-            # only on the sample scale, so one probe settles both before any
-            # compile rather than failing halfway through a scan.
-            _, _, background_skipped = _background.mean_counts(
-                background, 0.0, None, number_neutrons, background_scale
-            )
-        except (_background.SampleScaleUnavailable, ValueError) as exc:
-            reason = (
-                "sample_background_scale_unavailable: %s" % exc
-                if isinstance(exc, _background.SampleScaleUnavailable)
-                else "invalid background profile: %s" % exc
-            )
+        except ValueError as exc:
+            reason = "invalid background profile: %s" % exc
             self.message_printed.emit("McStas engine: %s -- job failed." % reason)
             if job is not None:
                 with job.lock:
@@ -7642,16 +7551,26 @@ class TAVIController(QObject):
             # failure; without it display_dock never leaves its in-progress state.
             self.scan_completed.emit()
             return data_folder
-        # sigma_E is only needed by resolution-width terms; computing it costs a
-        # resolution solve plus a 4x4 inversion per point, so it stays off unless
-        # a term reads it (a McStas point computes no resolution matrix itself).
-        background_needs_sigma = background.enabled and any(
-            term.shape == 'elastic_incoherent' for term in background.terms
+        # A McStas point has no resolution matrix of its own. Solve and invert
+        # only when an active smooth source consumes a marginalized width.
+        active_mean_shapes = {
+            state.definition.shape
+            for state in _background.active_mean_sources(background)
+        }
+        background_needs_sigma_e = bool(
+            active_mean_shapes & {'elastic_incoherent', 'powder_elastic'}
+        )
+        background_needs_sigma_q = 'powder_elastic' in active_mean_shapes
+        background_has_events = bool(
+            _background.active_event_sources(background)
         )
         if background.enabled:
+            enabled_sources = sum(
+                1 for state in background.sources if state.enabled
+            )
             self.message_printed.emit(
-                "Background overlay: preset=%s, seed=%d, fingerprint=%s"
-                % (background.preset, background_seed,
+                "Background overlay: sources=%d, seed=%d, fingerprint=%s"
+                % (enabled_sources, background_seed,
                    _background.profile_fingerprint(background))
             )
 
@@ -7688,6 +7607,7 @@ class TAVIController(QObject):
         
         total_counts = 0
         max_counts = 0
+        realized_background_events = []
         
         # Track individual scan times for runtime recording
         executed_scan_times = []
@@ -7944,42 +7864,64 @@ class TAVIController(QObject):
                     # (N), so the background overlay below leaves it untouched.
                     intensity, intensity_error, counts = read_1Ddetector_file(scan_folder)
 
-                    # Additive analytic background overlay on the ray-traced
-                    # counts (docs plan stage 6). Always Poisson-drawn: a bare
-                    # mean must never be added to integer McStas counts, and
-                    # `noiseless` stays a deterministic-engine concept that
-                    # McStas ignores. Zero work when the profile is disabled.
+                    # Add smooth background through its dedicated Poisson stream,
+                    # then sparse events through a source-keyed event stream.
+                    # Both alter detector counts only; weighted intensity stays
+                    # the unmodified McStas reading.
                     if background.enabled and counts is not None:
+                        q0 = _background_q_magnitude(metadata)
+                        sigma_q = None
                         sigma_e = None
-                        if background_needs_sigma:
-                            # Only an elastic_incoherent term reads sigma_E, so
-                            # the resolution solve happens under that flag alone.
+                        if background_needs_sigma_q or background_needs_sigma_e:
                             try:
-                                from tavi.deterministic_engine import sigma_e_mev as _sigma_e_mev
+                                from tavi.deterministic_engine import marginal_sigma as _marginal_sigma
                                 from tavi.resolution import resolution as _resolution
-                                if qx is not None:
-                                    q0 = math.sqrt(qx * qx + qy * qy + qz * qz)
-                                else:
-                                    q0 = 0.0
-                                sigma_e = _sigma_e_mev(
-                                    _resolution(
-                                        self.instrument.resolution_config(
-                                            vals, q0, float(deltaE)
-                                        )
+                                background_resolution = _resolution(
+                                    self.instrument.resolution_config(
+                                        vals, q0, float(deltaE)
                                     )
                                 )
+                                if background_needs_sigma_q:
+                                    sigma_q = _marginal_sigma(
+                                        background_resolution, 'dq_par'
+                                    )
+                                if background_needs_sigma_e:
+                                    sigma_e = _marginal_sigma(
+                                        background_resolution, 'dE'
+                                    )
                             except Exception as exc:
                                 self.message_printed.emit(
-                                    f"Point {i}: background resolution width "
-                                    f"unavailable ({exc}); using the term's "
-                                    f"sigma_fallback_meV"
+                                    f"Point {i}: background resolution widths "
+                                    f"unavailable ({exc}); using catalog "
+                                    f"fallback widths"
                                 )
+                        background_context = _background.BackgroundPointContext(
+                            q_inv_ang=q0,
+                            w_meV=float(deltaE),
+                            sigma_q_inv_ang=sigma_q,
+                            sigma_e_meV=sigma_e,
+                            number_neutrons=number_neutrons,
+                        )
                         bg_counts = _background.poisson_overlay(
-                            background, float(deltaE), sigma_e, number_neutrons,
-                            background_scale, background_seed, i,
+                            background,
+                            background_context,
+                            background_seed,
+                            i,
                         )
                         if bg_counts:
                             counts = counts + bg_counts
+                        if background_has_events:
+                            event_counts, point_events = (
+                                _background.draw_event_overlay(
+                                    background,
+                                    background_context,
+                                    background_seed,
+                                    i,
+                                )
+                            )
+                            if event_counts:
+                                counts = counts + event_counts
+                            realized_background_events.extend(point_events)
 
                     message = f"Final counts at detector: {int(counts)}"
                     self.message_printed.emit(message)
@@ -8327,11 +8269,15 @@ class TAVIController(QObject):
             with job.lock:
                 job.result.metadata['background'] = _background.metadata_block(
                     background, background_source,
-                    sample_scale=background_scale,
-                    skipped_terms=background_skipped,
                     background_seed=(
-                        background_seed if background.enabled else None
+                        background_seed
+                        if number_neutrons > 0 and (
+                            _background.active_mean_sources(background)
+                            or background_has_events
+                        )
+                        else None
                     ),
+                    realized_events=realized_background_events,
                 )
 
         # Finalize job bookkeeping: pick the terminal state from the same flags

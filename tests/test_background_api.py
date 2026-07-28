@@ -1,13 +1,4 @@
-"""Tests for the background API surface (stage 3: API + GUI + persistence).
-
-Pure stdlib + Qt-free, following ``test_engine_dispatch.py``: the real
-importable validators are exercised directly, and the routing/status-code
-contract is driven through a real ``TaviApiServer`` with a duck-typed fake
-backend. The controller-side wiring (``TaviApiBackend.get_background`` /
-``set_background``, ``build_api_schema``'s background block, the GUI row) is
-Qt-bound -- ``TAVI_PySide6`` imports PySide6 + mcstasscript -- so it is covered
-by source scans here, in the same style as ``test_fitting_dock.py``.
-"""
+"""Qt-free HTTP and source-wiring tests for ``tavi.background/2``."""
 import copy
 import json
 import os
@@ -18,17 +9,24 @@ import pytest
 
 from tavi import background
 from tavi.api_server import (
-    ApiError, TaviApiServer, API_PREFIX,
-    BACKGROUND_SPEC_KEYS, SCAN_BODY_KEYS, VALIDATE_BODY_KEYS,
-    parse_scan_background, parse_scan_engine,
+    API_PREFIX,
+    ApiError,
+    BACKGROUND_SPEC_KEYS,
+    SCAN_BODY_KEYS,
+    VALIDATE_BODY_KEYS,
+    TaviApiServer,
+    parse_scan_background,
+    parse_scan_engine,
 )
-from tavi.scan_jobs import ScanJob
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTROLLER_PATH = os.path.join(REPO_ROOT, "TAVI_PySide6.py")
 SIMULATION_DOCK_PATH = os.path.join(
     REPO_ROOT, "gui", "docks", "unified_simulation_dock.py"
+)
+DIALOG_PATH = os.path.join(
+    REPO_ROOT, "gui", "dialogs", "background_config_dialog.py"
 )
 
 
@@ -37,149 +35,74 @@ def _read(path):
         return handle.read()
 
 
-# ==========================================================================
-# parse_scan_background -- the real body validator
-# ==========================================================================
+def _spec(enabled=True, sources=None):
+    return {
+        "catalog_version": background.CATALOG_VERSION,
+        "enabled": enabled,
+        "sources": sources if sources is not None else {
+            "environment_flat": {"enabled": True, "scale": 1.0},
+        },
+    }
 
-def test_background_absent_is_none():
+
+def test_background_absent_or_null_uses_config_default():
     assert parse_scan_background({}) is None
-
-
-def test_background_null_is_none():
-    # An explicit null means "no override"; the scan uses the configured profile.
     assert parse_scan_background({"background": None}) is None
 
 
-def test_background_preset_form_accepted():
-    spec = {"enabled": True, "preset": "flat", "overrides": {}}
-    assert parse_scan_background({"background": spec}) == spec
-
-
-def test_background_scale_accepted_in_both_forms():
-    """The strength knob is a first-class spec field, not an unknown one."""
-    preset_form = {"enabled": True, "preset": "flat", "overrides": {}, "scale": 2.5}
-    assert parse_scan_background({"background": preset_form}) == preset_form
-    frozen_form = {
-        "enabled": True,
-        "scale": 0.1,
-        "terms": [{"name": "floor", "shape": "flat", "origin": "instrument",
-                   "params": {"rate": 1e-10}}],
-    }
-    assert parse_scan_background({"background": frozen_form}) == frozen_form
-    assert "scale" in BACKGROUND_SPEC_KEYS
-
-
-def test_background_frozen_form_accepted():
-    spec = {
-        "enabled": True,
-        "terms": [{"name": "flat", "shape": "flat", "origin": "instrument",
-                   "params": {"rate": 1e-10}}],
-    }
-    assert parse_scan_background({"background": spec}) == spec
-
-
-def test_background_non_dict_is_400():
-    with pytest.raises(ApiError) as ei:
-        parse_scan_background({"background": "flat"})
-    assert ei.value.status == 400
-    assert "background" in ei.value.message
-
-
-def test_background_unknown_field_is_400_with_allowed_list():
-    with pytest.raises(ApiError) as ei:
-        parse_scan_background({"background": {"preset": "flat", "rate": 1.0}})
-    err = ei.value
-    assert err.status == 400
-    assert err.code == "bad_request"
-    assert err.details["unknown"] == ["rate"]
-    assert err.details["allowed"] == sorted(BACKGROUND_SPEC_KEYS)
-
-
-def test_background_non_dict_body_is_400():
-    with pytest.raises(ApiError) as ei:
-        parse_scan_background([1, 2, 3])
-    assert ei.value.status == 400
-
-
-def test_background_shape_check_does_not_resolve_numerics():
-    # Deep validation belongs to background.resolve() on the GUI thread; the
-    # shape check must not duplicate (and drift from) the preset registry.
-    spec = {"enabled": True, "preset": "no_such_preset", "overrides": {}}
+def test_background_v2_shape_is_accepted_without_deep_resolution():
+    spec = _spec(sources={
+        "future_source": {"enabled": True, "scale": "resolved later"},
+    })
     assert parse_scan_background({"background": spec}) == spec
     with pytest.raises(ValueError):
         background.resolve(spec)
 
 
-def test_background_in_scan_and_validate_body_keys():
-    # Validate/submit parity: a body /validate accepts must be submittable.
+@pytest.mark.parametrize("legacy_field", ["preset", "overrides", "terms", "scale"])
+def test_remote_v1_fields_are_rejected(legacy_field):
+    with pytest.raises(ApiError) as caught:
+        parse_scan_background({"background": {legacy_field: None}})
+    assert caught.value.status == 400
+    assert caught.value.details["unknown"] == [legacy_field]
+
+
+def test_background_non_object_and_unknown_field_are_400():
+    with pytest.raises(ApiError):
+        parse_scan_background({"background": "flat"})
+    with pytest.raises(ApiError) as caught:
+        parse_scan_background({"background": {**_spec(), "rate": 1.0}})
+    assert caught.value.details["unknown"] == ["rate"]
+    assert caught.value.details["allowed"] == sorted(BACKGROUND_SPEC_KEYS)
+
+
+def test_background_contract_keys_and_scan_validate_parity():
+    assert BACKGROUND_SPEC_KEYS == frozenset(
+        {"catalog_version", "enabled", "sources"}
+    )
     assert "background" in SCAN_BODY_KEYS
     assert "background" in VALIDATE_BODY_KEYS
 
 
-def test_background_spec_keys_match_the_contract():
-    assert BACKGROUND_SPEC_KEYS == frozenset(
-        {"enabled", "preset", "overrides", "terms", "scale"}
-    )
-
-
-# ==========================================================================
-# _launch_summary back-compatibility
-# ==========================================================================
-
-def _job(launch_state):
-    return ScanJob(job_id="j-0001", source="api", launch_state=launch_state)
-
-
-LEGACY_SUMMARY_KEYS = {
-    "scan_command1", "scan_command2", "number_neutrons", "isolated",
-    "parameters", "engine", "seed",
-}
-
-
-def test_launch_summary_without_background_is_unchanged():
-    summary = _job({
-        "vals": {"scan_command1": "H 1 2 0.5", "number_neutrons": 1e8},
-        "engine": "deterministic", "seed": 3,
-    })._launch_summary()
-    assert set(summary) == LEGACY_SUMMARY_KEYS
-
-
-def test_launch_summary_surfaces_background_when_present():
-    spec = {"enabled": True, "preset": "flat", "overrides": {}}
-    summary = _job({
-        "vals": {"scan_command1": "H 1 2 0.5"},
-        "engine": "deterministic",
-        "background": spec,
-        "background_source": "per_scan_override",
-    })._launch_summary()
-    assert summary["background"] == spec
-    assert summary["background_source"] == "per_scan_override"
-    json.dumps(summary, allow_nan=False)
-
-
-# ==========================================================================
-# HTTP surface (real server, fake backend)
-# ==========================================================================
-
 def _request(url, method="GET", data=None, timeout=5):
-    hdrs = {}
+    headers = {}
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
-        hdrs["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url, data=data, method=method, headers=headers
+    )
     try:
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        raw, status = resp.read(), resp.getcode()
-    except urllib.error.HTTPError as e:
-        raw, status = e.read(), e.code
-    return status, (json.loads(raw.decode("utf-8")) if raw else None)
+        response = urllib.request.urlopen(request, timeout=timeout)
+        raw, status = response.read(), response.getcode()
+    except urllib.error.HTTPError as exc:
+        raw, status = exc.read(), exc.code
+    return status, json.loads(raw.decode("utf-8")) if raw else None
 
 
 class _BackgroundBackend:
-    """Fake backend reproducing the production background contract."""
-
     def __init__(self):
-        self.spec = {"enabled": False, "preset": "none", "overrides": {}}
+        self.spec = background.default_spec()
 
     def get_health(self):
         return {"status": "ok"}
@@ -187,7 +110,7 @@ class _BackgroundBackend:
     def _state(self):
         resolved = background.resolve(self.spec)
         return {
-            "spec": copy.deepcopy(self.spec),
+            "spec": background.normalized_spec(resolved),
             "resolved": background.metadata_block(resolved, "config_default"),
         }
 
@@ -196,17 +119,21 @@ class _BackgroundBackend:
 
     def set_background(self, body):
         try:
-            background.resolve(body)
+            resolved = background.resolve(body)
         except ValueError as exc:
             raise ApiError(400, "invalid_background", str(exc))
-        self.spec = copy.deepcopy(body)
+        self.spec = background.normalized_spec(resolved)
         return self._state()
 
     def submit_scan(self, body, idempotency_key=None):
         parse_scan_engine(body)
         spec = parse_scan_background(body)
+        if spec is not None:
+            spec = background.normalized_spec(background.resolve(spec))
         return {
-            "job_id": "j-0001", "state": "queued", "position": 0,
+            "job_id": "j-0001",
+            "state": "queued",
+            "position": 0,
             "background": spec,
             "background_source": (
                 "per_scan_override" if spec is not None else "config_default"
@@ -216,345 +143,222 @@ class _BackgroundBackend:
     def submit_validate(self, body):
         spec = parse_scan_background(body)
         resolved = background.resolve(spec if spec is not None else self.spec)
+        delivery = "per_scan_override" if spec is not None else "config_default"
         return {
             "would_queue": True,
             "blockers": [],
-            "background": {
-                "enabled": bool(resolved.enabled),
-                "source": (
-                    "per_scan_override" if spec is not None else "config_default"
-                ),
-                "profile_fingerprint": background.profile_fingerprint(resolved),
-                "effective_fingerprint": background.effective_fingerprint(
-                    resolved, None, ()
-                ),
-                "sample_scale": None,
-                "skipped_terms": [],
-            },
+            "background": background.metadata_block(resolved, delivery),
         }
 
     def get_schema(self):
         return {
-            "instrument": "puma",
-            "scan_body_fields": [
-                {"name": "background", "type": "object", "default": None},
-            ],
+            "scan_body_fields": [{"name": "background", "type": "object"}],
             "endpoints": [
                 {"method": "GET", "path": "/background"},
                 {"method": "PUT", "path": "/background"},
             ],
             "background": {
                 "background_schema": background.BACKGROUND_SCHEMA,
-                "preset_registry_version": background.PRESET_REGISTRY_VERSION,
-                "presets": background.preset_catalog(),
-                "shapes": list(background.SHAPES),
-                "origins": list(background.ORIGINS),
-                "methods": {"analytic": "implemented", "simulated": "reserved"},
+                "catalog_version": background.CATALOG_VERSION,
+                "categories": list(background.CATEGORIES),
+                "sources": background.source_catalog(),
+                "spec_fields": sorted(BACKGROUND_SPEC_KEYS),
             },
         }
 
 
 class _BareBackend:
-    """Backend without the background methods (pre-stage-3 server)."""
-
     def get_health(self):
         return {"status": "ok"}
 
 
 def _start(backend, mode="allow"):
-    srv = TaviApiServer(host="127.0.0.1", port=0, token=None, mode=mode,
-                        backend=backend)
-    srv.start()
-    port = srv._httpd.server_address[1]
-    return srv, "http://127.0.0.1:%d%s" % (port, API_PREFIX)
+    server = TaviApiServer(
+        host="127.0.0.1", port=0, token=None, mode=mode, backend=backend
+    )
+    server.start()
+    port = server._httpd.server_address[1]
+    return server, f"http://127.0.0.1:{port}{API_PREFIX}"
 
 
-def test_get_put_background_round_trip():
-    srv, base = _start(_BackgroundBackend())
+def test_get_put_background_normalizes_sparse_sources_wholesale():
+    server, base = _start(_BackgroundBackend())
     try:
         status, body = _request(base + "/background")
         assert status == 200
-        assert body["spec"]["preset"] == "none"
-        assert body["resolved"]["enabled"] is False
+        assert body["spec"] == background.default_spec()
 
-        spec = {"enabled": True, "preset": "flat", "overrides": {}}
-        status, body = _request(base + "/background", method="PUT", data=spec)
+        sparse = _spec(sources={
+            "sample_elastic": {"enabled": True, "scale": 0.5},
+        })
+        status, body = _request(
+            base + "/background", method="PUT", data=sparse
+        )
         assert status == 200
-        assert body["spec"] == spec
-        assert body["resolved"]["enabled"] is True
-        assert body["resolved"]["terms"][0]["shape"] == "flat"
-        fingerprint = body["resolved"]["profile_fingerprint"]
-
-        status, body = _request(base + "/background")
-        assert status == 200
-        assert body["spec"] == spec
-        assert body["resolved"]["profile_fingerprint"] == fingerprint
+        assert set(body["spec"]["sources"]) == set(background.SOURCES)
+        assert body["spec"]["sources"]["sample_elastic"]["scale"] == 0.5
+        assert body["spec"]["sources"]["environment_flat"] == {
+            "enabled": False,
+            "scale": 1.0,
+        }
+        assert body["resolved"]["background_schema"] == "tavi.background/2"
+        assert "sample_scale" not in body["resolved"]
+        assert "skipped_terms" not in body["resolved"]
     finally:
-        srv.stop()
+        server.stop()
 
 
-def test_put_background_rejects_unknown_top_level_key():
-    srv, base = _start(_BackgroundBackend())
+@pytest.mark.parametrize(
+    "bad_spec",
+    [
+        {"enabled": True, "preset": "flat"},
+        _spec(sources={"environment_flat": {"enabled": True, "scale": -1.0}}),
+        _spec(sources={"unknown": {"enabled": True, "scale": 1.0}}),
+        {"catalog_version": 1, "enabled": True, "sources": {}},
+        {"catalog_version": 999, "enabled": True, "sources": {}},
+    ],
+)
+def test_put_background_rejects_invalid_v2_or_v1(bad_spec):
+    server, base = _start(_BackgroundBackend())
     try:
         status, body = _request(
-            base + "/background", method="PUT",
-            data={"enabled": True, "preset": "flat", "rate": 1.0},
+            base + "/background", method="PUT", data=bad_spec
         )
         assert status == 400
-        assert body["error"]["details"]["unknown"] == ["rate"]
+        assert body["error"]["code"] in {"bad_request", "invalid_background"}
     finally:
-        srv.stop()
+        server.stop()
 
 
-def test_put_background_accepts_the_scale_knob():
-    srv, base = _start(_BackgroundBackend())
+def test_background_readonly_and_missing_backend_behavior():
+    server, base = _start(_BackgroundBackend(), mode="readonly")
     try:
-        spec = {"enabled": True, "preset": "flat", "overrides": {}, "scale": 2.5}
-        status, body = _request(base + "/background", method="PUT", data=spec)
-        assert status == 200
-        assert body["spec"] == spec
-        assert body["resolved"]["scale"] == 2.5
-        # It really is a different background, not a cosmetic field.
-        plain = dict(spec, scale=1.0)
-        _, plain_body = _request(base + "/background", method="PUT", data=plain)
-        assert (plain_body["resolved"]["profile_fingerprint"]
-                != body["resolved"]["profile_fingerprint"])
-    finally:
-        srv.stop()
-
-
-def test_put_background_rejects_a_negative_scale_400():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        status, body = _request(
-            base + "/background", method="PUT",
-            data={"enabled": True, "preset": "flat", "scale": -1.0},
-        )
-        assert status == 400
-        assert body["error"]["code"] == "invalid_background"
-        assert "scale" in body["error"]["message"]
-    finally:
-        srv.stop()
-
-
-def test_put_background_rejects_unknown_preset_400():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        status, body = _request(base + "/background", method="PUT",
-                                data={"enabled": True, "preset": "nope"})
-        assert status == 400
-        assert body["error"]["code"] == "invalid_background"
-    finally:
-        srv.stop()
-
-
-def test_put_background_readonly_is_403():
-    srv, base = _start(_BackgroundBackend(), mode="readonly")
-    try:
-        status, body = _request(base + "/background", method="PUT",
-                                data={"enabled": True, "preset": "flat"})
-        assert status == 403
-        assert body["error"]["code"] == "read_only"
-        # The read stays available in read-only mode.
         assert _request(base + "/background")[0] == 200
+        assert _request(
+            base + "/background", method="PUT", data=_spec()
+        )[0] == 403
     finally:
-        srv.stop()
-
-
-def test_background_methods_missing_is_501():
-    srv, base = _start(_BareBackend())
+        server.stop()
+    server, base = _start(_BareBackend())
     try:
         assert _request(base + "/background")[0] == 501
-        assert _request(base + "/background", method="PUT",
-                        data={"enabled": False})[0] == 501
     finally:
-        srv.stop()
+        server.stop()
 
 
-def test_background_wrong_method_is_405():
-    srv, base = _start(_BackgroundBackend())
+def test_scan_and_validate_accept_v2_override_and_report_delivery_source():
+    server, base = _start(_BackgroundBackend())
     try:
-        status, _ = _request(base + "/background", method="POST",
-                             data={"enabled": False})
-        assert status == 405
-    finally:
-        srv.stop()
-
-
-def test_scan_accepts_background_body_key():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        spec = {"enabled": True, "preset": "strong_elastic", "overrides": {}}
-        status, body = _request(base + "/scan", method="POST",
-                                data={"engine": "deterministic",
-                                      "background": spec})
+        spec = _spec(sources={
+            "instrument_aluminum_powder": {"enabled": True, "scale": 2.0},
+            "environment_cosmic_spikes": {"enabled": True, "scale": 0.5},
+        })
+        status, body = _request(
+            base + "/scan",
+            method="POST",
+            data={"engine": "deterministic", "background": spec},
+        )
         assert status == 202
-        assert body["background"] == spec
         assert body["background_source"] == "per_scan_override"
-    finally:
-        srv.stop()
+        assert set(body["background"]["sources"]) == set(background.SOURCES)
 
-
-def test_scan_without_background_reports_config_default():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        status, body = _request(base + "/scan", method="POST",
-                                data={"engine": "deterministic"})
-        assert status == 202
-        assert body["background"] is None
-        assert body["background_source"] == "config_default"
-    finally:
-        srv.stop()
-
-
-def test_scan_rejects_malformed_background():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        status, body = _request(base + "/scan", method="POST",
-                                data={"background": "flat"})
-        assert status == 400
-        assert body["error"]["code"] == "bad_request"
-
-        status, body = _request(base + "/scan", method="POST",
-                                data={"background": {"rate": 1.0}})
-        assert status == 400
-        assert body["error"]["details"]["unknown"] == ["rate"]
-    finally:
-        srv.stop()
-
-
-def test_validate_accepts_background_and_reports_the_block():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        spec = {"enabled": True, "preset": "flat", "overrides": {}}
-        status, body = _request(base + "/validate", method="POST",
-                                data={"background": spec})
+        status, body = _request(
+            base + "/validate", method="POST", data={"background": spec}
+        )
         assert status == 200
         block = body["background"]
-        assert block["enabled"] is True
-        assert block["source"] == "per_scan_override"
+        assert block["delivery_source"] == "per_scan_override"
+        assert block["catalog_version"] == 2
         assert set(block) >= {
-            "profile_fingerprint", "effective_fingerprint",
-            "sample_scale", "skipped_terms", "enabled",
+            "profile_fingerprint", "effective_fingerprint", "sources",
         }
     finally:
-        srv.stop()
+        server.stop()
 
 
-def test_validate_rejects_malformed_background():
-    srv, base = _start(_BackgroundBackend())
-    try:
-        status, body = _request(base + "/validate", method="POST",
-                                data={"background": {"rate": 1.0}})
-        assert status == 400
-        assert body["error"]["details"]["unknown"] == ["rate"]
-    finally:
-        srv.stop()
-
-
-def test_schema_advertises_the_background_block():
-    srv, base = _start(_BackgroundBackend())
+def test_schema_advertises_versioned_source_catalog():
+    server, base = _start(_BackgroundBackend())
     try:
         status, body = _request(base + "/schema")
         assert status == 200
         block = body["background"]
-        assert block["background_schema"] == "tavi.background/1"
-        assert block["methods"] == {"analytic": "implemented",
-                                    "simulated": "reserved"}
-        # Presets carry full numerics, so a client can freeze one.
-        flat_preset = block["presets"]["flat"]["terms"][0]
-        assert flat_preset["params"]["rate"] > 0.0
-        assert set(block["shapes"]) == set(background.SHAPES)
-        # The merged roster: the strength knob replaced the low/high pair.
-        assert "flat" in block["presets"]
-        assert "flat_low" not in block["presets"]
-        assert "flat_high" not in block["presets"]
-        assert block["preset_registry_version"] == 2
-        names = {f["name"] for f in body["scan_body_fields"]}
-        assert "background" in names
-        routes = {(e["method"], e["path"]) for e in body["endpoints"]}
-        assert ("GET", "/background") in routes
-        assert ("PUT", "/background") in routes
+        assert block["background_schema"] == "tavi.background/2"
+        assert block["catalog_version"] == 2
+        assert block["categories"] == ["environment", "instrument", "sample"]
+        assert set(block["sources"]) == set(background.SOURCES)
+        for source in block["sources"].values():
+            assert set(source) == {
+                "category", "label", "description", "scale_meaning", "shape",
+                "base_numerics", "units",
+            }
     finally:
-        srv.stop()
+        server.stop()
 
 
-# ==========================================================================
-# Qt-bound wiring: source scans (see module docstring)
-# ==========================================================================
-
-def test_controller_schema_declares_the_background_block():
+def test_controller_schema_and_runtime_use_v2_core_contract():
     source = _read(CONTROLLER_PATH)
-    assert '"background": {' in source
-    assert '"preset_registry_version": _background.PRESET_REGISTRY_VERSION' in source
-    assert '"presets": _background.preset_catalog()' in source
-    assert '"simulated": "reserved"' in source
-    assert '"sample": "counts = N * diffuse_background * rate"' in source
-    assert '{"method": "PUT", "path": "/background"' in source
-    # The strength knob is advertised in both spec forms and on its own.
-    spec_forms = source.split('"spec_forms": {', 1)[1].split('"spec_fields"', 1)[0]
-    assert spec_forms.count('"scale": "number >= 0 (default 1.0)"') == 2
-    assert '"default": _background.DEFAULT_SCALE' in source
+    assert '"catalog_version": _background.CATALOG_VERSION' in source
+    assert '"sources": _background.source_catalog()' in source
+    assert "_background.normalized_spec(resolved)" in source
+    assert "def _background_sample_scale" not in source
+    assert "SampleScaleUnavailable" not in source
+    assert "sample_scale=" not in source
+    assert "skipped_terms=" not in source
 
 
-def test_controller_injects_background_into_both_launch_builders():
+def test_controller_injects_and_validates_background_before_queueing():
     source = _read(CONTROLLER_PATH)
-    # GUI builder: configured profile, config_default tag.
     assert "'background': copy.deepcopy(self.background_profile)" in source
-    assert "'background_source': 'config_default'," in source
-    # API builder: the shared stamping helper, alongside engine/seed/noiseless.
     assert "self._apply_background_to_launch_state(controller, launch_state, background)" in source
-    assert "'per_scan_override' if background is not None else 'config_default'" in source
-
-
-def test_submit_runs_the_same_background_check_as_validate():
-    """Validate/submit parity: a doomed background must never reach the queue."""
-    source = _read(CONTROLLER_PATH)
     submit = source.split("def _submit_scan_on_gui", 1)[1].split(
-        "def submit_validate", 1)[0]
-    assert "self._background_validation(" in submit
-    assert 'background_block["error"]["id"]' in submit
-    # The refusal is raised before the job is enqueued.
+        "def submit_validate", 1
+    )[0]
     assert submit.index("_background_validation") < submit.index(
         "controller.submit_scan_job"
     )
 
 
-def test_controller_setter_and_validation_are_wired():
+def test_simulation_row_and_dialog_expose_staged_independent_controls():
+    dock = _read(SIMULATION_DOCK_PATH)
+    dialog = _read(DIALOG_PATH)
+    assert "engine_row.addWidget(self.engine_combo)" in dock
+    assert "self.background_enable_check = QCheckBox()" in dock
+    assert 'QPushButton("Background configuration…")' in dock
+    assert "background_preset_combo" not in dock
+    assert "background_scale_spin" not in dock
+    assert "background_summary_label" not in dock
+    assert "item[\"scale_meaning\"]" in dialog
+    assert "QDialogButtonBox.StandardButton.Apply" in dialog
+    assert ").clicked.connect(self.accept)" in dialog
+    assert "buttons.rejected.connect(self.reject)" in dialog
+    assert "Scale ×1 uses the catalog reference setting." in dialog
+    assert "scale_spin.setDecimals(12)" in dialog
+
+
+def test_dialog_scale_precision_survives_normalized_state_conversion():
+    spec = {
+        "catalog_version": background.CATALOG_VERSION,
+        "enabled": True,
+        "sources": {
+            "environment_flat": {"enabled": True, "scale": 0.0004},
+            "sample_elastic": {"enabled": True, "scale": 1.23456},
+        },
+    }
+    converted = background.normalized_spec(background.resolve(spec))
+    assert converted["sources"]["environment_flat"]["scale"] == 0.0004
+    assert converted["sources"]["sample_elastic"]["scale"] == 1.23456
+
+
+def test_controller_applies_global_gate_immediately_but_dialog_on_accept_only():
     source = _read(CONTROLLER_PATH)
-    assert "def set_background_profile(self, spec):" in source
-    assert "def background_profile_state(self):" in source
-    assert "def _background_sample_scale(self, sample_key):" in source
-    assert "sample_background_scale_unavailable" in source
-    assert "def get_background(self):" in source
-    assert "def set_background(self, body):" in source
-    assert 'raise ApiError(400, "invalid_background", str(exc))' in source
-
-
-def test_simulation_dock_has_the_background_row():
-    source = _read(SIMULATION_DOCK_PATH)
-    assert "from tavi.background import PRESETS as BACKGROUND_PRESETS" in source
-    assert "self.background_enable_check" in source
-    assert "self.background_preset_combo" in source
-    assert "self.background_summary_label" in source
-    assert "def get_background_spec(self)" in source
-    assert "def set_background_display(self" in source
-    # GUI edits never carry overrides -- that channel is API-only.
-    assert '"overrides": {},' in source
-    # ... but the profile-level strength knob *is* a user control.
-    assert "self.background_scale_spin = QDoubleSpinBox()" in source
-    assert "self.background_scale_spin.setKeyboardTracking(False)" in source
-    assert '"Multiplies every background term (S/N knob)"' in source
-    assert '"scale": float(self.background_scale_spin.value()),' in source
-    # The display sync blocks the knob's signals too, so it cannot loop back.
-    blocked = source.split("def set_background_display", 1)[1]
-    assert "self.background_scale_spin)" in blocked.split("blockSignals(True)", 1)[0]
-
-
-def test_controller_wires_the_background_scale_knob():
-    source = _read(CONTROLLER_PATH)
-    assert "background_scale_spin.valueChanged.connect(" in source
-    assert "_on_background_row_changed" in source
-    # The row refresh pushes the resolved scale back into the widget.
-    refresh = source.split("def _refresh_background_row", 1)[1].split("def ", 1)[0]
-    assert "resolved.scale," in refresh
+    assert "background_enable_check.toggled.connect(" in source
+    assert "background_config_button.clicked.connect(" in source
+    toggle = source.split("def _on_background_enabled_toggled", 1)[1].split(
+        "def configure_background", 1
+    )[0]
+    assert 'spec["enabled"] = bool(enabled)' in toggle
+    configure = source.split("def configure_background", 1)[1].split(
+        "def ", 1
+    )[0]
+    assert "if spec is None:" in configure
+    assert "self.set_background_profile(spec)" in configure

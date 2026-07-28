@@ -155,21 +155,19 @@ def parse_scan_engine(body):
     return engine, seed, noiseless
 
 
-# Top-level fields of a background request spec (``tavi.background.resolve``
-# accepts the preset form and the frozen numeric form; both draw from this set,
-# and both accept the profile-level strength knob ``scale``).
-BACKGROUND_SPEC_KEYS = frozenset(
-    {"enabled", "preset", "overrides", "terms", "scale"}
-)
+# Top-level fields of the versioned source configuration accepted by
+# ``tavi.background.resolve``. Legacy preset/frozen forms are intentionally
+# absent from both remote requests and current local persistence.
+BACKGROUND_SPEC_KEYS = frozenset({"catalog_version", "enabled", "sources"})
 
 
 def parse_scan_background(body):
     """Validate the optional ``background`` POST /scan and /validate field.
 
-    Qt-free **shape** check only -- the numerics are validated by
-    ``tavi.background.resolve`` on the GUI thread, which owns the preset
-    registry. Absent or ``null`` returns ``None`` (the scan uses the
-    instrument's configured profile); a present spec replaces that profile
+    Qt-free **shape** check only -- catalog version, source ids, nested fields,
+    and scales are validated by ``tavi.background.resolve`` on the GUI thread.
+    Absent or ``null`` returns ``None`` (the scan uses the instrument's
+    configured configuration); a present spec replaces that configuration
     wholesale and never merges with it.
     """
     if not isinstance(body, dict):
@@ -641,11 +639,10 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             return
 
         if segments == ["background"]:
-            # Instrument-level background profile (tavi/background.py). GET is a
-            # pure read; PUT replaces the stored profile wholesale (it never
+            # Instrument-level background configuration (tavi/background.py).
+            # GET is a pure read; PUT replaces the stored configuration wholesale (it never
             # merges) and so is gated on write access. Both return
-            # {"spec": ..., "resolved": ...} -- profile resolution only, since
-            # no scan sample is chosen at config level.
+            # {"spec": ..., "resolved": ...} in complete normalized v2 form.
             if method == "GET":
                 self._send_json(200, self._call_backend("get_background"))
                 return

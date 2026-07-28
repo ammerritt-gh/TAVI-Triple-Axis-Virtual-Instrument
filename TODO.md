@@ -4,7 +4,7 @@ Living list. Grouped by theme, roughly dependency-ordered within each group.
 Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first),
 `docs/CONTROL_FEATURES_DESIGN.md` (feature designs + roadmap §9),
 `docs/LLM_HARNESS_DESIGN.md` (measurement driver), `docs/API_USER_GUIDE.md`
-(live API reference). Last updated: 2026-07-27.
+(live API reference). Last updated: 2026-07-28.
 
 ## Closed-loop enablers (drive the ISAR/driver integration)
 
@@ -24,58 +24,44 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
       provenance + `_run_scan_deterministic` worker branch), milestone 8 (GUI engine
       selector, API guide, this list). Deterministic result stamps `cn_valid` +
       `invalidations`; brightness is a documented per-sample calibration.
-- [x] **Background generation** — `tavi/background.py` (`tavi.background/1`): four term
-      shapes (flat / linear-in-E / incoherent elastic line / elastic tail), origin
-      taxonomy fixing the scaling base (`sample` terms scale by the new
-      `AnalyticCalibration.diffuse_background`, never the phonon factor), preset registry
-      plus a frozen numeric spec form for campaign stamping, source-independent
-      profile/effective fingerprints, one shared metadata block. Planted by the
-      deterministic engine (added after the signal-only validity clamp; invalid-resolution
-      points still count background) and overlaid on McStas counts as an additive analytic
-      Poisson draw from a dedicated seeded stream. Surfaces: `GET`/`PUT /background`,
-      per-scan `background` override on `POST /scan` **and** `POST /validate` (parity),
-      preset registry in `GET /schema`, GUI enable+preset+scale row, `parameters.json`
-      persistence. Default-off: an unconfigured session is bit-identical to
-      pre-background TAVI. Registry v2 adds the user-facing `scale` strength knob
-      (multiplies every term uniformly, part of the fingerprint) and anchors the roster
-      at a signal-to-background ratio of 10:1.
+- [x] **Independent background-source generation** — `tavi/background.py`
+      (`tavi.background/2`, catalog version 2) owns six fixed sources across the
+      Environment, Instrument, and Sample categories. Mean sources include a
+      composite six-line aluminum powder model; sparse cosmic events use their
+      own source-keyed stream and are added after counting noise. Every source has
+      its own enable and finite non-negative scale. Surfaces: normalized
+      `GET`/wholesale `PUT
+      /background`; wholesale per-scan replacement on `POST /scan` and `POST
+      /validate`; the complete catalog in `GET /schema`; shared v2 metadata and
+      profile/effective fingerprints; a global GUI checkbox beside the engine
+      selector plus a modal grouped source editor; and `parameters.json`
+      persistence that visibly resets incompatible old state to safe defaults.
+      New sessions
+      prepare the four pre-existing smooth sources at scale 1 behind a disabled
+      global gate; aluminum and cosmic sources start unchecked at scale 1.
       → CONTROL_FEATURES §6.7, ANALYTIC_ENGINE *Background generation*, API guide
-      `GET`/`PUT /background`. ISAR keeps fingerprint-only provenance and redacts the
-      numerics (truth firewall); campaigns stamp the frozen per-scan form (ISAR
-      DECISIONS T4).
-- [ ] **Ray-traced background for McStas (`method: "simulated"`)** — environment/shielding
-      scattering simulated rather than added analytically. Reserved in the schema and
-      rejected by the current version; needs component work plus a cost story (it is
+      `GET`/`PUT /background`. Campaign clients pin `catalog_version` and stamp
+      the complete source request on every scan.
+- [ ] **Ray-traced background for McStas** — environment/shielding scattering
+      simulated rather than added analytically. Catalog version 2 contains only
+      analytic sources; this needs component work plus a cost story (it is
       ray-tracing time, not a per-point closed form).
       → CONTROL_FEATURES §6.5 fidelity-gap row.
-- [x] **Live McStas background end-to-end check** — done 2026-07-27 against a live
-      compiled-McStas instance (puma): paired 3-point scans at H=2.05, N=1e6, per-scan
-      override `flat` × 1e4. Background-off counts [0,0,0]; background-on [37,40,38]
-      against a planted mean of 40 ± 6.3 — Poisson draws around exactly the planted
-      rate. Metadata block stamped with `background_seed` (= launch seed), source
-      `per_scan_override`, both fingerprints; disabled scan stamps its block without a
-      seed; intensity columns untouched.
-- [ ] **Profile-resolution surface for frozen-form canonicalization** — a read-only
-      endpoint (or `/validate`-adjacent call) that resolves a background spec into its
-      fully-defaulted canonical frozen form without mutating config, so a client (ISAR's
-      campaign freeze) can store the *canonical* numerics instead of its raw declaration.
-      Today a raw frozen-form profile could resolve differently after a future default
-      change while the client's pre-spend drift comparison still sees identical JSON.
-      Not currently dangerous — preset expansion carries full numeric terms — but the
-      durable contract wants TAVI to own its own canonicalization. (External review
-      2026-07-27.)
-- [ ] **Tune the preset numerics against real fitting campaigns** — *addressed in part.*
-      Registry version **2** re-anchored the whole roster to a default
-      signal-to-background of **10:1** against the `Al_phonon_DFT` peak rate (~`4e-8`
-      counts per monitor count, so ~`4e-9` of background), replacing the old ~0.5%
-      anchor, and added the profile-level `scale` knob so a user sets strength with one
-      number instead of waiting for a retune — which also let `flat_low`/`flat_high`
-      merge into a single `flat` preset. Still open: the *shape* of the mix (relative
-      weights of slope / elastic line / tail / diffuse) is still anchored by
-      construction, not to measured signal-to-background. Retune once ISAR campaigns say
-      what is realistic, and bump `PRESET_REGISTRY_VERSION` again when the numbers move,
-      so a stored fingerprint that no longer matches a preset name is explainable rather
-      than silently re-tuned.
+- [x] **Historical v1 live McStas background check** — on 2026-07-27, before the
+      v2 source contract replaced presets, a paired live PUMA run verified the
+      additive Poisson overlay, dedicated seed, provenance, disabled-path
+      behavior, and untouched intensity columns. This is implementation history,
+      not a current request example; the maintained contract is v2 above.
+- [x] **Catalog pinning and canonical source state** — v2 requests require
+      `catalog_version`; omitted sources normalize to disabled at scale 1; and
+      `GET`/`PUT /background` plus `/validate` return complete normalized state.
+      A catalog-numeric change must increment `CATALOG_VERSION`, so campaign
+      clients can refuse drift before acquisition.
+- [ ] **Tune catalog numerics against real fitting campaigns.** The six
+      scale-1 base definitions are a reference mixture rather than a measured
+      universal background. Use campaign evidence to retune their relative
+      strengths and shapes, then bump `CATALOG_VERSION` so stored requests fail
+      clearly instead of silently changing planted truth.
 - [ ] **Virtual instrument clock** — per-axis velocities in the descriptor; per-job
       `experimental_time` = counting + axes-movement (angle-map metric); session total
       in /state and journal. Needed for honest driver benchmarking.
