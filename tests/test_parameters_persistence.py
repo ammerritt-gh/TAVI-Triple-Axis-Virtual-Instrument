@@ -13,6 +13,7 @@ pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 import TAVI_PySide6 as controller_module
+from tavi import background
 
 
 def _controller_stub():
@@ -105,30 +106,57 @@ def _background_controller_stub():
     return controller
 
 
-def test_saved_background_profile_round_trips():
+def test_saved_catalog_v2_background_profile_round_trips_normalized():
     controller = _background_controller_stub()
-    spec = {"enabled": True, "preset": "flat", "overrides": {}}
-    assert controller._saved_background_profile({"background_profile": spec}) == spec
-    assert controller.messages == []
-
-
-def test_saved_background_scale_survives_the_round_trip():
-    """The strength knob is part of the stored spec, not a transient widget value."""
-    controller = _background_controller_stub()
-    spec = {"enabled": True, "preset": "realistic", "overrides": {}, "scale": 2.5}
+    spec = {
+        "catalog_version": 2,
+        "enabled": True,
+        "sources": {
+            "sample_elastic": {"enabled": True, "scale": 2.5},
+        },
+    }
     restored = controller._saved_background_profile({"background_profile": spec})
-    assert restored == spec
-    assert restored["scale"] == 2.5
+    assert set(restored["sources"]) == set(background.SOURCES)
+    assert restored["sources"]["sample_elastic"] == {
+        "enabled": True, "scale": 2.5,
+    }
+    assert restored["sources"]["environment_flat"] == {
+        "enabled": False, "scale": 1.0,
+    }
     assert controller.messages == []
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {
+            "catalog_version": 1,
+            "enabled": True,
+            "sources": {
+                "environment_flat": {"enabled": True, "scale": 2.0},
+                "sample_diffuse": {"enabled": True, "scale": 9.0},
+            },
+        },
+        {"enabled": True, "preset": "flat", "scale": 2.5},
+        {"enabled": True, "preset": "sample_diffuse"},
+        {"enabled": True, "terms": []},
+    ],
+)
+def test_legacy_saved_background_profiles_reset_off_and_log(spec):
+    controller = _background_controller_stub()
+    restored = controller._saved_background_profile({"background_profile": spec})
+    assert restored == background.default_spec()
+    assert restored["enabled"] is False
+    assert len(controller.messages) == 1
+    assert "reset to safe defaults" in controller.messages[0]
 
 
 def test_saved_background_profile_with_a_bad_scale_defaults_off_and_logs():
-    """A hand-edited negative scale must fall back, not start a broken session."""
     controller = _background_controller_stub()
     profile = controller._saved_background_profile(
         {"background_profile": {"enabled": True, "preset": "flat", "scale": -1.0}}
     )
-    assert profile == {"enabled": False, "preset": "none", "overrides": {}}
+    assert profile == background.default_spec()
     assert len(controller.messages) == 1
     assert "background disabled" in controller.messages[0]
 
@@ -136,17 +164,26 @@ def test_saved_background_profile_with_a_bad_scale_defaults_off_and_logs():
 def test_saved_background_profile_absent_defaults_off():
     controller = _background_controller_stub()
     profile = controller._saved_background_profile({})
-    assert profile == {"enabled": False, "preset": "none", "overrides": {}}
+    assert profile == background.default_spec()
     assert controller.messages == []
 
 
-def test_saved_background_profile_invalid_defaults_off_and_logs():
-    """A retired preset or hand-edited file must not stop the session starting."""
+@pytest.mark.parametrize(
+    "spec",
+    [
+        {"enabled": True, "preset": "sloped"},
+        {"enabled": True, "preset": "flat",
+         "overrides": {"instrument_flat": {"rate": 1.0}}},
+        {"enabled": True, "terms": []},
+        {"enabled": True, "preset": "retired_preset"},
+    ],
+)
+def test_unrepresentable_v1_background_defaults_off_and_logs(spec):
     controller = _background_controller_stub()
     profile = controller._saved_background_profile(
-        {"background_profile": {"enabled": True, "preset": "retired_preset"}}
+        {"background_profile": spec}
     )
-    assert profile == {"enabled": False, "preset": "none", "overrides": {}}
+    assert profile == background.default_spec()
     assert len(controller.messages) == 1
     assert "background disabled" in controller.messages[0]
 

@@ -1,30 +1,17 @@
-"""Tests for the Monte-Carlo (McStas) additive background overlay (stage 6).
-
-Two halves, for the same reason ``test_background_api.py`` splits: the overlay
-math lives in ``tavi/background.py`` and is exercised directly here (Qt-free,
-no McStas), while the ``run_simulation`` loop that consumes it is Qt-bound --
-importing ``TAVI_PySide6`` needs PySide6 + mcstasscript and there is no headless
-seam that runs a McStas point -- so its wiring is covered by source scans in the
-style of ``test_background_api.py`` / ``test_fitting_dock.py``.
-"""
+"""Tests for the McStas additive ``tavi.background/2`` overlay."""
 import os
 
 import numpy as np
-import pytest
 
 from tavi import background
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTROLLER_PATH = os.path.join(REPO_ROOT, "TAVI_PySide6.py")
-
 N = 1.0e8
-
-# Flat rate used by the draw tests. Deliberately far above the preset roster
-# (~4e-9) so N * rate is a mean of 500 counts: a realistic rate would draw zero
-# almost every time and test nothing about the stream.
-RATE = 5.0e-6
-MEAN = N * RATE
+TARGET_RATE = 5.0e-6
+TARGET_MEAN = N * TARGET_RATE
+FLAT_BASE_RATE = background.SOURCES["environment_flat"].base_numerics["rate"]
 
 
 def _read(path):
@@ -32,310 +19,211 @@ def _read(path):
         return handle.read()
 
 
-def _flat(rate, enabled=True, scale=None):
-    spec = {
+def _flat(enabled=True, scale=None, source_enabled=True):
+    if scale is None:
+        scale = TARGET_RATE / FLAT_BASE_RATE
+    return background.resolve({
+        "catalog_version": background.CATALOG_VERSION,
         "enabled": enabled,
-        "terms": [{
-            "name": "instrument_flat",
-            "shape": "flat",
-            "origin": "instrument",
-            "params": {"rate": rate},
-        }],
-    }
-    if scale is not None:
-        spec["scale"] = scale
-    return background.resolve(spec)
+        "sources": {
+            "environment_flat": {
+                "enabled": source_enabled,
+                "scale": scale,
+            },
+        },
+    })
 
 
 class _ExplodingFactory:
-    """RNG factory that fails the test if the disabled path ever builds an RNG."""
-
     def __init__(self):
         self.calls = []
 
     def __call__(self, key):
         self.calls.append(key)
-        raise AssertionError(
-            "poisson_overlay constructed an RNG when it must not: key=%r" % (key,)
-        )
+        raise AssertionError(f"unexpected RNG construction for key {key!r}")
 
 
-# ==========================================================================
-# poisson_overlay -- the testable overlay contract
-# ==========================================================================
+def _context(*, q=0.0, w=0.0, sigma_q=None, sigma_e=None, neutrons=N):
+    return background.BackgroundPointContext(
+        q, w, sigma_q, sigma_e, neutrons
+    )
 
-def test_overlay_is_reproducible_for_the_same_seed_and_index():
-    resolved = _flat(RATE)
-    first = background.poisson_overlay(resolved, 3.0, None, N, None, 1234, 7)
-    second = background.poisson_overlay(resolved, 3.0, None, N, None, 1234, 7)
+
+def test_overlay_is_reproducible_and_point_keyed():
+    resolved = _flat()
+    context = _context(w=3.0)
+    first = background.poisson_overlay(resolved, context, 1234, 7)
+    second = background.poisson_overlay(resolved, context, 1234, 7)
     assert first == second
     assert isinstance(first, int)
-
-
-def test_overlay_differs_between_points():
-    resolved = _flat(RATE)
     draws = [
-        background.poisson_overlay(resolved, 3.0, None, N, None, 1234, i)
-        for i in range(40)
+        background.poisson_overlay(resolved, context, 1234, index)
+        for index in range(40)
     ]
-    # A per-point stream, not one value repeated for the whole scan.
     assert len(set(draws)) > 1
 
 
-def test_background_stream_is_separate_from_a_plain_seed_index_stream():
-    """The overlay must never consume the numbers a (seed, i) stream would."""
-    resolved = _flat(RATE)
+def test_overlay_stream_is_stable_and_separate():
+    resolved = _flat()
     seed, index = 99, 3
-    mean, _, _ = background.mean_counts(resolved, 0.0, None, N, None)
+    context = _context()
+    mean, _ = background.mean_counts(resolved, context)
     plain = int(np.random.default_rng((seed, index)).poisson(mean))
-    keyed = background.poisson_overlay(resolved, 0.0, None, N, None, seed, index)
-    reference = int(
-        np.random.default_rng(
-            (seed, background.BACKGROUND_STREAM, index)
-        ).poisson(mean)
+    keyed = background.poisson_overlay(
+        resolved, context, seed, index
     )
+    reference = int(np.random.default_rng(
+        (seed, background.BACKGROUND_STREAM, index)
+    ).poisson(mean))
+    assert background.BACKGROUND_STREAM == 0x6B67
     assert keyed == reference
     assert keyed != plain
 
 
-def test_stream_constant_is_stable():
-    # Changing this value silently changes every previously drawn overlay.
-    assert background.BACKGROUND_STREAM == 0x6B67
+def test_disabled_global_source_zero_scale_and_zero_neutrons_build_no_rng():
+    cases = [
+        (_flat(enabled=False), N),
+        (_flat(source_enabled=False), N),
+        (_flat(scale=0.0), N),
+        (_flat(), 0.0),
+    ]
+    for resolved, neutrons in cases:
+        factory = _ExplodingFactory()
+        assert background.poisson_overlay(
+            resolved, _context(w=1.0, neutrons=neutrons),
+            1, 0, rng_factory=factory
+        ) == 0
+        assert factory.calls == []
 
 
-def test_disabled_profile_draws_nothing_and_builds_no_rng():
-    factory = _ExplodingFactory()
-    resolved = _flat(RATE, enabled=False)
-    assert background.poisson_overlay(
-        resolved, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    assert factory.calls == []
+def test_overlay_mean_agrees_with_independent_source_scale():
+    resolved = _flat()
+    context = _context()
+    draws = np.array([
+        background.poisson_overlay(resolved, context, 4242, index)
+        for index in range(2000)
+    ], dtype=float)
+    assert abs(draws.mean() - TARGET_MEAN) < 5.0
+    assert 0.7 * TARGET_MEAN < draws.var() < 1.4 * TARGET_MEAN
+
+    doubled = _flat(scale=2.0 * TARGET_RATE / FLAT_BASE_RATE)
+    double_draws = np.array([
+        background.poisson_overlay(doubled, context, 4242, index)
+        for index in range(2000)
+    ], dtype=float)
+    assert abs(double_draws.mean() - 2.0 * TARGET_MEAN) < 8.0
 
 
-def test_zero_mean_draws_nothing_and_builds_no_rng():
-    factory = _ExplodingFactory()
-    # Enabled but with no terms at all, and enabled with an exactly-zero rate:
-    # both have nothing to plant, so neither may touch the RNG.
-    empty = background.resolve({"enabled": True, "preset": "none"})
-    assert background.poisson_overlay(
-        empty, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    zero_rate = _flat(0.0)
-    assert background.poisson_overlay(
-        zero_rate, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    # The strength knob at zero is the same "nothing to plant" case.
-    zero_scale = _flat(RATE, scale=0.0)
-    assert background.poisson_overlay(
-        zero_scale, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    # ... including over a required sample-origin term with no sample scale,
-    # which at nonzero strength would raise SampleScaleUnavailable.
-    zero_scale_sample = background.resolve({
+def test_overlay_uses_sigma_e_for_sample_elastic_source():
+    resolved = background.resolve({
+        "catalog_version": 2,
         "enabled": True,
-        "scale": 0.0,
-        "terms": [{
-            "name": "needed",
-            "shape": "flat",
-            "origin": "sample",
-            "params": {"rate": 0.05},
-        }],
+        "sources": {
+            "sample_elastic": {"enabled": True, "scale": 1.0},
+        },
     })
-    assert background.poisson_overlay(
-        zero_scale_sample, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    assert factory.calls == []
-
-
-def test_zero_neutrons_draws_nothing_and_builds_no_rng():
-    factory = _ExplodingFactory()
-    resolved = _flat(RATE)
-    assert background.poisson_overlay(
-        resolved, 1.0, None, 0.0, None, 1, 0, rng_factory=factory
-    ) == 0
-    assert factory.calls == []
-
-
-def test_overlay_mean_agrees_with_the_resolved_rate():
-    """Statistical agreement: many draws average to N * rate."""
-    resolved = _flat(RATE)
-    expected = MEAN  # 500 counts per point
-    draws = np.array([
-        background.poisson_overlay(resolved, 0.0, None, N, None, 4242, i)
-        for i in range(2000)
-    ], dtype=float)
-    # Standard error of the mean of 2000 Poisson(500) draws is ~0.5 counts;
-    # 5 counts is a 10-sigma band, so this is tight but not flaky.
-    assert abs(draws.mean() - expected) < 5.0
-    # Poisson, not a constant: the sample variance tracks the mean.
-    assert 0.7 * expected < draws.var() < 1.4 * expected
-
-
-def test_overlay_honors_the_profile_scale():
-    """The knob reaches the draw through the mean, on the Monte-Carlo path too."""
-    resolved = _flat(RATE, scale=2.0)
-    draws = np.array([
-        background.poisson_overlay(resolved, 0.0, None, N, None, 4242, i)
-        for i in range(2000)
-    ], dtype=float)
-    # 2 * 500 counts; standard error ~0.7, so 8 counts is a wide-but-safe band.
-    assert abs(draws.mean() - 2.0 * MEAN) < 8.0
-    # A scaled overlay is a differently-drawn overlay, not a rescaled one.
-    plain = background.poisson_overlay(_flat(RATE), 0.0, None, N, None, 4242, 0)
-    assert background.poisson_overlay(resolved, 0.0, None, N, None, 4242, 0) != plain
-
-
-def test_scale_zero_draws_nothing_and_builds_no_rng():
-    """Turning the knob to 0 is as cheap as disabling: no RNG is constructed."""
-    factory = _ExplodingFactory()
-    resolved = _flat(RATE, scale=0.0)
-    assert background.poisson_overlay(
-        resolved, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    assert factory.calls == []
-
-
-def test_disabled_profile_ignores_the_scale_entirely():
-    """A scale on a disabled profile still draws nothing and builds no RNG."""
-    factory = _ExplodingFactory()
-    resolved = _flat(RATE, enabled=False, scale=1000.0)
-    assert background.poisson_overlay(
-        resolved, 1.0, None, N, None, 1, 0, rng_factory=factory
-    ) == 0
-    assert factory.calls == []
-
-
-def test_overlay_uses_sigma_e_for_the_elastic_line():
-    """A narrower sigma_E concentrates the same integrated rate at E = 0."""
-    resolved = background.resolve({"enabled": True, "preset": "strong_elastic"})
-    narrow, _, _ = background.mean_counts(resolved, 0.0, 0.2, N, None)
-    wide, _, _ = background.mean_counts(resolved, 0.0, 2.0, N, None)
+    narrow, _ = background.mean_counts(
+        resolved, _context(sigma_e=0.2)
+    )
+    wide, _ = background.mean_counts(
+        resolved, _context(sigma_e=2.0)
+    )
     assert narrow > wide
-    # Away from the elastic line the fallback/None path must still be finite.
     assert background.poisson_overlay(
-        resolved, 8.0, None, N, None, 7, 1
+        resolved, _context(w=8.0), 7, 1
     ) >= 0
 
 
-def test_sample_origin_refusal_propagates_from_the_overlay():
+def test_powder_source_has_no_hidden_sample_scale_or_refusal():
     resolved = background.resolve({
+        "catalog_version": 2,
         "enabled": True,
-        "terms": [{
-            "name": "sample_diffuse",
-            "shape": "flat",
-            "origin": "sample",
-            "params": {"rate": 0.05},
-        }],
+        "sources": {
+            "instrument_aluminum_powder": {"enabled": True, "scale": 2.0},
+        },
     })
-    with pytest.raises(background.SampleScaleUnavailable):
-        background.poisson_overlay(resolved, 0.0, None, N, None, 1, 0)
-    # With a scale it plants N * scale * rate.
-    assert background.poisson_overlay(resolved, 0.0, None, N, 1.0e-8, 1, 0) >= 0
+    center = background.source_catalog()[
+        "instrument_aluminum_powder"
+    ]["base_numerics"]["lines"][0]["q_inv_ang"]
+    context = _context(q=center)
+    mean, per_source = background.mean_counts(resolved, context)
+    assert mean > 0
+    assert per_source == {"instrument_aluminum_powder": mean}
+    assert background.poisson_overlay(resolved, context, 1, 0) >= 0
 
-
-# ==========================================================================
-# Qt-bound MC loop: source scans (see module docstring)
-# ==========================================================================
 
 def _mc_branch(source):
-    """The McStas half of ``run_simulation`` (after the deterministic return)."""
     body = source.split("def run_simulation", 1)[1]
     return body.split("return self._run_scan_deterministic", 1)[1]
 
 
-def test_mc_path_resolves_the_background_once_before_the_loop():
+def test_mc_path_resolves_v2_once_before_build_without_sample_scaling():
     branch = _mc_branch(_read(CONTROLLER_PATH))
     assert "background = _background.resolve(background_spec)" in branch
-    assert "self._background_sample_scale(" in branch
-    assert "'background_source') or 'config_default'" in branch
-    # Resolution happens before the McStas build, not inside the point loop.
+    assert "self._background_sample_scale(" not in branch
+    assert "SampleScaleUnavailable" not in branch
     assert branch.index("_background.resolve(background_spec)") < branch.index(
         "self.instrument.build("
     )
 
 
-def test_mc_path_fails_the_job_on_an_inapplicable_background():
-    branch = _mc_branch(_read(CONTROLLER_PATH))
-    assert "sample_background_scale_unavailable" in branch
-    assert "invalid background profile" in branch
-    assert "_background.SampleScaleUnavailable" in branch
-    assert "job.state = JobState.FAILED" in branch
-
-
-def test_mc_path_freezes_a_background_seed():
+def test_mc_path_freezes_seed_and_uses_both_overlay_streams_inside_global_gate():
     branch = _mc_branch(_read(CONTROLLER_PATH))
     assert "background_seed = launch_state.get('seed')" in branch
     assert "zlib.crc32" in branch
     assert "launch_state['background_seed'] = background_seed" in branch
-
-
-def test_mc_path_overlays_poisson_counts_per_point():
-    branch = _mc_branch(_read(CONTROLLER_PATH))
-    assert "_background.poisson_overlay(" in branch
-    assert "counts = counts + bg_counts" in branch
-    # Gated on enabled, so a disabled profile is bit-identical to no background.
-    assert "if background.enabled and counts is not None:" in branch
-    # sigma_E only under the elastic_incoherent flag.
-    assert "background_needs_sigma = background.enabled and any(" in branch
-    assert "if background_needs_sigma:" in branch
-
-
-def test_mc_overlay_is_applied_exactly_once_per_point():
-    """No second addition site: a double overlay would silently double the truth."""
-    branch = _mc_branch(_read(CONTROLLER_PATH))
     assert branch.count("_background.poisson_overlay(") == 1
     assert branch.count("counts = counts + bg_counts") == 1
-    # The only mutation of `counts` in the McStas branch is the detector read
-    # and this one overlay.
-    assignments = [
-        line.strip() for line in branch.splitlines()
-        if line.strip().startswith("counts =") or line.strip().startswith("counts +=")
-    ]
-    assert assignments == [
-        "counts = counts + bg_counts",
-    ], assignments
+    assert branch.count("_background.draw_event_overlay(") == 1
+    assert branch.count("counts = counts + event_counts") == 1
+    assert "if background.enabled and counts is not None:" in branch
+    call_tail = branch.split("_background.poisson_overlay(", 1)[1].split(
+        "if bg_counts:", 1
+    )[0]
+    assert "background_seed" in call_tail
+    assert "i" in call_tail
+    assert "background_scale" not in call_tail
 
 
-def test_mc_overlay_work_is_entirely_inside_the_enabled_gate():
-    """Disabled profile == today's numerics: no RNG, no resolution, no draw."""
+def test_mc_resolution_solve_is_gated_for_elastic_and_powder_sources():
     branch = _mc_branch(_read(CONTROLLER_PATH))
+    assert "'elastic_incoherent', 'powder_elastic'" in branch
+    assert "background_needs_sigma_q = 'powder_elastic'" in branch
     lines = branch.splitlines()
     gate_index = next(
-        n for n, line in enumerate(lines)
-        if line.strip() == "if background.enabled and counts is not None:"
+        index for index, line in enumerate(lines)
+        if line.strip() == (
+            "if background_needs_sigma_q or background_needs_sigma_e:"
+        )
     )
     gate_indent = len(lines[gate_index]) - len(lines[gate_index].lstrip())
-    # Everything the overlay does lives strictly deeper than the gate line, so a
-    # disabled profile executes none of it.
-    for needle in ("_background.poisson_overlay(", "sigma_e_mev", "_resolution(",
-                   "counts = counts + bg_counts", "resolution_config("):
-        hits = [n for n, line in enumerate(lines) if needle in line]
-        assert hits, needle
-        for n in hits:
-            assert n > gate_index, needle
-            assert len(lines[n]) - len(lines[n].lstrip()) > gate_indent, needle
+    for needle in ("marginal_sigma", "_resolution(", "resolution_config("):
+        hits = [index for index, line in enumerate(lines) if needle in line]
+        assert hits
+        assert all(index > gate_index for index in hits)
+        assert all(
+            len(lines[index]) - len(lines[index].lstrip()) > gate_indent
+            for index in hits
+        )
 
 
-def test_mc_resolution_solve_only_happens_under_the_sigma_flag():
-    """sigma_E laziness: the 4x4 inversion never runs for a non-elastic profile."""
-    branch = _mc_branch(_read(CONTROLLER_PATH))
-    lines = branch.splitlines()
-    flag_index = next(
-        n for n, line in enumerate(lines) if line.strip() == "if background_needs_sigma:"
-    )
-    flag_indent = len(lines[flag_index]) - len(lines[flag_index].lstrip())
-    for needle in ("sigma_e_mev", "_resolution(", "resolution_config("):
-        hits = [n for n, line in enumerate(lines) if needle in line]
-        assert hits, needle
-        for n in hits:
-            assert n > flag_index, needle
-            assert len(lines[n]) - len(lines[n].lstrip()) > flag_indent, needle
-    # ... and the term flag itself is the elastic_incoherent test.
-    assert "term.shape == 'elastic_incoherent' for term in background.terms" in branch
-
-
-def test_mc_path_stamps_the_shared_metadata_block():
+def test_mc_path_stamps_shared_v2_metadata_without_legacy_fields():
     branch = _mc_branch(_read(CONTROLLER_PATH))
     assert "job.result.metadata['background'] = _background.metadata_block(" in branch
-    assert "skipped_terms=background_skipped," in branch
-    assert "background_seed if background.enabled else None" in branch
+    assert "realized_events=realized_background_events" in branch
+    assert "sample_scale=" not in branch
+    assert "skipped_terms=" not in branch
+
+
+def test_mc_path_derives_angle_scan_q_and_keeps_detector_only_overlay():
+    source = _read(CONTROLLER_PATH)
+    helper = source.split(
+        "def _background_q_magnitude", 1
+    )[1].split("def format_editable_number", 1)[0]
+    assert "lab_q_from_stt(" in helper
+    assert 'metadata["Ki"]' in helper
+    assert 'metadata["Kf"]' in helper
+    assert 'metadata["stt"]' in helper
+    branch = _mc_branch(source)
+    assert "intensity, intensity_error, counts = read_1Ddetector_file" in branch
+    assert "intensity = intensity +" not in branch

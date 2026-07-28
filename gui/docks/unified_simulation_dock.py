@@ -6,12 +6,10 @@ and progress tracking into a single dockable panel.
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QComboBox, QGroupBox, QPushButton,
                                 QGridLayout, QCheckBox, QFormLayout, QProgressBar,
-                                QWidget, QSizePolicy, QDoubleSpinBox)
+                                QWidget, QSizePolicy)
 from PySide6.QtCore import Qt
 
 from gui.docks.base_dock import BaseDockWidget
-from tavi.background import DEFAULT_SCALE as BACKGROUND_DEFAULT_SCALE
-from tavi.background import PRESETS as BACKGROUND_PRESETS
 
 
 # Define linked parameter groups - parameters within a group control the same thing
@@ -226,58 +224,26 @@ class UnifiedSimulationDock(BaseDockWidget):
             "Poisson counts (validator; see the API guide)."
         )
         engine_row.addWidget(self.engine_combo)
-        engine_row.addStretch()
-        scan_layout.addLayout(engine_row)
+        engine_row.addSpacing(12)
 
-        # Background profile row (tavi/background.py). Enable toggle + preset
-        # only: numeric overrides are an API-only capability, so a GUI edit
-        # always sends the plain preset form. The label is a read-only echo of
-        # the resolved terms, written by the controller after every change.
-        background_row = QHBoxLayout()
-        background_row.addWidget(QLabel("Background:"))
-        self.background_enable_check = QCheckBox("On")
+        # Background is configured globally beside the engine selector.  The
+        # checkbox is the immediate master gate; individual source switches and
+        # scales live in a staged modal dialog opened by the button.
+        engine_row.addWidget(QLabel("Background:"))
+        self.background_enable_check = QCheckBox()
         self.background_enable_check.setToolTip(
-            "Plant the selected background profile into generated scans.\n"
+            "Plant the configured background sources into generated scans.\n"
             "Off: scans contain signal only (identical counts to a "
             "background-free engine)."
         )
-        background_row.addWidget(self.background_enable_check)
-        self.background_preset_combo = QComboBox()
-        # userData carries the registry preset name; each item's tooltip is the
-        # registry description, so the roster documents itself.
-        for name, entry in BACKGROUND_PRESETS.items():
-            self.background_preset_combo.addItem(name, name)
-            self.background_preset_combo.setItemData(
-                self.background_preset_combo.count() - 1,
-                entry.get("description", ""), Qt.ToolTipRole,
-            )
-        background_row.addWidget(self.background_preset_combo)
-        # Strength knob: one multiplier over every term of the chosen preset, so
-        # the roster carries the character of a background and this carries its
-        # strength. keyboardTracking off means typing "2.5" emits one change at
-        # the end, not one per keystroke (each would round-trip the profile).
-        self.background_scale_spin = QDoubleSpinBox()
-        self.background_scale_spin.setDecimals(2)
-        self.background_scale_spin.setRange(0.0, 10000.0)
-        self.background_scale_spin.setSingleStep(0.1)
-        self.background_scale_spin.setValue(BACKGROUND_DEFAULT_SCALE)
-        self.background_scale_spin.setKeyboardTracking(False)
-        self.background_scale_spin.setPrefix("x ")
-        self.background_scale_spin.setToolTip(
-            "Multiplies every background term (S/N knob)"
+        engine_row.addWidget(self.background_enable_check)
+        self.background_config_button = QPushButton("Background configuration…")
+        self.background_config_button.setToolTip(
+            "Choose and scale the available background sources."
         )
-        self.background_scale_spin.setMaximumWidth(90)
-        background_row.addWidget(self.background_scale_spin)
-        self._background_summary_text = ""
-        self.background_summary_label = QLabel("")
-        self.background_summary_label.setStyleSheet(
-            "color: #666666; font-size: 10px;"
-        )
-        self.background_summary_label.setSizePolicy(
-            QSizePolicy.Ignored, QSizePolicy.Preferred
-        )
-        background_row.addWidget(self.background_summary_label, 1)
-        scan_layout.addLayout(background_row)
+        engine_row.addWidget(self.background_config_button)
+        engine_row.addStretch()
+        scan_layout.addLayout(engine_row)
 
         main_layout.addWidget(scan_group)
         
@@ -626,61 +592,17 @@ class UnifiedSimulationDock(BaseDockWidget):
         except Exception:
             return "mcstas"
 
-    def get_background_spec(self) -> dict:
-        """Preset-form background spec from the row (never carries overrides).
-
-        Per-term numeric overrides are reachable only through the API, so what
-        the row can express is exactly ``{enabled, preset, overrides: {}, scale}``
-        -- the profile-level strength knob is a user control, unlike the
-        per-term numerics.
-        """
-        preset = self.background_preset_combo.currentData()
-        return {
-            "enabled": bool(self.background_enable_check.isChecked()),
-            "preset": preset if isinstance(preset, str) else "none",
-            "overrides": {},
-            "scale": float(self.background_scale_spin.value()),
-        }
-
-    def set_background_display(self, enabled, preset, summary: str,
-                               scale=BACKGROUND_DEFAULT_SCALE):
-        """Show a resolved background profile without emitting change signals.
-
-        The controller owns the profile; this is a pure display sync, so the
-        widgets can never disagree with the stored spec. A profile delivered in
-        the frozen numeric form has no ``preset`` -- the combo then keeps its
-        current entry and the summary label carries the real content.
-        """
-        widgets = (self.background_enable_check, self.background_preset_combo,
-                   self.background_scale_spin)
-        for widget in widgets:
-            widget.blockSignals(True)
+    def set_background_display(self, enabled, summary: str):
+        """Sync the master gate and configuration tooltip without signalling."""
+        self.background_enable_check.blockSignals(True)
         try:
             self.background_enable_check.setChecked(bool(enabled))
-            index = self.background_preset_combo.findData(preset)
-            if index >= 0:
-                self.background_preset_combo.setCurrentIndex(index)
-            try:
-                self.background_scale_spin.setValue(float(scale))
-            except (TypeError, ValueError) as exc:
-                # A display sync must never raise; show the neutral knob and say why.
-                print(f"Background scale {scale!r} is not displayable ({exc}); "
-                      f"showing {BACKGROUND_DEFAULT_SCALE}")
-                self.background_scale_spin.setValue(BACKGROUND_DEFAULT_SCALE)
-            self._background_summary_text = summary or ""
-            self._update_background_summary_label()
         finally:
-            for widget in widgets:
-                widget.blockSignals(False)
-
-    def _update_background_summary_label(self):
-        """Elide the summary into the label's width; full text in the tooltip."""
-        metrics = self.background_summary_label.fontMetrics()
-        width = max(120, self.background_summary_label.width())
-        self.background_summary_label.setText(
-            metrics.elidedText(self._background_summary_text, Qt.ElideRight, width)
+            self.background_enable_check.blockSignals(False)
+        detail = summary or "No background sources are active."
+        self.background_config_button.setToolTip(
+            "Choose and scale the available background sources.\n\n" + detail
         )
-        self.background_summary_label.setToolTip(self._background_summary_text)
 
     def get_number_neutrons(self) -> int:
         """Get the combined number of neutrons from mantissa × 10^exponent.

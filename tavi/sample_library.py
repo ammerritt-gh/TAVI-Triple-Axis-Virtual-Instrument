@@ -87,10 +87,6 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
                 # Mean of three saved McStas scans: 4507 counts at (200),
                 # 0 meV, 1e7 neutrons; normalized by F2(200)=1.903296.
                 elastic=0.00023679974108073573,
-                # Scaling channel for sample-origin background terms; same order as
-                # the phonon calibration, so the sample_diffuse preset lands a few
-                # times the flat instrument floor rather than swamping the signal.
-                diffuse_background=1.0e-8,
             ),
         ),
     )

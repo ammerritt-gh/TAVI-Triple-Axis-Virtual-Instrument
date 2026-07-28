@@ -509,40 +509,36 @@ def test_background_means_threaded_per_point():
     assert with_bg == pytest.approx([m + b for m, b in zip(base, bgs)])
 
 
-def test_sigma_e_is_marginalized_width():
+def test_marginal_sigma_supports_q_and_energy_axes():
     res = _res()
     covariance = np.linalg.inv(np.asarray(res.matrix, dtype=float))
+    assert de.marginal_sigma(res, "dq_par") == pytest.approx(
+        math.sqrt(covariance[0, 0])
+    )
+    assert de.marginal_sigma(res, "q") == de.marginal_sigma(res, 0)
+    assert de.marginal_sigma(res, "dE") == pytest.approx(
+        math.sqrt(covariance[3, 3])
+    )
     assert de.sigma_e_mev(res) == pytest.approx(math.sqrt(covariance[3, 3]))
     # the conditional width 1/sqrt(M[3,3]) is narrower and is NOT what we want
     assert de.sigma_e_mev(res) > 1.0 / math.sqrt(res.matrix[3][3])
     assert de.sigma_e_mev(_res(q0=99.0)) is None
     assert de.sigma_e_mev(None) is None
+    with pytest.raises(ValueError, match="unknown resolution axis"):
+        de.marginal_sigma(res, "bananas")
+    with pytest.raises(ValueError, match="index 0..3"):
+        de.marginal_sigma(res, 4)
 
 
-def test_validated_calibration_carries_diffuse_background():
+def test_validated_calibration_contains_signal_channels_only():
     spec = _phonon_spec()
     calibrated = replace(
         spec,
-        analytic_calibration=AnalyticCalibration(
-            phonon=1.0, elastic=2.0, diffuse_background=3.0e-8
-        ),
-    )
-    assert de._validated_calibration(calibrated).diffuse_background == 3.0e-8
-    # An unusable scale becomes None -- background then refuses or skips
-    # explicitly instead of a signal-only scan dying on an optional channel.
-    for bad in (-1.0, float("nan"), float("inf")):
-        broken = replace(
-            spec,
-            analytic_calibration=AnalyticCalibration(
-                phonon=1.0, elastic=2.0, diffuse_background=bad
-            ),
-        )
-        assert de._validated_calibration(broken).diffuse_background is None
-    missing = replace(
-        spec,
         analytic_calibration=AnalyticCalibration(phonon=1.0, elastic=2.0),
     )
-    assert de._validated_calibration(missing).diffuse_background is None
+    assert de._validated_calibration(calibrated) == AnalyticCalibration(
+        phonon=1.0, elastic=2.0
+    )
 
 
 # --------------------------------------------------------------------------- timing
