@@ -10,6 +10,7 @@ seam ``_submit_scan_on_gui`` / ``_validate_scan_on_gui`` use.
 """
 import os
 import sys
+import threading
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from tavi.scan_jobs import JobState  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -102,3 +104,82 @@ def test_invalid_patch_field_is_rejected(controller):
         )
     assert exc.value.code == "invalid_parameters"
     assert "Ei" in exc.value.details["errors"]
+
+
+@pytest.mark.parametrize("instrument_id", ["puma", "in8"])
+@pytest.mark.parametrize("source", ["api", "gui"])
+def test_builtin_launch_state_stays_frozen_through_real_queue_boundary(
+        instrument_id, source):
+    """Every shipped scan_config satisfies the queue's deepcopy-safe execution contract."""
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    infos = available_instruments()
+    instrument = get_instrument(instrument_id)
+    window = cm.TAVIMainWindow(
+        instrument.descriptor(),
+        instrument_infos=infos,
+        current_instrument_id=instrument_id,
+        save_selection=lambda _id: None,
+    )
+    ctrl = cm.TAVIController(window, instrument, api_overrides={"disabled": True})
+    captured = {}
+    executed = threading.Event()
+
+    def capture_run(launch_state, job):
+        captured["launch_state"] = launch_state
+        with job.lock:
+            job.state = JobState.DONE
+            job.notify_state_change()
+        executed.set()
+
+    ctrl.run_simulation = capture_run
+    try:
+        ctrl.instrument_state.mis_omega = 1.25
+        ctrl.diagnostic_settings = {
+            "Detector PSD": True,
+            "nested": {"gain": [1.0]},
+        }
+        ctrl.background_profile["enabled"] = True
+        if source == "api":
+            launch = ctrl.build_api_launch_state({
+                "H": 1.0,
+                "K": 1.0,
+                "L": 0.0,
+                "scan_command1": "deltaE 0 1 0.5",
+            })
+            cm.TaviApiBackend._apply_background_to_launch_state(ctrl, launch, None)
+        else:
+            ctrl.window.simulation_dock.scan_command_1_edit.setText(
+                "deltaE 0 1 0.5")
+            ctrl.window.simulation_dock.scan_command_2_edit.setText("")
+            launch = ctrl._collect_simulation_launch_state()
+
+        expected_h = launch["vals"]["H"]
+        expected_mis_omega = launch["scan_config"].mis_omega
+        expected_mount = launch["scan_config"].sample_mount.R_mount.copy()
+        expected_gain = launch["diagnostic_settings"]["nested"]["gain"][:]
+        expected_background_enabled = launch["background"]["enabled"]
+
+        job = ctrl.submit_scan_job(launch, source)
+
+        ctrl.instrument_state.mis_omega = 99.0
+        ctrl.diagnostic_settings["nested"]["gain"].append(99.0)
+        ctrl.background_profile["enabled"] = False
+        launch["vals"]["H"] = 99.0
+        launch["scan_config"].mis_omega = 99.0
+        launch["scan_config"].sample_mount.R_mount[0, 0] = 99.0
+        launch["diagnostic_settings"]["nested"]["gain"].append(99.0)
+        launch["background"]["enabled"] = False
+
+        assert executed.wait(timeout=2.0)
+        frozen = captured["launch_state"]
+        assert frozen is job.launch_state
+        assert frozen["vals"]["H"] == expected_h
+        assert frozen["scan_config"].mis_omega == expected_mis_omega
+        assert frozen["scan_config"].sample_mount.R_mount.tolist() == (
+            expected_mount.tolist())
+        assert frozen["diagnostic_settings"]["nested"]["gain"] == expected_gain
+        assert frozen["background"]["enabled"] is expected_background_enabled
+    finally:
+        ctrl.shutdown()
+        window.deleteLater()
+        app.processEvents()

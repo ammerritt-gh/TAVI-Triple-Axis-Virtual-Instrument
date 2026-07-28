@@ -140,6 +140,13 @@ class InstrumentPlugin(Protocol):
         ``gui_values`` (e.g. hidden training misalignments). ``sample_mount`` is
         built by the controller (it depends on the session UB matrix) and passed
         in so the plugin stays free of UB coupling.
+
+        The returned object is an execution value, not a live adapter: it and
+        everything reachable from it must be independently owned and safe for
+        ``copy.deepcopy`` at the shared job-queue seam. It must contain no Qt
+        objects, callbacks, generators, locks, open handles, or mutable
+        references into controller/session state. A violation rejects the scan
+        before registry insertion.
         """
         ...
 

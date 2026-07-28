@@ -307,7 +307,10 @@ class InstrumentPlugin(Protocol):
                     diagnostic_settings, sample_mount) -> InstrumentState: ...
         # Frozen scan-launch config: deep-copies base_state *inside the
         # plugin*, then applies the instrument's GUI-value mapping (replaces
-        # the controller's hand-written _build_scan_puma_config).
+        # the controller's hand-written _build_scan_puma_config). The complete
+        # returned object graph is independently owned and deepcopy-safe: no
+        # Qt objects, callbacks, generators, locks, open handles, or mutable
+        # references into controller/session state.
 
     def crystal_info(self, mono_label, ana_label) -> tuple[dict, dict]: ...
         # TRANSITIONAL (Phase 1 only): crystal dicts shaped like
@@ -331,6 +334,11 @@ coupling. The three controller sites that need a bare state to poke generic TAS
 fields into for validation get `default_state()`; the fields they set
 (`monocris/anacris/K_fixed/fixed_E/sample_mount`) are `TAS_Instrument`
 *base-class* attributes, so setting them directly is instrument-agnostic.
+The shared queue deep-copies the complete launch state once more before
+registry insertion. A plugin that returns an object graph which cannot be
+deep-copied therefore fails scan submission closed; live resources belong
+behind plugin-owned identifiers or reconstruction logic, never inside the
+scan configuration.
 
 `build` / `compute_snapshot` / `run_point` are exactly today's
 `build_PUMA_instrument` / `compute_scan_snapshot` / `run_PUMA_point`, lifted
