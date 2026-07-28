@@ -37,6 +37,10 @@ _TERMINAL_STATES = frozenset(
 )
 
 
+class LaunchStateFreezeError(TypeError):
+    """The submitted launch state could not be isolated for queued execution."""
+
+
 def _json_safe(value: Any) -> Any:
     """Recursively convert a value into a JSON-serializable form.
 
@@ -161,6 +165,19 @@ class ScanJob:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self):
+        if not isinstance(self.launch_state, dict):
+            raise LaunchStateFreezeError(
+                "launch state must be a dictionary before it can be queued"
+            )
+        try:
+            # A queued job owns every execution input it will later consume.
+            # Freezing here covers every constructor path (GUI, API, benchmark)
+            # and happens before callers can insert the job into a registry.
+            self.launch_state = copy.deepcopy(self.launch_state)
+        except Exception as exc:
+            raise LaunchStateFreezeError(
+                f"launch state could not be frozen for queued execution: {exc}"
+            ) from exc
         # Condition shares the job lock so a thread holding ``lock`` (every
         # state-transition site does) can call ``notify_state_change()`` to wake
         # long-poll waiters, and a waiter's ``wait()`` releases/re-acquires the

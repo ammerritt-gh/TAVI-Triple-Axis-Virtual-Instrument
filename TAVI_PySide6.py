@@ -7526,16 +7526,15 @@ class TAVIController(QObject):
         background_source = (
             launch_state.get('background_source') or 'config_default'
         )
-        # Frozen background seed: an explicit body seed wins, else a stable hash
-        # of the job id (crc32 is deterministic across processes, unlike Python's
-        # salted hash()), mirroring the deterministic branch. Frozen into the
-        # launch state so a replay of this launch redraws the same overlay.
+        # An explicit body seed wins, else a stable hash of the job id (crc32 is
+        # deterministic across processes, unlike Python's salted hash()),
+        # mirroring the deterministic branch. Keep the derived value local:
+        # ScanJob owns a write-once launch snapshot once it enters the queue.
         background_seed = launch_state.get('seed')
         if background_seed is None:
             _job_id = getattr(job, 'job_id', '') if job is not None else ''
             background_seed = int(zlib.crc32((_job_id or '').encode('utf-8')))
         background_seed = int(background_seed)
-        launch_state['background_seed'] = background_seed
         try:
             background = _background.resolve(background_spec)
         except ValueError as exc:

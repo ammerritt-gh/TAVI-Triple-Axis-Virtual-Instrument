@@ -9,9 +9,11 @@ import math
 import threading
 import time
 
+import numpy as np
 import pytest
 
 from tavi.scan_jobs import (
+    LaunchStateFreezeError,
     JobState,
     JobRegistry,
     ScanJob,
@@ -115,6 +117,78 @@ def test_recent_returns_snapshot_dicts_not_jobs():
 # --------------------------------------------------------------------------
 # ScanJob.snapshot / launch summary
 # --------------------------------------------------------------------------
+
+class _LaunchConfig:
+    def __init__(self):
+        self.offsets = np.array([1.0, 2.0])
+        self.sample_mount = {"ub": np.eye(3), "labels": ["a", "b"]}
+
+
+class _Uncopyable:
+    def __deepcopy__(self, memo):
+        raise RuntimeError("live handle")
+
+
+def test_job_owns_a_deep_frozen_launch_state():
+    source = {
+        "vals": {"scan_command1": "deltaE -2 4 0.25", "nested": [1, {"x": 2}]},
+        "scan_config": _LaunchConfig(),
+        "diagnostics": {"enabled": ["monitor_a"]},
+        "background": {"sources": [{"id": "flat", "scale": 0.5}]},
+        "planned_feasible_mask": [True, False],
+    }
+    job = ScanJob(job_id="j-0001", source="api", launch_state=source)
+
+    source["vals"]["scan_command1"] = "deltaE 0 0 1"
+    source["vals"]["nested"][1]["x"] = 99
+    source["scan_config"].offsets[0] = 99.0
+    source["scan_config"].sample_mount["ub"][0, 0] = 99.0
+    source["diagnostics"]["enabled"].append("monitor_b")
+    source["background"]["sources"][0]["scale"] = 9.0
+    source["planned_feasible_mask"][0] = False
+
+    frozen = job.launch_state
+    assert frozen["vals"]["scan_command1"] == "deltaE -2 4 0.25"
+    assert frozen["vals"]["nested"][1]["x"] == 2
+    np.testing.assert_array_equal(frozen["scan_config"].offsets, [1.0, 2.0])
+    np.testing.assert_array_equal(frozen["scan_config"].sample_mount["ub"], np.eye(3))
+    assert frozen["diagnostics"]["enabled"] == ["monitor_a"]
+    assert frozen["background"]["sources"][0]["scale"] == 0.5
+    assert frozen["planned_feasible_mask"] == [True, False]
+    assert job.snapshot()["launch"]["scan_command1"] == "deltaE -2 4 0.25"
+
+
+def test_two_jobs_from_one_source_do_not_share_nested_launch_state():
+    source = {
+        "vals": {"number_neutrons": 100, "scan_command1": "deltaE -1 1 0.1"},
+        "scan_config": _LaunchConfig(),
+        "background": {"sources": [{"id": "flat", "scale": 1.0}]},
+    }
+    first = ScanJob(job_id="j-0001", source="api", launch_state=source)
+    second = ScanJob(job_id="j-0002", source="api", launch_state=source)
+
+    first.launch_state["vals"]["number_neutrons"] = 999
+    first.launch_state["scan_config"].offsets[0] = 999.0
+    first.launch_state["background"]["sources"][0]["scale"] = 999.0
+
+    assert second.launch_state["vals"]["number_neutrons"] == 100
+    np.testing.assert_array_equal(second.launch_state["scan_config"].offsets, [1.0, 2.0])
+    assert second.launch_state["background"]["sources"][0]["scale"] == 1.0
+    assert source["vals"]["number_neutrons"] == 100
+
+
+def test_uncopyable_launch_state_fails_before_registry_insertion():
+    registry = JobRegistry()
+    with pytest.raises(LaunchStateFreezeError, match="could not be frozen"):
+        job = ScanJob(
+            job_id=registry.next_id(),
+            source="api",
+            launch_state={"scan_config": _Uncopyable()},
+        )
+        registry.add(job)
+
+    assert registry.all_jobs() == []
+
 
 def _job_with_result(counts, mode="1D", include_meta=None):
     result = ScanResult(

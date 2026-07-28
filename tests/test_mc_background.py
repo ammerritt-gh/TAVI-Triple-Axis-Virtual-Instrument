@@ -167,11 +167,11 @@ def test_mc_path_resolves_v2_once_before_build_without_sample_scaling():
     )
 
 
-def test_mc_path_freezes_seed_and_uses_both_overlay_streams_inside_global_gate():
+def test_mc_path_derives_seed_locally_and_uses_both_overlay_streams_inside_global_gate():
     branch = _mc_branch(_read(CONTROLLER_PATH))
     assert "background_seed = launch_state.get('seed')" in branch
     assert "zlib.crc32" in branch
-    assert "launch_state['background_seed'] = background_seed" in branch
+    assert "launch_state['background_seed'] = background_seed" not in branch
     assert branch.count("_background.poisson_overlay(") == 1
     assert branch.count("counts = counts + bg_counts") == 1
     assert branch.count("_background.draw_event_overlay(") == 1

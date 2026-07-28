@@ -144,7 +144,7 @@ For 2D scans `counts` is null and `counts_grid` is a list of rows. Unmeasured or
 ### 7.1 Data structures (`tavi/scan_jobs.py`)
 
 - `JobState`: `QUEUED / RUNNING / DONE / FAILED / CANCELLED / STOPPED`.
-- `ScanJob`: `job_id` (`j-%04d`), `source` (`"gui"` or `"api"`), frozen `launch_state` dict, state, timestamps, `progress_done/total`, `error`, `result: ScanResult | None`, a `threading.Lock`. `snapshot(include_data=False)` returns a deep-copied JSON-safe dict under the lock.
+- `ScanJob`: `job_id` (`j-%04d`), `source` (`"gui"` or `"api"`), frozen `launch_state` dict, state, timestamps, `progress_done/total`, `error`, `result: ScanResult | None`, a `threading.Lock`. Construction deep-copies the complete launch state before registry insertion, so later mutation of controller/plugin objects cannot alter a queued job; an uncopyable state is rejected before queue publication. `snapshot(include_data=False)` returns a deep-copied JSON-safe dict under the lock.
 - `ScanResult`: mode, variable names, scan value arrays, valid masks, `counts` (pre-sized list written by index) or `counts_grid`, count totals, output folder, metadata. Plain lists, not ndarrays, so `json.dumps` works directly.
 - `JobRegistry`: id → job dict behind a lock; recent-jobs listing.
 - `BudgetLimits`: the four limits plus an accounting helper. On API submission the server computes points (via `parse_scan_steps` from `tavi/utilities.py` on the scan commands in the frozen `launch_state`) × `number_neutrons`, and enforces: queue depth ≤ `max_queued`, points ≤ `max_points`, neutrons per point ≤ `max_neutrons_per_point`, and Σ(points × neutrons) over pending jobs ≤ `queue_neutron_budget`. GUI-source jobs skip the checks and do not consume budget.
