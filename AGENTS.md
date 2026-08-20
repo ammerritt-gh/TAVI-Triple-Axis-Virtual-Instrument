@@ -15,6 +15,14 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 - **Generated output:** simulation results are written under `output/`; McStas can generate `.c`, `.instr`, executables, and detector output files.
 - **External runtime dependency:** McStas 3.4 or later plus a C/C++ compiler for instrument compilation.
 - **Dependencies to change carefully:** `mcstasscript`, `PySide6`, `matplotlib`, and McStas path handling all affect launch and simulation behavior.
+- **TAVI is a dependency hub — sweep consumers before moving or renaming anything they touch.**
+  Three external consumers break silently: sibling repo **ISAR** vendors `geometry/` (Qt-free
+  copy in `ISAR/isar/geometry/`), drives the REST/SSE API at `127.0.0.1:8642` in its `live`
+  tests and the closed loop, and falls back to the `tavi-dev` env for its GUI;
+  **MCPs\TAS_MCP** imports the `tavi` package (path fallback resolves `Science\TAVI`;
+  `TAVI_ROOT` overrides). Moving/renaming this repo, the `tavi` package, `geometry/`, or the
+  API surface requires sweeping all three. The closed-loop design is
+  `docs/CLOSED_LOOP_DESIGN.md`.
 
 ---
 
