@@ -696,8 +696,140 @@ double pdft_nbose(double omega, double temp)
 }
 
 /* ======================================================================
+   Fast numeric table reader for the dispersion grid.
+
+   read_table-lib's Table_Read is generic and slow: ~30 s for a 150 MB
+   map, paid once per MPI rank. The grid is a plain numeric table, so read
+   the whole file once and walk it with strtod. Comment lines ('#' as the
+   first non-blank character) are concatenated into the header that
+   Table_ParseHeader reads; an inline '#' ends a data line. Every data
+   line must carry the same number of fields. Returns 1 on success, 0 for
+   an empty table, -1 on error (message already printed).
+   ====================================================================== */
+typedef struct {
+  double *data;      /* rows*columns doubles, row-major */
+  long    rows;
+  int     columns;
+  char   *header;    /* concatenated comment lines, newline separated */
+} pdft_num_table;
+
+#define PDFT_TAB(t, i, c) ((t).data[(long)(i) * (t).columns + (c)])
+
+static void pdft_num_table_free(pdft_num_table *t)
+{
+  if (t->data) free(t->data);
+  if (t->header) free(t->header);
+  t->data = NULL; t->header = NULL; t->rows = 0; t->columns = 0;
+}
+
+static int pdft_read_numeric_table(char *filename, pdft_num_table *t)
+{
+  FILE *f;
+  char *path, *buf, *p, *end, *line_end, *q;
+  long size, nread, cap, n, hcap, hlen, line_no = 0;
+  int cols_line;
+
+  t->data = NULL; t->header = NULL; t->rows = 0; t->columns = 0;
+  path = (char *)malloc(1024);
+  if (!path) return -1;
+  f = Open_File(filename, "r", path);
+  free(path);
+  if (!f) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Could not open phonon file %s\n", filename);
+    return -1;
+  }
+  if (fseek(f, 0, SEEK_END) != 0 || (size = ftell(f)) <= 0) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Could not size phonon file %s\n", filename);
+    fclose(f);
+    return -1;
+  }
+  rewind(f);
+  buf = (char *)malloc((size_t)size + 1);
+  if (!buf) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Out of memory reading %s\n", filename);
+    fclose(f);
+    return -1;
+  }
+  nread = (long)fread(buf, 1, (size_t)size, f);   /* text mode may shrink CRLF */
+  fclose(f);
+  buf[nread] = '\0';
+
+  cap = 1L << 20; n = 0;
+  hcap = 4096; hlen = 0;
+  t->data = (double *)malloc((size_t)cap * sizeof(double));
+  t->header = (char *)malloc((size_t)hcap);
+  if (!t->data || !t->header) {
+    fprintf(stderr, "Phonon_DFT: ERROR: Out of memory reading %s\n", filename);
+    free(buf); pdft_num_table_free(t);
+    return -1;
+  }
+  t->header[0] = '\0';
+
+  p = buf; end = buf + nread;
+  while (p < end) {
+    line_no++;
+    line_end = (char *)memchr(p, '\n', (size_t)(end - p));
+    if (!line_end) line_end = end;
+    q = p;
+    while (q < line_end && (*q == ' ' || *q == '\t' || *q == '\r')) q++;
+    if (q < line_end && *q == '#') {
+      long len = (long)(line_end - q);
+      if (hlen + len + 2 > hcap) {
+        char *h;
+        while (hlen + len + 2 > hcap) hcap *= 2;
+        h = (char *)realloc(t->header, (size_t)hcap);
+        if (!h) { free(buf); pdft_num_table_free(t); return -1; }
+        t->header = h;
+      }
+      memcpy(t->header + hlen, q, (size_t)len);
+      hlen += len;
+      t->header[hlen++] = '\n';
+      t->header[hlen] = '\0';
+    } else if (q < line_end) {
+      cols_line = 0;
+      while (q < line_end) {
+        char *next;
+        double v;
+        while (q < line_end && (*q == ' ' || *q == '\t' || *q == '\r')) q++;
+        if (q >= line_end || *q == '#') break;
+        v = strtod(q, &next);
+        if (next == q) {
+          fprintf(stderr, "Phonon_DFT: ERROR: %s line %ld: non-numeric value\n",
+                  filename, line_no);
+          free(buf); pdft_num_table_free(t);
+          return -1;
+        }
+        if (n >= cap) {
+          double *d;
+          cap *= 2;
+          d = (double *)realloc(t->data, (size_t)cap * sizeof(double));
+          if (!d) { free(buf); pdft_num_table_free(t); return -1; }
+          t->data = d;
+        }
+        t->data[n++] = v;
+        cols_line++;
+        q = next;
+      }
+      if (cols_line > 0) {
+        if (t->columns == 0) t->columns = cols_line;
+        else if (cols_line != t->columns) {
+          fprintf(stderr, "Phonon_DFT: ERROR: %s line %ld: %d fields, expected %d\n",
+                  filename, line_no, cols_line, t->columns);
+          free(buf); pdft_num_table_free(t);
+          return -1;
+        }
+        t->rows++;
+      }
+    }
+    p = line_end + 1;
+  }
+  free(buf);
+  return (t->rows > 0 && t->columns > 0) ? 1 : 0;
+}
+
+/* ======================================================================
    Read phonon dispersion grid from file
-   
+
    File format: columnar text, one row per (q-point, branch):
      H(rlu) K(rlu) L(rlu) E(meV) Intensity Branch
    
@@ -712,7 +844,7 @@ double pdft_nbose(double omega, double temp)
    ====================================================================== */
 int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
 {
-  t_Table sTable;
+  pdft_num_table sTable;
   int i, total_rows;
   int nx_detected, ny_detected, nz_detected, nb_detected;
   int ix, iy, iz, ib, flat_idx;
@@ -731,7 +863,7 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
     return 0;
   }
   
-  if (Table_Read(&sTable, filename, 1) <= 0) {
+  if (pdft_read_numeric_table(filename, &sTable) <= 0) {
     fprintf(stderr, "Phonon_DFT: ERROR: Could not read phonon file %s\n", filename);
     return -1;
   }
@@ -740,13 +872,13 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
   if (total_rows < 2) {
     fprintf(stderr, "Phonon_DFT: ERROR: Phonon file %s has too few rows (%d)\n",
             filename, total_rows);
-    Table_Free(&sTable);
+    pdft_num_table_free(&sTable);
     return -1;
   }
   if (sTable.columns < 6) {
     fprintf(stderr, "Phonon_DFT: ERROR: Phonon file %s needs >= 6 columns "
             "(H K L E Intensity Branch), got %d\n", filename, (int)sTable.columns);
-    Table_Free(&sTable);
+    pdft_num_table_free(&sTable);
     return -1;
   }
   
@@ -771,7 +903,7 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
   if (!nb_detected) {
     max_branch = 0;
     for (i = 0; i < total_rows; i++) {
-      b_val = (int)Table_Index(sTable, i, 5);
+      b_val = (int)PDFT_TAB(sTable, i, 5);
       if (b_val > max_branch) max_branch = b_val;
     }
     nb_detected = max_branch + 1;  /* 0-indexed */
@@ -780,9 +912,9 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
   if (!nx_detected || !ny_detected || !nz_detected) {
     /* Count unique H values (assumes data sorted by H first) */
     count_h = 1;
-    prev_h = Table_Index(sTable, 0, 0);
+    prev_h = PDFT_TAB(sTable, 0, 0);
     for (i = nb_detected; i < total_rows; i += nb_detected) {
-      h_val = Table_Index(sTable, i, 0);
+      h_val = PDFT_TAB(sTable, i, 0);
       if (fabs(h_val - prev_h) > 1e-8) {
         count_h++;
         prev_h = h_val;
@@ -792,11 +924,11 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
     /* nz = total / (nx * ny * nb), but we need to figure out ny too */
     /* Count unique K values for the first H slice */
     count_k = 1;
-    prev_k = Table_Index(sTable, 0, 1);
+    prev_k = PDFT_TAB(sTable, 0, 1);
     for (i = nb_detected; i < total_rows; i += nb_detected) {
-      h_val = Table_Index(sTable, i, 0);
-      if (fabs(h_val - Table_Index(sTable, 0, 0)) > 1e-8) break;
-      k_val = Table_Index(sTable, i, 1);
+      h_val = PDFT_TAB(sTable, i, 0);
+      if (fabs(h_val - PDFT_TAB(sTable, 0, 0)) > 1e-8) break;
+      k_val = PDFT_TAB(sTable, i, 1);
       if (fabs(k_val - prev_k) > 1e-8) {
         count_k++;
         prev_k = k_val;
@@ -804,13 +936,13 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
     }
     /* Count unique L values for first H,K slice */
     count_l = 1;
-    prev_l = Table_Index(sTable, 0, 2);
+    prev_l = PDFT_TAB(sTable, 0, 2);
     for (i = nb_detected; i < total_rows; i += nb_detected) {
-      h_val = Table_Index(sTable, i, 0);
-      k_val = Table_Index(sTable, i, 1);
-      if (fabs(h_val - Table_Index(sTable, 0, 0)) > 1e-8) break;
-      if (fabs(k_val - Table_Index(sTable, 0, 1)) > 1e-8) break;
-      l_val = Table_Index(sTable, i, 2);
+      h_val = PDFT_TAB(sTable, i, 0);
+      k_val = PDFT_TAB(sTable, i, 1);
+      if (fabs(h_val - PDFT_TAB(sTable, 0, 0)) > 1e-8) break;
+      if (fabs(k_val - PDFT_TAB(sTable, 0, 1)) > 1e-8) break;
+      l_val = PDFT_TAB(sTable, i, 2);
       if (fabs(l_val - prev_l) > 1e-8) {
         count_l++;
         prev_l = l_val;
@@ -845,7 +977,7 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
   grid->I_data = (double *)calloc(nx_detected * ny_detected * nz_detected * nb_detected, sizeof(double));
   if (!grid->E_data || !grid->I_data) {
     fprintf(stderr, "Phonon_DFT: ERROR: Memory allocation failed for phonon grid\n");
-    Table_Free(&sTable);
+    pdft_num_table_free(&sTable);
     return -1;
   }
   
@@ -865,9 +997,9 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
   }
   
   /* Detect H,K,L range from first and last rows */
-  grid->H_min = Table_Index(sTable, 0, 0);
-  grid->K_min = Table_Index(sTable, 0, 1);
-  grid->L_min = Table_Index(sTable, 0, 2);
+  grid->H_min = PDFT_TAB(sTable, 0, 0);
+  grid->K_min = PDFT_TAB(sTable, 0, 1);
+  grid->L_min = PDFT_TAB(sTable, 0, 2);
   grid->H_max = grid->H_min;
   grid->K_max = grid->K_min;
   grid->L_max = grid->L_min;
@@ -875,12 +1007,12 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
   /* Scan for actual min/max and fill grid */
   grid->E_max = 0;
   for (i = 0; i < total_rows; i++) {
-    h_val = Table_Index(sTable, i, 0);
-    k_val = Table_Index(sTable, i, 1);
-    l_val = Table_Index(sTable, i, 2);
-    e_val = Table_Index(sTable, i, 3);
-    i_val = Table_Index(sTable, i, 4);
-    b_val = (int)Table_Index(sTable, i, 5);
+    h_val = PDFT_TAB(sTable, i, 0);
+    k_val = PDFT_TAB(sTable, i, 1);
+    l_val = PDFT_TAB(sTable, i, 2);
+    e_val = PDFT_TAB(sTable, i, 3);
+    i_val = PDFT_TAB(sTable, i, 4);
+    b_val = (int)PDFT_TAB(sTable, i, 5);
     
     if (h_val < grid->H_min) grid->H_min = h_val;
     if (h_val > grid->H_max) grid->H_max = h_val;
@@ -904,12 +1036,12 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
      Assumed file ordering: rows are sorted by (H, K, L, branch) with
      branch varying fastest. Map each row to grid index. */
   for (i = 0; i < total_rows; i++) {
-    h_val = Table_Index(sTable, i, 0);
-    k_val = Table_Index(sTable, i, 1);
-    l_val = Table_Index(sTable, i, 2);
-    e_val = Table_Index(sTable, i, 3);
-    i_val = Table_Index(sTable, i, 4);
-    b_val = (int)Table_Index(sTable, i, 5);
+    h_val = PDFT_TAB(sTable, i, 0);
+    k_val = PDFT_TAB(sTable, i, 1);
+    l_val = PDFT_TAB(sTable, i, 2);
+    e_val = PDFT_TAB(sTable, i, 3);
+    i_val = PDFT_TAB(sTable, i, 4);
+    b_val = (int)PDFT_TAB(sTable, i, 5);
     
     /* Map continuous r.l.u. to grid index */
     fH = (h_val - grid->H_min) / grid->dH;
@@ -929,14 +1061,14 @@ int pdft_read_phonon_grid(char *filename, pdft_phonon_grid *grid)
     grid->E_data[flat_idx] = e_val;
     grid->I_data[flat_idx] = i_val;
     if (has_gamma) {
-      g_val = Table_Index(sTable, i, 6);
+      g_val = PDFT_TAB(sTable, i, 6);
       grid->G_data[flat_idx] = g_val;
     }
   }
   
   grid->loaded = 1;
   
-  Table_Free(&sTable);
+  pdft_num_table_free(&sTable);
   
   MPI_MASTER(
     printf("Phonon_DFT: Phonon grid range: H=[%g, %g] K=[%g, %g] L=[%g, %g]  E_max=%g meV\n",
