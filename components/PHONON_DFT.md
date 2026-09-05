@@ -206,6 +206,39 @@ The sample also owns independent analytic phonon and elastic calibrations.
 Those factors affect deterministic counts only; they are not component input
 parameters.
 
+The aluminium map is a toy: `sin^2(pi*H/2)` is periodic in each of H, K, and L
+separately, so its zone centres sit only at all-even `(H,K,L)` and `(1,1,1)` is
+a dispersion maximum. A real fcc crystal is also gapless at `(1,1,1)`. Any
+consumer that infers zone centres from the map's period inherits this
+difference between the two built-in samples.
+
+## Built-in lead configuration
+
+`tavi/sample_library.py` configures `Pb_phonon_DFT` with:
+
+- reflection file `Pb_Fm-3m.laz` (committed; generated from tabulated
+  constants, `b_coh = 9.405 fm`, `F2 = 14.1526 barn` on every allowed
+  reflection);
+- dispersion file `Pb_dft_phonons.dat` (**gitignored** with its source
+  `pb_pdisp_3d_nq50` until the collaborator permits publication; a checkout
+  without it lists the sample but fails at asset load);
+- cubic lattice parameter `a = 4.9508 A` (room-temperature Pb; the DFT
+  lattice constant has not been supplied);
+- temperature `T = 300 K`; otherwise the aluminium parameters.
+
+`tools/make_pb_assets.py` builds both files. The DFT source is a `50^3` grid in
+primitive-reciprocal internal coordinates (`q = x*b1 + y*b2 + z*b3` with
+`b1 = (-1,1,1)`, `b2 = (1,-1,1)`, `b3 = (1,1,-1)`) with three sorted branch
+energies per point and no eigenvectors. The tool places conventional `(H,K,L)`
+nodes on `[-1,1]` at step 0.04; each lands exactly on a DFT node
+(`x = (K+L)/2`, `y = (H+L)/2`, `z = (H+K)/2`), so the map is a lookup, not an
+interpolation, using one DFT node in eight. Every intensity is `1.0` because the
+source carries no structure factors, the twelve numerically negative frequencies
+near Gamma (worst `-0.065 meV`) are clamped to zero, and the analytic
+calibration is copied from aluminium uncalibrated. The tool's self-check asserts
+`E = 0` at `(0,0,0)` and `(1,1,1)`, the X-point values, the period-2 wrap, and
+cubic symmetry.
+
 ## Adding or replacing a branch
 
 To add a branch:

@@ -89,4 +89,32 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
                 elastic=0.00023679974108073573,
             ),
         ),
+        SampleSpec(
+            "Pb_phonon_DFT", "Pb: Phonon DFT", "Phonon_DFT",
+            # Real fcc dispersion from a collaborator's DFT grid (tools/make_pb_assets.py).
+            # Pb_dft_phonons.dat is gitignored until the data may be published; the sample
+            # is listed regardless, and a run without the file fails at asset load.
+            properties={
+                "reflections": '"Pb_Fm-3m.laz"',
+                "delta_d_d": 1.45e-3, "barns": 1,
+                "dispersion": '"Pb_dft_phonons.dat"',
+                "tessellate": 1, "phonon_e_steps": 50,
+                "radius": 5e-3, "yheight": 30e-3,
+                "a": 4.9508, "sigma_abs": 0, "sigma_inc": 0.0,
+                "debye_waller": 1, "T": 300,
+                "p_interact": 1.0, "p_phonon": 0.95, "phonon_gamma": 0.2,
+                "target_index": 2, "focus_aw": 5.0, "focus_ah": 15.0,
+            },
+            split=10,
+            lattice=(4.9508, 4.9508, 4.9508, 90.0, 90.0, 90.0),
+            reflection_source="Pb_Fm-3m.laz",
+            space_group=225,
+            # Copied from Al_phonon_DFT, not calibrated against a Pb McStas run. The
+            # elastic factor is per unit F2 and transfers as is; the physical phonon
+            # rescaling (b_Pb/b_Al)^2 * (M_Al/M_Pb) = 0.97 is within 3 % of the copy.
+            analytic_calibration=AnalyticCalibration(
+                phonon=6.41e-8,
+                elastic=0.00023679974108073573,
+            ),
+        ),
     )

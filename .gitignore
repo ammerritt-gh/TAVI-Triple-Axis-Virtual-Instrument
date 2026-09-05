@@ -383,6 +383,11 @@ IN8_McScript.instr
 # Local-only third-party reference material (see examples/vTAS-README.md)
 examples/vTAS/
 
+# Collaborator's Pb DFT phonon grid and the map built from it (tools/make_pb_assets.py);
+# not redistributable until permission to publish is granted
+pb_pdisp_3d_nq50
+components/Pb_dft_phonons.dat
+
 # Virtual environments for Python projects
 .venv/
 

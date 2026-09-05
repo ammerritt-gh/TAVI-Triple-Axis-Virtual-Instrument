@@ -136,6 +136,7 @@ def test_alpha2_table_matches_descriptor_slot():
 
 @pytest.mark.parametrize("sample_id", [
     "Al_rod_phonon", "Al_rod_phonon_optic", "Al_bragg", "Al_phonon_DFT",
+    "Pb_phonon_DFT",
 ])
 def test_sample_emission_matches_library_spec(sample_id):
     from tavi.sample_library import default_sample_library
