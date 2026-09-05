@@ -4,6 +4,11 @@ The public surface is deliberately small: :func:`load_dispersion_map` loads and
 validates one file, and :meth:`DispersionMap.evaluate` returns every interpolated
 mode at one HKL point. Parsing, cache invalidation, tessellation, interpolation,
 linewidth handling, and numerical gradients stay private to this module.
+
+Parsing is vectorised (``numpy.loadtxt`` plus array checks) because a fine
+real-crystal map runs to millions of rows; the row-by-row walk survives only
+as the diagnostic that names the offending line once ``loadtxt`` has refused a
+file.
 """
 from __future__ import annotations
 
@@ -236,13 +241,74 @@ def _parse_positive_header_int(name: str, raw_value: str, line_number: int) -> i
     return value
 
 
+def _parse_headers(path: Path) -> dict[str, int]:
+    """Collect the ``# grid_n* / num_branches`` declarations from comment lines."""
+    headers: dict[str, int] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if "#" not in line:
+                continue
+            header_match = _HEADER_PATTERN.match(line)
+            if header_match:
+                name = header_match.group(1).lower()
+                value = _parse_positive_header_int(
+                    name, header_match.group(2), line_number
+                )
+                previous = headers.get(name)
+                if previous is not None and previous != value:
+                    raise DispersionMapError(
+                        f"line {line_number}: conflicting {name} declarations"
+                    )
+                headers[name] = value
+            elif _HEADER_PREFIX_PATTERN.match(line):
+                raise DispersionMapError(
+                    f"line {line_number}: malformed grid header declaration"
+                )
+    return headers
+
+
+def _diagnose_rows(path: Path, cause: Exception) -> DispersionMapError:
+    """Walk the rows once ``loadtxt`` has refused them and name the first offender."""
+    gamma_columns: bool | None = None
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            content = line.split("#", 1)[0].strip()
+            if not content:
+                continue
+            fields = content.split()
+            if len(fields) < 6:
+                return DispersionMapError(
+                    f"line {line_number}: expected H K L E intensity branch "
+                    "and optional linewidth"
+                )
+            if len(fields) > 7:
+                return DispersionMapError(
+                    f"line {line_number}: expected at most seven dispersion fields"
+                )
+            row_has_gamma = len(fields) == 7
+            if gamma_columns is None:
+                gamma_columns = row_has_gamma
+            elif gamma_columns != row_has_gamma:
+                return DispersionMapError(
+                    f"line {line_number}: linewidth column is present on only "
+                    "part of the grid"
+                )
+            try:
+                [float(value) for value in fields]
+            except ValueError:
+                return DispersionMapError(
+                    f"line {line_number}: non-numeric dispersion value"
+                )
+    return DispersionMapError(f"cannot parse dispersion rows in {path}: {cause}")
+
+
 def _regular_axis(
-    values: Iterable[float],
+    values: np.ndarray,
     *,
     name: str,
     expected_size: int | None,
 ) -> np.ndarray:
-    axis = np.asarray(sorted(set(values)), dtype=float)
+    axis = np.unique(values)
     if expected_size is not None and len(axis) != expected_size:
         raise DispersionMapError(
             f"{name} dimension is {len(axis)}, header declares {expected_size}"
@@ -260,89 +326,45 @@ def _regular_axis(
 
 
 def _parse_dispersion_map(path: Path) -> DispersionMap:
-    headers: dict[str, int] = {}
-    rows: list[tuple[float, float, float, float, float, int, float]] = []
-    gamma_columns: bool | None = None
+    headers = _parse_headers(path)
+    try:
+        table = np.loadtxt(path, comments="#", dtype=float, ndmin=2, encoding="utf-8")
+    except ValueError as exc:
+        raise _diagnose_rows(path, exc) from exc
 
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            header_match = _HEADER_PATTERN.match(line)
-            if header_match:
-                name = header_match.group(1).lower()
-                value = _parse_positive_header_int(
-                    name, header_match.group(2), line_number
-                )
-                previous = headers.get(name)
-                if previous is not None and previous != value:
-                    raise DispersionMapError(
-                        f"line {line_number}: conflicting {name} declarations"
-                    )
-                headers[name] = value
-            elif _HEADER_PREFIX_PATTERN.match(line):
-                raise DispersionMapError(
-                    f"line {line_number}: malformed grid header declaration"
-                )
-            content = line.split("#", 1)[0].strip()
-            if not content:
-                continue
-            fields = content.split()
-            if len(fields) < 6:
-                raise DispersionMapError(
-                    f"line {line_number}: expected H K L E intensity branch "
-                    "and optional linewidth"
-                )
-            if len(fields) > 7:
-                raise DispersionMapError(
-                    f"line {line_number}: expected at most seven dispersion fields"
-                )
-            row_has_gamma = len(fields) >= 7
-            if gamma_columns is None:
-                gamma_columns = row_has_gamma
-            elif gamma_columns != row_has_gamma:
-                raise DispersionMapError(
-                    f"line {line_number}: linewidth column is present on only "
-                    "part of the grid"
-                )
-            try:
-                numeric = [float(value) for value in fields[:7]]
-            except ValueError as exc:
-                raise DispersionMapError(
-                    f"line {line_number}: non-numeric dispersion value"
-                ) from exc
-            if not all(math.isfinite(value) for value in numeric):
-                raise DispersionMapError(
-                    f"line {line_number}: dispersion values must be finite"
-                )
-            branch_value = numeric[5]
-            if branch_value < 0.0 or not branch_value.is_integer():
-                raise DispersionMapError(
-                    f"line {line_number}: branch must be a non-negative integer"
-                )
-            linewidth = numeric[6] if row_has_gamma else 0.0
-            if linewidth < 0.0:
-                raise DispersionMapError(
-                    f"line {line_number}: linewidth must be non-negative"
-                )
-            rows.append(
-                (
-                    numeric[0],
-                    numeric[1],
-                    numeric[2],
-                    numeric[3],
-                    numeric[4],
-                    int(branch_value),
-                    linewidth,
-                )
-            )
-
-    if not rows:
+    if table.size == 0:
         raise DispersionMapError(f"dispersion map contains no data rows: {path}")
-
-    branch_ids = sorted({row[5] for row in rows})
-    expected_branch_ids = list(range(branch_ids[-1] + 1))
-    if branch_ids != expected_branch_ids:
+    columns = table.shape[1]
+    if columns < 6:
         raise DispersionMapError(
-            f"branch indices must be contiguous from 0; found {branch_ids}"
+            "expected H K L E intensity branch and optional linewidth"
+        )
+    if columns > 7:
+        raise DispersionMapError("expected at most seven dispersion fields")
+    gamma_columns = columns == 7
+
+    finite = np.isfinite(table).all(axis=1)
+    if not finite.all():
+        raise DispersionMapError(
+            f"data row {int(np.argmax(~finite)) + 1}: dispersion values must be finite"
+        )
+    branch_values = table[:, 5]
+    if np.any(branch_values < 0.0) or np.any(branch_values != np.floor(branch_values)):
+        bad = int(np.argmax((branch_values < 0.0) | (branch_values != np.floor(branch_values))))
+        raise DispersionMapError(
+            f"data row {bad + 1}: branch must be a non-negative integer"
+        )
+    branches = branch_values.astype(int)
+    if gamma_columns and np.any(table[:, 6] < 0.0):
+        raise DispersionMapError(
+            f"data row {int(np.argmax(table[:, 6] < 0.0)) + 1}: "
+            "linewidth must be non-negative"
+        )
+
+    branch_ids = np.unique(branches)
+    if not np.array_equal(branch_ids, np.arange(branch_ids[-1] + 1)):
+        raise DispersionMapError(
+            f"branch indices must be contiguous from 0; found {branch_ids.tolist()}"
         )
     header_branches = headers.get("num_branches")
     if header_branches is not None and header_branches != len(branch_ids):
@@ -351,53 +373,37 @@ def _parse_dispersion_map(path: Path) -> DispersionMap:
         )
 
     axes = (
-        _regular_axis(
-            (row[0] for row in rows),
-            name="H",
-            expected_size=headers.get("grid_nx"),
-        ),
-        _regular_axis(
-            (row[1] for row in rows),
-            name="K",
-            expected_size=headers.get("grid_ny"),
-        ),
-        _regular_axis(
-            (row[2] for row in rows),
-            name="L",
-            expected_size=headers.get("grid_nz"),
-        ),
+        _regular_axis(table[:, 0], name="H", expected_size=headers.get("grid_nx")),
+        _regular_axis(table[:, 1], name="K", expected_size=headers.get("grid_ny")),
+        _regular_axis(table[:, 2], name="L", expected_size=headers.get("grid_nz")),
     )
     shape = tuple(len(axis) for axis in axes) + (len(branch_ids),)
     expected_rows = math.prod(shape)
 
-    axis_indices = tuple(
-        {float(value): index for index, value in enumerate(axis)}
-        for axis in axes
-    )
+    grid_index = tuple(
+        np.searchsorted(axis, table[:, dimension]) for dimension, axis in enumerate(axes)
+    ) + (branches,)
+    flat = np.ravel_multi_index(grid_index, shape)
+    unique_flat, first_index, counts = np.unique(flat, return_index=True, return_counts=True)
+    if len(unique_flat) != len(flat):
+        duplicate_row = table[int(first_index[np.argmax(counts > 1)])]
+        raise DispersionMapError(
+            f"duplicate grid cell at ({duplicate_row[0]:g}, {duplicate_row[1]:g}, "
+            f"{duplicate_row[2]:g}), branch {int(duplicate_row[5])}"
+        )
+    if len(unique_flat) != expected_rows:
+        raise DispersionMapError(
+            f"grid requires {expected_rows} unique rows, found {len(unique_flat)}"
+        )
+
     energies = np.empty(shape, dtype=float)
     intensities = np.empty(shape, dtype=float)
-    linewidths = np.empty(shape, dtype=float) if gamma_columns else None
-    occupied: set[tuple[int, int, int, int]] = set()
-    for h, k, l, energy, intensity, branch, linewidth in rows:
-        index = (
-            axis_indices[0][h],
-            axis_indices[1][k],
-            axis_indices[2][l],
-            branch,
-        )
-        if index in occupied:
-            raise DispersionMapError(
-                f"duplicate grid cell at ({h:g}, {k:g}, {l:g}), branch {branch}"
-            )
-        occupied.add(index)
-        energies[index] = energy
-        intensities[index] = intensity
-        if linewidths is not None:
-            linewidths[index] = linewidth
-    if len(occupied) != expected_rows:
-        raise DispersionMapError(
-            f"grid requires {expected_rows} unique rows, found {len(occupied)}"
-        )
+    energies.flat[flat] = table[:, 3]
+    intensities.flat[flat] = table[:, 4]
+    linewidths = None
+    if gamma_columns:
+        linewidths = np.empty(shape, dtype=float)
+        linewidths.flat[flat] = table[:, 6]
 
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return DispersionMap(
