@@ -241,9 +241,18 @@ calibration is copied from aluminium uncalibrated. The tool's self-check asserts
 `E = 0` at `(0,0,0)` and `(1,1,1)`, the X- and L-point values, the period-2
 wrap, and cubic symmetry.
 
-The analytic loader (`tavi/dispersion_map.py`) parses with `numpy.loadtxt` and
-vectorised validation so a map of this size loads in seconds; the row walk
-survives only to name the offending line of a refused file.
+Both readers were rebuilt for maps of this size. The analytic loader
+(`tavi/dispersion_map.py`) parses with `numpy.loadtxt` and vectorised
+validation (87 s → 3 s); its row walk survives only to name the offending line
+of a refused file. The component reads the grid with its own
+`pdft_read_numeric_table` — one `fread` of the file and a `strtod` walk, comment
+lines kept for `Table_ParseHeader` — instead of the generic `Table_Read`, which
+took 30 s per MPI rank on the 150 MB map. Startup is now about 1 s. The
+accepted format is unchanged, and the detector output at a fixed seed is
+bit-identical to the old reader's. The reflection table still goes through
+`Table_Read`; it is small. Map spacing is therefore a physics choice, not a
+runtime one: measured per-event cost is about 3 µs per source neutron on both
+the 0.02 and the 0.04 rlu map.
 
 ## Dispersion viewer
 
