@@ -388,6 +388,10 @@ examples/vTAS/
 pb_pdisp_3d_nq50
 components/Pb_dft_phonons.dat
 
+# Figures saved by the dispersion viewer (kept apart from output/ so a sweep of
+# simulation results does not take them)
+figures/
+
 # Virtual environments for Python projects
 .venv/
 
