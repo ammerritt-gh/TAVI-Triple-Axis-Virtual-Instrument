@@ -18,7 +18,7 @@ _PB_MAP = Path(__file__).resolve().parents[1] / "components" / "Pb_dft_phonons.d
 def test_pb_dft_map_has_fcc_zone_centres_and_period_two():
     dispersion = load_dispersion_map(_PB_MAP)
     assert dispersion.branch_count == 3
-    assert dispersion.grid_shape == (51, 51, 51)
+    assert dispersion.grid_shape == (101, 101, 101)
 
     def energies(hkl):
         return [mode.energy_mev for mode in dispersion.evaluate(hkl, tessellate=True)]

@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import map_coordinates
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "pb_pdisp_3d_nq50"
@@ -47,19 +48,25 @@ def load_dft_grid(path: Path = SOURCE) -> np.ndarray:
 
 
 def resample_conventional(grid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Map the DFT grid onto conventional ``[-1,1]^3`` nodes (step ``2/NQ``), no interpolation."""
-    axis = np.linspace(-1.0, 1.0, NQ + 1)
+    """Map the DFT grid onto conventional ``[-1,1]^3`` nodes at step ``1/NQ``.
+
+    Every DFT node is a conventional node (those with H, K, L of equal parity in
+    units of the step, one in four); the other three in four sit at primitive
+    cell centres and are trilinearly interpolated on the periodic primitive grid.
+    """
+    axis = np.linspace(-1.0, 1.0, 2 * NQ + 1)
     H, K, L = np.meshgrid(axis, axis, axis, indexing="ij")
     hkl = np.stack([H, K, L], axis=-1)
-    internal = hkl @ _CONVENTIONAL_TO_INTERNAL.T * NQ      # node index, possibly negative
-    nodes = np.rint(internal)
-    if not np.allclose(internal, nodes, atol=1e-9):
-        raise ValueError("conventional grid does not land on DFT nodes; keep step = 2/NQ")
-    ix, iy, iz = (nodes[..., d].astype(int) % NQ for d in range(3))
-    # ponytail: step 2/NQ lands on every other DFT node per axis (1 in 8 overall); the DFT
-    # nodes at odd multiples of 0.02 rlu (e.g. the L point (.5,.5,.5)) are then linearly
-    # interpolated by the consumers. Step 1/NQ would use every node at 3.1M rows.
-    energies = grid[ix, iy, iz]
+    internal = hkl @ _CONVENTIONAL_TO_INTERNAL.T * NQ      # fractional node index
+    internal = np.round(internal, 9)                        # exact .0 / .5 before wrapping
+    coords = internal.reshape(-1, 3).T
+    energies = np.stack(
+        [
+            map_coordinates(grid[..., b], coords, order=1, mode="grid-wrap")
+            for b in range(grid.shape[-1])
+        ],
+        axis=-1,
+    ).reshape(*H.shape, grid.shape[-1])
     # DFT noise near Gamma gives a few |E| < 0.07 meV negatives; the map convention is E >= 0.
     energies = np.where(energies < 0.0, 0.0, energies) + 0.0   # + 0.0 turns -0.0 into 0.0
     return axis, energies
@@ -76,9 +83,9 @@ def write_map(axis: np.ndarray, energies: np.ndarray, path: Path = MAP_OUT) -> N
     header = "\n".join([
         "Pb phonon dispersion for Phonon_DFT, resampled from a collaborator's DFT grid",
         f"Source: {SOURCE.name} (50^3 primitive-reciprocal grid, 3 branches, meV); not redistributable yet",
-        "Resampling: conventional (H,K,L) nodes on [-1,1] step 0.04 land exactly on DFT nodes via",
-        "  x=(K+L)/2, y=(H+L)/2, z=(H+K)/2 for b1=(-1,1,1), b2=(1,-1,1), b3=(1,1,-1); no interpolation,",
-        "  one DFT node in eight is used (the source is twice as fine along each primitive axis)",
+        "Resampling: conventional (H,K,L) nodes on [-1,1] step 0.02; x=(K+L)/2, y=(H+L)/2, z=(H+K)/2",
+        "  for b1=(-1,1,1), b2=(1,-1,1), b3=(1,1,-1). Nodes with H,K,L of equal parity (in 0.02 units)",
+        "  are exact DFT nodes (every DFT node is used); the rest are trilinear on the periodic primitive grid",
         "Intensity: 1.0 on every mode (the source carries no eigenvectors or structure factors)",
         "Negative DFT frequencies (|E| < 0.07 meV, numerical, near Gamma) clamped to 0",
         f"lattice_a {LATTICE_A}",
@@ -153,12 +160,15 @@ def main() -> None:
     gamma = energies[at[0.0], at[0.0], at[0.0]]
     zone_111 = energies[at[1.0], at[1.0], at[1.0]]
     x_point = energies[at[1.0], at[0.0], at[0.0]]
+    l_point = energies[at[0.5], at[0.5], at[0.5]]
+    assert energies.shape == (2 * NQ + 1,) * 3 + (3,), energies.shape
     assert np.all(gamma == 0.0), gamma
     assert np.all(zone_111 == 0.0), zone_111          # the Al toy puts its maximum here
     assert np.allclose(x_point, grid[0, 25, 25]), x_point
-    assert np.array_equal(energies[0], energies[-1])   # H=-1 and H=+1 coincide (period 2)
-    assert np.array_equal(energies, np.transpose(energies, (1, 0, 2, 3)))
-    assert np.array_equal(energies, np.transpose(energies, (2, 1, 0, 3)))
+    assert np.allclose(l_point, grid[25, 25, 25]), l_point   # exact DFT node, was interpolated at 0.04
+    assert np.allclose(energies[0], energies[-1], atol=1e-9)   # H=-1 and H=+1 coincide (period 2)
+    assert np.allclose(energies, np.transpose(energies, (1, 0, 2, 3)), atol=1e-9)
+    assert np.allclose(energies, np.transpose(energies, (2, 1, 0, 3)), atol=1e-9)
     assert n_refl == 1240, n_refl
     print(f"wrote {MAP_OUT.name}: grid {energies.shape[:3]}, {energies.shape[-1]} branches, "
           f"E max {energies.max():.3f} meV; X point {np.round(x_point, 3)}")
