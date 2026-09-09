@@ -70,3 +70,23 @@ def test_the_subprocess_guard_still_captures_output():
     )
     assert result.returncode == 0
     assert "captured" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only constants")
+def test_an_unreadable_signature_leaves_the_call_alone():
+    """A guard that breaks the call it guards is worse than no guard.
+
+    Without the position, a positional creationflags argument cannot be
+    recognised, and adding the keyword blind raises "multiple values for
+    argument 'creationflags'" before the child starts.
+    """
+    import conftest
+
+    saved = conftest._CREATIONFLAGS_POS
+    try:
+        conftest._CREATIONFLAGS_POS = None
+        args, kwargs = conftest.apply_no_window((["x"], -1), {})
+        assert "creationflags" not in kwargs
+        assert args == (["x"], -1)
+    finally:
+        conftest._CREATIONFLAGS_POS = saved
