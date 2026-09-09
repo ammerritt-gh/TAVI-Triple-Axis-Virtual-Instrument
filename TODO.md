@@ -113,13 +113,16 @@ Roadmap order per CONTROL_FEATURES §9:
 
 ## Housekeeping
 
-- [x] **Test-runner note** - done 2026-09-09, and the premise was stale: the
-      full suite does **not** crash the interpreter. `micromamba run -n tavi-dev
-      python -m pytest tests -q` runs it clean (843 passed, plus the known
-      `test_live_packages_are_valid` failure); the 0xc06d007f fault did not
-      reproduce. The allowlist is unnecessary. Run one suite at a time - two
-      concurrent runs contend for the API server port. Documented in `AGENTS.md`
-      step 3 and `tests/README.md`.
+- [x] **Test-runner note** - done 2026-09-09. The interpreter crash on a full
+      `pytest tests/` (fault 0xc06d007f, a delay-load failure in matplotlib and
+      Qt native code) is *not* a broken environment: it is what happens when the
+      env's interpreter is invoked **directly**, which leaves `Library\bin` off
+      PATH. Run the suite through the activation the launcher uses --
+      `micromamba run -n tavi-dev python -m pytest tests -q` -- and it passes
+      whole in ~70 s. No allowlist needed. Run one suite at a time: two
+      concurrent runs contend for the API server port and fail
+      `test_api_server.py` / `test_api_validation_schema.py` spuriously.
+      Written up in `AGENTS.md` step 3 and `tests/README.md`.
 
 - [ ] **Instrument evidence still needing an instrument scientist** - each is
       labelled in the owning `MODEL_STATUS.md`, none blocks use:
