@@ -80,7 +80,14 @@ def apply_no_window(args, kwargs):
 
     Returns the (args, kwargs) to forward, preserving any flags already set.
     """
-    if _CREATIONFLAGS_POS is not None and len(args) > _CREATIONFLAGS_POS:
+    if _CREATIONFLAGS_POS is None:
+        # The signature could not be read, so a positional flags argument
+        # cannot be recognised. Adding the keyword blind would raise "multiple
+        # values for argument 'creationflags'" and kill a legitimate call, and
+        # a guard that breaks the thing it guards is worse than no guard: leave
+        # the call alone.
+        return args, kwargs
+    if len(args) > _CREATIONFLAGS_POS:
         args = list(args)
         args[_CREATIONFLAGS_POS] = (args[_CREATIONFLAGS_POS] or 0) | CREATE_NO_WINDOW
         return tuple(args), kwargs
