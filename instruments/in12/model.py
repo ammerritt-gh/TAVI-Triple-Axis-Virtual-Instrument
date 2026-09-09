@@ -130,6 +130,30 @@ class IN12_Instrument(TAS_Instrument):
 
         return crystal_info_from_descriptor(in12_descriptor(), monocris, anacris)
 
+    def ana_vertical_is_fixed(self):
+        """True when the SELECTED analyser holds its vertical focus fixed.
+
+        The 1998 evidence is about the conventional PG(002) assembly, whose
+        fixed vertical focus is produced by permanently tilting the top and
+        bottom crystal rows. It says nothing about the Heusler, so applying
+        PG's fixed radius to it would be inventing a focusing policy from
+        another crystal's evidence -- the exact thing declaring
+        ``fixed_curvature`` per crystal exists to stop. Reads that declaration
+        rather than restating it.
+
+        An unresolved selection means the conventional analyser: like every
+        TAVI instrument state, this one starts with no crystal chosen and
+        ``scan_config`` sets a real id before any scan consults this, so the
+        fallback only covers a state nobody has configured yet -- and IN12's
+        conventional secondary spectrometer is the PG(002) one.
+        """
+        from instruments.in12.plugin import in12_descriptor
+
+        for spec in in12_descriptor().ana_crystals:
+            if spec.id == self.anacris:
+                return "rva" in (spec.fixed_curvature or ())
+        return True
+
     def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
         """Store bending radii, forcing every one onto IN12's take-off branch.
 
@@ -182,7 +206,16 @@ class IN12_Instrument(TAS_Instrument):
         rhm = _clamp_radius(rhmfac * 2 * mono_focus / sin_mth, MONO_MIN_RH)
         rvm = _clamp_radius(rvmfac * 2 * mono_focus * sin_mth, MONO_MIN_RV)
         rha = rhafac * 2 * ana_focus / sin_ath
-        rva = math.copysign(ANA_FIXED_RV, sin_ath)
+        if self.ana_vertical_is_fixed():
+            rva = math.copysign(ANA_FIXED_RV, sin_ath)
+        else:
+            # No evidence of a fixed vertical focus for this analyser, so it is
+            # treated as variable and driven to the point-source optimum, the
+            # same policy every other driven radius here gets. PLACEHOLDER for
+            # the Heusler: its focusing behaviour is unpublished (see
+            # MODEL_STATUS.md), and this is a stated modelling choice, not a
+            # claim about the hardware.
+            rva = 2 * ana_focus * sin_ath
 
         print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
         return rhm, rvm, rha, rva
