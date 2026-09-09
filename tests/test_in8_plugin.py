@@ -68,7 +68,8 @@ def _gui_vals(**overrides):
         "monocris": "pg002",
         "anacris": "pg002",
         "modules": {},
-        "collimation": {"alpha_2": "0", "alpha_3": "30", "alpha_4": "0"},
+        "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "30",
+                        "alpha_4": "0"},
         "slits_mm": {"sbl": (40.0, 100.0), "dbl_hgap": 40.0},
     }
     vals.update(overrides)
@@ -85,7 +86,7 @@ def test_default_state_matches_descriptor_geometry():
     assert state is not plugin.default_state()  # fresh object per call
     assert (state.L1, state.L2, state.L3, state.L4) == (2.28, 2.48, 1.05, 0.70)
     assert (state.sense_mono, state.sense_sample, state.sense_ana) == (1, 1, -1)
-    assert (state.alpha_2, state.alpha_3, state.alpha_4) == (0, 0, 0)
+    assert (state.alpha_1, state.alpha_2, state.alpha_3, state.alpha_4) == (0, 0, 0, 0)
     assert state.source_type == "Maxwellian"
 
 
@@ -115,6 +116,7 @@ def test_scan_config_applies_gui_mapping():
     assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     # Single-select collimation slots -- floats, not PUMA's stacked list.
+    assert config.alpha_1 == 0.0
     assert config.alpha_2 == 0.0
     assert config.alpha_3 == 30.0
     assert config.alpha_4 == 0.0
