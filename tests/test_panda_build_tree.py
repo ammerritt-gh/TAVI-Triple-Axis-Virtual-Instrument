@@ -53,7 +53,19 @@ def plain_instrument():
     return _build()
 
 
+# Every Soller open (the default): each is withdrawn from the beam, so no
+# collimator component exists at all.
 _BEAM_ORDER = [
+    "origin", "source", "virtual_source",
+    "mono_cradle", "monochromator", "sample_arm",
+    "sample_slit", "sample_gonio", "sample_chi_arm", "sample_cradle",
+    "sample_mount", "analyzer_arm", "sample_exit_slit",
+    "analyzer_cradle", "analyzer", "detector_arm",
+    "detector",
+]
+
+# The same backbone with all four Sollers inserted.
+_BEAM_ORDER_COLLIMATED = [
     "origin", "source", "primary_collimator", "virtual_source",
     "mono_cradle", "monochromator", "sample_arm", "sample_collimator",
     "sample_slit", "sample_gonio", "sample_chi_arm", "sample_cradle",
@@ -61,6 +73,9 @@ _BEAM_ORDER = [
     "analyzer_cradle", "analyzer", "detector_arm", "detector_collimator",
     "detector",
 ]
+
+_SOLLERS = ("primary_collimator", "sample_collimator", "analyzer_collimator",
+            "detector_collimator")
 
 
 def test_backbone_beam_order(plain_instrument):
@@ -114,20 +129,53 @@ def test_monitor_gating_is_per_monitor():
                         if m.component_name != "detector_PSD"}
 
 
-def test_collimators_track_selection_including_the_primary():
-    open_build = _build()
-    by_name = {c.name: c for c in open_build.component_list}
-    assert by_name["primary_collimator"].divergence == 0.0
-    assert by_name["sample_collimator"].divergence == 0.0
-    assert by_name["analyzer_collimator"].divergence == 0.0
-    assert by_name["detector_collimator"].divergence == 0.0
+def test_backbone_beam_order_with_every_soller_inserted():
+    names = _component_names(_build(alpha_1="20", alpha_2="40", alpha_3="15",
+                                    alpha_4="60"))
+    assert ([n for n in names if n in set(_BEAM_ORDER_COLLIMATED)]
+            == _BEAM_ORDER_COLLIMATED)
 
+
+def test_open_sollers_leave_the_beam_entirely():
+    """Open is withdrawn, not divergence == 0.
+
+    A zero-divergence ``Collimator_linear`` still carries its two rectangular
+    apertures and absorbs rays, so the real vPANDA instrument gated its
+    collimators with ``WHEN`` clauses rather than opening them in place.
+    """
+    assert not set(_component_names(_build())) & set(_SOLLERS)
+
+
+def test_collimators_track_selection_including_the_primary():
     collimated = _build(alpha_1="20", alpha_2="40", alpha_3="15", alpha_4="60")
     by_name = {c.name: c for c in collimated.component_list}
     assert by_name["primary_collimator"].divergence == 20.0
     assert by_name["sample_collimator"].divergence == 40.0
     assert by_name["analyzer_collimator"].divergence == 15.0
     assert by_name["detector_collimator"].divergence == 60.0
+
+
+def test_each_soller_is_independent():
+    """Inserting one blade must not drag its neighbours into the beam."""
+    slots = {"primary_collimator": "alpha_1", "sample_collimator": "alpha_2",
+             "analyzer_collimator": "alpha_3", "detector_collimator": "alpha_4"}
+    for inserted, slot in slots.items():
+        names = set(_component_names(_build(**{slot: "40"})))
+        assert names & set(_SOLLERS) == {inserted}
+
+
+def test_both_crystals_are_first_order_only():
+    """PANDA's status record claims an order-clean beam; the tree must deliver it.
+
+    ``Monochromator_curved`` at its default ``order=0`` reflects at every
+    multiple of the supplied reciprocal-lattice vector, and the default source
+    is the broadband Maxwellian branch, so nothing else here would exclude a
+    lambda/2 component. This is the assertion that makes the documented
+    "no higher-order contamination" true rather than aspirational.
+    """
+    by_name = {c.name: c for c in _build().component_list}
+    assert by_name["monochromator"].order == 1
+    assert by_name["analyzer"].order == 1
 
 
 def test_virtual_source_is_a_scannable_slit_at_the_right_place():
