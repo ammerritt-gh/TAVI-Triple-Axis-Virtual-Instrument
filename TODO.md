@@ -157,14 +157,34 @@ Roadmap order per CONTROL_FEATURES §9:
 
 ## Housekeeping
 
-- [ ] **Test-runner note — RESOLVED, still to document.** The interpreter crash on
-      a full `pytest tests/` (fault 0xc06d007f, a delay-load failure in matplotlib and
+- [x] **Test-runner note** - done 2026-09-09. The interpreter crash on a full
+      `pytest tests/` (fault 0xc06d007f, a delay-load failure in matplotlib and
       Qt native code) is *not* a broken environment: it is what happens when the
-      env's interpreter is invoked directly, leaving `Library\bin` off PATH. Run the
-      suite through the activation the launcher uses —
-      `micromamba run -n tavi-dev python -m pytest` — and it passes whole in ~70 s
-      (851 passed, 2026-09-09). No allowlist needed. Write this into CLAUDE.md / a
-      tests README so the next person does not re-diagnose it as a broken env.
+      env's interpreter is invoked directly, leaving `Libraryin` off PATH.
+      Run the suite through the activation the launcher uses --
+      `micromamba run -n tavi-dev python -m pytest tests -q` -- and it passes
+      whole in ~70 s. No allowlist needed. Run one suite at a time: two
+      concurrent runs contend for the API server port and fail
+      `test_api_server.py` / `test_api_validation_schema.py` spuriously.
+      Written up in `AGENTS.md` step 3 and `tests/README.md`.
+
+- [ ] **Instrument evidence still needing an instrument scientist** - each is
+      labelled in the owning `MODEL_STATUS.md`, none blocks use:
+      IN8's monochromator take-off lower limit (ILL's current page says 11 deg,
+      the 2023 Thermes paper ~10 deg; the tighter one is enforced);
+      IN12's monochromator curvature minima (1.7 m / 0.5 m, enforced as a
+      *provisional model assumption* - the vertical clamp binds above roughly
+      |A1| = 32 deg, so it is an unsourced number affecting emitted geometry);
+      PANDA's and IN12's analyser vertical curvature *radius* (the fixedness is
+      evidenced, the value is not); IN8's Cu(200) reflectivity; and every
+      instrument's source spectrum - the Maxwellian is now correctly sampled
+      but is still not a measured SR-2 / H144 / H10 spectrum.
+
+- [ ] **PUMA's own evidence review** - PANDA and IN12 got one; PUMA's arm
+      lengths, crystal menu and source spectrum are marked provisional in its
+      own `MODEL_STATUS.md` and disagree with the current MLZ description.
+      Deliberately out of scope for the 2026-09-09 instrument pass, which
+      treated PUMA's declared values as authoritative.
 
 
 Others:
