@@ -270,7 +270,8 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 
         # Primary Soller (ca1), 0.50 m long, 0.10 m past the guide exit.
-        # Automatic changer on the real instrument; divergence 0 = open.
+        # Automatic changer on the real instrument; open (0) withdraws it
+        # from the beam and emits no component.
         emit_collimator(instrument, "primary_collimator", relative="origin",
                         at=(0, 0, 0.10), divergence=PANDA.alpha_1, length=0.50,
                         xwidth=0.108, yheight=0.160)
@@ -289,7 +290,8 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
                               distance=PANDA.L1, rotation_expr="A1_param/2",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
-                              split=2, extend="if(!SCATTERED) ABSORB;")
+                              split=2, extend="if(!SCATTERED) ABSORB;",
+                              order=1)
 
         ## sample arm
 
@@ -297,7 +299,7 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
                                               RELATIVE="origin", ROTATED=[0, "A1_param", 0])
 
         # Second Soller (ca2), 0.20 m long at 0.90 m from the monochromator
-        # (vPANDA PANDA_ca2). Divergence 0 = open aperture.
+        # (vPANDA PANDA_ca2). Open (0) withdraws it from the beam.
         emit_collimator(instrument, "sample_collimator", relative="sample_arm",
                         at=(0, 0, 0.90), divergence=PANDA.alpha_2, length=0.20,
                         xwidth=0.040, yheight=0.120)
@@ -354,16 +356,20 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
                         at=(0, 0, PANDA.L3 - 0.55), divergence=PANDA.alpha_3, length=0.20,
                         xwidth=0.040, yheight=0.140)
 
-        # No analyzer-side filter: PANDA's PG / cold-Be / BeO filters suppress
-        # higher-order contamination that Monochromator_curved's single-Q
-        # reflection does not produce, so modeling one would only attenuate the
-        # primary beam. Recorded as a gap in MODEL_STATUS.md.
+        # No analyzer-side filter. PANDA's PG / cold-Be / BeO filters remove
+        # higher-order contamination, and this model has no contamination to
+        # remove -- not because a single-Q reflection cannot produce it (it
+        # can: Monochromator_curved with order=0 transports every multiple of
+        # the supplied reciprocal-lattice vector), but because both crystals
+        # are pinned to order=1. That is an idealized, order-clean
+        # spectrometer, and it is what MODEL_STATUS.md records; a broadband
+        # model with real filters is the alternative, not a free upgrade.
         emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
                               crystal_name="analyzer", relative="analyzer_arm",
                               distance=PANDA.L3, rotation_expr="A4_param/2",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
-                              split=5)
+                              split=5, order=1)
 
         ## detector
 
