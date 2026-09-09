@@ -25,11 +25,12 @@ drawings.
 |---|---|---|
 | Scattering senses | mono +1, sample +1, analyzer −1 | live vTAS run 2026-07-02 |
 | a3 convention | Friedel/−Q branch (±90° cubic setting jumps in vTAS readouts) | live vTAS run |
-| Axis limits | A1 −40…110°, A2/A4 ±120° | vTAS (2023 gives take-off 10–90° — see below) |
+| Axis limits | A1 11…90°, A2/A4 ±120° | ILL characteristics (A1); vTAS (A2/A4) |
 | Arm lengths | L1–L4 = 2.28 / 2.48 / 1.05 / 0.70 m | ILL (current Thermes) |
 | Crystal d-spacings | PG002 3.355 Å, Cu200 1.807 Å | vTAS crystal table |
 | Detector opening | 42 × 89 mm | ILL |
 | Mono PG002 face | 11×11 of 25×17 mm (≈290×202 mm), mosaic 30′ | 2006 (slabs) + 2023 (11×11) + ILL (mosaic) |
+| Cu200 mosaic | 25′ horizontal × 10′ vertical | ILL characteristics |
 
 Note on distances: vTAS says 2.5/1.35/0.65 — deliberately not used (design
 decision, §20.3); if vTAS-identical resolution ever matters, that's a
@@ -53,12 +54,11 @@ decision, §20.3); if vTAS-identical resolution ever matters, that's a
 
 | Item | Current | Needed |
 |---|---|---|
-| Cu200 mosaic | isotropic 25′ | anisotropic 25′(h) × 10′(v) — `Monochromator_curved` takes one mosaic; either accept or use mosaich/mosaicv if the component supports it. *needs IS for measured values* |
 | Cu200 reflectivity | constant r0 = 0.7 via `"NULL"` sentinel | measured Cu(200) reflectivity (no stock McStas .rfl). *needs IS* |
 | Slab gap | 1.5 mm (derived so 11×25 mm + gaps = 290 mm) | drawing value |
 | Si(111)/Si(311) faces | **absent** | bent-perfect crystals are not representable by the mosaic `Monochromator_curved` model — needs a different component (e.g. perfect-crystal + curvature). Deferred capability, not a data gap |
 | Bending clamps | none | IN8 mechanical min/max radii. *needs IS* |
-| Take-off range | vTAS −40…110° | 2023 paper: 10–90° mechanical for Thermes — reconcile which envelope to enforce |
+| Take-off range | **11…90° enforced** (ILL characteristics: 11° < 2θ_M < 90°) | reconciled 2026-09-09. The 2023 paper gives ≈10–90°; the tighter currently-published envelope is enforced rather than averaging the two into a guess. The 1° disagreement at the lower end stands open. *needs IS to settle 10° vs 11°* |
 
 ### Analyzer (Thermes)
 
@@ -76,7 +76,7 @@ decision, §20.3); if vTAS-identical resolution ever matters, that's a
 | α2 Soller | at L2/2, length 0.2 m, 50×150 mm | real position/length/aperture. *needs IS* |
 | α3 Soller | at 0.7 m after sample, 0.2 m, 50×250 mm | " |
 | α4 Soller | at 0.3 m after analyzer, 0.15 m, 50×100 mm | " |
-| No α1 slot | assumed correct (primary collimation sits after the mono on IN8) | confirm. *needs IS* |
+| α1 Soller | present; at L1/2, length 0.2 m, aperture = HVS envelope | ILL describes collimators before *and* after the mono (and before and after the analyser), so the slot exists; its position/length/aperture are placeholders. *needs IS* |
 | Pre-sample slit `sbl` | 40×100 mm at L2 − 0.35 | real position + default gaps |
 | Detector slit `dbl` | 40 mm wide at L4 − 0.03 | " |
 
@@ -123,4 +123,5 @@ correct and used by scans, but the advisory labels don't call it yet.
 3. Collimator geometries (only matters once collimated modes are used —
    default is open/double-focused).
 4. Second PG filter + filter switching.
-5. Cu200 reflectivity/mosaic (only when the Cu branch is used).
+5. Cu200 reflectivity (only when the Cu branch is used; the mosaic is now
+   ILL's published 25′×10′).
