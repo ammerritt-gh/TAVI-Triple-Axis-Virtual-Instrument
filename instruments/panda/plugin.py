@@ -221,6 +221,15 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.013, slab_height=0.025, n_columns=11, n_rows=5,
                 gap=0.003, mosaic=20, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                # Fixed vertical / variable horizontal focusing is
+                # confirmed for THIS assembly (two peer-reviewed
+                # papers, one tying the fixed vertical geometry to
+                # the vertically oriented 1" 3He detector; MLZ
+                # advertises only variable horizontal). So rva is
+                # refused as a scan variable rather than silently
+                # defeating the pin scan_config applies. The RADIUS
+                # is still unsourced -- only the fixedness is.
+                fixed_curvature=("rva",),
             ),
         ),
         # Samples come from the shared, instrument-independent library --

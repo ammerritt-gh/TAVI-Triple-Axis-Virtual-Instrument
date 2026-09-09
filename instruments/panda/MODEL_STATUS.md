@@ -145,6 +145,18 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   change, any Cu(111) crystal geometry, a measured PG mosaic, the analyser's
   fixed vertical radius, any bending limit, or the detector's active height and
   fill pressure. Surfaced the monochromator replacement.
+- **Fixed analyser vertical curvature is no longer scannable.** `scan_config`
+  pins `rva`, but the generic scan surface still offered it and
+  `compute_scan_snapshot` reads the radii out of `scans[4:8]` — so a scan over
+  it quietly defeated the pin. The PG(002) analyser now declares
+  `fixed_curvature=("rva",)` and the scan-command validator refuses it by name,
+  on the GUI and API paths alike. It is declared on the **crystal**, not the
+  instrument, because fixed focusing is a property of the assembly: the
+  evidence here (two peer-reviewed papers, one tying the fixed vertical
+  geometry to the vertically oriented 1″ ³He detector) is about this analyser,
+  and would not transfer to a different one. `rhm`, `rvm` and `rha` are
+  genuinely driven and stay scannable. The *radius* remains unsourced — only
+  the fixedness is established.
 - **Compiled McStas smoke run: passed** (2026-09-09, re-run on the final tree).
   Step 8 of `docs/INSTRUMENT_AUTHORING.md`, driven through the production path
   (`build` → `compute_snapshot` → `run_point`): Al (2,0,0) elastic at
