@@ -145,9 +145,14 @@ TRACE
        *
        * Sampling method: Gamma(3/2) = Gamma(1) + Gamma(1/2)
        *   - Gamma(1) with scale theta: -theta * log(U)
-       *   - Gamma(1/2) with scale theta: theta * N^2 / 4, where N ~ Normal(0,1)
+       *   - Gamma(1/2) with scale theta: theta * N^2 / 2, where N ~ Normal(0,1)
+       *     (chi^2_1 = N^2 is Gamma(1/2, scale 2), so Gamma(1/2, scale 1)
+       *      = N^2 / 2 -- the coefficient is 1/2, not 1/4.)
        *
-       * So: E = kT * (-log(U) + N^2/4) where kT = 2*E0
+       * So: E = kT * (-log(U) + N^2/2) where kT = 2*E0, giving <E> = 1.5*kT.
+       * The 1/4 coefficient used here until 2026-09 sampled a distribution
+       * with <E> = 1.25*kT instead: too cold, and not the Gamma(3/2) this
+       * component documents.
        */
       double u1, n1;
       double kT = 2.0 * E0;  /* So peak is at kT/2 = E0 */
@@ -160,7 +165,7 @@ TRACE
       n1 = randnorm();
       
       /* Combine for Gamma(3/2, kT) */
-      E = kT * (-log(u1) + 0.25 * n1 * n1);
+      E = kT * (-log(u1) + 0.5 * n1 * n1);
       
       /* Ensure positive energy */
       if (E <= 0) E = 1e-6;
