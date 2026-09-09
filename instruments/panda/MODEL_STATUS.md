@@ -81,6 +81,7 @@ model does not represent. None is an oversight.
 | Fixed beam-defining apertures `sk1`–`sk5` | Not motorized and not scannable; they shape flux, never angles. `ca1`–`ca4`, `ms1`, `ss1`, `ss2` are the operational apertures and are all present. |
 | 2″ ³He detector (collimated configuration) | Only the 1″ focusing-mode tube is selectable. A detector choice would need a descriptor-level module, which no current task requires. |
 | Cold-source vs thermal-source operation | MLZ publishes separate ki ranges for the two. The model carries one Maxwellian source; `axis_limits` and the crystal menu span both. The "without cold source" spectrum is not represented. |
+| Ideal focusing radii in the GUI/API | The Ideal button and the API's widget-free equivalent never call `calculate_crystal_bending`: both hard-code PUMA's parallel-beam formula and PUMA's minimum-radius clamps. PANDA's negative angles make every ideal radius negative, so the clamps always fire and the button offers (2.0, 0.5, 2.0) instead of (3.985, 1.787, 1.651). **Scans and the API launch path are unaffected** — they take the radii from `scan_config`, which is correct. Deferred deliberately to one comprehensive cross-instrument repair (`TODO.md` → Instrument models), because the fix changes IN8's numbers too. |
 
 ## Reference planes — the one unresolved geometry question
 
@@ -104,9 +105,16 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
 - Plugin conformance, build-tree and angle-golden tests:
   `tests/test_panda_plugin.py`, `tests/test_panda_build_tree.py`,
   `tests/test_sign_conventions.py`.
-- **Not yet performed:** a compiled McStas run. Step 8 of
-  `docs/INSTRUMENT_AUTHORING.md` (compile and run one elastic Bragg point at
-  1e7 neutrons and confirm the detector counts) is outstanding — that is the
-  check that caught IN8's bending-sign error, and PANDA's senses put *both*
-  crystals on the negative branch, which no TAVI instrument has exercised
-  before.
+- **Compiled McStas smoke run: passed** (2026-09-09). Step 8 of
+  `docs/INSTRUMENT_AUTHORING.md`, driven through the production path
+  (`build` → `compute_snapshot` → `run_point`): Al (2,0,0) elastic at
+  kf = 2.662 Å⁻¹, 1e7 neutrons, all collimators open, ideal focusing.
+  `detector_I = 2.63e-07`, `detector_N = 12105`. The identical point through
+  IN8 as a control gives `4.65e-07` / `5324` — the same order of magnitude,
+  which is the check that matters: a wrong-branch curvature costs ~7 orders of
+  magnitude, so PANDA's all-negative focusing is not defocusing.
+  Al (1,1,1) is *not* a usable smoke point despite being reachable at the cold
+  kf = 1.55 setting — it is out of the horizontal scattering plane for the
+  default cubic mount and returns `I = 0`, `N = 18`. Al (2,0,0) at that kf has
+  Q = 3.103 Å⁻¹, just past 2k = 3.10, and is unreachable. Hence kf = 2.662 for
+  the smoke.

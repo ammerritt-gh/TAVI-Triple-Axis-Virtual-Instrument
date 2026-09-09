@@ -1,0 +1,216 @@
+/********************************************************************************
+* 
+* McStas, neutron ray-tracing package
+*         Copyright (C) 1997-2008, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+* 
+* This file was written by McStasScript, which is a 
+* python based McStas instrument generator written by 
+* Mads Bertelsen in 2019 while employed at the 
+* European Spallation Source Data Management and 
+* Software Centre
+* 
+* Instrument: PANDA_McScript
+* 
+* %Identification
+* Written by: Python McStas Instrument Generator
+* Date: 09:22:54 on September 09, 2026
+* Origin: ESS DMSC
+* %INSTRUMENT_SITE: Generated_instruments
+* 
+* !!Please write a short instrument description (1 line) here!!
+* 
+* %Description
+* Please write a longer instrument description here!
+* 
+* 
+* %Parameters
+* A1_param: [unit] Monochromator 2-theta angle.
+* A2_param: [unit] Sample 2-theta angle.
+* A3_param: [unit] Sample phi angle.
+* A4_param: [unit] Analyzer 2-theta angle.
+* E0_param: [unit] Source energy (meV) for monochromatic source.
+* saz_param: [unit] Sample azimuthal angle (out-of-plane).
+* rhm_param: [unit] Monochromator horizontal bending.
+* rvm_param: [unit] Monochromator vertical bending.
+* rha_param: [unit] Analyzer horizontal bending.
+* rva_param: [unit] Analyzer vertical bending.
+* ms1_wgap_param: [unit] Horizontal virtual source width (m).
+* ss1_wgap_param: [unit] Pre-sample slit horizontal gap (m).
+* ss1_hgap_param: [unit] Pre-sample slit vertical gap (m).
+* ss2_wgap_param: [unit] Sample exit slit horizontal gap (m).
+* ss2_hgap_param: [unit] Sample exit slit vertical gap (m).
+* chi_param: [unit] User chi - out-of-plane tilt
+* kappa_param: [unit] Kappa - chi alignment offset
+* mis_chi_param: [unit] Hidden chi misalignment (training)
+* psi_param: [unit] Psi - omega alignment offset
+* mis_omega_param: [unit] Hidden omega misalignment (training)
+* chi_total: [unit] Total chi = chi + kappa + mis_chi
+* omega_offset_total: [unit] Total omega offset = psi + mis_omega
+* mount_rx_param: [unit] Static sample mount rotation about x
+* mount_ry_param: [unit] Static sample mount rotation about y
+* mount_rz_param: [unit] Static sample mount rotation about z
+* 
+* %Link 
+* 
+* %End 
+********************************************************************************/
+
+DEFINE INSTRUMENT PANDA_McScript (
+A1_param = -41.19028636991626, // Monochromator 2-theta angle.
+A2_param = 71.29492216112949, // Sample 2-theta angle.
+A3_param = 35.64746108056474, // Sample phi angle.
+A4_param = -41.19028636991626, // Analyzer 2-theta angle.
+E0_param = 14.684089, // Source energy (meV) for monochromatic source.
+saz_param = -3.508354649267438e-15, // Sample azimuthal angle (out-of-plane).
+rhm_param = -6.849, // Monochromator horizontal bending.
+rvm_param = -1.0403, // Monochromator vertical bending.
+rha_param = -2.836, // Analyzer horizontal bending.
+rva_param = -0.6, // Analyzer vertical bending.
+ms1_wgap_param = 0.04, // Horizontal virtual source width (m).
+ss1_wgap_param = 0.04, // Pre-sample slit horizontal gap (m).
+ss1_hgap_param = 0.08, // Pre-sample slit vertical gap (m).
+ss2_wgap_param = 0.04, // Sample exit slit horizontal gap (m).
+ss2_hgap_param = 0.08, // Sample exit slit vertical gap (m).
+chi_param = 0.0, // User chi - out-of-plane tilt
+kappa_param = 0.0, // Kappa - chi alignment offset
+mis_chi_param = 0, // Hidden chi misalignment (training)
+psi_param = 0.0, // Psi - omega alignment offset
+mis_omega_param = 0, // Hidden omega misalignment (training)
+chi_total = 0.0, // Total chi = chi + kappa + mis_chi
+omega_offset_total = 0.0, // Total omega offset = psi + mis_omega
+mount_rx_param = -0.0, // Static sample mount rotation about x
+mount_ry_param = 0.0, // Static sample mount rotation about y
+mount_rz_param = -0.0 // Static sample mount rotation about z
+)
+
+DECLARE 
+%{
+%}
+
+INITIALIZE 
+%{
+// Start of initialize for generated PANDA_McScript
+%}
+
+TRACE 
+COMPONENT origin = Progress_bar()
+AT (0, 0, 0) ABSOLUTE
+
+COMPONENT source = Source_div_Maxwellian_v2(
+ xwidth = 0.107, yheight = 0.138,
+ focus_aw = 2.7496695611388104, focus_ah = 2.4977003678603706,
+ E0 = E0_param, dE = 1,
+ energy_distribution = 2, divergence_distribution = 0)
+AT (0, 0, 0) ABSOLUTE
+
+COMPONENT primary_collimator = Collimator_linear(
+ xwidth = 0.108, yheight = 0.16,
+ length = 0.5, divergence = 0.0)
+AT (0, 0, 0.1) RELATIVE origin
+
+COMPONENT virtual_source = Slit(
+ xwidth = ms1_wgap_param, yheight = 0.18)
+AT (0, 0, 2.18) RELATIVE origin
+
+COMPONENT mono_cradle = Arm()
+AT (0, 0, 5.0) RELATIVE origin
+ROTATED (0, A1_param/2, 0) RELATIVE origin
+
+SPLIT 2 COMPONENT monochromator = Monochromator_curved(
+ reflect = "HOPG.rfl", transmit = "HOPG.trm",
+ zwidth = 0.02, yheight = 0.018,
+ gap = 0.002, NH = 11,
+ NV = 11, r0 = 1.0,
+ RV = rvm_param, RH = rhm_param,
+ DM = 3.355, mosaic = 20,
+ order = 0)
+AT (0, 0, 0) RELATIVE mono_cradle
+EXTEND %{
+if(!SCATTERED) ABSORB;
+%}
+
+COMPONENT sample_arm = Arm()
+AT (0, 0, 5.0) RELATIVE origin
+ROTATED (0, A1_param, 0) RELATIVE origin
+
+COMPONENT sample_collimator = Collimator_linear(
+ xwidth = 0.04, yheight = 0.12,
+ length = 0.2, divergence = 0.0)
+AT (0, 0, 0.9) RELATIVE sample_arm
+
+COMPONENT sample_slit = Slit(
+ xwidth = ss1_wgap_param, yheight = ss1_hgap_param)
+AT (0, 0, 1.7) RELATIVE sample_arm
+
+COMPONENT sample_gonio = Arm()
+AT (0, 0, 2.1) RELATIVE sample_arm
+ROTATED (saz_param, 0, 0) RELATIVE sample_arm
+
+COMPONENT sample_chi_arm = Arm()
+AT (0, 0, 0) RELATIVE sample_gonio
+ROTATED (chi_total, 0, 0) RELATIVE sample_gonio
+
+COMPONENT sample_cradle = Arm()
+AT (0, 0, 0) RELATIVE sample_chi_arm
+ROTATED (0, A3_param + omega_offset_total, 0) RELATIVE sample_chi_arm
+
+COMPONENT sample_mount = Arm()
+AT (0, 0, 0) RELATIVE sample_cradle
+ROTATED (mount_rx_param, mount_ry_param, mount_rz_param) RELATIVE sample_cradle
+
+SPLIT 10 COMPONENT Al_Bragg = Single_crystal(
+ reflections = "Al.lau", yheight = 0.03,
+ radius = 0.005, mosaic = 5,
+ sigma_inc = -1)
+AT (0, 0, 0) RELATIVE sample_mount
+ROTATED (0, 0, 0) RELATIVE sample_mount
+
+COMPONENT analyzer_arm = Arm()
+AT (0, 0, 2.1) RELATIVE sample_arm
+ROTATED (0, A2_param, 0) RELATIVE sample_arm
+
+COMPONENT sample_exit_slit = Slit(
+ xwidth = ss2_wgap_param, yheight = ss2_hgap_param)
+AT (0, 0, 0.4) RELATIVE analyzer_arm
+
+COMPONENT analyzer_collimator = Collimator_linear(
+ xwidth = 0.04, yheight = 0.14,
+ length = 0.2, divergence = 0.0)
+AT (0, 0, 0.5) RELATIVE analyzer_arm
+
+COMPONENT analyzer_cradle = Arm()
+AT (0, 0, 1.05) RELATIVE analyzer_arm
+ROTATED (0, A4_param/2, 0) RELATIVE analyzer_arm
+
+SPLIT 5 COMPONENT analyzer = Monochromator_curved(
+ reflect = "HOPG.rfl", transmit = "HOPG.trm",
+ zwidth = 0.013, yheight = 0.025,
+ gap = 0.003, NH = 11,
+ NV = 5, r0 = 1.0,
+ RV = rva_param, RH = rha_param,
+ DM = 3.355, mosaic = 20,
+ order = 0)
+AT (0, 0, 0) RELATIVE analyzer_cradle
+
+COMPONENT detector_arm = Arm()
+AT (0, 0, 1.05) RELATIVE analyzer_arm
+ROTATED (0, A4_param, 0) RELATIVE analyzer_arm
+
+COMPONENT detector_collimator = Collimator_linear(
+ xwidth = 0.04, yheight = 0.14,
+ length = 0.2, divergence = 0.0)
+AT (0, 0, 0.41) RELATIVE detector_arm
+
+COMPONENT detector = Monitor(
+ xwidth = 0.025, yheight = 0.1)
+AT (0, 0, 0.95) RELATIVE detector_arm
+ROTATED (0, 0, 0) RELATIVE detector_arm
+
+FINALLY 
+%{
+// Start of finally for generated PANDA_McScript
+%}
+
+END
