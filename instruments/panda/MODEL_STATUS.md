@@ -145,14 +145,28 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   change, any Cu(111) crystal geometry, a measured PG mosaic, the analyser's
   fixed vertical radius, any bending limit, or the detector's active height and
   fill pressure. Surfaced the monochromator replacement.
-- **Compiled McStas smoke run: passed** (2026-09-09). Step 8 of
-  `docs/INSTRUMENT_AUTHORING.md`, driven through the production path
+- **Compiled McStas smoke run: passed** (2026-09-09, re-run on the final tree).
+  Step 8 of `docs/INSTRUMENT_AUTHORING.md`, driven through the production path
   (`build` → `compute_snapshot` → `run_point`): Al (2,0,0) elastic at
   kf = 2.662 Å⁻¹, 1e7 neutrons, all collimators open, ideal focusing.
-  `detector_I = 2.63e-07`, `detector_N = 12105`. The identical point through
-  IN8 as a control gives `4.65e-07` / `5324` — the same order of magnitude,
-  which is the check that matters: a wrong-branch curvature costs ~7 orders of
-  magnitude, so PANDA's all-negative focusing is not defocusing.
+  `detector_I = 7.99e-08`, `detector_N = 1462`. The identical point through IN8
+  as a control, **on the same tree**, gives `3.33e-07` / `4908` — the same
+  order of magnitude, which is the check that matters: a wrong-branch curvature
+  costs ~7 orders of magnitude, so PANDA's all-negative focusing is not
+  defocusing.
+  This run supersedes the first one. The earlier numbers (`2.63e-07` / `12105`,
+  IN8 control `4.65e-07` / `5324`) were measured on a tree that predates
+  `order=1` and the corrected Maxwellian sampler, so they validated a
+  configuration this model no longer emits. They are kept only to explain the
+  difference: the IN8 control fell ~28% from the sampler correction alone (a
+  correctly sampled Gamma(3/2) is hotter and broader, so fewer neutrons sit
+  near E0), and the remaining ~2.4× drop for PANDA is `order=1` removing
+  higher-order transport. Roughly half of what the old tree counted at this
+  setting was higher-order — one setting, not a contamination figure for the
+  instrument, but it makes the point of that change concrete.
+  The smoke also certifies what the Python suite cannot: the emitted tree, with
+  withdrawn collimators and `order=1`, still generates a `.instr` that compiles
+  and counts.
   Al (1,1,1) is *not* a usable smoke point despite being reachable at the cold
   kf = 1.55 setting — it is out of the horizontal scattering plane for the
   default cubic mount and returns `I = 0`, `N = 18`. Al (2,0,0) at that kf has
