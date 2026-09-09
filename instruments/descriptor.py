@@ -111,6 +111,20 @@ class CrystalSpec:
     gap: float | None = None
     mosaic: float | None = None     # arcmin (horizontal mosaic, FWHM)
     mosaic_v: float | None = None   # arcmin (vertical mosaic, FWHM); None -> use horizontal
+    # Curvature axes THIS crystal assembly holds fixed, as lowercase
+    # scan-command names: a monochromator may fix "rhm"/"rvm", an analyser
+    # "rha"/"rva". A scan over one is refused rather than silently ignored or
+    # silently honoured -- scan_config pins the value but
+    # compute_scan_snapshot reads the radii out of scans[4:8], so an accepted
+    # scan would either do nothing or quietly defeat the pin.
+    #
+    # It belongs to the crystal, not the instrument: IN12's conventional
+    # PG(002) analyser has a fixed vertical focus (1998: produced by tilting
+    # the top and bottom crystal rows) while the Heusler option on the same
+    # instrument has no established focusing behaviour at all. Declaring it per
+    # instrument would assert something about every crystal from evidence about
+    # one.
+    fixed_curvature: tuple[str, ...] = ()
     r0: float | None = None
     reflect_file: str | None = None
     transmit_file: str | None = None
@@ -292,10 +306,3 @@ class InstrumentDescriptor:
     # (the adapter records the source as "descriptor default" in provenance).
     # None -> the adapter falls back to a uniform 120 arcmin default.
     vertical_divergence: tuple[float, float, float, float] | None = None
-    # Scan-variable names this instrument holds FIXED, so a scan over one is
-    # refused rather than silently ignored or silently honoured. Names are the
-    # lowercase scan-command spelling ("rva"), not the McStas parameter
-    # ("rva_param"). A model that pins a radius in ``scan_config`` but leaves
-    # it in the generic scan surface offers a scan that either does nothing or
-    # quietly overrides the pin -- both worse than a refusal.
-    fixed_parameters: tuple[str, ...] = ()
