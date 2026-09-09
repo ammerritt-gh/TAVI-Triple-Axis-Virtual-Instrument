@@ -87,7 +87,9 @@ class PANDA_Instrument(TAS_Instrument):
         self.rvm = 0
         self.rha = 0
         self.rva = 0
-        self.source_dE = 2  # Energy half-spread for Mono source (meV)
+        # Energy half-spread for the Mono source (meV). 1, not IN8's 2: the
+        # same E0 - dE > 0 guard applies, and PANDA runs down to E0 = 2.28 meV.
+        self.source_dE = 1
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -95,6 +97,27 @@ class PANDA_Instrument(TAS_Instrument):
         from instruments.panda.plugin import panda_descriptor
 
         return crystal_info_from_descriptor(panda_descriptor(), monocris, anacris)
+
+    def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
+        """Store bending radii, forcing every one onto PANDA's take-off branch.
+
+        ``PANDAPlugin.scan_config`` already signs the radii it copies out of the
+        GUI, but a *scanned* radius does not go through it: ``compute_scan_snapshot``
+        reads scans[4:8] and calls this setter directly, so scanning ``rhm`` from
+        3 to 5 would otherwise hand positive radii to a monochromator whose
+        curvature center must sit on the negative side. PUMA and IN8 never saw
+        this for the monochromator because theirs takes off positive.
+
+        ``-abs()`` is idempotent, so the already-signed non-scanned path is
+        unaffected. Overriding here rather than in ``TAS_Instrument`` keeps the
+        branch sign where it belongs -- with the instrument.
+        """
+        super().set_crystal_bending(
+            rhm=None if rhm is None else -abs(rhm),
+            rvm=None if rvm is None else -abs(rvm),
+            rha=None if rha is None else -abs(rha),
+            rva=None if rva is None else -abs(rva),
+        )
 
     def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
         """Ideal bending radii for PANDA's focusing crystals.
@@ -233,7 +256,14 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
             source.E0 = "E0_param"
         else:  # Maxwellian
             source.energy_distribution = 2  # Maxwellian energy distribution
-            source.dE = 3
+            # Source_div_Maxwellian_v2 aborts in INITIALIZE when E0 - dE <= 0
+            # (components/Source_div_Maxwellian_v2.comp), and in Maxwellian mode
+            # dE is not sampled -- it only scales p_init. PANDA is COLD: its
+            # published floor kf = 1.05 A^-1 is E0 = 2.28 meV, so IN8's thermal
+            # dE = 3 would kill a routine cold run at initialization. 1 meV
+            # clears the guard down to k = 0.69 A^-1 and, being constant, adds
+            # no spurious energy trend across a scan that moves E0_param.
+            source.dE = 1
             source.E0 = "E0_param"
         source.divergence_distribution = 0
 

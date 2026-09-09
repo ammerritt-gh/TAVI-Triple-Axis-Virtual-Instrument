@@ -313,3 +313,39 @@ def test_resolution_config_needs_no_primary_collimation_substitution():
     # PANDA's senses reach the resolution config unchanged.
     assert (cfg.sm, cfg.ss, cfg.sa) == (-1, 1, -1)
     assert cfg.dm == cfg.da == 3.355
+
+
+def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
+    """Regression: scan_config signs the radii it copies out of the GUI, but a
+    SCANNED radius bypasses it -- compute_scan_snapshot reads scans[4:8] and
+    calls set_crystal_bending directly. PANDA's override forces the branch."""
+    pytest.importorskip("mcstasscript")
+    plugin = PANDAPlugin()
+    state = plugin.default_state()
+    state.monocris = state.anacris = "pg002"
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 4.978451631466585
+
+    # Positive magnitudes in the scans array, exactly as the GUI carries them.
+    scans = [-74.332, 120.180, 60.090, -74.332, 4.0, 1.8, 1.65, 0.6,
+             0.0, 0.0, 0.0]
+    snapshot = plugin.compute_snapshot(
+        (scans, 0), 0, "angle", state,
+        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        variable_name1="rhm", variable_name2="rha",
+    )
+
+    assert snapshot.error_flags == []
+    assert snapshot.params["rhm_param"] == -4.0
+    assert snapshot.params["rha_param"] == -1.65
+
+
+def test_set_crystal_bending_is_idempotent_on_already_signed_values():
+    """scan_config signs first; the setter must not flip them back."""
+    pytest.importorskip("mcstasscript")
+    state = PANDAPlugin().default_state()
+    state.set_crystal_bending(rhm=-4.0, rvm=-1.8, rha=-1.65, rva=-0.6)
+    assert (state.rhm, state.rvm, state.rha, state.rva) == (-4.0, -1.8, -1.65, -0.6)
+    state.set_crystal_bending(rhm=4.0)
+    assert state.rhm == -4.0
+    assert state.rvm == -1.8            # untouched arguments stay put
