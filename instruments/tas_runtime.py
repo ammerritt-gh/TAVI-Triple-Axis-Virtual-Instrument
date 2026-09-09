@@ -225,6 +225,42 @@ class TAS_Instrument:
             "Kf": energy2k(max(Ef, 1e-9)),
         }
 
+    def energy_transfer_from_angles(self, mtt, att, default=0.0):
+        """The transfer the scanned crystal angles actually encode.
+
+        In ``angle`` scan mode the user drives the motors directly, so the
+        transfer is whatever the monochromator and analyser select. The launch
+        state's frozen ``deltaE`` is not that: an A1 scan sweeps the incident
+        energy across its points while that value stays put, so every point
+        recorded the same transfer and the saved Ei/Ef disagreed with the
+        crystals -- the same inconsistency ``point_energy_metadata`` carries in
+        the other modes, arriving by a different route.
+
+        This is the inverse of ``calculate_angles`` and agrees with
+        ``calculate_q_and_deltaE``. Returns ``default`` when the crystals
+        cannot be resolved or an angle is degenerate, so a point that would
+        error out is left exactly as it was.
+        """
+        mono_info, ana_info = self.crystal_info(self.monocris, self.anacris)
+        if 'dm' not in mono_info or 'da' not in ana_info:
+            return default
+
+        # Remove the signed readout sense before inverting Bragg, as
+        # calculate_q_and_deltaE does.
+        if self.K_fixed == "Kf Fixed":
+            Ef = self.fixed_E
+            ki = angle2k(mtt / (2 * self.sense_mono), mono_info['dm'])
+            if ki <= 0:
+                return default
+            Ei = k2energy(ki)
+        else:
+            Ei = self.fixed_E
+            kf = angle2k(att / (2 * self.sense_ana), ana_info['da'])
+            if kf <= 0:
+                return default
+            Ef = k2energy(kf)
+        return Ei - Ef
+
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
         """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
         error_flags = []
@@ -244,6 +280,23 @@ class TAS_Instrument:
 
         # pre-calculate values from parameters
         q = math.sqrt(qx**2 + qy**2 + qz**2)
+
+        # A transfer larger than the neutron has to give leaves a
+        # non-positive energy on one side. energy2k() is np.sqrt(), so that
+        # becomes NaN rather than an exception: k2angle() then returns NaN,
+        # math.isinf() does not catch it, and every axis-limit comparison
+        # against NaN is False -- so the point passes feasibility and the
+        # scan runs with NaN motor angles. Reject it here, where both
+        # fixed-energy modes and every caller of the angle solve pass.
+        if K_fixed == "Kf Fixed":
+            Ei_nominal, Ef_nominal = fixed_E + deltaE, fixed_E
+        else:
+            Ei_nominal, Ef_nominal = fixed_E, fixed_E - deltaE
+        if not (Ei_nominal > 0 and Ef_nominal > 0):
+            print("\nInvalid: energy transfer %s leaves Ei=%s, Ef=%s; both must be positive"
+                  % (deltaE, Ei_nominal, Ef_nominal))
+            error_flags.append("energy")
+            return [0, 0, 0, 0, 0], error_flags
 
         K = energy2k(fixed_E)
 
@@ -364,6 +417,7 @@ _ERROR_FLAG_REASONS = {
     "sth": "sample rotation undefined (scattering triangle does not close)",
     "q": "invalid Q from sample angles",
     "K_fixed": "invalid fixed-energy mode",
+    "energy": "energy transfer leaves no neutron (Ei or Ef would be <= 0)",
 }
 
 
@@ -422,8 +476,10 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     else:
         A1, A2, A3, A4 = scans[:4]
         point_state.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
-        deltaE = vals['deltaE']
         mtt, stt, sth, att = A1, A2, A3, A4
+        # The scanned angles are the authority here, not the frozen field.
+        deltaE = point_state.energy_transfer_from_angles(
+            mtt, att, default=vals['deltaE'])
         saz = vals.get('chi', 0.0)
 
     return {
