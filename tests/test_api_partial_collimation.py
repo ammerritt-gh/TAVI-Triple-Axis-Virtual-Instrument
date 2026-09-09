@@ -63,3 +63,34 @@ def test_a_partial_patch_still_reaches_scan_config(in8_controller):
     base = plugin.default_state()
     config = plugin.scan_config(base, state["vals"], None, {}, base.sample_mount)
     assert (config.alpha_1, config.alpha_3) == (0.0, 40.0)
+
+
+def test_a_fixed_parameter_is_refused_as_a_scan_variable(in8_controller, monkeypatch):
+    """Refusing beats silently ignoring or silently honouring.
+
+    scan_config pins a fixed radius, but compute_scan_snapshot reads
+    scans[4:8] and lets a scan override it, so an accepted scan over a pinned
+    parameter either does nothing or quietly defeats the pin.
+    """
+    import dataclasses
+
+    ctrl = in8_controller
+    monkeypatch.setattr(
+        ctrl, "descriptor",
+        dataclasses.replace(ctrl.descriptor, fixed_parameters=("rva",)),
+        raising=False,
+    )
+
+    var, warning = ctrl._validate_single_scan_command("rva 0.3 0.6 0.05")
+    assert var is None
+    assert "fixed" in warning and "cannot be scanned" in warning
+
+    # A parameter the instrument does not pin is untouched.
+    var, warning = ctrl._validate_single_scan_command("rhm 3.0 5.0 0.5")
+    assert var == "rhm" and warning is None
+
+
+def test_nothing_is_refused_when_the_instrument_pins_nothing(in8_controller):
+    assert in8_controller.descriptor.fixed_parameters == ()
+    var, warning = in8_controller._validate_single_scan_command("rva 0.3 0.6 0.05")
+    assert var == "rva" and warning is None
