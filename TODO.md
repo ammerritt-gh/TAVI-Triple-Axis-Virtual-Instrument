@@ -160,7 +160,7 @@ Roadmap order per CONTROL_FEATURES §9:
 - [x] **Test-runner note** - done 2026-09-09. The interpreter crash on a full
       `pytest tests/` (fault 0xc06d007f, a delay-load failure in matplotlib and
       Qt native code) is *not* a broken environment: it is what happens when the
-      env's interpreter is invoked directly, leaving `Libraryin` off PATH.
+      env's interpreter is invoked directly, leaving `Library\bin` off PATH.
       Run the suite through the activation the launcher uses --
       `micromamba run -n tavi-dev python -m pytest tests -q` -- and it passes
       whole in ~70 s. No allowlist needed. Run one suite at a time: two
