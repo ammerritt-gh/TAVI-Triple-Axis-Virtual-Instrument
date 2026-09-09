@@ -192,8 +192,13 @@ class TAS_Instrument:
 
         return self.fixed_E
 
-    def point_energy_metadata(self, deltaE):
+    def point_energy_metadata(self, deltaE, energies=None):
         """Return the per-point energy values recorded with the scan output.
+
+        ``energies`` is an (Ei, Ef) pair read straight off the crystal angles.
+        Angle mode supplies it, because there the user drives A1 and A4 and
+        neither energy is held at ``fixed_E``; every other mode leaves it None
+        and the pair follows ``K_fixed`` below.
 
         The nominal energies follow ``K_fixed`` alone. They are exactly the
         energies the monochromator and analyser two-theta angles encode, and
@@ -210,7 +215,9 @@ class TAS_Instrument:
         ``E0_param`` is a *source-distribution* parameter, not a nominal
         energy, and is resolved separately by :meth:`e0_param_value`.
         """
-        if self.K_fixed == "Kf Fixed":
+        if energies is not None:
+            Ei, Ef = energies
+        elif self.K_fixed == "Kf Fixed":
             Ef = self.fixed_E
             Ei = Ef + deltaE
         else:
@@ -225,41 +232,32 @@ class TAS_Instrument:
             "Kf": energy2k(max(Ef, 1e-9)),
         }
 
-    def energy_transfer_from_angles(self, mtt, att, default=0.0):
-        """The transfer the scanned crystal angles actually encode.
+    def nominal_energies_from_angles(self, mtt, att):
+        """(Ei, Ef) as the two crystals actually select them, or None.
 
-        In ``angle`` scan mode the user drives the motors directly, so the
-        transfer is whatever the monochromator and analyser select. The launch
-        state's frozen ``deltaE`` is not that: an A1 scan sweeps the incident
-        energy across its points while that value stays put, so every point
-        recorded the same transfer and the saved Ei/Ef disagreed with the
-        crystals -- the same inconsistency ``point_energy_metadata`` carries in
-        the other modes, arriving by a different route.
+        In ``angle`` scan mode the user drives A1 and A4 directly, so BOTH
+        energies are whatever the monochromator and analyser select -- neither
+        one is held at ``fixed_E``. An A4 scan in Kf-fixed mode moves the
+        analyser, so recording Ef = fixed_E across it is wrong in exactly the
+        way the momentum-mode fix addresses, and an A1 scan does the same to
+        Ei. The launch state's frozen ``deltaE`` does not move either.
 
         This is the inverse of ``calculate_angles`` and agrees with
-        ``calculate_q_and_deltaE``. Returns ``default`` when the crystals
-        cannot be resolved or an angle is degenerate, so a point that would
-        error out is left exactly as it was.
+        ``calculate_q_and_deltaE``. Returns None when the crystals cannot be
+        resolved or either angle is degenerate, so a point that would error out
+        is left exactly as it was.
         """
         mono_info, ana_info = self.crystal_info(self.monocris, self.anacris)
         if 'dm' not in mono_info or 'da' not in ana_info:
-            return default
+            return None
 
         # Remove the signed readout sense before inverting Bragg, as
         # calculate_q_and_deltaE does.
-        if self.K_fixed == "Kf Fixed":
-            Ef = self.fixed_E
-            ki = angle2k(mtt / (2 * self.sense_mono), mono_info['dm'])
-            if ki <= 0:
-                return default
-            Ei = k2energy(ki)
-        else:
-            Ei = self.fixed_E
-            kf = angle2k(att / (2 * self.sense_ana), ana_info['da'])
-            if kf <= 0:
-                return default
-            Ef = k2energy(kf)
-        return Ei - Ef
+        ki = angle2k(mtt / (2 * self.sense_mono), mono_info['dm'])
+        kf = angle2k(att / (2 * self.sense_ana), ana_info['da'])
+        if ki <= 0 or kf <= 0:
+            return None
+        return k2energy(ki), k2energy(kf)
 
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
         """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
@@ -448,6 +446,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     ``qx qy qz H K L deltaE mtt stt sth saz att error_flags``.
     """
     error_flags = []
+    angle_energies = None   # angle mode only: (Ei, Ef) from the crystals
     qx = qy = qz = None
     H = K = L = None
     deltaE = 0.0
@@ -478,8 +477,9 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         point_state.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
         mtt, stt, sth, att = A1, A2, A3, A4
         # The scanned angles are the authority here, not the frozen field.
-        deltaE = point_state.energy_transfer_from_angles(
-            mtt, att, default=vals['deltaE'])
+        angle_energies = point_state.nominal_energies_from_angles(mtt, att)
+        deltaE = (angle_energies[0] - angle_energies[1]
+                  if angle_energies else vals['deltaE'])
         saz = vals.get('chi', 0.0)
 
     return {
@@ -487,6 +487,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         "H": H, "K": K, "L": L,
         "deltaE": deltaE,
         "mtt": mtt, "stt": stt, "sth": sth, "saz": saz, "att": att,
+        "nominal_energies": angle_energies,
         "error_flags": error_flags,
     }
 
@@ -634,7 +635,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         'psi': psi_scan,
         'kappa': kappa_scan,
     }
-    metadata.update(point_state.point_energy_metadata(deltaE))
+    metadata.update(point_state.point_energy_metadata(
+        deltaE, energies=geom.get("nominal_energies")))
 
     return PointSnapshot(
         params=None if error_flags else point_state.build_point_params(deltaE),

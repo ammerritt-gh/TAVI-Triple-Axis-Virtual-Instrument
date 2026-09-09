@@ -65,41 +65,69 @@ def test_a_partial_patch_still_reaches_scan_config(in8_controller):
     assert (config.alpha_1, config.alpha_3) == (0.0, 40.0)
 
 
-def test_a_fixed_curvature_axis_is_refused_as_a_scan_variable(in8_controller,
-                                                              monkeypatch):
-    """Refusing beats silently ignoring or silently honouring.
-
-    scan_config pins a fixed radius, but compute_scan_snapshot reads
-    scans[4:8] and lets a scan override it, so an accepted scan over a pinned
-    axis either does nothing or quietly defeats the pin.
-    """
+def _pin_rva(ctrl, monkeypatch):
+    """Give the instrument's analyser a fixed vertical curvature."""
     import dataclasses
 
-    ctrl = in8_controller
     pinned = dataclasses.replace(
         ctrl.descriptor,
         ana_crystals=tuple(dataclasses.replace(c, fixed_curvature=("rva",))
                            for c in ctrl.descriptor.ana_crystals))
     monkeypatch.setattr(ctrl, "descriptor", pinned, raising=False)
+    return pinned
 
-    var, warning = ctrl._validate_single_scan_command("rva 0.3 0.6 0.05")
+
+def test_a_fixed_curvature_axis_is_refused_as_a_scan_variable(in8_controller,
+                                                              monkeypatch):
+    ctrl = in8_controller
+    d = _pin_rva(ctrl, monkeypatch)
+    axes = ctrl._fixed_curvature_axes("pg002", d.ana_crystals[0].id)
+
+    var, warning = ctrl._validate_single_scan_command("rva 0.3 0.6 0.05", axes)
     assert var is None
     assert "fixed on" in warning and "cannot be scanned" in warning
     assert "analyser" in warning          # names the crystal, not the instrument
 
     # The radii that side really does drive stay scannable.
-    var, warning = ctrl._validate_single_scan_command("rha 1.0 2.0 0.1")
-    assert var == "rha" and warning is None
-    var, warning = ctrl._validate_single_scan_command("rhm 3.0 5.0 0.5")
-    assert var == "rhm" and warning is None
+    for cmd, expected in (("rha 1.0 2.0 0.1", "rha"), ("rhm 3.0 5.0 0.5", "rhm")):
+        var, warning = ctrl._validate_single_scan_command(cmd, axes)
+        assert var == expected and warning is None
 
 
-def test_the_pin_follows_the_selected_crystal(in8_controller, monkeypatch):
+def test_the_refusal_actually_blocks_the_launch(in8_controller, monkeypatch):
+    """The gate is worthless if it only annotates a widget.
+
+    `_validate_scan_commands_text` is what the GUI Run button and the API
+    launch path both consult. It used to escalate only messages containing a
+    warning marker or the word "Unknown", so this refusal was shown and then
+    launched anyway -- and so was every other hard rejection whose wording
+    happened to lack the marker.
+    """
+    ctrl = in8_controller
+    d = _pin_rva(ctrl, monkeypatch)
+    ana = d.ana_crystals[0].id
+
+    msg = ctrl._validate_scan_commands_text("rva 0.3 0.6 0.05", "", "pg002", ana)
+    assert msg, "a refused scan variable must block the launch"
+    assert "cannot be scanned" in msg
+
+    # A scannable axis still launches.
+    assert ctrl._validate_scan_commands_text("rha 1.0 2.0 0.1", "", "pg002", ana) == ""
+
+
+def test_other_hard_rejections_also_block(in8_controller):
+    """The same hole covered these; none of their wordings carry the marker."""
+    ctrl = in8_controller
+    for cmd in ("rhm 1.0 2.0", "rhm 1.0 2.0 0.1 0.2", "rhm a b c"):
+        assert ctrl._validate_scan_commands_text(cmd, ""), cmd
+
+
+def test_the_pin_follows_the_crystal_the_caller_names(in8_controller, monkeypatch):
     """Fixed focusing belongs to the crystal assembly, not the instrument.
 
-    IN12 carries a PG(002) analyser with a documented fixed vertical focus and
-    a Heusler whose focusing behaviour is unknown; a flag on the instrument
-    would assert the first crystal's evidence about the second.
+    And the caller decides which crystal: an API request carries its own
+    frozen selection, which need not be what the GUI currently shows. Reading
+    the dock here would validate an API scan against the wrong crystal.
     """
     import dataclasses
 
@@ -112,19 +140,18 @@ def test_the_pin_follows_the_selected_crystal(in8_controller, monkeypatch):
         dataclasses.replace(ctrl.descriptor, ana_crystals=(pinned, other)),
         raising=False)
 
-    ctrl.window.instrument_dock.anacris_combo.addItem("Other", "other")
+    assert ctrl._fixed_curvature_axes("pg002", pinned.id)
+    assert ctrl._fixed_curvature_axes("pg002", "other") == {}
+    assert ctrl._fixed_curvature_axes("pg002", None) == {}
 
-    ctrl.window.instrument_dock.set_ana_id(pinned.id)
-    assert ctrl._validate_single_scan_command("rva 0.3 0.6 0.05")[0] is None
-
-    ctrl.window.instrument_dock.set_ana_id("other")
-    assert ctrl._validate_single_scan_command("rva 0.3 0.6 0.05")[0] == "rva"
-
-    ctrl.window.instrument_dock.set_ana_id(pinned.id)
+    # ...and that difference reaches the launch gate.
+    cmd = "rva 0.3 0.6 0.05"
+    assert ctrl._validate_scan_commands_text(cmd, "", "pg002", pinned.id)
+    assert ctrl._validate_scan_commands_text(cmd, "", "pg002", "other") == ""
 
 
 def test_nothing_is_refused_when_no_crystal_pins_anything(in8_controller):
     for spec in in8_controller.descriptor.ana_crystals:
         assert spec.fixed_curvature == ()
-    var, warning = in8_controller._validate_single_scan_command("rva 0.3 0.6 0.05")
-    assert var == "rva" and warning is None
+    assert in8_controller._validate_scan_commands_text(
+        "rva 0.3 0.6 0.05", "", "pg002", "pg002") == ""
