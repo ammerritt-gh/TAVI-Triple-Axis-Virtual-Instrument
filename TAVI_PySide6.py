@@ -5303,14 +5303,26 @@ class TAVIController(QObject):
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
         # Pre-flight validation - check for scan command issues
-        validation_result = self._preflight_scan_validation()
-        if validation_result:
-            # There are issues - show warning but allow proceeding
-            from PySide6.QtWidgets import QMessageBox
+        hard_issues, soft_issues = self._preflight_scan_validation()
+        from PySide6.QtWidgets import QMessageBox
+        if hard_issues:
+            # Not a question: the command does not describe a scan that can
+            # run. Offering "continue anyway" here would launch a scan over
+            # a refused axis and silently overwrite the radius it pins.
+            message = "\n".join(hard_issues)
+            QMessageBox.critical(
+                self.window, "Scan Command Rejected",
+                f"{message}\n\nFix the scan command and try again."
+            )
+            self.print_to_message_center(f"Simulation refused: {message}")
+            return
+        if soft_issues:
+            # Judgement calls, so they stay the operator's to make.
             reply = QMessageBox.warning(
                 self.window,
                 "Scan Command Issues",
-                f"{validation_result}\n\nDo you want to continue anyway?",
+                "\n".join(soft_issues)
+                + "\n\nDo you want to continue anyway?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -5924,9 +5936,14 @@ class TAVIController(QObject):
             cmd1, cmd2, dock.selected_mono_id(), dock.selected_ana_id()
         )
 
-    def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
-                                     monocris=None, anacris=None) -> str:
-        """Pure scan-command validation over two command strings.
+    def _scan_command_issues(self, cmd1: str, cmd2: str,
+                             monocris=None, anacris=None):
+        """(hard, soft) issue lists for two scan-command strings.
+
+        Hard means the command cannot run as written -- an unknown or
+        refused variable, a malformed command, a conflict between the two.
+        Soft means it can run but probably should not, which is the
+        operator's call.
 
         Parameterized on strings only -- reads no widgets -- so both the GUI
         Run button and the remote API can call it. ``monocris``/``anacris`` name
@@ -5945,16 +5962,22 @@ class TAVIController(QObject):
         cmd2 = (cmd2 or "").strip()
         fixed_axes = self._fixed_curvature_axes(monocris, anacris)
 
-        issues = []
+        hard = []
+        soft = []
         variables = []
 
         for label, cmd in (("Command 1", cmd1), ("Command 2", cmd2)):
             var, warning = self._validate_single_scan_command(cmd, fixed_axes)
             variables.append(var)
-            # var is None alongside a warning -> the command cannot run as
-            # written, whatever the wording.
-            if warning and (var is None or "⚠" in warning):
-                issues.append(f"{label}: {warning}")
+            if not warning:
+                continue
+            # var is None -> the command cannot run as written, whatever the
+            # wording. Anything else marked serious is a judgement the
+            # operator is allowed to overrule (a very long scan, say).
+            if var is None:
+                hard.append(f"{label}: {warning}")
+            elif "⚠" in warning:
+                soft.append(f"{label}: {warning}")
 
         var1, var2 = variables
 
@@ -5962,9 +5985,19 @@ class TAVIController(QObject):
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
-                issues.append(conflict)
+                hard.append(conflict)
 
-        return "\n".join(issues)
+        return hard, soft
+
+    def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
+                                     monocris=None, anacris=None) -> str:
+        """Every blocking issue as one string, or "" when there are none.
+
+        The API's gate: it has ``force`` for the deliberate override, so it
+        does not need the hard/soft distinction the GUI makes.
+        """
+        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
+        return "\n".join(hard + soft)
 
     # ------------------------------------------------------------- remote API
     #

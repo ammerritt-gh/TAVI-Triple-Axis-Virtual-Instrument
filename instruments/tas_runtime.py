@@ -59,6 +59,11 @@ class TAS_Instrument:
         self.fixed_E = 0 # The fixed energy to work with, for the source.
         self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
         self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
+        # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
+        # point by _solve_point_geometry on its private copy of the state, so
+        # the recorded energies, the transfer and the source parameter all read
+        # one source of truth instead of re-deriving it three ways.
+        self._angle_energies = None
         self.diagnostic_mode = False
         self.diagnostic_settings = {}
 
@@ -187,7 +192,18 @@ class TAS_Instrument:
         SR-2 / H144 / H10 spectrum is modelled); in Kf-fixed mode it therefore
         peaks at Ef, and large positive transfers sample the tail.
         """
-        if self.source_type == "Mono" and self.K_fixed == "Kf Fixed":
+        if self.source_type != "Mono":
+            return self.fixed_E
+
+        # A Mono source is steered onto the energy the monochromator selects,
+        # which IS Ei: fixed_E in Ki-fixed mode, and fixed_E + deltaE in
+        # Kf-fixed mode only because Ef is then held at fixed_E. In angle mode
+        # neither is held, so that arithmetic drifts -- an A4 scan would move
+        # E0 while A1, and therefore the real Ei, stood still, starving the
+        # beam. Take Ei from the crystals when they are the authority.
+        if self._angle_energies is not None:
+            return self._angle_energies[0]
+        if self.K_fixed == "Kf Fixed":
             return self.fixed_E + deltaE
 
         return self.fixed_E
@@ -215,6 +231,7 @@ class TAS_Instrument:
         ``E0_param`` is a *source-distribution* parameter, not a nominal
         energy, and is resolved separately by :meth:`e0_param_value`.
         """
+        energies = energies if energies is not None else self._angle_energies
         if energies is not None:
             Ei, Ef = energies
         elif self.K_fixed == "Kf Fixed":
@@ -478,6 +495,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         mtt, stt, sth, att = A1, A2, A3, A4
         # The scanned angles are the authority here, not the frozen field.
         angle_energies = point_state.nominal_energies_from_angles(mtt, att)
+        point_state._angle_energies = angle_energies
         deltaE = (angle_energies[0] - angle_energies[1]
                   if angle_energies else vals['deltaE'])
         saz = vals.get('chi', 0.0)
