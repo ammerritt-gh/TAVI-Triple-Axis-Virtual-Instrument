@@ -10,6 +10,36 @@ Nothing in the historical `vpanda.instr` was accepted merely because it is
 executable; every value below names the source it came from and, where sources
 disagree, which one won.
 
+A literature verification pass on 2026-09-09 (see "Verification performed")
+checked every provisional value against the published record. It confirmed some,
+left more unsupported, and turned up one fact that reframes the whole table —
+**PANDA's monochromator has been replaced.** Read the next section first.
+
+## The model describes pre-shutdown PANDA
+
+FRM II has produced no neutrons since 17 March 2020, and the MLZ User Office
+states "No neutrons in 2026". PANDA is not taking user data; it is being
+prepared for renewed operation. (The March 2020 stop was a COVID-19 closure —
+the C-14 exceedance and the later cold-source failure were found while the
+reactor was already down, and are why it has stayed down. A May 2026 conference
+abstract mentions a restart in early 2027 in thermal mode; that is a planning
+statement, not a committed date, and is recorded here as such.)
+
+That matters for this model because the 2024–25 restart reports describe
+**a new double-focusing PG(002) monochromator** and a new sample table. Every
+monochromator number in the table below — the 11 × 11 array, the 20 × 18 mm
+pieces, the 20′ mosaic, the 20°–132° travel, and the 2.10 m monochromator–sample
+distance — comes from sources describing the instrument *before* that
+replacement. They are the best published values and they are internally
+consistent, but none of them has been confirmed against the hardware that will
+come back online.
+
+**So: this package models pre-shutdown PANDA.** That is the right target — it is
+what the literature documents and what the historical McStas models were
+validated against — but the monochromator section will need revisiting once the
+new unit is described anywhere public. Question 1 of `SCIENTIST_REVIEW.md` is
+now that question.
+
 ## Source hierarchy
 
 The dossier's hierarchy is followed as written: current MLZ technical data
@@ -25,25 +55,25 @@ conventions and the mechanical bending limits remain unconfirmed.
 
 | Area | Value in TAVI | Source | Confidence |
 |---|---|---|---|
-| Scattering senses | (−1, +1, −1) | `vPANDA` `scatsense_*`; dossier reports the 2014 model reaching the same effective tuple | provisional — no NICOS confirmation |
+| Scattering senses | (−1, +1, −1) | `vPANDA` `scatsense_*` + the 2014 team model. The teaching notes independently give PANDA's convention as 0° along the incident beam, **positive counter-clockwise**, with 2Θ_S positive — which supports `sense_sample = +1`, and the MLZ page's signed analyser range (−130° to 100°) is consistent with the analyser sitting on the negative branch. | provisional — no source states the full tuple. Treat as the component-tree convention the team models use, NOT a documented motor-sign tuple. The analyser's own travel crosses zero, so `sense_ana = −1` is the normal geometry, not a universal motor sign. |
 | L1 (guide exit → mono) | 5.00 m | `vPANDA` model coordinate | good, but see "Reference planes" below |
 | L2 (mono → sample) | 2.10 m | `vPANDA` + 2016 guide study "available distance" | conflicting — 2007 and 2014 models say 2.15 m |
 | Virtual source → mono | 2.82 m | `vPANDA` (`ms1` at guide exit +2.180 m, mono at +5.000 m) | good |
 | L3 (sample → ana) | 1.05 m | dossier, high confidence across sources | good |
 | L4 (ana → det) | 0.95 m | dossier, high confidence across sources | good |
-| Mono PG(002) | d = 3.355 Å, 11 × 11 of 20 × 18 mm, 2 mm gap, 20′ mosaic | consistent across every PANDA McStas generation | good |
+| Mono PG(002) | d = 3.355 Å, 11 × 11 of 20 × 18 mm, 2 mm gap, 20′ mosaic | The 11 × 11 = 121 count is confirmed by the teaching material ("121 monochromator (55 analyzer) crystals"); the rest is consistent across every PANDA McStas generation. | **pre-restart** — 121 crystals well supported for the old unit; piece size, gap and mosaic are simulation values with no measurement behind them. The monochromator has since been replaced. |
 | Mono Cu(111) | d = 2.087 Å | MLZ quotes 2.08 Å; 2.087 Å is the crystallographic value for a = 3.6149 Å | good |
-| Cu(111) array, mosaic, r0 | 11 × 11 of 20 × 18 mm, 30′, r0 = 0.7 | **PLACEHOLDER** — copied from the PG holder; no source describes the Cu array | missing |
-| Analyzer PG(002) | 11 × 5 = 55 of 13 × 25 mm, 3 mm gap, 20′ mosaic | 2014 team model + PANDA teaching notes | good — supersedes `vPANDA`'s 13 × 6 = 78, judged inherited from 2007 |
+| Cu(111) array, mosaic, r0 | 11 × 11 of 20 × 18 mm, 30′, r0 = 0.7 | **PLACEHOLDER** — copied from the PG holder. The unit itself is real (MLZ 2021: Cu-111 monochromator from IPC/Göttingen under commissioning; 2024: "can be used"), but no source gives its piece count, dimensions, gaps, mosaic or reflectivity. | missing — every geometric number here is invented |
+| Analyzer PG(002) | 11 × 5 = 55 of 13 × 25 mm, 3 mm gap, 20′ mosaic | The **55-crystal count is confirmed** by the teaching material, in more than one revision, and supersedes `vPANDA`'s 13 × 6 = 78. No restart report says the conventional analyser was replaced. | count good; the 11 × 5 arrangement, the 13 × 25 mm pieces and the 3 mm gap are the 2014 model's implementation detail and are **unverified** |
 | Sample two-theta travel | 5° < A2 < 125° | MLZ page, verbatim | good |
 | Analyzer two-theta travel | −130° < A4 < 100° | MLZ page, verbatim (a signed range, not a magnitude) | good |
-| Mono two-theta travel | −132° < A1 < −20° | 2007 table's PG(002) `20° < 2Θ_M < 132°`, carried onto the negative branch | provisional — the MLZ page publishes no mono travel |
+| Mono two-theta travel | −132° < A1 < −20° | `20° < 2Θ_M < 132°` for PG(002) appears in the 2007 table, the **2015 JLSRF instrument paper**, and a 2011 instrument compilation — better established than first assumed. Carried onto the negative branch. | **pre-restart** — three independent sources agree through 2015, but the MLZ page omits it and the monochromator is new |
 | Collimation | `ca1` 20′/40′/60′/open; `ca2`–`ca4` 15′/40′/60′/open | dossier + `vPANDA` `switch` blocks | good |
 | Apertures `ms1`/`ss1`/`ss2` | 40 mm; 40 × 80 mm; 40 × 80 mm | `vPANDA` defaults | provisional — motorized limits unknown |
-| Detector | 1″ ³He, 25 × 100 mm | MLZ page (focusing mode) + teaching notes (~100 mm active height) | good |
+| Detector | 1″ ³He, 25 × 100 mm | The **1″-focusing / 2″-collimated choice is confirmed** by the MLZ page and by peer-reviewed PANDA experiment descriptions. | type good; **25 mm × 100 mm, 10 bar and ~90% efficiency are detector-model assumptions** — no PANDA-specific source found, and "1 inch" names the tube, not the active gas diameter |
 | Source aperture | 107 × 138 mm | `vPANDA` `NL_SR2_3` exit face | good |
-| Analyzer vertical curvature | fixed at −0.60 m | dossier: conventional analyzer vertical curvature "apparently fixed"; value is the point-focus radius for the standard cold setting kf = 1.55 Å⁻¹ | provisional |
-| Bending minimum radii | none applied | PANDA's mechanical limits are unknown; PUMA clamps, PANDA cannot | missing |
+| Analyzer vertical curvature | fixed at −0.60 m | **Fixed vertical / variable horizontal is confirmed** by two peer-reviewed PANDA papers, one of which ties the fixed vertical geometry to the vertically oriented 1″ ³He detector, and by the MLZ page advertising only variable horizontal focusing. | the *fixedness* is now well supported; the **radius is not** — no source gives it, and −0.60 m is our point-focus value for kf = 1.55 Å⁻¹ |
+| Bending minimum radii | none applied | No published minimum or maximum radius for either crystal was found. The 2007 reporting confirms driven focusing existed, but gives no travel. Applying no clamp is the deliberate choice: inventing one would be worse, and the monochromator is new anyway. | missing — confirmed absent from the literature, not merely unlocated |
 
 ## `vPANDA` defects, and how each was handled
 
@@ -72,12 +102,12 @@ model does not represent. None is an oversight.
 
 | Gap | Why |
 |---|---|
-| BAMBUS | Multi-detector; TAVI's detector contract is a single 1-D monitor writing `detector.dat`. Deferred exactly as IN8's FlatCone/IMPS are. MLZ lists it as under commissioning. |
+| BAMBUS | Multi-detector; TAVI's detector contract is a single 1-D monitor writing `detector.dat`. Deferred exactly as IN8's FlatCone/IMPS are. It is further along than the 2015 concept paper suggests — a BMBF final report describes it as built and dry-commissioned: 100 channels, 40° total 2θ coverage, 2° cassettes, E_f = 3.0/3.5/4.0/4.5/5.0 meV, a cooled 14 cm Be filter, per-energy Rowland distances of ~950–1400 mm, and 99 of 100 detectors installed. Neutron commissioning is what remains, and it cannot happen without beam. Public sources disagree on whether the analyser holds 500 or 250 PG crystals; that conflict is unresolved and is not resolved here. |
 | Heusler monochromator/analyzer, spin flippers, guide fields | TAVI models no spin-dependent transport. A Heusler entry would emit an unpolarized beam under a polarizing label — worse than its absence. |
 | Si(111) monochromator | A bent-perfect crystal; `Monochromator_curved`'s mosaic model misrepresents it. Same call as IN8's Si faces. |
 | Upstream sapphire filter | `Al2O3_sapphire.trm` is in the PANDA team's repository, not in `components/` and not stock McStas data. Adding a transmission table we cannot source would be worse than omitting a component that only attenuates. |
 | Analyzer-side PG / cold-Be / BeO filters | They suppress higher-order contamination, which `Monochromator_curved`'s single-Q reflection does not produce. Modeling one would only attenuate the primary beam. |
-| Proposed 1.48 m, m = 6 elliptic mono→sample guide | The 2016 study is prospective ("shall", "expected"); no later official source confirms installation. The dossier says it must not be enabled by default. |
+| Proposed 1.48 m, m = 6 elliptic mono→sample guide | The 2016 study is prospective ("shall", "expected") and no post-2016 source says the specific m = 6, 1.48 m design was fabricated or installed. Note the distinction that verification drew: PANDA **has** used sample-focusing guide optics experimentally (e.g. earlier small-sample work on NiS₂), so "PANDA has used a focusing guide" is true while "the 2016 guide is standard hardware" is not. |
 | Fixed beam-defining apertures `sk1`–`sk5` | Not motorized and not scannable; they shape flux, never angles. `ca1`–`ca4`, `ms1`, `ss1`, `ss2` are the operational apertures and are all present. |
 | 2″ ³He detector (collimated configuration) | Only the 1″ focusing-mode tube is selectable. A detector choice would need a descriptor-level module, which no current task requires. |
 | Cold-source vs thermal-source operation | MLZ publishes separate ki ranges for the two. The model carries one Maxwellian source; `axis_limits` and the crystal menu span both. The "without cold source" spectrum is not represented. |
@@ -105,6 +135,16 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
 - Plugin conformance, build-tree and angle-golden tests:
   `tests/test_panda_plugin.py`, `tests/test_panda_build_tree.py`,
   `tests/test_sign_conventions.py`.
+- **Literature verification pass** (2026-09-09, external search seat): every
+  provisional value above checked against the published record. Confirmed the
+  55-crystal analyser, the 121-crystal monochromator, fixed vertical analyser
+  focusing, the 1″/2″ detector choice, the 20°–132° monochromator travel
+  through 2015, and 7.8 m source→mono as recently as a 2023 upgrade
+  contribution. Found **no source** for: the full scattering-sense tuple, the
+  7.8 m / 8.81 m reference-plane reconciliation, a 2.15 → 2.10 m mechanical
+  change, any Cu(111) crystal geometry, a measured PG mosaic, the analyser's
+  fixed vertical radius, any bending limit, or the detector's active height and
+  fill pressure. Surfaced the monochromator replacement.
 - **Compiled McStas smoke run: passed** (2026-09-09). Step 8 of
   `docs/INSTRUMENT_AUTHORING.md`, driven through the production path
   (`build` → `compute_snapshot` → `run_point`): Al (2,0,0) elastic at

@@ -10,49 +10,61 @@ current drawing are worth more than a completed form; TAVI maintainers will do
 the structured extraction and coding. `MODEL_STATUS.md` lists every value with
 its source and confidence if you want to check something not asked about here.
 
-The seven highest-priority questions are:
+A literature pass on 2026-09-09 answered several of the original questions from
+the published record, so this list is shorter and sharper than it was. What
+remains is what the public literature genuinely does not contain.
 
-1. **Reference planes.** The published source–monochromator distance is ~7.8 m,
-   but the McStas models put the monochromator at ~8.81 m of model coordinate.
-   Which physical planes does the 7.8 m figure connect? TAVI currently starts
-   at the guide exit and calls it 5.00 m to the monochromator, which avoids
-   the question rather than answering it.
+The five highest-priority questions are:
 
-2. **Monochromator–sample distance.** 2.10 m or 2.15 m — and does it depend on
-   configuration? The two numbers split evenly across the sources.
+1. **The new monochromator.** Restart reports describe a new double-focusing
+   PG(002) monochromator. Every monochromator number in our model — 11 × 11
+   pieces of about 20 × 18 mm on 2 mm gaps, 20′ mosaic, 20°–132° travel, and the
+   2.10 m distance to the sample — describes the *old* unit. What is the new
+   one? Crystal count and arrangement, piece size, mosaic, focusing ranges,
+   two-theta travel, and whether the monochromator–sample distance changed.
 
-3. **Analyzer array.** Is the PG analyzer definitively 11 × 5 = 55 crystals of
-   about 13 × 25 mm? TAVI assumes so, following the 2014 model and the teaching
-   notes, over the older 13 × 6 = 78.
+2. **Axis signs and zeros.** We assume monochromator, sample and analyser
+   scattering senses of −1, +1, −1. The teaching notes confirm the convention is
+   positive counter-clockwise with 2Θ_S positive, which supports the sample
+   sign, but no document we could find states all three. What are the current
+   NICOS motor signs, zero definitions and hard limits for the three two-theta
+   axes? This is the single value most of our angle output depends on.
 
-4. **Axis signs and zeros.** TAVI assumes monochromator, sample and analyzer
-   scattering senses of −1, +1, −1 — i.e. the monochromator and analyzer take
-   off to one side and the sample to the other. What are the current NICOS
-   motor signs, zero definitions and hard limits for the three two-theta axes?
-   The published mechanical range for the monochromator is still the 2007
-   figure (20°–132° for PG(002)); is that current?
+3. **Focusing limits, and the analyser's fixed vertical radius.** Two papers
+   confirm the conventional analyser is vertically fixed and horizontally
+   variable — but at what vertical radius? And what are the minimum and maximum
+   horizontal and vertical bending radii for the monochromator and analyser? We
+   apply no mechanical clamp at all, because no published limit exists, which
+   means our model can request an impossible curvature.
 
-5. **Focusing limits.** What are the minimum and maximum horizontal and
-   vertical bending radii for the monochromator and the analyzer? TAVI applies
-   no mechanical clamp today because none is documented. Related: is the
-   conventional analyzer's vertical curvature genuinely fixed, and at what
-   radius?
+4. **Cu(111) monochromator geometry.** The unit exists and has been commissioned,
+   but every Cu(111) number in our model is a placeholder copied from the PG
+   holder: 11 × 11 pieces of 20 × 18 mm, 30′ mosaic, peak reflectivity 0.7. How
+   many pieces, what size, what mosaic, what reflectivity? (Minor: the MLZ page
+   prints d = 2.08 Å where a = 3.6149 Å gives 2.087 Å, which rounds to 2.09. We
+   use 2.087. Is 2.08 a legacy value?)
 
-6. **Cu(111) monochromator geometry.** How many crystal pieces, what size, what
-   mosaic, and what peak reflectivity? Every Cu(111) number in TAVI is a
-   placeholder copied from the PG holder.
+5. **Reference planes, and the analyser array's dimensions.** Two smaller
+   things. First: the published 7.8 m source–monochromator distance is stable
+   across 2007, 2015, 2016 and 2023, but the McStas models put the
+   monochromator at about 8.81 m of model coordinate. Which physical planes does
+   the 7.8 m connect? Second: the 55-crystal analyser count is confirmed, but is
+   it arranged 11 × 5, and are the crystals about 13 × 25 mm on 3 mm gaps?
 
-7. **Aperture limits.** What are the travel limits and normal working settings
-   for `ms1` (the horizontal virtual source), `ss1` and `ss2`? TAVI uses the
-   historical model's 40 mm / 40 × 80 mm / 40 × 80 mm defaults with no limits.
+Two things that would be valuable but are not blocking:
 
-Two further things that would be valuable but are not blocking:
-
+- Measured mosaic distributions for the PG crystals, and the detector's active
+  height and fill pressure. We use 20′ and 25 × 100 mm at 10 bar; all four are
+  simulation assumptions with no PANDA-specific source behind them.
 - The **thermal-source configuration**: which source spectrum should represent
   operation without the cold source?
-- The **1.48 m, m = 6 elliptic monochromator-to-sample guide** proposed in the
-  2016 optimization study — was it ever installed? TAVI does not model it, on
-  the basis that no source after 2016 confirms it.
+
+Settled since the last revision, for information — no need to answer these
+unless we have them wrong: the analyser is 55 crystals, not 78; the old
+monochromator was 121; the conventional analyser's vertical focusing is fixed;
+the 1″ tube is the focusing-mode detector and the 2″ the collimated one; and the
+2016 proposed 1.48 m, m = 6 elliptic monochromator-to-sample guide was never
+confirmed installed, so we do not model it.
 
 ## Your comments
 

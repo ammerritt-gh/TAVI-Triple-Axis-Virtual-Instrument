@@ -169,9 +169,16 @@ def panda_descriptor() -> InstrumentDescriptor:
         mono_crystals=(
             # PG(002) double-focusing face: 11x11 pieces of 20x18 mm on a 2 mm
             # gap, mosaic 20' (consistent across every PANDA McStas
-            # generation). The 2016 guide paper quotes nominal 20x20 mm pieces;
-            # the 18 mm model height is kept because it is what the reflecting
-            # area is modeled as.
+            # generation). The 121-crystal count is confirmed by the PANDA
+            # teaching material ("121 monochromator (55 analyzer) crystals");
+            # the piece size, gap and mosaic are simulation values with no
+            # measurement behind them. The 2016 guide paper quotes nominal
+            # 20x20 mm pieces; the 18 mm model height is kept because it is
+            # what the reflecting area is modeled as.
+            # PRE-SHUTDOWN: the 2024-25 restart reports describe a NEW
+            # double-focusing PG(002) monochromator. Everything here describes
+            # the unit the literature documents, not the replacement -- see
+            # MODEL_STATUS.md, "The model describes pre-shutdown PANDA".
             CrystalSpec(
                 id="pg002", display_name="PG[002]", d_spacing=3.355,
                 slab_width=0.020, slab_height=0.018, n_columns=11, n_rows=11,
@@ -180,7 +187,11 @@ def panda_descriptor() -> InstrumentDescriptor:
             ),
             # Cu(111), the second current monochromator (MLZ: ki = 1.8-7.0
             # A^-1, d quoted as 2.08 A; 2.087 A is the crystallographic value
-            # for a = 3.6149 A). No stock McStas reflectivity data for Cu, so
+            # for a = 3.6149 A, which rounds to 2.09 -- MLZ's 2.08 is
+            # unexplained and is probably a legacy figure). The unit itself is
+            # real: MLZ reported a Cu-111 monochromator from IPC/Goettingen
+            # under commissioning in 2021. No stock McStas reflectivity data
+            # for Cu, so
             # constant r0 with the "NULL" sentinel. Slab subdivision, mosaic
             # and r0 are PLACEHOLDERs carried over from the PG holder -- no
             # source describes the Cu array.
@@ -199,9 +210,12 @@ def panda_descriptor() -> InstrumentDescriptor:
         ),
         ana_crystals=(
             # PG(002) focusing analyzer, 55 crystals of 13x25 mm on a 3 mm gap,
-            # mosaic 20'. The dossier prefers 11x5 (2014 team model + PANDA
-            # teaching notes) over vPANDA's 13x6 = 78, which it judges inherited
-            # from the 2007 model.
+            # mosaic 20'. The 55-crystal COUNT is confirmed by the PANDA
+            # teaching material in more than one revision, and supersedes
+            # vPANDA's 13x6 = 78 (inherited from the 2007 model). The 11x5
+            # arrangement, the piece size and the gap are the 2014 team model's
+            # implementation detail and are unverified. No restart report says
+            # this analyzer was replaced.
             CrystalSpec(
                 id="pg002", display_name="PG[002]", d_spacing=3.355,
                 slab_width=0.013, slab_height=0.025, n_columns=11, n_rows=5,
@@ -301,9 +315,12 @@ class PANDAPlugin:
         scan_config.rvm = -abs(vals['rvm'])
         scan_config.rha = -abs(vals['rha'])
         # PANDA's conventional analyzer vertical curvature is fixed, not
-        # driven (dossier: "variable horizontal focusing; conventional analyzer
-        # vertical curvature apparently fixed"). Held at the point-focus value
-        # for the standard cold setting kf = 1.55 A^-1.
+        # driven. Confirmed: two peer-reviewed PANDA papers describe fixed
+        # vertical / variable horizontal analyzer focusing, one tying the fixed
+        # vertical geometry to the vertically oriented 1" 3He detector, and the
+        # MLZ page advertises only variable horizontal focusing. The RADIUS is
+        # not confirmed by anything -- this is our point-focus value for the
+        # standard cold setting kf = 1.55 A^-1.
         scan_config.rva = -0.60
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])

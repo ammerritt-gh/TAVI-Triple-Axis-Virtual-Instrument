@@ -7,7 +7,13 @@ horizontal virtual source, a double-focusing monochromator, a focusing
 analyzer, four selectable Soller positions, and low background.
 
 TAVI models it as a plain single-analyzer, single-detector triple-axis
-spectrometer. What is in the beam, in order:
+spectrometer, and specifically models **pre-shutdown PANDA**: FRM II has
+produced no neutrons since March 2020, and the 2024–25 restart work includes a
+new PG(002) monochromator, so the monochromator values here describe the unit
+the literature documents rather than the one that will come back online. See
+[MODEL_STATUS.md](MODEL_STATUS.md).
+
+What is in the beam, in order:
 
 1. **Source** at the SR-2 guide exit — a Maxwellian (or monochromatic) source
    with the guide's exit aperture, 107 × 138 mm. Guide transport upstream of
