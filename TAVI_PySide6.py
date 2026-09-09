@@ -2477,6 +2477,16 @@ class TAVIController(QObject):
         patched = set(parsed)
         vals.update(parsed)
 
+        # A patched container replaces the previous object wholesale, so a
+        # request naming only some collimation slots would silently drop the
+        # rest -- and the plugin's scan_config indexes every slot the
+        # descriptor declares, so the next one added to an instrument would
+        # turn every previously valid partial request into a KeyError. Refill
+        # from the descriptor defaults instead.
+        if 'collimation' in patched and isinstance(vals.get('collimation'), dict):
+            for slot_id, default in self._descriptor_collimation_defaults().items():
+                vals['collimation'].setdefault(slot_id, default)
+
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
                         'lattice_alpha', 'lattice_beta', 'lattice_gamma')
@@ -5066,6 +5076,20 @@ class TAVIController(QObject):
         except Exception:
             return None
 
+    def _descriptor_collimation_defaults(self):
+        """{slot_id: default} for every collimation slot the descriptor declares.
+
+        A multi-select slot's value is a set, matching what the GUI's
+        ``collimation_values`` returns for one.
+        """
+        defaults = {}
+        for slot in self.descriptor.collimation:
+            if slot.multi_select:
+                defaults[slot.id] = {slot.default} if slot.default else set()
+            else:
+                defaults[slot.id] = slot.default
+        return defaults
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -5087,12 +5111,7 @@ class TAVIController(QObject):
             else:
                 modules[m.id] = bool(m.default)
 
-        collimation = {}
-        for slot in d.collimation:
-            if slot.multi_select:
-                collimation[slot.id] = {slot.default} if slot.default else set()
-            else:
-                collimation[slot.id] = slot.default
+        collimation = self._descriptor_collimation_defaults()
 
         slits_mm = {}
         for slit in d.slits:
