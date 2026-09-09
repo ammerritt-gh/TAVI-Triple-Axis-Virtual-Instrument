@@ -205,6 +205,23 @@ def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
     dock.scan_command_1_edit.setText("")
 
 
+def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller):
+    """This pair does not scan both variables -- it mislabels the data.
+
+    A scan point's first four values live in one slot group that
+    _solve_point_geometry reads as (qx, qy, qz, dE) in momentum mode and as
+    (H, K, L, dE) in rlu mode. Pairing the two means one mode wins and the
+    other command's values are read under the winning mode's units, producing
+    measurements labelled with coordinates they were not taken at. Offering
+    "continue anyway" for that would be offering to corrupt the record.
+    """
+    hard, soft = in8_controller._scan_command_issues(
+        "H 1.99 2.01 0.01", "qx 1.9 2.1 0.1"
+    )
+    assert hard and "same target momentum" in hard[0]
+    assert soft == []
+
+
 def test_a_command_conflict_stays_the_operators_call(in8_controller):
     """Conflicts were overridable before the hard/soft split and remain so.
 
