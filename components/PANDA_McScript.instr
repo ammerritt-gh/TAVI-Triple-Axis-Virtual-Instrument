@@ -15,7 +15,7 @@
 * 
 * %Identification
 * Written by: Python McStas Instrument Generator
-* Date: 09:22:54 on September 09, 2026
+* Date: 11:50:10 on September 09, 2026
 * Origin: ESS DMSC
 * %INSTRUMENT_SITE: Generated_instruments
 * 
@@ -58,15 +58,15 @@
 ********************************************************************************/
 
 DEFINE INSTRUMENT PANDA_McScript (
-A1_param = -41.19028636991626, // Monochromator 2-theta angle.
-A2_param = 71.29492216112949, // Sample 2-theta angle.
-A3_param = 35.64746108056474, // Sample phi angle.
-A4_param = -41.19028636991626, // Analyzer 2-theta angle.
-E0_param = 14.684089, // Source energy (meV) for monochromatic source.
+A1_param = -41.191003384230044, // Monochromator 2-theta angle.
+A2_param = 71.29629060627097, // Sample 2-theta angle.
+A3_param = 35.64814530313549, // Sample phi angle.
+A4_param = -41.191003384230044, // Analyzer 2-theta angle.
+E0_param = 14.6836, // Source energy (meV) for monochromatic source.
 saz_param = -3.508354649267438e-15, // Sample azimuthal angle (out-of-plane).
-rhm_param = -6.849, // Monochromator horizontal bending.
-rvm_param = -1.0403, // Monochromator vertical bending.
-rha_param = -2.836, // Analyzer horizontal bending.
+rhm_param = -3.0, // Monochromator horizontal bending.
+rvm_param = -1.2, // Monochromator vertical bending.
+rha_param = -1.5, // Analyzer horizontal bending.
 rva_param = -0.6, // Analyzer vertical bending.
 ms1_wgap_param = 0.04, // Horizontal virtual source width (m).
 ss1_wgap_param = 0.04, // Pre-sample slit horizontal gap (m).
@@ -105,11 +105,6 @@ COMPONENT source = Source_div_Maxwellian_v2(
  energy_distribution = 2, divergence_distribution = 0)
 AT (0, 0, 0) ABSOLUTE
 
-COMPONENT primary_collimator = Collimator_linear(
- xwidth = 0.108, yheight = 0.16,
- length = 0.5, divergence = 0.0)
-AT (0, 0, 0.1) RELATIVE origin
-
 COMPONENT virtual_source = Slit(
  xwidth = ms1_wgap_param, yheight = 0.18)
 AT (0, 0, 2.18) RELATIVE origin
@@ -125,7 +120,7 @@ SPLIT 2 COMPONENT monochromator = Monochromator_curved(
  NV = 11, r0 = 1.0,
  RV = rvm_param, RH = rhm_param,
  DM = 3.355, mosaic = 20,
- order = 0)
+ order = 1)
 AT (0, 0, 0) RELATIVE mono_cradle
 EXTEND %{
 if(!SCATTERED) ABSORB;
@@ -134,11 +129,6 @@ if(!SCATTERED) ABSORB;
 COMPONENT sample_arm = Arm()
 AT (0, 0, 5.0) RELATIVE origin
 ROTATED (0, A1_param, 0) RELATIVE origin
-
-COMPONENT sample_collimator = Collimator_linear(
- xwidth = 0.04, yheight = 0.12,
- length = 0.2, divergence = 0.0)
-AT (0, 0, 0.9) RELATIVE sample_arm
 
 COMPONENT sample_slit = Slit(
  xwidth = ss1_wgap_param, yheight = ss1_hgap_param)
@@ -175,11 +165,6 @@ COMPONENT sample_exit_slit = Slit(
  xwidth = ss2_wgap_param, yheight = ss2_hgap_param)
 AT (0, 0, 0.4) RELATIVE analyzer_arm
 
-COMPONENT analyzer_collimator = Collimator_linear(
- xwidth = 0.04, yheight = 0.14,
- length = 0.2, divergence = 0.0)
-AT (0, 0, 0.5) RELATIVE analyzer_arm
-
 COMPONENT analyzer_cradle = Arm()
 AT (0, 0, 1.05) RELATIVE analyzer_arm
 ROTATED (0, A4_param/2, 0) RELATIVE analyzer_arm
@@ -191,17 +176,12 @@ SPLIT 5 COMPONENT analyzer = Monochromator_curved(
  NV = 5, r0 = 1.0,
  RV = rva_param, RH = rha_param,
  DM = 3.355, mosaic = 20,
- order = 0)
+ order = 1)
 AT (0, 0, 0) RELATIVE analyzer_cradle
 
 COMPONENT detector_arm = Arm()
 AT (0, 0, 1.05) RELATIVE analyzer_arm
 ROTATED (0, A4_param, 0) RELATIVE analyzer_arm
-
-COMPONENT detector_collimator = Collimator_linear(
- xwidth = 0.04, yheight = 0.14,
- length = 0.2, divergence = 0.0)
-AT (0, 0, 0.41) RELATIVE detector_arm
 
 COMPONENT detector = Monitor(
  xwidth = 0.025, yheight = 0.1)
