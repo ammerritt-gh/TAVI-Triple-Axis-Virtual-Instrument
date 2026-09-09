@@ -48,6 +48,12 @@ is currently under commissioning."
 
 ---
 
+**Reactor status.** The page publishes technical data, not operating status.
+The FRM II reactor was still offline as of this capture (confirmed by the
+repository owner, 2026-09-09), so these are the instrument's specifications, not
+a statement that PANDA is taking user beam this cycle. TAVI simulates the
+instrument either way.
+
 **Note on scope.** The page publishes no arm lengths, no collimator menu, no
 crystal-array subdivision and no axis sign convention; those come from the
 lower tiers of the dossier's hierarchy and are attributed at each descriptor
