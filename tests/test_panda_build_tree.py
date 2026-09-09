@@ -212,3 +212,19 @@ def test_no_sample_warns_and_omits_component(capsys):
     names = set(_component_names(instrument))
     assert "Al_Bragg" not in names
     assert "No sample selected" in capsys.readouterr().out
+
+
+def test_maxwellian_de_clears_the_source_init_guard_at_pandas_cold_floor():
+    """Source_div_Maxwellian_v2 exits in INITIALIZE when E0 - dE <= 0.
+
+    PANDA's published floor is kf = 1.05 A^-1, i.e. E0 = 2.28 meV, so IN8's
+    thermal dE = 3 would abort a routine cold run before any detector data.
+    """
+    source_dE = _build(source_type="Maxwellian").get_component("source").dE
+    e0_floor_meV = 2.072142 * 1.05 ** 2          # kf = 1.05 A^-1
+    assert e0_floor_meV - source_dE > 0, (e0_floor_meV, source_dE)
+
+
+def test_mono_source_de_default_also_clears_the_guard():
+    source_dE = _build(source_type="Mono").get_component("source").dE
+    assert 2.072142 * 1.05 ** 2 - source_dE > 0
