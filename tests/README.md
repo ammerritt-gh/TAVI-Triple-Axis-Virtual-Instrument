@@ -15,6 +15,20 @@ Notes:
 - **No GUI, no McStas runs.** Tests must not launch PySide6 widgets or compile/
   execute McStas instruments. Pure math, parsing, registry, and source-scan
   checks only.
+- **The repo-root `conftest.py` keeps windows off the operator's screen, and
+  must stay.** Merely *constructing* `ms.McStas_instr(...)` -- which every
+  build-tree test does -- makes McStasScript shell out twice: `mcrun
+  --showcfg=resourcedir` with `shell=True` when `MCSTAS` is unset, and
+  `mcstas -v` unconditionally, inside a bare `except`. Windows gives a child
+  of a console-less parent its own console, so each launch is a console window
+  on screen, and a faulting binary adds an error dialog. That is invisible when
+  you start the GUI from `run-tavi-dev.bat` (the children inherit its console)
+  and very visible when an agent runs pytest from a background process:
+  measured 2026-09-09, an afternoon of runs left 121 orphaned `conhost.exe`
+  behind. `conftest.py` sets `MCSTAS` if absent and forces `CREATE_NO_WINDOW`
+  on every subprocess for the session; `test_no_console_windows.py` fails if
+  either guard is removed. **A script that drives McStasScript outside pytest
+  needs the same guard** -- see `install_no_window_guard()`.
 - Tests that merely need to *import* McStasScript-heavy modules (e.g. the PUMA
   instrument definition) must guard with
   `pytest.importorskip("mcstasscript")` so the suite passes in environments
