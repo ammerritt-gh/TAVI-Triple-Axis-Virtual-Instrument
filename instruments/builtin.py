@@ -11,8 +11,10 @@ To add an instrument: write its plugin module (see ``instruments/puma/plugin.py`
 and ``docs/CONFIGURABLE_INSTRUMENTS.md`` §5), then register it here.
 """
 from instruments.in8.plugin import IN8_DISPLAY_NAME, IN8_ID, IN8Plugin
+from instruments.panda.plugin import PANDA_DISPLAY_NAME, PANDA_ID, PANDAPlugin
 from instruments.puma.plugin import PUMA_DISPLAY_NAME, PUMA_ID, PUMAPlugin
 from instruments.registry import register
 
 register(PUMA_ID, PUMA_DISPLAY_NAME, PUMAPlugin)  # the class itself is the factory
 register(IN8_ID, IN8_DISPLAY_NAME, IN8Plugin)
+register(PANDA_ID, PANDA_DISPLAY_NAME, PANDAPlugin)
