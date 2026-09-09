@@ -94,7 +94,7 @@ inverse.
 | Slab gap | 1.5 mm PLACEHOLDER | drawing value |
 | Crystal backing | not modeled | 2016's 2.3 mm B₄C + 3 mm Al could not be re-confirmed; only matters for transmission/background realism |
 | Mosaic | 24′ isotropic | 2016 gives 0.4° FWHM without splitting horizontal and vertical. Takin's 33′ is an *effective* resolution parameter, not metrology — do not adopt it as the crystal mosaic |
-| Curvature limits | 1.7 m horizontal / 0.5 m vertical minima | **unconfirmed.** ILL says only that both axes are variable; Takin's saved 1.20 m vertical radius is one setting, not a limit. *needs IS* |
+| Curvature limits | 1.7 m horizontal / 0.5 m vertical minima, **enforced as a provisional model assumption** and labelled as such in `model.py` | **unconfirmed.** ILL says only that both axes are variable; Takin's saved 1.20 m vertical radius is one setting, not a limit. The vertical clamp is load-bearing (it binds above roughly \|A1\| = 32°), so this is an unsourced number affecting emitted geometry. Kept rather than deleted because removing it asserts unbounded bending, which is equally unsourced and less conservative. *needs IS* |
 | Motor sign convention | both radii negated onto the −1 take-off branch | the *motor* convention should be checked at more than one real setting. *needs IS* |
 
 ### Analyser
@@ -184,6 +184,30 @@ freely.
   publishes the 2016 flux and resolution figures unchanged.
 
 ---
+
+## Validation record
+
+- **Compiled McStas smoke run: passed** (2026-09-09, on the final tree). Step 8
+  of `docs/INSTRUMENT_AUTHORING.md`, driven through the production path
+  (`build` → `compute_snapshot` → `run_point`): Al (2,0,0) elastic at
+  kf = 2.000 Å⁻¹ (E = 8.289 meV), 1e7 neutrons, every Soller open, ideal
+  focusing. `detector_I = 4.21e-07`, `detector_N = 4334`, at
+  A1 = A4 = −55.834°, A2 = 101.737°.
+  The identical point through IN8 on the same tree gives `3.33e-07` / `4908` at
+  its own thermal setting — the same order of magnitude, which is the check
+  that matters here: a wrong-branch curvature costs ~7 orders of magnitude, so
+  IN12's all-negative focusing (`sense_mono = sense_ana = −1`) is not
+  defocusing. This is gross-geometry and execution evidence, not a flux
+  calibration; the two instruments are at different energies on different
+  sources and the numbers are not comparable beyond their order.
+  The smoke also certifies what the Python suite cannot: the emitted tree, with
+  withdrawn collimators and `order=1` on both crystals, still generates a
+  `.instr` that compiles and counts.
+- **Not yet done:** any independent resolution or intensity benchmark at
+  matched settings. Until one exists this is a runnable, documented model of
+  the post-upgrade conventional configuration, not a quantitatively validated
+  reference.
+
 
 ## Priority for the next data pass
 

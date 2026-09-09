@@ -297,9 +297,13 @@ def test_crystal_bending_is_rowland_matched_and_branch_signed():
     assert abs(rva) > 2 * abs(2 * ana_focus * sin_th)
 
 
-def test_vertical_bending_clamps_at_the_published_minimum():
-    """2016: vertical curvature adjusts from ~0.5 m to flat. At small Bragg
-    angles the ideal radius drops below that and the motor cannot follow."""
+def test_vertical_bending_clamps_at_the_provisional_minimum():
+    """The clamp is a PROVISIONAL model assumption, not a published limit.
+
+    MODEL_STATUS.md records the 2016 reading (~0.5 m to flat) as unconfirmed,
+    so this pins the behaviour of the assumption the model states -- that at
+    small Bragg angles the ideal radius drops below the minimum and is
+    clamped -- not the existence of a 0.5 m mechanical stop."""
     pytest.importorskip("mcstasscript")
     from instruments.in12.model import MONO_MIN_RV
 
@@ -360,3 +364,43 @@ def test_resolution_config_can_collimate_the_primary_arm():
     )
     assert cfg.alf[0] == 30.0
     assert not any("alpha_1 open" in w for w in cfg.warnings)
+
+
+def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
+    """Regression: scan_config signs the radii it copies out of the GUI, but a
+    SCANNED radius bypasses it -- compute_scan_snapshot reads scans[4:8] and
+    calls set_crystal_bending directly. IN12's override forces the branch.
+
+    IN12 takes off negative at both crystals, so a positive scanned radius puts
+    the curvature centre on the wrong side and defocuses by orders of
+    magnitude while every angle stays valid."""
+    pytest.importorskip("mcstasscript")
+    plugin = IN12Plugin()
+    state = plugin.default_state()
+    state.monocris = state.anacris = "pg002"
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 4.978451631466585
+
+    # Positive magnitudes in the scans array, exactly as the GUI carries them.
+    scans = [-74.332, 120.180, 60.090, -74.332, 4.0, 1.8, 1.65, 0.6,
+             0.0, 0.0, 0.0]
+    snapshot = plugin.compute_snapshot(
+        (scans, 0), 0, "angle", state,
+        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        variable_name1="rhm", variable_name2="rha",
+    )
+
+    assert snapshot.error_flags == []
+    assert snapshot.params["rhm_param"] == -4.0
+    assert snapshot.params["rha_param"] == -1.65
+
+
+def test_set_crystal_bending_is_idempotent_on_already_signed_values():
+    """scan_config signs first; the setter must not flip them back."""
+    pytest.importorskip("mcstasscript")
+    state = IN12Plugin().default_state()
+    state.set_crystal_bending(rhm=-4.0, rvm=-1.8, rha=-1.65, rva=-0.6)
+    assert (state.rhm, state.rvm, state.rha, state.rva) == (-4.0, -1.8, -1.65, -0.6)
+    state.set_crystal_bending(rhm=4.0)
+    assert state.rhm == -4.0
+    assert state.rvm == -1.8            # untouched arguments stay put
