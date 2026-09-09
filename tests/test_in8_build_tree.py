@@ -52,12 +52,23 @@ def plain_instrument():
     return _build()
 
 
+# Every Soller open (the default): each is withdrawn from the beam, so no
+# collimator component exists at all.
 _BEAM_ORDER = [
     "origin", "source", "mono_cradle", "monochromator", "sample_arm",
-    "sample_collimator", "sample_slit", "sample_gonio", "sample_chi_arm",
+    "sample_slit", "sample_gonio", "sample_chi_arm",
     "sample_cradle", "sample_mount", "analyzer_arm", "analyzer_filter",
-    "analyzer_collimator", "analyzer_cradle", "analyzer", "detector_arm",
-    "detector_collimator", "detector_slit", "detector",
+    "analyzer_cradle", "analyzer", "detector_arm",
+    "detector_slit", "detector",
+]
+
+# The same backbone with every Soller inserted.
+_BEAM_ORDER_COLLIMATED = [
+    "origin", "source", "mono_cradle", "monochromator",
+    "sample_arm", "sample_collimator", "sample_slit", "sample_gonio",
+    "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
+    "analyzer_filter", "analyzer_collimator", "analyzer_cradle", "analyzer",
+    "detector_arm", "detector_collimator", "detector_slit", "detector",
 ]
 
 
@@ -65,6 +76,12 @@ def test_backbone_beam_order(plain_instrument):
     """The structural components appear exactly once, in beam order."""
     names = _component_names(plain_instrument)
     assert [n for n in names if n in set(_BEAM_ORDER)] == _BEAM_ORDER
+
+
+def test_backbone_beam_order_with_every_soller_inserted():
+    names = _component_names(_build(alpha_2="30", alpha_3="40", alpha_4="60"))
+    assert ([n for n in names if n in set(_BEAM_ORDER_COLLIMATED)]
+            == _BEAM_ORDER_COLLIMATED)
 
 
 def test_declared_parameters_match_descriptor(plain_instrument):
@@ -111,18 +128,35 @@ def test_monitor_gating_is_per_monitor():
                         if m.component_name != "detector_PSD"}
 
 
-def test_collimators_track_selection():
-    open_build = _build()
-    by_name = {c.name: c for c in open_build.component_list}
-    assert by_name["sample_collimator"].divergence == 0.0
-    assert by_name["analyzer_collimator"].divergence == 0.0
-    assert by_name["detector_collimator"].divergence == 0.0
+_SOLLERS = ("sample_collimator", "analyzer_collimator", "detector_collimator")
 
+
+def test_open_sollers_leave_the_beam_entirely():
+    """Open is withdrawn, not divergence == 0.
+
+    A zero-divergence ``Collimator_linear`` still carries its two rectangular
+    apertures and absorbs rays, so asserting ``divergence == 0`` would lock the
+    parameter mapping while leaving a guessed aperture in an open beam.
+    """
+    names = set(_component_names(_build()))
+    assert not names & set(_SOLLERS)
+
+
+def test_collimators_track_selection():
     collimated = _build(alpha_2="30", alpha_3="40", alpha_4="60")
     by_name = {c.name: c for c in collimated.component_list}
     assert by_name["sample_collimator"].divergence == 30.0
     assert by_name["analyzer_collimator"].divergence == 40.0
     assert by_name["detector_collimator"].divergence == 60.0
+
+
+def test_each_soller_is_independent():
+    """Inserting one blade must not drag its neighbours into the beam."""
+    for inserted in _SOLLERS:
+        slot = {"sample_collimator": "alpha_2", "analyzer_collimator": "alpha_3",
+                "detector_collimator": "alpha_4"}[inserted]
+        names = set(_component_names(_build(**{slot: "30"})))
+        assert names & set(_SOLLERS) == {inserted}
 
 
 def test_mono_crystal_matches_descriptor_pg002(plain_instrument):
