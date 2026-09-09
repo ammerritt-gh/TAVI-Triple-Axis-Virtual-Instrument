@@ -114,37 +114,50 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
 
 
 @pytest.mark.parametrize("source_type", ["Maxwellian", "Mono"])
-def test_angle_mode_energies_follow_the_scanned_crystals(source_type):
-    """An A1 scan sweeps the incident energy; the record must sweep with it.
+def test_angle_mode_reads_both_crystals(source_type):
+    """In angle mode NEITHER energy is held at fixed_E.
 
-    ``deltaE`` in angle mode came from the launch-frozen GUI field, which does
-    not move while the scan drives A1, so every point recorded the same
-    transfer and the saved Ei/Ef disagreed with the monochromator.
+    The user drives A1 and A4 directly, so Ei comes from the monochromator and
+    Ef from the analyser, both of them, every point. Deriving only one from its
+    angle and leaving the other at fixed_E made an A4 scan record a constant Ef
+    while the analyser was visibly moving -- the same class of error as the
+    momentum-mode fix, one crystal further along.
     """
-    d_pg002 = 3.355
-    transfers = []
-    for mtt in (41.19, 50.0, 60.0):
-        meta = _angle_snapshot("Kf Fixed", source_type, mtt, -41.19,
+    d = 3.355
+    for mtt, att in ((41.19, -41.19), (50.0, -41.19), (41.19, -50.0),
+                     (55.0, -60.0)):
+        meta = _angle_snapshot("Kf Fixed", source_type, mtt, att,
                                deltaE_field=0.0).metadata
-        ki_from_angle = angle2k(abs(mtt) / 2, d_pg002)
-        assert meta["Ki"] == pytest.approx(ki_from_angle, rel=1e-9)
-        assert meta["Ei"] == pytest.approx(k2energy(ki_from_angle), rel=1e-9)
-        assert meta["Ef"] == _FIXED_E
+        ki = angle2k(abs(mtt) / 2, d)
+        kf = angle2k(abs(att) / 2, d)
+        assert meta["Ei"] == pytest.approx(k2energy(ki), rel=1e-9)
+        assert meta["Ef"] == pytest.approx(k2energy(kf), rel=1e-9)
+        assert meta["Ki"] == pytest.approx(ki, rel=1e-9)
+        assert meta["Kf"] == pytest.approx(kf, rel=1e-9)
         assert meta["deltaE"] == pytest.approx(meta["Ei"] - meta["Ef"], rel=1e-9)
+
+
+def test_angle_mode_an_analyser_scan_moves_ef():
+    """The specific case that was wrong: Kf-fixed, scanning A4."""
+    transfers, finals = [], []
+    for att in (-41.19, -50.0, -60.0):
+        meta = _angle_snapshot("Kf Fixed", "Maxwellian", 41.19, att,
+                               deltaE_field=0.0).metadata
         transfers.append(meta["deltaE"])
+        finals.append(meta["Ef"])
 
-    assert len(set(transfers)) == 3, "the recorded transfer must track A1"
+    assert len(set(finals)) == 3, "Ef must track the analyser angle"
+    assert len(set(transfers)) == 3
+    assert finals[0] != pytest.approx(_FIXED_E, rel=1e-6) or finals[1] != finals[0]
 
 
-def test_angle_mode_ki_fixed_reads_the_analyser():
-    """Ki-fixed inverts the analyser angle instead."""
-    d_pg002 = 3.355
-    meta = _angle_snapshot("Ki Fixed", "Maxwellian", 41.19, -50.0,
-                           deltaE_field=0.0).metadata
-    kf_from_angle = angle2k(50.0 / 2, d_pg002)
-    assert meta["Ei"] == _FIXED_E
-    assert meta["Kf"] == pytest.approx(kf_from_angle, rel=1e-9)
-    assert meta["deltaE"] == pytest.approx(meta["Ei"] - meta["Ef"], rel=1e-9)
+def test_angle_mode_a_monochromator_scan_moves_ei():
+    incidents = []
+    for mtt in (41.19, 50.0, 60.0):
+        meta = _angle_snapshot("Ki Fixed", "Maxwellian", mtt, -41.19,
+                               deltaE_field=0.0).metadata
+        incidents.append(meta["Ei"])
+    assert len(set(incidents)) == 3, "Ei must track the monochromator angle"
 
 
 def test_angle_mode_falls_back_when_the_angle_is_degenerate():

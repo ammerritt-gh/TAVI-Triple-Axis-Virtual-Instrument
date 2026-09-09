@@ -670,7 +670,9 @@ class TaviApiBackend:
 
         # 2. Validate scan commands unless force overrides.
         if not force:
-            msg = controller._validate_scan_commands_text(cmd1, cmd2)
+            msg = controller._validate_scan_commands_text(
+                cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
+            )
             if msg:
                 raise ApiError(400, "scan_validation", msg)
 
@@ -824,7 +826,9 @@ class TaviApiBackend:
             blockers.append(background_blocker)
         scan_msg = ""
         if not force:
-            scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
+            scan_msg = controller._validate_scan_commands_text(
+                cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
+            )
             if scan_msg:
                 blockers.append("scan_validation: %s" % scan_msg)
 
@@ -3578,9 +3582,14 @@ class TAVIController(QObject):
         # Clear all previous warnings
         self.window.simulation_dock.clear_all_scan_warnings()
         
-        # Validate each command individually
-        var1, warning1 = self._validate_single_scan_command(cmd1)
-        var2, warning2 = self._validate_single_scan_command(cmd2)
+        # Validate each command individually, against the crystals the dock
+        # currently shows -- this path exists to annotate those widgets.
+        dock = self.window.instrument_dock
+        fixed_axes = self._fixed_curvature_axes(
+            dock.selected_mono_id(), dock.selected_ana_id()
+        )
+        var1, warning1 = self._validate_single_scan_command(cmd1, fixed_axes)
+        var2, warning2 = self._validate_single_scan_command(cmd2, fixed_axes)
         
         if warning1:
             self.window.simulation_dock.set_scan_command_warning(1, warning1)
@@ -3593,25 +3602,23 @@ class TAVIController(QObject):
             if conflict:
                 self.window.simulation_dock.set_scan_conflict_warning(conflict)
     
-    def _fixed_curvature_axes(self):
-        """{axis: crystal display name} for the crystals selected right now.
+    def _fixed_curvature_axes(self, monocris, anacris):
+        """{axis: crystal display name} for the two named crystals.
 
         Fixed focusing is a property of the crystal assembly, not the
         instrument: IN12's conventional PG(002) analyser has a fixed vertical
         focus while the Heusler option on the same instrument has no
-        established focusing behaviour. So this resolves the current
-        monochromator and analyser selection rather than reading one flag off
-        the descriptor. An unknown or unset selection contributes nothing --
-        the gate never invents a restriction.
+        established focusing behaviour. So the answer depends on which crystals
+        are selected -- and the *caller* says which, because the GUI's live
+        selection and a frozen API request can name different ones. Reading the
+        dock here would have validated an API scan against whatever crystal the
+        operator happened to have on screen. An unknown or unset id contributes
+        nothing: the gate never invents a restriction.
         """
-        dock = getattr(self.window, "instrument_dock", None)
-        if dock is None:
-            return {}
-
         fixed = {}
         for selected_id, specs, label in (
-            (dock.selected_mono_id(), self.descriptor.mono_crystals, "monochromator"),
-            (dock.selected_ana_id(), self.descriptor.ana_crystals, "analyser"),
+            (monocris, self.descriptor.mono_crystals, "monochromator"),
+            (anacris, self.descriptor.ana_crystals, "analyser"),
         ):
             for spec in specs:
                 if spec.id == selected_id:
@@ -3620,9 +3627,17 @@ class TAVIController(QObject):
                     break
         return fixed
 
-    def _validate_single_scan_command(self, command: str) -> tuple:
+    def _validate_single_scan_command(self, command: str, fixed_axes=None) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
-        
+
+        ``fixed_axes`` is the {axis: crystal} mapping from
+        ``_fixed_curvature_axes`` for the crystals this scan will actually run
+        with; omitted means no curvature axis is refused.
+
+        A returned variable of ``None`` alongside a warning is a *hard*
+        rejection -- the command cannot run as written. Callers must treat it
+        as blocking; see ``_validate_scan_commands_text``.
+
         Returns:
             tuple: (normalized_variable_name or None, warning_message or None)
         """
@@ -3661,7 +3676,7 @@ class TAVIController(QObject):
         # reads scans[4:8] and would otherwise let the scan override the pin,
         # so a scan that looked accepted would either do nothing or quietly
         # defeat the fixed value.
-        fixed_by = self._fixed_curvature_axes()
+        fixed_by = fixed_axes or {}
         if var_lower in fixed_by:
             return (None, f"'{var_name}' is fixed on the {fixed_by[var_lower]} "
                           f"and cannot be scanned.")
@@ -5904,34 +5919,44 @@ class TAVIController(QObject):
         """
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        return self._validate_scan_commands_text(cmd1, cmd2)
+        dock = self.window.instrument_dock
+        return self._validate_scan_commands_text(
+            cmd1, cmd2, dock.selected_mono_id(), dock.selected_ana_id()
+        )
 
-    def _validate_scan_commands_text(self, cmd1: str, cmd2: str) -> str:
+    def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
+                                     monocris=None, anacris=None) -> str:
         """Pure scan-command validation over two command strings.
 
         Parameterized on strings only -- reads no widgets -- so both the GUI
-        Run button and the remote API can call it. Returns an empty string when
-        the commands are acceptable, or a newline-joined description of the
-        blocking issues (serious warnings / unknown variables / conflicts).
+        Run button and the remote API can call it. ``monocris``/``anacris`` name
+        the crystals the scan will run with, which decides whether a curvature
+        axis is refused; the API passes the frozen request's, not the GUI's.
+        Returns an empty string when the commands are acceptable, or a
+        newline-joined description of the blocking issues.
+
+        A command that came back with no variable is a hard rejection and
+        always blocks. Sniffing the message text for a warning marker used to
+        decide this, so every rejection whose wording lacked the marker --
+        an incomplete command, unparseable numbers, a refused fixed curvature
+        axis -- was reported to the operator and then launched anyway.
         """
         cmd1 = (cmd1 or "").strip()
         cmd2 = (cmd2 or "").strip()
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris)
 
         issues = []
+        variables = []
 
-        # Validate command 1
-        var1, warning1 = self._validate_single_scan_command(cmd1)
-        if warning1 and "⚠" in warning1:  # Only block on serious warnings
-            issues.append(f"Command 1: {warning1}")
-        elif warning1 and "Unknown" in warning1:
-            issues.append(f"Command 1: {warning1}")
+        for label, cmd in (("Command 1", cmd1), ("Command 2", cmd2)):
+            var, warning = self._validate_single_scan_command(cmd, fixed_axes)
+            variables.append(var)
+            # var is None alongside a warning -> the command cannot run as
+            # written, whatever the wording.
+            if warning and (var is None or "⚠" in warning):
+                issues.append(f"{label}: {warning}")
 
-        # Validate command 2
-        var2, warning2 = self._validate_single_scan_command(cmd2)
-        if warning2 and "⚠" in warning2:
-            issues.append(f"Command 2: {warning2}")
-        elif warning2 and "Unknown" in warning2:
-            issues.append(f"Command 2: {warning2}")
+        var1, var2 = variables
 
         # Check for conflicts between commands
         if var1 and var2:
