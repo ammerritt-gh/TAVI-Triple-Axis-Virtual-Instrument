@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from instruments.descriptor import ParameterSpec
 from instruments.in8.plugin import in8_descriptor  # noqa: F401  (re-export)
+from instruments.panda.plugin import panda_descriptor  # noqa: F401  (re-export)
 from instruments.puma.plugin import puma_descriptor  # noqa: F401  (re-export)
 
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
@@ -50,7 +51,7 @@ _CORE_PARAMS = (
 if __name__ == "__main__":
     from instruments.validation import validate_descriptor
 
-    for d in (puma_descriptor(), in8_descriptor()):
+    for d in (puma_descriptor(), in8_descriptor(), panda_descriptor()):
         g = d.geometry
         print(f"\n{d.display_name}  (id={d.id})")
         print(f"  arms L1/L2/L3/L4 = "
