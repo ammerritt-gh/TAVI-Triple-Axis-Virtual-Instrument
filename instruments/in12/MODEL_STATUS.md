@@ -83,7 +83,7 @@ inverse.
 | Model boundary | effective source AT the H144 exit; 115 m of guide not modeled | a real H144 model or an MCPL file at the exit. 2016 says the guide was calculated in McStas and the primary spectrometer in SIMRES plus in-house routines, so models existed — **none is public**. *needs IS* |
 | Spectrum | `Source_div_Maxwellian_v2` peaked at E0, dE = 2 meV | the true cold-source spectrum at the H144 exit for absolute flux. 2016 measured ~30 % more capture flux than the contemporary McStas cold-source description predicted. *needs IS* |
 | Guide geometry | not modeled, but the public record supports what would be modeled: ~115 m from the vertical cold source, last ~80 m at R = −2000 m in 45 × 105 mm with an m = 2.4 outer wall, final 8 m widening 105 → 140 mm vertically and focusing 45 → 20 mm horizontally at up to m = 3.2 | the upstream 6 m at R = 2700 m and ~21 m at R = 4000 m belong to the **common H14 system** before the four branches split, not to H144 specifically |
-| Velocity selector | **absent** | >36 m upstream, outside the model boundary. With a narrow band around E0 there are no higher orders to suppress, so modelling it would only attenuate. Only Astrium, >36 m, in/out, and the 2.23–6.3 Å design range are confirmed; the rotor blade count, helix angle, Δλ/λ, transmission, speed range and rpm↔λ calibration are **all unconfirmed for the IN12 unit** and must not be copied from other Astrium selectors |
+| Velocity selector | **absent** | >36 m upstream, outside the model boundary. Its higher-order suppression is replaced by pinning both crystals to `order=1` (see *Higher orders* below), not inherited from a narrow band this model does not have. Only Astrium, >36 m, in/out, and the 2.23–6.3 Å design range are confirmed; the rotor blade count, helix angle, Δλ/λ, transmission, speed range and rpm↔λ calibration are **all unconfirmed for the IN12 unit** and must not be copied from other Astrium selectors |
 | Polarising cavity, guide fields, flippers | **absent** | ~35 m upstream, and TAVI models no polarisation |
 
 ### Monochromator
@@ -114,6 +114,21 @@ inverse.
 |---|---|---|
 | L3 sample→analyser | **1.30 m**, the nominal value of a genuinely **variable** arm | ILL calls it "a variable sample-to-analyser distance of about 1.3 m"; Takin's preset uses **1.46 m**. Read 1.30 m as one setting, not as the arm length. The travel limits are unpublished — with them, L3 could become a descriptor-level choice. *needs IS* |
 
+### Higher orders
+
+The default source is the **broadband Maxwellian** branch, where `dE` sets
+normalization rather than a sampling cutoff, so this model does **not** inherit
+the real instrument's narrow incident band. `Monochromator_curved` at its
+default `order=0` reflects at every multiple of the supplied reciprocal-lattice
+vector, so a λ/2 component at four times the nominal energy would reach the
+sample with nothing in the tree to stop it.
+
+Both crystals are therefore pinned to **`order=1`**: this is an *idealized,
+order-clean* cold TAS. The alternative — an effective filtered spectrum plus
+the real secondary filtering (the Be filter, and a selector transmission
+function) — is a different model, not a refinement of this one. No
+contamination fraction has been measured here.
+
 ### Collimation, slits, filters
 
 | Item | Current | Needed |
@@ -122,7 +137,7 @@ inverse.
 | α2/α3/α4 Sollers | PLACEHOLDER positions, lengths and apertures | " |
 | Pre-sample slit `sbl` | 30 × 60 mm at L2 − 0.25 | real diaphragm positions and openings. *needs IS* |
 | Detector slit `dbl` | 50 mm wide at L4 − 0.03 | " |
-| Cooled Be filter | **absent** | still in use post-upgrade, but there is no single position: published experiments put it in the **incident** beam (with the selector out) and **between sample and analyser**. With a narrow-band source it has no higher orders to remove, so it would only attenuate. McCode's `Be.trm` — header: "Be transmission, as measured on IN12. T=80 K", B. Fåk — is available the day a broadband source model lands |
+| Cooled Be filter | **absent** | still in use post-upgrade, but there is no single position: published experiments put it in the **incident** beam (with the selector out) and **between sample and analyser**. It has no higher orders to remove here because `order=1` already excludes them (see *Higher orders* below). McCode's `Be.trm` — header: "Be transmission, as measured on IN12. T=80 K", B. Fåk — is what an order-transporting model would need |
 
 ### Detector
 
