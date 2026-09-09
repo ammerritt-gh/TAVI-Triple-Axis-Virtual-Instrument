@@ -72,6 +72,19 @@ def _check_ids(errors, items, list_name, *, slug):
     _check_unique(errors, items, list_name)
 
 
+# Scan-variable vocabulary, mirrored from
+# gui/docks/unified_simulation_dock.py::VALID_SCAN_VARIABLES. Duplicated rather
+# than imported because this module is Qt-free and the GUI module is not;
+# test_descriptor_validation.py asserts the two stay in step.
+_SCAN_VARIABLES = frozenset({
+    "qx", "qy", "qz", "deltae", "h", "k", "l",
+    "a1", "a2", "a3", "a4", "2theta",
+    "omega", "chi", "kappa", "psi",
+    "rhm", "rvm", "rha", "rva",
+    "vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap",
+})
+
+
 def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> list[str]:
     """Return a list of problems (empty = valid).
 
@@ -167,6 +180,20 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
             errors.append(
                 f"axis_limits[{axis!r}]: expected lower <= default <= upper, "
                 f"got {lim.lower} / {lim.default} / {lim.upper}"
+            )
+
+    # --- S10b: fixed parameters ---------------------------------------------------
+    # A typo here fails open -- the scan is allowed and the pin is bypassed --
+    # so the names are checked against the scan-variable vocabulary.
+    for name in d.fixed_parameters:
+        if name != name.lower():
+            errors.append(
+                f"fixed_parameters: {name!r} must be the lowercase scan-command "
+                f"spelling"
+            )
+        elif name not in _SCAN_VARIABLES:
+            errors.append(
+                f"fixed_parameters: {name!r} is not a scan variable"
             )
 
     # --- S11: senses -------------------------------------------------------------------
