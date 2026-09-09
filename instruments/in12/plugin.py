@@ -254,6 +254,12 @@ def in12_descriptor() -> InstrumentDescriptor:
                 n_columns=11, n_rows=_ANA_N_ROWS,
                 gap=_ANA_GAP, mosaic=30, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                # The fixed vertical focus above is a property of THIS
+                # assembly, so rva is refused as a scan variable rather
+                # than silently defeating the pin scan_config applies.
+                # The Heusler option below has no established focusing
+                # behaviour and therefore claims nothing.
+                fixed_curvature=("rva",),
             ),
             # Polarisation-analysis analyser: Heusler(111), d = 3.44 A, ILL
             # face 75 x 145 mm. TAVI models no polarisation, so this changes
