@@ -160,35 +160,36 @@ def test_monitor_component_names_unique_and_set():
 # tests/test_puma_build_tree.py.
 
 
-def test_scan_variable_vocabulary_matches_the_gui():
-    """`validation._SCAN_VARIABLES` is a Qt-free mirror; it must not drift.
+def test_fixed_curvature_must_name_an_axis_that_side_has():
+    """A typo fails open -- the scan is allowed and the pin bypassed.
 
-    If the GUI gains a scan variable and this copy does not, a descriptor
-    naming it in ``fixed_parameters`` is rejected as unknown; if the GUI drops
-    one, a typo here starts passing validation.
+    A monochromator can only fix rhm/rvm and an analyser only rha/rva, so
+    "rva" on a mono is a typo and must not pass silently.
     """
-    pytest.importorskip("PySide6")
-    from gui.docks.unified_simulation_dock import VALID_SCAN_VARIABLES
-    from instruments.validation import _SCAN_VARIABLES
-
-    assert set(_SCAN_VARIABLES) == set(VALID_SCAN_VARIABLES)
-
-
-def test_fixed_parameters_must_name_real_scan_variables():
-    """A typo fails open -- the scan is allowed and the pin bypassed."""
     base = in8_descriptor()
 
-    good = dataclasses.replace(base, fixed_parameters=("rva",))
-    assert [e for e in validate_descriptor(good) if "fixed_parameters" in e] == []
+    good = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(c, fixed_curvature=("rva",))
+            for c in base.ana_crystals))
+    assert [e for e in validate_descriptor(good) if "fixed_curvature" in e] == []
 
-    typo = dataclasses.replace(base, fixed_parameters=("rva_param",))
-    assert any("is not a scan variable" in e for e in validate_descriptor(typo))
+    wrong_side = dataclasses.replace(
+        base, mono_crystals=tuple(
+            dataclasses.replace(c, fixed_curvature=("rva",))
+            for c in base.mono_crystals))
+    errs = [e for e in validate_descriptor(wrong_side) if "fixed_curvature" in e]
+    assert errs and "is not one of" in errs[0]
 
-    upper = dataclasses.replace(base, fixed_parameters=("RVA",))
-    assert any("lowercase" in e for e in validate_descriptor(upper))
+    typo = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(c, fixed_curvature=("rva_param",))
+            for c in base.ana_crystals))
+    assert any("fixed_curvature" in e for e in validate_descriptor(typo))
 
 
-def test_fixed_parameters_defaults_to_empty():
+def test_fixed_curvature_defaults_to_empty():
     """The generic instruments pin nothing, so nothing is refused for them."""
-    assert in8_descriptor().fixed_parameters == ()
-    assert puma_descriptor().fixed_parameters == ()
+    for d in (in8_descriptor(), puma_descriptor()):
+        for spec in d.mono_crystals + d.ana_crystals:
+            assert spec.fixed_curvature == ()
