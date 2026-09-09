@@ -60,8 +60,10 @@ class IN8_Instrument(TAS_Instrument):
         # for PG/Cu). Height is a PLACEHOLDER.
         self.hvs_width = 0.030
         self.hvs_height = 0.120
-        # Single-value collimation slots (arcmin; 0 = open). No alpha_1: IN8's
-        # primary collimation sits between mono and sample.
+        # Single-value collimation slots (arcmin; 0 = open -> the Soller is
+        # withdrawn and no component is emitted). ILL documents collimators
+        # both before and after the monochromator, so alpha_1 is a real slot.
+        self.alpha_1 = 0
         self.alpha_2 = 0
         self.alpha_3 = 0
         self.alpha_4 = 0
@@ -214,6 +216,14 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
         source.divergence_distribution = 0
 
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
+
+        # Primary Soller between the virtual source and the monochromator
+        # (ILL documents collimation before as well as after the mono).
+        # PLACEHOLDER position/length/aperture; the clear aperture is set to
+        # the HVS envelope. Open (0) emits nothing at all.
+        emit_collimator(instrument, "mono_collimator", relative="origin",
+                        at=(0, 0, IN8.L1 / 2), divergence=IN8.alpha_1, length=0.2,
+                        xwidth=IN8.hvs_width, yheight=IN8.hvs_height)
 
         ## monochromator section
 
