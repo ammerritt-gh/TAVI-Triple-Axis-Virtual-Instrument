@@ -349,3 +349,23 @@ def test_set_crystal_bending_is_idempotent_on_already_signed_values():
     state.set_crystal_bending(rhm=4.0)
     assert state.rhm == -4.0
     assert state.rvm == -1.8            # untouched arguments stay put
+
+
+def test_the_fixed_analyser_curvature_is_not_scannable():
+    """The fixed vertical focus is declared on the crystal, not the instrument.
+
+    scan_config pins rva, but compute_scan_snapshot reads the radii out of
+    scans[4:8], so an accepted scan would either do nothing or quietly defeat
+    the pin. Fixed focusing is a property of the analyser assembly, confirmed
+    here by two peer-reviewed papers about this analyser; it would not
+    transfer to a different one.
+    """
+    d = panda_descriptor()
+    ana = {c.id: c for c in d.ana_crystals}
+    assert ana["pg002"].fixed_curvature == ("rva",)
+
+    # The radii this instrument really does drive stay scannable.
+    for spec in d.mono_crystals:
+        assert spec.fixed_curvature == ()
+    for spec in d.ana_crystals:
+        assert "rha" not in spec.fixed_curvature
