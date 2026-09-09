@@ -81,7 +81,9 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
 - `test_sign_conventions.py` — golden sign-convention tests: PUMA's baked
   angle branch frozen (elastic/inelastic/skew-Q/out-of-plane/Kf-fixed +
   reverse recovery), sense-threading equivalence and flip tests, and the
-  vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02).
+  vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02),
+  plus the PANDA cases (senses −1/+1/−1 — the first negative monochromator
+  branch; generated 2026-09-09, not yet control-system verified).
 - `test_in8_plugin.py` — IN8 plugin conformance: runnable descriptor,
   scan-config mapping (single-select collimation, branch-signed bending),
   crystal lookup incl. the Cu200 `"NULL"` reflectivity sentinel, fingerprint
@@ -91,6 +93,18 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   gating/settings, collimator selection, crystal properties per descriptor,
   detector contract, Mono/Maxwellian source wiring, shared-library sample
   emission, no PUMA-only components.
+- `test_panda_plugin.py` — PANDA plugin conformance: runnable descriptor,
+  the negative-monochromator senses (−1/+1/−1), the four-slot collimation
+  (PANDA is the first instrument with an `alpha_1`), the 55-crystal analyzer,
+  the Cu111 `"NULL"` sentinel, all-negative branch-signed bending, the split
+  monochromator object distance, published axis limits, fingerprint
+  sensitivity, snapshot params == `_PANDA_PARAMS`.
+- `test_panda_build_tree.py` — object-level PANDA build-tree tests
+  (construction only, no compile): backbone beam order, parameter set, monitor
+  gating/settings, all four collimators tracking selection, the scannable
+  virtual-source/`ss1`/`ss2` apertures, crystal properties per descriptor, the
+  1″ ³He detector contract, source wiring at the guide exit, shared-library
+  sample emission, no PUMA/IN8-only components.
 - `test_descriptor_validation.py` / `test_instrument_registry.py` updated:
   IN8 is runnable-valid (rejection paths keep synthetic broken descriptors);
-  the lazy-import test lists in8 and bans `instruments.in8.model`.
+  the lazy-import test lists in8 and panda and bans their `model` modules.

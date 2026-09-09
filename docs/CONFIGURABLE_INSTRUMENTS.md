@@ -25,7 +25,7 @@ convention for the flipped sample sense is vTAS-verified too (Friedel/-Q
 branch; §20.5).
 **Unified packages IMPLEMENTED (2026-07-18):** runnable PUMA and IN8 code,
 plain-language documentation, evidence status, scientist review, and immutable
-references now live together under `instruments/<id>/`. PANDA and IN12 are
+references now live together under `instruments/<id>/`. IN12 is
 research-only packages. Shared TAS state/snapshot/execution moved to
 `instruments/tas_runtime.py`, and `python -m instruments.package_validation`
 enforces the package contract. Sections below retain historical implementation
