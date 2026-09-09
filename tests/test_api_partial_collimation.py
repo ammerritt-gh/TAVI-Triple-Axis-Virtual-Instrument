@@ -155,3 +155,31 @@ def test_nothing_is_refused_when_no_crystal_pins_anything(in8_controller):
         assert spec.fixed_curvature == ()
     assert in8_controller._validate_scan_commands_text(
         "rva 0.3 0.6 0.05", "", "pg002", "pg002") == ""
+
+
+def test_a_hard_rejection_is_not_offered_as_a_choice(in8_controller, monkeypatch):
+    """The GUI Run path used to show every issue with "continue anyway".
+
+    Answering Yes then launched a scan over a refused axis and overwrote the
+    fixed radius it pins, which is the hole the refusal exists to close. Hard
+    and soft issues are separated so the Run path can refuse one and ask about
+    the other.
+    """
+    ctrl = in8_controller
+    d = _pin_rva(ctrl, monkeypatch)
+    ana = d.ana_crystals[0].id
+
+    hard, soft = ctrl._scan_command_issues("rva 0.3 0.6 0.05", "", "pg002", ana)
+    assert hard and "cannot be scanned" in hard[0]
+    assert soft == [], "a refused axis is not the operator's judgement call"
+
+    # A very long scan is the operator's call, and stays overridable.
+    hard, soft = ctrl._scan_command_issues("rha 1.0 2.0 0.0001", "", "pg002", ana)
+    assert hard == []
+    assert soft and "⚠" in soft[0]
+
+
+def test_malformed_commands_are_hard(in8_controller):
+    for cmd in ("rhm 1.0 2.0", "rhm 1.0 2.0 0.1 0.2", "rhm a b c", "nope 1 2 3"):
+        hard, _ = in8_controller._scan_command_issues(cmd, "")
+        assert hard, cmd
