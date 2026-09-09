@@ -3621,6 +3621,15 @@ class TAVIController(QObject):
             else:
                 return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, chi, etc.")
         
+        # A parameter this instrument holds fixed is not scannable. Refusing is
+        # the point: scan_config pins it, but compute_scan_snapshot reads
+        # scans[4:8] and would otherwise let the scan override the pin, so a
+        # scan that looked accepted would either do nothing or quietly defeat
+        # the fixed value.
+        if var_lower in self.descriptor.fixed_parameters:
+            return (None, f"'{var_name}' is fixed on "
+                          f"{self.descriptor.display_name} and cannot be scanned.")
+
         # Validate numeric parts
         try:
             start = float(parts[1])

@@ -152,3 +152,37 @@ def test_monitor_component_names_unique_and_set():
 # build() now mounts the sample straight from the shared library
 # (tavi/sample_library.py); tree-level sample guarantees live in
 # tests/test_puma_build_tree.py.
+
+
+def test_scan_variable_vocabulary_matches_the_gui():
+    """`validation._SCAN_VARIABLES` is a Qt-free mirror; it must not drift.
+
+    If the GUI gains a scan variable and this copy does not, a descriptor
+    naming it in ``fixed_parameters`` is rejected as unknown; if the GUI drops
+    one, a typo here starts passing validation.
+    """
+    pytest.importorskip("PySide6")
+    from gui.docks.unified_simulation_dock import VALID_SCAN_VARIABLES
+    from instruments.validation import _SCAN_VARIABLES
+
+    assert set(_SCAN_VARIABLES) == set(VALID_SCAN_VARIABLES)
+
+
+def test_fixed_parameters_must_name_real_scan_variables():
+    """A typo fails open -- the scan is allowed and the pin bypassed."""
+    base = in8_descriptor()
+
+    good = dataclasses.replace(base, fixed_parameters=("rva",))
+    assert [e for e in validate_descriptor(good) if "fixed_parameters" in e] == []
+
+    typo = dataclasses.replace(base, fixed_parameters=("rva_param",))
+    assert any("is not a scan variable" in e for e in validate_descriptor(typo))
+
+    upper = dataclasses.replace(base, fixed_parameters=("RVA",))
+    assert any("lowercase" in e for e in validate_descriptor(upper))
+
+
+def test_fixed_parameters_defaults_to_empty():
+    """The generic instruments pin nothing, so nothing is refused for them."""
+    assert in8_descriptor().fixed_parameters == ()
+    assert puma_descriptor().fixed_parameters == ()
