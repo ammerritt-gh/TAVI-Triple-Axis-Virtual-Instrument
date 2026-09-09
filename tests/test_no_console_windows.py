@@ -23,17 +23,30 @@ def test_the_guard_is_installed():
     )
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-only constants")
 def test_the_guard_adds_the_flag_and_keeps_any_others():
     """Pins the transformation, since the absence of a window on the operator's
     screen is not observable from inside the harness -- the evidence for the
     flag being the right one is the 121 orphaned conhost.exe processes an
     afternoon of unguarded runs left behind (2026-09-09)."""
-    from conftest import CREATE_NO_WINDOW, apply_no_window
+    from conftest import CREATE_NO_WINDOW, _CREATIONFLAGS_POS, apply_no_window
 
-    assert apply_no_window({})["creationflags"] & CREATE_NO_WINDOW
-    both = apply_no_window({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP})
-    assert both["creationflags"] & CREATE_NO_WINDOW
-    assert both["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+    _, kwargs = apply_no_window((), {})
+    assert kwargs["creationflags"] & CREATE_NO_WINDOW
+
+    group = subprocess.CREATE_NEW_PROCESS_GROUP
+    _, kwargs = apply_no_window((), {"creationflags": group})
+    assert kwargs["creationflags"] & CREATE_NO_WINDOW
+    assert kwargs["creationflags"] & group
+
+    # Passed positionally, it must be merged in place rather than duplicated
+    # as a keyword -- that would raise before the child ever starts.
+    positional = [None] * (_CREATIONFLAGS_POS + 1)
+    positional[_CREATIONFLAGS_POS] = group
+    args, kwargs = apply_no_window(tuple(positional), {})
+    assert "creationflags" not in kwargs
+    assert args[_CREATIONFLAGS_POS] & CREATE_NO_WINDOW
+    assert args[_CREATIONFLAGS_POS] & group
 
 
 def test_mcstas_env_var_is_set_so_mcstasscript_skips_its_shell_probe():
