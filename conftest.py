@@ -28,6 +28,7 @@ Two guards, because either alone leaves a hole:
 ``CREATE_NO_WINDOW`` suppresses the console without detaching the process, so
 stdout/stderr capture, exit codes and timeouts all behave exactly as before.
 """
+import inspect
 import os
 import subprocess
 import sys
@@ -55,10 +56,36 @@ def _resolve_mcstas_resources():
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
-def apply_no_window(kwargs):
-    """Add CREATE_NO_WINDOW to a Popen kwargs dict, preserving other flags."""
+def _creationflags_position():
+    """Where `creationflags` sits in Popen.__init__'s positional parameters.
+
+    Read from the signature rather than hardcoded: it has moved between Python
+    versions, and a wrong index would silently OR the flag into somebody else's
+    argument. A caller passing it positionally must have its value merged in
+    place -- adding the keyword as well raises "multiple values for argument
+    'creationflags'" before the child ever starts.
+    """
+    try:
+        names = list(inspect.signature(subprocess.Popen.__init__).parameters)
+        return names.index("creationflags") - 1   # discount self
+    except (ValueError, TypeError):      # pragma: no cover - not on this Python
+        return None
+
+
+_CREATIONFLAGS_POS = _creationflags_position()
+
+
+def apply_no_window(args, kwargs):
+    """Add CREATE_NO_WINDOW to a Popen call, wherever the flags were passed.
+
+    Returns the (args, kwargs) to forward, preserving any flags already set.
+    """
+    if _CREATIONFLAGS_POS is not None and len(args) > _CREATIONFLAGS_POS:
+        args = list(args)
+        args[_CREATIONFLAGS_POS] = (args[_CREATIONFLAGS_POS] or 0) | CREATE_NO_WINDOW
+        return tuple(args), kwargs
     kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_NO_WINDOW
-    return kwargs
+    return args, kwargs
 
 
 def install_no_window_guard():
@@ -77,7 +104,8 @@ def install_no_window_guard():
         return True
 
     def windowless_init(self, *args, **kwargs):
-        return original_init(self, *args, **apply_no_window(kwargs))
+        args, kwargs = apply_no_window(args, kwargs)
+        return original_init(self, *args, **kwargs)
 
     windowless_init._tavi_no_window = True
     subprocess.Popen.__init__ = windowless_init
