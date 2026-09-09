@@ -15,17 +15,25 @@ one vertical 3He tube. Sources, recorded per field below:
 - "2001": a historical IN12 raw scan header (dossier §14) -- secondary senses,
   practical mosaics, vertical Soller divergences.
 
-Two things are NOT verified and are the model's real risk:
+- "1998": W. Schmidt and B. Fak, "New focusing analyser on IN12", ILL Annual
+  Report 1998 -- the conventional analyser's construction (eleven vertical
+  lamellae, fixed vertical focus by tilting the top and bottom rows).
+- "Takin": the public ILL Takin resolution preset
+  ``data/instruments/in12_pg002_pg002.taz`` (github.com/ILLGrenoble/takin) --
+  the only post-upgrade IN12 parameter set in public circulation.
 
-- **Senses are provisional (-1, +1, -1).** The monochromator's -1 branch is
-  strongly established (ILL publishes the mono two-theta range as -140°..-10°,
-  re-confirmed 2026-09-09). Sample +1 and analyser -1 come from a 2001 scan
-  header and the fact that the 2012 upgrade retained the secondary spectrometer;
-  they predate the upgrade and no modern readback has been obtained. IN8's
-  senses were only settled by a live vTAS run -- IN12 wants the same treatment.
-- **Slab geometry is derived, not published.** No source gives individual PG
-  crystal sizes or gaps for either assembly; the values here divide the
-  published overall face by the blade count with a nominal 1.5 mm gap.
+**Senses (-1, +1, -1) are confirmed** (literature round 2026-09-09). Three
+independent lines agree: ILL publishes the mono two-theta travel as
+-140°..-10°, entirely negative; the Takin preset stores mono/sample/analyser
+senses as 0/1/0, i.e. sample opposite the other two (the "W" configuration ILL
+names for IN12); and H. Trepka's 2022 Stuttgart dissertation reports a
+post-upgrade IN12 configuration explicitly as SM=-1, SS=+1, SA=-1. IN12 is the
+first TAVI instrument with sense_mono = -1.
+
+**Slab geometry is still the weak point.** The analyser's 11 mm lamella width
+is published (1998); everything else -- the monochromator's 121 crystal
+dimensions, and every inter-crystal gap -- is not, and is derived from the
+published overall faces.
 
 Placeholder values that need instrument-scientist input are marked
 "PLACEHOLDER" (they affect intensity/resolution, never angles).
@@ -66,9 +74,13 @@ IN12_MCSTAS_NAME = "IN12_McScript"
 # Arm lengths (m). L1 = H144 guide exit -> monochromator (ILL: 1.8 m); the
 # guide exit IS the virtual source, so the ~115 m of H144 upstream of it is
 # outside the model boundary. L2 = 1.8 m matches L1 by design (2016: the
-# Rowland condition for the double-focusing mono). L3 ~ 1.3 m and L4 = 0.72 m
-# are the ILL-current secondary values. L3 is described as variable but no
-# source gives its limits, so it is fixed here (see MODEL_STATUS.md).
+# Rowland condition for the double-focusing mono -- the paper states both
+# distances outright). L4 = 0.72 m is the ILL-current value.
+#
+# L3 is genuinely VARIABLE: ILL calls it "a variable sample-to-analyser
+# distance of about 1.3 m", and the public Takin preset uses 1.46 m. No source
+# gives its travel limits, so the nominal 1.30 m is modeled -- read it as one
+# setting of an adjustable arm, not as the arm length (MODEL_STATUS.md).
 _L1, _L2, _L3, _L4 = 1.80, 1.80, 1.30, 0.72
 
 # Overall monochromator face, 2016: 20 cm wide x 16 cm high (an ILL table
@@ -77,10 +89,33 @@ _L1, _L2, _L3, _L4 = 1.80, 1.80, 1.30, 0.72
 _MONO_FACE_W, _MONO_FACE_H = 0.200, 0.160
 # Conventional PG analyser face, ILL: 12.2 x 11.8 cm.
 _ANA_FACE_W, _ANA_FACE_H = 0.122, 0.118
-# PLACEHOLDER slab gap; no source publishes it. Slab sizes below are the
-# published face divided by the blade count with this gap removed -- they are
-# pitch minus gap, NOT measured crystal dimensions.
+# PLACEHOLDER slab gap for the monochromator; no source publishes it. The mono
+# slab sizes below are the published face divided by the blade count with this
+# gap removed -- they are pitch minus gap, NOT measured crystal dimensions.
 _SLAB_GAP = 0.0015
+
+# The analyser is different: 1998 publishes an 11 mm lamella width, and eleven
+# of those span 121 of the 122 mm active face, so its crystals are effectively
+# butted and the leftover 1 mm is what the gap can be. Driving the geometry
+# from the published width leaves the gap as the derived quantity, which is
+# the right way round.
+_ANA_LAMELLA_W = 0.011
+_ANA_GAP = (_ANA_FACE_W - 11 * _ANA_LAMELLA_W) / 10      # = 0.1 mm
+
+# 1998: fixed vertical focusing comes from tilting the TOP and BOTTOM crystal
+# rows, which needs at least three rows; three is the natural reading and the
+# only row count consistent with "top and bottom rows" plus a middle. The
+# individual row height is not published.
+_ANA_N_ROWS = 3
+
+# Fixed analyser vertical curvature radius (m). 1998 says the vertical focus is
+# fixed; it does not give the radius. 1.40 m is the value the public Takin
+# preset stores (pop_ana_curvv = 140 cm, pop_ana_use_curvv = 1), which is the
+# only post-upgrade number in circulation -- a preset, not a mechanical
+# drawing. It is deliberately NOT the point-source Rowland radius for L3/L4
+# (~0.43 m at this take-off), which is what a *fixed* focus looks like: right
+# at one setting only.
+ANA_FIXED_RV = 1.40
 
 
 def _slab_size(face, count, gap=_SLAB_GAP):
@@ -178,10 +213,10 @@ def in12_descriptor() -> InstrumentDescriptor:
             l2_mono_sample=_L2,
             l3_sample_ana=_L3,
             l4_ana_det=_L4,
-            # PROVISIONAL (-1, +1, -1) -- see the module docstring. The mono
-            # sits on the clockwise/negative branch: ILL publishes its
-            # two-theta range as -140°..-10°, which no other TAVI instrument
-            # does, so IN12 is the first exerciser of sense_mono = -1.
+            # (-1, +1, -1), confirmed on three independent sources -- see the
+            # module docstring. This is the "W" configuration: mono and
+            # analyser on the clockwise branch, sample counter-clockwise. IN12
+            # is the first TAVI instrument with sense_mono = -1.
             sense_mono=Sense.RIGHT,
             sense_sample=Sense.LEFT,
             sense_ana=Sense.RIGHT,
@@ -203,27 +238,34 @@ def in12_descriptor() -> InstrumentDescriptor:
         ),
         ana_crystals=(
             # Conventional analyser: PG(002), ILL face 122 x 118 mm. The 2012
-            # upgrade retained the secondary spectrometer, so the historical
-            # official McStas wrapper's 11 horizontal blades x 1 vertical row
-            # (WA 0.121 / HA 0.118, near-identical to today's published face)
-            # is carried forward. Mosaic 30 arcmin is the 2001 scan header's
-            # ETAA -- PLACEHOLDER for a post-upgrade measurement.
+            # upgrade rebuilt the PRIMARY spectrometer and kept the secondary,
+            # so the governing description is still 1998 (Schmidt and Fak, ILL
+            # Annual Report): eleven vertical lamellae 11 mm wide, motorised
+            # variable HORIZONTAL focusing, and a FIXED vertical focus produced
+            # by tilting the top and bottom crystal rows -- hence 11 x 3, not
+            # the 11 x 1 the historical ILL_H142_IN12 McStas wrapper used.
+            # Mosaic 30 arcmin is 1998's ~0.5 deg; the 2001 scan header's ETAA
+            # says 35' and the Takin preset uses an effective 33', so treat 30
+            # as nominal rather than measured post-upgrade.
             CrystalSpec(
                 id="pg002", display_name="PG[002]", d_spacing=3.355,
-                slab_width=_slab_size(_ANA_FACE_W, 11),
-                slab_height=_ANA_FACE_H,      # one vertical row: no vertical gap
-                n_columns=11, n_rows=1,
-                gap=_SLAB_GAP, mosaic=30, r0=1.0,
+                slab_width=_ANA_LAMELLA_W,
+                slab_height=_slab_size(_ANA_FACE_H, _ANA_N_ROWS, _ANA_GAP),
+                n_columns=11, n_rows=_ANA_N_ROWS,
+                gap=_ANA_GAP, mosaic=30, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
             ),
             # Polarisation-analysis analyser: Heusler(111), d = 3.44 A, ILL
             # face 75 x 145 mm. TAVI models no polarisation, so this changes
             # the kinematics (d-spacing -> A4) and nothing else. Blade count,
             # mosaic and reflectivity are all PLACEHOLDER: no source gives
-            # them, and the 2016 paper and the ILL page even disagree on
-            # whether it focuses vertically or horizontally (MODEL_STATUS.md).
-            # No stock McStas reflectivity data for Heusler -> constant r0 via
-            # the "NULL" sentinel, at the ~0.3 typical of a Heusler face.
+            # them. Its focusing axis is CONFIGURATION-DEPENDENT, not a source
+            # conflict -- published IN12 experiments describe a horizontally
+            # focusing Heusler (2014, 2025) and a vertically focusing one
+            # (2024). The subdivision here is a horizontal-focus reading; see
+            # MODEL_STATUS.md. No stock McStas reflectivity data for Heusler ->
+            # constant r0 via the "NULL" sentinel, at the ~0.3 typical of a
+            # Heusler face.
             CrystalSpec(
                 id="heusler111", display_name="Heusler[111]", d_spacing=3.44,
                 slab_width=_slab_size(0.075, 5),
@@ -331,10 +373,10 @@ class IN12Plugin:
         scan_config.rhm = -abs(vals['rhm'])
         scan_config.rvm = -abs(vals['rvm'])
         scan_config.rha = -abs(vals['rha'])
-        # The conventional analyser is a single vertical row of blades, so it
-        # has no vertical focusing to drive -- ILL lists its vertical curvature
-        # as fixed. Flat.
-        scan_config.rva = 0.0
+        # The analyser's vertical focus is FIXED hardware (1998: the top and
+        # bottom crystal rows are permanently tilted), so it is not a GUI knob
+        # -- it takes the fixed radius, on the same negative branch.
+        scan_config.rva = -ANA_FIXED_RV
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])

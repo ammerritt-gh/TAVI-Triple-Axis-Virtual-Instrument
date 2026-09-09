@@ -16,15 +16,18 @@ angle) and nothing else.
 Not modeled, deliberately: the ~115 m of H144 above the guide exit, and with it
 the velocity selector and the transmission polarising cavity that sit 35–36 m
 upstream; the optional cooled beryllium filter; and IN12-UFO, the fifteen-channel
-multi-analyser option that ILL still describes in the future tense. The reasons
-are in [MODEL_STATUS.md](MODEL_STATUS.md), which also lists what the model
-guesses and what it knows.
+multi-analyser option, which reached neutron commissioning but has no published
+routine science use. The reasons are in [MODEL_STATUS.md](MODEL_STATUS.md),
+which also lists what the model guesses and what it knows.
 
-**The scattering senses are provisional.** Only the monochromator's negative
-branch is well evidenced; sample and analyser senses come from a 2001 scan
-header. One modern raw scan header would settle them — see
-[SCIENTIST_REVIEW.md](SCIENTIST_REVIEW.md), which is the only file an
-instrument scientist needs to open.
+The scattering senses are **(−1, +1, −1)** — the "W" configuration, with the
+monochromator and analyser on the clockwise branch and the sample
+counter-clockwise. This was confirmed from three independent sources, so IN12's
+angles are trustworthy. What the model still guesses at is intensity and
+resolution: the incident spectrum above all, then the individual crystal
+dimensions, which nobody publishes. Those questions are in
+[SCIENTIST_REVIEW.md](SCIENTIST_REVIEW.md), the only file an instrument
+scientist needs to open.
 
 The runnable implementation is [plugin.py](plugin.py) plus [model.py](model.py).
 Its component and data dependencies remain in the repository-level `components/`
