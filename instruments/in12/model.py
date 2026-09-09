@@ -5,7 +5,7 @@ the per-point snapshot pipeline, and the run layer are all shared with
 ``instruments/tas_runtime.py``. What lives here is only what is genuinely
 IN12's:
 
-- ``IN12_Instrument``: geometry, the provisional scattering senses (-1, +1, -1),
+- ``IN12_Instrument``: geometry, the confirmed scattering senses (-1, +1, -1),
   Rowland-matched point-source focusing with the published mechanical radius
   clamps, and the per-point parameter dict.
 - ``build_IN12_instrument``: the component tree, emitted through the shared
@@ -27,6 +27,7 @@ import math
 
 import mcstasscript as ms
 
+from instruments.in12.plugin import ANA_FIXED_RV
 from instruments.paths import COMPONENTS_DIR
 from instruments.tas_runtime import (
     TAS_Instrument,
@@ -55,7 +56,8 @@ data_dir = COMPONENTS_DIR
 # at any Bragg angle, so that limit does not bind today -- it is kept because it
 # is the real hardware envelope and would start to matter if L1/L2 ever moved.
 # The vertical limit does bind, above roughly |A1| = 32 deg (ki > ~3.7 A^-1).
-# No analyser radius limits are published.
+# No analyser radius limits are published; its fixed vertical radius
+# (``ANA_FIXED_RV``, imported from the descriptor) is not a limit but hardware.
 MONO_MIN_RH = 1.7
 MONO_MIN_RV = 0.5
 
@@ -74,13 +76,13 @@ class IN12_Instrument(TAS_Instrument):
         super().__init__()
         self.L1 = 1.80   # H144 guide exit (virtual source) - mono (ILL)
         self.L2 = 1.80   # mono - sample (2016: matched to L1 for Rowland focusing)
-        self.L3 = 1.30   # sample - analyzer (ILL "about 1.3 m"; variable, limits unknown)
+        self.L3 = 1.30   # sample - analyzer (ILL "about 1.3 m"; genuinely variable)
         self.L4 = 0.72   # analyzer - detector (ILL)
-        # PROVISIONAL senses (-1, +1, -1). Only the monochromator's negative
-        # branch is well evidenced (ILL publishes mono 2-theta as -140..-10 deg);
-        # sample and analyzer come from a 2001 raw scan header plus the fact
-        # that the 2012 upgrade retained the secondary spectrometer. See the
-        # descriptor Geometry in instruments/in12/plugin.py and MODEL_STATUS.md.
+        # Senses (-1, +1, -1) -- the "W" configuration, confirmed on three
+        # independent sources (ILL's entirely negative mono travel, the public
+        # Takin preset's 0/1/0 senses, and a post-upgrade IN12 configuration
+        # reported as SM=-1/SS=+1/SA=-1). See the descriptor Geometry in
+        # instruments/in12/plugin.py and MODEL_STATUS.md.
         self.sense_mono = -1
         self.sense_sample = 1
         self.sense_ana = -1
@@ -126,9 +128,11 @@ class IN12_Instrument(TAS_Instrument):
         + 1/L2). With L1 = L2 = 1.8 m this is the Rowland condition the
         instrument was designed to satisfy.
 
-        The analyzer is a single vertical row of blades and ILL lists its
-        vertical curvature as fixed, so only rha is driven; rva is returned
-        flat (0). A one-row assembly has no vertical focusing to give.
+        Only rha is driven at the analyzer. Its vertical focus is fixed
+        hardware -- 1998 describes it as produced by permanently tilting the
+        top and bottom crystal rows -- so rva returns the fixed radius
+        (``ANA_FIXED_RV``) on the take-off branch rather than a computed one.
+        It is deliberately not the Rowland optimum: that is what "fixed" means.
 
         The radii are SIGNED: theta arrives signed (IN12's A1 *and* A4 are both
         negative), and ``Monochromator_curved`` needs the curvature center on
@@ -145,7 +149,7 @@ class IN12_Instrument(TAS_Instrument):
         rhm = _clamp_radius(rhmfac * 2 * mono_focus / sin_mth, MONO_MIN_RH)
         rvm = _clamp_radius(rvmfac * 2 * mono_focus * sin_mth, MONO_MIN_RV)
         rha = rhafac * 2 * ana_focus / sin_ath
-        rva = 0.0
+        rva = math.copysign(ANA_FIXED_RV, sin_ath)
 
         print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
         return rhm, rvm, rha, rva

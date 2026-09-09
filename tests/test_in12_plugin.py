@@ -14,6 +14,7 @@ import pytest
 from instruments.contract import InstrumentPlugin, PointSnapshot
 from instruments.in12.plugin import (
     _IN12_PARAMS,
+    ANA_FIXED_RV,
     IN12_MCSTAS_NAME,
     IN12Plugin,
     in12_descriptor,
@@ -40,16 +41,17 @@ def test_descriptor_is_runnable():
     assert validate_descriptor(in12_descriptor(), runnable=True) == []
 
 
-def test_descriptor_senses_are_the_provisional_in12_assignment():
-    """(-1, +1, -1): mono on the clockwise branch, secondary as IN8's.
+def test_descriptor_senses_are_the_w_configuration():
+    """(-1, +1, -1): mono and analyser clockwise, sample counter-clockwise.
 
-    Provisional -- only the monochromator sense is well evidenced (ILL
-    publishes its two-theta range as entirely negative). If a real IN12 scan
-    header ever contradicts this, MODEL_STATUS.md says so and this test moves
-    with the descriptor.
+    Confirmed on three independent sources (MODEL_STATUS.md). The structural
+    half -- mono and analyser on the SAME branch, sample on the other -- is
+    what "W configuration" means, and is asserted separately so a partial
+    regression cannot hide behind the triple.
     """
     g = in12_descriptor().geometry
     assert (g.sense_mono.value, g.sense_sample.value, g.sense_ana.value) == (-1, 1, -1)
+    assert g.sense_mono.value == g.sense_ana.value != g.sense_sample.value
 
 
 def test_monochromator_axis_limits_are_entirely_negative():
@@ -77,10 +79,16 @@ def test_crystal_faces_match_published_overall_dimensions():
     assert height == pytest.approx(0.160)
     assert mono.mosaic == 24                      # 0.4 deg FWHM (2016 paper)
 
+    # The analyser is driven the other way round: 1998 publishes the 11 mm
+    # lamella width, so the GAP is the derived quantity, and eleven lamellae
+    # must still span the published 122 mm face.
     ana = next(c for c in d.ana_crystals if c.id == "pg002")
-    assert (ana.n_columns, ana.n_rows) == (11, 1)
+    assert ana.slab_width == 0.011
     assert ana.slab_width * 11 + ana.gap * 10 == pytest.approx(0.122)
-    assert ana.slab_height == pytest.approx(0.118)   # single row: the whole face
+    # Three rows, not one: the fixed vertical focus comes from tilting the top
+    # and bottom rows, which a single-row assembly cannot do.
+    assert (ana.n_columns, ana.n_rows) == (11, 3)
+    assert ana.slab_height * 3 + ana.gap * 2 == pytest.approx(0.118)
 
 
 def test_heusler_analyser_uses_null_reflectivity_sentinel():
@@ -100,7 +108,9 @@ def test_alpha1_collimation_slot_exists_and_defaults_open():
 
 
 def test_no_ufo_or_multi_analyser_capability():
-    """IN12-UFO is still future tense on ILL's own page; it must not leak in."""
+    """IN12-UFO reached neutron commissioning but has no published routine
+    science use, and multi-analyser secondaries are out of scope for v1
+    regardless. This descriptor is the conventional single-detector IN12."""
     d = in12_descriptor()
     assert d.modules == ()
     assert d.primary_detector == "detector"
@@ -166,8 +176,11 @@ def test_scan_config_applies_gui_mapping():
     assert config.K_fixed == "Kf Fixed"
     # Branch-signed curvature: the GUI carries magnitudes and BOTH IN12 crystals
     # take off on the negative branch, so all three driven radii come out
-    # negative. The analyser is one row of blades -> flat vertically.
-    assert (config.rhm, config.rvm, config.rha, config.rva) == (-3.84, -0.84, -1.98, 0.0)
+    # negative.
+    assert (config.rhm, config.rvm, config.rha) == (-3.84, -0.84, -1.98)
+    # The analyser's vertical focus is fixed hardware, not a GUI knob, so it
+    # ignores vals entirely and takes the fixed radius on the same branch.
+    assert config.rva == -ANA_FIXED_RV
     assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     assert (config.alpha_1, config.alpha_2, config.alpha_3, config.alpha_4) == \
@@ -277,8 +290,11 @@ def test_crystal_bending_is_rowland_matched_and_branch_signed():
     assert rhm == pytest.approx(-2 * mono_focus / sin_th)
     assert rvm == pytest.approx(-2 * mono_focus * sin_th)
     assert rha == pytest.approx(-2 * ana_focus / sin_th)
-    # One vertical row of analyser blades has no vertical focusing to give.
-    assert rva == 0.0
+    # The analyser's vertical radius is fixed hardware, branch-signed but not
+    # computed -- and deliberately NOT the Rowland optimum, which is what
+    # "fixed" means. Guard that it is not silently tracking the arms.
+    assert rva == -ANA_FIXED_RV
+    assert abs(rva) > 2 * abs(2 * ana_focus * sin_th)
 
 
 def test_vertical_bending_clamps_at_the_published_minimum():

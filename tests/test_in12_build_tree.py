@@ -139,12 +139,16 @@ def test_mono_crystal_matches_descriptor_pg002(plain_instrument):
     assert mono.reflect == '"HOPG.rfl"' and mono.transmit == '"HOPG.trm"'
 
 
-def test_conventional_analyzer_is_one_row_of_eleven_blades(plain_instrument):
+def test_conventional_analyzer_is_eleven_lamellae_in_three_rows(plain_instrument):
+    """1998: eleven 11 mm vertical lamellae for horizontal focusing, with the
+    top and bottom rows tilted for a fixed vertical focus."""
     by_name = {c.name: c for c in plain_instrument.component_list}
     ana = by_name["analyzer"]
     assert ana.DM == 3.355
-    assert ana.NH == 11 and ana.NV == 1
-    assert ana.yheight == pytest.approx(0.118)   # single row spans the face
+    assert ana.NH == 11 and ana.NV == 3
+    assert ana.zwidth == 0.011                          # published lamella width
+    assert ana.zwidth * 11 + ana.gap * 10 == pytest.approx(0.122)
+    assert ana.yheight * 3 + ana.gap * 2 == pytest.approx(0.118)
 
 
 def test_heusler_analyzer_emits_null_reflectivity():

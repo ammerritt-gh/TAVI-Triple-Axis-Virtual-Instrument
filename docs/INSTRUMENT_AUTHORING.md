@@ -26,8 +26,11 @@ runtime example: modules, stacked collimators, and 19 monitors. IN12
 (`instruments/in12/plugin.py`) is the worked example of an instrument built
 from public documentation alone, with no instrument-scientist input: it is
 the first package whose monochromator sits on the negative branch
-(`sense_mono = -1`), and its `MODEL_STATUS.md` shows how to publish an
-unverified sense assignment honestly instead of hiding it. PANDA shows a
+(`sense_mono = -1`), and its `references/` shows the pattern that made that
+possible — a broad research dossier, then a targeted literature round before
+registration, each frozen as its own dated snapshot. That second round is what
+settled IN12's scattering senses and corrected its analyser topology, so budget
+for it rather than treating the first dossier as final. PANDA shows a
 research-only package; it must not be registered until runnable.
 
 Run `python -m instruments.package_validation` before and after package work.
