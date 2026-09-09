@@ -425,3 +425,72 @@ def test_the_fixed_analyser_curvature_is_not_scannable():
         assert spec.fixed_curvature == ()
     for spec in d.ana_crystals:
         assert "rha" not in spec.fixed_curvature
+
+
+def _heusler_id():
+    for spec in in12_descriptor().ana_crystals:
+        if spec.id != "pg002":
+            return spec.id
+    raise AssertionError("IN12 should carry a second analyser")
+
+
+def test_the_heusler_does_not_inherit_pg_s_fixed_vertical_focus():
+    """The 1998 fixed-focus evidence is about the PG(002) assembly only.
+
+    scan_config pinned rva = -ANA_FIXED_RV unconditionally, so selecting the
+    Heusler still started every scan with PG's 1.40 m vertical curvature --
+    which is precisely the cross-crystal inference that declaring
+    fixed_curvature per crystal exists to prevent.
+    """
+    pytest.importorskip("mcstasscript")
+    plugin = IN12Plugin()
+    heusler = _heusler_id()
+
+    ana = {c.id: c for c in in12_descriptor().ana_crystals}
+    assert ana["pg002"].fixed_curvature == ("rva",)
+    assert ana[heusler].fixed_curvature == ()
+
+    state = plugin.default_state()
+    state.anacris = "pg002"
+    assert state.ana_vertical_is_fixed()
+    state.anacris = heusler
+    assert not state.ana_vertical_is_fixed()
+
+    # ...and the runtime radius follows, rather than PG's fixed value.
+    mth = ath = -27.917234
+    state.anacris = "pg002"
+    _, _, _, rva_pg = state.calculate_crystal_bending(1, 1, 1, mth, ath)
+    state.anacris = heusler
+    _, _, _, rva_heusler = state.calculate_crystal_bending(1, 1, 1, mth, ath)
+    assert rva_pg == -ANA_FIXED_RV
+    assert rva_heusler != pytest.approx(rva_pg)
+    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
+    assert rva_heusler == pytest.approx(
+        -2 * ana_focus * math.sin(math.radians(abs(ath))))
+
+
+def test_scan_config_rva_follows_the_selected_analyser():
+    pytest.importorskip("mcstasscript")
+    plugin = IN12Plugin()
+    heusler = _heusler_id()
+    base = plugin.default_state()
+
+    def _config(anacris, rva=None):
+        vals = {
+            "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2,
+            "rhm": 3.0, "rvm": 1.2, "rha": 1.5,
+            "fixed_E": 8.288785, "monocris": "pg002", "anacris": anacris,
+            "modules": {},
+            "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0",
+                            "alpha_4": "0"},
+            "slits_mm": {"sbl": (30.0, 60.0), "dbl_hgap": 50.0},
+        }
+        if rva is not None:
+            vals["rva"] = rva
+        return plugin.scan_config(base, vals, None, {}, base.sample_mount)
+
+    assert _config("pg002").rva == -ANA_FIXED_RV
+    # The Heusler takes the GUI magnitude on the take-off branch, like rha.
+    assert _config(heusler, rva=0.9).rva == pytest.approx(-0.9)
+    # Absent a value it is flat, not PG's radius.
+    assert _config(heusler).rva == 0.0

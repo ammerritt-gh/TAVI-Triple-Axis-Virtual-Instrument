@@ -379,10 +379,23 @@ class IN12Plugin:
         scan_config.rhm = -abs(vals['rhm'])
         scan_config.rvm = -abs(vals['rvm'])
         scan_config.rha = -abs(vals['rha'])
-        # The analyser's vertical focus is FIXED hardware (1998: the top and
-        # bottom crystal rows are permanently tilted), so it is not a GUI knob
-        # -- it takes the fixed radius, on the same negative branch.
-        scan_config.rva = -ANA_FIXED_RV
+        # The PG(002) analyser's vertical focus is FIXED hardware (1998: the
+        # top and bottom crystal rows are permanently tilted), so for it rva is
+        # not a GUI knob and takes the fixed radius on the negative branch.
+        # That evidence is about THAT assembly: the Heusler has no published
+        # focusing behaviour, so it is driven to the point-source optimum
+        # instead of inheriting PG's radius. The crystal's own
+        # fixed_curvature declaration decides, so the runtime policy and the
+        # scan-legality gate can never disagree about which analyser is fixed.
+        if scan_config.ana_vertical_is_fixed():
+            scan_config.rva = -ANA_FIXED_RV
+        else:
+            # Driven like rha: the GUI carries the magnitude (its Ideal button
+            # reads calculate_crystal_bending, which returns the point-source
+            # optimum for an analyser with no fixed focus) and the branch sign
+            # is applied here. Absent a value, flat -- the neutral choice for a
+            # crystal whose focusing behaviour is unpublished.
+            scan_config.rva = -abs(vals.get('rva', 0.0))
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
