@@ -4,7 +4,7 @@ Living list. Grouped by theme, roughly dependency-ordered within each group.
 Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first),
 `docs/CONTROL_FEATURES_DESIGN.md` (feature designs + roadmap §9),
 `docs/LLM_HARNESS_DESIGN.md` (measurement driver), `docs/API_USER_GUIDE.md`
-(live API reference). Last updated: 2026-09-09.
+(live API reference). Last updated: 2026-07-28.
 
 ## Closed-loop enablers (drive the ISAR/driver integration)
 
@@ -111,57 +111,13 @@ Roadmap order per CONTROL_FEATURES §9:
       wheel-capture issue fixed for combo boxes (`NoScrollComboBox`); deferred by
       scope at the time.
 
-## Instrument models
-
-- [ ] **Crystal-bending correctness pass (one comprehensive repair, not per-instrument
-      patches).** Curvature radii are computed in three places that disagree, and the
-      branch sign is applied in a fourth. Surfaced by PANDA (2026-09-09), the first
-      instrument whose *monochromator* takes off on the negative branch, but every
-      part of this predates it and PUMA/IN8 are affected too. The four pieces:
-
-      1. **The GUI/API ideal values ignore the instrument.**
-         `TAVIController._compute_ideal_bending_values` (`TAVI_PySide6.py`) hard-codes
-         PUMA's parallel-beam monochromator formula, PUMA's `rva = 0.8`, and PUMA's
-         minimum-radius clamps (rhm/rha < 2.0 -> 2.0, rvm < 0.5 -> 0.5) for *every*
-         instrument. `_ideal_bending_from_modules` is a second, near-identical copy for
-         the widget-free API path. Neither ever calls the instrument's own
-         `calculate_crystal_bending`, so IN8's point-source formula and PANDA's split
-         object distance (horizontal images the ms1 virtual source at 2.82 m, vertical
-         the guide exit at 5.00 m) are dead code in production.
-      2. **The clamps fire on the sign, not the magnitude.** With PANDA's negative
-         two-theta every ideal radius comes out negative, so `if rhm < 2.0` is always
-         true: the Ideal button returns (2.0, 0.5, 2.0) where the correct magnitudes
-         are (3.985, 1.787, 1.651). Any clamp must compare `abs()`.
-      3. **Branch signing is scattered.** Each plugin's `scan_config` signs the radii it
-         copies out of the GUI, but a *scanned* radius bypasses it entirely --
-         `compute_scan_snapshot` (`instruments/tas_runtime.py`) reads `scans[4:8]` and
-         calls `set_crystal_bending` directly. PANDA now works around this with an
-         idempotent `set_crystal_bending` override; **IN8 still has the bug** for its
-         analyzer radii. The sign belongs in one place, derived from the descriptor
-         senses, not repeated per instrument per path.
-      4. **Mechanical limits are per-instrument and mostly unknown.** PUMA's 2.0/0.5 m
-         minima are PUMA's; IN8 and PANDA apply none because nobody has documented
-         theirs. A clamp policy needs a descriptor field, not a hard-coded constant.
-
-      Why one pass: fixing any single piece in isolation either leaves the others
-      inconsistent or silently changes another instrument's displayed numbers.
-      Delegating (1) to `calculate_crystal_bending` is bit-identical for PUMA but
-      *changes IN8's numbers* -- correctly, but it is a real behaviour change and wants
-      deciding together with (3) and (4). Wrong-branch curvature costs ~7 orders of
-      magnitude in peak intensity (measured during the IN8 Phase-4 smoke), so this is a
-      correctness issue, not cosmetics.
-      → `instruments/*/model.py::calculate_crystal_bending`,
-      `instruments/*/plugin.py::scan_config`, `instruments/tas_runtime.py`,
-      `TAVI_PySide6.py` (both ideal-bending copies),
-      `instruments/panda/MODEL_STATUS.md`.
-
 ## Housekeeping
 
 - [x] **Test-runner note** - done 2026-09-09. The interpreter crash on a full
       `pytest tests/` (fault 0xc06d007f, a delay-load failure in matplotlib and
       Qt native code) is *not* a broken environment: it is what happens when the
-      env's interpreter is invoked directly, leaving `Library\bin` off PATH.
-      Run the suite through the activation the launcher uses --
+      env's interpreter is invoked **directly**, which leaves `Library\bin` off
+      PATH. Run the suite through the activation the launcher uses --
       `micromamba run -n tavi-dev python -m pytest tests -q` -- and it passes
       whole in ~70 s. No allowlist needed. Run one suite at a time: two
       concurrent runs contend for the API server port and fail
