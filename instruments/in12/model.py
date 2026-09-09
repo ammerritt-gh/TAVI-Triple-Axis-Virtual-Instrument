@@ -6,8 +6,8 @@ the per-point snapshot pipeline, and the run layer are all shared with
 IN12's:
 
 - ``IN12_Instrument``: geometry, the confirmed scattering senses (-1, +1, -1),
-  Rowland-matched point-source focusing with the published mechanical radius
-  clamps, and the per-point parameter dict.
+  Rowland-matched point-source focusing with provisional radius clamps, and
+  the per-point parameter dict.
 - ``build_IN12_instrument``: the component tree, emitted through the shared
   helpers in ``tavi/instrument_helpers.py`` wherever a category exists there
   (monitors, crystals, collimators, slits, sample + orientation arms); the
@@ -54,15 +54,21 @@ from tavi.instrument_helpers import (
 MCSTAS_NAME = "IN12_McScript"
 data_dir = COMPONENTS_DIR
 
-# Published mechanical bending limits (2016): the monochromator's horizontal
-# curvature is continuously adjustable from ~1.7 m radius to flat, and its
-# vertical curvature from ~0.5 m to flat. "To flat" is an unbounded radius, so
-# only the minima clamp. With L1 = L2 = 1.8 m the ideal RH never reaches 1.7 m
-# at any Bragg angle, so that limit does not bind today -- it is kept because it
-# is the real hardware envelope and would start to matter if L1/L2 ever moved.
-# The vertical limit does bind, above roughly |A1| = 32 deg (ki > ~3.7 A^-1).
-# No analyser radius limits are published; its fixed vertical radius
-# (``ANA_FIXED_RV``, imported from the descriptor) is not a limit but hardware.
+# PROVISIONAL bending minima -- a model assumption, NOT a published limit.
+# The 2016 reading was that the monochromator's horizontal curvature is
+# adjustable from ~1.7 m radius to flat and its vertical from ~0.5 m to flat,
+# but MODEL_STATUS.md records both numbers as unconfirmed: ILL establishes
+# only that both axes are variable, and the literature search did not find
+# the mechanical envelope. They are kept as the model's stated assumption
+# rather than deleted, because removing a clamp is also an unsourced claim
+# (that the crystal bends arbitrarily far) and this one is at least
+# conservative. Settling them is on the instrument-team question list.
+# "To flat" is an unbounded radius, so only the minima clamp. With
+# L1 = L2 = 1.8 m the ideal RH never reaches 1.7 m at any Bragg angle, so that
+# one does not bind today; the vertical one does, above roughly |A1| = 32 deg
+# (ki > ~3.7 A^-1) -- so it is load-bearing on an unconfirmed number, which is
+# exactly why it is labelled. The analyser has no assumed limits; its fixed
+# vertical radius (``ANA_FIXED_RV``) is hardware, not a limit.
 MONO_MIN_RH = 1.7
 MONO_MIN_RV = 0.5
 
@@ -124,6 +130,27 @@ class IN12_Instrument(TAS_Instrument):
 
         return crystal_info_from_descriptor(in12_descriptor(), monocris, anacris)
 
+    def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
+        """Store bending radii, forcing every one onto IN12's take-off branch.
+
+        ``IN12Plugin.scan_config`` already signs the radii it copies out of the
+        GUI, but a *scanned* radius does not go through it:
+        ``compute_scan_snapshot`` reads scans[4:8] and calls this setter
+        directly, so scanning ``rhm`` from 3 to 5 would otherwise hand positive
+        radii to crystals whose curvature centres must sit on the negative
+        side. IN12 takes off negative at both the monochromator and the
+        analyser (sense_mono = sense_ana = -1), so all four are signed.
+
+        ``-abs()`` is idempotent, so the already-signed non-scanned path is
+        unaffected. Same override, same reason, as PANDA's.
+        """
+        super().set_crystal_bending(
+            rhm=None if rhm is None else -abs(rhm),
+            rvm=None if rvm is None else -abs(rvm),
+            rha=None if rha is None else -abs(rha),
+            rva=None if rva is None else -abs(rva),
+        )
+
     def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
         """Ideal bending radii for IN12's focusing crystals.
 
@@ -144,7 +171,8 @@ class IN12_Instrument(TAS_Instrument):
         the scattering side -- feeding a positive radius to a negative take-off
         branch defocuses by ~7 orders of magnitude in peak intensity (measured
         on IN8 in the Phase-4 smoke run). Magnitudes are clamped up to the
-        published mechanical minima; the analyzer has no published limits.
+        provisional minima above (a model assumption, not a published limit --
+        see MONO_MIN_RH/RV); the analyzer has no assumed limits.
         """
         sin_mth = math.sin(math.radians(mth))
         sin_ath = math.sin(math.radians(ath))
