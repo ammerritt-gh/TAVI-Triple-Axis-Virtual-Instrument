@@ -1442,6 +1442,14 @@ class TAVIController(QObject):
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
+        # Which curvature axes are fixed follows the selected crystal, so a
+        # scan command that was valid under one crystal can stop being valid
+        # under another. The launch path re-validates regardless; this keeps
+        # the warning in the dock honest as soon as the selection changes.
+        self.window.instrument_dock.monocris_combo.currentTextChanged.connect(
+            lambda _text: self.validate_scan_commands())
+        self.window.instrument_dock.anacris_combo.currentTextChanged.connect(
+            lambda _text: self.validate_scan_commands())
 
         # Connect NMO selection change to update ideal bending values (instrument-
         # specific coupling; the module widget only exists when declared)
@@ -3585,6 +3593,33 @@ class TAVIController(QObject):
             if conflict:
                 self.window.simulation_dock.set_scan_conflict_warning(conflict)
     
+    def _fixed_curvature_axes(self):
+        """{axis: crystal display name} for the crystals selected right now.
+
+        Fixed focusing is a property of the crystal assembly, not the
+        instrument: IN12's conventional PG(002) analyser has a fixed vertical
+        focus while the Heusler option on the same instrument has no
+        established focusing behaviour. So this resolves the current
+        monochromator and analyser selection rather than reading one flag off
+        the descriptor. An unknown or unset selection contributes nothing --
+        the gate never invents a restriction.
+        """
+        dock = getattr(self.window, "instrument_dock", None)
+        if dock is None:
+            return {}
+
+        fixed = {}
+        for selected_id, specs, label in (
+            (dock.selected_mono_id(), self.descriptor.mono_crystals, "monochromator"),
+            (dock.selected_ana_id(), self.descriptor.ana_crystals, "analyser"),
+        ):
+            for spec in specs:
+                if spec.id == selected_id:
+                    for axis in spec.fixed_curvature:
+                        fixed[axis] = f"{spec.display_name} {label}"
+                    break
+        return fixed
+
     def _validate_single_scan_command(self, command: str) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
         
@@ -3621,6 +3656,16 @@ class TAVIController(QObject):
             else:
                 return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, chi, etc.")
         
+        # A curvature axis the SELECTED crystal holds fixed is not scannable.
+        # Refusing is the point: scan_config pins it, but compute_scan_snapshot
+        # reads scans[4:8] and would otherwise let the scan override the pin,
+        # so a scan that looked accepted would either do nothing or quietly
+        # defeat the fixed value.
+        fixed_by = self._fixed_curvature_axes()
+        if var_lower in fixed_by:
+            return (None, f"'{var_name}' is fixed on the {fixed_by[var_lower]} "
+                          f"and cannot be scanned.")
+
         # Validate numeric parts
         try:
             start = float(parts[1])
