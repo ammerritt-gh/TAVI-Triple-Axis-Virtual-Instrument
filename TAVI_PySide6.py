@@ -5919,20 +5919,22 @@ class TAVIController(QObject):
             parts.append(f"max {int(peak[0])} counts at {peak[1]}")
         return ", ".join(parts)
 
-    def _preflight_scan_validation(self) -> str:
+    def _preflight_scan_validation(self):
         """Check scan commands before running simulation (GUI wrapper).
 
         Reads the scan-command widgets and delegates to the pure
-        ``_validate_scan_commands_text`` so the GUI Run path and the API path
-        share one validation implementation. GUI behavior is unchanged.
+        ``_scan_command_issues`` so the GUI Run path and the API path share
+        one validation implementation.
 
         Returns:
-            str: Error/warning message if issues found, empty string if OK
+            tuple: (hard, soft) issue lists. Hard cannot be overridden --
+            the command does not describe a scan that can run. Soft is the
+            operator's judgement to make.
         """
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         dock = self.window.instrument_dock
-        return self._validate_scan_commands_text(
+        return self._scan_command_issues(
             cmd1, cmd2, dock.selected_mono_id(), dock.selected_ana_id()
         )
 
@@ -5981,11 +5983,14 @@ class TAVIController(QObject):
 
         var1, var2 = variables
 
-        # Check for conflicts between commands
+        # Check for conflicts between commands. These stay overridable:
+        # they were before this split, and legitimate combinations exist
+        # (scanning H against the sample offset psi, say). Only a command
+        # that cannot run AS WRITTEN is hard.
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
-                hard.append(conflict)
+                soft.append(conflict)
 
         return hard, soft
 

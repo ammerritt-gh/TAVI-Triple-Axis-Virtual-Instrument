@@ -183,3 +183,36 @@ def test_malformed_commands_are_hard(in8_controller):
     for cmd in ("rhm 1.0 2.0", "rhm 1.0 2.0 0.1 0.2", "rhm a b c", "nope 1 2 3"):
         hard, _ = in8_controller._scan_command_issues(cmd, "")
         assert hard, cmd
+
+
+def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
+    """The Run path does `hard, soft = self._preflight_scan_validation()`.
+
+    The wrapper was left returning a joined string while its caller was changed
+    to unpack two lists, so every click of Run raised ValueError -- including
+    with empty or perfectly valid commands. No test drove the Run path, so the
+    suite stayed green through it. This pins the contract between them.
+    """
+    dock = in8_controller.window.simulation_dock
+    for cmd in ("", "rhm 3.0 5.0 0.5", "nonsense"):
+        dock.scan_command_1_edit.setText(cmd)
+        dock.scan_command_2_edit.setText("")
+        result = in8_controller._preflight_scan_validation()
+        assert isinstance(result, tuple) and len(result) == 2, cmd
+        hard, soft = result
+        assert isinstance(hard, list) and isinstance(soft, list), cmd
+
+    dock.scan_command_1_edit.setText("")
+
+
+def test_a_command_conflict_stays_the_operators_call(in8_controller):
+    """Conflicts were overridable before the hard/soft split and remain so.
+
+    Scanning H against the sample offset psi is a supported combination the
+    conflict check flags advisorily; promoting it to a hard refusal would have
+    blocked real scans.
+    """
+    hard, soft = in8_controller._scan_command_issues(
+        "H 1.99 2.01 0.01", "psi -1 1 0.5"
+    )
+    assert hard == [], hard
