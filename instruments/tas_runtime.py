@@ -177,42 +177,52 @@ class TAS_Instrument:
         raise NotImplementedError("Instrument state must supply build_point_params().")
 
     def e0_param_value(self, deltaE):
-        """Return the runtime source-energy parameter for the current point."""
-        if self.source_type == "Mono":
-            if self.K_fixed == "Kf Fixed":
-                return self.fixed_E + deltaE
-            return self.fixed_E
+        """Return the runtime source-energy parameter for the current point.
+
+        A "Mono" source is a narrow band the model steers onto the energy the
+        monochromator will select, so in Kf-fixed mode it tracks Ei. A
+        Maxwellian source is a broadband moderator whose peak is a property of
+        the source, not of the scan, so it stays put. Pinning that peak to
+        ``fixed_E`` is a placeholder for every instrument here (no measured
+        SR-2 / H144 / H10 spectrum is modelled); in Kf-fixed mode it therefore
+        peaks at Ef, and large positive transfers sample the tail.
+        """
+        if self.source_type == "Mono" and self.K_fixed == "Kf Fixed":
+            return self.fixed_E + deltaE
 
         return self.fixed_E
 
     def point_energy_metadata(self, deltaE):
-        """Return the per-point energy values recorded with the scan output."""
-        if self.source_type == "Mono":
-            if self.K_fixed == "Kf Fixed":
-                E0_param = self.fixed_E + deltaE
-                Ei = E0_param
-                Ki = energy2k(Ei)
-                Ef = self.fixed_E
-                Kf = energy2k(Ef)
-            else:
-                E0_param = self.fixed_E
-                Ei = self.fixed_E
-                Ki = energy2k(Ei)
-                Ef = self.fixed_E - deltaE
-                Kf = energy2k(max(Ef, 1e-9))
+        """Return the per-point energy values recorded with the scan output.
+
+        The nominal energies follow ``K_fixed`` alone. They are exactly the
+        energies the monochromator and analyser two-theta angles encode, and
+        ``calculate_angles`` derives those from ``K_fixed`` without consulting
+        the source type -- so this must not consult it either. Reading the
+        source type here as well used to give a fixed-Ef Maxwellian point
+        angles for (Ei = Ef + dE, Ef) alongside metadata for
+        (Ei = fixed_E, Ef = fixed_E - dE); a consumer reconstructing kinematics
+        or resolution from the saved Ki/Kf then disagreed with the crystals,
+        and a large positive transfer could even record a negative Ef for an
+        otherwise valid scan. Both branches coincide at dE = 0, which is why an
+        elastic smoke test cannot see it.
+
+        ``E0_param`` is a *source-distribution* parameter, not a nominal
+        energy, and is resolved separately by :meth:`e0_param_value`.
+        """
+        if self.K_fixed == "Kf Fixed":
+            Ef = self.fixed_E
+            Ei = Ef + deltaE
         else:
-            E0_param = self.fixed_E
             Ei = self.fixed_E
-            Ki = energy2k(Ei)
-            Ef = self.fixed_E - deltaE
-            Kf = energy2k(max(Ef, 1e-9))
+            Ef = Ei - deltaE
 
         return {
-            "E0_param": E0_param,
+            "E0_param": self.e0_param_value(deltaE),
             "Ei": Ei,
-            "Ki": Ki,
+            "Ki": energy2k(max(Ei, 1e-9)),
             "Ef": Ef,
-            "Kf": Kf,
+            "Kf": energy2k(max(Ef, 1e-9)),
         }
 
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
