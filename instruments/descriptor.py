@@ -292,3 +292,10 @@ class InstrumentDescriptor:
     # (the adapter records the source as "descriptor default" in provenance).
     # None -> the adapter falls back to a uniform 120 arcmin default.
     vertical_divergence: tuple[float, float, float, float] | None = None
+    # Scan-variable names this instrument holds FIXED, so a scan over one is
+    # refused rather than silently ignored or silently honoured. Names are the
+    # lowercase scan-command spelling ("rva"), not the McStas parameter
+    # ("rva_param"). A model that pins a radius in ``scan_config`` but leaves
+    # it in the generic scan surface offers a scan that either does nothing or
+    # quietly overrides the pin -- both worse than a refusal.
+    fixed_parameters: tuple[str, ...] = ()
