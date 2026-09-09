@@ -3714,6 +3714,27 @@ class TAVIController(QObject):
         normalized = self.normalize_scan_variable(var_name)
         return (normalized.lower() if normalized else var_lower, None)
     
+    @staticmethod
+    def _is_unexecutable_conflict(v1: str, v2: str) -> bool:
+        """True when two scan variables cannot both be honoured as written.
+
+        A scan point stores its first four values in one slot group that
+        ``_solve_point_geometry`` reads as (qx, qy, qz, dE) in momentum mode and
+        as (H, K, L, dE) in rlu mode -- the SAME slots. Pairing a Q variable
+        with an HKL one therefore does not scan both: one mode wins, the other
+        command overwrites its slot, and the overwritten values are then read
+        under the winning mode's units. The result is measurements labelled with
+        coordinates they were not taken at, which is worse than a refusal.
+
+        Every other conflict this class detects is a judgement call -- scanning
+        H against the sample offset psi is a supported combination -- so those
+        stay overridable.
+        """
+        q_vars = {"qx", "qy", "qz"}
+        hkl_vars = {"h", "k", "l"}
+        return ((v1 in q_vars and v2 in hkl_vars)
+                or (v1 in hkl_vars and v2 in q_vars))
+
     def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
         """Check if two scan variables conflict with each other.
         
@@ -3734,10 +3755,9 @@ class TAVIController(QObject):
         if v1 == v2:
             return f"⚠ Both commands scan '{v1}' - use different parameters"
         
-        q_vars = {"qx", "qy", "qz"}
-        hkl_vars = {"h", "k", "l"}
-        if (v1 in q_vars and v2 in hkl_vars) or (v1 in hkl_vars and v2 in q_vars):
-            return "Conflict: Q and HKL scans describe the same target momentum under the current sample mount"
+        if self._is_unexecutable_conflict(v1, v2):
+            return ("Conflict: Q and HKL scans describe the same target momentum "
+                    "under the current sample mount")
 
         # Check linked parameter groups (parameters that control the same thing)
         for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
@@ -5990,7 +6010,10 @@ class TAVIController(QObject):
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
-                soft.append(conflict)
+                if self._is_unexecutable_conflict(var1.lower(), var2.lower()):
+                    hard.append(conflict)
+                else:
+                    soft.append(conflict)
 
         return hard, soft
 
