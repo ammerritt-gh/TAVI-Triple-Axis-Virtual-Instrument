@@ -72,17 +72,12 @@ def _check_ids(errors, items, list_name, *, slug):
     _check_unique(errors, items, list_name)
 
 
-# Scan-variable vocabulary, mirrored from
-# gui/docks/unified_simulation_dock.py::VALID_SCAN_VARIABLES. Duplicated rather
-# than imported because this module is Qt-free and the GUI module is not;
-# test_descriptor_validation.py asserts the two stay in step.
-_SCAN_VARIABLES = frozenset({
-    "qx", "qy", "qz", "deltae", "h", "k", "l",
-    "a1", "a2", "a3", "a4", "2theta",
-    "omega", "chi", "kappa", "psi",
-    "rhm", "rvm", "rha", "rva",
-    "vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap",
-})
+# The curvature axes each side of the spectrometer owns, as lowercase
+# scan-command names. A crystal can only hold fixed an axis it actually has:
+# "rva" on a monochromator is a typo, and a typo here fails open -- the scan
+# allowed, the pin bypassed.
+_MONO_CURVATURE = frozenset({"rhm", "rvm"})
+_ANA_CURVATURE = frozenset({"rha", "rva"})
 
 
 def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> list[str]:
@@ -182,19 +177,18 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
                 f"got {lim.lower} / {lim.default} / {lim.upper}"
             )
 
-    # --- S10b: fixed parameters ---------------------------------------------------
-    # A typo here fails open -- the scan is allowed and the pin is bypassed --
-    # so the names are checked against the scan-variable vocabulary.
-    for name in d.fixed_parameters:
-        if name != name.lower():
-            errors.append(
-                f"fixed_parameters: {name!r} must be the lowercase scan-command "
-                f"spelling"
-            )
-        elif name not in _SCAN_VARIABLES:
-            errors.append(
-                f"fixed_parameters: {name!r} is not a scan variable"
-            )
+    # --- S10b: fixed curvature axes -----------------------------------------------
+    for side, specs, allowed in (
+        ("mono_crystals", d.mono_crystals, _MONO_CURVATURE),
+        ("ana_crystals", d.ana_crystals, _ANA_CURVATURE),
+    ):
+        for spec in specs:
+            for name in spec.fixed_curvature:
+                if name not in allowed:
+                    errors.append(
+                        f"{side}[{spec.id!r}].fixed_curvature: {name!r} is not "
+                        f"one of {sorted(allowed)}"
+                    )
 
     # --- S11: senses -------------------------------------------------------------------
     for name in ("sense_mono", "sense_sample", "sense_ana"):
