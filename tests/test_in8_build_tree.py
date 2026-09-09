@@ -13,7 +13,7 @@ from instruments.in8.plugin import _IN8_MONITORS, IN8Plugin
 
 def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
            monocris="pg002", source_type="Maxwellian",
-           alpha_2="0", alpha_3="0", alpha_4="0"):
+           alpha_1="0", alpha_2="0", alpha_3="0", alpha_4="0"):
     plugin = IN8Plugin()
     diagnostic_settings = diagnostic_settings or {}
     vals = {
@@ -27,7 +27,8 @@ def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
         "monocris": monocris,
         "anacris": "pg002",
         "modules": {},
-        "collimation": {"alpha_2": alpha_2, "alpha_3": alpha_3, "alpha_4": alpha_4},
+        "collimation": {"alpha_1": alpha_1, "alpha_2": alpha_2,
+                        "alpha_3": alpha_3, "alpha_4": alpha_4},
         "slits_mm": {"sbl": (40.0, 100.0), "dbl_hgap": 40.0},
     }
     state = plugin.default_state()
@@ -64,7 +65,7 @@ _BEAM_ORDER = [
 
 # The same backbone with every Soller inserted.
 _BEAM_ORDER_COLLIMATED = [
-    "origin", "source", "mono_cradle", "monochromator",
+    "origin", "source", "mono_collimator", "mono_cradle", "monochromator",
     "sample_arm", "sample_collimator", "sample_slit", "sample_gonio",
     "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
     "analyzer_filter", "analyzer_collimator", "analyzer_cradle", "analyzer",
@@ -79,7 +80,8 @@ def test_backbone_beam_order(plain_instrument):
 
 
 def test_backbone_beam_order_with_every_soller_inserted():
-    names = _component_names(_build(alpha_2="30", alpha_3="40", alpha_4="60"))
+    names = _component_names(_build(alpha_1="20", alpha_2="30", alpha_3="40",
+                                    alpha_4="60"))
     assert ([n for n in names if n in set(_BEAM_ORDER_COLLIMATED)]
             == _BEAM_ORDER_COLLIMATED)
 
@@ -95,7 +97,7 @@ def test_no_puma_only_components(plain_instrument, diag_all_instrument):
     for instrument in (plain_instrument, diag_all_instrument):
         names = set(_component_names(instrument))
         assert not names & {"v_selector", "NMO_slit", "vertical_focusing_NMO",
-                            "horizontal_focusing_NMO", "mono_collimator",
+                            "horizontal_focusing_NMO",
                             "postmono_slit", "exit_beam_tube"}
 
 
@@ -128,7 +130,8 @@ def test_monitor_gating_is_per_monitor():
                         if m.component_name != "detector_PSD"}
 
 
-_SOLLERS = ("sample_collimator", "analyzer_collimator", "detector_collimator")
+_SOLLERS = ("mono_collimator", "sample_collimator", "analyzer_collimator",
+            "detector_collimator")
 
 
 def test_open_sollers_leave_the_beam_entirely():
@@ -143,8 +146,9 @@ def test_open_sollers_leave_the_beam_entirely():
 
 
 def test_collimators_track_selection():
-    collimated = _build(alpha_2="30", alpha_3="40", alpha_4="60")
+    collimated = _build(alpha_1="20", alpha_2="30", alpha_3="40", alpha_4="60")
     by_name = {c.name: c for c in collimated.component_list}
+    assert by_name["mono_collimator"].divergence == 20.0
     assert by_name["sample_collimator"].divergence == 30.0
     assert by_name["analyzer_collimator"].divergence == 40.0
     assert by_name["detector_collimator"].divergence == 60.0
@@ -153,10 +157,25 @@ def test_collimators_track_selection():
 def test_each_soller_is_independent():
     """Inserting one blade must not drag its neighbours into the beam."""
     for inserted in _SOLLERS:
-        slot = {"sample_collimator": "alpha_2", "analyzer_collimator": "alpha_3",
+        slot = {"mono_collimator": "alpha_1", "sample_collimator": "alpha_2",
+                "analyzer_collimator": "alpha_3",
                 "detector_collimator": "alpha_4"}[inserted]
         names = set(_component_names(_build(**{slot: "30"})))
         assert names & set(_SOLLERS) == {inserted}
+
+
+def test_cu200_mono_carries_the_anisotropic_mosaic():
+    """ILL gives Cu(200) 25' horizontal / 10' vertical.
+
+    ``Monochromator_curved`` ignores mosaich/mosaicv whenever ``mosaic`` is
+    set, so the emitter must leave ``mosaic`` alone for an anisotropic crystal.
+    """
+    mono = {c.name: c for c in _build(monocris="cu200").component_list}["monochromator"]
+    assert mono.mosaich == 25 and mono.mosaicv == 10
+    assert not mono.mosaic
+
+    pg = {c.name: c for c in _build().component_list}["monochromator"]
+    assert pg.mosaic == 30
 
 
 def test_mono_crystal_matches_descriptor_pg002(plain_instrument):
