@@ -16,10 +16,15 @@ IN12's:
 Model boundary: the source is an *effective* source at the H144 guide exit,
 1.8 m upstream of the monochromator. The ~115 m of H144 above it -- including
 the velocity selector (>36 m upstream) and the transmission polarising cavity
-(~35 m upstream) -- is not modeled. Neither is the optional cooled Be filter:
-the source emits a band around E0, so there are no higher orders for a
-suppressor to remove, and inserting one would only attenuate. See
-``MODEL_STATUS.md``.
+(~35 m upstream) -- is not modeled. Neither is the optional cooled Be filter.
+
+Higher orders: the default source is the broadband Maxwellian branch, whose
+``dE`` sets normalization rather than a sampling cutoff, so the model does not
+inherit the real instrument's narrow band. Both crystals are therefore pinned
+to ``order=1`` -- idealized, order-clean transport -- rather than relying on an
+upstream selector the model boundary excludes. That is why no filter is needed
+here; it is a modelling choice, not a claim that higher orders cannot arise.
+See ``MODEL_STATUS.md``.
 
 Values marked PLACEHOLDER affect intensity/resolution only, never angles.
 """
@@ -255,9 +260,10 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
 
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 
-        # Optional Soller in the short guide-exit -> monochromator section
-        # (divergence 0 = open). PLACEHOLDER position/length/aperture; the
-        # clear aperture is set to the guide exit envelope.
+        # Optional Soller in the short guide-exit -> monochromator section.
+        # Open (0) withdraws it from the beam and emits no component at all,
+        # so its PLACEHOLDER position/length/aperture only ever act in a
+        # collimated configuration. The clear aperture is the guide exit.
         emit_collimator(instrument, "mono_collimator", relative="origin",
                         at=(0, 0, IN12.L1 / 2), divergence=IN12.alpha_1, length=0.2,
                         xwidth=0.03, yheight=0.15)
@@ -269,7 +275,8 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
                               distance=IN12.L1, rotation_expr="A1_param/2",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
-                              split=2, extend="if(!SCATTERED) ABSORB;")
+                              split=2, extend="if(!SCATTERED) ABSORB;",
+                              order=1)
 
         ## sample arm
 
@@ -322,9 +329,11 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
         analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0, 0, IN12.L2],
                                                 ROTATED=[0, "A2_param", 0], RELATIVE="sample_arm")
 
-        # No permanent filter: IN12's higher-order suppression is the velocity
-        # selector, far upstream of the model boundary, and the optional cooled
-        # Be filter is not modeled (see the module docstring).
+        # No permanent filter: the real instrument's higher-order suppression
+        # is the velocity selector, far upstream of the model boundary, and the
+        # optional cooled Be filter is not modeled. What keeps this model
+        # order-clean is order=1 on both crystals, not the selector it does not
+        # contain (see the module docstring).
         emit_collimator(instrument, "analyzer_collimator", relative="analyzer_arm",
                         at=(0, 0, 0.65), divergence=IN12.alpha_3, length=0.2,
                         xwidth=0.06, yheight=0.14)
@@ -334,7 +343,7 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
                               distance=IN12.L3, rotation_expr="A4_param/2",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
-                              split=5)
+                              split=5, order=1)
 
         ## detector
 

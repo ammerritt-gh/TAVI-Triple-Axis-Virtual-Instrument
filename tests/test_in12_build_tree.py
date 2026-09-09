@@ -53,13 +53,27 @@ def plain_instrument():
     return _build()
 
 
+# Every Soller open (the default): each is withdrawn from the beam, so no
+# collimator component exists at all.
 _BEAM_ORDER = [
+    "origin", "source", "mono_cradle", "monochromator",
+    "sample_arm", "sample_slit", "sample_gonio",
+    "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
+    "analyzer_cradle", "analyzer", "detector_arm",
+    "detector_slit", "detector",
+]
+
+# The same backbone with all four Sollers inserted.
+_BEAM_ORDER_COLLIMATED = [
     "origin", "source", "mono_collimator", "mono_cradle", "monochromator",
     "sample_arm", "sample_collimator", "sample_slit", "sample_gonio",
     "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
     "analyzer_collimator", "analyzer_cradle", "analyzer", "detector_arm",
     "detector_collimator", "detector_slit", "detector",
 ]
+
+_SOLLERS = ("mono_collimator", "sample_collimator", "analyzer_collimator",
+            "detector_collimator")
 
 
 def test_backbone_beam_order(plain_instrument):
@@ -113,13 +127,49 @@ def test_monitor_gating_is_per_monitor():
                         if m.component_name != "detector_PSD"}
 
 
-def test_collimators_track_selection_including_the_primary_arm():
-    open_build = _build()
-    by_name = {c.name: c for c in open_build.component_list}
-    for name in ("mono_collimator", "sample_collimator", "analyzer_collimator",
-                 "detector_collimator"):
-        assert by_name[name].divergence == 0.0
+def test_backbone_beam_order_with_every_soller_inserted():
+    names = _component_names(_build(alpha_1="10", alpha_2="30", alpha_3="40",
+                                    alpha_4="60"))
+    assert ([n for n in names if n in set(_BEAM_ORDER_COLLIMATED)]
+            == _BEAM_ORDER_COLLIMATED)
 
+
+def test_open_sollers_leave_the_beam_entirely():
+    """Open is withdrawn, not divergence == 0.
+
+    IN12's primary Soller is an optional 30 mm-wide aperture assembly halfway
+    between the guide exit and the monochromator, at a PLACEHOLDER position: it
+    must not be sitting in the default open beam. A zero-divergence
+    ``Collimator_linear`` only loses its angular transmission function -- the
+    two rectangular apertures stay and absorb.
+    """
+    assert not set(_component_names(_build())) & set(_SOLLERS)
+
+
+def test_each_soller_is_independent():
+    """Inserting one blade must not drag its neighbours into the beam."""
+    slots = {"mono_collimator": "alpha_1", "sample_collimator": "alpha_2",
+             "analyzer_collimator": "alpha_3", "detector_collimator": "alpha_4"}
+    for inserted, slot in slots.items():
+        names = set(_component_names(_build(**{slot: "30"})))
+        assert names & set(_SOLLERS) == {inserted}
+
+
+def test_both_crystals_are_first_order_only():
+    """The status record claims an order-clean beam; the tree must deliver it.
+
+    The default source is the broadband Maxwellian branch (``dE`` normalizes,
+    it does not cut), and ``Monochromator_curved`` at its default ``order=0``
+    reflects at every multiple of the supplied reciprocal-lattice vector -- so
+    the velocity selector and Be filter this model omits are not what excludes
+    a lambda/2 component. ``order=1`` is.
+    """
+    by_name = {c.name: c for c in _build().component_list}
+    assert by_name["monochromator"].order == 1
+    assert by_name["analyzer"].order == 1
+
+
+def test_collimators_track_selection_including_the_primary_arm():
     collimated = _build(alpha_1="10", alpha_2="30", alpha_3="40", alpha_4="60")
     by_name = {c.name: c for c in collimated.component_list}
     assert by_name["mono_collimator"].divergence == 10.0
