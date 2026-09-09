@@ -22,8 +22,13 @@ The living runnable template is IN8:
 - `instruments/in8/SCIENTIST_REVIEW.md` — low-effort scientist handoff
 
 PUMA (`instruments/puma/plugin.py`, `instruments/puma/model.py`) is the fuller
-runtime example: modules, stacked collimators, and 19 monitors. PANDA and IN12
-show research-only packages; they must not be registered until runnable.
+runtime example: modules, stacked collimators, and 19 monitors. IN12
+(`instruments/in12/plugin.py`) is the worked example of an instrument built
+from public documentation alone, with no instrument-scientist input: it is
+the first package whose monochromator sits on the negative branch
+(`sense_mono = -1`), and its `MODEL_STATUS.md` shows how to publish an
+unverified sense assignment honestly instead of hiding it. PANDA shows a
+research-only package; it must not be registered until runnable.
 
 Run `python -m instruments.package_validation` before and after package work.
 It validates metadata, required documents, references, status/registration,
