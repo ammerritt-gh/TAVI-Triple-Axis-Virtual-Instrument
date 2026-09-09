@@ -344,3 +344,99 @@ def test_crystal_info_dict_shape_frozen():
     ]
     assert mono_info["dm"] == 3.355
     assert ana_info["da"] == 3.355
+
+
+# ---------------------------------------------------------------------------
+# IN12 goldens -- NOT instrument-verified. IN8's numbers above came from a live
+# vTAS run; IN12's team never sent us files, so these were generated from this
+# code (2026-09-09) against the descriptor's PROVISIONAL senses (-1, +1, -1).
+# What they freeze is the *sign structure*: IN12 is the only TAVI instrument
+# with sense_mono = -1, so a regression in that path (a stray abs(), a sense
+# dropped on the mono branch) must fail loudly here. The magnitudes follow only
+# from published d-spacings and arm geometry and are sound; the signs inherit
+# whatever confidence the sense assignment has (instruments/in12/MODEL_STATUS.md).
+# Setup: cubic a=4.05, plane (1,0,0)/(0,1,0); kf or ki fixed at 2.0 A^-1 --
+# the wavevector IN12's published flux figures are quoted at.
+# ---------------------------------------------------------------------------
+
+E_K_2P0 = 8.288785234491714   # k2energy(2.0)
+
+
+@pytest.fixture(scope="module")
+def in12():
+    from instruments.in12.model import IN12_Instrument
+
+    return IN12_Instrument()
+
+
+def _in12_angles(in12, qx, qy, qz, deltaE, fixed_E, k_fixed, ana="pg002"):
+    angles, error_flags = in12.calculate_angles(
+        qx, qy, qz, deltaE, fixed_E, k_fixed, "pg002", ana
+    )
+    assert error_flags == []
+    return angles
+
+
+def test_in12_w1_elastic_200_monochromator_is_on_the_negative_branch(in12):
+    mtt, stt, sth, saz, att = _in12_angles(in12, 2 * TAU, 0.0, 0.0, 0.0,
+                                           E_K_2P0, "Kf Fixed")
+    assert mtt == pytest.approx(-55.834469, abs=1e-3)
+    assert stt == pytest.approx(101.737423, abs=1e-3)
+    assert att == pytest.approx(-55.834469, abs=1e-3)
+    # The whole point of IN12: mono AND analyzer take off negative, sample
+    # positive. No other TAVI instrument has a negative monochromator.
+    assert mtt < 0 and stt > 0 and att < 0
+    assert sth == pytest.approx(+50.868712, abs=1e-3)
+
+
+def test_in12_w2_inelastic_kf_fixed(in12):
+    mtt, stt, sth, saz, att = _in12_angles(in12, 2 * TAU, 0.0, 0.0, 2.0,
+                                           E_K_2P0, "Kf Fixed")
+    # Energy gain at the sample raises ki, so the mono angle closes toward zero
+    # while staying negative; the analyzer is pinned by fixed kf.
+    assert mtt == pytest.approx(-49.698670, abs=1e-3)
+    assert stt == pytest.approx(94.261101, abs=1e-3)
+    assert att == pytest.approx(-55.834469, abs=1e-3)
+
+
+def test_in12_w3_skew_q(in12):
+    mtt, stt, sth, saz, att = _in12_angles(in12, TAU, TAU, 0.0, 0.0,
+                                           E_K_2P0, "Kf Fixed")
+    assert stt == pytest.approx(66.528892, abs=1e-3)
+    assert sth == pytest.approx(+78.264446, abs=1e-3)
+
+
+def test_in12_w4_heusler_analyzer_ki_fixed(in12):
+    """The Heusler(111) face is 3.44 A, not 3.355 -- it moves A4 and nothing
+    else (TAVI models no polarisation)."""
+    mtt, stt, sth, saz, att = _in12_angles(in12, 2 * TAU, 0.0, 0.0, 2.0,
+                                           E_K_2P0, "Ki Fixed", ana="heusler111")
+    assert mtt == pytest.approx(-55.834469, abs=1e-3)
+    assert stt == pytest.approx(111.842206, abs=1e-3)
+    assert att == pytest.approx(-63.233107, abs=1e-3)
+
+
+def test_in12_w1_reverse_recovers_q(in12):
+    """The inverse must divide the mono readout by sense_mono = -1 -- the path
+    no other instrument exercises."""
+    mtt, stt, sth, saz, att = _in12_angles(in12, 2 * TAU, 0.0, 0.0, 0.0,
+                                           E_K_2P0, "Kf Fixed")
+    q_and_e, error_flags = in12.calculate_q_and_deltaE(
+        mtt, stt, sth, saz, att, E_K_2P0, "Kf Fixed", "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert q_and_e[0] == pytest.approx(2 * TAU, abs=1e-6)
+    assert q_and_e[3] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_in12_ki_fixed_reverse_recovers_energy_transfer(in12):
+    """Ki-fixed inverts through the ANALYZER sense instead; both branches of
+    calculate_q_and_deltaE must survive a negative-sense instrument."""
+    mtt, stt, sth, saz, att = _in12_angles(in12, 2 * TAU, 0.0, 0.0, 2.0,
+                                           E_K_2P0, "Ki Fixed")
+    q_and_e, error_flags = in12.calculate_q_and_deltaE(
+        mtt, stt, sth, saz, att, E_K_2P0, "Ki Fixed", "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert q_and_e[0] == pytest.approx(2 * TAU, abs=1e-6)
+    assert q_and_e[3] == pytest.approx(2.0, abs=1e-6)
