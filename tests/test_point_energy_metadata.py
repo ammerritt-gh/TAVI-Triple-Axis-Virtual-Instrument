@@ -222,3 +222,30 @@ def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
     )
     assert feasible is False
     assert "no neutron" in reason
+
+
+def test_angle_mode_mono_source_follows_the_monochromator():
+    """E0 for a Mono source is the energy A1 selects, not fixed_E + deltaE.
+
+    That arithmetic is only equal to Ei while the other crystal is held at
+    fixed_E. In angle mode neither is, so an A4 scan would have walked the
+    source band away from the energy the monochromator was still selecting,
+    starving the beam while every angle stayed valid.
+    """
+    d = 3.355
+    for att in (-41.19, -50.0, -60.0):
+        snap = _angle_snapshot("Kf Fixed", "Mono", 41.19, att, deltaE_field=0.0)
+        meta = snap.metadata
+        ei = k2energy(angle2k(41.19 / 2, d))
+        assert meta["Ei"] == pytest.approx(ei, rel=1e-9)
+        assert meta["E0_param"] == pytest.approx(ei, rel=1e-9)
+        # The transfer moves with A4 while E0 stays on the monochromator.
+        assert meta["Ef"] == pytest.approx(k2energy(angle2k(abs(att) / 2, d)),
+                                           rel=1e-9)
+
+
+def test_momentum_mode_mono_source_is_unchanged():
+    """The override must not touch the modes that were already right."""
+    assert _snapshot("Kf Fixed", "Mono", 2.0).metadata["E0_param"] == _FIXED_E + 2.0
+    assert _snapshot("Ki Fixed", "Mono", 2.0).metadata["E0_param"] == _FIXED_E
+    assert _snapshot("Kf Fixed", "Maxwellian", 2.0).metadata["E0_param"] == _FIXED_E
