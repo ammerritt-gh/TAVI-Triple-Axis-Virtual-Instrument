@@ -4,7 +4,7 @@ Living list. Grouped by theme, roughly dependency-ordered within each group.
 Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first),
 `docs/CONTROL_FEATURES_DESIGN.md` (feature designs + roadmap §9),
 `docs/LLM_HARNESS_DESIGN.md` (measurement driver), `docs/API_USER_GUIDE.md`
-(live API reference). Last updated: 2026-07-28.
+(live API reference). Last updated: 2026-09-10.
 
 ## Closed-loop enablers (drive the ISAR/driver integration)
 
@@ -69,9 +69,11 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
 - [ ] **Point-list (non-uniform) scans** — `scan_points` body form; reject duplicates,
       auto-sort with validation note. Small, independent.
       → CONTROL_FEATURES §8.
-- [ ] **Expose sample selection via the API** — currently GUI-only; blocked the first
-      closed-loop phonon run until manually switched. Field in `_api_field_map` +
-      schema `allowed` values from the sample library.
+- [x] **Expose sample selection via the API** — done 2026-07-06: `"sample"` is a
+      `PATCH /parameters` / `POST /scan` field with `allowed` ids from the sample
+      library in `GET /schema` (API guide, *Parameters*). The library now also
+      carries `Pb_phonon_DFT` (2026-09-05, real fcc dispersion from Rolf Heid's
+      DFT grid; `components/PHONON_DFT.md`).
       → CLOSED_LOOP §7 payload gaps.
 - [ ] **Per-scan truth in the data payload** — sample temperature, mono/ana/sample
       mosaics, scattering senses, vertical collimations. Each currently a card
@@ -86,8 +88,9 @@ Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first)
 
 Roadmap order per CONTROL_FEATURES §9:
 
-- [ ] **goto CEN/COM/MAX** — `tavi/scan_fits.py`, `POST /goto`, display-dock buttons.
-      Highest-value, self-contained. → CONTROL_FEATURES §1.
+- [ ] **goto CEN/COM/MAX** — GUI half done 2026-07-26: `tavi/scan_fits.py` and the
+      Fitting dock (`gui/docks/fitting_dock.py`) with goto COM/MAX/CEN and revert.
+      Still open: `POST /goto` for API clients. → CONTROL_FEATURES §1.
 - [ ] **Path (vector) scans** — `scan_path` body + GUI "Path" mode + point generator;
       `display_dock._get_axis_label` needs a path/|q| case. → CONTROL_FEATURES §2.
 - [ ] **Batch submission + campaigns** — `POST /scans`, `Campaign`/`CampaignRegistry`,
@@ -97,9 +100,8 @@ Roadmap order per CONTROL_FEATURES §9:
 
 ## API polish (small, found in live testing)
 
-- [ ] **Reject unknown top-level POST body keys (400)** — currently silently ignored;
-      an LLM sending `scan_commands` instead of `parameters.scan_command1` validates
-      the GUI's current state instead of erroring. Known footgun.
+- [x] **Reject unknown top-level POST body keys (400)** — done 2026-07-06
+      (`SCAN_BODY_KEYS` in `tavi/api_server.py`; unknown keys → `400 bad_request`).
 - [ ] **Quiet journal noise from isolation restore** — isolated submissions log
       duplicate "api: set …" parameter entries (apply + restore both record).
 - [ ] **429 Retry-After from real queue drain** — currently the ETA estimate when

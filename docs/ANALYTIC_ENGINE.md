@@ -216,7 +216,8 @@ signal_mean =
 mean_counts = signal_mean + background_mean
 ```
 
-The built-in `Al_phonon_DFT` calibration is:
+The built-in `Al_phonon_DFT` calibration (which `Pb_phonon_DFT` copies
+uncalibrated, see `components/PHONON_DFT.md`) is:
 
 - phonon: `6.41e-8`, preserving the established phonon anchor;
 - elastic: `0.00023679974108073573`.

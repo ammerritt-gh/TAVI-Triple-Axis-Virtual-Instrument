@@ -1,4 +1,4 @@
-"""Build the Pb ``Phonon_DFT`` assets from the collaborator's DFT phonon grid.
+"""Build the Pb ``Phonon_DFT`` assets from Rolf Heid's (KIT) DFT phonon grid.
 
 Input ``pb_pdisp_3d_nq50`` (repo root): DFT phonon frequencies calculated and
 provided by Rolf Heid, Karlsruhe Institute of Technology (KIT), committed with

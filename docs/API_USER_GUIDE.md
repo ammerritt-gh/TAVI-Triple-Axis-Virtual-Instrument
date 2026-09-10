@@ -253,7 +253,7 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
 - Each field is validated first and applied all-or-nothing: a field with a bad
   value is skipped entirely and reported in `errors`; valid fields still apply.
 - The mounted **sample** is one of these fields: set `"sample": "<id>"` (e.g.
-  `"Al_phonon_DFT"`, `"Al_bragg"`, or `"none"`). Allowed ids come from the sample
+  `"Al_phonon_DFT"`, `"Pb_phonon_DFT"`, `"Al_bragg"`, or `"none"`). Allowed ids come from the sample
   library and are listed under the `sample` field of `GET /schema`; an unknown id
   → `400 invalid_parameters`. Selecting a sample adopts its lattice, so pass any
   explicit `lattice_*` overrides in the *same* patch (they win). The chosen
