@@ -219,9 +219,12 @@ difference between the two built-in samples.
 - reflection file `Pb_Fm-3m.laz` (committed; generated from tabulated
   constants, `b_coh = 9.405 fm`, `F2 = 14.1526 barn` on every allowed
   reflection);
-- dispersion file `Pb_dft_phonons.dat` (**gitignored** with its source
-  `pb_pdisp_3d_nq50` until the collaborator permits publication; a checkout
-  without it lists the sample but fails at asset load);
+- dispersion file `Pb_dft_phonons.dat`, built by `tools/make_pb_assets.py`
+  from the committed DFT grid `pb_pdisp_3d_nq50` (calculated by Rolf Heid,
+  Karlsruhe Institute of Technology, and committed with his permission). The
+  150 MB map itself is gitignored as a build product over GitHub's file
+  limit; `setup-tavi-dev.bat` builds it, and a checkout without it lists the
+  sample but fails at asset load;
 - cubic lattice parameter `a = 4.9508 A` (room-temperature Pb; the DFT
   lattice constant has not been supplied);
 - temperature `T = 300 K`; otherwise the aluminium parameters.

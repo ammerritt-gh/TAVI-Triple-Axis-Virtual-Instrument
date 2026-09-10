@@ -91,9 +91,10 @@ def default_sample_library() -> tuple[SampleSpec, ...]:
         ),
         SampleSpec(
             "Pb_phonon_DFT", "Pb: Phonon DFT", "Phonon_DFT",
-            # Real fcc dispersion from a collaborator's DFT grid (tools/make_pb_assets.py).
-            # Pb_dft_phonons.dat is gitignored until the data may be published; the sample
-            # is listed regardless, and a run without the file fails at asset load.
+            # Real fcc dispersion from Rolf Heid's (KIT) DFT grid, pb_pdisp_3d_nq50.
+            # Pb_dft_phonons.dat is a 150 MB build product of tools/make_pb_assets.py
+            # (gitignored); the sample is listed regardless, and a run without the
+            # file fails at asset load.
             properties={
                 "reflections": '"Pb_Fm-3m.laz"',
                 "delta_d_d": 1.45e-3, "barns": 1,

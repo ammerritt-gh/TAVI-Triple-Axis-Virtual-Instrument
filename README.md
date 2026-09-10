@@ -107,6 +107,11 @@ TAVI is based on McStas and McStasScript, which can be found at the following lo
 
 [https://mads-bertelsen.github.io/index.html](https://mads-bertelsen.github.io/index.html)
 
+The lead sample (`Pb_phonon_DFT`) uses phonon frequencies calculated with
+density-functional perturbation theory by **Rolf Heid** (Karlsruhe Institute of
+Technology, KIT): the grid `pb_pdisp_3d_nq50`, from which
+`components/Pb_dft_phonons.dat` is built, is included with his permission.
+
 ## License
 
 Licensed under the GNU General Public License v3.0. See `LICENSE`.
