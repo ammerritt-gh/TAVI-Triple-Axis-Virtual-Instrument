@@ -57,6 +57,15 @@ plugins, but built-in packages use the central path.
    `InstrumentDescriptor` (`instruments/descriptor.py`): geometry + senses,
    crystals, `samples=default_sample_library()`, scannable parameters,
    monitors, collimation, slits, source types, axis limits.
+   Two `CrystalSpec` fields are easy to miss and both belong to the *crystal*,
+   not the instrument: `mosaic_v` for an anisotropic mosaic (the emitter then
+   writes McStas's `mosaich`/`mosaicv` pair instead of the single `mosaic`),
+   and `fixed_curvature` naming the curvature axes that assembly holds fixed
+   (`"rhm"`/`"rvm"` for a monochromator, `"rha"`/`"rva"` for an analyser), which
+   makes the scan-command validator refuse a scan over them. Declare the second
+   only where the *fixedness* is evidenced for that crystal — two analysers on
+   one instrument can differ, and pinning a value in `scan_config` without
+   declaring it lets a scan silently defeat the pin.
 2. **Validate** — `validate_descriptor(d, runnable=True)` must return `[]`.
    Startup calls `assert_valid_descriptor(runnable=True)` and exits on
    failure. Run `python -m instruments._descriptor_examples` for a printout.
@@ -86,7 +95,15 @@ plugins, but built-in packages use the central path.
 8. **Baselines + smoke** — capture `.instr` baselines through the plugin path
    before refactors; compile and run one elastic Bragg point end-to-end and
    check the detector actually counts (see §Gotchas — the bending sign was
-   found only this way).
+   found only this way). Record the result in `MODEL_STATUS.md` with the
+   configuration it validates, and **re-run it when the emitted tree changes** —
+   a smoke recorded against a tree the model no longer emits validates nothing.
+   Generated `.instr`/`.exe` are build products and belong in `.gitignore`.
+
+   A smoke script runs *outside* pytest, so it does not get the repo-root
+   `conftest.py` guard: call `install_no_window_guard()` from it before
+   touching McStasScript, or every instrument construction opens a console
+   window on the operator's screen (see `tests/README.md`).
 
 ---
 

@@ -151,13 +151,14 @@ def in8_descriptor() -> InstrumentDescriptor:
             ),
             # Cu200 face, same subdivision (paper 2023). No stock McStas
             # reflectivity data for Cu: constant r0 with the McStas "NULL"
-            # sentinel (= no file). Mosaic is actually anisotropic 25'/10'
-            # (ILL); PLACEHOLDER isotropic 25' and r0=0.7 until measured
-            # values are available.
+            # sentinel (= no file); r0=0.7 stays a PLACEHOLDER until a measured
+            # reflectivity is available. Mosaic is ILL's published anisotropic
+            # 25' horizontal / 10' vertical, emitted as Monochromator_curved's
+            # mosaich/mosaicv pair and consumed by the resolution adapter.
             CrystalSpec(
                 id="cu200", display_name="Cu[200]", d_spacing=1.807,
                 slab_width=0.025, slab_height=0.017, n_columns=11, n_rows=11,
-                gap=0.0015, mosaic=25, r0=0.7,
+                gap=0.0015, mosaic=25, mosaic_v=10, r0=0.7,
                 reflect_file="NULL", transmit_file="NULL",
             ),
             # Si111/Si311 bent-perfect faces exist on IN8 but cannot be
@@ -184,8 +185,14 @@ def in8_descriptor() -> InstrumentDescriptor:
         modules=(),
         # Soller collimators 20'/30'/40' (+60' on the secondary spectrometer);
         # IN8 normally runs open with double focusing, hence default "0".
-        # There is no alpha_1 slot: the primary collimation sits after the mono.
+        # ILL's characteristics page describes collimators both before and
+        # after the monochromator (and before and after the analyser), so the
+        # primary slot exists; its housing position and aperture are
+        # PLACEHOLDERs (see model.py). An open slot is withdrawn from the beam
+        # and emits no component at all.
         collimation=(
+            CollimationSlot("alpha_1", "α1 (src-mono)", ("0", "20", "30", "40", "60"),
+                            default="0"),
             CollimationSlot("alpha_2", "α2 (mono-smp)", ("0", "20", "30", "40", "60"),
                             default="0"),
             CollimationSlot("alpha_3", "α3 (smp-ana)", ("0", "20", "30", "40", "60"),
@@ -205,8 +212,15 @@ def in8_descriptor() -> InstrumentDescriptor:
         ),
         # vTAS a2/a4/a6 mechanical limits; defaults are the standard elastic
         # Al (2,0,0) configuration at kf = 2.662 (signs per verified senses).
+        # A1 is the exception: vTAS's inherited -40...110 deg admitted take-off
+        # angles outside the real machine. ILL's current characteristics page
+        # gives 11 deg < 2-theta_M < 90 deg, and the 2023 Thermes paper gives
+        # approximately 10-90 deg. The tighter, currently-published envelope is
+        # the one enforced; the 10 deg figure is recorded in MODEL_STATUS.md as
+        # the looser historical reading rather than averaged into a guess.
+        # sense_mono = +1, so the signed readout is the take-off angle itself.
         axis_limits={
-            "A1": AxisLimits(-40.0, 41.19, 110.0),
+            "A1": AxisLimits(11.0, 41.19, 90.0),
             "A2": AxisLimits(-120.0, 71.30, 120.0),
             "A4": AxisLimits(-120.0, -41.19, 120.0),
         },
@@ -264,6 +278,7 @@ class IN8Plugin:
         # double-focusing).
         scan_config.rva = -0.31
         scan_config.sample_key = sample_key
+        scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
         scan_config.alpha_3 = float(collimation['alpha_3'])
         scan_config.alpha_4 = float(collimation['alpha_4'])
@@ -294,6 +309,7 @@ class IN8Plugin:
             "sample_key": getattr(config, "sample_key", None),
             "source_type": config.source_type,
             "source_dE": config.source_dE,
+            "alpha_1": config.alpha_1,
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,
             "alpha_4": config.alpha_4,
@@ -355,9 +371,9 @@ class IN8Plugin:
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript. IN8
         has no NMO and no velocity selector, so no invalidations arise from
-        modules; a monochromatic source still warns. IN8's collimation has no
-        alpha_1 slot (open primary) -> the adapter substitutes 60 arcmin for it
-        with a recorded warning.
+        modules; a monochromatic source still warns. Every collimation slot
+        left open substitutes the adapter's documented 60 arcmin effective
+        divergence with a recorded warning.
         """
         from instruments.resolution_adapter import build_resolution_config
 

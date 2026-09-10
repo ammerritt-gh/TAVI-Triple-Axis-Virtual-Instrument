@@ -668,11 +668,11 @@ class TaviApiBackend:
         cmd1 = vals.get("scan_command1", "")
         cmd2 = vals.get("scan_command2", "")
 
-        # 2. Validate scan commands unless force overrides.
-        if not force:
-            msg = controller._validate_scan_commands_text(cmd1, cmd2)
-            if msg:
-                raise ApiError(400, "scan_validation", msg)
+        # 2. Validate scan commands. ``force`` clears the soft issues only;
+        #    a hard one is refused whatever the caller says.
+        issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
+        if issues:
+            raise ApiError(400, "scan_validation", "\n".join(issues))
 
         # 2a. Resolve the background against this scan's sample -- the same
         #     check /validate runs, so a body that validates cannot be rejected
@@ -692,8 +692,8 @@ class TaviApiBackend:
         try:
             points = controller._count_scan_points(cmd1, cmd2)
         except Exception:
-            # Unparseable command with force=True: cannot size it, let the
-            # scan itself fail later; treat as a single point for budget.
+            # A command the gate accepted but the sizer cannot parse: treat
+            # it as a single point for budget and let the scan itself report.
             points = 1
         neutrons = float(vals.get("number_neutrons") or 0)
 
@@ -801,6 +801,24 @@ class TaviApiBackend:
             lambda: self._validate_scan_on_gui(patch, force, background)
         )
 
+    @staticmethod
+    def _blocking_scan_issues(controller, vals, cmd1, cmd2, force):
+        """The scan-command issues that block this request.
+
+        ``force`` is the operator's deliberate override, so it clears exactly
+        what the GUI Run button offers as a choice: the soft issues (a very
+        long scan, an advisory conflict). A hard issue -- the command does not
+        describe a scan that can run as written: an unknown or refused
+        variable, a malformed command, Q paired with HKL -- blocks whatever
+        the caller says. Forcing through one of those ran a scan that
+        silently overwrote the radius a crystal pins, or labelled points with
+        coordinates they were not taken at (ruling 2026-09-10).
+        """
+        hard, soft = controller._scan_command_issues(
+            cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
+        )
+        return hard if force else hard + soft
+
     def _validate_scan_on_gui(self, patch, force, background=None):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
 
@@ -822,11 +840,9 @@ class TaviApiBackend:
         )
         if background_blocker is not None:
             blockers.append(background_blocker)
-        scan_msg = ""
-        if not force:
-            scan_msg = controller._validate_scan_commands_text(cmd1, cmd2)
-            if scan_msg:
-                blockers.append("scan_validation: %s" % scan_msg)
+        scan_issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
+        if scan_issues:
+            blockers.append("scan_validation: %s" % "\n".join(scan_issues))
 
         try:
             points = controller._count_scan_points(cmd1, cmd2)
@@ -1442,6 +1458,14 @@ class TAVIController(QObject):
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
+        # Which curvature axes are fixed follows the selected crystal, so a
+        # scan command that was valid under one crystal can stop being valid
+        # under another. The launch path re-validates regardless; this keeps
+        # the warning in the dock honest as soon as the selection changes.
+        self.window.instrument_dock.monocris_combo.currentTextChanged.connect(
+            lambda _text: self.validate_scan_commands())
+        self.window.instrument_dock.anacris_combo.currentTextChanged.connect(
+            lambda _text: self.validate_scan_commands())
 
         # Connect NMO selection change to update ideal bending values (instrument-
         # specific coupling; the module widget only exists when declared)
@@ -2476,6 +2500,16 @@ class TAVIController(QObject):
 
         patched = set(parsed)
         vals.update(parsed)
+
+        # A patched container replaces the previous object wholesale, so a
+        # request naming only some collimation slots would silently drop the
+        # rest -- and the plugin's scan_config indexes every slot the
+        # descriptor declares, so the next one added to an instrument would
+        # turn every previously valid partial request into a KeyError. Refill
+        # from the descriptor defaults instead.
+        if 'collimation' in patched and isinstance(vals.get('collimation'), dict):
+            for slot_id, default in self._descriptor_collimation_defaults().items():
+                vals['collimation'].setdefault(slot_id, default)
 
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
@@ -3560,9 +3594,14 @@ class TAVIController(QObject):
         # Clear all previous warnings
         self.window.simulation_dock.clear_all_scan_warnings()
         
-        # Validate each command individually
-        var1, warning1 = self._validate_single_scan_command(cmd1)
-        var2, warning2 = self._validate_single_scan_command(cmd2)
+        # Validate each command individually, against the crystals the dock
+        # currently shows -- this path exists to annotate those widgets.
+        dock = self.window.instrument_dock
+        fixed_axes = self._fixed_curvature_axes(
+            dock.selected_mono_id(), dock.selected_ana_id()
+        )
+        var1, warning1 = self._validate_single_scan_command(cmd1, fixed_axes)
+        var2, warning2 = self._validate_single_scan_command(cmd2, fixed_axes)
         
         if warning1:
             self.window.simulation_dock.set_scan_command_warning(1, warning1)
@@ -3575,9 +3614,42 @@ class TAVIController(QObject):
             if conflict:
                 self.window.simulation_dock.set_scan_conflict_warning(conflict)
     
-    def _validate_single_scan_command(self, command: str) -> tuple:
+    def _fixed_curvature_axes(self, monocris, anacris):
+        """{axis: crystal display name} for the two named crystals.
+
+        Fixed focusing is a property of the crystal assembly, not the
+        instrument: IN12's conventional PG(002) analyser has a fixed vertical
+        focus while the Heusler option on the same instrument has no
+        established focusing behaviour. So the answer depends on which crystals
+        are selected -- and the *caller* says which, because the GUI's live
+        selection and a frozen API request can name different ones. Reading the
+        dock here would have validated an API scan against whatever crystal the
+        operator happened to have on screen. An unknown or unset id contributes
+        nothing: the gate never invents a restriction.
+        """
+        fixed = {}
+        for selected_id, specs, label in (
+            (monocris, self.descriptor.mono_crystals, "monochromator"),
+            (anacris, self.descriptor.ana_crystals, "analyser"),
+        ):
+            for spec in specs:
+                if spec.id == selected_id:
+                    for axis in spec.fixed_curvature:
+                        fixed[axis] = f"{spec.display_name} {label}"
+                    break
+        return fixed
+
+    def _validate_single_scan_command(self, command: str, fixed_axes=None) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
-        
+
+        ``fixed_axes`` is the {axis: crystal} mapping from
+        ``_fixed_curvature_axes`` for the crystals this scan will actually run
+        with; omitted means no curvature axis is refused.
+
+        A returned variable of ``None`` alongside a warning is a *hard*
+        rejection -- the command cannot run as written. Callers must treat it
+        as blocking; see ``_validate_scan_commands_text``.
+
         Returns:
             tuple: (normalized_variable_name or None, warning_message or None)
         """
@@ -3611,6 +3683,16 @@ class TAVIController(QObject):
             else:
                 return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, chi, etc.")
         
+        # A curvature axis the SELECTED crystal holds fixed is not scannable.
+        # Refusing is the point: scan_config pins it, but compute_scan_snapshot
+        # reads scans[4:8] and would otherwise let the scan override the pin,
+        # so a scan that looked accepted would either do nothing or quietly
+        # defeat the fixed value.
+        fixed_by = fixed_axes or {}
+        if var_lower in fixed_by:
+            return (None, f"'{var_name}' is fixed on the {fixed_by[var_lower]} "
+                          f"and cannot be scanned.")
+
         # Validate numeric parts
         try:
             start = float(parts[1])
@@ -3644,6 +3726,27 @@ class TAVIController(QObject):
         normalized = self.normalize_scan_variable(var_name)
         return (normalized.lower() if normalized else var_lower, None)
     
+    @staticmethod
+    def _is_unexecutable_conflict(v1: str, v2: str) -> bool:
+        """True when two scan variables cannot both be honoured as written.
+
+        A scan point stores its first four values in one slot group that
+        ``_solve_point_geometry`` reads as (qx, qy, qz, dE) in momentum mode and
+        as (H, K, L, dE) in rlu mode -- the SAME slots. Pairing a Q variable
+        with an HKL one therefore does not scan both: one mode wins, the other
+        command overwrites its slot, and the overwritten values are then read
+        under the winning mode's units. The result is measurements labelled with
+        coordinates they were not taken at, which is worse than a refusal.
+
+        Every other conflict this class detects is a judgement call -- scanning
+        H against the sample offset psi is a supported combination -- so those
+        stay overridable.
+        """
+        q_vars = {"qx", "qy", "qz"}
+        hkl_vars = {"h", "k", "l"}
+        return ((v1 in q_vars and v2 in hkl_vars)
+                or (v1 in hkl_vars and v2 in q_vars))
+
     def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
         """Check if two scan variables conflict with each other.
         
@@ -3664,10 +3767,9 @@ class TAVIController(QObject):
         if v1 == v2:
             return f"⚠ Both commands scan '{v1}' - use different parameters"
         
-        q_vars = {"qx", "qy", "qz"}
-        hkl_vars = {"h", "k", "l"}
-        if (v1 in q_vars and v2 in hkl_vars) or (v1 in hkl_vars and v2 in q_vars):
-            return "Conflict: Q and HKL scans describe the same target momentum under the current sample mount"
+        if self._is_unexecutable_conflict(v1, v2):
+            return ("Conflict: Q and HKL scans describe the same target momentum "
+                    "under the current sample mount")
 
         # Check linked parameter groups (parameters that control the same thing)
         for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
@@ -5066,6 +5168,20 @@ class TAVIController(QObject):
         except Exception:
             return None
 
+    def _descriptor_collimation_defaults(self):
+        """{slot_id: default} for every collimation slot the descriptor declares.
+
+        A multi-select slot's value is a set, matching what the GUI's
+        ``collimation_values`` returns for one.
+        """
+        defaults = {}
+        for slot in self.descriptor.collimation:
+            if slot.multi_select:
+                defaults[slot.id] = {slot.default} if slot.default else set()
+            else:
+                defaults[slot.id] = slot.default
+        return defaults
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -5087,12 +5203,7 @@ class TAVIController(QObject):
             else:
                 modules[m.id] = bool(m.default)
 
-        collimation = {}
-        for slot in d.collimation:
-            if slot.multi_select:
-                collimation[slot.id] = {slot.default} if slot.default else set()
-            else:
-                collimation[slot.id] = slot.default
+        collimation = self._descriptor_collimation_defaults()
 
         slits_mm = {}
         for slit in d.slits:
@@ -5224,14 +5335,26 @@ class TAVIController(QObject):
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
         # Pre-flight validation - check for scan command issues
-        validation_result = self._preflight_scan_validation()
-        if validation_result:
-            # There are issues - show warning but allow proceeding
-            from PySide6.QtWidgets import QMessageBox
+        hard_issues, soft_issues = self._preflight_scan_validation()
+        from PySide6.QtWidgets import QMessageBox
+        if hard_issues:
+            # Not a question: the command does not describe a scan that can
+            # run. Offering "continue anyway" here would launch a scan over
+            # a refused axis and silently overwrite the radius it pins.
+            message = "\n".join(hard_issues)
+            QMessageBox.critical(
+                self.window, "Scan Command Rejected",
+                f"{message}\n\nFix the scan command and try again."
+            )
+            self.print_to_message_center(f"Simulation refused: {message}")
+            return
+        if soft_issues:
+            # Judgement calls, so they stay the operator's to make.
             reply = QMessageBox.warning(
                 self.window,
                 "Scan Command Issues",
-                f"{validation_result}\n\nDo you want to continue anyway?",
+                "\n".join(soft_issues)
+                + "\n\nDo you want to continue anyway?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -5828,54 +5951,94 @@ class TAVIController(QObject):
             parts.append(f"max {int(peak[0])} counts at {peak[1]}")
         return ", ".join(parts)
 
-    def _preflight_scan_validation(self) -> str:
+    def _preflight_scan_validation(self):
         """Check scan commands before running simulation (GUI wrapper).
 
         Reads the scan-command widgets and delegates to the pure
-        ``_validate_scan_commands_text`` so the GUI Run path and the API path
-        share one validation implementation. GUI behavior is unchanged.
+        ``_scan_command_issues`` so the GUI Run path and the API path share
+        one validation implementation.
 
         Returns:
-            str: Error/warning message if issues found, empty string if OK
+            tuple: (hard, soft) issue lists. Hard cannot be overridden --
+            the command does not describe a scan that can run. Soft is the
+            operator's judgement to make.
         """
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        return self._validate_scan_commands_text(cmd1, cmd2)
+        dock = self.window.instrument_dock
+        return self._scan_command_issues(
+            cmd1, cmd2, dock.selected_mono_id(), dock.selected_ana_id()
+        )
 
-    def _validate_scan_commands_text(self, cmd1: str, cmd2: str) -> str:
-        """Pure scan-command validation over two command strings.
+    def _scan_command_issues(self, cmd1: str, cmd2: str,
+                             monocris=None, anacris=None):
+        """(hard, soft) issue lists for two scan-command strings.
+
+        Hard means the command cannot run as written -- an unknown or
+        refused variable, a malformed command, a conflict between the two.
+        Soft means it can run but probably should not, which is the
+        operator's call.
 
         Parameterized on strings only -- reads no widgets -- so both the GUI
-        Run button and the remote API can call it. Returns an empty string when
-        the commands are acceptable, or a newline-joined description of the
-        blocking issues (serious warnings / unknown variables / conflicts).
+        Run button and the remote API can call it. ``monocris``/``anacris`` name
+        the crystals the scan will run with, which decides whether a curvature
+        axis is refused; the API passes the frozen request's, not the GUI's.
+        Returns an empty string when the commands are acceptable, or a
+        newline-joined description of the blocking issues.
+
+        A command that came back with no variable is a hard rejection and
+        always blocks. Sniffing the message text for a warning marker used to
+        decide this, so every rejection whose wording lacked the marker --
+        an incomplete command, unparseable numbers, a refused fixed curvature
+        axis -- was reported to the operator and then launched anyway.
         """
         cmd1 = (cmd1 or "").strip()
         cmd2 = (cmd2 or "").strip()
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris)
 
-        issues = []
+        hard = []
+        soft = []
+        variables = []
 
-        # Validate command 1
-        var1, warning1 = self._validate_single_scan_command(cmd1)
-        if warning1 and "⚠" in warning1:  # Only block on serious warnings
-            issues.append(f"Command 1: {warning1}")
-        elif warning1 and "Unknown" in warning1:
-            issues.append(f"Command 1: {warning1}")
+        for label, cmd in (("Command 1", cmd1), ("Command 2", cmd2)):
+            var, warning = self._validate_single_scan_command(cmd, fixed_axes)
+            variables.append(var)
+            if not warning:
+                continue
+            # var is None -> the command cannot run as written, whatever the
+            # wording. Anything else marked serious is a judgement the
+            # operator is allowed to overrule (a very long scan, say).
+            if var is None:
+                hard.append(f"{label}: {warning}")
+            elif "⚠" in warning:
+                soft.append(f"{label}: {warning}")
 
-        # Validate command 2
-        var2, warning2 = self._validate_single_scan_command(cmd2)
-        if warning2 and "⚠" in warning2:
-            issues.append(f"Command 2: {warning2}")
-        elif warning2 and "Unknown" in warning2:
-            issues.append(f"Command 2: {warning2}")
+        var1, var2 = variables
 
-        # Check for conflicts between commands
+        # Check for conflicts between commands. These stay overridable:
+        # they were before this split, and legitimate combinations exist
+        # (scanning H against the sample offset psi, say). Only a command
+        # that cannot run AS WRITTEN is hard.
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
-                issues.append(conflict)
+                if self._is_unexecutable_conflict(var1.lower(), var2.lower()):
+                    hard.append(conflict)
+                else:
+                    soft.append(conflict)
 
-        return "\n".join(issues)
+        return hard, soft
+
+    def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
+                                     monocris=None, anacris=None) -> str:
+        """Hard and soft issues joined as one string, or "" when there are none.
+
+        For callers that only want the text. The API gate reads
+        ``_scan_command_issues`` itself, because ``force`` may clear the soft
+        issues only (``TaviApiBackend._blocking_scan_issues``).
+        """
+        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
+        return "\n".join(hard + soft)
 
     # ------------------------------------------------------------- remote API
     #

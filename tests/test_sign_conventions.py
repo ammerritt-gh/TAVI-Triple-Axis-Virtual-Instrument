@@ -339,8 +339,11 @@ def test_crystal_info_dict_shape_frozen():
 
     mono_info, ana_info = mono_ana_crystals_setup("pg002", "pg002")
     assert sorted(mono_info) == [
-        "dm", "gap", "mosaic", "ncolumns", "nrows",
+        "dm", "gap", "mosaic", "mosaic_v", "ncolumns", "nrows",
         "r0", "reflect", "slabheight", "slabwidth", "transmit",
     ]
+    # mosaic_v is None for an isotropic crystal; the emitter then sets the
+    # component's single `mosaic` exactly as before.
+    assert mono_info["mosaic_v"] is None
     assert mono_info["dm"] == 3.355
     assert ana_info["da"] == 3.355

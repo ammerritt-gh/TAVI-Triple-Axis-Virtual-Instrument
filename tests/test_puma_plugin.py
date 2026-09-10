@@ -176,12 +176,12 @@ def test_binary_path_is_derived_from_built_instrument(tmp_path):
 # strings emitted verbatim into the .instr).
 _GOLDEN_PG002_MONO = {
     'dm': 3.355, 'slabwidth': 0.0202, 'slabheight': 0.018, 'ncolumns': 13,
-    'nrows': 9, 'gap': 0.0005, 'mosaic': 35, 'r0': 1.0,
+    'nrows': 9, 'gap': 0.0005, 'mosaic': 35, 'mosaic_v': None, 'r0': 1.0,
     'reflect': '"HOPG.rfl"', 'transmit': '"HOPG.trm"',
 }
 _GOLDEN_PG002_ANA = {
     'da': 3.355, 'slabwidth': 0.01, 'slabheight': 0.0295, 'ncolumns': 21,
-    'nrows': 5, 'gap': 0.0005, 'mosaic': 35, 'r0': 1.0,
+    'nrows': 5, 'gap': 0.0005, 'mosaic': 35, 'mosaic_v': None, 'r0': 1.0,
     'reflect': '"HOPG.rfl"', 'transmit': '"HOPG.trm"',
 }
 

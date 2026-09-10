@@ -292,7 +292,10 @@ ETA. The GUI Run button is **never** subject to this — humans are always allow
 to submit.
 
 - Invalid scan command → `400 scan_validation` with a human-readable message.
-  Pass `"force": true` in the body to bypass scan-command validation.
+  Pass `"force": true` in the body to override the *soft* scan-command
+  warnings (a very long scan, an advisory conflict). A hard rejection -- an
+  unknown or refused variable, a malformed command, a Q variable paired with
+  an HKL one -- is refused regardless, exactly as the GUI Run button refuses it.
 - Any **geometrically infeasible** point → `400 infeasible_points`; the error
   `details` is the full `validation` object (so you can see which points and
   why). To queue anyway and simply **skip** the unreachable points, resubmit
@@ -933,7 +936,7 @@ Server-Sent Events stream. See §8.
 |---|---|---|
 | 400 | `bad_request` | Malformed JSON body, non-object body, or a PATCH field whose value is not a scalar/object. |
 | 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) had an unknown field or a bad value. `details` lists `applied` and `errors`. |
-| 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, step larger than range). Bypass with `"force": true`. |
+| 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, step larger than range). `"force": true` overrides only the soft warnings; hard rejections stand. |
 | 400 | `invalid_background` | A background configuration (`PUT /background`, or the `background` field of `POST /scan` / `POST /validate`) failed to resolve — for example a missing/mismatched `catalog_version`, unknown source id or nested field, non-boolean enable, or invalid scale. On `PUT` the stored configuration is untouched; on `POST /scan` `details.background` is the validation background block. Unknown top-level fields are `bad_request`. |
 | 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
 | 401 | `unauthorized` | A token is configured and the `Authorization: Bearer <token>` header is missing or wrong. |
