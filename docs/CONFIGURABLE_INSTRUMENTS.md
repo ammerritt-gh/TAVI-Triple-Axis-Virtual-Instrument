@@ -25,11 +25,18 @@ convention for the flipped sample sense is vTAS-verified too (Friedel/-Q
 branch; §20.5).
 **Unified packages IMPLEMENTED (2026-07-18):** runnable PUMA and IN8 code,
 plain-language documentation, evidence status, scientist review, and immutable
-references now live together under `instruments/<id>/`. PANDA and IN12 are
-research-only packages. Shared TAS state/snapshot/execution moved to
+references now live together under `instruments/<id>/`. PANDA is a
+research-only package. Shared TAS state/snapshot/execution moved to
 `instruments/tas_runtime.py`, and `python -m instruments.package_validation`
 enforces the package contract. Sections below retain historical implementation
 context; current paths and authoring policy are in `docs/INSTRUMENT_AUTHORING.md`.
+**IN12 IMPLEMENTED (2026-09-09, record §21):** the third registered
+instrument, and the first with a monochromator on the negative branch
+(`sense_mono = −1`). Built entirely from public documentation — its team never
+sent files — but a literature round the same day resolved its scattering senses
+to `(−1, +1, −1)` on three independent sources, so its kinematics are verified
+(§21.2). What remains provisional is intensity and resolution: the incident
+spectrum above all (§21.3).
 **Author:** initial draft 2026-06-18; design decisions locked 2026-06-18; review
 incorporated 2026-06-18; audit + implementation spec 2026-07-02; implemented
 2026-07-02.
@@ -1494,3 +1501,182 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
   ±90° symmetry-setting jumps between points.
 - Si bent-perfect crystals, FlatCone/IMPS, and the §20.3 placeholders await
   instrument-scientist input.
+
+## 21. IN12 implementation record (2026-09-09)
+
+IN12 (ILL, cold TAS on guide H144) is the third registered instrument. It is
+the first one built with **no instrument-scientist input at all** — the team
+never sent files — so the record below is as much about what the model does
+*not* know as about what it does.
+
+Evidence: a 2026-07-18 research dossier assembled from the 2016 Schmalzl
+upgrade paper, the current ILL pages, the historical `ILL_H142_IN12` McStas
+example, a 2001 IN12 raw scan header and the 2010 vTAS instrument repository;
+plus a 2026-09-09 re-check of the live ILL pages before registration. Both are
+immutable snapshots under `instruments/in12/references/`. The re-check
+contradicted nothing.
+
+### 21.1 The first negative-branch monochromator
+
+IN12 is the first TAVI instrument with `sense_mono = −1`. ILL publishes its
+monochromator two-theta travel as **−140°…−10°** — entirely negative — because
+the 2012 upgrade moved the new 11 × 11 PG(002) assembly onto the clockwise
+branch. The sense threading from §20.1 already supported this; IN12 is the
+first exerciser of it, forward and inverse (`calculate_q_and_deltaE` divides
+the mono readout by `sense_mono` before the inverse Bragg conversion — a path
+no previous instrument reached with a negative sense).
+
+Consequently **all three driven curvature radii are negative** in
+`IN12Plugin.scan_config`: the mono takes off negative *and* so does the
+analyser. §20's branch-sign rule generalises without change.
+
+### 21.2 Senses — resolved, and the model was right
+
+`(−1, +1, −1)` — the **W configuration**, monochromator and analyser on the
+clockwise branch, sample counter-clockwise. Confirmed 2026-09-09 by a
+literature round (`instruments/in12/references/2026-09-09__in12-literature-round__v02.md`)
+after the model had already been built on it as a provisional assignment. Three
+independent lines agree:
+
+1. ILL publishes the monochromator two-theta travel as −140°…−10°, entirely
+   negative. Strong, but not proof alone: a motor coordinate and the logical
+   sense metadata need not share a sign, since software may apply offsets or
+   inversions.
+2. ILL's own public **Takin** resolution preset
+   (`data/instruments/in12_pg002_pg002.taz`) stores `mono_scatter_sense = 0`,
+   `sample_scatter_sense = 1`, `ana_scatter_sense = 0` — mono and analyser
+   together, sample opposite.
+3. H. Trepka's 2022 Stuttgart dissertation reports a post-upgrade IN12
+   configuration explicitly as `SM = −1, SS = +1, SA = −1`.
+
+The one apparently contradictory source is not: Brüning's IN12 RESCAL table
+gives `+1, −1, +1`, but legacy ResCal defines +1 = right, the reverse of the
+SICS/raw-file convention. Normalised, it is the same geometry — a reminder that
+a sense triple is meaningless without naming its convention.
+
+The goldens in `tests/test_sign_conventions.py` remain self-generated (nobody
+ran the instrument for us), but they now freeze a verified geometry rather than
+a hypothesis. `test_in12_plugin.py` additionally asserts the *structural* half —
+mono and analyser on the same branch, sample opposite — so a partial regression
+cannot hide behind the triple.
+
+### 21.3 Model boundary and what was deliberately left out
+
+- **Source** = an effective 20 × 140 mm aperture at the H144 guide exit, 1.8 m
+  from the monochromator. The exit *is* the instrument's virtual source (2016);
+  the ~115 m of guide above it is not modeled, and with it the velocity
+  selector (>36 m upstream) and the transmission polarising cavity (~35 m).
+  A bare source at 115 m without the guide would not reproduce the incident
+  phase space, so the compact interpretation is the only honest one available.
+- **No velocity selector, no Be filter.** Both are higher-order suppressors.
+  The source emits a narrow band around E0, so there are no higher orders to
+  remove and either component would only attenuate. McCode's `Be.trm` — a
+  transmission curve measured *on IN12* at 80 K — is available the day a
+  broadband source model lands.
+- **No IN12-UFO** — but it was built, which the first pass got wrong. The 2016
+  CRG annual report describes commissioning the fifteen-channel
+  multi-analyser/multi-detector, with neutron tests performed and
+  mechanical-stability and background problems corrected; a 2018 JCNS
+  contribution calls it "currently in a commissioning phase"; and a 2023 ECNS
+  instrument-status contribution describes it in the present tense as
+  interchangeable with the standard secondary spectrometer. What could not be
+  found is any peer-reviewed paper stating its data were taken with UFO, or
+  evidence of routine user operation — so ILL's surviving "will be equipped
+  with" web wording is stale rather than accurate. Excluding it is still right:
+  multi-analyser secondaries are out of scope for v1 (§14), the same call made
+  for IN8's FlatCone/IMPS, and it belongs in a separate descriptor if ever
+  modeled. It should simply not be described as never built.
+- **No polarisation.** The Heusler(111) analyser IS offered, because its
+  d-spacing (3.44 Å) genuinely moves A4; everything else about polarised
+  operation is outside TAVI's model.
+- **L3 modeled at 1.30 m**, which is one setting of a genuinely variable arm,
+  not the arm length: ILL says "a variable sample-to-analyser distance of about
+  1.3 m" and ILL's own Takin preset uses 1.46 m. The travel limits are
+  unpublished; with them L3 could become a descriptor-level choice.
+
+### 21.4 Derived, not measured — and one correction
+
+No source publishes IN12's **monochromator** crystal dimensions. The descriptor
+divides the published 200 × 160 mm face by eleven and removes a nominal 1.5 mm
+gap. The tests assert the *face* those slabs reconstruct, not the slab sizes,
+so the derivation stays visible as a derivation.
+
+The **analyser** was initially modeled as 11 × 1 and vertically flat, inherited
+from the historical `ILL_H142_IN12` McStas wrapper (`NHA = 11`, `NVA = 1`) on
+the argument that the 2012 upgrade left the secondary spectrometer alone. That
+argument was right and the conclusion was wrong. W. Schmidt and B. Fåk, "New
+focusing analyser on IN12", **ILL Annual Report 1998**, describes the assembly
+as built: eleven vertical lamellae of **11 mm** width, motorised variable
+*horizontal* focusing, and a **fixed vertical focus produced by tilting the top
+and bottom crystal rows** (its Fig. 1 says the tilt is visible), mosaic ~0.5°.
+
+Tilting a top and bottom row requires at least three rows, so the analyser is
+now **11 × 3**. Its geometry is also derived the other way round from the
+monochromator's: the 11 mm lamella width is published, eleven of them span 121
+of the 122 mm active face, so the crystals are effectively butted and the
+**gap** (0.1 mm) is the derived quantity. That is the right direction whenever
+a real dimension exists.
+
+The fixed vertical radius is **1.40 m**, from ILL's public Takin preset
+(`pop_ana_curvv = 140`, `pop_ana_use_curvv = 1`) — a resolution parameter, not
+a mechanical drawing. It is deliberately far from the point-source Rowland
+radius for L3/L4 (~0.43 m at a typical take-off), which is exactly what a
+*fixed* focus looks like: right at one setting only. A test asserts it is not
+tracking the arms, so a later "improvement" cannot quietly turn it into a
+computed radius.
+
+Published mechanical bending limits (horizontal ≥ 1.7 m, vertical ≥ 0.5 m) are
+clamped in `calculate_crystal_bending`. With L1 = L2 = 1.8 m the horizontal
+limit never binds; the vertical one does, above about |A1| = 32°. Neither limit
+could be re-confirmed in the literature round — ILL says only that both axes
+are variable.
+
+### 21.5 Verification
+
+- Descriptor runnable-valid; `python -m instruments.package_validation` clean.
+- Full suite green: 683 passed / 47 skipped under Python 3.12 (no
+  mcstasscript), and every mcstasscript-gated instrument test passed under the
+  `tavi-dev` environment.
+- **McStas compile + run smoke**, elastic Al (2,0,0) at ki = kf = 2.0 Å⁻¹, the
+  descriptor's default axes (A1 −55.834, A2 +101.737, A4 −55.834), 1e7
+  neutrons: `detector_I = 7.47e-07 ± 1.73e-08`, N = 10055 detector events.
+- The **wrong-branch A/B** — the identical tree with all three radii
+  sign-flipped — gives `5.32e-08 ± 4.34e-09`, N = 498: a factor ~10 in
+  intensity and ~16 in statistics. Smaller than IN8's ~1e7 collapse, as
+  expected: IN12's mono is only weakly focused (RH = 3.84 m across a 20 cm
+  face) where IN8's analyser is strongly bent, so there is less focusing to
+  lose. The sign is confirmed by an order of magnitude, which is the point of
+  the run.
+- The **analyser correction A/B**: the same point through the original 11 × 1
+  vertically-flat analyser gave `5.19e-07 ± 1.36e-08`, N = 7785. Restoring the
+  real fixed vertical focus is worth **+44 % in intensity** and +29 % in
+  events — the right direction, and a useful independent check that the 1998
+  description was read correctly rather than merely differently.
+
+### 21.6 Follow-ups
+
+- The senses are settled (§21.2), so **everything** left in
+  `instruments/in12/MODEL_STATUS.md` is intensity or resolution. The largest
+  single item is the incident spectrum: 2016 says the guide was calculated in
+  McStas and the primary spectrometer in SIMRES, but neither model is public
+  and no MCPL file or exit phase space exists in the public record.
+- Two claims in the first pass were **wrong and are corrected here**: the
+  analyser topology (§21.4) and IN12-UFO's status (§21.3). A third suggested
+  correction — that the McStas transmission table measured on IN12 is
+  `BeO.trm` rather than `Be.trm` — was checked against the installed McStas 3.x
+  resources and **rejected**: the shipped file is `data/Be.trm`, header "Be
+  transmission, as measured on IN12. T=80 K … B. Fåk (CEA/ILL)", and no
+  `BeO.trm` exists in that tree.
+- The **velocity-selector detail** in the 2026-07-18 dossier (60 blades, 23.9°
+  helix, 25 % resolution, 83 % transmission at 4 Å) could not be confirmed for
+  the IN12 unit; published Astrium figures at that level of detail belong to
+  different 72-blade devices. Treat it as unsourced. Nothing in the model
+  depends on it, since the selector is outside the model boundary.
+- `tests/test_instrument_registry.py` now imports `instruments.builtin` at
+  module scope: its snapshot/restore fixture used to snapshot an *empty*
+  registry and wipe the built-in registrations for every later test file in the
+  same process. Latent since Phase 4; surfaced by running the registry file
+  before `test_instrument_packages.py`.
+- The two research dossiers (IN12, PANDA) were renamed to the
+  `YYYY-MM-DD__source-id__vNN.ext` reference convention; they had been failing
+  `package_validation` on `main`.

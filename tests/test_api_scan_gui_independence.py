@@ -106,7 +106,7 @@ def test_invalid_patch_field_is_rejected(controller):
     assert "Ei" in exc.value.details["errors"]
 
 
-@pytest.mark.parametrize("instrument_id", ["puma", "in8"])
+@pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12"])
 @pytest.mark.parametrize("source", ["api", "gui"])
 def test_builtin_launch_state_stays_frozen_through_real_queue_boundary(
         instrument_id, source):
