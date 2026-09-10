@@ -1,6 +1,8 @@
 """Build the Pb ``Phonon_DFT`` assets from the collaborator's DFT phonon grid.
 
-Input ``pb_pdisp_3d_nq50`` (repo root, gitignored, not redistributable yet):
+Input ``pb_pdisp_3d_nq50`` (repo root): DFT phonon frequencies calculated and
+provided by Rolf Heid, Karlsruhe Institute of Technology (KIT), committed with
+his permission.  Its layout is
 ``nq**3`` rows of ``index om1 om2 om3`` (meV, sorted per row), looped as
 ``x`` outer, ``y``, ``z`` inner, each over ``0, 1/nq, ..., 1-1/nq``.  These are
 internal coordinates of the primitive reciprocal basis, ``q = x*b1 + y*b2 + z*b3``
@@ -11,7 +13,8 @@ Outputs (``components/``):
 * ``Pb_dft_phonons.dat`` -- the shared ``Phonon_DFT`` map on the conventional
   ``(H,K,L)`` cube ``[-1,1]^3`` with step ``2/nq``.  Every conventional node
   maps exactly onto a DFT node (``x=(K+L)/2`` etc.), so no interpolation is
-  done.  Gitignored with its source.
+  done.  Gitignored as a 150 MB build product (over GitHub's file limit);
+  ``setup-tavi-dev.bat`` runs this tool to build it.
 * ``Pb_Fm-3m.laz`` -- the Bragg reflection table (public constants only, so
   it is committed).
 
@@ -81,8 +84,9 @@ def write_map(axis: np.ndarray, energies: np.ndarray, path: Path = MAP_OUT) -> N
         np.ones(H.size), B.ravel(),
     ])
     header = "\n".join([
-        "Pb phonon dispersion for Phonon_DFT, resampled from a collaborator's DFT grid",
-        f"Source: {SOURCE.name} (50^3 primitive-reciprocal grid, 3 branches, meV); not redistributable yet",
+        "Pb phonon dispersion for Phonon_DFT, resampled from a DFT phonon grid",
+        "DFT calculation by Rolf Heid, Karlsruhe Institute of Technology (KIT); used with permission",
+        f"Source: {SOURCE.name} (50^3 primitive-reciprocal grid, 3 branches, meV)",
         "Resampling: conventional (H,K,L) nodes on [-1,1] step 0.02; x=(K+L)/2, y=(H+L)/2, z=(H+K)/2",
         "  for b1=(-1,1,1), b2=(1,-1,1), b3=(1,1,-1). Nodes with H,K,L of equal parity (in 0.02 units)",
         "  are exact DFT nodes (every DFT node is used); the rest are trilinear on the periodic primitive grid",
