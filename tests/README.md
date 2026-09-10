@@ -95,7 +95,12 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
 - `test_sign_conventions.py` — golden sign-convention tests: PUMA's baked
   angle branch frozen (elastic/inelastic/skew-Q/out-of-plane/Kf-fixed +
   reverse recovery), sense-threading equivalence and flip tests, and the
-  vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02).
+  vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02),
+  plus IN12's cases. The IN12 goldens are **self-generated** — nobody ran the
+  instrument for us — but they freeze a *verified* geometry: IN12's senses were
+  settled from the published record (`instruments/in12/MODEL_STATUS.md`). Their
+  job is to catch a regression in the only `sense_mono = −1` path, forward and
+  through both inverse branches.
 - `test_in8_plugin.py` — IN8 plugin conformance: runnable descriptor,
   scan-config mapping (single-select collimation, branch-signed bending),
   crystal lookup incl. the Cu200 `"NULL"` reflectivity sentinel, fingerprint
@@ -105,6 +110,21 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   gating/settings, collimator selection, crystal properties per descriptor,
   detector contract, Mono/Maxwellian source wiring, shared-library sample
   emission, no PUMA-only components.
+- `test_in12_plugin.py` — IN12 plugin conformance, same shape as IN8's plus
+  what is specific to IN12: the provisional senses (−1, +1, −1), the entirely
+  negative monochromator travel that evidences them, the derived slab sizes
+  reconstructing the published crystal faces, the fourth (α1) collimation slot,
+  the Heusler(111) analyser's `"NULL"` sentinel, the eleven-lamellae-in-three-
+  rows analyser reconstructing its published face, the analyser's fixed vertical
+  radius (asserted *not* to be tracking the arms, since "fixed" is the point),
+  and the vertical bending clamp at the published 0.5 m minimum.
+- `test_in12_build_tree.py` — object-level IN12 build-tree tests (construction
+  only, no compile): beam order including the guide-exit collimator, four
+  collimator selections, guide-exit source aperture, one-row analyser, 3He
+  detector contract, and the absence of any filter or PUMA-only optics.
 - `test_descriptor_validation.py` / `test_instrument_registry.py` updated:
-  IN8 is runnable-valid (rejection paths keep synthetic broken descriptors);
-  the lazy-import test lists in8 and bans `instruments.in8.model`.
+  IN8 and IN12 are runnable-valid (rejection paths keep synthetic broken
+  descriptors); the lazy-import test lists in8/in12 and bans their `model`
+  modules. `test_instrument_registry.py` imports `instruments.builtin` at
+  module scope so its snapshot/restore fixture cannot wipe the built-in
+  registrations for later test files.
