@@ -221,7 +221,7 @@ For Python changes, use the smallest relevant checks available:
 
 1. **Syntax / parse check:** `python -m py_compile TAVI_PySide6.py gui/main_window.py` plus any changed Python files.
 2. **Import / load check:** import changed non-GUI helper modules when they do not require launching the GUI or McStas.
-3. **Test run:** `micromamba run -n tavi-dev python -m pytest tests -q` from the repo root. The repo-root `conftest.py` sets `MCSTAS` for you and, on Windows, forces `CREATE_NO_WINDOW` on every subprocess the session starts -- **do not remove or bypass it.** Constructing `ms.McStas_instr(...)`, which every build-tree test does, makes McStasScript shell out twice (`mcrun --showcfg=resourcedir` with `shell=True` when `MCSTAS` is unset, and `mcstas -v` unconditionally, inside a bare `except`). Windows gives a child of a console-less parent its own console, so from a background process each launch is a console window on the operator's screen and a faulting binary adds an error dialog -- invisible when you start from `run-tavi-dev.bat`, which has a console the children inherit. See `tests/README.md`. pytest comes from `requirements-dev.txt`, not `requirements.txt`; no GUI and no McStas compiles/runs in tests. **Run one suite at a time** -- two concurrent runs contend for the API server port and fail `test_api_server.py` / `test_api_validation_schema.py` spuriously. Status 2026-09-09: 843 passed, 1 failed -- the only known failure is `tests/test_instrument_packages.py::test_live_packages_are_valid`.
+3. **Test run:** `micromamba run -n tavi-dev python -m pytest tests -q` from the repo root. The repo-root `conftest.py` sets `MCSTAS` for you and, on Windows, forces `CREATE_NO_WINDOW` on every subprocess the session starts -- **do not remove or bypass it.** Constructing `ms.McStas_instr(...)`, which every build-tree test does, makes McStasScript shell out twice (`mcrun --showcfg=resourcedir` with `shell=True` when `MCSTAS` is unset, and `mcstas -v` unconditionally, inside a bare `except`). Windows gives a child of a console-less parent its own console, so from a background process each launch is a console window on the operator's screen and a faulting binary adds an error dialog -- invisible when you start from `run-tavi-dev.bat`, which has a console the children inherit. See `tests/README.md`. pytest comes from `requirements-dev.txt`, not `requirements.txt`; no GUI and no McStas compiles/runs in tests. **Run one suite at a time** -- two concurrent runs contend for the API server port and fail `test_api_server.py` / `test_api_validation_schema.py` spuriously. Status 2026-09-10 (main after #30/#31/#28/#27): 973 passed, no known failures.
 4. **Integration check:** for GUI or simulation changes, launch `python TAVI_PySide6.py` in an environment with McStas/McStasScript available and exercise the changed path. Avoid long simulations unless the task requires them.
 
 ---
@@ -278,6 +278,6 @@ API scan submissions are always validated before queueing (parse, budget, per-po
 
 ---
 
-*Last updated: 2026-07-28 (Independent background-source configuration:
-`tavi.background/2`, planted by both engines, `GET`/`PUT /background` +
-wholesale per-scan replacement).*
+*Last updated: 2026-09-10 (four runnable instruments: PUMA, IN8, IN12, PANDA;
+shared TAS physics fixes; the `Pb_phonon_DFT` sample from Rolf Heid's (KIT)
+committed DFT grid; API `force` clears soft scan-command issues only).*
