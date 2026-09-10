@@ -217,7 +217,7 @@ The dock never reads worker state directly — all updates arrive via `job_state
 
 ## 12. Validation Reuse
 
-`_preflight_scan_validation()` (:2869) splits into a pure `_validate_scan_commands_text(cmd1, cmd2) -> str` (parameterized on strings; its helpers are already pure) plus a thin GUI wrapper that reads the widgets. The GUI path is behaviorally unchanged (`QMessageBox` stays in `run_simulation_thread`). The API path calls the text version on the GUI thread via the bridge after applying any inline parameter patch; a non-empty result → 400 `scan_validation` unless the request set `"force": true`.
+`_preflight_scan_validation()` (:2869) splits into a pure `_validate_scan_commands_text(cmd1, cmd2) -> str` (parameterized on strings; its helpers are already pure) plus a thin GUI wrapper that reads the widgets. The GUI path is behaviorally unchanged (`QMessageBox` stays in `run_simulation_thread`). The API path calls the text version on the GUI thread via the bridge after applying any inline parameter patch; a non-empty result → 400 `scan_validation` unless the request set `"force": true`. Amended 2026-09-10: the gate now reads `_scan_command_issues(...) -> (hard, soft)` through `TaviApiBackend._blocking_scan_issues`; `force` clears the soft issues only, and a hard one (unknown or refused variable, malformed command, Q paired with HKL) is refused regardless.
 
 ## 13. Implementation Phases
 
