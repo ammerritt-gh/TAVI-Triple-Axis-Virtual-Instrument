@@ -8,6 +8,29 @@ import pytest
 from tavi.dispersion_map import DispersionMapError, load_dispersion_map
 
 
+_PB_MAP = Path(__file__).resolve().parents[1] / "components" / "Pb_dft_phonons.dat"
+
+
+@pytest.mark.skipif(
+    not _PB_MAP.is_file(),
+    reason="Pb DFT map not built; run tools/make_pb_assets.py",
+)
+def test_pb_dft_map_has_fcc_zone_centres_and_period_two():
+    dispersion = load_dispersion_map(_PB_MAP)
+    assert dispersion.branch_count == 3
+    assert dispersion.grid_shape == (101, 101, 101)
+
+    def energies(hkl):
+        return [mode.energy_mev for mode in dispersion.evaluate(hkl, tessellate=True)]
+
+    assert energies((0.0, 0.0, 0.0)) == [0.0, 0.0, 0.0]
+    # fcc zone centre; the Al toy (period 2 per axis) puts its maximum here instead.
+    assert energies((1.0, 1.0, 1.0)) == [0.0, 0.0, 0.0]
+    # X point straight off the DFT node (0, .5, .5) in primitive internal coordinates.
+    assert energies((1.0, 0.0, 0.0)) == pytest.approx([3.34454, 3.34454, 7.79182])
+    assert energies((3.0, 0.0, 0.0)) == pytest.approx(energies((1.0, 0.0, 0.0)))
+
+
 def _grid_text(branches: int = 2, *, energy_offset: float = 0.0) -> str:
     lines = [
         "# grid_nx 2",

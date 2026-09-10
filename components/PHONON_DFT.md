@@ -206,6 +206,68 @@ The sample also owns independent analytic phonon and elastic calibrations.
 Those factors affect deterministic counts only; they are not component input
 parameters.
 
+The aluminium map is a toy: `sin^2(pi*H/2)` is periodic in each of H, K, and L
+separately, so its zone centres sit only at all-even `(H,K,L)` and `(1,1,1)` is
+a dispersion maximum. A real fcc crystal is also gapless at `(1,1,1)`. Any
+consumer that infers zone centres from the map's period inherits this
+difference between the two built-in samples.
+
+## Built-in lead configuration
+
+`tavi/sample_library.py` configures `Pb_phonon_DFT` with:
+
+- reflection file `Pb_Fm-3m.laz` (committed; generated from tabulated
+  constants, `b_coh = 9.405 fm`, `F2 = 14.1526 barn` on every allowed
+  reflection);
+- dispersion file `Pb_dft_phonons.dat`, built by `tools/make_pb_assets.py`
+  from the committed DFT grid `pb_pdisp_3d_nq50` (calculated by Rolf Heid,
+  Karlsruhe Institute of Technology, and committed with his permission). The
+  150 MB map itself is gitignored as a build product over GitHub's file
+  limit; `setup-tavi-dev.bat` builds it, and a checkout without it lists the
+  sample but fails at asset load;
+- cubic lattice parameter `a = 4.9508 A` (room-temperature Pb; the DFT
+  lattice constant has not been supplied);
+- temperature `T = 300 K`; otherwise the aluminium parameters.
+
+`tools/make_pb_assets.py` builds both files. The DFT source is a `50^3` grid in
+primitive-reciprocal internal coordinates (`q = x*b1 + y*b2 + z*b3` with
+`b1 = (-1,1,1)`, `b2 = (1,-1,1)`, `b3 = (1,1,-1)`) with three sorted branch
+energies per point and no eigenvectors. The tool places conventional `(H,K,L)`
+nodes on `[-1,1]` at step 0.02 (`101^3` points, 3.1 million rows, ~150 MB).
+Nodes whose H, K and L share parity in units of the step are exact DFT nodes
+(`x = (K+L)/2`, `y = (H+L)/2`, `z = (H+K)/2`), so every DFT node is used; the
+other three in four sit at primitive cell centres and are trilinearly
+interpolated on the periodic primitive grid. Every intensity is `1.0` because the
+source carries no structure factors, the twelve numerically negative frequencies
+near Gamma (worst `-0.065 meV`) are clamped to zero, and the analytic
+calibration is copied from aluminium uncalibrated. The tool's self-check asserts
+`E = 0` at `(0,0,0)` and `(1,1,1)`, the X- and L-point values, the period-2
+wrap, and cubic symmetry.
+
+Both readers were rebuilt for maps of this size. The analytic loader
+(`tavi/dispersion_map.py`) parses with `numpy.loadtxt` and vectorised
+validation (87 s → 3 s); its row walk survives only to name the offending line
+of a refused file. The component reads the grid with its own
+`pdft_read_numeric_table` — one `fread` of the file and a `strtod` walk, comment
+lines kept for `Table_ParseHeader` — instead of the generic `Table_Read`, which
+took 30 s per MPI rank on the 150 MB map. Startup is now about 1 s. The
+accepted format is unchanged, and the detector output at a fixed seed is
+bit-identical to the old reader's. The reflection table still goes through
+`Table_Read`; it is small. Map spacing is therefore a physics choice, not a
+runtime one: measured per-event cost is about 3 µs per source neutron on both
+the 0.02 and the 0.04 rlu map.
+
+## Dispersion viewer
+
+`run-dispersion-viewer.bat` opens `gui/dispersion_viewer.py`, a windowless
+PySide6 tool that plots any `components/*.dat` map (with an optional second map
+overlaid dashed) along a reciprocal-space path — presets for the fcc special
+points `Γ X W K L U` or free text such as `Γ K (1,1,0)` — exactly as the
+analytic engine evaluates it. Figures are saved to `figures/` by default
+(gitignored, deliberately not `output/`); the last folder and controls are
+remembered. The Qt-free path logic lives in `tavi/dispersion_path.py` so the
+main TAVI window can host the same widget later.
+
 ## Adding or replacing a branch
 
 To add a branch:

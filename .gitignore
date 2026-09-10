@@ -387,6 +387,15 @@ PANDA_McScript.instr
 # Local-only third-party reference material (see examples/vTAS-README.md)
 examples/vTAS/
 
+# The Pb Phonon_DFT map is a 150 MB build product of the committed DFT grid
+# (pb_pdisp_3d_nq50, Rolf Heid / KIT): over GitHub's 100 MB file limit, so
+# tools/make_pb_assets.py rebuilds it locally (setup-tavi-dev.bat runs it).
+components/Pb_dft_phonons.dat
+
+# Figures saved by the dispersion viewer (kept apart from output/ so a sweep of
+# simulation results does not take them)
+figures/
+
 # Virtual environments for Python projects
 .venv/
 
