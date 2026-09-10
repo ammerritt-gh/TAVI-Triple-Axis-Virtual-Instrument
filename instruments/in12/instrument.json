@@ -3,7 +3,7 @@
   "id": "in12",
   "display_name": "IN12 (ILL)",
   "facility": "ILL",
-  "status": "research",
-  "model_version": "0.1.0",
-  "model_date": "2026-07-18"
+  "status": "runnable",
+  "model_version": "1.0.0",
+  "model_date": "2026-09-09"
 }

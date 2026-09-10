@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from instruments._descriptor_examples import in8_descriptor
+from instruments._descriptor_examples import in8_descriptor, in12_descriptor
 from instruments.descriptor import AxisLimits
 from instruments.puma.plugin import puma_descriptor
 from instruments.validation import (
@@ -30,6 +30,11 @@ def test_puma_descriptor_valid_runnable():
 def test_in8_descriptor_valid_runnable():
     # Phase 4: IN8 is a real, registered instrument -- startup gates on this.
     assert validate_descriptor(in8_descriptor(), runnable=True) == []
+
+
+def test_in12_descriptor_valid_runnable():
+    # IN12 is a real, registered instrument -- startup gates on this.
+    assert validate_descriptor(in12_descriptor(), runnable=True) == []
 
 
 def test_runnable_rejects_incomplete_descriptor():
@@ -57,6 +62,7 @@ def test_assert_valid_descriptor_raises_with_messages():
         assert_valid_descriptor(broken, runnable=True)
     assert_valid_descriptor(puma_descriptor(), runnable=True)  # must not raise
     assert_valid_descriptor(in8_descriptor(), runnable=True)   # must not raise
+    assert_valid_descriptor(in12_descriptor(), runnable=True)  # must not raise
 
 
 def _replace(d, **kwargs):
