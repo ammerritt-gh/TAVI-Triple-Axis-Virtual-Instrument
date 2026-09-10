@@ -33,7 +33,7 @@ echo   env prefix : %ENV_PREFIX%
 echo   repo       : %REPO_DIR%
 echo.
 
-echo [Step 1/5] Checking Visual Studio compiler (advisory)...
+echo [Step 1/6] Checking Visual Studio compiler (advisory)...
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if exist "%VSWHERE%" (
     "%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%TEMP%\tavidev_vs.txt" 2>nul
@@ -47,7 +47,7 @@ if exist "%ProgramFiles(x86)%\Microsoft SDKs\MPI\Include\mpi.h" (
 )
 echo.
 
-echo [Step 2/5] Setting up micromamba...
+echo [Step 2/6] Setting up micromamba...
 if not exist "%MICROMAMBA_DIR%" mkdir "%MICROMAMBA_DIR%"
 if not exist "%MICROMAMBA_EXE%" (
     echo [INFO] Downloading micromamba %MAMBA_VERSION%...
@@ -82,7 +82,7 @@ if not exist "%MICROMAMBA_EXE%" (
 echo [OK] Micromamba ready.
 echo.
 
-echo [Step 3/5] Creating or updating environment '%ENV_NAME%'...
+echo [Step 3/6] Creating or updating environment '%ENV_NAME%'...
 echo [INFO] Packages:
 echo        %CONDA_PACKAGES%
 :: Detect an existing env by its conda-meta directory, NOT by parsing
@@ -112,7 +112,7 @@ if exist "%ENV_PREFIX%\conda-meta" (
 )
 echo.
 
-echo [Step 4/5] Installing Python packages from requirements...
+echo [Step 4/6] Installing Python packages from requirements...
 "%MICROMAMBA_EXE%" run -n %ENV_NAME% python -m pip install --upgrade pip
 "%MICROMAMBA_EXE%" run -n %ENV_NAME% python -m pip install -r "%REPO_DIR%requirements.txt"
 if errorlevel 1 (
@@ -129,7 +129,7 @@ if errorlevel 1 (
 echo [OK] Python packages ready.
 echo.
 
-echo [Step 5/5] Configuring McStas / McStasScript paths...
+echo [Step 5/6] Configuring McStas / McStasScript paths...
 set "MCSTAS_RESOURCES=%ENV_PREFIX%\share\mcstas\resources"
 if not exist "%MCSTAS_RESOURCES%" set "MCSTAS_RESOURCES=%ENV_PREFIX%\Library\share\mcstas\resources"
 
@@ -176,6 +176,21 @@ if not exist "%REPO_DIR%config" mkdir "%REPO_DIR%config"
 >> "%REPO_DIR%config\mcstas_config.json" echo     "auto_detect": true
 >> "%REPO_DIR%config\mcstas_config.json" echo }
 echo [OK] config\mcstas_config.json -^> %MCSTAS_JSON%
+echo.
+
+echo [Step 6/6] Building the Pb Phonon_DFT dispersion map (once; 150 MB, gitignored)...
+if exist "%REPO_DIR%components\Pb_dft_phonons.dat" (
+    echo [OK] components\Pb_dft_phonons.dat already present.
+) else (
+    "%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%REPO_DIR%tools\make_pb_assets.py"
+    if errorlevel 1 (
+        echo [ERROR] Building the Pb dispersion map failed. The Pb sample will not run
+        echo         until "python tools\make_pb_assets.py" succeeds.
+        pause
+        exit /b 1
+    )
+    echo [OK] Pb dispersion map built.
+)
 echo.
 
 echo ============================================================================
