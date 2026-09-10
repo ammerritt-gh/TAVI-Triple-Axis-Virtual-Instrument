@@ -350,11 +350,117 @@ def test_crystal_info_dict_shape_frozen():
 
 
 # ---------------------------------------------------------------------------
+# PANDA goldens -- generated 2026-09-09 from this code with the descriptor's
+# senses (-1, +1, -1): the monochromator and analyzer take off NEGATIVE and the
+# sample POSITIVE. PANDA and IN12 are the two TAVI instruments with a negative
+# monochromator branch, so these freeze that sign, not just the magnitudes.
+# The senses come from vPANDA's scatsense_* declarations and are NOT yet
+# confirmed against the instrument control system -- see
+# instruments/panda/SCIENTIST_REVIEW.md question 4. Setup: cubic a = 4.05,
+# kf fixed at 1.55 A^-1 (P1-P3, the standard cold setting), ki fixed at
+# 4.0 A^-1 with the Cu(111) monochromator (P4).
+# ---------------------------------------------------------------------------
+
+E_KF_1P55 = 4.978451631466585   # k2energy(1.55)
+E_KI_4P0 = 33.155140937966856   # k2energy(4.0)
+Q_AL_111 = TAU * math.sqrt(3)   # 2.687110169235878
+
+
+@pytest.fixture(scope="module")
+def panda():
+    from instruments.panda.model import PANDA_Instrument
+
+    return PANDA_Instrument()
+
+
+def _panda_angles(panda, qx, qy, qz, deltaE, fixed_E, k_fixed, mono="pg002"):
+    angles, error_flags = panda.calculate_angles(
+        qx, qy, qz, deltaE, fixed_E, k_fixed, mono, "pg002"
+    )
+    assert error_flags == []
+    return angles
+
+
+def test_panda_p1_elastic_standard_cold_setting(panda):
+    """kf = 1.55 A^-1 on PG(002): the take-off vPANDA itself defaults to."""
+    mtt, stt, sth, saz, att = _panda_angles(panda, Q_AL_111, 0.0, 0.0, 0.0,
+                                            E_KF_1P55, "Kf Fixed")
+    assert mtt == pytest.approx(-74.331576, abs=1e-3)
+    assert stt == pytest.approx(120.180000, abs=1e-3)
+    assert att == pytest.approx(-74.331576, abs=1e-3)
+    # The sign pattern IS the instrument convention: mono -, sample +, ana -.
+    assert mtt < 0 and stt > 0 and att < 0
+    assert sth == pytest.approx(+60.090000, abs=1e-3)
+    assert saz == pytest.approx(0.0, abs=1e-6)
+    # vPANDA's own default two-theta for this setting, to its 3 decimals.
+    assert round(mtt, 3) == -74.332
+
+
+def test_panda_p2_inelastic_kf_fixed(panda):
+    """Energy gain moves the monochromator only; the analyzer is pinned."""
+    mtt, stt, sth, saz, att = _panda_angles(panda, Q_AL_111, 0.0, 0.0, 3.0,
+                                            E_KF_1P55, "Kf Fixed")
+    assert mtt == pytest.approx(-57.007248, abs=1e-3)
+    assert stt == pytest.approx(99.155079, abs=1e-3)
+    assert att == pytest.approx(-74.331576, abs=1e-3)
+    assert mtt < 0 and stt > 0 and att < 0
+
+
+def test_panda_p3_skew_q(panda):
+    mtt, stt, sth, saz, att = _panda_angles(panda, TAU, TAU, 0.0, 0.0,
+                                            E_KF_1P55, "Kf Fixed")
+    assert stt == pytest.approx(90.103829, abs=1e-3)
+    assert sth == pytest.approx(+90.051914, abs=1e-3)
+
+
+def test_panda_p4_cu111_ki_fixed(panda):
+    """The Cu(111) monochromator reaches ki = 4.0 A^-1 where PG(002) cannot."""
+    mtt, stt, sth, saz, att = _panda_angles(panda, 2 * TAU, 0.0, 0.0, 10.0,
+                                            E_KI_4P0, "Ki Fixed", mono="cu111")
+    assert mtt == pytest.approx(-44.212927, abs=1e-3)
+    assert stt == pytest.approx(48.993525, abs=1e-3)
+    assert att == pytest.approx(-32.535116, abs=1e-3)
+    assert mtt < 0 and stt > 0 and att < 0
+
+
+def test_panda_p1_reverse_recovers_q(panda):
+    """Signed readout angles must be unsigned before inverse Bragg conversion --
+    with PANDA both crystal angles are negative, which no earlier instrument
+    exercised."""
+    mtt, stt, sth, saz, att = _panda_angles(panda, Q_AL_111, 0.0, 0.0, 0.0,
+                                            E_KF_1P55, "Kf Fixed")
+    q_and_e, error_flags = panda.calculate_q_and_deltaE(
+        mtt, stt, sth, saz, att, E_KF_1P55, "Kf Fixed", "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert q_and_e[0] == pytest.approx(Q_AL_111, abs=1e-6)
+    assert q_and_e[3] == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("fixed_mode", "delta_e"),
+    [("Ki Fixed", -2.0), ("Kf Fixed", 2.0)],
+)
+def test_panda_negative_mono_sense_inelastic_round_trip(panda, fixed_mode, delta_e):
+    angles, error_flags = panda.calculate_angles(
+        Q_AL_111, 0.0, 0.0, delta_e, E_KF_1P55, fixed_mode, "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert angles[0] < 0 and angles[4] < 0      # both crystals on the - branch
+
+    q_and_e, error_flags = panda.calculate_q_and_deltaE(
+        *angles, E_KF_1P55, fixed_mode, "pg002", "pg002"
+    )
+    assert error_flags == []
+    assert q_and_e[:3] == pytest.approx([Q_AL_111, 0.0, 0.0], abs=1e-6)
+    assert q_and_e[3] == pytest.approx(delta_e, abs=1e-6)
+
+
 # IN12 goldens -- NOT instrument-verified. IN8's numbers above came from a live
 # vTAS run; IN12's team never sent us files, so these were generated from this
 # code (2026-09-09) against the descriptor's PROVISIONAL senses (-1, +1, -1).
-# What they freeze is the *sign structure*: IN12 is the only TAVI instrument
-# with sense_mono = -1, so a regression in that path (a stray abs(), a sense
+# What they freeze is the *sign structure*: IN12 and PANDA are the only TAVI
+# instruments with sense_mono = -1, so a regression in that path (a stray abs(), a sense
 # dropped on the mono branch) must fail loudly here. The magnitudes follow only
 # from published d-spacings and arm geometry and are sound; the signs inherit
 # whatever confidence the sense assignment has (instruments/in12/MODEL_STATUS.md).

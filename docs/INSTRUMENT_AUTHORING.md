@@ -24,14 +24,18 @@ The living runnable template is IN8:
 PUMA (`instruments/puma/plugin.py`, `instruments/puma/model.py`) is the fuller
 runtime example: modules, stacked collimators, and 19 monitors. IN12
 (`instruments/in12/plugin.py`) is the worked example of an instrument built
-from public documentation alone, with no instrument-scientist input: it is
-the first package whose monochromator sits on the negative branch
-(`sense_mono = -1`), and its `references/` shows the pattern that made that
-possible — a broad research dossier, then a targeted literature round before
-registration, each frozen as its own dated snapshot. That second round is what
-settled IN12's scattering senses and corrected its analyser topology, so budget
-for it rather than treating the first dossier as final. PANDA shows a
-research-only package; it must not be registered until runnable.
+from public documentation alone, with no instrument-scientist input: its
+monochromator sits on the negative branch (`sense_mono = -1`, as PANDA's
+does), and its `references/` shows the pattern that made that possible — a
+broad research dossier, then a targeted literature round before registration,
+each frozen as its own dated snapshot. That second round is what settled
+IN12's scattering senses and corrected its analyser topology, so budget for it
+rather than treating the first dossier as final. PANDA
+(`instruments/panda/`) is the worked example of the *evidence* side: a package
+promoted from research to runnable, whose `MODEL_STATUS.md` records a source
+per field, a disposition per known defect in its historical McStas file, and a
+reason per deliberate gap. A research-only package must not be registered
+until it is runnable.
 
 Run `python -m instruments.package_validation` before and after package work.
 It validates metadata, required documents, references, status/registration,
