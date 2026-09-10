@@ -79,8 +79,8 @@ class _StubController:
             "relative_mode_1": False, "relative_mode_2": False,
         }
 
-    def _validate_scan_commands_text(self, c1, c2):
-        return ""  # grammar OK
+    def _scan_command_issues(self, c1, c2, monocris=None, anacris=None):
+        return [], []  # grammar OK
 
     def _count_scan_points(self, c1, c2):
         return self._npoints  # cheap, mirrors production

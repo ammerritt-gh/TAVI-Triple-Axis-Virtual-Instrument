@@ -351,9 +351,11 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
                   xwidth="vbl_hgap_param", yheight=0.142)
 
         # Entrance slit of the alpha_2 collimator housing
+        # Permanently installed diaphragm, not a withdrawable Soller: it
+        # carries no collimation but its aperture is always in the beam.
         emit_collimator(instrument, "sample_collimator_dia", relative="sample_arm",
                         at=(0, 0, 0.398), divergence=0, length=0.112,
-                        xwidth=39e-3, ymin=-70e-3, ymax=77e-3)
+                        xwidth=39e-3, ymin=-70e-3, ymax=77e-3, removable=False)
 
         emit_monitor_group(instrument, 'Pre-sample collimation PSD')
 

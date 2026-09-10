@@ -120,12 +120,22 @@ def emit_sample_orientation_arms(instrument, *, relative, distance,
 
 def emit_crystal_assembly(instrument, *, cradle_name, crystal_name, relative,
                           distance, rotation_expr, info, d_key,
-                          rv_param, rh_param, split, extend=None):
+                          rv_param, rh_param, split, extend=None, order=0):
     """A crystal cradle Arm plus a Monochromator_curved read from a crystal-info dict.
 
     ``info`` is the legacy crystal-info dict (``mono_ana_crystals_setup`` shape);
     ``d_key`` selects its d-spacing key ('dm' for a monochromator, 'da' for an
     analyzer). Returns the crystal component.
+
+    ``order`` is McStas's reflection order: 0 (the component default, and the
+    default here) transports *all* orders off the one supplied d-spacing, so a
+    lambda/2 component at four times the nominal energy reaches the sample
+    unless something downstream removes it. ``order=1`` selects first-order
+    reflection only -- an idealized, order-clean spectrometer. An instrument
+    whose model has no filter or narrow-band source to suppress higher orders
+    should pass ``order=1`` and say so in its status record rather than claim
+    higher orders do not arise. The default stays 0 so existing instruments
+    keep the tree they were validated against.
     """
     instrument.add_component(cradle_name, "Arm",
                              AT=[0, 0, distance],
@@ -142,8 +152,15 @@ def emit_crystal_assembly(instrument, *, cradle_name, crystal_name, relative,
     crystal.DM = info[d_key]
     crystal.RV = rv_param
     crystal.RH = rh_param
-    crystal.mosaic = info['mosaic']
-    crystal.order = 0  # all orders
+    mosaic_v = info.get('mosaic_v')
+    if mosaic_v is not None and mosaic_v != info['mosaic']:
+        # Monochromator_curved reads mosaich/mosaicv only while `mosaic` is 0;
+        # setting `mosaic` at all overrides both with one isotropic value.
+        crystal.mosaich = info['mosaic']
+        crystal.mosaicv = mosaic_v
+    else:
+        crystal.mosaic = info['mosaic']
+    crystal.order = order
     crystal.reflect = info['reflect']
     crystal.transmit = info['transmit']
     if extend:
@@ -165,9 +182,24 @@ def emit_slit(instrument, name, *, relative, at, xwidth, yheight, rotated=None):
 
 
 def emit_collimator(instrument, name, *, relative, at, divergence, length,
-                    xwidth, yheight=None, ymin=None, ymax=None):
+                    xwidth, yheight=None, ymin=None, ymax=None, removable=True):
     """A Collimator_linear. Sets whichever of yheight vs ymin/ymax is given;
-    never emits ROTATED (no legacy collimator does)."""
+    never emits ROTATED (no legacy collimator does).
+
+    Zero divergence is the public "open" value, but in McStas it only disables
+    the angular transmission function: the component's two rectangular
+    apertures stay in the beam and keep absorbing rays. A Soller that is open
+    because it was withdrawn from the beam must therefore not be emitted at
+    all -- which is what ``removable=True`` (the default) does, returning
+    ``None``. It matches the conditional emission the legacy instruments used
+    (PUMA's stacked alpha_2 blades; vpanda.instr's ``WHEN`` clauses).
+
+    Pass ``removable=False`` for a permanently installed housing or beam
+    aperture that happens to carry no collimation -- it is a real obstruction
+    and must stay in the tree at every setting.
+    """
+    if removable and not divergence:
+        return None
     collimator = instrument.add_component(name, "Collimator_linear",
                                           AT=_placement(at), RELATIVE=relative)
     collimator.xwidth = xwidth
@@ -201,6 +233,9 @@ def crystal_spec_to_info(spec, d_key):
         'nrows': spec.n_rows,
         'gap': spec.gap,
         'mosaic': spec.mosaic,
+        # None -> isotropic; a value differing from `mosaic` makes the emitter
+        # switch to the component's mosaich/mosaicv pair.
+        'mosaic_v': spec.mosaic_v,
         'r0': spec.r0,
         'reflect': f'"{reflect}"',
         'transmit': f'"{transmit}"',

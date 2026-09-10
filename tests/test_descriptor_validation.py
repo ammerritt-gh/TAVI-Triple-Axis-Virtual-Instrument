@@ -152,3 +152,38 @@ def test_monitor_component_names_unique_and_set():
 # build() now mounts the sample straight from the shared library
 # (tavi/sample_library.py); tree-level sample guarantees live in
 # tests/test_puma_build_tree.py.
+
+
+def test_fixed_curvature_must_name_an_axis_that_side_has():
+    """A typo fails open -- the scan is allowed and the pin bypassed.
+
+    A monochromator can only fix rhm/rvm and an analyser only rha/rva, so
+    "rva" on a mono is a typo and must not pass silently.
+    """
+    base = in8_descriptor()
+
+    good = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(c, fixed_curvature=("rva",))
+            for c in base.ana_crystals))
+    assert [e for e in validate_descriptor(good) if "fixed_curvature" in e] == []
+
+    wrong_side = dataclasses.replace(
+        base, mono_crystals=tuple(
+            dataclasses.replace(c, fixed_curvature=("rva",))
+            for c in base.mono_crystals))
+    errs = [e for e in validate_descriptor(wrong_side) if "fixed_curvature" in e]
+    assert errs and "is not one of" in errs[0]
+
+    typo = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(c, fixed_curvature=("rva_param",))
+            for c in base.ana_crystals))
+    assert any("fixed_curvature" in e for e in validate_descriptor(typo))
+
+
+def test_fixed_curvature_defaults_to_empty():
+    """The generic instruments pin nothing, so nothing is refused for them."""
+    for d in (in8_descriptor(), puma_descriptor()):
+        for spec in d.mono_crystals + d.ana_crystals:
+            assert spec.fixed_curvature == ()

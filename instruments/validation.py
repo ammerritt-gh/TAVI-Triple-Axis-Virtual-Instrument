@@ -72,6 +72,14 @@ def _check_ids(errors, items, list_name, *, slug):
     _check_unique(errors, items, list_name)
 
 
+# The curvature axes each side of the spectrometer owns, as lowercase
+# scan-command names. A crystal can only hold fixed an axis it actually has:
+# "rva" on a monochromator is a typo, and a typo here fails open -- the scan
+# allowed, the pin bypassed.
+_MONO_CURVATURE = frozenset({"rhm", "rvm"})
+_ANA_CURVATURE = frozenset({"rha", "rva"})
+
+
 def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> list[str]:
     """Return a list of problems (empty = valid).
 
@@ -168,6 +176,19 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
                 f"axis_limits[{axis!r}]: expected lower <= default <= upper, "
                 f"got {lim.lower} / {lim.default} / {lim.upper}"
             )
+
+    # --- S10b: fixed curvature axes -----------------------------------------------
+    for side, specs, allowed in (
+        ("mono_crystals", d.mono_crystals, _MONO_CURVATURE),
+        ("ana_crystals", d.ana_crystals, _ANA_CURVATURE),
+    ):
+        for spec in specs:
+            for name in spec.fixed_curvature:
+                if name not in allowed:
+                    errors.append(
+                        f"{side}[{spec.id!r}].fixed_curvature: {name!r} is not "
+                        f"one of {sorted(allowed)}"
+                    )
 
     # --- S11: senses -------------------------------------------------------------------
     for name in ("sense_mono", "sense_sample", "sense_ana"):
