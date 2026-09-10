@@ -381,6 +381,8 @@ IN8_McScript.exe
 IN8_McScript.instr
 IN12_McScript.exe
 IN12_McScript.instr
+PANDA_McScript.exe
+PANDA_McScript.instr
 
 # Local-only third-party reference material (see examples/vTAS-README.md)
 examples/vTAS/

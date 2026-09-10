@@ -96,11 +96,13 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   angle branch frozen (elastic/inelastic/skew-Q/out-of-plane/Kf-fixed +
   reverse recovery), sense-threading equivalence and flip tests, and the
   vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02),
-  plus IN12's cases. The IN12 goldens are **self-generated** — nobody ran the
-  instrument for us — but they freeze a *verified* geometry: IN12's senses were
-  settled from the published record (`instruments/in12/MODEL_STATUS.md`). Their
-  job is to catch a regression in the only `sense_mono = −1` path, forward and
-  through both inverse branches.
+  plus the IN12 and PANDA cases. Both sets are **self-generated** — nobody ran
+  either instrument for us — and they freeze the sign structure of the two
+  negative-monochromator geometries (senses −1/+1/−1): IN12's senses were
+  settled from the published record (`instruments/in12/MODEL_STATUS.md`);
+  PANDA's follow vPANDA's declarations and are not yet control-system
+  verified. Their job is to catch a regression in the `sense_mono = −1` path,
+  forward and through both inverse branches.
 - `test_in8_plugin.py` — IN8 plugin conformance: runnable descriptor,
   scan-config mapping (single-select collimation, branch-signed bending),
   crystal lookup incl. the Cu200 `"NULL"` reflectivity sentinel, fingerprint
@@ -122,9 +124,21 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   only, no compile): beam order including the guide-exit collimator, four
   collimator selections, guide-exit source aperture, one-row analyser, 3He
   detector contract, and the absence of any filter or PUMA-only optics.
+- `test_panda_plugin.py` — PANDA plugin conformance: runnable descriptor,
+  the negative-monochromator senses (−1/+1/−1), the four-slot collimation
+  (an `alpha_1` slot, as IN8 and IN12 now have), the 55-crystal analyzer,
+  the Cu111 `"NULL"` sentinel, all-negative branch-signed bending, the split
+  monochromator object distance, published axis limits, fingerprint
+  sensitivity, snapshot params == `_PANDA_PARAMS`.
+- `test_panda_build_tree.py` — object-level PANDA build-tree tests
+  (construction only, no compile): backbone beam order, parameter set, monitor
+  gating/settings, all four collimators tracking selection, the scannable
+  virtual-source/`ss1`/`ss2` apertures, crystal properties per descriptor, the
+  1″ ³He detector contract, source wiring at the guide exit, shared-library
+  sample emission, no PUMA/IN8-only components.
 - `test_descriptor_validation.py` / `test_instrument_registry.py` updated:
   IN8 and IN12 are runnable-valid (rejection paths keep synthetic broken
-  descriptors); the lazy-import test lists in8/in12 and bans their `model`
-  modules. `test_instrument_registry.py` imports `instruments.builtin` at
-  module scope so its snapshot/restore fixture cannot wipe the built-in
+  descriptors); the lazy-import test lists in8/in12/panda and bans their
+  `model` modules. `test_instrument_registry.py` imports `instruments.builtin`
+  at module scope so its snapshot/restore fixture cannot wipe the built-in
   registrations for later test files.

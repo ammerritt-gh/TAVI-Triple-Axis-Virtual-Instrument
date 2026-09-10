@@ -25,13 +25,13 @@ convention for the flipped sample sense is vTAS-verified too (Friedel/-Q
 branch; §20.5).
 **Unified packages IMPLEMENTED (2026-07-18):** runnable PUMA and IN8 code,
 plain-language documentation, evidence status, scientist review, and immutable
-references now live together under `instruments/<id>/`. PANDA is a
-research-only package. Shared TAS state/snapshot/execution moved to
+references now live together under `instruments/<id>/`. PANDA and IN12,
+research-only until 2026-09-09, are runnable too. Shared TAS state/snapshot/execution moved to
 `instruments/tas_runtime.py`, and `python -m instruments.package_validation`
 enforces the package contract. Sections below retain historical implementation
 context; current paths and authoring policy are in `docs/INSTRUMENT_AUTHORING.md`.
-**IN12 IMPLEMENTED (2026-09-09, record §21):** the third registered
-instrument, and the first with a monochromator on the negative branch
+**IN12 IMPLEMENTED (2026-09-09, record §21):** registered the same day
+as PANDA; both put the monochromator on the negative branch
 (`sense_mono = −1`). Built entirely from public documentation — its team never
 sent files — but a literature round the same day resolved its scattering senses
 to `(−1, +1, −1)` on three independent sources, so its kinematics are verified
