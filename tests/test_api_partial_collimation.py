@@ -233,3 +233,44 @@ def test_a_command_conflict_stays_the_operators_call(in8_controller):
         "H 1.99 2.01 0.01", "psi -1 1 0.5"
     )
     assert hard == [], hard
+
+
+class _SyncBridge:
+    """Stand-in for ApiBridge: run the marshalled call inline."""
+
+    def call_on_gui(self, fn, timeout=5.0):
+        return fn()
+
+
+def test_api_force_clears_soft_issues_only(in8_controller, monkeypatch):
+    """``force`` is the operator's override, so it clears what the GUI offers
+    as a choice and nothing more.
+
+    A hard rejection -- here a refused fixed-curvature axis -- used to vanish
+    under ``force``, and the scan ran with the pin silently overwritten. Both
+    API gates, /validate and /scan, must hold it whatever the caller says.
+    """
+    ctrl = in8_controller
+    d = _pin_rva(ctrl, monkeypatch)
+    ana = d.ana_crystals[0].id
+    backend = cm.TaviApiBackend(ctrl, _SyncBridge())
+
+    hard = {"scan_command1": "rva 0.3 0.6 0.05", "scan_command2": "",
+            "anacris": ana}
+    for force in (False, True):
+        result = backend.submit_validate({"parameters": hard, "force": force})
+        assert result["would_queue"] is False, force
+        assert any("cannot be scanned" in b for b in result["blockers"]), (
+            force, result["blockers"])
+        with pytest.raises(cm.ApiError) as excinfo:
+            backend.submit_scan({"parameters": hard, "force": force})
+        assert excinfo.value.code == "scan_validation", force
+
+    # A soft issue -- the same variable on both axes -- stays the operator's
+    # call: blocked by default, cleared by force.
+    soft = {"scan_command1": "rha 1.0 2.0 0.1", "scan_command2": "rha 1.0 2.0 0.1",
+            "anacris": ana}
+    blocked = backend.submit_validate({"parameters": soft})["blockers"]
+    assert any(b.startswith("scan_validation") for b in blocked), blocked
+    forced = backend.submit_validate({"parameters": soft, "force": True})["blockers"]
+    assert not any(b.startswith("scan_validation") for b in forced), forced

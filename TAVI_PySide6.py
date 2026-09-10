@@ -668,13 +668,11 @@ class TaviApiBackend:
         cmd1 = vals.get("scan_command1", "")
         cmd2 = vals.get("scan_command2", "")
 
-        # 2. Validate scan commands unless force overrides.
-        if not force:
-            msg = controller._validate_scan_commands_text(
-                cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
-            )
-            if msg:
-                raise ApiError(400, "scan_validation", msg)
+        # 2. Validate scan commands. ``force`` clears the soft issues only;
+        #    a hard one is refused whatever the caller says.
+        issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
+        if issues:
+            raise ApiError(400, "scan_validation", "\n".join(issues))
 
         # 2a. Resolve the background against this scan's sample -- the same
         #     check /validate runs, so a body that validates cannot be rejected
@@ -694,8 +692,8 @@ class TaviApiBackend:
         try:
             points = controller._count_scan_points(cmd1, cmd2)
         except Exception:
-            # Unparseable command with force=True: cannot size it, let the
-            # scan itself fail later; treat as a single point for budget.
+            # A command the gate accepted but the sizer cannot parse: treat
+            # it as a single point for budget and let the scan itself report.
             points = 1
         neutrons = float(vals.get("number_neutrons") or 0)
 
@@ -803,6 +801,24 @@ class TaviApiBackend:
             lambda: self._validate_scan_on_gui(patch, force, background)
         )
 
+    @staticmethod
+    def _blocking_scan_issues(controller, vals, cmd1, cmd2, force):
+        """The scan-command issues that block this request.
+
+        ``force`` is the operator's deliberate override, so it clears exactly
+        what the GUI Run button offers as a choice: the soft issues (a very
+        long scan, an advisory conflict). A hard issue -- the command does not
+        describe a scan that can run as written: an unknown or refused
+        variable, a malformed command, Q paired with HKL -- blocks whatever
+        the caller says. Forcing through one of those ran a scan that
+        silently overwrote the radius a crystal pins, or labelled points with
+        coordinates they were not taken at (ruling 2026-09-10).
+        """
+        hard, soft = controller._scan_command_issues(
+            cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
+        )
+        return hard if force else hard + soft
+
     def _validate_scan_on_gui(self, patch, force, background=None):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
 
@@ -824,13 +840,9 @@ class TaviApiBackend:
         )
         if background_blocker is not None:
             blockers.append(background_blocker)
-        scan_msg = ""
-        if not force:
-            scan_msg = controller._validate_scan_commands_text(
-                cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
-            )
-            if scan_msg:
-                blockers.append("scan_validation: %s" % scan_msg)
+        scan_issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
+        if scan_issues:
+            blockers.append("scan_validation: %s" % "\n".join(scan_issues))
 
         try:
             points = controller._count_scan_points(cmd1, cmd2)
@@ -6019,10 +6031,11 @@ class TAVIController(QObject):
 
     def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
                                      monocris=None, anacris=None) -> str:
-        """Every blocking issue as one string, or "" when there are none.
+        """Hard and soft issues joined as one string, or "" when there are none.
 
-        The API's gate: it has ``force`` for the deliberate override, so it
-        does not need the hard/soft distinction the GUI makes.
+        For callers that only want the text. The API gate reads
+        ``_scan_command_issues`` itself, because ``force`` may clear the soft
+        issues only (``TaviApiBackend._blocking_scan_issues``).
         """
         hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
         return "\n".join(hard + soft)
