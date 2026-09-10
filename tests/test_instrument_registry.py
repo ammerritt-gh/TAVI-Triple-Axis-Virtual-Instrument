@@ -10,6 +10,7 @@ import sys
 
 import pytest
 
+import instruments.builtin  # noqa: F401  (see _registry_snapshot)
 from instruments import registry
 from instruments.registry import InstrumentInfo, available_instruments, get_instrument, register
 
@@ -18,7 +19,16 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 @pytest.fixture(autouse=True)
 def _registry_snapshot():
-    """Snapshot/restore the module-level registry dicts around every test."""
+    """Snapshot/restore the module-level registry dicts around every test.
+
+    ``instruments.builtin`` is imported at module scope so the snapshot always
+    contains the built-in registrations. Without that, the first test in this
+    file snapshots an *empty* registry, and restoring it wipes the built-ins
+    for every later test file in the same process -- a latent ordering bug that
+    only bites when this file happens to run before
+    ``test_instrument_packages.py``. Re-importing `builtin` cannot fix it after
+    the fact: it is already in ``sys.modules``, so the import is a no-op.
+    """
     factories = dict(registry._FACTORIES)
     display_names = dict(registry._DISPLAY_NAMES)
     yield
@@ -56,7 +66,7 @@ def test_get_unknown_id_error_lists_available():
     assert "dummy" in str(excinfo.value)
 
 
-def test_builtin_registers_the_three_instruments():
+def test_builtin_registers_all_four_instruments():
     import instruments.builtin  # noqa: F401  (registration side effect)
 
     if "puma" not in {i.id for i in available_instruments()}:
@@ -68,6 +78,7 @@ def test_builtin_registers_the_three_instruments():
     infos = available_instruments()
     assert InstrumentInfo("puma", "PUMA (FRM-II)") in infos
     assert InstrumentInfo("in8", "IN8 (ILL)") in infos
+    assert InstrumentInfo("in12", "IN12 (ILL)") in infos
     assert InstrumentInfo("panda", "PANDA (MLZ)") in infos
 
 
@@ -81,10 +92,12 @@ def test_listing_is_lazy_no_mcstas_import():
         "infos = available_instruments()\n"
         "assert any(i.id == 'puma' for i in infos), infos\n"
         "assert any(i.id == 'in8' for i in infos), infos\n"
+        "assert any(i.id == 'in12' for i in infos), infos\n"
         "assert any(i.id == 'panda' for i in infos), infos\n"
         "for banned in ('mcstasscript', 'PySide6',\n"
         "               'instruments.puma.model',\n"
         "               'instruments.in8.model',\n"
+        "               'instruments.in12.model',\n"
         "               'instruments.panda.model',\n"
         "               'instruments.tas_runtime'):\n"
         "    assert banned not in sys.modules, f'{banned} was imported'\n"

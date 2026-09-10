@@ -1,11 +1,12 @@
-"""Side-by-side descriptor demo: PUMA and IN8, both real.
+"""Side-by-side descriptor demo: PUMA, IN8, IN12 and PANDA, all real.
 
 Purpose: prove the ``InstrumentDescriptor`` of ``instruments/descriptor.py``
 captures both reference instruments *without* baking in PUMA's shape -- the
 "design against PUMA and IN8" check from ``docs/CONFIGURABLE_INSTRUMENTS.md``
 §12.5. Neither descriptor is defined here anymore: PUMA's lives in
-``instruments/puma/plugin.py`` and IN8's in ``instruments/in8/plugin.py``
-(single sources of truth, both runnable); they are re-imported for the
+``instruments/puma/plugin.py``, IN8's in ``instruments/in8/plugin.py``,
+IN12's in ``instruments/in12/plugin.py``, and PANDA's in
+``instruments/panda/plugin.py`` (single sources of truth, all runnable); they are re-imported for the
 comparison printout:
 
     python -m instruments._descriptor_examples
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 from instruments.descriptor import ParameterSpec
 from instruments.in8.plugin import in8_descriptor  # noqa: F401  (re-export)
+from instruments.in12.plugin import in12_descriptor  # noqa: F401  (re-export)
 from instruments.panda.plugin import panda_descriptor  # noqa: F401  (re-export)
 from instruments.puma.plugin import puma_descriptor  # noqa: F401  (re-export)
 
@@ -51,7 +53,7 @@ _CORE_PARAMS = (
 if __name__ == "__main__":
     from instruments.validation import validate_descriptor
 
-    for d in (puma_descriptor(), in8_descriptor(), panda_descriptor()):
+    for d in (puma_descriptor(), in8_descriptor(), in12_descriptor(), panda_descriptor()):
         g = d.geometry
         print(f"\n{d.display_name}  (id={d.id})")
         print(f"  arms L1/L2/L3/L4 = "

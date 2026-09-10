@@ -93,8 +93,8 @@ TAVI/
 |   |-- tas_runtime.py           # Shared TAS state, snapshot, feasibility, execution
 |   |-- puma/                    # Runnable PUMA plugin, model, review package
 |   |-- in8/                     # Runnable IN8 plugin, model, review package
-|   |-- panda/                   # Runnable PANDA plugin, model, review package
-|   `-- in12/                    # Research-only instrument package
+|   |-- in12/                    # Runnable IN12 plugin, model, review package
+|   `-- panda/                   # Runnable PANDA plugin, model, review package
 |-- tavi/                        # Core Python helpers and domain logic
 |-- components/                  # Custom McStas components, headers, and related data
 |-- config/                      # Local JSON config and McStas path notes

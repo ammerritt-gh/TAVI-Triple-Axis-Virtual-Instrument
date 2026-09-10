@@ -96,8 +96,13 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   angle branch frozen (elastic/inelastic/skew-Q/out-of-plane/Kf-fixed +
   reverse recovery), sense-threading equivalence and flip tests, and the
   vTAS-verified IN8 reference cases (senses +1/+1/−1; live run 2026-07-02),
-  plus the PANDA cases (senses −1/+1/−1 — the first negative monochromator
-  branch; generated 2026-09-09, not yet control-system verified).
+  plus the IN12 and PANDA cases. Both sets are **self-generated** — nobody ran
+  either instrument for us — and they freeze the sign structure of the two
+  negative-monochromator geometries (senses −1/+1/−1): IN12's senses were
+  settled from the published record (`instruments/in12/MODEL_STATUS.md`);
+  PANDA's follow vPANDA's declarations and are not yet control-system
+  verified. Their job is to catch a regression in the `sense_mono = −1` path,
+  forward and through both inverse branches.
 - `test_in8_plugin.py` — IN8 plugin conformance: runnable descriptor,
   scan-config mapping (single-select collimation, branch-signed bending),
   crystal lookup incl. the Cu200 `"NULL"` reflectivity sentinel, fingerprint
@@ -107,9 +112,21 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   gating/settings, collimator selection, crystal properties per descriptor,
   detector contract, Mono/Maxwellian source wiring, shared-library sample
   emission, no PUMA-only components.
+- `test_in12_plugin.py` — IN12 plugin conformance, same shape as IN8's plus
+  what is specific to IN12: the provisional senses (−1, +1, −1), the entirely
+  negative monochromator travel that evidences them, the derived slab sizes
+  reconstructing the published crystal faces, the fourth (α1) collimation slot,
+  the Heusler(111) analyser's `"NULL"` sentinel, the eleven-lamellae-in-three-
+  rows analyser reconstructing its published face, the analyser's fixed vertical
+  radius (asserted *not* to be tracking the arms, since "fixed" is the point),
+  and the vertical bending clamp at the published 0.5 m minimum.
+- `test_in12_build_tree.py` — object-level IN12 build-tree tests (construction
+  only, no compile): beam order including the guide-exit collimator, four
+  collimator selections, guide-exit source aperture, one-row analyser, 3He
+  detector contract, and the absence of any filter or PUMA-only optics.
 - `test_panda_plugin.py` — PANDA plugin conformance: runnable descriptor,
   the negative-monochromator senses (−1/+1/−1), the four-slot collimation
-  (PANDA is the first instrument with an `alpha_1`), the 55-crystal analyzer,
+  (an `alpha_1` slot, as IN8 and IN12 now have), the 55-crystal analyzer,
   the Cu111 `"NULL"` sentinel, all-negative branch-signed bending, the split
   monochromator object distance, published axis limits, fingerprint
   sensitivity, snapshot params == `_PANDA_PARAMS`.
@@ -120,5 +137,8 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   1″ ³He detector contract, source wiring at the guide exit, shared-library
   sample emission, no PUMA/IN8-only components.
 - `test_descriptor_validation.py` / `test_instrument_registry.py` updated:
-  IN8 is runnable-valid (rejection paths keep synthetic broken descriptors);
-  the lazy-import test lists in8 and panda and bans their `model` modules.
+  IN8 and IN12 are runnable-valid (rejection paths keep synthetic broken
+  descriptors); the lazy-import test lists in8/in12/panda and bans their
+  `model` modules. `test_instrument_registry.py` imports `instruments.builtin`
+  at module scope so its snapshot/restore fixture cannot wipe the built-in
+  registrations for later test files.
