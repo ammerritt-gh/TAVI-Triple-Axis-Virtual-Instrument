@@ -72,19 +72,30 @@ plugins, but built-in packages use the central path.
    Two `CrystalSpec` fields are easy to miss and both belong to the *crystal*,
    not the instrument: `mosaic_v` for an anisotropic mosaic (the emitter then
    writes McStas's `mosaich`/`mosaicv` pair instead of the single `mosaic`),
-   and `fixed_curvature` naming the curvature axes that assembly holds fixed
-   (`"rhm"`/`"rvm"` for a monochromator, `"rha"`/`"rva"` for an analyser), which
-   makes the scan-command validator refuse a scan over them. Declare the second
-   only where the *fixedness* is evidenced for that crystal — two analysers on
-   one instrument can differ, and pinning a value in `scan_config` without
+   and `curvature`, a mapping of the crystal's curvature axes (`"rhm"`/`"rvm"`
+   for a monochromator, `"rha"`/`"rva"` for an analyser) to `CurvatureAxis`
+   declarations (`instruments/descriptor.py`) — driven or fixed
+   (`fixed_radius_m`), mechanical travel (`min_radius_m`/`max_radius_m`), and
+   whether a focusing model is established at all (`focusing_known`). A fixed
+   axis makes the scan-command validator refuse a scan over it. `provenance`
+   is **required** on every axis that declares a radius (fixed or clamped) —
+   it is read by a person in a GUI dialog and by a campaign client in an API
+   error body, so it must say where the number came from. Declare fixedness
+   only where it is evidenced for that crystal — two analysers on one
+   instrument can differ, and pinning a value in `scan_config` without
    declaring it lets a scan silently defeat the pin.
 2. **Validate** — `validate_descriptor(d, runnable=True)` must return `[]`.
    Startup calls `assert_valid_descriptor(runnable=True)` and exits on
    failure. Run `python -m instruments._descriptor_examples` for a printout.
 3. **State class** — subclass `TAS_Instrument`
    (`instruments/tas_runtime.py`): set L1–L4, the senses, and
-   instrument fields in `__init__`; implement `crystal_info()`,
-   `build_point_params()`, and `calculate_crystal_bending()`.
+   instrument fields in `__init__`; implement `crystal_info()` and
+   `build_point_params()`. Crystal bending is shared policy, not something
+   each instrument implements: `TAS_Instrument.ideal_curvature` is the one
+   producer, and an instrument overrides `curvature_object_distances` only
+   when its optics are not the default point-source (L_in, L_out) pair — or
+   `optical_radii` directly for an optic whose focusing law isn't that pair
+   at all.
 4. **`build_<ID>_instrument()`** — the McStas component tree, in beam order,
    through the shared emitters of `tavi/instrument_helpers.py` wherever a
    category exists there. `add_parameter` names must match the descriptor's
@@ -163,9 +174,13 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
 - **Crystal bending radii are SIGNED by branch**: `Monochromator_curved`
   needs the curvature center on the take-off side. A positive radius on a
   negative take-off branch defocuses by ~7 orders of magnitude in peak
-  intensity (measured). Return signed radii from
-  `calculate_crystal_bending` and apply the branch sign in `scan_config`
-  (the GUI carries magnitudes).
+  intensity (measured). The sign is derived from the take-off angle in one
+  place, `TAS_Instrument.ideal_curvature`/`set_crystal_bending`
+  (`instruments/tas_runtime.py`) — never applied per plugin. The GUI, the API,
+  and `vals` all carry magnitudes only; `tavi/resolution.py` applies the same
+  branch sense itself when it reads those magnitudes back
+  (`monorh = radius_cm(cfg.rhm) * sm`), so a signed value reaching that
+  surface would be signed twice.
 
 ## The scans-array contract
 

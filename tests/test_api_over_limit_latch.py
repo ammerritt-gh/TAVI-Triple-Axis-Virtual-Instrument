@@ -79,7 +79,8 @@ class _StubController:
             "relative_mode_1": False, "relative_mode_2": False,
         }
 
-    def _scan_command_issues(self, c1, c2, monocris=None, anacris=None):
+    def _scan_command_issues(self, c1, c2, monocris=None, anacris=None, modules=None,
+                             relative_1=False, relative_2=False, current_values=None):
         return [], []  # grammar OK
 
     def _count_scan_points(self, c1, c2):
@@ -207,6 +208,11 @@ class _ManifestController:
 
     def normalize_scan_variable(self, variable):
         return variable
+
+    def _curvature_axis_specs(self, monocris, anacris, modules=None):
+        # No curvature axis in this scan's command (deltaE) -- an empty
+        # mapping is exactly what a non-curvature scan gets in production.
+        return {}
 
     def print_to_message_center(self, message):
         raise AssertionError("manifest expansion unexpectedly failed: %s" % message)

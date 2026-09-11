@@ -40,6 +40,7 @@ from instruments.descriptor import (
     AxisLimits,
     CollimationSlot,
     CrystalSpec,
+    CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
     MonitorSpec,
@@ -78,6 +79,32 @@ _L1, _L2, _L3, _L4 = 5.00, 2.10, 1.05, 0.95
 # distance for the monochromator's horizontal focusing and PANDA's defining
 # primary optic; it is not a Geometry field, so the state class owns it
 # (PANDA_Instrument.l_virtual_source_mono).
+
+# Curvature: no minimum or maximum radius is applied for either crystal.
+# MODEL_STATUS.md records this as confirmed absent from the literature, not
+# merely unlocated -- the 2007 report confirms driven focusing existed but
+# gives no travel, and inventing a clamp would be worse than applying none.
+_PANDA_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True),
+    "rvm": CurvatureAxis(driven=True),
+}
+_PANDA_ANA_CURVATURE = {
+    "rha": CurvatureAxis(driven=True),
+    # Fixed vertical / variable horizontal focusing is confirmed for THIS
+    # assembly by two peer-reviewed PANDA papers (one ties the fixed vertical
+    # geometry to the vertically oriented 1" 3He detector) and by the MLZ page
+    # advertising only variable horizontal focusing. The RADIUS is still
+    # unsourced -- only the fixedness is.
+    "rva": CurvatureAxis(
+        driven=False, fixed_radius_m=0.60,
+        provenance=(
+            "Fixedness confirmed by two peer-reviewed PANDA papers and the "
+            "MLZ page (variable horizontal focusing advertised, vertical "
+            "not); the 0.60 m radius is our own point-focus value for "
+            "kf = 1.55 A^-1, not a sourced mechanical figure (MODEL_STATUS.md)."
+        ),
+    ),
+}
 
 # The full McStas parameter set build_PANDA_instrument declares via
 # add_parameter() -- the per-point snapshot dict shape. The 16 shared core TAS
@@ -184,6 +211,7 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.020, slab_height=0.018, n_columns=11, n_rows=11,
                 gap=0.002, mosaic=20, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_PANDA_MONO_CURVATURE,
             ),
             # Cu(111), the second current monochromator (MLZ: ki = 1.8-7.0
             # A^-1, d quoted as 2.08 A; 2.087 A is the crystallographic value
@@ -200,6 +228,7 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.020, slab_height=0.018, n_columns=11, n_rows=11,
                 gap=0.002, mosaic=30, r0=0.7,
                 reflect_file="NULL", transmit_file="NULL",
+                curvature=_PANDA_MONO_CURVATURE,
             ),
             # Si(111) and the Heusler polarizing face are current PANDA
             # hardware but are deliberately absent: Si(111) is a bent-perfect
@@ -221,15 +250,7 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.013, slab_height=0.025, n_columns=11, n_rows=5,
                 gap=0.003, mosaic=20, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
-                # Fixed vertical / variable horizontal focusing is
-                # confirmed for THIS assembly (two peer-reviewed
-                # papers, one tying the fixed vertical geometry to
-                # the vertically oriented 1" 3He detector; MLZ
-                # advertises only variable horizontal). So rva is
-                # refused as a scan variable rather than silently
-                # defeating the pin scan_config applies. The RADIUS
-                # is still unsourced -- only the fixedness is.
-                fixed_curvature=("rva",),
+                curvature=_PANDA_ANA_CURVATURE,
             ),
         ),
         # Samples come from the shared, instrument-independent library --
@@ -314,23 +335,16 @@ class PANDAPlugin:
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
-        # Curvature radii are signed by the scattering branch: the curvature
-        # center must sit on the take-off side. PANDA takes off negative at
-        # BOTH crystals (senses -1/+1/-1), so every radius is negative -- where
-        # IN8 only flips the analyzer. The GUI carries magnitudes; the branch
-        # sign is instrument physics, applied here. (Wrong sign = ~7 orders of
-        # magnitude peak loss; measured during the IN8 Phase-4 smoke.)
-        scan_config.rhm = -abs(vals['rhm'])
-        scan_config.rvm = -abs(vals['rvm'])
-        scan_config.rha = -abs(vals['rha'])
-        # PANDA's conventional analyzer vertical curvature is fixed, not
-        # driven. Confirmed: two peer-reviewed PANDA papers describe fixed
-        # vertical / variable horizontal analyzer focusing, one tying the fixed
-        # vertical geometry to the vertically oriented 1" 3He detector, and the
-        # MLZ page advertises only variable horizontal focusing. The RADIUS is
-        # not confirmed by anything -- this is our point-focus value for the
-        # standard cold setting kf = 1.55 A^-1.
-        scan_config.rva = -0.60
+        # Curvature radii are plain magnitudes here: the branch sign (a
+        # crystal's take-off side) and any fixed-axis/mechanical-limit policy
+        # are enforced once, in TAS_Instrument.set_crystal_bending, the
+        # boundary every path to the instrument state crosses. Signing here
+        # too would be the exact duplicated-policy bug that boundary exists
+        # to prevent.
+        scan_config.rhm = vals['rhm']
+        scan_config.rvm = vals['rvm']
+        scan_config.rha = vals['rha']
+        scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
@@ -418,7 +432,7 @@ class PANDAPlugin:
             axis_limits=panda_descriptor().axis_limits,
         )
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for PANDA (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
@@ -428,4 +442,6 @@ class PANDAPlugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(panda_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            panda_descriptor(), vals, q0, w, point_angles=point_angles,
+        )

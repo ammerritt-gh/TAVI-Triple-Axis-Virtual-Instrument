@@ -32,7 +32,7 @@ def _snapshot(k_fixed, source_type, deltaE):
         "K_fixed": k_fixed,
         "source_type": source_type,
         "source_dE": 2,
-        "rhm": 3.0, "rvm": 1.2, "rha": 1.5,
+        "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31,
         "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002",
         "modules": {},
@@ -96,7 +96,7 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
         "K_fixed": k_fixed,
         "source_type": source_type,
         "source_dE": 2,
-        "rhm": 3.0, "rvm": 1.2, "rha": 1.5,
+        "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31,
         "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002",
         "modules": {},
@@ -206,7 +206,7 @@ def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
     plugin = IN8Plugin()
     vals = {
         "K_fixed": "Ki Fixed", "source_type": "Maxwellian", "source_dE": 2,
-        "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "fixed_E": _FIXED_E,
+        "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31, "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002", "modules": {},
         "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0",
                         "alpha_4": "0"},

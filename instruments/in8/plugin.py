@@ -33,6 +33,7 @@ from instruments.descriptor import (
     AxisLimits,
     CollimationSlot,
     CrystalSpec,
+    CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
     MonitorSpec,
@@ -56,6 +57,26 @@ IN8_MCSTAS_NAME = "IN8_McScript"
 # never affect angles, and the running simulation should match today's
 # hardware. Design record §20.
 _L1, _L2, _L3, _L4 = 2.28, 2.48, 1.05, 0.70
+
+# Curvature: no axis has a declared radius. IN8's model applies no bending
+# clamps at all, and MODEL_STATUS.md records the mechanical min/max radii as
+# unknown (*needs IS*) rather than as a value we merely haven't sourced yet.
+# rva is DRIVEN, not fixed: the Thermes analyser is variable double-focusing
+# and the hardware tracks it with a motor (operator ruling, 2026-09-11) --
+# scan_config's `rva = -0.31` is a stated placeholder magnitude, not a
+# declared fixed radius.
+_IN8_CURVATURE_PROVENANCE = (
+    "No bending clamps in the model; IN8 mechanical min/max radii are "
+    "unknown, not merely unsourced (MODEL_STATUS.md: *needs IS*)."
+)
+_IN8_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True, provenance=_IN8_CURVATURE_PROVENANCE),
+    "rvm": CurvatureAxis(driven=True, provenance=_IN8_CURVATURE_PROVENANCE),
+}
+_IN8_ANA_CURVATURE = {
+    "rha": CurvatureAxis(driven=True, provenance=_IN8_CURVATURE_PROVENANCE),
+    "rva": CurvatureAxis(driven=True, provenance=_IN8_CURVATURE_PROVENANCE),
+}
 
 # The full McStas parameter set build_IN8_instrument declares via
 # add_parameter() -- the per-point snapshot dict shape. 16 shared core TAS
@@ -148,6 +169,7 @@ def in8_descriptor() -> InstrumentDescriptor:
                 slab_width=0.025, slab_height=0.017, n_columns=11, n_rows=11,
                 gap=0.0015, mosaic=30, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_IN8_MONO_CURVATURE,
             ),
             # Cu200 face, same subdivision (paper 2023). No stock McStas
             # reflectivity data for Cu: constant r0 with the McStas "NULL"
@@ -160,6 +182,7 @@ def in8_descriptor() -> InstrumentDescriptor:
                 slab_width=0.025, slab_height=0.017, n_columns=11, n_rows=11,
                 gap=0.0015, mosaic=25, mosaic_v=10, r0=0.7,
                 reflect_file="NULL", transmit_file="NULL",
+                curvature=_IN8_MONO_CURVATURE,
             ),
             # Si111/Si311 bent-perfect faces exist on IN8 but cannot be
             # represented by the mosaic Monochromator_curved model; deferred.
@@ -172,6 +195,7 @@ def in8_descriptor() -> InstrumentDescriptor:
                 slab_width=0.02, slab_height=0.02, n_columns=9, n_rows=7,
                 gap=0.0005, mosaic=30, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_IN8_ANA_CURVATURE,
             ),
         ),
         # Samples come from the shared, instrument-independent library --
@@ -265,18 +289,16 @@ class IN8Plugin:
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
-        # Curvature radii are signed by the scattering branch: the curvature
-        # center must sit on the take-off side, and IN8's analyzer take-off is
-        # the negative branch (sense_ana = -1). The GUI carries magnitudes;
-        # the branch sign is instrument physics, applied here. (Wrong sign =
-        # ~7 orders of magnitude peak loss; measured in the Phase-4 smoke.)
-        scan_config.rhm = abs(vals['rhm'])       # mono take-off: +1 branch
-        scan_config.rvm = abs(vals['rvm'])
-        scan_config.rha = -abs(vals['rha'])      # analyzer take-off: -1 branch
-        # PLACEHOLDER magnitude: vertical analyzer curvature held at the
-        # point-source value for kf = 2.662 (Thermes is variable
-        # double-focusing).
-        scan_config.rva = -0.31
+        # Curvature radii are plain magnitudes here: the branch sign (a
+        # crystal's take-off side) and any fixed-axis/mechanical-limit policy
+        # are enforced once, in TAS_Instrument.set_crystal_bending, the
+        # boundary every path to the instrument state crosses. Signing here
+        # too would be the exact duplicated-policy bug that boundary exists
+        # to prevent.
+        scan_config.rhm = vals['rhm']
+        scan_config.rvm = vals['rvm']
+        scan_config.rha = vals['rha']
+        scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
@@ -366,7 +388,7 @@ class IN8Plugin:
             axis_limits=in8_descriptor().axis_limits,
         )
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for IN8 (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript. IN8
@@ -377,4 +399,6 @@ class IN8Plugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(in8_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            in8_descriptor(), vals, q0, w, point_angles=point_angles,
+        )

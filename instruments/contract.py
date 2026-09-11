@@ -20,6 +20,7 @@ Targets Python 3.11 syntax.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from instruments.descriptor import InstrumentDescriptor
@@ -41,6 +42,28 @@ InstrumentState = Any
 # today; the fan-out width is fixed here and referenced by the run-point sites
 # (and recorded on mcstas scan records for future-proofing).
 DEFAULT_MPI_COUNT = 30
+
+
+class CurvatureMode(str, Enum):
+    """Per-axis curvature policy, carried in launch-state ``vals['curvature_modes']``.
+
+    One enum, used by the GUI, the API and the scan loop alike -- there is no
+    second way to express "how should this axis's radius be decided this scan".
+
+    ``FIXED`` is deliberately NOT a mode here: it is a property of the
+    installed assembly (``CurvatureAxis.driven is False``), already enforced
+    in ``TAS_Instrument.set_crystal_bending`` (which pins the axis to its
+    declared ``fixed_radius_m`` regardless of what mode or value is supplied)
+    and already refused as a scan variable elsewhere. A fixed axis has no
+    mode because the operator has no say over it.
+
+    Subclasses ``str`` so a plain value survives the ``copy.deepcopy`` at the
+    job-queue seam (``instruments/contract.py``) same as any other string.
+    """
+
+    AUTOFOCUS = "autofocus"   # recomputed from the optics at every point
+    HELD = "held"             # an explicit magnitude, unchanged for the scan
+    SCANNED = "scanned"       # driven by the scan command, point by point
 
 
 @dataclass
@@ -246,6 +269,7 @@ class InstrumentPlugin(Protocol):
         vals: dict,
         q0: float,
         w: float,
+        point_angles: "dict | None" = None,
     ) -> "ResolutionConfig":
         """Build a theoretical-resolution config for one ``(q0, w)`` point.
 
@@ -254,18 +278,30 @@ class InstrumentPlugin(Protocol):
         ``fixed_E``/``collimation``/``modules``/``source_type``/``rhm``... plus an
         optional ``sample_key``) onto the instrument-independent
         :class:`tavi.resolution.ResolutionConfig` (ISAR Cooper-Nathans vocabulary
-        + Popovici extensions): d-spacings, mosaics and senses from the
-        descriptor; horizontal collimations from ``vals`` (tightest non-zero
-        blade of a multi-select slot; an open/zero blade substitutes a documented
-        60 arcmin effective divergence and records a warning); vertical
-        divergences from the descriptor default; ``kfix``/``fx`` from ``K_fixed``/
-        ``fixed_E``. ``q0`` (Angstrom^-1) and ``w`` (meV) pass straight through.
+        + Popovici extensions): d-spacings and mosaics from the descriptor;
+        horizontal collimations from ``vals`` (tightest non-zero blade of a
+        multi-select slot; an open/zero blade substitutes a documented 60 arcmin
+        effective divergence and records a warning); vertical divergences from
+        the descriptor default; ``kfix``/``fx`` from ``K_fixed``/``fixed_E``.
+        ``q0`` (Angstrom^-1) and ``w`` (meV) pass straight through.
 
-        A **pure function of its inputs**: it reads only the descriptor and
-        ``vals`` and must not import mcstasscript or touch any McStas state.
-        Components that break the analytic assumptions (PUMA's NMO) are recorded
-        as *invalidations* on the returned config (so ``cn_valid`` becomes False)
-        rather than silently ignored. Optional for a plugin, mirroring
-        ``check_point_feasibility``; callers degrade gracefully when absent.
+        Scattering senses (sm/ss/sa) come from the descriptor's declared
+        (normal-branch) ``Geometry`` UNLESS ``point_angles`` -- this point's own
+        solved ``{"mtt", "stt", "att"}`` two-theta angles (degrees), the same
+        snapshot metadata ``compute_scan_snapshot`` already carries -- says
+        otherwise: a direct-angle command can put a crystal on the opposite
+        take-off branch from the one the descriptor calls normal, and Popovici
+        uses that sense for both the crystal's Bragg angle and its curvature
+        sign, so the two must never be answered from different sources. Omit
+        it (or leave an individual angle key out) for a caller with no solved
+        point; each axis then keeps today's descriptor-only behaviour.
+
+        A **pure function of its inputs**: it reads only the descriptor,
+        ``vals`` and ``point_angles`` and must not import mcstasscript or touch
+        any McStas state. Components that break the analytic assumptions
+        (PUMA's NMO) are recorded as *invalidations* on the returned config (so
+        ``cn_valid`` becomes False) rather than silently ignored. Optional for a
+        plugin, mirroring ``check_point_feasibility``; callers degrade
+        gracefully when absent.
         """
         ...

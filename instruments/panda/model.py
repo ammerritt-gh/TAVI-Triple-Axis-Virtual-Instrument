@@ -98,63 +98,22 @@ class PANDA_Instrument(TAS_Instrument):
 
         return crystal_info_from_descriptor(panda_descriptor(), monocris, anacris)
 
-    def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
-        """Store bending radii, forcing every one onto PANDA's take-off branch.
+    def descriptor(self):
+        from instruments.panda.plugin import panda_descriptor
 
-        ``PANDAPlugin.scan_config`` already signs the radii it copies out of the
-        GUI, but a *scanned* radius does not go through it: ``compute_scan_snapshot``
-        reads scans[4:8] and calls this setter directly, so scanning ``rhm`` from
-        3 to 5 would otherwise hand positive radii to a monochromator whose
-        curvature center must sit on the negative side. PUMA and IN8 never saw
-        this for the monochromator because theirs takes off positive.
+        return panda_descriptor()
 
-        ``-abs()`` is idempotent, so the already-signed non-scanned path is
-        unaffected. Overriding here rather than in ``TAS_Instrument`` keeps the
-        branch sign where it belongs -- with the instrument.
-        """
-        super().set_crystal_bending(
-            rhm=None if rhm is None else -abs(rhm),
-            rvm=None if rvm is None else -abs(rvm),
-            rha=None if rha is None else -abs(rha),
-            rva=None if rva is None else -abs(rva),
-        )
-
-    def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
-        """Ideal bending radii for PANDA's focusing crystals.
-
-        Point-source formulas throughout -- RH = 2/sin(theta)/(1/Lin + 1/Lout)
-        and RV = 2*sin(theta)/(1/Lin + 1/Lout) -- but the monochromator's two
-        planes do NOT share an object distance:
-
-        * horizontally it images the virtual source ms1, 2.82 m upstream, onto
-          the sample. That is the whole point of PANDA's primary optics;
-        * vertically there is no virtual source, so the guide exit at L1 is the
-          object.
-
-        The analyzer uses the sample as a real point source on both planes;
-        ``rva`` is computed here for completeness, but the plugin's
-        ``scan_config`` overrides it with a fixed value because PANDA's
-        conventional analyzer vertical curvature is not driven.
-
-        The radii are SIGNED: theta arrives signed and PANDA takes off negative
-        at both crystals, so both come out negative -- which is what
-        ``Monochromator_curved`` needs (curvature center on the take-off side).
-        No minimum-radius clamps: PANDA's mechanical limits are unknown
-        (PLACEHOLDER; SCIENTIST_REVIEW.md question 5).
-        """
-        sin_mth = math.sin(math.radians(mth))
-        sin_ath = math.sin(math.radians(ath))
-        mono_focus_h = 1 / (1 / self.l_virtual_source_mono + 1 / self.L2)
-        mono_focus_v = 1 / (1 / self.L1 + 1 / self.L2)
-        ana_focus = 1 / (1 / self.L3 + 1 / self.L4)
-
-        rhm = rhmfac * 2 * mono_focus_h / sin_mth
-        rvm = rvmfac * 2 * mono_focus_v * sin_mth
-        rha = rhafac * 2 * ana_focus / sin_ath
-        rva = 2 * ana_focus * sin_ath
-
-        print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
-        return rhm, rvm, rha, rva
+    def curvature_object_distances(self, modules=None):
+        """PANDA's monochromator does not share an object distance between its
+        two focusing planes: horizontally it images the virtual source ms1
+        (2.82 m upstream) onto the sample -- the whole point of PANDA's
+        primary optics; vertically there is no virtual source, so the guide
+        exit at L1 is the object. The analyser keeps the base point-source
+        pair (the sample is a real source on both planes)."""
+        distances = dict(super().curvature_object_distances(modules=modules))
+        distances["mono_h"] = (self.l_virtual_source_mono, self.L2)
+        distances["mono_v"] = (self.L1, self.L2)
+        return distances
 
     def build_point_params(self, deltaE):
         """Build the runtime parameter snapshot for one instrument point.

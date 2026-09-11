@@ -32,7 +32,6 @@ import math
 
 import mcstasscript as ms
 
-from instruments.in12.plugin import ANA_FIXED_RV
 from instruments.paths import COMPONENTS_DIR
 from instruments.tas_runtime import (
     TAS_Instrument,
@@ -68,16 +67,12 @@ data_dir = COMPONENTS_DIR
 # one does not bind today; the vertical one does, above roughly |A1| = 32 deg
 # (ki > ~3.7 A^-1) -- so it is load-bearing on an unconfirmed number, which is
 # exactly why it is labelled. The analyser has no assumed limits; its fixed
-# vertical radius (``ANA_FIXED_RV``) is hardware, not a limit.
+# vertical radius is hardware, not a limit (see ``ANA_FIXED_RV`` in
+# instruments/in12/plugin.py, which declares these same minima on the
+# monochromator's CurvatureAxis -- ``curvature_limits`` on TAS_Instrument
+# reads them from there now).
 MONO_MIN_RH = 1.7
 MONO_MIN_RV = 0.5
-
-
-def _clamp_radius(radius, minimum):
-    """Clamp |radius| up to a mechanical minimum, preserving the branch sign."""
-    if radius == 0 or abs(radius) >= minimum:
-        return radius
-    return math.copysign(minimum, radius)
 
 
 class IN12_Instrument(TAS_Instrument):
@@ -130,6 +125,11 @@ class IN12_Instrument(TAS_Instrument):
 
         return crystal_info_from_descriptor(in12_descriptor(), monocris, anacris)
 
+    def descriptor(self):
+        from instruments.in12.plugin import in12_descriptor
+
+        return in12_descriptor()
+
     def ana_vertical_is_fixed(self):
         """True when the SELECTED analyser holds its vertical focus fixed.
 
@@ -153,72 +153,6 @@ class IN12_Instrument(TAS_Instrument):
             if spec.id == self.anacris:
                 return "rva" in (spec.fixed_curvature or ())
         return True
-
-    def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
-        """Store bending radii, forcing every one onto IN12's take-off branch.
-
-        ``IN12Plugin.scan_config`` already signs the radii it copies out of the
-        GUI, but a *scanned* radius does not go through it:
-        ``compute_scan_snapshot`` reads scans[4:8] and calls this setter
-        directly, so scanning ``rhm`` from 3 to 5 would otherwise hand positive
-        radii to crystals whose curvature centres must sit on the negative
-        side. IN12 takes off negative at both the monochromator and the
-        analyser (sense_mono = sense_ana = -1), so all four are signed.
-
-        ``-abs()`` is idempotent, so the already-signed non-scanned path is
-        unaffected. Same override, same reason, as PANDA's.
-        """
-        super().set_crystal_bending(
-            rhm=None if rhm is None else -abs(rhm),
-            rvm=None if rvm is None else -abs(rvm),
-            rha=None if rha is None else -abs(rha),
-            rva=None if rva is None else -abs(rva),
-        )
-
-    def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
-        """Ideal bending radii for IN12's focusing crystals.
-
-        Point-source formulas at the monochromator (the H144 exit at L1 is a
-        real focal point -- the virtual source the 2016 upgrade was built
-        around), so RH = 2/sin(theta)/(1/L1 + 1/L2) and RV = 2*sin(theta)/(1/L1
-        + 1/L2). With L1 = L2 = 1.8 m this is the Rowland condition the
-        instrument was designed to satisfy.
-
-        Only rha is driven at the analyzer. Its vertical focus is fixed
-        hardware -- 1998 describes it as produced by permanently tilting the
-        top and bottom crystal rows -- so rva returns the fixed radius
-        (``ANA_FIXED_RV``) on the take-off branch rather than a computed one.
-        It is deliberately not the Rowland optimum: that is what "fixed" means.
-
-        The radii are SIGNED: theta arrives signed (IN12's A1 *and* A4 are both
-        negative), and ``Monochromator_curved`` needs the curvature center on
-        the scattering side -- feeding a positive radius to a negative take-off
-        branch defocuses by ~7 orders of magnitude in peak intensity (measured
-        on IN8 in the Phase-4 smoke run). Magnitudes are clamped up to the
-        provisional minima above (a model assumption, not a published limit --
-        see MONO_MIN_RH/RV); the analyzer has no assumed limits.
-        """
-        sin_mth = math.sin(math.radians(mth))
-        sin_ath = math.sin(math.radians(ath))
-        mono_focus = 1 / (1 / self.L1 + 1 / self.L2)
-        ana_focus = 1 / (1 / self.L3 + 1 / self.L4)
-
-        rhm = _clamp_radius(rhmfac * 2 * mono_focus / sin_mth, MONO_MIN_RH)
-        rvm = _clamp_radius(rvmfac * 2 * mono_focus * sin_mth, MONO_MIN_RV)
-        rha = rhafac * 2 * ana_focus / sin_ath
-        if self.ana_vertical_is_fixed():
-            rva = math.copysign(ANA_FIXED_RV, sin_ath)
-        else:
-            # No evidence of a fixed vertical focus for this analyser, so it is
-            # treated as variable and driven to the point-source optimum, the
-            # same policy every other driven radius here gets. PLACEHOLDER for
-            # the Heusler: its focusing behaviour is unpublished (see
-            # MODEL_STATUS.md), and this is a stated modelling choice, not a
-            # claim about the hardware.
-            rva = 2 * ana_focus * sin_ath
-
-        print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
-        return rhm, rvm, rha, rva
 
     def build_point_params(self, deltaE):
         """Build the runtime parameter snapshot for one instrument point.

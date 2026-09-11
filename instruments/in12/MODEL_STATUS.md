@@ -102,11 +102,11 @@ inverse.
 | Item | Current | Needed |
 |---|---|---|
 | PG subdivision | **11 columns × 3 rows**, lamella width 11 mm (published), row height and 0.1 mm gap derived from the 122 × 118 mm face | 1998 gives the lamella width and says the fixed vertical focus comes from tilting the **top and bottom rows**, which needs at least three. Three is the natural reading; the true row count, crystal thickness and inter-crystal gaps are **not published**. *needs IS* |
-| Vertical curvature | fixed at **1.40 m**, branch-signed, and declared `fixed_curvature=("rva",)` **on the PG(002) analyser** so a scan over it is refused rather than silently defeating the pin. Declared on the crystal, not the instrument: the 1998 evidence is about this assembly, and the Heusler option below has no established focusing behaviour to inherit it | 1998 confirms the vertical focus is fixed but gives no radius; 1.40 m is Takin's `pop_ana_curvv`, a resolution preset rather than a mechanical drawing. It is deliberately far from the point-source Rowland radius for L3/L4 (~0.43 m) — which is what "fixed" means. *needs IS* for the mechanical value |
+| Vertical curvature | fixed at **1.40 m**, branch-signed, and declared `"rva": CurvatureAxis(driven=False, fixed_radius_m=ANA_FIXED_RV, ...)` **on the PG(002) analyser** so a scan over it is refused rather than silently defeating the pin. Declared on the crystal, not the instrument: the 1998 evidence is about this assembly, and the Heusler option below has no established focusing behaviour to inherit it | 1998 confirms the vertical focus is fixed but gives no radius; 1.40 m is Takin's `pop_ana_curvv`, a resolution preset rather than a mechanical drawing. It is deliberately far from the point-source Rowland radius for L3/L4 (~0.43 m) — which is what "fixed" means. *needs IS* for the mechanical value |
 | Mosaic | 30′ | 1998's ~0.5°. The 2001 header says 35′ and Takin uses an effective 33′; treat 30′ as nominal, not as a post-upgrade measurement |
 | Horizontal curvature limits | none | allowed radius range. *needs IS* |
 | Heusler(111) geometry | PLACEHOLDER 5 columns × 1 row of 13.8 × 145 mm, mosaic 30′, constant r0 = 0.3 via the `"NULL"` sentinel | blade count, size, gap, mosaic, reflectivity — none published. Its **focusing axis is configuration-dependent, not a source conflict**: published IN12 experiments describe a horizontally focusing Heusler (2014, 2025) and a vertically focusing one (2024). Whether that is one reconfigurable assembly or two is unknown. *needs IS* |
-| Heusler vertical focus | **not** PG's fixed 1.40 m -- the Heusler declares no `fixed_curvature`, so `rva` is driven like `rha` (GUI magnitude on the take-off branch; flat when unset) and stays scannable | PG(002)'s fixed vertical focus is 1998 evidence about **that** assembly. `scan_config` used to pin `-ANA_FIXED_RV` for every analyser, so selecting the Heusler silently inherited PG's radius. The point-source optimum the Ideal button now offers for it is a stated modelling choice, not a claim about the hardware. *needs IS* |
+| Heusler vertical focus | **not** PG's fixed 1.40 m -- the Heusler declares `"rva": CurvatureAxis(driven=True, focusing_known=False)`, so `rva` is driven like `rha` (GUI magnitude on the take-off branch; flat when unset) and stays scannable, though no ideal radius may be computed for it | PG(002)'s fixed vertical focus is 1998 evidence about **that** assembly. `scan_config` used to pin `-ANA_FIXED_RV` for every analyser, so selecting the Heusler silently inherited PG's radius. The Ideal button no longer offers it a point-source optimum either: `focusing_known=False` means no established focusing model, so the button is unavailable for this axis and the operator sets it by hand -- a per-axis refusal, not a whole-crystal one: `rhm`/`rvm`/`rha` still compute their own Ideal normally with the Heusler installed, because `ideal_curvature` is asked only for the axes a caller actually wants and refuses solely a *requested* axis with no focusing model, rather than the whole calculation tripping over this one unrelated axis. *needs IS* |
 | Polarisation | not modeled | TAVI has no polarisation channel; Heusler here is a d-spacing only |
 
 ### Distances
@@ -204,6 +204,15 @@ freely.
   The smoke also certifies what the Python suite cannot: the emitted tree, with
   withdrawn collimators and `order=1` on both crystals, still generates a
   `.instr` that compiles and counts.
+- **Compiled McStas smoke run: passed** (2026-09-11, re-run on the
+  `crystal-bending-generality` tree, same configuration: Al (2,0,0) elastic
+  at kf = 2.000 Å⁻¹, 1e7 neutrons, all Soller collimators open, ideal
+  focusing). `detector_I = 5.44329e-07`, `detector_N = 6901` — up from the
+  2026-09-09 run above, the expected direction: the corrected monochromator
+  images the real virtual source at L1 onto the sample instead of assuming a
+  beam from infinity, so it focuses more strongly. The reported error is
+  ~2-5% of the value, well outside Monte-Carlo scatter. This is
+  gross-geometry and execution evidence, not a flux calibration.
 - **Not yet done:** any independent resolution or intensity benchmark at
   matched settings. Until one exists this is a runnable, documented model of
   the post-upgrade conventional configuration, not a quantitatively validated

@@ -4,6 +4,7 @@ import os
 import shutil
 import json
 import hashlib
+import logging
 import time
 import datetime
 import copy
@@ -16,7 +17,79 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
-from instruments.contract import DEFAULT_MPI_COUNT, PrepFailure, RunExecutionState
+from instruments.contract import (
+    DEFAULT_MPI_COUNT,
+    CurvatureMode,
+    PrepFailure,
+    RunExecutionState,
+)
+
+log = logging.getLogger(__name__)
+
+
+def _operator_magnitudes(ideal):
+    """Strip the branch sign off radii bound for the operator surface.
+
+    ``ideal_curvature`` returns SIGNED radii, which is what the scan loop
+    wants: it hands them to ``set_crystal_bending``, which is the physical
+    boundary where a curvature centre has to sit on the take-off side.
+
+    The operator surface is the other contract. A radius shown in a field,
+    saved to parameters.json, or sent in an API request is a MAGNITUDE -- how
+    tightly the crystal is bent, which is the operator's business. Which side
+    it bends toward is instrument geometry and is derived, never typed.
+
+    Keeping that straight is not cosmetic. ``tavi/resolution.py`` applies the
+    scattering sense itself (``monorh = radius_cm(cfg.rhm) * sm``), reading
+    the same ``vals`` the GUI and API fill. A signed value there is signed
+    twice, and the analytic resolution then describes a crystal bent the wrong
+    way -- silently, because the emitted McStas geometry is still correct.
+    """
+    return {axis: abs(value) for axis, value in ideal.items()}
+
+
+def _vals_with_point_state(vals, metadata):
+    """Overlay one point's ACTUALLY APPLIED radii AND kinematics onto a copy
+    of ``vals``.
+
+    ``resolution_config`` (``instruments/resolution_adapter.py``) reads
+    rhm/rvm/rha/rva straight out of ``vals`` as magnitudes (applying the
+    scattering sense itself) and prefers ``vals['Ki']``/``vals['Kf']`` for
+    the fixed wavevector (``_kfix``). The frozen launch ``vals`` carries only
+    the operator's declared/starting radii and the LAUNCH energies -- never
+    what an AUTOFOCUS or SCANNED curvature axis actually ran with at THIS
+    point, nor this point's own energy transfer under a direct-angle scan,
+    where the snapshot's Ei/Ki/Ef/Kf differ from the launch's (D23): an A4
+    scan under Kf-fixed otherwise hands Popovici a per-point energy transfer
+    against the LAUNCH Kf instead of the point's own.
+
+    ``metadata`` is the per-point dict carrying rhm/rvm/rha/rva (SIGNED --
+    the physical boundary's output), Ei/Ki/Ef/Kf, and deltaE -- snapshot
+    metadata (``instruments/tas_runtime.py``'s ``point_energy_metadata``
+    merge), or the equivalent freshly built for a point with no snapshot
+    (``compute_resolution``). Radii are stripped to magnitudes through
+    ``_operator_magnitudes``, the same sign strip the operator/API surface
+    already relies on, so the resolution adapter's "arrived signed" guard
+    never has cause to fire; Ei/Ki/Ef/Kf/deltaE pass through as-is (already
+    unsigned).
+    """
+    point_vals = dict(vals)
+    point_vals.update(_operator_magnitudes(
+        {axis: metadata[axis] for axis in ("rhm", "rvm", "rha", "rva")}
+    ))
+    for key in ("Ei", "Ki", "Ef", "Kf", "deltaE"):
+        if key in metadata:
+            point_vals[key] = metadata[key]
+    return point_vals
+
+
+def _point_angles(mtt, stt, att):
+    """``point_angles`` kwarg for ``resolution_config`` -- this point's own
+    solved two-theta angles, so the resolution model reads its scattering
+    senses off the point it is describing instead of always rebuilding them
+    from the descriptor's declared (normal-branch) ``Geometry``. See
+    ``instruments/resolution_adapter.py:_axis_sense``."""
+    return {"mtt": mtt, "stt": stt, "att": att}
 
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
@@ -814,8 +887,16 @@ class TaviApiBackend:
         silently overwrote the radius a crystal pins, or labelled points with
         coordinates they were not taken at (ruling 2026-09-10).
         """
+        # API scan commands are always absolute (build_api_launch_state hard-codes
+        # relative_mode_1/2 False, unlike the GUI-collected launch state) --
+        # relative_1/relative_2 default False here for that reason, not omission.
+        # current_values still passes vals' curvature radii through: a future
+        # relative API request would need them, and there is no separate
+        # "widget-free" reading to diverge from the GUI's.
+        current_values = {axis: vals.get(axis) for axis in ("rhm", "rvm", "rha", "rva")}
         hard, soft = controller._scan_command_issues(
-            cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
+            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules"),
+            current_values=current_values,
         )
         return hard if force else hard + soft
 
@@ -1491,6 +1572,9 @@ class TAVIController(QObject):
         self.window.instrument_dock.rha_ideal_button.clicked.connect(
             lambda: self.apply_ideal_bending_value("rha")
         )
+        self.window.instrument_dock.rva_ideal_button.clicked.connect(
+            lambda: self.apply_ideal_bending_value("rva")
+        )
 
         # User edits unlock ideal lock
         self.window.instrument_dock.rhm_edit.textEdited.connect(
@@ -1501,6 +1585,9 @@ class TAVIController(QObject):
         )
         self.window.instrument_dock.rha_edit.textEdited.connect(
             lambda: self.unlock_ideal_bending("rha")
+        )
+        self.window.instrument_dock.rva_edit.textEdited.connect(
+            lambda: self.unlock_ideal_bending("rva")
         )
         
         # Connect field editing events for linked updates
@@ -2221,12 +2308,17 @@ class TAVIController(QObject):
     def get_gui_values(self):
         """Helper to get all GUI values as a dict."""
         try:
+            mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
+            att = float(self.window.instrument_dock.att_edit.text() or 0)
+            monocris = self.window.instrument_dock.selected_mono_id()
+            anacris = self.window.instrument_dock.selected_ana_id()
+            modules = self.window.instrument_dock.module_values()
             return {
-                'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
+                'mtt': mtt,
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
                 'chi': float(self.window.instrument_dock.chi_edit.text() or 0),
-                'att': float(self.window.instrument_dock.att_edit.text() or 0),
+                'att': att,
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
                 'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
@@ -2252,16 +2344,33 @@ class TAVIController(QObject):
                 # to key None internally but surfaces to the API as "none" so it
                 # round-trips through apply_parameters/isolation restore.
                 'sample': self.window.sample_dock.get_selected_sample_key() or "none",
-                'monocris': self.window.instrument_dock.selected_mono_id(),
-                'anacris': self.window.instrument_dock.selected_ana_id(),
+                'monocris': monocris,
+                'anacris': anacris,
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
                 'rvm': float(self.window.instrument_dock.rvm_edit.text() or 0),
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
+                'rva': float(self.window.instrument_dock.rva_edit.text() or 0),
+                # Per-axis curvature policy for the scan about to run: the
+                # Ideal lock already tracked per field (locked = follow the
+                # optics, unlocked = the operator's own number). A fixed
+                # axis's mode is irrelevant -- set_crystal_bending pins it to
+                # the declared radius regardless -- so rva follows its lock
+                # exactly like its siblings rather than being special-cased.
+                'curvature_modes': {
+                    'rhm': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rhm')
+                           else CurvatureMode.HELD,
+                    'rvm': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rvm')
+                           else CurvatureMode.HELD,
+                    'rha': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rha')
+                           else CurvatureMode.HELD,
+                    'rva': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rva')
+                           else CurvatureMode.HELD,
+                },
                 'source_type': self.window.instrument_dock.selected_source_id(),
                 'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
                 # Descriptor-driven categories (the plugin's scan_config owns the
                 # mapping from these containers to its instrument state fields).
-                'modules': self.window.instrument_dock.module_values(),
+                'modules': modules,
                 'collimation': self.window.instrument_dock.collimation_values(),
                 'slits_mm': self.window.instrument_dock.slit_values_mm(),
                 'number_neutrons': self.window.simulation_dock.get_number_neutrons(),
@@ -2339,12 +2448,18 @@ class TAVIController(QObject):
         # Feasibility gate: the same per-point angle solve run_simulation applies
         # (throwaway check_state, calculate_angles error flags). Infeasible ->
         # {"ok": false, "reason": ...} with the /validate refusal vocabulary.
-        check_state = self.instrument.default_state()
-        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
-        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
-        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-        check_state.fixed_E = vals.get('fixed_E', 14.7)
-        _, error_flags = check_state.calculate_angles(
+        #
+        # Built through scan_config -- the same mapping compute_scan_snapshot's
+        # launch path and _reciprocal_advisory use -- so module state (e.g.
+        # a fitted nested mirror optic) reaches check_state exactly like every
+        # other curvature consumer, instead of a hand-picked field subset that
+        # a generic controller would have to know one plugin's module names to
+        # extend.
+        check_state = self.instrument.scan_config(
+            self.instrument.default_state(), vals, vals.get('sample_key'),
+            self.diagnostic_settings, self._build_sample_mount(vals),
+        )
+        angles, error_flags = check_state.calculate_angles(
             qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
             check_state.monocris, check_state.anacris,
         )
@@ -2355,11 +2470,72 @@ class TAVIController(QObject):
             )
             return {"ok": False, "reason": reason}
 
+        # This request's OWN curvature, honouring each axis's mode -- there is
+        # no snapshot to read applied radii off here (unlike the scan engines
+        # above), so it is solved the same way compute_snapshot does: stamp
+        # the solved angles onto the state (set_crystal_bending signs off
+        # them), recompute AUTOFOCUS axes at THIS point's own two-theta, keep
+        # a HELD axis's operator value, and let set_crystal_bending itself
+        # pin a fixed axis to its declared radius.
+        mtt, stt, sth, saz, att = angles
+        check_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+        curvature_modes = vals.get('curvature_modes') or {}
+        radii = {}
+        autofocus_axes = []
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            radii[axis] = vals.get(axis)
+            if curvature_modes.get(axis, CurvatureMode.HELD) == CurvatureMode.AUTOFOCUS:
+                autofocus_axes.append(axis)
+        if autofocus_axes:
+            try:
+                # requested_axes = exactly the AUTOFOCUS set: an unrelated
+                # HELD/SCANNED axis with no established focusing model (IN12's
+                # Heusler rva) must not refuse a query that never asked for it.
+                ideal = check_state.ideal_curvature(
+                    check_state.monocris, check_state.anacris, mtt / 2, att / 2,
+                    requested_axes=autofocus_axes,
+                )
+            except ValueError as exc:
+                # Same refusal ideal_curvature already gives the GUI Ideal
+                # button and the API launch-state recompute (an unknown
+                # focusing model, e.g. IN12's Heusler rva) -- surfaced with
+                # the same ok:false vocabulary as the feasibility gate above,
+                # not a 500.
+                #
+                # The catch stays broad on purpose: a resolution query should
+                # degrade to a stated refusal rather than a 500, because a
+                # campaign client can act on the first and only retries the
+                # second. But broad also catches things that are not refusals
+                # at all, so it is logged. A silent catch would hide a real
+                # fault behind a perfectly reasonable-looking answer, which is
+                # the failure mode this entire branch has been chasing.
+                log.warning(
+                    "resolution refused for %s/%s at mtt=%.4g att=%.4g: %s",
+                    check_state.monocris, check_state.anacris, mtt, att, exc,
+                )
+                return {"ok": False, "reason": str(exc)}
+            for axis in autofocus_axes:
+                radii[axis] = ideal[axis]
+        check_state.set_crystal_bending(**radii)
+        point_state = {
+            axis: getattr(check_state, axis)
+            for axis in ("rhm", "rvm", "rha", "rva")
+        }
+        # This request's own energies, built the identical way the snapshot
+        # builds them (point_energy_metadata): HKL/momentum mode never sets
+        # _angle_energies, so this follows K_fixed + deltaE exactly like
+        # compute_scan_snapshot's equivalent point would.
+        point_state.update(check_state.point_energy_metadata(deltaE))
+        point_state['deltaE'] = deltaE
+
         # Build the instrument's resolution config (optional plugin method).
         res_fn = getattr(self.instrument, "resolution_config", None)
         if not callable(res_fn):
             return {"ok": False, "reason": "resolution not supported for this instrument"}
-        cfg = res_fn(vals, q0, deltaE)
+        cfg = res_fn(
+            _vals_with_point_state(vals, point_state), q0, deltaE,
+            point_angles=_point_angles(mtt, stt, att),
+        )
 
         from tavi.resolution import resolution
         return resolution(cfg, method=method).to_dict()
@@ -2484,6 +2660,11 @@ class TAVIController(QObject):
         parsed = {}
         errors = {}
         for name, value in patch.items():
+            if name == 'curvature_modes':
+                # Known field (declared read-only in build_api_schema), not an
+                # unrecognized one -- see _api_field_map's docstring.
+                errors[name] = "read-only field"
+                continue
             spec = field_map.get(name)
             if spec is None:
                 errors[name] = "unknown field"
@@ -2500,6 +2681,13 @@ class TAVIController(QObject):
 
         patched = set(parsed)
         vals.update(parsed)
+
+        # Naming an explicit radius holds THAT axis, and only that axis --
+        # per-axis is what a per-axis mode means. This replaces the old
+        # all-or-nothing pin, where naming one radius froze all four.
+        for axis in ('rhm', 'rvm', 'rha', 'rva'):
+            if axis in patched:
+                vals['curvature_modes'][axis] = CurvatureMode.HELD
 
         # A patched container replaces the previous object wholesale, so a
         # request naming only some collimation slots would silently drop the
@@ -2560,17 +2748,76 @@ class TAVIController(QObject):
                 vals['qx'], vals['qy'], vals['qz'], vals
             )
 
-        # Recompute ideal bending when mtt/att/modules were patched and the
-        # caller did not pin the radii explicitly.
-        if (any(k in patched for k in ('mtt', 'att', 'modules'))
-                and not any(k in patched for k in ('rhm', 'rvm', 'rha'))):
-            ideal = self._ideal_bending_from_modules(
-                vals['mtt'], vals['att'], vals['modules']
+        # Refresh the AUTOFOCUS radii's starting numbers when mtt/att/modules/
+        # monocris/anacris were patched, so a submitted request already
+        # carries sensible values before any point is solved (the real
+        # per-point focus still runs in compute_scan_snapshot -- this is just
+        # the launch-state snapshot). Per-axis: an axis a caller pinned to an
+        # explicit radius above (now HELD, computed above) is never
+        # overwritten here, unlike the old all-or-nothing recompute this
+        # replaces, where naming ANY one radius silently skipped it for all
+        # four. Computed AFTER the HELD loop so a caller naming e.g. rva
+        # excludes it here too; also excludes any axis a non-empty scan
+        # command names (SCANNED, not a launch-state number to fill in --
+        # compute_scan_snapshot answers that per point). Deliberately NOT
+        # filtered through ``_askable_curvature_axes``: an axis that is
+        # genuinely AUTOFOCUS, unscanned, AND driven with no established
+        # focusing model (IN12's Heusler ``rva``) must still reach
+        # ``ideal_curvature`` and raise -- nobody pinned or scanned it, so
+        # there is no radius to run with, and that refusal is the point.
+        if any(k in patched for k in
+               ('mtt', 'att', 'modules', 'monocris', 'anacris')):
+            requested_axes = {
+                axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+                if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS
+            }
+            requested_axes -= self._scan_named_curvature_axes(
+                vals.get('scan_command1'), vals.get('scan_command2')
             )
-            if ideal:
-                vals['rhm'] = ideal['rhm']
-                vals['rvm'] = ideal['rvm']
-                vals['rha'] = ideal['rha']
+            if requested_axes:
+                try:
+                    ideal = self._ideal_bending_from_modules(
+                        vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
+                        vals['modules'], requested_axes=requested_axes,
+                    )
+                except ValueError as exc:
+                    raise ApiError(400, "invalid_curvature", str(exc))
+                if ideal:
+                    for axis in requested_axes:
+                        vals[axis] = ideal[axis]
+
+        # A HELD radius outside its declared mechanical travel, or off a
+        # fixed axis's declared radius, is refused here rather than silently
+        # clamped: the caller named this value explicitly. The GUI's
+        # ``_held_curvature_issues`` runs the identical check on the
+        # equivalent widgets, via the same ``curvature_command_error``, so an
+        # operator and an API client see the same sentence for the same
+        # out-of-travel value. An axis a non-empty scan command names is
+        # skipped -- ``_scan_named_curvature_axes``, shared with the GUI
+        # check -- because that axis is about to be promoted to SCANNED and
+        # this HELD value is not what the scan will actually run with (D21):
+        # a patched rhm=1.0 alongside a legal absolute "rhm 3.0 4.0 0.5"
+        # must not be refused for the 1.0 the scan overrides at every point.
+        from instruments.tas_runtime import curvature_command_error
+
+        curvature_axis_specs = self._curvature_axis_specs(
+            vals['monocris'], vals['anacris'], modules=vals['modules']
+        )
+        scan_named_axes = self._scan_named_curvature_axes(
+            vals.get('scan_command1'), vals.get('scan_command2')
+        )
+        for axis in ('rhm', 'rvm', 'rha', 'rva'):
+            if vals['curvature_modes'][axis] != CurvatureMode.HELD:
+                continue
+            if axis in scan_named_axes:
+                continue
+            axis_spec = curvature_axis_specs.get(axis)
+            if axis_spec is None:
+                continue
+            curvature_axis, crystal_name = axis_spec
+            error = curvature_command_error(axis, vals[axis], curvature_axis, crystal_name)
+            if error:
+                raise ApiError(400, "curvature_out_of_travel", error)
 
         # At least one non-empty scan command is required (a lone command 2 is
         # swapped into command 1 downstream, so either satisfies the check).
@@ -2829,118 +3076,219 @@ class TAVIController(QObject):
             self.update_ideal_bending_buttons()
 
     def _compute_ideal_bending_values(self, mtt=None, att=None):
-        """Compute ideal absolute bending radii from current angles.
-        
-        When NMO (Nested Mirror Optic) is installed, the ideal monochromator
-        bending is flat (0), since the NMO provides the focusing.
-        
-        For the monochromator: Uses parallel beam formula since the source is
-        effectively at infinity (neutron guide produces quasi-parallel beam).
-        Per McStas Monochromator_curved documentation:
-            RV = 2*L*sin(theta)
-            RH = 2*L/sin(theta)
-        where L = L2 (monochromator to sample distance) and theta is Bragg angle.
-        
-        For the analyzer: Uses point-source formula since the sample is a real
-        point source at L3, focusing to the detector at L4.
+        """Ideal absolute bending radii for the crystals selected in the GUI.
+
+        Thin caller of ``_ideal_bending_from_modules``, naming the crystals
+        the GUI actually has selected and the NMO state from its combo --
+        never a live-widget read anywhere else, so a hypothetical (mtt, att)
+        passed in by a caller still gets today's real crystal selection.
+        Returns None for a degenerate geometry (zero take-off angle); a
+        driven axis whose crystal declares this axis's focusing model
+        unknown (IN12's Heusler ``rva``) is simply left out of the askable
+        set (``_askable_curvature_axes``) rather than blanking the whole
+        result -- the other three axes still get a real ideal. The caller
+        shows "Ideal: --" for a missing key the same way it already does for
+        a fully refused result.
         """
         try:
             if mtt is None:
                 mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
             if att is None:
                 att = float(self.window.instrument_dock.att_edit.text() or 0)
-
-            # Check if NMO is installed - if so, ideal monochromator bending is flat (0)
-            nmo_combo = getattr(self.window.instrument_dock, "nmo_combo", None)
-            nmo_installed = nmo_combo.currentText() if nmo_combo is not None else "None"
-            if nmo_installed != "None":
-                # NMO provides focusing, so ideal monochromator bending is flat
-                rhm = 0
-                rvm = 0
-            else:
-                # Use theta (mtt/2) not 2-theta (mtt) per McStas documentation:
-                # RV = 2*L*sin(theta) where theta is the Bragg angle
-                sin_m = math.sin(math.radians(mtt / 2))
-
-                if sin_m == 0:
-                    return None
-
-                # Parallel beam formula: source effectively at infinity (guide output)
-                # Focus from monochromator to sample at distance L2
-                rhm = 2 * self.instrument_state.L2 / sin_m
-                rvm = 2 * self.instrument_state.L2 * sin_m
-
-                if rhm < 2.0:
-                    rhm = 2.0
-                if rvm < 0.5:
-                    rvm = 0.5
-
-            # Analyzer: point-source formula (sample is real point source)
-            denom_a = (1 / self.instrument_state.L3 + 1 / self.instrument_state.L4)
-            # Use theta (att/2) not 2-theta (att) per McStas documentation
-            sin_a = math.sin(math.radians(att / 2))
-
-            if denom_a == 0 or sin_a == 0:
-                return None
-
-            rha = 2 / sin_a / denom_a
-            rva = 0.8
-
-            if rha < 2.0:
-                rha = 2.0
-
-            return {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
-        except Exception:
+            modules = self.window.instrument_dock.module_values()
+            monocris = self.window.instrument_dock.selected_mono_id()
+            anacris = self.window.instrument_dock.selected_ana_id()
+            # Ask only for the axes with an established focusing model --
+            # an unrelated driven axis with none (IN12's Heusler rva) must
+            # not disable the other three, which the whole-crystal try/except
+            # used to do by construction (any raise blanked all four).
+            requested_axes = self._askable_curvature_axes(
+                monocris, anacris, modules=modules
+            )
+            return self._ideal_bending_from_modules(
+                mtt, att, monocris, anacris, modules,
+                requested_axes=requested_axes,
+            )
+        except ValueError as exc:
+            # Expected refusal: an unrequested-but-still-raising crystal
+            # lookup failure. A degenerate take-off angle is handled inside
+            # ``_ideal_bending_from_modules`` (ZeroDivisionError -> None) and
+            # never reaches here. The caller shows "Ideal: --".
+            log.info("ideal bending unavailable (%s/%s): %s",
+                     monocris, anacris, exc)
             return None
+        except Exception:
+            # Anything else is a wiring bug, not a refusal. It still degrades
+            # to "Ideal: --" rather than taking the window down mid-session,
+            # but it is never silent -- this catch used to hide the traceback
+            # entirely, and it now guards a call into the instrument model
+            # rather than a few lines of arithmetic.
+            log.exception("ideal bending raised unexpectedly (%s/%s)",
+                          monocris, anacris)
+            return None
+
+    def _current_rva_axis(self):
+        """The selected analyser's declared ``CurvatureAxis`` for rva.
+
+        The one axis whose declared policy actually varies between crystals
+        -- fixed (no operator say), driven with no established focusing model
+        (IN12's Heusler), or ordinary. Read fresh from the descriptor via
+        ``_curvature_axis_specs`` rather than cached, so a crystal swap is
+        picked up the moment it happens.
+        """
+        from instruments.descriptor import CurvatureAxis
+
+        idock = self.window.instrument_dock
+        monocris = idock.selected_mono_id()
+        anacris = idock.selected_ana_id()
+        # Resolved against the LIVE module state, exactly as the four-axis
+        # sync loop in update_ideal_bending_buttons resolves its specs -- a
+        # second reading without modules would be a twin that disagrees the
+        # day a module override touches rva.
+        rva_axis, _ = self._curvature_axis_specs(
+            monocris, anacris, modules=idock.module_values()
+        ).get('rva', (CurvatureAxis(), ''))
+        return rva_axis
+
+    def _apply_rva_axis_policy(self, rva_axis):
+        """Enable/disable rva's field and Ideal button per the descriptor.
+
+        Three cases (docs/CONFIGURABLE_INSTRUMENTS.md, this branch's packet):
+        fixed -- the operator has no say, the field shows the declared radius
+        and is not editable, and the Ideal button is pointless (the applier
+        pins the value regardless of mode); driven with no established
+        focusing model -- a typed value is legitimate (HELD) but there is no
+        optimum to compute, so the Ideal button is disabled with a tooltip
+        saying why; otherwise it behaves exactly like rha.
+        """
+        idock = self.window.instrument_dock
+        if not rva_axis.driven:
+            idock.rva_ideal_button.setChecked(False)
+            idock.rva_ideal_button.setEnabled(False)
+            idock.rva_edit.setEnabled(False)
+            idock.rva_ideal_button.setToolTip(
+                "rva is fixed for this analyser; there is no autofocus and "
+                "no operator override."
+            )
+        elif not rva_axis.focusing_known:
+            idock.rva_ideal_button.setChecked(False)
+            idock.rva_ideal_button.setEnabled(False)
+            idock.rva_edit.setEnabled(True)
+            idock.rva_ideal_button.setToolTip(
+                "No established focusing model for this analyser's rva; a "
+                "typed value is honoured, but autofocus cannot be offered."
+            )
+        else:
+            idock.rva_edit.setEnabled(True)
+            if not idock.rva_ideal_button.isChecked():
+                idock.rva_ideal_button.setEnabled(True)
+            idock.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
 
     def update_ideal_bending_buttons(self):
         """Update ideal bending button labels based on current angles."""
+        idock = self.window.instrument_dock
+        monocris = idock.selected_mono_id()
+        anacris = idock.selected_ana_id()
+        modules = idock.module_values()
+        axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
+        rva_axis = self._current_rva_axis()
+        self._apply_rva_axis_policy(rva_axis)
+
         ideal = self._compute_ideal_bending_values()
         if not ideal:
-            self.window.instrument_dock.rhm_ideal_button.setText("Ideal: --")
-            self.window.instrument_dock.rvm_ideal_button.setText("Ideal: --")
-            self.window.instrument_dock.rha_ideal_button.setText("Ideal: --")
+            idock.rhm_ideal_button.setText("Ideal: --")
+            idock.rvm_ideal_button.setText("Ideal: --")
+            idock.rha_ideal_button.setText("Ideal: --")
+            idock.rva_ideal_button.setText("Ideal: --")
+            # No ideal (degenerate take-off angle) does not suspend policy:
+            # a fixed axis still shows its resolved radius, disabled, so a
+            # later Run is not refused on a stale value the module never
+            # uses. Same loop as below, with no ideal to sync locked axes to.
+            self._sync_curvature_fields(axis_specs, ideal=None)
             return
 
         rhm_locked = self.is_bending_locked("rhm")
         rvm_locked = self.is_bending_locked("rvm")
         rha_locked = self.is_bending_locked("rha")
+        rva_locked = self.is_bending_locked("rva")
 
         # Show "Flat" when NMO is installed and ideal value is 0
         if ideal['rhm'] == 0:
-            self.window.instrument_dock.rhm_ideal_button.setText(
+            idock.rhm_ideal_button.setText(
                 f"Ideal ({'L' if rhm_locked else 'U'}): Flat (NMO)"
             )
         else:
-            self.window.instrument_dock.rhm_ideal_button.setText(
+            idock.rhm_ideal_button.setText(
                 f"Ideal ({'L' if rhm_locked else 'U'}): {ideal['rhm']:.3f} m"
             )
-        
+
         if ideal['rvm'] == 0:
-            self.window.instrument_dock.rvm_ideal_button.setText(
+            idock.rvm_ideal_button.setText(
                 f"Ideal ({'L' if rvm_locked else 'U'}): Flat (NMO)"
             )
         else:
-            self.window.instrument_dock.rvm_ideal_button.setText(
+            idock.rvm_ideal_button.setText(
                 f"Ideal ({'L' if rvm_locked else 'U'}): {ideal['rvm']:.3f} m"
             )
-        
-        self.window.instrument_dock.rha_ideal_button.setText(
+
+        idock.rha_ideal_button.setText(
             f"Ideal ({'L' if rha_locked else 'U'}): {ideal['rha']:.3f} m"
         )
 
-        # If locked to ideal, keep fields synced
-        if not self.updating:
-            self.updating = True
-            try:
-                if rhm_locked:
-                    self._update_locked_field_if_needed(self.window.instrument_dock.rhm_edit, ideal['rhm'])
-                if rvm_locked:
-                    self._update_locked_field_if_needed(self.window.instrument_dock.rvm_edit, ideal['rvm'])
-                if rha_locked:
-                    self._update_locked_field_if_needed(self.window.instrument_dock.rha_edit, ideal['rha'])
-            finally:
-                self.updating = False
+        if rva_axis.driven and not rva_axis.focusing_known:
+            # No model to report a number from -- the button is disabled by
+            # policy above; the label matches the "no ideal available" case.
+            idock.rva_ideal_button.setText("Ideal: --")
+        else:
+            idock.rva_ideal_button.setText(
+                f"Ideal ({'L' if rva_locked else 'U'}): {ideal['rva']:.3f} m"
+            )
+
+        # If locked to ideal, keep fields synced. A fixed axis is always
+        # synced regardless of lock bookkeeping -- the field is disabled and
+        # the applier pins it anyway, so it must always show the declared
+        # radius, sourced here from the producer, never computed locally.
+        # One loop over all four: an axis whose RESOLVED policy (this
+        # crystal pair plus live module state, e.g. a nested mirror optic
+        # fixing rhm/rvm flat) is not driven has its field disabled and
+        # synced unconditionally; a driven axis stays editable and is
+        # synced only when its own Ideal lock is on. Previously only rva's
+        # field ever got disabled here (via ``_apply_rva_axis_policy``) --
+        # rhm/rvm/rha kept whatever stale value the operator last typed,
+        # with no disabled cue, once a module fixed them flat.
+        self._sync_curvature_fields(axis_specs, ideal)
+
+    def _sync_curvature_fields(self, axis_specs, ideal):
+        """The one loop that keeps the four radius fields honest.
+
+        A non-driven axis (fixed by declaration, or by a fitted module) is
+        disabled and shows its resolved radius; a driven axis is editable
+        and synced to its ideal only while its Ideal lock is on. ``ideal``
+        may be None (no take-off angle to focus at) or a dict narrowed to
+        the askable axes; a locked driven axis with no ideal is left as is.
+        """
+        idock = self.window.instrument_dock
+        axis_edits = {
+            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit,
+            "rha": idock.rha_edit, "rva": idock.rva_edit,
+        }
+        if self.updating:
+            return
+        self.updating = True
+        try:
+            for axis, edit in axis_edits.items():
+                axis_spec = axis_specs.get(axis)
+                driven = axis_spec[0].driven if axis_spec else True
+                edit.setEnabled(driven)
+                if not driven:
+                    value = ideal.get(axis) if ideal else None
+                    if value is None:
+                        value = abs(axis_spec[0].fixed_radius_m or 0.0)
+                    self._update_locked_field_if_needed(edit, value)
+                elif self.is_bending_locked(axis) and ideal and axis in ideal:
+                    self._update_locked_field_if_needed(edit, ideal[axis])
+        finally:
+            self.updating = False
 
     def apply_ideal_bending_value(self, key):
         """Apply the ideal bending value to the selected input field."""
@@ -2959,6 +3307,10 @@ class TAVIController(QObject):
             self.window.instrument_dock.rha_ideal_button.setChecked(True)
             self.window.instrument_dock.rha_ideal_button.setEnabled(False)
             self._set_and_confirm_field(self.window.instrument_dock.rha_edit, ideal['rha'])
+        elif key == "rva":
+            self.window.instrument_dock.rva_ideal_button.setChecked(True)
+            self.window.instrument_dock.rva_ideal_button.setEnabled(False)
+            self._set_and_confirm_field(self.window.instrument_dock.rva_edit, ideal['rva'])
         self.update_ideal_bending_buttons()
 
     def apply_ideal_bending_values(self):
@@ -2969,6 +3321,7 @@ class TAVIController(QObject):
         self._set_and_confirm_field(self.window.instrument_dock.rhm_edit, ideal['rhm'])
         self._set_and_confirm_field(self.window.instrument_dock.rvm_edit, ideal['rvm'])
         self._set_and_confirm_field(self.window.instrument_dock.rha_edit, ideal['rha'])
+        self._set_and_confirm_field(self.window.instrument_dock.rva_edit, ideal['rva'])
 
     def unlock_ideal_bending(self, key):
         """Unlock ideal bending button when user edits the field."""
@@ -2981,6 +3334,16 @@ class TAVIController(QObject):
         elif key == "rha":
             self.window.instrument_dock.rha_ideal_button.setChecked(False)
             self.window.instrument_dock.rha_ideal_button.setEnabled(True)
+        elif key == "rva":
+            self.window.instrument_dock.rva_ideal_button.setChecked(False)
+            # Unlike the other three, rva's button may legitimately be
+            # unavailable for the selected analyser (fixed, or no established
+            # focusing model) -- re-enable it only when the descriptor says
+            # autofocus is actually offered here.
+            rva_axis = self._current_rva_axis()
+            self.window.instrument_dock.rva_ideal_button.setEnabled(
+                rva_axis.driven and rva_axis.focusing_known
+            )
 
     def is_bending_locked(self, key):
         """Return True if a bending field is locked to ideal."""
@@ -2990,6 +3353,8 @@ class TAVIController(QObject):
             return self.window.instrument_dock.rvm_ideal_button.isChecked() and not self.window.instrument_dock.rvm_ideal_button.isEnabled()
         if key == "rha":
             return self.window.instrument_dock.rha_ideal_button.isChecked() and not self.window.instrument_dock.rha_ideal_button.isEnabled()
+        if key == "rva":
+            return self.window.instrument_dock.rva_ideal_button.isChecked() and not self.window.instrument_dock.rva_ideal_button.isEnabled()
         return False
 
     def _set_and_confirm_field(self, line_edit, value, force=False):
@@ -3062,6 +3427,7 @@ class TAVIController(QObject):
         self.window.instrument_dock.rhm_edit.setText(format_editable_number(parameters.get("rhm_var", "0")))
         self.window.instrument_dock.rvm_edit.setText(format_editable_number(parameters.get("rvm_var", "0")))
         self.window.instrument_dock.rha_edit.setText(format_editable_number(parameters.get("rha_var", "0")))
+        self.window.instrument_dock.rva_edit.setText(format_editable_number(parameters.get("rva_var", "0")))
 
     def _normalise_loaded_numbers(self, parameters):
         """Replace malformed saved numeric values with documented defaults.
@@ -3070,7 +3436,7 @@ class TAVIController(QObject):
         null JSON values become visible warnings rather than startup crashes.
         """
         defaults = {
-            "rhm_var": 0, "rvm_var": 0, "rha_var": 0,
+            "rhm_var": 0, "rvm_var": 0, "rha_var": 0, "rva_var": 0,
             "mtt_var": 41.167, "stt_var": -71.2502, "omega_var": -35.6251,
             "chi_var": 0, "att_var": 41.167, "Ki_var": 2.6634, "Kf_var": 2.6634,
             "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
@@ -3092,16 +3458,25 @@ class TAVIController(QObject):
                 result[key] = default
         return result
 
-    def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked):
-        """Apply lock state for ideal bending buttons."""
+    def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked, rva_locked):
+        """Apply lock state for ideal bending buttons.
+
+        ``rva``'s enabled state set here is provisional: ``update_ideal_bending_buttons``
+        (called below, and always again once loading finishes) re-applies the
+        descriptor's own policy over it -- a saved lock the current analyser
+        no longer offers (fixed, or no established focusing model) does not
+        survive that call.
+        """
         self.window.instrument_dock.rhm_ideal_button.setChecked(bool(rhm_locked))
         self.window.instrument_dock.rhm_ideal_button.setEnabled(not bool(rhm_locked))
         self.window.instrument_dock.rvm_ideal_button.setChecked(bool(rvm_locked))
         self.window.instrument_dock.rvm_ideal_button.setEnabled(not bool(rvm_locked))
         self.window.instrument_dock.rha_ideal_button.setChecked(bool(rha_locked))
         self.window.instrument_dock.rha_ideal_button.setEnabled(not bool(rha_locked))
+        self.window.instrument_dock.rva_ideal_button.setChecked(bool(rva_locked))
+        self.window.instrument_dock.rva_ideal_button.setEnabled(not bool(rva_locked))
 
-        if any([rhm_locked, rvm_locked, rha_locked]):
+        if any([rhm_locked, rvm_locked, rha_locked, rva_locked]):
             self.update_ideal_bending_buttons()
     
     def on_mtt_changed(self):
@@ -3597,12 +3972,22 @@ class TAVIController(QObject):
         # Validate each command individually, against the crystals the dock
         # currently shows -- this path exists to annotate those widgets.
         dock = self.window.instrument_dock
-        fixed_axes = self._fixed_curvature_axes(
-            dock.selected_mono_id(), dock.selected_ana_id()
+        monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
+        modules = dock.module_values()
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris, modules=modules)
+        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
+        relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
+        relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
+        current_values = self._current_curvature_field_values()
+        var1, warning1 = self._validate_single_scan_command(
+            cmd1, fixed_axes, curvature_axes, relative=relative_1,
+            current_values=current_values,
         )
-        var1, warning1 = self._validate_single_scan_command(cmd1, fixed_axes)
-        var2, warning2 = self._validate_single_scan_command(cmd2, fixed_axes)
-        
+        var2, warning2 = self._validate_single_scan_command(
+            cmd2, fixed_axes, curvature_axes, relative=relative_2,
+            current_values=current_values,
+        )
+
         if warning1:
             self.window.simulation_dock.set_scan_command_warning(1, warning1)
         if warning2:
@@ -3614,37 +3999,201 @@ class TAVIController(QObject):
             if conflict:
                 self.window.simulation_dock.set_scan_conflict_warning(conflict)
     
-    def _fixed_curvature_axes(self, monocris, anacris):
-        """{axis: crystal display name} for the two named crystals.
+    def _fixed_curvature_axes(self, monocris, anacris, modules=None):
+        """{axis: crystal display name} for the two named crystals, RIGHT NOW.
 
-        Fixed focusing is a property of the crystal assembly, not the
-        instrument: IN12's conventional PG(002) analyser has a fixed vertical
-        focus while the Heusler option on the same instrument has no
-        established focusing behaviour. So the answer depends on which crystals
-        are selected -- and the *caller* says which, because the GUI's live
-        selection and a frozen API request can name different ones. Reading the
-        dock here would have validated an API scan against whatever crystal the
-        operator happened to have on screen. An unknown or unset id contributes
-        nothing: the gate never invents a restriction.
+        Fixed focusing is a property of the resolved policy, not just the
+        crystal assembly: IN12's conventional PG(002) analyser has a fixed
+        vertical focus while the Heusler option on the same instrument has no
+        established focusing behaviour, AND an instrument's mono radii can
+        read as fixed whenever a nested mirror optic (NMO) is fitted
+        regardless of which monochromator crystal is mounted (``TAS_Instrument.
+        effective_curvature_axis``). So the answer depends on which crystals
+        AND which modules are current -- and the *caller* says both, because
+        the GUI's live selection and a frozen API request can name different
+        ones. Reading the dock here would have validated an API scan against
+        whatever the operator happened to have on screen. An unknown or unset
+        id contributes nothing: the gate never invents a restriction.
+
+        Delegates to ``_curvature_axis_specs`` rather than re-walking the
+        crystal tables independently -- a second lookup here, unaware of
+        ``modules``, is exactly the class of bug (a rule enforced in one path
+        and not its twin) this method exists to avoid reintroducing.
         """
-        fixed = {}
-        for selected_id, specs, label in (
+        return {
+            axis: crystal_name
+            for axis, (curvature_axis, crystal_name) in
+            self._curvature_axis_specs(monocris, anacris, modules=modules).items()
+            if not curvature_axis.driven
+        }
+
+    def _curvature_axis_specs(self, monocris, anacris, modules=None):
+        """{axis: (CurvatureAxis, crystal display name)} for the two named
+        crystals, resolved against the current (or supplied) module state.
+
+        The same crystal resolution ``_fixed_curvature_axes`` uses, but
+        keeping each axis's full resolved declaration -- fixed radius AND
+        mechanical travel -- rather than reducing it to fixed-axis
+        membership. ``curvature_command_error`` needs both: a HELD radius or
+        a scan-range endpoint can be refused for either reason, and the
+        refusal must judge it against the identical declaration the scan will
+        actually run with, not the GUI's live selection (an API request can
+        name different crystals or modules).
+
+        Resolution runs through ``self.instrument_state.
+        effective_curvature_axis`` -- the one place a crystal's declaration
+        and the live module state (e.g. a nested mirror optic) are folded
+        together -- rather than reading ``CrystalSpec.curvature`` directly,
+        which would recreate the raw, module-blind view this method used to
+        return.
+        ``modules`` mirrors that resolver's own override argument: ``None``
+        reads live module state; an explicit mapping (e.g. from a frozen API
+        request) wins over it.
+        """
+        specs = {}
+        for selected_id, crystal_specs, label in (
             (monocris, self.descriptor.mono_crystals, "monochromator"),
             (anacris, self.descriptor.ana_crystals, "analyser"),
         ):
-            for spec in specs:
+            for spec in crystal_specs:
                 if spec.id == selected_id:
-                    for axis in spec.fixed_curvature:
-                        fixed[axis] = f"{spec.display_name} {label}"
+                    for axis in ("rhm", "rvm") if label == "monochromator" else ("rha", "rva"):
+                        specs[axis] = (
+                            self.instrument_state.effective_curvature_axis(
+                                axis, spec, modules=modules
+                            ),
+                            f"{spec.display_name} {label}",
+                        )
                     break
-        return fixed
+        return specs
 
-    def _validate_single_scan_command(self, command: str, fixed_axes=None) -> tuple:
+    def _askable_curvature_axes(self, monocris, anacris, modules=None):
+        """Axes the GUI's advisory Ideal labels may ask a radius for.
+
+        One caller, on purpose: ``_compute_ideal_bending_values`` wants an
+        answer for every axis that HAS a focusing model so that an
+        unrelated axis with none (IN12's Heusler ``rva``, driven with
+        ``focusing_known=False``) does not blank the other three labels.
+        That is an advisory-display question. The API's launch refresh
+        (``build_api_launch_state``, ``_default_parameter_values``) asks a
+        different one -- which axes this launch will actually AUTOFOCUS --
+        and deliberately does NOT filter through here: an unaskable axis
+        that is genuinely AUTOFOCUS, unpinned and unscanned must reach
+        ``ideal_curvature`` and be refused naming the axis, because there
+        is no radius to run with. The GUI can never put such an axis into
+        AUTOFOCUS (its Ideal button is disabled), so the two paths do not
+        disagree on any reachable launch; they answer different questions.
+        """
+        axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
+        return {
+            axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+            if not (axis_specs.get(axis) and axis_specs[axis][0].driven
+                    and not axis_specs[axis][0].focusing_known)
+        }
+
+    def _scan_named_curvature_axes(self, cmd1, cmd2):
+        """{axis} named by either scan command's first token, normalized.
+
+        Shared by ``_held_curvature_issues`` (GUI) and
+        ``build_api_launch_state``'s HELD loop (API): a scan command that
+        names a curvature axis is about to promote it to SCANNED --
+        ``compute_scan_snapshot`` drives it point by point -- so a HELD
+        refusal on that axis's CURRENT field/patch value would refuse a
+        number the scan never actually uses. An unlocked rhm field at 1.0
+        (below a driven axis's declared minimum) plus a legal absolute
+        "rhm 3.0 4.0 0.5" must not be refused for the 1.0 the scan
+        overrides at every point.
+        """
+        named = set()
+        for cmd in (cmd1, cmd2):
+            cmd = (cmd or "").strip()
+            if not cmd:
+                continue
+            var = self.normalize_scan_variable(cmd.split()[0])
+            if var:
+                named.add(var.lower())
+        return named
+
+    def _held_curvature_issues(self, monocris, anacris, scan_named_axes=None):
+        """Hard-refusal messages for a HELD curvature radius, straight from
+        the instrument-dock widgets.
+
+        Only an axis the operator actually commanded is checked -- one whose
+        Ideal lock is off, i.e. HELD, not AUTOFOCUS (``is_bending_locked``
+        mirrors the same read ``get_gui_values`` uses to set
+        ``curvature_modes``) -- AND not named by a non-empty scan command
+        (``scan_named_axes``, from ``_scan_named_curvature_axes``): that axis
+        is about to be promoted to SCANNED, so its current field value is not
+        what the scan will actually run with (D21). Refusing an AUTOFOCUS
+        ideal would break a legitimate scan whose optimum leaves the
+        bender's reach; nobody chose that number, so there is nothing to
+        refuse. Runs the identical ``curvature_command_error`` check
+        ``build_api_launch_state`` runs on a patched value, so an operator
+        and an API client see the same sentence for the same out-of-travel
+        value.
+        """
+        from instruments.tas_runtime import curvature_command_error
+
+        idock = self.window.instrument_dock
+        axis_edits = {
+            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit, "rha": idock.rha_edit,
+            "rva": idock.rva_edit,
+        }
+        curvature_axis_specs = self._curvature_axis_specs(
+            monocris, anacris, modules=idock.module_values()
+        )
+        scan_named_axes = scan_named_axes or set()
+        issues = []
+        for axis, edit in axis_edits.items():
+            if self.is_bending_locked(axis) or axis in scan_named_axes:
+                continue
+            axis_spec = curvature_axis_specs.get(axis)
+            if axis_spec is None:
+                continue
+            curvature_axis, crystal_name = axis_spec
+            try:
+                value = float(edit.text() or 0)
+            except ValueError:
+                # A non-numeric radius cannot reach a launch at all:
+                # get_gui_values() returns None for any unparseable field and
+                # _collect_simulation_launch_state bails on that (:2700), so
+                # there is no commanded value here to accept or refuse and
+                # skipping is not a hole. That the operator is not *told* why
+                # the run did nothing is a separate, pre-existing gap in field
+                # validation, not this check's to close.
+                continue
+            error = curvature_command_error(axis, value, curvature_axis, crystal_name)
+            if error:
+                issues.append(error)
+        return issues
+
+    def _validate_single_scan_command(self, command: str, fixed_axes=None,
+                                      curvature_axes=None, relative=False,
+                                      current_values=None) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
 
         ``fixed_axes`` is the {axis: crystal} mapping from
         ``_fixed_curvature_axes`` for the crystals this scan will actually run
-        with; omitted means no curvature axis is refused.
+        with; omitted means no curvature axis is refused. ``curvature_axes`` is
+        the {axis: (CurvatureAxis, crystal)} mapping from
+        ``_curvature_axis_specs`` for the same crystals; omitted means no scan
+        range is checked against mechanical travel. A commanded scan endpoint
+        outside a driven axis's declared travel is refused the same as a HELD
+        value would be, via ``curvature_scan_error`` -- the operator asked for
+        the whole range, so every value it expands to is checked, not just the
+        two endpoints (an absolute ``"rhm 0 2 1"`` on an axis with a 2.0 m
+        declared minimum has legal endpoints and an illegal interior point at
+        1.0 m).
+
+        ``relative`` is THIS command's own relative-mode flag (a 2D scan's two
+        commands set it independently). For a relative command the literal
+        start/end are offsets from the current radius, not the requested radii
+        themselves; ``current_values`` (an {axis: float-or-None} mapping of the
+        launch's current curvature values, from the GUI's instrument-dock
+        fields or the API's frozen ``vals``) supplies the base a relative
+        command is expanded against. A relative command on an axis whose
+        current value is missing or non-numeric is a hard issue naming the
+        field -- there is no base to expand the offsets against.
 
         A returned variable of ``None`` alongside a warning is a *hard*
         rejection -- the command cannot run as written. Callers must treat it
@@ -3700,7 +4249,7 @@ class TAVIController(QObject):
             step = float(parts[3])
         except ValueError:
             return (None, "Invalid numbers. Check start, end, and step values.")
-        
+
         # Check for zero step
         if step == 0:
             return (var_lower, "Step size cannot be zero.")
@@ -3709,6 +4258,35 @@ class TAVIController(QObject):
         if (end > start and step < 0) or (end < start and step > 0):
             return (var_lower, "Step sign doesn't match direction (start → end).")
         
+        # After the step guards: the expansion below divides by the step and
+        # calls parse_scan_steps, so a zero or wrong-sign step must have been
+        # refused already -- mid-keystroke text like 'rhm 2 4 0' reaches
+        # this validator from textChanged.
+        # A commanded scan range on a driven curvature axis is refused, not
+        # clamped, when any value it expands to falls outside its declared
+        # mechanical travel -- the operator wrote the range deliberately.
+        # Absolute and relative commands are both checked here now: a
+        # relative command's real requested radii are the current value plus
+        # every offset ``parse_scan_steps`` would produce, which needs a base
+        # value from ``current_values``.
+        axis_spec = (curvature_axes or {}).get(var_lower)
+        if axis_spec is not None:
+            curvature_axis, crystal_name = axis_spec
+            base_value = None
+            if relative:
+                base_value = (current_values or {}).get(var_lower)
+                if base_value is None:
+                    return (None, f"'{var_name}' is a relative curvature scan "
+                                  f"but its current value is not numeric.")
+            from instruments.tas_runtime import curvature_scan_error
+
+            error = curvature_scan_error(
+                var_lower, start, end, step, relative, base_value,
+                curvature_axis, crystal_name,
+            )
+            if error:
+                return (None, error)
+
         # Calculate number of points and warn if too many or too few
         import numpy as np
         num_points = int(np.floor(abs(end - start) / abs(step) + 0.5)) + 1
@@ -3836,7 +4414,7 @@ class TAVIController(QObject):
         elif var == 'rha':
             return vals.get('rha', 0)
         elif var == 'rva':
-            return vals.get('rva', 0.8)
+            return vals.get('rva', 0)
         
         return 0
     
@@ -4048,7 +4626,7 @@ class TAVIController(QObject):
         # Build scan point template
         scan_point_template = [
             vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
-            vals['rhm'], vals['rvm'], vals['rha'], vals.get('rva', 0.8),
+            vals['rhm'], vals['rvm'], vals['rha'], vals['rva'],
             0, vals.get('kappa', 0), vals.get('psi', 0),
             vals.get('H', 0), vals.get('K', 0), vals.get('L', 0)
         ]
@@ -4738,9 +5316,11 @@ class TAVIController(QObject):
             "rhm_var": self.window.instrument_dock.rhm_edit.text(),
             "rvm_var": self.window.instrument_dock.rvm_edit.text(),
             "rha_var": self.window.instrument_dock.rha_edit.text(),
+            "rva_var": self.window.instrument_dock.rva_edit.text(),
             "rhm_ideal_locked": self.is_bending_locked("rhm"),
             "rvm_ideal_locked": self.is_bending_locked("rvm"),
             "rha_ideal_locked": self.is_bending_locked("rha"),
+            "rva_ideal_locked": self.is_bending_locked("rva"),
             "fixed_E_var": self.window.scattering_dock.fixed_E_edit.text(),
             "qx_var": self.window.scattering_dock.qx_edit.text(),
             "qy_var": self.window.scattering_dock.qy_edit.text(),
@@ -4812,7 +5392,11 @@ class TAVIController(QObject):
             json.dump(document, file)
         self.print_to_message_center("Parameters saved successfully")
 
-    PARAMETERS_SCHEMA_VERSION = 1
+    # v2 (this branch): rva joined rhm/rvm/rha as a real GUI field with its
+    # own saved radius and Ideal lock. _parameters_block does not itself
+    # reject an older version -- see _saved_curvature_state, which detects
+    # and resets an incomplete (pre-rva) curvature block instead.
+    PARAMETERS_SCHEMA_VERSION = 2
 
     def _parameters_block(self, document):
         """This instrument's block from ``{"<id>": {"_schema": N, ...}}``.
@@ -4824,6 +5408,40 @@ class TAVIController(QObject):
             return {}
         block = document.get(self.instrument.id, {})
         return block if isinstance(block, dict) else {}
+
+    # All four bending radii start flat and unlocked -- the same safe,
+    # feature-free state a fresh install would ask for these fields.
+    _CURVATURE_VAR_KEYS = ("rhm_var", "rvm_var", "rha_var", "rva_var")
+    _CURVATURE_LOCK_KEYS = (
+        "rhm_ideal_locked", "rvm_ideal_locked", "rha_ideal_locked", "rva_ideal_locked",
+    )
+
+    def _saved_curvature_state(self, parameters):
+        """{var/lock key: saved value} for all four curvature axes, or defaults.
+
+        A v1 save predates ``rva`` as a GUI field: it carries the first three
+        var/lock keys but never ``rva_var``/``rva_ideal_locked``. Loading
+        those three from such a block while rva silently defaulted to
+        "0"/unlocked would present a half-populated curvature state as a real
+        save -- an operator's genuinely locked rha next to a phantom flat,
+        unlocked rva. This repo resets and fails loudly rather than migrating
+        a pre-release format (the same rule ``_saved_background_profile``
+        already applies to an incompatible background catalog): an incomplete
+        curvature block is discarded as a whole and the operator is told,
+        rather than silently patched key by key.
+        """
+        keys = self._CURVATURE_VAR_KEYS + self._CURVATURE_LOCK_KEYS
+        if all(key in parameters for key in keys):
+            return {key: parameters[key] for key in keys}
+        defaults = {key: "0" for key in self._CURVATURE_VAR_KEYS}
+        defaults.update({key: False for key in self._CURVATURE_LOCK_KEYS})
+        if any(key in parameters for key in keys):
+            self.print_to_message_center(
+                "Saved curvature state predates the rva field and is "
+                "incomplete; reset to safe defaults (all four radii flat "
+                "and unlocked)"
+            )
+        return defaults
 
     @staticmethod
     def _dominant_execution_mode(point_stage_timings):
@@ -4983,14 +5601,19 @@ class TAVIController(QObject):
                     self._saved_slit_values(parameters)
                 )
 
-                # Load absolute bending values (backward-compatible with factor-based params)
-                self._load_bending_parameters(parameters)
+                # Load absolute bending values (backward-compatible with factor-based params).
+                # A block missing the rva keys (pre-slice-4 schema) resets the
+                # whole curvature block to safe defaults rather than loading
+                # three real values next to a phantom rva.
+                curvature_state = self._saved_curvature_state(parameters)
+                self._load_bending_parameters(curvature_state)
 
                 # Restore ideal lock state
                 self._apply_bending_lock_state(
-                    parameters.get("rhm_ideal_locked", False),
-                    parameters.get("rvm_ideal_locked", False),
-                    parameters.get("rha_ideal_locked", False),
+                    curvature_state["rhm_ideal_locked"],
+                    curvature_state["rvm_ideal_locked"],
+                    curvature_state["rha_ideal_locked"],
+                    curvature_state["rva_ideal_locked"],
                 )
                 
                 self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
@@ -5134,38 +5757,35 @@ class TAVIController(QObject):
         else:
             self.set_default_parameters()
     
-    def _ideal_bending_from_modules(self, mtt, att, modules):
-        """Widget-free ideal bending radii (mirrors _compute_ideal_bending_values).
+    def _ideal_bending_from_modules(self, mtt, att, monocris, anacris, modules,
+                                     requested_axes=None):
+        """Widget-free ideal bending radii for the NAMED crystals.
 
-        The NMO installed-check reads ``modules['nmo']`` instead of the GUI combo
-        so the API launch path never touches widgets. Returns the same
-        ``{"rhm","rvm","rha","rva"}`` dict, or ``None`` for a degenerate geometry.
+        Thin caller of the shared producer, mirroring
+        ``_compute_ideal_bending_values`` minus every widget read: crystals
+        come from the caller's frozen values (a patched API request), never
+        from live GUI selection, which can name a different pair.
+
+        ``requested_axes`` passes straight through to ``ideal_curvature``:
+        ``None`` (the default) asks for all four, same as every caller before
+        this parameter existed. A caller that only wants some axes (e.g. the
+        ones actually AUTOFOCUS right now) should narrow it, so an unrelated
+        axis with no established focusing model (IN12's Heusler ``rva``)
+        cannot refuse an answer nobody asked it for.
+
+        Returns None for a degenerate geometry (zero take-off angle) -- the
+        caller leaves the radii at their prior value, same as before. A
+        REQUESTED crystal/axis whose focusing model is unknown for a driven
+        axis (IN12's Heusler ``rva``) is NOT swallowed: ``ValueError``
+        propagates so the API path (``build_api_launch_state``) can surface
+        it as a 400 instead of silently keeping a stale radius.
         """
         try:
-            nmo = modules.get("nmo", "None") if isinstance(modules, dict) else "None"
-            if nmo not in (None, "None", False):
-                rhm = 0
-                rvm = 0
-            else:
-                sin_m = math.sin(math.radians(mtt / 2))
-                if sin_m == 0:
-                    return None
-                rhm = 2 * self.instrument_state.L2 / sin_m
-                rvm = 2 * self.instrument_state.L2 * sin_m
-                if rhm < 2.0:
-                    rhm = 2.0
-                if rvm < 0.5:
-                    rvm = 0.5
-            denom_a = (1 / self.instrument_state.L3 + 1 / self.instrument_state.L4)
-            sin_a = math.sin(math.radians(att / 2))
-            if denom_a == 0 or sin_a == 0:
-                return None
-            rha = 2 / sin_a / denom_a
-            rva = 0.8
-            if rha < 2.0:
-                rha = 2.0
-            return {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
-        except Exception:
+            return _operator_magnitudes(self.instrument_state.ideal_curvature(
+                monocris, anacris, mtt / 2, att / 2, modules=modules,
+                requested_axes=requested_axes,
+            ))
+        except ZeroDivisionError:
             return None
 
     def _descriptor_collimation_defaults(self):
@@ -5227,7 +5847,15 @@ class TAVIController(QObject):
             'sample': "Al_bragg" if "Al_bragg" in sample_ids else "none",
             'monocris': d.mono_crystals[0].id,
             'anacris': d.ana_crystals[0].id,
-            'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0,
+            'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0, 'rva': 0.0,
+            # An API request that never names a radius gets one focused for
+            # its own point, not this launch state's reference-geometry
+            # default -- an explicit rhm/rvm/rha patch pins that axis to
+            # HELD below.
+            'curvature_modes': {
+                'rhm': CurvatureMode.AUTOFOCUS, 'rvm': CurvatureMode.AUTOFOCUS,
+                'rha': CurvatureMode.AUTOFOCUS, 'rva': CurvatureMode.AUTOFOCUS,
+            },
             'source_type': d.source_types[0].id,
             'source_dE': 2.0,
             'modules': modules,
@@ -5239,11 +5867,35 @@ class TAVIController(QObject):
             'diagnostic_mode': False,
         }
 
-        ideal = self._ideal_bending_from_modules(vals['mtt'], vals['att'], modules)
+        try:
+            # All four are AUTOFOCUS in the defaults set just above; naming
+            # them explicitly (rather than passing requested_axes=None) makes
+            # that rule visible here rather than implicit in "ask for
+            # everything".
+            ideal = self._ideal_bending_from_modules(
+                vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
+                modules, requested_axes=('rhm', 'rvm', 'rha', 'rva'),
+            )
+        except ValueError as exc:
+            # The default crystals are always focusing-known; a refusal here
+            # would mean a hand-built descriptor with no valid default pair.
+            # Leave the flat fallbacks above rather than fail every request,
+            # but never swallow it silently -- a hand-built descriptor that
+            # hits this is a wiring bug worth seeing in the log.
+            log.warning(
+                "default ideal bending unavailable for %s/%s: %s",
+                vals['monocris'], vals['anacris'], exc,
+            )
+            ideal = None
         if ideal:
-            vals['rhm'] = ideal['rhm']
-            vals['rvm'] = ideal['rvm']
-            vals['rha'] = ideal['rha']
+            # Per axis, honouring the modes set just above -- the same rule
+            # build_api_launch_state applies. Every axis is AUTOFOCUS in the
+            # defaults, so today this fills all four either way; writing it
+            # per-axis means a caller that reuses these defaults after
+            # adjusting a mode does not silently overwrite a HELD axis.
+            for axis in ('rhm', 'rvm', 'rha', 'rva'):
+                if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
+                    vals[axis] = ideal[axis]
         return vals
 
     def set_default_parameters(self):
@@ -5958,6 +6610,13 @@ class TAVIController(QObject):
         ``_scan_command_issues`` so the GUI Run path and the API path share
         one validation implementation.
 
+        Also folds in ``_held_curvature_issues`` (a HELD radius outside its
+        declared travel, or off a fixed axis's declared radius): that check
+        has no scan-command text to attach to, so it belongs beside this
+        wrapper's other pre-launch gate rather than inside
+        ``_scan_command_issues``, which is parameterized on command strings
+        alone.
+
         Returns:
             tuple: (hard, soft) issue lists. Hard cannot be overridden --
             the command does not describe a scan that can run. Soft is the
@@ -5966,12 +6625,44 @@ class TAVIController(QObject):
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         dock = self.window.instrument_dock
-        return self._scan_command_issues(
-            cmd1, cmd2, dock.selected_mono_id(), dock.selected_ana_id()
+        monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
+        modules = dock.module_values()
+        relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
+        relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
+        hard, soft = self._scan_command_issues(
+            cmd1, cmd2, monocris, anacris, modules,
+            relative_1=relative_1, relative_2=relative_2,
+            current_values=self._current_curvature_field_values(),
         )
+        scan_named_axes = self._scan_named_curvature_axes(cmd1, cmd2)
+        hard = hard + self._held_curvature_issues(
+            monocris, anacris, scan_named_axes=scan_named_axes
+        )
+        return hard, soft
+
+    def _current_curvature_field_values(self):
+        """{axis: float-or-None} read straight from the instrument-dock
+        curvature fields -- the base a relative scan command expands
+        against. ``None`` for a field that does not parse as a number,
+        matching ``_held_curvature_issues``'s own read of the same widgets.
+        """
+        idock = self.window.instrument_dock
+        axis_edits = {
+            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit,
+            "rha": idock.rha_edit, "rva": idock.rva_edit,
+        }
+        values = {}
+        for axis, edit in axis_edits.items():
+            try:
+                values[axis] = float(edit.text() or 0)
+            except ValueError:
+                values[axis] = None
+        return values
 
     def _scan_command_issues(self, cmd1: str, cmd2: str,
-                             monocris=None, anacris=None):
+                             monocris=None, anacris=None, modules=None,
+                             relative_1=False, relative_2=False,
+                             current_values=None):
         """(hard, soft) issue lists for two scan-command strings.
 
         Hard means the command cannot run as written -- an unknown or
@@ -5981,8 +6672,15 @@ class TAVIController(QObject):
 
         Parameterized on strings only -- reads no widgets -- so both the GUI
         Run button and the remote API can call it. ``monocris``/``anacris`` name
-        the crystals the scan will run with, which decides whether a curvature
-        axis is refused; the API passes the frozen request's, not the GUI's.
+        the crystals the scan will run with, and ``modules`` the module state
+        (e.g. a nested mirror optic combo), which together decide whether a
+        curvature axis is refused; the API passes the frozen request's, not
+        the GUI's. ``relative_1``/``relative_2`` are each command's own
+        relative-mode flag (independent per command, exactly like a 2D scan's
+        two commands run under independent modes); ``current_values`` is the
+        {axis: float-or-None} mapping of the launch's current curvature
+        values a relative command expands against -- see
+        ``_validate_single_scan_command``.
         Returns an empty string when the commands are acceptable, or a
         newline-joined description of the blocking issues.
 
@@ -5994,14 +6692,20 @@ class TAVIController(QObject):
         """
         cmd1 = (cmd1 or "").strip()
         cmd2 = (cmd2 or "").strip()
-        fixed_axes = self._fixed_curvature_axes(monocris, anacris)
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris, modules=modules)
+        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
 
         hard = []
         soft = []
         variables = []
 
-        for label, cmd in (("Command 1", cmd1), ("Command 2", cmd2)):
-            var, warning = self._validate_single_scan_command(cmd, fixed_axes)
+        for label, cmd, relative in (
+            ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
+        ):
+            var, warning = self._validate_single_scan_command(
+                cmd, fixed_axes, curvature_axes, relative=relative,
+                current_values=current_values,
+            )
             variables.append(var)
             if not warning:
                 continue
@@ -6030,14 +6734,15 @@ class TAVIController(QObject):
         return hard, soft
 
     def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
-                                     monocris=None, anacris=None) -> str:
+                                     monocris=None, anacris=None,
+                                     modules=None) -> str:
         """Hard and soft issues joined as one string, or "" when there are none.
 
         For callers that only want the text. The API gate reads
         ``_scan_command_issues`` itself, because ``force`` may clear the soft
         issues only (``TaviApiBackend._blocking_scan_issues``).
         """
-        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
+        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris, modules)
         return "\n".join(hard + soft)
 
     # ------------------------------------------------------------- remote API
@@ -6056,11 +6761,18 @@ class TAVIController(QObject):
     def _api_field_map(self):
         """Return ``{field: (parse_fn, setter_fn, after_handler_or_None)}``.
 
-        Covers every key ``get_gui_values()`` returns. ``parse_fn(value)``
+        Covers every WRITABLE key ``get_gui_values()`` returns. ``parse_fn(value)``
         validates/coerces the incoming JSON value (raising ``ValueError`` with a
         human message on bad input), ``setter_fn(parsed)`` writes the widget,
         and ``after_handler`` (zero-arg or ``None``) recomputes derived state --
         the same handler the user's Enter key would trigger.
+
+        Deliberately excluded, though ``get_gui_values()``/``GET /parameters``/
+        ``GET /state`` all expose it: ``curvature_modes``, read-only derived
+        state (``build_api_schema`` declares it with ``readOnly: True``). It is
+        computed from the Ideal locks and from which axes a scan command names
+        -- a second way to set it here would be a new twin of that logic, not a
+        convenience.
         """
         w = self.window
         idock = w.instrument_dock
@@ -6187,6 +6899,7 @@ class TAVIController(QObject):
             'rhm': (p_float, set_text(idock.rhm_edit), bend_after('rhm')),
             'rvm': (p_float, set_text(idock.rvm_edit), bend_after('rvm')),
             'rha': (p_float, set_text(idock.rha_edit), bend_after('rha')),
+            'rva': (p_float, set_text(idock.rva_edit), bend_after('rva')),
             # source
             'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
             'source_dE': (p_float, set_text(idock.source_dE_edit), None),
@@ -6339,6 +7052,11 @@ class TAVIController(QObject):
         # (a) Parse/validate everything first; never partially apply a field.
         parsed = {}
         for name, value in patch.items():
+            if name == 'curvature_modes':
+                # Known field (declared read-only in build_api_schema), not an
+                # unrecognized one -- see _api_field_map's docstring.
+                errors[name] = "read-only field"
+                continue
             spec = field_map.get(name)
             if spec is None:
                 errors[name] = "unknown field"
@@ -6472,6 +7190,31 @@ class TAVIController(QObject):
         relative_mode_1 = launch_state.get('relative_mode_1', False)
         relative_mode_2 = launch_state.get('relative_mode_2', False)
 
+        # ``values`` here is one point's already-expanded values (``_expand``
+        # below has already added the current radius for a relative command),
+        # so each is checked as a single-value "range" (start == end) through
+        # the same ``curvature_scan_error`` ``_validate_single_scan_command``
+        # calls on the whole command text -- one shared primitive for both,
+        # rather than a second copy of the travel comparison here.
+        from instruments.tas_runtime import curvature_scan_error
+
+        curvature_axes = self._curvature_axis_specs(
+            vals.get('monocris'), vals.get('anacris'), modules=vals.get('modules')
+        )
+
+        def _curvature_violation(values):
+            for var, val in values.items():
+                axis_spec = curvature_axes.get(var)
+                if axis_spec is None:
+                    continue
+                curvature_axis, crystal_name = axis_spec
+                error = curvature_scan_error(
+                    var, val, val, 1.0, False, None, curvature_axis, crystal_name,
+                )
+                if error:
+                    return error
+            return None
+
         result = {"requested_points": 0, "per_command": [], "infeasible": [],
                   "point_manifest": []}
 
@@ -6499,7 +7242,11 @@ class TAVIController(QObject):
                 return False, f"angle solve error: {exc}", "geometry_solver_error"
 
         def _record(index, values, scan_point):
-            feasible, reason, kind = _feasible(scan_point)
+            curvature_error = _curvature_violation(values)
+            if curvature_error:
+                feasible, reason, kind = False, curvature_error, "curvature_out_of_travel"
+            else:
+                feasible, reason, kind = _feasible(scan_point)
             entry = {"index": index, "values": values, "feasible": feasible,
                      "kind": kind, "reason": reason}
             result["point_manifest"].append(entry)
@@ -6617,6 +7364,7 @@ class TAVIController(QObject):
             'sample': ('string', None),
             'monocris': ('string', None), 'anacris': ('string', None),
             'rhm': ('number', None), 'rvm': ('number', None), 'rha': ('number', None),
+            'rva': ('number', None),
             'source_type': ('string', None), 'source_dE': ('number', 'meV'),
             'modules': ('object', None), 'collimation': ('object', None),
             'slits_mm': ('object', 'mm'),
@@ -6645,6 +7393,25 @@ class TAVIController(QObject):
             if name in allowed:
                 entry["allowed"] = allowed[name]
             fields.append(entry)
+
+        # curvature_modes is NOT in _api_field_map (see its docstring): it is
+        # read-only derived state, not a hand-maintained duplicate of a
+        # writable field, so it is declared here by hand rather than sourced
+        # from field_names. get_gui_values()/GET /parameters/GET /state all
+        # return it; PATCH /parameters refuses a write against it.
+        fields.append({
+            "name": "curvature_modes",
+            "type": "object",
+            "readOnly": True,
+            "description": (
+                "Per-axis curvature policy (rhm/rvm/rha/rva -> "
+                "'%s'/'%s'/'%s'), derived from the Ideal locks and from which "
+                "axes the scan command names. Read-only." % (
+                    CurvatureMode.AUTOFOCUS.value, CurvatureMode.HELD.value,
+                    CurvatureMode.SCANNED.value,
+                )
+            ),
+        })
 
         limits = getattr(self, "_api_limits", None)
 
@@ -7105,9 +7872,17 @@ class TAVIController(QObject):
                     q0 = _background_q_magnitude(md)
 
                     # Resolution kernel for this point (cheap: one config + solve).
+                    # Uses THIS point's own applied radii AND kinematics (md),
+                    # not the frozen launch vals -- an AUTOFOCUS axis or a
+                    # curvature scan point runs with radii that differ
+                    # point-to-point, and a direct-angle scan's own Ei/Ki/Ef/Kf
+                    # can differ from the launch's (D23).
                     rr = None
                     try:
-                        cfg = self.instrument.resolution_config(vals, q0, w)
+                        cfg = self.instrument.resolution_config(
+                            _vals_with_point_state(vals, md), q0, w,
+                            point_angles=_point_angles(md['mtt'], md['stt'], md['att']),
+                        )
                         rr = _resolution(cfg)
                         meta_res = rr
                     except Exception as exc:
@@ -7171,17 +7946,32 @@ class TAVIController(QObject):
                         scan_counts.append(counts)
 
                     if job is not None and job.result is not None:
+                        # THIS point's own applied radii (md), signed -- see
+                        # ScanResult.applied_curvature. The deterministic
+                        # engine writes no per-point files, so this is the
+                        # only place its truth can live.
+                        point_curvature = {
+                            axis: md[axis] for axis in ("rhm", "rvm", "rha", "rva")
+                        }
                         with job.lock:
                             res = job.result
                             if is_2d_scan:
                                 if res.counts_grid is not None:
                                     res.counts_grid[idx_y][idx_x] = counts
+                                if res.applied_curvature:
+                                    orig_idx = idx_y * len(res.scan_values_1) + idx_x
+                                    if 0 <= orig_idx < len(res.applied_curvature):
+                                        res.applied_curvature[orig_idx] = point_curvature
                             elif is_single_point_scan:
                                 if res.counts:
                                     res.counts[0] = counts
+                                if res.applied_curvature:
+                                    res.applied_curvature[0] = point_curvature
                             elif idx_1d >= 0 and res.counts is not None \
                                     and idx_1d < len(res.counts):
                                 res.counts[idx_1d] = counts
+                                if res.applied_curvature and idx_1d < len(res.applied_curvature):
+                                    res.applied_curvature[idx_1d] = point_curvature
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
                             self._mark_executed_result_point(
@@ -7415,10 +8205,14 @@ class TAVIController(QObject):
             # Store as tuple (scan_point, idx_1d) for consistency
             scan_parameter_input.append((scan_point_template[:], 0))
         
-        # Swap if only second command provided
+        # Swap if only second command provided. The relative-mode flags move
+        # with the text -- a lone command 2 becomes command 1 and must keep
+        # ITS OWN relative setting, not silently pick up command 1's (empty)
+        # one, exactly like validate_scan_launch_state's identical swap.
         if scan_command2 and not scan_command1:
             scan_command1 = scan_command2
             scan_command2 = None
+            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
         
         variable_name1 = ""
         variable_name2 = ""
@@ -7496,6 +8290,7 @@ class TAVIController(QObject):
                         counts_grid=None,
                         output_folder=data_folder,
                         metadata=dict(vals),
+                        applied_curvature=[None] * n_points,
                     )
                     job.progress_total = len(scan_parameter_input)
                 self._publish_api_event('scan_initialized', {
@@ -7579,6 +8374,10 @@ class TAVIController(QObject):
                         counts_grid=[[None] * n_cols for _ in range(n_rows)],
                         output_folder=data_folder,
                         metadata=dict(vals),
+                        # Flat, row-major (idx_y * n_cols + idx_x) -- the same
+                        # linear order _mark_executed_result_point already uses
+                        # to flatten a 2D scan for planned/executed_feasible_mask.
+                        applied_curvature=[None] * (n_cols * n_rows),
                     )
                     job.progress_total = len(scan_parameter_input)
                 self._publish_api_event('scan_initialized', {
@@ -7610,6 +8409,7 @@ class TAVIController(QObject):
                     counts_grid=None,
                     output_folder=data_folder,
                     metadata=dict(vals),
+                    applied_curvature=[None],
                 )
                 job.progress_total = len(scan_parameter_input)
             self._publish_api_event('scan_initialized', {
@@ -8038,9 +8838,16 @@ class TAVIController(QObject):
                             try:
                                 from tavi.deterministic_engine import marginal_sigma as _marginal_sigma
                                 from tavi.resolution import resolution as _resolution
+                                # THIS point's own applied radii AND kinematics
+                                # (metadata), not the frozen launch vals -- see
+                                # the deterministic engine's identical fix above.
                                 background_resolution = _resolution(
                                     self.instrument.resolution_config(
-                                        vals, q0, float(deltaE)
+                                        _vals_with_point_state(vals, metadata),
+                                        q0, float(deltaE),
+                                        point_angles=_point_angles(
+                                            metadata['mtt'], metadata['stt'], metadata['att']
+                                        ),
                                     )
                                 )
                                 if background_needs_sigma_q:
@@ -8109,16 +8916,31 @@ class TAVIController(QObject):
 
                     # Record the measured count into the job result for readers.
                     if job is not None and job.result is not None:
+                        # THIS point's own applied radii (metadata), signed --
+                        # see ScanResult.applied_curvature. The McStas
+                        # per-point files already carry this; this is the
+                        # HTTP/GUI-facing record of the same truth.
+                        point_curvature = {
+                            axis: metadata[axis] for axis in ("rhm", "rvm", "rha", "rva")
+                        }
                         with job.lock:
                             res = job.result
                             if is_2d_scan:
                                 if res.counts_grid is not None:
                                     res.counts_grid[idx_y][idx_x] = float(counts)
+                                if res.applied_curvature:
+                                    orig_idx = idx_y * len(res.scan_values_1) + idx_x
+                                    if 0 <= orig_idx < len(res.applied_curvature):
+                                        res.applied_curvature[orig_idx] = point_curvature
                             elif is_single_point_scan:
                                 if res.counts:
                                     res.counts[0] = float(counts)
+                                if res.applied_curvature:
+                                    res.applied_curvature[0] = point_curvature
                             elif idx_1d >= 0 and res.counts is not None and idx_1d < len(res.counts):
                                 res.counts[idx_1d] = float(counts)
+                                if res.applied_curvature and idx_1d < len(res.applied_curvature):
+                                    res.applied_curvature[idx_1d] = point_curvature
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
                             self._mark_executed_result_point(

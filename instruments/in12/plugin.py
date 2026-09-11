@@ -54,6 +54,7 @@ from instruments.descriptor import (
     AxisLimits,
     CollimationSlot,
     CrystalSpec,
+    CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
     MonitorSpec,
@@ -116,6 +117,46 @@ _ANA_N_ROWS = 3
 # (~0.43 m at this take-off), which is what a *fixed* focus looks like: right
 # at one setting only.
 ANA_FIXED_RV = 1.40
+
+# Duplicated from instruments.in12.model.MONO_MIN_RH/MONO_MIN_RV to preserve
+# the import-light rule above; asserted equal by tests/test_in12_plugin.py.
+_MONO_MIN_RH = 1.7
+_MONO_MIN_RV = 0.5
+
+_MONO_CLAMP_PROVENANCE = (
+    "Provisional model assumption, not a published mechanical limit -- ILL "
+    "confirms only that both axes are variable, and no source gives the "
+    "mechanical envelope. The vertical minimum is load-bearing above roughly "
+    "|A1| = 32 deg (MODEL_STATUS.md)."
+)
+_IN12_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True, min_radius_m=_MONO_MIN_RH,
+                          provenance=_MONO_CLAMP_PROVENANCE),
+    "rvm": CurvatureAxis(driven=True, min_radius_m=_MONO_MIN_RV,
+                          provenance=_MONO_CLAMP_PROVENANCE),
+}
+_IN12_ANA_PG002_CURVATURE = {
+    "rha": CurvatureAxis(driven=True),
+    "rva": CurvatureAxis(
+        driven=False, fixed_radius_m=ANA_FIXED_RV,
+        provenance=(
+            "1998 (Schmidt & Fak) confirms the vertical focus is fixed by "
+            "design (tilting the top and bottom crystal rows); 1.40 m is "
+            "Takin's pop_ana_curvv resolution preset, not a measured "
+            "mechanical radius (MODEL_STATUS.md)."
+        ),
+    ),
+}
+# The Heusler's focusing behaviour is unpublished -- not the same claim as
+# "driven": published IN12 experiments describe both a horizontally and a
+# vertically focusing Heusler configuration, and whether that is one
+# reconfigurable assembly or two is unknown (MODEL_STATUS.md). It is driven
+# like rha (no fixed_curvature to inherit from PG's evidence), but no ideal
+# radius may be computed for it -- hence focusing_known=False rather than a
+# claimed mechanical model.
+_IN12_ANA_HEUSLER_CURVATURE = {
+    "rva": CurvatureAxis(driven=True, focusing_known=False),
+}
 
 
 def _slab_size(face, count, gap=_SLAB_GAP):
@@ -234,6 +275,7 @@ def in12_descriptor() -> InstrumentDescriptor:
                 n_columns=11, n_rows=11,
                 gap=_SLAB_GAP, mosaic=24, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_IN12_MONO_CURVATURE,
             ),
         ),
         ana_crystals=(
@@ -259,7 +301,7 @@ def in12_descriptor() -> InstrumentDescriptor:
                 # than silently defeating the pin scan_config applies.
                 # The Heusler option below has no established focusing
                 # behaviour and therefore claims nothing.
-                fixed_curvature=("rva",),
+                curvature=_IN12_ANA_PG002_CURVATURE,
             ),
             # Polarisation-analysis analyser: Heusler(111), d = 3.44 A, ILL
             # face 75 x 145 mm. TAVI models no polarisation, so this changes
@@ -279,6 +321,7 @@ def in12_descriptor() -> InstrumentDescriptor:
                 n_columns=5, n_rows=1,
                 gap=_SLAB_GAP, mosaic=30, r0=0.3,
                 reflect_file="NULL", transmit_file="NULL",
+                curvature=_IN12_ANA_HEUSLER_CURVATURE,
             ),
         ),
         # Samples come from the shared, instrument-independent library --
@@ -356,7 +399,11 @@ class IN12Plugin:
 
         Same shape as IN8's, with two IN12 differences: a fourth collimation
         slot (alpha_1, in the guide-exit section) and a monochromator on the
-        negative take-off branch, so BOTH mono radii are negated here.
+        negative take-off branch. The branch sign is NOT applied here --
+        curvature radii pass through as plain magnitudes (see the comment
+        below); ``TAS_Instrument.set_crystal_bending`` signs both mono radii
+        onto the actual take-off branch at the boundary every path to the
+        instrument state crosses.
         """
         vals = gui_values
         collimation = vals['collimation']
@@ -369,33 +416,18 @@ class IN12Plugin:
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
-        # Curvature radii are signed by the scattering branch: the curvature
-        # center must sit on the take-off side. IN12 takes off NEGATIVE at both
-        # crystals (sense_mono = sense_ana = -1), so all three driven radii are
-        # negative -- the first TAVI instrument whose monochromator is on the
-        # negative branch. The GUI carries magnitudes; the branch sign is
-        # instrument physics, applied here. (Wrong sign = ~7 orders of
-        # magnitude peak loss; measured on IN8 in the Phase-4 smoke.)
-        scan_config.rhm = -abs(vals['rhm'])
-        scan_config.rvm = -abs(vals['rvm'])
-        scan_config.rha = -abs(vals['rha'])
-        # The PG(002) analyser's vertical focus is FIXED hardware (1998: the
-        # top and bottom crystal rows are permanently tilted), so for it rva is
-        # not a GUI knob and takes the fixed radius on the negative branch.
-        # That evidence is about THAT assembly: the Heusler has no published
-        # focusing behaviour, so it is driven to the point-source optimum
-        # instead of inheriting PG's radius. The crystal's own
-        # fixed_curvature declaration decides, so the runtime policy and the
-        # scan-legality gate can never disagree about which analyser is fixed.
-        if scan_config.ana_vertical_is_fixed():
-            scan_config.rva = -ANA_FIXED_RV
-        else:
-            # Driven like rha: the GUI carries the magnitude (its Ideal button
-            # reads calculate_crystal_bending, which returns the point-source
-            # optimum for an analyser with no fixed focus) and the branch sign
-            # is applied here. Absent a value, flat -- the neutral choice for a
-            # crystal whose focusing behaviour is unpublished.
-            scan_config.rva = -abs(vals.get('rva', 0.0))
+        # Curvature radii are plain magnitudes here: the branch sign (a
+        # crystal's take-off side) and any fixed-axis/mechanical-limit policy
+        # -- including PG(002)'s fixed vertical analyser focus versus the
+        # Heusler's driven one, both read off the crystal's own
+        # fixed_curvature declaration -- are enforced once, in
+        # TAS_Instrument.set_crystal_bending, the boundary every path to the
+        # instrument state crosses. Signing or fixing here too would be the
+        # exact duplicated-policy bug that boundary exists to prevent.
+        scan_config.rhm = vals['rhm']
+        scan_config.rvm = vals['rvm']
+        scan_config.rha = vals['rha']
+        scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
@@ -480,7 +512,7 @@ class IN12Plugin:
             axis_limits=in12_descriptor().axis_limits,
         )
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for IN12 (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
@@ -491,4 +523,6 @@ class IN12Plugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(in12_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            in12_descriptor(), vals, q0, w, point_angles=point_angles,
+        )

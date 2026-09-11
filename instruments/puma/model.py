@@ -6,6 +6,7 @@ import os
 
 import mcstasscript as ms
 
+from instruments.descriptor import CurvatureAxis
 from instruments.paths import COMPONENTS_DIR
 from instruments.tas_runtime import TAS_Instrument
 from tavi.neutron_conversions import energy2lambda
@@ -84,6 +85,53 @@ class PUMA_Instrument(TAS_Instrument):
     def crystal_info(self, monocris, anacris):
         return mono_ana_crystals_setup(monocris, anacris)
 
+    def descriptor(self):
+        from instruments.puma.plugin import puma_descriptor
+
+        return puma_descriptor()
+
+    def curvature_object_distances(self, modules=None):
+        """PUMA's guide delivers a quasi-parallel beam to the monochromator on
+        BOTH planes -- the object distance is infinite, only L2 (mono-sample)
+        acts as the focal length. The analyser keeps the base point-source
+        pair (the sample is a real source)."""
+        distances = dict(super().curvature_object_distances(modules=modules))
+        distances["mono_h"] = (math.inf, self.L2)
+        distances["mono_v"] = (math.inf, self.L2)
+        return distances
+
+    def effective_curvature_axis(self, axis, crystal_spec, modules=None):
+        """PUMA's rhm/rvm read as fixed FLAT whenever a nested mirror optic
+        (NMO) is fitted, regardless of what the mounted crystal declares.
+
+        A fitted NMO does the monochromator's own horizontal/vertical
+        focusing, so those two axes are not driven for as long as it stays
+        fitted -- matching the historical Ideal-button behaviour
+        (``TAVI_PySide6.py`` around line 2853). The build-time factor zeroing
+        that used to sit in ``build_PUMA_instrument`` was a second copy of
+        this rule and is deleted; this method is the only one. Only PUMA has an
+        NMO, so this stays a PUMA override rather than a descriptor concept.
+
+        NMO state is read from ``self.NMO_installed`` (the live instrument
+        state, a string: "None" when absent). ``modules['nmo']`` -- for a
+        caller with no state object yet, e.g. a frozen API request -- WINS
+        over ``self.NMO_installed`` when supplied, mirroring the override rule
+        ``optical_radii`` used before this resolver replaced its direct
+        zeroing.
+        """
+        nmo_installed = self.NMO_installed
+        if modules is not None and 'nmo' in modules:
+            nmo_installed = modules['nmo']
+        if axis in ("rhm", "rvm") and nmo_installed != "None":
+            return CurvatureAxis(
+                driven=False, fixed_radius_m=0.0,
+                provenance=(
+                    "NMO installed: this axis is fixed flat, not driven, "
+                    "for as long as the nested mirror optic stays fitted."
+                ),
+            )
+        return super().effective_curvature_axis(axis, crystal_spec, modules=modules)
+
     def build_point_params(self, deltaE):
         return build_puma_point_params(self, deltaE)
 
@@ -95,48 +143,6 @@ class PUMA_Instrument(TAS_Instrument):
                 print(f"{key}: {value}")
         else:
             print("No diagnostic settings provided.")
-        
-    def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
-        """Calculates the required bending for the monochromator and analyzer crystals based on their angles of rotation and the arm distances.
-        
-        Parameters:
-            mth: Monochromator theta angle (Bragg angle = A1/2, NOT the 2-theta)
-            ath: Analyzer theta angle (Bragg angle = A4/2, NOT the 2-theta)
-            
-        Note: The formulas follow McStas Monochromator_curved convention:
-            RV = 2*L*sin(theta) and RH = 2*L/sin(theta)
-        
-        For monochromator: Uses parallel beam formula (L = L2 only) since the 
-        neutron guide produces a quasi-parallel beam (source effectively at infinity).
-        
-        For analyzer: Uses point-source formula with L = 1/(1/L3 + 1/L4) since
-        the sample is a real point source.
-        """
-        # Monochromator: parallel beam formula (source at infinity from guide)
-        # RH = 2*L2/sin(theta), RV = 2*L2*sin(theta)
-        rhm = rhmfac * 2 * self.L2 / math.sin(math.radians(mth))
-        rvm = rvmfac * 2 * self.L2 * math.sin(math.radians(mth))
-        
-        # Analyzer: point-source formula (sample is real source)
-        # RH = 2/sin(theta)/(1/L3 + 1/L4), RV = 2*sin(theta)/(1/L3 + 1/L4)
-        rha = rhafac * 2 / math.sin(math.radians(ath)) / (1/self.L3 + 1/self.L4)
-        rva = 0.8 # Said to be fixed at 0.8 m
-
-        print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
-
-        if rhm < 2.0 and rhmfac != 0:
-            print("\nRequested Rh (mono) is {:.2f} m, but minimum Rh is 2.0 m".format(rhm))
-            rhm = 2.0
-
-        if rvm < 0.5 and rvmfac != 0:
-            print("\nRequested Rv (mono) is {:.2f} m, but minimum Rv is 0.5 m".format(rvm))
-            rvm = 0.5
-
-        if rha < 2.0:
-            print(f"\nRequested Rh (ana) is {rha:.2f} m, but minimum Rh is 2.0 m")
-            rha = 2.0
-
-        return rhm, rvm, rha, rva
 
 
 
@@ -212,11 +218,6 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     """Build a PUMA instrument object for repeated per-point execution."""
 
     PUMA = puma_config
-
-    # focusing; use 1 for optimal focusing, 0 for flat monochromator
-    if PUMA.NMO_installed != "None":
-        PUMA.rhmfac = 0 # radius factor in the horizontal for the monochromator
-        PUMA.rvmfac = 0 # radius factor in the vertical for the monochromator
 
     ## start the instrument
 

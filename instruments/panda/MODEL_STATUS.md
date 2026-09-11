@@ -111,7 +111,6 @@ model does not represent. None is an oversight.
 | Fixed beam-defining apertures `sk1`–`sk5` | Not motorized and not scannable; they shape flux, never angles. `ca1`–`ca4`, `ms1`, `ss1`, `ss2` are the operational apertures and are all present. |
 | 2″ ³He detector (collimated configuration) | Only the 1″ focusing-mode tube is selectable. A detector choice would need a descriptor-level module, which no current task requires. |
 | Cold-source vs thermal-source operation | MLZ publishes separate ki ranges for the two. The model carries one Maxwellian source; `axis_limits` and the crystal menu span both. The "without cold source" spectrum is not represented. |
-| Ideal focusing radii in the GUI/API | The Ideal button and the API's widget-free equivalent never call `calculate_crystal_bending`: both hard-code PUMA's parallel-beam formula and PUMA's minimum-radius clamps. PANDA's negative angles make every ideal radius negative, so the clamps always fire and the button offers (2.0, 0.5, 2.0) instead of (3.985, 1.787, 1.651). **Scans and the API launch path are unaffected** — they take the radii from `scan_config`, which is correct. Deferred deliberately to one comprehensive cross-instrument repair (`TODO.md` → Instrument models), because the fix changes IN8's numbers too. |
 
 ## Reference planes — the one unresolved geometry question
 
@@ -149,8 +148,9 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   pins `rva`, but the generic scan surface still offered it and
   `compute_scan_snapshot` reads the radii out of `scans[4:8]` — so a scan over
   it quietly defeated the pin. The PG(002) analyser now declares
-  `fixed_curvature=("rva",)` and the scan-command validator refuses it by name,
-  on the GUI and API paths alike. It is declared on the **crystal**, not the
+  `"rva": CurvatureAxis(driven=False, fixed_radius_m=0.60, ...)` and the
+  scan-command validator refuses it by name, on the GUI and API paths alike.
+  It is declared on the **crystal**, not the
   instrument, because fixed focusing is a property of the assembly: the
   evidence here (two peer-reviewed papers, one tying the fixed vertical
   geometry to the vertically oriented 1″ ³He detector) is about this analyser,
@@ -184,3 +184,12 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   default cubic mount and returns `I = 0`, `N = 18`. Al (2,0,0) at that kf has
   Q = 3.103 Å⁻¹, just past 2k = 3.10, and is unreachable. Hence kf = 2.662 for
   the smoke.
+- **Compiled McStas smoke run: passed** (2026-09-11, re-run on the
+  `crystal-bending-generality` tree, same configuration: Al (2,0,0) elastic
+  at kf = 2.662 Å⁻¹, 1e7 neutrons, all Soller collimators open, ideal
+  focusing). `detector_I = 2.07537e-07`, `detector_N = 7663` — up from the
+  2026-09-09 run above, the expected direction: the corrected monochromator
+  images the real virtual source at L1 onto the sample instead of assuming a
+  beam from infinity, so it focuses more strongly. The reported error is
+  ~2-5% of the value, well outside Monte-Carlo scatter. This is
+  gross-geometry and execution evidence, not a flux calibration.

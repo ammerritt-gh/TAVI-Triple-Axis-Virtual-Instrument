@@ -135,7 +135,11 @@ variant) with inline dict literals. Duplicated again inside `validate_angles()`
 **C. Instrument-specific physics constants.** `PUMA_Instrument.__init__`
 (`:375`) sets arm lengths, slit gaps, NMO/selector flags, source type.
 `calculate_crystal_bending()` (`:426`) encodes PUMA focusing formulas and minimum
-radii (`rhm>=2.0`, `rvm>=0.5`, `rha>=2.0`, `rva=0.8` fixed). `_get_v_selector_frequency`
+radii (`rhm>=2.0`, `rvm>=0.5`, `rha>=2.0`, `rva=0.8` fixed) — historical Phase-0
+state; the method no longer exists, replaced by the one shared producer,
+`TAS_Instrument.ideal_curvature` (`instruments/tas_runtime.py`), driven by each
+crystal's declared `CurvatureAxis` (`docs/INSTRUMENT_AUTHORING.md`).
+`_get_v_selector_frequency`
 (`:480`) hard-codes selector geometry.
 
 **D. Per-point parameter snapshot.** `build_puma_point_params()` (`:524`) and
@@ -1104,9 +1108,20 @@ Key assertions per file (see §17.4 for the file list):
   the 25 descriptor parameter names.
 - **Plugin:** `isinstance(PUMAPlugin(), InstrumentPlugin)`; id/display/mcstas
   name consistency; `default_state()` matches legacy defaults and returns fresh
-  objects; `scan_config` applies the full GUI mapping (incl. `rva == 0.8`,
-  NMO ⇒ `rhm = rvm = 0`, `alpha_2` list, base not mutated, hidden `mis_omega`
-  propagates); **snapshot `params.keys()` == descriptor parameter names**;
+  objects; `scan_config` applies the full GUI mapping (`alpha_2` list, base not
+  mutated, hidden `mis_omega` propagates) and passes curvature through as
+  magnitudes — `rva == 0.8` is PUMA's PG(002) declaring that axis fixed, and
+  NMO ⇒ flat monochromator is `PUMA_Instrument.effective_curvature_axis`
+  (folding the fitted NMO into rhm/rvm's resolved policy for every consumer:
+  the applier, the scan-command validator, the ideal-radius producer, and
+  (since the crystal-bending-generality branch) `GET /resolution`'s
+  `compute_resolution`, which used to read a module-blind throwaway state);
+  it is neither `scan_config`'s nor `optical_radii`'s to decide any more, and
+  `build_PUMA_instrument`'s former `rhmfac`/`rvmfac` build-time zeroing —
+  a second, independent copy of the same NMO-flat rule — is deleted: it was
+  dead weight, never read by anything that reaches McStas (`rhm_param` comes
+  straight from `PUMA.rhm`, already zeroed by `set_crystal_bending`);
+  **snapshot `params.keys()` == descriptor parameter names**;
   `PUMARunExecutionState is RunExecutionState`; binary fallback ends with
   `PUMA_McScript.exe` and `SimpleNamespace(input_path=tmp, name="Foo")` →
   `Foo.exe`; `crystal_info` equals `mono_ana_crystals_setup`.
@@ -1454,17 +1469,25 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
 - **Branch-signed crystal bending (found in the smoke run):**
   `Monochromator_curved` needs the curvature center on the take-off side, so
   the bending radii carry the sign of the branch. IN8's
-  `calculate_crystal_bending` returns signed radii (point-source formulas on
-  BOTH sides — the virtual source is a real focal point, unlike PUMA's guide),
-  and `scan_config` applies the branch sign to the GUI magnitudes
-  (rha/rva negative). Measured cost of the wrong sign: **~7 orders of
-  magnitude** in elastic peak intensity. PUMA is unaffected (all its take-offs
-  are the positive branch).
+  `calculate_crystal_bending` (historical name; the one shared producer today
+  is `TAS_Instrument.ideal_curvature`) returned signed radii (point-source
+  formulas on BOTH sides — the virtual source is a real focal point, unlike
+  PUMA's guide). The sign is no longer applied per plugin: `scan_config` passes
+  magnitudes straight through, and `TAS_Instrument.set_crystal_bending` derives
+  the branch from the **actual local take-off angle** at the point being
+  measured — never from the declared scattering sense, because a direct-angle
+  scan can legitimately put a crystal on the opposite branch (PANDA's declared
+  A4 range spans both signs). Measured cost of the wrong sign: **~7 orders of
+  magnitude** in elastic peak intensity. PUMA's take-offs are all on the
+  positive branch, which is why a sign error there is invisible and why the
+  tests that guard this use IN12 or PANDA.
 - Minimal six-monitor diagnostic set; collimation slots α2/α3/α4
   (20/30/40/60′, default open); no modules (FlatCone/IMPS deferred, §14).
   PLACEHOLDER values (positions, apertures, Cu200 mosaic/r0, analyzer
-  subdivision, hvs height, single vs double PG filter, no bending clamps,
-  rva magnitude 0.31) are marked in-line in both modules. The full inventory
+  subdivision, hvs height, single vs double PG filter, no bending clamps) are
+  marked in-line in both modules. The old `rva magnitude 0.31` placeholder is
+  gone: IN8's Thermes analyser is variable double-focusing and the hardware
+  tracks it, so `rva` is declared driven and follows kf. The full inventory
   of missing/placeholder data, with provenance and a priority order for the
   next data pass, is `instruments/in8/MODEL_STATUS.md`.
 
@@ -1487,10 +1510,12 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
 - **Resolved 2026-07-18:** IN8 and PUMA import
   `compute_scan_snapshot`/`run_tas_point`/`TAS_Instrument` from the neutral
   `instruments/tas_runtime.py`; neither model owns another instrument's runtime.
-- `TAVIController._compute_ideal_bending_values` still uses PUMA's
-  parallel-beam mono formula and unsigned magnitudes for the advisory "Ideal:"
-  labels — mildly wrong for IN8 (point-source + signed). Follow-up: route
-  through `state.calculate_crystal_bending`.
+- **Resolved (crystal-bending-generality branch):** `TAVIController._compute_ideal_bending_values`
+  used to reuse PUMA's parallel-beam mono formula and unsigned magnitudes for
+  the advisory "Ideal:" labels regardless of the selected instrument. It is
+  now a thin caller of the one shared producer, `TAS_Instrument.ideal_curvature`,
+  passed the GUI's actual crystal selection, and returns absolute magnitudes
+  (`docs/INSTRUMENT_AUTHORING.md`).
 - **a3 convention: RESOLVED** (user's second live vTAS run). The raw readings
   a3(V1)=125.647 / a3(V3)=69.337 initially suggested a −56.31° difference
   (mirror of the baked branch), but decode exactly as TAVI's Friedel-branch
@@ -1626,7 +1651,8 @@ tracking the arms, so a later "improvement" cannot quietly turn it into a
 computed radius.
 
 Published mechanical bending limits (horizontal ≥ 1.7 m, vertical ≥ 0.5 m) are
-clamped in `calculate_crystal_bending`. With L1 = L2 = 1.8 m the horizontal
+declared as `min_radius_m` on the mono's `CurvatureAxis` entries and clamped by
+`TAS_Instrument.ideal_curvature`. With L1 = L2 = 1.8 m the horizontal
 limit never binds; the vertical one does, above about |A1| = 32°. Neither limit
 could be re-confirmed in the literature round — ILL says only that both axes
 are variable.
