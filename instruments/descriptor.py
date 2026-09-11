@@ -170,8 +170,10 @@ class CrystalSpec:
     def fixed_curvature(self) -> tuple[str, ...]:
         """Axes this assembly holds fixed -- derived from ``curvature``.
 
-        Kept so ``_fixed_curvature_axes`` (TAVI_PySide6.py), the scan-command
-        validator, and existing tests keep reading a plain tuple.
+        A convenience view for tests and reports. Production policy readers
+        (``_fixed_curvature_axes``, the scan-command validator) resolve through
+        ``TAS_Instrument.effective_curvature_axis`` instead, which folds in
+        module state; this raw property does not.
 
         Ordered alphabetically rather than in declaration order, deliberately:
         every consumer tests membership (the validator refuses a named axis,

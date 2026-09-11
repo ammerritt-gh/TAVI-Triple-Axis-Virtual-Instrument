@@ -209,3 +209,47 @@ TAVI-wt-before worktree removed at closeout.
   (decided: one helper, literal check deleted); L6 optional REJECT-because
   a contract another repo reads with zero documentation is a defect, not a
   preference.
+
+## Ledger — landing (2026-09-11, session 09bdc537)
+
+Landed on the branch, in order: eaafbcde plan; de8ec5d7 + 0290eda5 L1 (D13);
+714e77a5 L2a (D14, D22); a2779021 (D20); 5da82e85 (D21); aaa25d8b L2c (D23);
+ebf0368b L3 (D15); acb4ceb9 L4 (D16); 8c242a9e L5 (D17, D18, D19, D24, D25);
+534c2140 per-slice review fix (rva lookup with live modules); 73ab6c9f L6 (G1,
+H1). M1 landed on main as c868f080. Every code commit shown red first; suite
+1102 passed serial after 534c2140; four compiled smoke runs repeated at
+534c2140 within Monte-Carlo scatter of the handoff's table (PUMA 2.86e-07/4791,
+IN8 5.71e-07/10782, IN12 4.61e-07/7152, PANDA 2.46e-07/7883).
+
+Pre-PR seats (reviewer role, external reader, review_files per slice) found
+and this session fixed:
+D26 (P1) the travel helper ran before the zero-step and step-sign guards, so
+    `rhm 2 4 0` typed mid-keystroke raised ZeroDivisionError in a Qt slot and
+    the same body on the API was a 500. Guards now run first.
+D27 (P2) update_ideal_bending_buttons returned early when no ideal could be
+    computed (degenerate take-off angle), skipping the fixed-axis field sync;
+    one `_sync_curvature_fields` loop now runs in both branches.
+D28 (P3) a test asserting absolute semantics under a docstring claiming the
+    validator cannot expand a relative command (deleted); stale module
+    docstring in test_curvature_relative_scan_travel.py, puma/model.py's
+    effective_curvature_axis and descriptor.py's fixed_curvature corrected.
+
+Deferred, pinned (TODO.md at merge):
+- A zero-step or wrong-sign step returns (var, message) from the validator
+  and `_scan_command_issues` files it as neither hard nor soft (only "⚠"
+  messages are soft), so the Run gate does not block it; the dock's live
+  annotation shows it. Pre-existing, not curvature-specific.
+- `curvature_modes` in GET /state and result.metadata reports the launch
+  policy (autofocus/held) for an axis the scan command names; only the
+  per-point snapshot says "scanned". applied_curvature carries the truth.
+- PATCH /parameters on a module-fixed axis (PUMA rhm with NMO) returns
+  applied: the requested value while the field syncs to the resolved 0.
+- The Ideal label block indexes ideal['rhm'/'rvm'/'rha'] unconditionally;
+  a future driven mono/rha axis with focusing_known=False would KeyError.
+- test_api_over_limit_latch's _ManifestController still re-implements
+  normalize_scan_variable as identity.
+- IN12 `ana_vertical_is_fixed()` reads raw fixed_curvature; zero callers.
+- The "40-field" parameter-table count is stale (43) in four documents.
+- curvature_limits' docstring points at an angle-dependent extension that
+  effective_curvature_axis cannot serve without the angle; the seam stays
+  as recorded under "angle-dependent bender travel".
