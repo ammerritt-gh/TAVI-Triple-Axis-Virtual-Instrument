@@ -107,8 +107,9 @@ class PUMA_Instrument(TAS_Instrument):
         A fitted NMO does the monochromator's own horizontal/vertical
         focusing, so those two axes are not driven for as long as it stays
         fitted -- matching the historical Ideal-button behaviour
-        (``TAVI_PySide6.py`` around line 2853) and the build-time factor
-        zeroing (``build_PUMA_instrument`` in this module). Only PUMA has an
+        (``TAVI_PySide6.py`` around line 2853). The build-time factor zeroing
+        that used to sit in ``build_PUMA_instrument`` was a second copy of
+        this rule and is deleted; this method is the only one. Only PUMA has an
         NMO, so this stays a PUMA override rather than a descriptor concept.
 
         NMO state is read from ``self.NMO_installed`` (the live instrument

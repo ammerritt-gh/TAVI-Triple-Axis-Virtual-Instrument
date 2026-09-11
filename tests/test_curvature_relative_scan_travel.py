@@ -1,22 +1,15 @@
 """Packet slice 7: a relative scan cannot smuggle a radius past the refusal.
 
-``_validate_single_scan_command`` (pinned by ``test_curvature_command_refusal.py``)
-checks the LITERAL start/end written in a scan command. That is correct for an
-absolute command, but a relative command's real requested values are the
-current radius plus those literal numbers -- values that check never sees. On
-PUMA with rhm = 2.5 m (declared 2.0 m minimum), the relative command
-``rhm -2.4 -2.0 0.2`` has literal endpoints -2.4 and -2.0 (magnitudes 2.4 and
-2.0, both >= the minimum, so the literal check passes) but actually requests
-0.1 m to 0.5 m -- well inside the minimum, and previously reached
-``set_crystal_bending`` to be silently clamped back to 2.0.
-
-``validate_scan_launch_state`` is the fix: it already expands a relative
-command to its real values (``_expand``) before recording each point, so this
-is where the curvature-travel check has to run to be authoritative for the
-relative case. This module pins that with a fast fake-controller unit test
-(mirrors ``test_api_over_limit_latch.py``'s pattern, no Qt) plus one
-integration test through the real PUMA instrument and GUI-collected launch
-state for the worked example itself.
+Since 714e77a5 both the GUI preflight (``_validate_single_scan_command`` with
+``relative`` and ``current_values``) and the API manifest
+(``validate_scan_launch_state``) expand a command through one shared helper,
+``instruments.tas_runtime.curvature_scan_error``, and check every expanded
+radius. On PUMA with rhm = 2.5 m (declared 2.0 m minimum), the relative
+command ``rhm -2.4 -2.0 0.2`` requests 0.1 m to 0.5 m and is refused on both
+paths; before that commit only the manifest saw the expanded values and the
+GUI Run path never called it, so the scan ran silently clamped to 2.0 m.
+These tests pin the manifest side; ``test_curvature_relative_preflight.py``
+and ``test_curvature_scan_travel_check.py`` pin the preflight side.
 """
 import os
 
@@ -194,29 +187,6 @@ def test_an_instrument_declaring_no_travel_refuses_nothing_relative_or_not():
 
 
 # ------------------------------------------------------------- integration
-
-
-def test_red_first_the_literal_check_alone_passes_the_worked_example():
-    """Reproduces the hole directly: before the manifest-level fix existed,
-    ``_validate_single_scan_command`` -- the only check a relative command
-    used to reach -- passes 'rhm -2.4 -2.0 0.2' clean, because it only ever
-    sees the literal -2.4/-2.0 endpoints, not the 0.1/0.5 the scan actually
-    requests. This pins that the literal-text check is INHERENTLY blind to a
-    relative command's real values (by construction, not as a lingering bug):
-    it is not passed the current radius at all, so it cannot expand anything.
-    """
-    axis = CurvatureAxis(driven=True, min_radius_m=2.0)
-    curvature_axes = {"rhm": (axis, "PG(002) monochromator")}
-
-    ctrl = controller_module.TAVIController.__new__(controller_module.TAVIController)
-    var, warning = controller_module.TAVIController._validate_single_scan_command(
-        ctrl, "rhm -2.4 -2.0 0.2", fixed_axes=None, curvature_axes=curvature_axes
-    )
-    assert warning is None, (
-        "the literal-text check does not refuse this command -- it cannot "
-        "see that -2.4/-2.0 are offsets from rhm=2.5, not the requested "
-        "radii themselves"
-    )
 
 
 def test_a_two_command_scan_checks_each_command_against_its_own_relative_mode():
