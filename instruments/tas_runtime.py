@@ -14,7 +14,12 @@ import subprocess
 
 import numpy as np
 
-from instruments.contract import DEFAULT_MPI_COUNT, PointSnapshot, RunExecutionState
+from instruments.contract import (
+    DEFAULT_MPI_COUNT,
+    CurvatureMode,
+    PointSnapshot,
+    RunExecutionState,
+)
 from instruments.descriptor import CurvatureAxis
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
@@ -427,6 +432,7 @@ class TAS_Instrument:
             ("rva", ana_spec, "ana_v", ath),
         )
         result = {}
+        clamped_axes = []
         for axis, crystal_spec, radii_key, theta in axis_plan:
             curvature_axis = crystal_spec.curvature.get(axis, CurvatureAxis())
             if not curvature_axis.driven:
@@ -450,8 +456,18 @@ class TAS_Instrument:
                     )
                 magnitude = radii[radii_key]
                 min_m, max_m = self.curvature_limits(axis, crystal_spec, mth, ath)
-                magnitude = _clamp_curvature_magnitude(magnitude, min_m, max_m)
+                clamped_magnitude = _clamp_curvature_magnitude(magnitude, min_m, max_m)
+                if clamped_magnitude != magnitude:
+                    clamped_axes.append(axis)
+                magnitude = clamped_magnitude
             result[axis] = math.copysign(magnitude, math.sin(math.radians(theta)))
+        # Side channel for a caller that needs to know whether the mechanical
+        # travel actually bit this call (AUTOFOCUS provenance in
+        # ``compute_scan_snapshot``), without changing this method's
+        # axis->float return shape for its existing callers (the GUI Ideal
+        # buttons, the API default-value recompute). Same pattern as
+        # ``_solve_point_geometry``'s ``point_state._angle_energies``.
+        self._last_ideal_clamped_axes = tuple(clamped_axes)
         return result
 
     def build_point_params(self, deltaE):
@@ -862,14 +878,44 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     else:
         omega_scan = 0
 
-    if 'rhm' not in [variable_name1, variable_name2]:
-        rhm = point_state.rhm
-    if 'rvm' not in [variable_name1, variable_name2]:
-        rvm = point_state.rvm
-    if 'rha' not in [variable_name1, variable_name2]:
-        rha = point_state.rha
-    if 'rva' not in [variable_name1, variable_name2]:
-        rva = point_state.rva
+    # Per-axis curvature policy for THIS point (design record: curvature
+    # follows the measurement). A scanned axis is decided right here, from
+    # the scan variables already in hand -- the operator never declares it.
+    # Everything else defaults to HELD (today's frozen-launch-state
+    # behaviour) unless the launch state names it AUTOFOCUS.
+    radii = {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+    curvature_modes = vals.get('curvature_modes') or {}
+    scanned_axes = (variable_name1, variable_name2)
+    effective_modes = {}
+    autofocus_axes = []
+    for axis in ("rhm", "rvm", "rha", "rva"):
+        if axis in scanned_axes:
+            effective_modes[axis] = CurvatureMode.SCANNED
+            continue
+        radii[axis] = getattr(point_state, axis)
+        mode = curvature_modes.get(axis, CurvatureMode.HELD)
+        effective_modes[axis] = mode
+        # A point whose geometry did not solve must not autofocus off stale
+        # angles (mtt/att are 0.0 or a pre-error leftover here) -- leave the
+        # axis alone, exactly the degenerate-angle guard set_crystal_bending
+        # already applies to a supplied value.
+        if mode == CurvatureMode.AUTOFOCUS and not error_flags:
+            autofocus_axes.append(axis)
+
+    curvature_clamped = []
+    if autofocus_axes:
+        # This point's OWN solved two-theta, halved once into theta here --
+        # ideal_curvature takes theta, mtt/att are two-theta.
+        ideal = point_state.ideal_curvature(
+            point_state.monocris, point_state.anacris, mtt / 2, att / 2,
+        )
+        clamped_this_point = set(getattr(point_state, "_last_ideal_clamped_axes", ()))
+        for axis in autofocus_axes:
+            radii[axis] = ideal[axis]
+            if axis in clamped_this_point:
+                curvature_clamped.append(axis)
+
+    rhm, rvm, rha, rva = radii["rhm"], radii["rvm"], radii["rha"], radii["rva"]
 
     point_state.omega = omega_scan
     point_state.chi = chi_scan
@@ -932,6 +978,14 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         'rvm': rvm,
         'rha': rha,
         'rva': rva,
+        # Provenance: the policy this point actually ran each axis under, and
+        # whether a mechanical limit clipped an autofocus radius -- so a
+        # headless campaign client can tell "focused" from "clamped" without
+        # a log line a human might never see.
+        'curvature_modes': {
+            axis: CurvatureMode(mode).value for axis, mode in effective_modes.items()
+        },
+        'curvature_clamped': curvature_clamped,
         'omega': omega_scan,
         'chi': chi_scan,
         'psi': psi_scan,

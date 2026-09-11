@@ -17,7 +17,12 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
-from instruments.contract import DEFAULT_MPI_COUNT, PrepFailure, RunExecutionState
+from instruments.contract import (
+    DEFAULT_MPI_COUNT,
+    CurvatureMode,
+    PrepFailure,
+    RunExecutionState,
+)
 
 log = logging.getLogger(__name__)
 
@@ -2289,6 +2294,20 @@ class TAVIController(QObject):
                 'rvm': float(self.window.instrument_dock.rvm_edit.text() or 0),
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
                 'rva': rva,
+                # Per-axis curvature policy for the scan about to run: the
+                # Ideal lock already tracked per field (locked = follow the
+                # optics, unlocked = the operator's own number). rva has no
+                # widget yet, so it is always sourced from the producer above
+                # and therefore always AUTOFOCUS.
+                'curvature_modes': {
+                    'rhm': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rhm')
+                           else CurvatureMode.HELD,
+                    'rvm': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rvm')
+                           else CurvatureMode.HELD,
+                    'rha': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rha')
+                           else CurvatureMode.HELD,
+                    'rva': CurvatureMode.AUTOFOCUS,
+                },
                 'source_type': self.window.instrument_dock.selected_source_id(),
                 'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
                 # Descriptor-driven categories (the plugin's scan_config owns the
@@ -2533,6 +2552,13 @@ class TAVIController(QObject):
         patched = set(parsed)
         vals.update(parsed)
 
+        # Naming an explicit radius holds THAT axis, and only that axis --
+        # per-axis is what a per-axis mode means. This replaces the old
+        # all-or-nothing pin, where naming one radius froze all four.
+        for axis in ('rhm', 'rvm', 'rha'):
+            if axis in patched:
+                vals['curvature_modes'][axis] = CurvatureMode.HELD
+
         # A patched container replaces the previous object wholesale, so a
         # request naming only some collimation slots would silently drop the
         # rest -- and the plugin's scan_config indexes every slot the
@@ -2592,17 +2618,16 @@ class TAVIController(QObject):
                 vals['qx'], vals['qy'], vals['qz'], vals
             )
 
-        # Recompute ideal bending when mtt/att/modules/monocris/anacris were
-        # patched and the caller did not pin the radii explicitly. Selecting
-        # a different crystal changes the curvature policy (a fixed axis, a
-        # different travel), not just the angle, so it retriggers this too.
-        if (any(k in patched for k in
-                ('mtt', 'att', 'modules', 'monocris', 'anacris'))
-                # 'rva' is listed with its siblings although no API request
-                # field sets it yet: pinning one radius has always pinned all
-                # four, and the slice that makes rva settable must not have to
-                # remember to come back here.
-                and not any(k in patched for k in ('rhm', 'rvm', 'rha', 'rva'))):
+        # Refresh the AUTOFOCUS radii's starting numbers when mtt/att/modules/
+        # monocris/anacris were patched, so a submitted request already
+        # carries sensible values before any point is solved (the real
+        # per-point focus still runs in compute_scan_snapshot -- this is just
+        # the launch-state snapshot). Per-axis: an axis a caller pinned to an
+        # explicit radius above (now HELD) is never overwritten here, unlike
+        # the old all-or-nothing recompute this replaces, where naming ANY
+        # one radius silently skipped it for all four.
+        if any(k in patched for k in
+               ('mtt', 'att', 'modules', 'monocris', 'anacris')):
             try:
                 ideal = self._ideal_bending_from_modules(
                     vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
@@ -2611,10 +2636,9 @@ class TAVIController(QObject):
             except ValueError as exc:
                 raise ApiError(400, "invalid_curvature", str(exc))
             if ideal:
-                vals['rhm'] = ideal['rhm']
-                vals['rvm'] = ideal['rvm']
-                vals['rha'] = ideal['rha']
-                vals['rva'] = ideal['rva']
+                for axis in ('rhm', 'rvm', 'rha', 'rva'):
+                    if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
+                        vals[axis] = ideal[axis]
 
         # At least one non-empty scan command is required (a lone command 2 is
         # swapped into command 1 downstream, so either satisfies the check).
@@ -5235,6 +5259,14 @@ class TAVIController(QObject):
             'monocris': d.mono_crystals[0].id,
             'anacris': d.ana_crystals[0].id,
             'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0, 'rva': 0.0,
+            # An API request that never names a radius gets one focused for
+            # its own point, not this launch state's reference-geometry
+            # default -- an explicit rhm/rvm/rha patch pins that axis to
+            # HELD below.
+            'curvature_modes': {
+                'rhm': CurvatureMode.AUTOFOCUS, 'rvm': CurvatureMode.AUTOFOCUS,
+                'rha': CurvatureMode.AUTOFOCUS, 'rva': CurvatureMode.AUTOFOCUS,
+            },
             'source_type': d.source_types[0].id,
             'source_dE': 2.0,
             'modules': modules,
@@ -5257,10 +5289,14 @@ class TAVIController(QObject):
             # Leave the flat fallbacks above rather than fail every request.
             ideal = None
         if ideal:
-            vals['rhm'] = ideal['rhm']
-            vals['rvm'] = ideal['rvm']
-            vals['rha'] = ideal['rha']
-            vals['rva'] = ideal['rva']
+            # Per axis, honouring the modes set just above -- the same rule
+            # build_api_launch_state applies. Every axis is AUTOFOCUS in the
+            # defaults, so today this fills all four either way; writing it
+            # per-axis means a caller that reuses these defaults after
+            # adjusting a mode does not silently overwrite a HELD axis.
+            for axis in ('rhm', 'rvm', 'rha', 'rva'):
+                if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
+                    vals[axis] = ideal[axis]
         return vals
 
     def set_default_parameters(self):

@@ -102,14 +102,19 @@ def test_gui_ideal_bending_halves_two_theta_and_matches_pinned_table(
 
 def test_panda_api_hkl_request_emits_expected_signed_curvature(tmp_path):
     """POST /scan-shaped request (an H/K/L patch) all the way to the McStas
-    *_param values: solved point angles -> the frozen ideal magnitudes from
-    the reference-geometry defaults (H/K/L never retriggers that recompute,
-    a known and deliberately-not-fixed limitation this slice documents
-    rather than hides) -> the SIGNED params set_crystal_bending emits at the
-    angles THIS request actually solves to. The single most valuable
-    regression here: PANDA used to get PUMA's clamped (2.0, 0.5, 2.0) from
-    the GUI Ideal path and its own hard-coded -0.60 rva from scan_config;
-    now both come from PANDA's own optics and its own crystal declarations.
+    *_param values: solved point angles -> AUTOFOCUS (the API default for an
+    axis no one pinned) recomputed from THIS point's own solved angles ->
+    the SIGNED params set_crystal_bending emits at the angles THIS request
+    actually solves to.
+
+    Packet slice3a documented a known limitation here: an H/K/L request never
+    retriggered the launch-state recompute, so it focused for PUMA's
+    reference-geometry default (mtt=att=41.167) regardless of the sample's
+    real Bragg geometry. Slice 3b removes it -- curvature is no longer frozen
+    at launch at all, so this is no longer a limitation to route around; it
+    is the ordinary per-point path. The regression this guards: rhm/rha must
+    come from PANDA's OWN solved two-theta, not from the frozen launch
+    values agreeing by construction with what compute_snapshot re-derives.
     """
     with _controller("panda") as ctrl:
         launch = ctrl.build_api_launch_state({
@@ -133,28 +138,84 @@ def test_panda_api_hkl_request_emits_expected_signed_curvature(tmp_path):
 
         solved_mtt = snapshot.metadata["mtt"]
         solved_att = snapshot.metadata["att"]
-        sign_m = math.copysign(1.0, math.sin(math.radians(solved_mtt / 2)))
-        sign_a = math.copysign(1.0, math.sin(math.radians(solved_att / 2)))
+        # PANDA's real (H,K,L)=(1,0,0) Bragg geometry is nowhere near PUMA's
+        # 41.167 reference default -- proof this point actually solved its
+        # own angles rather than inheriting the launch-state frozen ones.
+        assert solved_mtt != pytest.approx(41.167, abs=1.0)
 
-        # rhm/rvm/rha are driven with no declared PANDA travel limit,
-        # so the frozen default magnitude survives unclamped; rva is
-        # PANDA's fixed analyser vertical radius (0.60 m) regardless of
-        # what the frozen defaults carried for it.
-        expected_rhm = sign_m * abs(vals["rhm"])
-        expected_rvm = sign_m * abs(vals["rvm"])
-        expected_rha = sign_a * abs(vals["rha"])
-        expected_rva = sign_a * 0.60
+        # Ground truth: the producer, called directly at THIS point's own
+        # solved two-theta (halved once into theta) -- exactly what AUTOFOCUS
+        # is specified to do, not a value re-derived by the assertion.
+        expected = scan_config.ideal_curvature(
+            scan_config.monocris, scan_config.anacris,
+            solved_mtt / 2, solved_att / 2,
+        )
 
-        assert snapshot.params["rhm_param"] == pytest.approx(expected_rhm)
-        assert snapshot.params["rvm_param"] == pytest.approx(expected_rvm)
-        assert snapshot.params["rha_param"] == pytest.approx(expected_rha)
-        assert snapshot.params["rva_param"] == pytest.approx(expected_rva)
+        assert snapshot.params["rhm_param"] == pytest.approx(expected["rhm"])
+        assert snapshot.params["rvm_param"] == pytest.approx(expected["rvm"])
+        assert snapshot.params["rha_param"] == pytest.approx(expected["rha"])
+        assert snapshot.params["rva_param"] == pytest.approx(expected["rva"])
 
-        # The snapshot's metadata must record what was actually emitted.
-        assert snapshot.metadata["rhm"] == pytest.approx(expected_rhm)
-        assert snapshot.metadata["rvm"] == pytest.approx(expected_rvm)
-        assert snapshot.metadata["rha"] == pytest.approx(expected_rha)
-        assert snapshot.metadata["rva"] == pytest.approx(expected_rva)
+        # The snapshot's metadata must record what was actually emitted, and
+        # its provenance.
+        assert snapshot.metadata["rhm"] == pytest.approx(expected["rhm"])
+        assert snapshot.metadata["rvm"] == pytest.approx(expected["rvm"])
+        assert snapshot.metadata["rha"] == pytest.approx(expected["rha"])
+        assert snapshot.metadata["rva"] == pytest.approx(expected["rva"])
+        assert snapshot.metadata["curvature_modes"] == {
+            "rhm": "autofocus", "rvm": "autofocus",
+            "rha": "autofocus", "rva": "autofocus",
+        }
+        assert snapshot.metadata["curvature_clamped"] == []
+
+
+def test_single_pass_hkl_request_matches_the_two_pass_workaround(tmp_path):
+    """Acceptance test for the whole slice.
+
+    The pre-slice smoke-run harness had to solve a plain H/K/L request's
+    angles once, then submit a SECOND request with those solved angles
+    re-patched back in as mtt/att, purely to make the launch-state ideal
+    recompute fire -- otherwise "ideal focusing" was the default angle's.
+    With AUTOFOCUS honoured per point, a single H/K/L request must now focus
+    exactly as well as that two-pass workaround did. If this ever regresses
+    to needing the second pass again, this is the test that catches it.
+    """
+    with _controller("panda") as ctrl:
+        instrument = get_instrument("panda")
+
+        def _run_once(patch):
+            launch = ctrl.build_api_launch_state(dict(
+                patch, scan_command1="deltaE 0 0.5 0.5",
+            ))
+            vals = launch["vals"]
+            scan_config = launch["scan_config"]
+            scans = [
+                vals["qx"], vals["qy"], vals["qz"], 0.0,
+                vals["rhm"], vals["rvm"], vals["rha"], vals["rva"],
+                0.0, vals.get("kappa", 0.0), vals.get("psi", 0.0),
+            ]
+            snapshot = instrument.compute_snapshot(
+                (scans, 0), 0, "momentum", scan_config, vals, str(tmp_path),
+            )
+            assert snapshot.error_flags == []
+            return snapshot
+
+        # Pass 1 -- the production path today: submit the bare H/K/L request.
+        single_pass = _run_once({"H": 1.0, "K": 0.0, "L": 0.0})
+
+        # Pass 2 -- the historical workaround: re-solve, then resubmit with
+        # the solved angles patched in as mtt/att so the OLD launch-state
+        # recompute would have fired on them.
+        two_pass = _run_once({
+            "H": 1.0, "K": 0.0, "L": 0.0,
+            "mtt": single_pass.metadata["mtt"],
+            "att": single_pass.metadata["att"],
+        })
+
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            assert single_pass.metadata[axis] == pytest.approx(
+                two_pass.metadata[axis]
+            ), axis
 
 
 def test_metadata_matches_emitted_params_for_a_scanned_curvature_axis(tmp_path):
