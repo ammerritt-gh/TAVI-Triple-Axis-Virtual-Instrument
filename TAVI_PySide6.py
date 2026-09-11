@@ -3183,6 +3183,10 @@ class TAVIController(QObject):
     def update_ideal_bending_buttons(self):
         """Update ideal bending button labels based on current angles."""
         idock = self.window.instrument_dock
+        monocris = idock.selected_mono_id()
+        anacris = idock.selected_ana_id()
+        modules = idock.module_values()
+        axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
         rva_axis = self._current_rva_axis()
         self._apply_rva_axis_policy(rva_axis)
 
@@ -3235,17 +3239,31 @@ class TAVIController(QObject):
         # synced regardless of lock bookkeeping -- the field is disabled and
         # the applier pins it anyway, so it must always show the declared
         # radius, sourced here from the producer, never computed locally.
+        # One loop over all four: an axis whose RESOLVED policy (this
+        # crystal pair plus live module state, e.g. a nested mirror optic
+        # fixing rhm/rvm flat) is not driven has its field disabled and
+        # synced unconditionally; a driven axis stays editable and is
+        # synced only when its own Ideal lock is on. Previously only rva's
+        # field ever got disabled here (via ``_apply_rva_axis_policy``) --
+        # rhm/rvm/rha kept whatever stale value the operator last typed,
+        # with no disabled cue, once a module fixed them flat.
+        locked = {
+            "rhm": rhm_locked, "rvm": rvm_locked,
+            "rha": rha_locked, "rva": rva_locked,
+        }
+        axis_edits = {
+            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit,
+            "rha": idock.rha_edit, "rva": idock.rva_edit,
+        }
         if not self.updating:
             self.updating = True
             try:
-                if rhm_locked:
-                    self._update_locked_field_if_needed(idock.rhm_edit, ideal['rhm'])
-                if rvm_locked:
-                    self._update_locked_field_if_needed(idock.rvm_edit, ideal['rvm'])
-                if rha_locked:
-                    self._update_locked_field_if_needed(idock.rha_edit, ideal['rha'])
-                if rva_locked or not rva_axis.driven:
-                    self._update_locked_field_if_needed(idock.rva_edit, ideal['rva'])
+                for axis, edit in axis_edits.items():
+                    axis_spec = axis_specs.get(axis)
+                    driven = axis_spec[0].driven if axis_spec else True
+                    edit.setEnabled(driven)
+                    if not driven or locked[axis]:
+                        self._update_locked_field_if_needed(edit, ideal[axis])
             finally:
                 self.updating = False
 
