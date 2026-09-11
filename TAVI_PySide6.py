@@ -3200,6 +3200,11 @@ class TAVIController(QObject):
             idock.rvm_ideal_button.setText("Ideal: --")
             idock.rha_ideal_button.setText("Ideal: --")
             idock.rva_ideal_button.setText("Ideal: --")
+            # No ideal (degenerate take-off angle) does not suspend policy:
+            # a fixed axis still shows its resolved radius, disabled, so a
+            # later Run is not refused on a stale value the module never
+            # uses. Same loop as below, with no ideal to sync locked axes to.
+            self._sync_curvature_fields(axis_specs, ideal=None)
             return
 
         rhm_locked = self.is_bending_locked("rhm")
@@ -3251,25 +3256,39 @@ class TAVIController(QObject):
         # field ever got disabled here (via ``_apply_rva_axis_policy``) --
         # rhm/rvm/rha kept whatever stale value the operator last typed,
         # with no disabled cue, once a module fixed them flat.
-        locked = {
-            "rhm": rhm_locked, "rvm": rvm_locked,
-            "rha": rha_locked, "rva": rva_locked,
-        }
+        self._sync_curvature_fields(axis_specs, ideal)
+
+    def _sync_curvature_fields(self, axis_specs, ideal):
+        """The one loop that keeps the four radius fields honest.
+
+        A non-driven axis (fixed by declaration, or by a fitted module) is
+        disabled and shows its resolved radius; a driven axis is editable
+        and synced to its ideal only while its Ideal lock is on. ``ideal``
+        may be None (no take-off angle to focus at) or a dict narrowed to
+        the askable axes; a locked driven axis with no ideal is left as is.
+        """
+        idock = self.window.instrument_dock
         axis_edits = {
             "rhm": idock.rhm_edit, "rvm": idock.rvm_edit,
             "rha": idock.rha_edit, "rva": idock.rva_edit,
         }
-        if not self.updating:
-            self.updating = True
-            try:
-                for axis, edit in axis_edits.items():
-                    axis_spec = axis_specs.get(axis)
-                    driven = axis_spec[0].driven if axis_spec else True
-                    edit.setEnabled(driven)
-                    if not driven or locked[axis]:
-                        self._update_locked_field_if_needed(edit, ideal[axis])
-            finally:
-                self.updating = False
+        if self.updating:
+            return
+        self.updating = True
+        try:
+            for axis, edit in axis_edits.items():
+                axis_spec = axis_specs.get(axis)
+                driven = axis_spec[0].driven if axis_spec else True
+                edit.setEnabled(driven)
+                if not driven:
+                    value = ideal.get(axis) if ideal else None
+                    if value is None:
+                        value = abs(axis_spec[0].fixed_radius_m or 0.0)
+                    self._update_locked_field_if_needed(edit, value)
+                elif self.is_bending_locked(axis) and ideal and axis in ideal:
+                    self._update_locked_field_if_needed(edit, ideal[axis])
+        finally:
+            self.updating = False
 
     def apply_ideal_bending_value(self, key):
         """Apply the ideal bending value to the selected input field."""
@@ -4231,6 +4250,18 @@ class TAVIController(QObject):
         except ValueError:
             return (None, "Invalid numbers. Check start, end, and step values.")
 
+        # Check for zero step
+        if step == 0:
+            return (var_lower, "Step size cannot be zero.")
+        
+        # Check step sign consistency with direction
+        if (end > start and step < 0) or (end < start and step > 0):
+            return (var_lower, "Step sign doesn't match direction (start → end).")
+        
+        # After the step guards: the expansion below divides by the step and
+        # calls parse_scan_steps, so a zero or wrong-sign step must have been
+        # refused already -- mid-keystroke text like 'rhm 2 4 0' reaches
+        # this validator from textChanged.
         # A commanded scan range on a driven curvature axis is refused, not
         # clamped, when any value it expands to falls outside its declared
         # mechanical travel -- the operator wrote the range deliberately.
@@ -4256,14 +4287,6 @@ class TAVIController(QObject):
             if error:
                 return (None, error)
 
-        # Check for zero step
-        if step == 0:
-            return (var_lower, "Step size cannot be zero.")
-        
-        # Check step sign consistency with direction
-        if (end > start and step < 0) or (end < start and step > 0):
-            return (var_lower, "Step sign doesn't match direction (start → end).")
-        
         # Calculate number of points and warn if too many or too few
         import numpy as np
         num_points = int(np.floor(abs(end - start) / abs(step) + 0.5)) + 1
