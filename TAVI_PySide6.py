@@ -2611,6 +2611,11 @@ class TAVIController(QObject):
         parsed = {}
         errors = {}
         for name, value in patch.items():
+            if name == 'curvature_modes':
+                # Known field (declared read-only in build_api_schema), not an
+                # unrecognized one -- see _api_field_map's docstring.
+                errors[name] = "read-only field"
+                continue
             spec = field_map.get(name)
             if spec is None:
                 errors[name] = "unknown field"
@@ -6475,11 +6480,18 @@ class TAVIController(QObject):
     def _api_field_map(self):
         """Return ``{field: (parse_fn, setter_fn, after_handler_or_None)}``.
 
-        Covers every key ``get_gui_values()`` returns. ``parse_fn(value)``
+        Covers every WRITABLE key ``get_gui_values()`` returns. ``parse_fn(value)``
         validates/coerces the incoming JSON value (raising ``ValueError`` with a
         human message on bad input), ``setter_fn(parsed)`` writes the widget,
         and ``after_handler`` (zero-arg or ``None``) recomputes derived state --
         the same handler the user's Enter key would trigger.
+
+        Deliberately excluded, though ``get_gui_values()``/``GET /parameters``/
+        ``GET /state`` all expose it: ``curvature_modes``, read-only derived
+        state (``build_api_schema`` declares it with ``readOnly: True``). It is
+        computed from the Ideal locks and from which axes a scan command names
+        -- a second way to set it here would be a new twin of that logic, not a
+        convenience.
         """
         w = self.window
         idock = w.instrument_dock
@@ -6759,6 +6771,11 @@ class TAVIController(QObject):
         # (a) Parse/validate everything first; never partially apply a field.
         parsed = {}
         for name, value in patch.items():
+            if name == 'curvature_modes':
+                # Known field (declared read-only in build_api_schema), not an
+                # unrecognized one -- see _api_field_map's docstring.
+                errors[name] = "read-only field"
+                continue
             spec = field_map.get(name)
             if spec is None:
                 errors[name] = "unknown field"
@@ -7096,6 +7113,25 @@ class TAVIController(QObject):
             if name in allowed:
                 entry["allowed"] = allowed[name]
             fields.append(entry)
+
+        # curvature_modes is NOT in _api_field_map (see its docstring): it is
+        # read-only derived state, not a hand-maintained duplicate of a
+        # writable field, so it is declared here by hand rather than sourced
+        # from field_names. get_gui_values()/GET /parameters/GET /state all
+        # return it; PATCH /parameters refuses a write against it.
+        fields.append({
+            "name": "curvature_modes",
+            "type": "object",
+            "readOnly": True,
+            "description": (
+                "Per-axis curvature policy (rhm/rvm/rha/rva -> "
+                "'%s'/'%s'/'%s'), derived from the Ideal locks and from which "
+                "axes the scan command names. Read-only." % (
+                    CurvatureMode.AUTOFOCUS.value, CurvatureMode.HELD.value,
+                    CurvatureMode.SCANNED.value,
+                )
+            ),
+        })
 
         limits = getattr(self, "_api_limits", None)
 
@@ -7631,17 +7667,32 @@ class TAVIController(QObject):
                         scan_counts.append(counts)
 
                     if job is not None and job.result is not None:
+                        # THIS point's own applied radii (md), signed -- see
+                        # ScanResult.applied_curvature. The deterministic
+                        # engine writes no per-point files, so this is the
+                        # only place its truth can live.
+                        point_curvature = {
+                            axis: md[axis] for axis in ("rhm", "rvm", "rha", "rva")
+                        }
                         with job.lock:
                             res = job.result
                             if is_2d_scan:
                                 if res.counts_grid is not None:
                                     res.counts_grid[idx_y][idx_x] = counts
+                                if res.applied_curvature:
+                                    orig_idx = idx_y * len(res.scan_values_1) + idx_x
+                                    if 0 <= orig_idx < len(res.applied_curvature):
+                                        res.applied_curvature[orig_idx] = point_curvature
                             elif is_single_point_scan:
                                 if res.counts:
                                     res.counts[0] = counts
+                                if res.applied_curvature:
+                                    res.applied_curvature[0] = point_curvature
                             elif idx_1d >= 0 and res.counts is not None \
                                     and idx_1d < len(res.counts):
                                 res.counts[idx_1d] = counts
+                                if res.applied_curvature and idx_1d < len(res.applied_curvature):
+                                    res.applied_curvature[idx_1d] = point_curvature
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
                             self._mark_executed_result_point(
@@ -7956,6 +8007,7 @@ class TAVIController(QObject):
                         counts_grid=None,
                         output_folder=data_folder,
                         metadata=dict(vals),
+                        applied_curvature=[None] * n_points,
                     )
                     job.progress_total = len(scan_parameter_input)
                 self._publish_api_event('scan_initialized', {
@@ -8039,6 +8091,10 @@ class TAVIController(QObject):
                         counts_grid=[[None] * n_cols for _ in range(n_rows)],
                         output_folder=data_folder,
                         metadata=dict(vals),
+                        # Flat, row-major (idx_y * n_cols + idx_x) -- the same
+                        # linear order _mark_executed_result_point already uses
+                        # to flatten a 2D scan for planned/executed_feasible_mask.
+                        applied_curvature=[None] * (n_cols * n_rows),
                     )
                     job.progress_total = len(scan_parameter_input)
                 self._publish_api_event('scan_initialized', {
@@ -8070,6 +8126,7 @@ class TAVIController(QObject):
                     counts_grid=None,
                     output_folder=data_folder,
                     metadata=dict(vals),
+                    applied_curvature=[None],
                 )
                 job.progress_total = len(scan_parameter_input)
             self._publish_api_event('scan_initialized', {
@@ -8577,16 +8634,31 @@ class TAVIController(QObject):
 
                     # Record the measured count into the job result for readers.
                     if job is not None and job.result is not None:
+                        # THIS point's own applied radii (metadata), signed --
+                        # see ScanResult.applied_curvature. The McStas
+                        # per-point files already carry this; this is the
+                        # HTTP/GUI-facing record of the same truth.
+                        point_curvature = {
+                            axis: metadata[axis] for axis in ("rhm", "rvm", "rha", "rva")
+                        }
                         with job.lock:
                             res = job.result
                             if is_2d_scan:
                                 if res.counts_grid is not None:
                                     res.counts_grid[idx_y][idx_x] = float(counts)
+                                if res.applied_curvature:
+                                    orig_idx = idx_y * len(res.scan_values_1) + idx_x
+                                    if 0 <= orig_idx < len(res.applied_curvature):
+                                        res.applied_curvature[orig_idx] = point_curvature
                             elif is_single_point_scan:
                                 if res.counts:
                                     res.counts[0] = float(counts)
+                                if res.applied_curvature:
+                                    res.applied_curvature[0] = point_curvature
                             elif idx_1d >= 0 and res.counts is not None and idx_1d < len(res.counts):
                                 res.counts[idx_1d] = float(counts)
+                                if res.applied_curvature and idx_1d < len(res.applied_curvature):
+                                    res.applied_curvature[idx_1d] = point_curvature
                             res.total_counts = float(total_counts)
                             res.max_counts = float(max_counts)
                             self._mark_executed_result_point(

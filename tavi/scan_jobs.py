@@ -87,6 +87,9 @@ class ScanResult:
     directly. ``counts`` (1D) or ``counts_grid`` (2D) are pre-sized with
     ``None`` placeholders that the worker thread fills in by index as points
     complete; ``None`` means unmeasured or invalid.
+
+    ``metadata``'s rhm/rvm/rha/rva are the LAUNCH reference the scan started
+    from -- see ``applied_curvature`` for what each point actually ran with.
     """
     mode: str  # '1D' | '2D' | 'single'
     variable_1: str
@@ -110,6 +113,20 @@ class ScanResult:
     # Points deliberately omitted from the run. Each entry carries an index,
     # coordinates, failure kind, and reason; a partial scan never has silent gaps.
     skipped_points: List[Dict[str, Any]] = field(default_factory=list)
+    # Curvature stopped being constant for a whole scan once autofocus could
+    # sweep a radius with the take-off angle (a fixed-kf PUMA scan runs rhm
+    # 11.62->15.46 m point to point). ``metadata``'s rhm/rvm/rha/rva are only
+    # the launch value the scan STARTED from; this is what each point actually
+    # ran with, one entry per point (flat, row-major for a 2D scan), pre-sized
+    # with ``None`` placeholders like ``counts``/``counts_grid`` -- ``None``
+    # means unmeasured or skipped, never a flat/untouched crystal. Values are
+    # SIGNED (the physical boundary's own output, same convention as the
+    # McStas per-point files) -- the opposite convention to the operator/API
+    # ``vals``, which carries magnitudes; the sign is what tells a later
+    # reconstruction which side the crystal was bent toward and cannot be
+    # recovered from a magnitude. This is the only record of applied
+    # curvature for the deterministic engine, which writes no per-point files.
+    applied_curvature: List[Optional[Dict[str, float]]] = field(default_factory=list)
 
     def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
         """Return a JSON-safe dict view of this result.
@@ -140,6 +157,7 @@ class ScanResult:
             'counts': _json_safe(self.counts),
             'counts_grid': _json_safe(self.counts_grid),
             'metadata': _json_safe(self.metadata),
+            'applied_curvature': _json_safe(self.applied_curvature),
         })
         return summary
 
