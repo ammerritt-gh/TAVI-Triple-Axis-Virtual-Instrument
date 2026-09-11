@@ -1113,8 +1113,14 @@ Key assertions per file (see §17.4 for the file list):
   magnitudes — `rva == 0.8` is PUMA's PG(002) declaring that axis fixed, and
   NMO ⇒ flat monochromator is `PUMA_Instrument.effective_curvature_axis`
   (folding the fitted NMO into rhm/rvm's resolved policy for every consumer:
-  the applier, the scan-command validator, and the ideal-radius producer);
-  it is neither `scan_config`'s nor `optical_radii`'s to decide any more;
+  the applier, the scan-command validator, the ideal-radius producer, and
+  (since the crystal-bending-generality branch) `GET /resolution`'s
+  `compute_resolution`, which used to read a module-blind throwaway state);
+  it is neither `scan_config`'s nor `optical_radii`'s to decide any more, and
+  `build_PUMA_instrument`'s former `rhmfac`/`rvmfac` build-time zeroing —
+  a second, independent copy of the same NMO-flat rule — is deleted: it was
+  dead weight, never read by anything that reaches McStas (`rhm_param` comes
+  straight from `PUMA.rhm`, already zeroed by `set_crystal_bending`);
   **snapshot `params.keys()` == descriptor parameter names**;
   `PUMARunExecutionState is RunExecutionState`; binary fallback ends with
   `PUMA_McScript.exe` and `SimpleNamespace(input_path=tmp, name="Foo")` →

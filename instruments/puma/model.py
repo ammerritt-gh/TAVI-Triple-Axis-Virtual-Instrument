@@ -218,11 +218,6 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
     PUMA = puma_config
 
-    # focusing; use 1 for optimal focusing, 0 for flat monochromator
-    if PUMA.NMO_installed != "None":
-        PUMA.rhmfac = 0 # radius factor in the horizontal for the monochromator
-        PUMA.rvmfac = 0 # radius factor in the vertical for the monochromator
-
     ## start the instrument
 
     instrument = ms.McStas_instr(MCSTAS_NAME, input_path=data_dir)
