@@ -22,6 +22,18 @@
 > - `GET /scan/{id}/data` returns the job snapshot with the `result` arrays
 >   expanded (completeness is read from the job `state`); there is no separate
 >   top-level `complete` flag as sketched in §6.1.
+> - **Crystal curvature (`crystal-bending-generality` branch):** the client
+>   contract is `docs/API_USER_GUIDE.md` §5 *Crystal curvature* /
+>   §6 parameter table / §12 gotchas. Two sign contracts apply, and neither is
+>   negotiable: `rhm`/`rvm`/`rha`/`rva` sent by a client are always
+>   MAGNITUDES, enforced by `curvature_command_error` at submission
+>   (`build_api_launch_state` in `TAVI_PySide6.py`, mirrored by
+>   `_held_curvature_issues` for the GUI path); `ScanResult.applied_curvature`
+>   is always SIGNED, derived per point from the point's own take-off angle by
+>   `TAS_Instrument.set_crystal_bending` (`instruments/tas_runtime.py`), never
+>   from the instrument's declared scattering sense. `curvature_modes` is
+>   read-only derived state, refused on write by the same field-map check that
+>   rejects any other unknown/read-only field.
 
 ---
 

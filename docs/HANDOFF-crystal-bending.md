@@ -2,7 +2,16 @@
 
 > **Status:** live
 > **Branch:** `crystal-bending-generality`, not merged, no PR open yet
-> **State:** all known defects closed at `2e5282d0`; no review round outstanding
+> **State (corrected):** the eight defects from the two external reviews were
+> closed at `2e5282d0`, but that was not the end of the list. A landing
+> session afterward, working from `docs/PLAN-crystal-bending-landing.md`,
+> found and fixed thirteen more (`D13`-`D25`, listed there) reading the same
+> code with the same "one path, not its twin" question in mind. Every one of
+> D13-D25 is fixed on the branch as of `534c2140`; see that plan's defect
+> ledger for the commit that fixed each. "No review round outstanding" was
+> true of the two external rounds and is no longer the state of the branch —
+> read the plan's own seat dispositions before treating this branch as
+> closed.
 > **Worktree:** `C:\Users\AMM\Documents\Github\Science\TAVI-wt-bending`
 
 ## What this branch is
@@ -27,17 +36,34 @@ each scan result records the curvature each point actually ran with.
 ## The one thing to know before touching this area
 
 **The recurring defect is a rule implemented in one path and not its twin.** It
-has been found **twelve times** on this branch, at nearly every layer the
-consolidation touches: the producer, the applier, the GUI, the API, the
-resolution model, the scan validator, the persistence layer, and once inside a
-*test fixture* — a stub controller whose `normalize_scan_variable` and
-variable-index map had silently diverged from the real controller's, which made
-a green suite mean less than it appeared to.
+was found **twelve times** through the two external reviews, at nearly every
+layer the consolidation touches: the producer, the applier, the GUI, the API,
+the resolution model, the scan validator, the persistence layer, and once
+inside a *test fixture* — a stub controller whose `normalize_scan_variable`
+and variable-index map had silently diverged from the real controller's,
+which made a green suite mean less than it appeared to.
 
-This is not a coincidence; it is the shape of the original defect (one formula in
-two copies) reproducing itself wherever the consolidation lands. **Assume a
-thirteenth exists.** Two review passes returned clean on code where an external
-reader then found three.
+**Corrected: the count is now twenty-five, not twelve.** A landing session
+found thirteen more (`D13`-`D25`, `docs/PLAN-crystal-bending-landing.md`)
+asking the identical question of the same code, in three further layers the
+original twelve had not yet shown: a *test itself* asserting the wrong
+behaviour, not merely a fixture silently diverging from production
+(`D22` pinned the GUI preflight's blindness to a relative out-of-travel
+command as if it were correct); a partial twin inside one overlay function
+rather than across two functions (`D23` — the resolution-model overlay copied
+a point's radii but not its own Ei/Ki/Ef/Kf, so the two halves of "this
+point's state" disagreed with each other inside the same call); and a check
+that exists and is correct but that production never actually reaches with
+the input that matters (`D14` — `validate_scan_launch_state`'s
+`_curvature_violation` was "authoritative" only for callers that force
+`relative=False`, so a relative GUI scan never reached it in practice). This
+was not a coincidence the first twelve times and is not one now: it is the
+shape of the original defect (one formula in two copies) reproducing itself
+wherever the consolidation lands, including into weaker forms once the
+literal duplicate-code instances had been swept up. **Assume a
+twenty-sixth exists.** Two review passes returned clean on code where an
+external reader then found three, and a landing session found thirteen more
+after that.
 
 Practical consequence: when you fix something here, ask what its twin is before
 you write the fix, and prefer deleting a copy to adding a rule.
@@ -81,10 +107,14 @@ from the static descriptor while the applier used the point's own angle. Plus a
 regression the *previous* round's fix had introduced — the false-accept repair
 had created its mirror-image false-reject.
 
-All eight are fixed. **Both external readers found defects that a per-slice
+All eight are fixed (as are `D13`-`D25`, found afterward — see the corrected
+`State:` line above). **Both external readers found defects that a per-slice
 review and a whole-branch review had passed clean on the same code.** That is
 the single most transferable fact in this document: in this area, one tool's
-silence is not evidence.
+silence is not evidence. The landing session's own thirteen are the same
+lesson from a different angle: they were found by *rereading the existing
+code against the plan's defect-hunting question*, not by a new tool — nothing
+about the review machinery changed, only the willingness to keep asking.
 
 ## Verification
 
@@ -122,8 +152,13 @@ detector files:
 | IN12 | 4.21e-07 / 4334 | 5.44329e-07 / 6901 |
 | PANDA | 7.99e-08 / 1462 | 2.07537e-07 / 7663 |
 
-Every instrument gained flux, far outside Monte-Carlo scatter, in the direction
-expected once the monochromator images the real virtual source at L1 instead of
+**Corrected (H1):** "every instrument gained flux" overstates PUMA, which has
+no *before* number in the table above — the parallel-beam assumption this
+branch replaces was PUMA's own pre-existing formula, so there is nothing on
+PUMA to compare "after" against; its row is a first baseline, not a measured
+gain. IN8, IN12, and PANDA each have a real before/after pair, and all three
+gained flux there, far outside Monte-Carlo scatter, in the direction expected
+once the monochromator images the real virtual source at L1 instead of
 assuming a beam from infinity. Each takes ~3 s on this machine with 30 MPI
 processes.
 
