@@ -106,12 +106,28 @@ Roadmap order per CONTROL_FEATURES §9:
       duplicate "api: set …" parameter entries (apply + restore both record).
 - [ ] **429 Retry-After from real queue drain** — currently the ETA estimate when
       available, constant 30 s otherwise; revisit once campaigns land.
+- [ ] **Curvature follow-ups from PR #32** (ledger and reasons at the end of
+      `docs/PLAN-crystal-bending-landing.md`): `curvature_modes` in launch
+      metadata never says `scanned` for a scan-named axis (only the per-point
+      snapshot does; `applied_curvature` carries the truth); `PATCH /parameters`
+      on a module-fixed axis (PUMA rhm with an NMO) reports the requested value
+      while the field syncs to the resolved 0; the "40-field" parameter-table
+      count is stale (43) in four documents.
 
 ## GUI
 
 - [ ] **Scroll-lock the two QDoubleSpinBox in `ub_matrix_dock`** — same accidental
       wheel-capture issue fixed for combo boxes (`NoScrollComboBox`); deferred by
       scope at the time.
+- [ ] **A zero or wrong-sign scan step is not a hard Run gate** — the validator
+      returns `(var, message)` and `_scan_command_issues` files it as neither
+      hard nor soft (only "⚠" messages are soft); the dock annotation shows it,
+      Run does not refuse it. Pre-existing, found in PR #32's pre-PR review.
+- [ ] **Non-numeric radius in a GUI field silently blocks the run** —
+      `get_gui_values()` returns None and the launch bails with no message.
+- [ ] **Ideal labels index `ideal['rhm'/'rvm'/'rha']` unconditionally** — a
+      future driven mono/rha axis with `focusing_known=False` (today only
+      IN12's Heusler rva) would KeyError in `update_ideal_bending_buttons`.
 
 ## Housekeeping
 
@@ -143,6 +159,12 @@ Roadmap order per CONTROL_FEATURES §9:
       instrument's source spectrum - the Maxwellian is now correctly sampled
       but is still not a measured SR-2 / H144 / H10 spectrum.
 
+- [ ] **Small twins left after PR #32** - `tests/test_api_over_limit_latch.py`'s
+      `_ManifestController` still re-implements `normalize_scan_variable` as
+      identity; IN12's `ana_vertical_is_fixed()` reads raw `fixed_curvature`
+      with zero callers; `curvature_limits`' docstring advertises an
+      angle-dependent extension `effective_curvature_axis` cannot serve
+      without the angle (the seam for angle-dependent bender travel).
 - [ ] **PUMA's own evidence review** - PANDA and IN12 got one; PUMA's arm
       lengths, crystal menu and source spectrum are marked provisional in its
       own `MODEL_STATUS.md` and disagree with the current MLZ description.
