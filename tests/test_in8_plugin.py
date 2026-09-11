@@ -198,22 +198,52 @@ def test_momentum_feasibility_enforces_solved_axis_limits():
 
 
 def test_crystal_bending_is_point_source_and_branch_signed():
+    """Literals are the pinned reference table (packet slice2 §pinned table),
+    derived from IN8's declared arm lengths -- not recomputed from the
+    implementation under test, which would pass against any policy it
+    happened to adopt."""
     pytest.importorskip("mcstasscript")
-    import math
 
     plugin = IN8Plugin()
     state = plugin.default_state()
     mth, ath = 20.59, -20.59       # signed angles: A4/2 is negative on IN8
-    rhm, rvm, rha, rva = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    sin_th = math.sin(math.radians(abs(mth)))
-    mono_focus = 1 / (1 / 2.28 + 1 / 2.48)
-    ana_focus = 1 / (1 / 1.05 + 1 / 0.70)
-    assert rhm == pytest.approx(2 * mono_focus / sin_th)
-    assert rvm == pytest.approx(2 * mono_focus * sin_th)
+    radii = state.ideal_curvature("pg002", "pg002", mth, ath)
+
+    assert radii["rhm"] == pytest.approx(6.7556, abs=5e-5)
+    assert radii["rvm"] == pytest.approx(0.8355, abs=5e-5)
     # Analyzer radii carry the branch sign: curvature center on the take-off
     # side (wrong sign defocuses by ~1e7 in peak intensity).
-    assert rha == pytest.approx(-2 * ana_focus / sin_th)
-    assert rva == pytest.approx(-2 * ana_focus * sin_th)  # computed, not fixed
+    assert radii["rha"] == pytest.approx(-2.3885, abs=5e-5)
+    assert radii["rva"] == pytest.approx(-0.2954, abs=5e-5)  # driven, not fixed
+
+
+def test_scanned_rha_lands_on_the_negative_take_off_branch(tmp_path):
+    """Regression: IN8 never had a ``set_crystal_bending`` override (only
+    PANDA and IN12 did), so a SCANNED analyser radius reached
+    ``Monochromator_curved`` un-signed while every other crystal's override
+    forced its branch -- a ~1e7x defocus bug this slice fixes by moving
+    branch-signing into the one shared setter
+    (``instruments/tas_runtime.py::TAS_Instrument.set_crystal_bending``).
+    IN8 takes off NEGATIVE at the analyser (A4 is negative), so a positive
+    scanned rha must arrive negative.
+    """
+    pytest.importorskip("mcstasscript")
+    plugin = IN8Plugin()
+    state = plugin.default_state()
+    state.monocris = state.anacris = "pg002"
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 14.87
+
+    # Positive magnitude in the scans array, exactly as the GUI carries it.
+    scans = [41.18, 90.0, 45.0, -41.18, 4.0, 1.8, 1.65, 0.6, 0.0, 0.0, 0.0]
+    snapshot = plugin.compute_snapshot(
+        (scans, 0), 0, "angle", state,
+        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        variable_name1="rha",
+    )
+
+    assert snapshot.error_flags == []
+    assert snapshot.params["rha_param"] == -1.65
 
 
 def test_build_fingerprint_stable_and_sensitive():
