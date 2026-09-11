@@ -1706,3 +1706,285 @@ are variable.
 - The two research dossiers (IN12, PANDA) were renamed to the
   `YYYY-MM-DD__source-id__vNN.ext` reference convention; they had been failing
   `package_validation` on `main`.
+
+---
+
+## 22. Crystal curvature: design record (landed 2026-09-11, PR #32)
+
+Moved here at closeout from the retired `docs/HANDOFF-crystal-bending.md`
+and `docs/PLAN-crystal-bending-landing.md`; the branch
+`crystal-bending-generality` merged as `38aa33fa`. The client contract is
+`docs/API_USER_GUIDE.md`, "Crystal curvature". Open follow-ups are TODO.md
+rows that point at §22.10.
+
+### 22.1 What landed
+
+A monochromator or analyser crystal has up to four curvature axes (`rhm`/`rvm`
+on the monochromator, `rha`/`rva` on the analyser). Before PR #32 the radii
+that actually reached the simulation came from **two hard-coded copies of PUMA's
+parallel-beam focusing formula**, plus PUMA's minimum-radius clamps, in the GUI
+controller and the widget-free API equivalent. Each instrument's own focusing
+method had **zero production callers**. The fourth axis, `rva`, had no widget and
+no key in the values dict, so three call sites read PUMA's fixed 0.8 m as a
+universal default.
+
+Now: a crystal assembly declares what each axis can do; one producer
+(`TAS_Instrument.ideal_curvature`) computes an ideal radius from the
+instrument's own optics; one applier (`set_crystal_bending`) enforces policy and
+signs; a per-axis mode (AUTOFOCUS / HELD / SCANNED) travels in launch state and
+is honoured per point; an explicitly commanded out-of-travel radius is refused at
+submission rather than clamped; the analytic resolution model receives `rva`; and
+each scan result records the curvature each point actually ran with.
+
+### 22.2 The one thing to know before touching this area
+
+**The recurring defect is a rule implemented in one path and not its twin.** It
+was found **twelve times** through the two external reviews, at nearly every
+layer the consolidation touches: the producer, the applier, the GUI, the API,
+the resolution model, the scan validator, the persistence layer, and once
+inside a *test fixture* — a stub controller whose `normalize_scan_variable`
+and variable-index map had silently diverged from the real controller's,
+which made a green suite mean less than it appeared to.
+
+**Corrected: the count is now twenty-five, not twelve.** A landing session
+found thirteen more (`D13`-`D25`, §22.9)
+asking the identical question of the same code, in three further layers the
+original twelve had not yet shown: a *test itself* asserting the wrong
+behaviour, not merely a fixture silently diverging from production
+(`D22` pinned the GUI preflight's blindness to a relative out-of-travel
+command as if it were correct); a partial twin inside one overlay function
+rather than across two functions (`D23` — the resolution-model overlay copied
+a point's radii but not its own Ei/Ki/Ef/Kf, so the two halves of "this
+point's state" disagreed with each other inside the same call); and a check
+that exists and is correct but that production never actually reaches with
+the input that matters (`D14` — `validate_scan_launch_state`'s
+`_curvature_violation` was "authoritative" only for callers that force
+`relative=False`, so a relative GUI scan never reached it in practice). This
+was not a coincidence the first twelve times and is not one now: it is the
+shape of the original defect (one formula in two copies) reproducing itself
+wherever the consolidation lands, including into weaker forms once the
+literal duplicate-code instances had been swept up. **Assume a
+twenty-sixth exists.** Two review passes returned clean on code where an
+external reader then found three, and a landing session found thirteen more
+after that.
+
+Practical consequence: when you fix something here, ask what its twin is before
+you write the fix, and prefer deleting a copy to adding a rule.
+
+### 22.3 Two contracts that are deliberately different
+
+Getting these backwards is how the worst bug on this branch happened.
+
+- **Operator / API / descriptor values are MAGNITUDES.** How tightly the crystal
+  is bent is what a person types and an API client sends.
+- **Emitted McStas geometry and `ScanResult.applied_curvature` are SIGNED.**
+  Which side it bends toward is instrument geometry, derived at the physical
+  boundary from the *actual local take-off angle* — never from the declared
+  scattering sense, because a direct-angle scan can legitimately put a crystal on
+  the opposite branch (PANDA's declared A4 range spans both signs) where the
+  wrong sign costs ~7 orders of magnitude.
+
+`tavi/resolution.py` applies the scattering sense *itself*
+(`monorh = radius_cm(cfg.rhm) * sm`), so a signed radius reaching it is signed
+twice. That was live for three commits and cost ~1.6% on energy resolution and
+roughly a factor of two on both momentum components, while the emitted McStas
+geometry stayed correct — so nothing visible broke and no test caught it.
+
+### 22.4 Settled rulings — do not re-open
+
+- Curvature policy belongs on `CrystalSpec`: here a "crystal" is the crystal
+  **plus its mount**, as an installed package. Two reviews raised a mount/assembly
+  objection; the operator closed it on that ground.
+- **Autofocus tracks during the measurement.** Operator ruling: scanning drives
+  an axis point by point, setting holds it, autofocus follows. That it had not
+  been doing so was a failure, not a design choice.
+- IN8's `rva` is **driven** — its Thermes analyser is variable double-focusing and
+  the hardware tracks it.
+- **Zero means flat**, always legal, never clamped up to a minimum. An unbent
+  crystal is real hardware; a minimum radius bounds how tightly a bender may
+  bend, not whether it may be straight.
+- IN8 and PANDA declare **no** mechanical travel and therefore refuse nothing.
+  Theirs are genuinely unknown — PANDA's confirmed absent from the literature —
+  and inventing limits would be the defect.
+- PUMA's bending limits and its fixed 0.8 m analyser radius were **reviewed
+  against internal instrument documentation and confirmed with the instrument
+  scientist** (operator, 2026-09-11). Not independently citable, not a guarantee,
+  and explicitly **not** covering PUMA's arm lengths, which stay provisional.
+- `curvature_modes` is **read-only** on the API. Modes derive from the Ideal locks
+  and from which axes a scan command names; a second way to set them would be
+  another twin.
+
+### 22.5 Review history, and what each round found
+
+The branch went through two external pre-PR reviews, plus a per-slice review on
+every commit and one whole-branch pass. That history is the most useful thing
+here, because of *what* the later rounds found.
+
+**First external review** — would not merge. Four functional findings, three of
+which were one defect at three call sites: the deterministic engine, the
+`GET /resolution` backend, and the McStas background sigma widths all still
+built the analytic resolution from the frozen launch values after curvature had
+become per-point. Plus relative scans evading the out-of-travel refusal.
+
+**Second external review** — would still not merge. Four more, three again the
+same class: PUMA's nested-mirror-optic rule living in two places with a SCANNED
+axis escaping both; `focusing_known=False` being per-axis in the schema but
+whole-crystal in the producer; and the resolution model rebuilding branch signs
+from the static descriptor while the applier used the point's own angle. Plus a
+regression the *previous* round's fix had introduced — the false-accept repair
+had created its mirror-image false-reject.
+
+All eight are fixed (as are `D13`-`D25`, found afterward — see the corrected
+`State:` line above). **Both external readers found defects that a per-slice
+review and a whole-branch review had passed clean on the same code.** That is
+the single most transferable fact in this document: in this area, one tool's
+silence is not evidence. The landing session's own thirteen are the same
+lesson from a different angle: they were found by *rereading the existing
+code against the plan's defect-hunting question*, not by a new tool — nothing
+about the review machinery changed, only the willingness to keep asking.
+
+### 22.6 Compiled McStas smoke runs
+
+Step 8 of `docs/INSTRUMENT_AUTHORING.md`, production path, Al (2,0,0) elastic,
+1e7 neutrons, collimators open, ideal focusing. **Call
+`install_no_window_guard()` from any script outside pytest** or every instrument
+construction opens a console window on the operator's screen — this has buried
+his desktop before. Results on the branch, 2026-09-11, each verified against the
+detector files:
+
+| | before | after |
+|---|---|---|
+| PUMA | none | 2.09475e-07 / 4973 (first baseline) |
+| IN8 | 3.33e-07 / 4908 | 5.07902e-07 / 11455 |
+| IN12 | 4.21e-07 / 4334 | 5.44329e-07 / 6901 |
+| PANDA | 7.99e-08 / 1462 | 2.07537e-07 / 7663 |
+
+**Corrected (H1):** "every instrument gained flux" overstates PUMA, which has
+no *before* number in the table above — the parallel-beam assumption this
+branch replaces was PUMA's own pre-existing formula, so there is nothing on
+PUMA to compare "after" against; its row is a first baseline, not a measured
+gain. IN8, IN12, and PANDA each have a real before/after pair, and all three
+gained flux there, far outside Monte-Carlo scatter, in the direction expected
+once the monochromator images the real virtual source at L1 instead of
+assuming a beam from infinity. Each takes ~3 s on this machine with 30 MPI
+processes.
+
+Repeated at `534c2140` (final code commit) before the PR: PUMA 2.85757e-07 /
+4791, IN8 5.71118e-07 / 10782, IN12 4.60709e-07 / 7152, PANDA 2.46073e-07 /
+7883 — every ratio within 1.4x of the table above, ordinary Monte-Carlo
+scatter, signs on every axis as §22.3 predicts.
+
+### 22.7 Downstream
+
+PR #32 changes numbers the sibling campaign repo (ISAR) consumes, three
+ways: emitted curvature on IN8/IN12/PANDA; the analytic resolution for every
+instrument once `rva` reaches it; and the sign correction on negative-branch
+instruments. A campaign run against PR #32 or later will **not** reproduce one run
+against `main`. That is intended, not drift. The reader confirmed no API *shape*
+break — ISAR's client is a permissive JSON wrapper and its parser ignores unknown
+members.
+
+### 22.8 Deferred on purpose
+
+- A non-numeric radius typed into a GUI field blocks the run but tells the
+  operator nothing — the run quietly does nothing. Pre-existing, unrelated to
+  curvature.
+- IN12's provisional 1.7 / 0.5 m monochromator minima, and PANDA's and IN12's
+  analyser vertical *radius*, remain unsourced and still need an instrument
+  scientist. Recorded as such, not closed.
+- No angle-dependent bender travel. `curvature_limits` is the seam; nothing needs
+  it yet.
+
+### 22.9 Defect ledger D13-D28 (landing session 09bdc537)
+D13 API refuses an IN12 Heusler request that names rva (no requested_axes
+    in build_api_launch_state / _default_parameter_values). GUI accepts.
+D14 A RELATIVE curvature scan on the GUI Run path is never travel-checked:
+    validate_scan_command skips relative commands and points at
+    validate_scan_launch_state, which only the API backend and the
+    benchmark stage call, both with relative flags forced False. Per point,
+    set_crystal_bending clamps silently; curvature_clamped records AUTOFOCUS
+    axes only. PUMA, rhm 2.5, Relative-1, "rhm -1.9 -1.5 0.1" runs at a
+    constant 2.0 m while the record says 0.6-1.0.
+D20 run_simulation's lone-command-2 swap moves the text but not
+    relative_mode_1/2 (TAVI_PySide6.py ~8016); validate_scan_launch_state
+    swaps both. Command 2 "rhm 0.5 1.0 0.5" with Relative-2 at rhm 2.5 is
+    validated as 3.0-3.5 m and executed as 0.5-1.0 m absolute, clamped.
+D21 HELD refusal runs before an axis named by the scan command is promoted
+    to SCANNED, GUI (_held_curvature_issues, ~6466) and API (~2756) alike:
+    unlocked rhm field 1.0 plus a legal absolute "rhm 3.0 4.0 0.5" is refused
+    for a value the scan never uses.
+D15 GET /resolution's throwaway check_state never receives module state:
+    PUMA with NMO fitted returns a bent-mono resolution while the scan emits
+    rhm=rvm=0.
+D16 update_ideal_bending_buttons syncs a fixed axis's field only for rva;
+    PUMA+NMO with locks off hard-blocks Run on stale non-zero rhm/rvm fields
+    with no GUI cue.
+D17 (P3) curvature_limits reads raw CrystalSpec.curvature, bypassing
+    effective_curvature_axis, against that method's own docstring.
+D18 (P3) build_PUMA_instrument keeps rhmfac = rvmfac = 0 as a copy of the
+    NMO-flat rule; CONFIGURABLE_INSTRUMENTS.md claims full folding.
+D19 (P3/P4) test stubs: test_api_over_limit_latch _StubController lacks
+    relative_1/2; test_curvature_relative_scan_travel stub's current-value
+    getter is not name-canonicalising.
+D22 (P3) tests/test_curvature_relative_preflight.py pins the GUI preflight's
+    blindness as intended behaviour (asserts hard == [] for the relative
+    out-of-travel command).
+D23 (P1, operator's Pro review, verified by reading) Direct-angle scans:
+    the three analytic-resolution consumers overlay only the point's RADII
+    onto the frozen launch vals (`_vals_with_point_curvature`), while
+    resolution_adapter._kfix prefers vals['Ki']/vals['Kf'], the launch
+    values. The snapshot metadata already carries the point's own
+    Ei/Ki/Ef/Kf (tas_runtime ~641). An A4 scan under Kf-fixed feeds Popovici
+    a per-point energy transfer against the launch Kf; the reviewer's PANDA
+    A4=+50 example yields a negative implied incident energy.
+D24 (P3) test_deterministic_engine_leaves_skipped_point_as_none never
+    requires a skipped point; it passes with every entry a full dict.
+D25 (P3) applied_curvature recording on the McStas job-result path is
+    "verified by reading", not by a test.
+H1  Handoff overstatement: "every instrument gained flux" is unsupported for
+    PUMA, which has no before value; it is a first baseline.
+G1  applied_curvature and curvature_modes appear in no client-facing doc.
+
+### 22.10 Landing commits and pinned follow-ups
+
+Landed on the branch, in order: eaafbcde plan; de8ec5d7 + 0290eda5 L1 (D13);
+714e77a5 L2a (D14, D22); a2779021 (D20); 5da82e85 (D21); aaa25d8b L2c (D23);
+ebf0368b L3 (D15); acb4ceb9 L4 (D16); 8c242a9e L5 (D17, D18, D19, D24, D25);
+534c2140 per-slice review fix (rva lookup with live modules); 73ab6c9f L6 (G1,
+H1). M1 landed on main as c868f080. Every code commit shown red first; suite
+1102 passed serial after 534c2140; four compiled smoke runs repeated at
+534c2140 within Monte-Carlo scatter of the handoff's table (PUMA 2.86e-07/4791,
+IN8 5.71e-07/10782, IN12 4.61e-07/7152, PANDA 2.46e-07/7883).
+
+Pre-PR seats (reviewer role, external reader, review_files per slice) found
+and this session fixed:
+D26 (P1) the travel helper ran before the zero-step and step-sign guards, so
+    `rhm 2 4 0` typed mid-keystroke raised ZeroDivisionError in a Qt slot and
+    the same body on the API was a 500. Guards now run first.
+D27 (P2) update_ideal_bending_buttons returned early when no ideal could be
+    computed (degenerate take-off angle), skipping the fixed-axis field sync;
+    one `_sync_curvature_fields` loop now runs in both branches.
+D28 (P3) a test asserting absolute semantics under a docstring claiming the
+    validator cannot expand a relative command (deleted); stale module
+    docstring in test_curvature_relative_scan_travel.py, puma/model.py's
+    effective_curvature_axis and descriptor.py's fixed_curvature corrected.
+
+Deferred, pinned (TODO.md at merge):
+- A zero-step or wrong-sign step returns (var, message) from the validator
+  and `_scan_command_issues` files it as neither hard nor soft (only "⚠"
+  messages are soft), so the Run gate does not block it; the dock's live
+  annotation shows it. Pre-existing, not curvature-specific.
+- `curvature_modes` in GET /state and result.metadata reports the launch
+  policy (autofocus/held) for an axis the scan command names; only the
+  per-point snapshot says "scanned". applied_curvature carries the truth.
+- PATCH /parameters on a module-fixed axis (PUMA rhm with NMO) returns
+  applied: the requested value while the field syncs to the resolved 0.
+- The Ideal label block indexes ideal['rhm'/'rvm'/'rha'] unconditionally;
+  a future driven mono/rha axis with focusing_known=False would KeyError.
+- test_api_over_limit_latch's _ManifestController still re-implements
+  normalize_scan_variable as identity.
+- IN12 `ana_vertical_is_fixed()` reads raw fixed_curvature; zero callers.
+- The "40-field" parameter-table count is stale (43) in four documents.
+- curvature_limits' docstring points at an angle-dependent extension that
+  effective_curvature_axis cannot serve without the angle; the seam stays
+  as recorded under "angle-dependent bender travel".

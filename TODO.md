@@ -107,7 +107,7 @@ Roadmap order per CONTROL_FEATURES §9:
 - [ ] **429 Retry-After from real queue drain** — currently the ETA estimate when
       available, constant 30 s otherwise; revisit once campaigns land.
 - [ ] **Curvature follow-ups from PR #32** (ledger and reasons at the end of
-      `docs/PLAN-crystal-bending-landing.md`): `curvature_modes` in launch
+      `docs/CONFIGURABLE_INSTRUMENTS.md` §22.10): `curvature_modes` in launch
       metadata never says `scanned` for a scan-named axis (only the per-point
       snapshot does; `applied_curvature` carries the truth); `PATCH /parameters`
       on a module-fixed axis (PUMA rhm with an NMO) reports the requested value
