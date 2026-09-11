@@ -8098,10 +8098,14 @@ class TAVIController(QObject):
             # Store as tuple (scan_point, idx_1d) for consistency
             scan_parameter_input.append((scan_point_template[:], 0))
         
-        # Swap if only second command provided
+        # Swap if only second command provided. The relative-mode flags move
+        # with the text -- a lone command 2 becomes command 1 and must keep
+        # ITS OWN relative setting, not silently pick up command 1's (empty)
+        # one, exactly like validate_scan_launch_state's identical swap.
         if scan_command2 and not scan_command1:
             scan_command1 = scan_command2
             scan_command2 = None
+            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
         
         variable_name1 = ""
         variable_name2 = ""
