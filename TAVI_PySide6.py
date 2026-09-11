@@ -2746,11 +2746,9 @@ class TAVIController(QObject):
                 axis for axis in ('rhm', 'rvm', 'rha', 'rva')
                 if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS
             }
-            for cmd in (vals.get('scan_command1'), vals.get('scan_command2')):
-                cmd = (cmd or "").strip()
-                if not cmd:
-                    continue
-                requested_axes.discard(self.normalize_scan_variable(cmd.split()[0]))
+            requested_axes -= self._scan_named_curvature_axes(
+                vals.get('scan_command1'), vals.get('scan_command2')
+            )
             if requested_axes:
                 try:
                     ideal = self._ideal_bending_from_modules(
@@ -2769,14 +2767,24 @@ class TAVIController(QObject):
         # ``_held_curvature_issues`` runs the identical check on the
         # equivalent widgets, via the same ``curvature_command_error``, so an
         # operator and an API client see the same sentence for the same
-        # out-of-travel value.
+        # out-of-travel value. An axis a non-empty scan command names is
+        # skipped -- ``_scan_named_curvature_axes``, shared with the GUI
+        # check -- because that axis is about to be promoted to SCANNED and
+        # this HELD value is not what the scan will actually run with (D21):
+        # a patched rhm=1.0 alongside a legal absolute "rhm 3.0 4.0 0.5"
+        # must not be refused for the 1.0 the scan overrides at every point.
         from instruments.tas_runtime import curvature_command_error
 
         curvature_axis_specs = self._curvature_axis_specs(
             vals['monocris'], vals['anacris'], modules=vals['modules']
         )
+        scan_named_axes = self._scan_named_curvature_axes(
+            vals.get('scan_command1'), vals.get('scan_command2')
+        )
         for axis in ('rhm', 'rvm', 'rha', 'rva'):
             if vals['curvature_modes'][axis] != CurvatureMode.HELD:
+                continue
+            if axis in scan_named_axes:
                 continue
             axis_spec = curvature_axis_specs.get(axis)
             if axis_spec is None:
@@ -4017,19 +4025,46 @@ class TAVIController(QObject):
                     and not axis_specs[axis][0].focusing_known)
         }
 
-    def _held_curvature_issues(self, monocris, anacris):
+    def _scan_named_curvature_axes(self, cmd1, cmd2):
+        """{axis} named by either scan command's first token, normalized.
+
+        Shared by ``_held_curvature_issues`` (GUI) and
+        ``build_api_launch_state``'s HELD loop (API): a scan command that
+        names a curvature axis is about to promote it to SCANNED --
+        ``compute_scan_snapshot`` drives it point by point -- so a HELD
+        refusal on that axis's CURRENT field/patch value would refuse a
+        number the scan never actually uses. An unlocked rhm field at 1.0
+        (below a driven axis's declared minimum) plus a legal absolute
+        "rhm 3.0 4.0 0.5" must not be refused for the 1.0 the scan
+        overrides at every point.
+        """
+        named = set()
+        for cmd in (cmd1, cmd2):
+            cmd = (cmd or "").strip()
+            if not cmd:
+                continue
+            var = self.normalize_scan_variable(cmd.split()[0])
+            if var:
+                named.add(var.lower())
+        return named
+
+    def _held_curvature_issues(self, monocris, anacris, scan_named_axes=None):
         """Hard-refusal messages for a HELD curvature radius, straight from
         the instrument-dock widgets.
 
         Only an axis the operator actually commanded is checked -- one whose
         Ideal lock is off, i.e. HELD, not AUTOFOCUS (``is_bending_locked``
         mirrors the same read ``get_gui_values`` uses to set
-        ``curvature_modes``). Refusing an AUTOFOCUS ideal would break a
-        legitimate scan whose optimum leaves the bender's reach; nobody chose
-        that number, so there is nothing to refuse. Runs the identical
-        ``curvature_command_error`` check ``build_api_launch_state`` runs on a
-        patched value, so an operator and an API client see the same sentence
-        for the same out-of-travel value.
+        ``curvature_modes``) -- AND not named by a non-empty scan command
+        (``scan_named_axes``, from ``_scan_named_curvature_axes``): that axis
+        is about to be promoted to SCANNED, so its current field value is not
+        what the scan will actually run with (D21). Refusing an AUTOFOCUS
+        ideal would break a legitimate scan whose optimum leaves the
+        bender's reach; nobody chose that number, so there is nothing to
+        refuse. Runs the identical ``curvature_command_error`` check
+        ``build_api_launch_state`` runs on a patched value, so an operator
+        and an API client see the same sentence for the same out-of-travel
+        value.
         """
         from instruments.tas_runtime import curvature_command_error
 
@@ -4041,9 +4076,10 @@ class TAVIController(QObject):
         curvature_axis_specs = self._curvature_axis_specs(
             monocris, anacris, modules=idock.module_values()
         )
+        scan_named_axes = scan_named_axes or set()
         issues = []
         for axis, edit in axis_edits.items():
-            if self.is_bending_locked(axis):
+            if self.is_bending_locked(axis) or axis in scan_named_axes:
                 continue
             axis_spec = curvature_axis_specs.get(axis)
             if axis_spec is None:
@@ -6528,7 +6564,10 @@ class TAVIController(QObject):
             relative_1=relative_1, relative_2=relative_2,
             current_values=self._current_curvature_field_values(),
         )
-        hard = hard + self._held_curvature_issues(monocris, anacris)
+        scan_named_axes = self._scan_named_curvature_axes(cmd1, cmd2)
+        hard = hard + self._held_curvature_issues(
+            monocris, anacris, scan_named_axes=scan_named_axes
+        )
         return hard, soft
 
     def _current_curvature_field_values(self):
