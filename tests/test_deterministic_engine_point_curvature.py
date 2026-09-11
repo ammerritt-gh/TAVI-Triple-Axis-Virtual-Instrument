@@ -54,9 +54,9 @@ def _spy_resolution_config(ctrl):
     calls = []
     real = ctrl.instrument.resolution_config
 
-    def _wrapped(vals, q0, w):
+    def _wrapped(vals, q0, w, point_angles=None):
         calls.append(tuple(vals[axis] for axis in ("rhm", "rvm", "rha", "rva")))
-        return real(vals, q0, w)
+        return real(vals, q0, w, point_angles=point_angles)
 
     ctrl.instrument.resolution_config = _wrapped
     return calls

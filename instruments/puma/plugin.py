@@ -465,7 +465,7 @@ class PUMAPlugin:
 
         return check_point_feasibility(config, scan_mode, scan_point, vals)
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for PUMA (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript. NMO
@@ -474,4 +474,6 @@ class PUMAPlugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(puma_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            puma_descriptor(), vals, q0, w, point_angles=point_angles,
+        )

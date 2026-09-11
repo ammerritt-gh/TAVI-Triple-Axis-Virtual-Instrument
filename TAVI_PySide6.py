@@ -69,6 +69,15 @@ def _vals_with_point_curvature(vals, applied_radii):
     point_vals.update(_operator_magnitudes(applied_radii))
     return point_vals
 
+
+def _point_angles(mtt, stt, att):
+    """``point_angles`` kwarg for ``resolution_config`` -- this point's own
+    solved two-theta angles, so the resolution model reads its scattering
+    senses off the point it is describing instead of always rebuilding them
+    from the descriptor's declared (normal-branch) ``Geometry``. See
+    ``instruments/resolution_adapter.py:_axis_sense``."""
+    return {"mtt": mtt, "stt": stt, "att": att}
+
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
                                    simple_plot_scan_commands, display_existing_data,
@@ -865,8 +874,11 @@ class TaviApiBackend:
         silently overwrote the radius a crystal pins, or labelled points with
         coordinates they were not taken at (ruling 2026-09-10).
         """
+        # API scan commands are always absolute (build_api_launch_state hard-codes
+        # relative_mode_1/2 False, unlike the GUI-collected launch state) --
+        # relative_1/relative_2 default False here for that reason, not omission.
         hard, soft = controller._scan_command_issues(
-            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules")
+            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules"),
         )
         return hard if force else hard + soft
 
@@ -2490,7 +2502,10 @@ class TAVIController(QObject):
         res_fn = getattr(self.instrument, "resolution_config", None)
         if not callable(res_fn):
             return {"ok": False, "reason": "resolution not supported for this instrument"}
-        cfg = res_fn(_vals_with_point_curvature(vals, point_radii), q0, deltaE)
+        cfg = res_fn(
+            _vals_with_point_curvature(vals, point_radii), q0, deltaE,
+            point_angles=_point_angles(mtt, stt, att),
+        )
 
         from tavi.resolution import resolution
         return resolution(cfg, method=method).to_dict()
@@ -3864,13 +3879,15 @@ class TAVIController(QObject):
         modules = dock.module_values()
         fixed_axes = self._fixed_curvature_axes(monocris, anacris, modules=modules)
         curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
+        relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
+        relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
         var1, warning1 = self._validate_single_scan_command(
-            cmd1, fixed_axes, curvature_axes
+            cmd1, fixed_axes, curvature_axes, relative=relative_1
         )
         var2, warning2 = self._validate_single_scan_command(
-            cmd2, fixed_axes, curvature_axes
+            cmd2, fixed_axes, curvature_axes, relative=relative_2
         )
-        
+
         if warning1:
             self.window.simulation_dock.set_scan_command_warning(1, warning1)
         if warning2:
@@ -3999,7 +4016,7 @@ class TAVIController(QObject):
         return issues
 
     def _validate_single_scan_command(self, command: str, fixed_axes=None,
-                                      curvature_axes=None) -> tuple:
+                                      curvature_axes=None, relative=False) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
 
         ``fixed_axes`` is the {axis: crystal} mapping from
@@ -4011,6 +4028,20 @@ class TAVIController(QObject):
         outside a driven axis's declared travel is refused the same as a HELD
         value would be, via ``curvature_command_error`` -- the operator asked
         for both ends of the range, so both are checked.
+
+        ``relative`` is THIS command's own relative-mode flag (a 2D scan's two
+        commands set it independently). The literal start/end this function
+        reads are the values as typed, which are the real requested radii only
+        for an absolute command -- a relative command's real values are the
+        current radius plus these offsets, which this function is never given
+        and so cannot check. So a relative command skips the literal curvature
+        check entirely rather than compare the wrong numbers to travel: the
+        expanded manifest (``validate_scan_launch_state``'s
+        ``_curvature_violation``) is authoritative for that case, and running
+        both would refuse an in-travel relative command exactly as often as it
+        would pass an out-of-travel one -- the false-reject this same check
+        used to produce. Absolute commands are unaffected: the literal check is
+        the only feedback the operator gets while typing, so it stays hard.
 
         A returned variable of ``None`` alongside a warning is a *hard*
         rejection -- the command cannot run as written. Callers must treat it
@@ -4074,15 +4105,18 @@ class TAVIController(QObject):
         # This checks the LITERAL text (start/end as typed) and is therefore
         # only correct for an ABSOLUTE command: it gives immediate feedback
         # while typing, before any launch state exists to expand a relative
-        # offset. It is a false pass for a RELATIVE command, whose real
-        # requested values are the current radius plus these offsets, not
-        # these numbers themselves -- ``validate_scan_launch_state``'s
-        # ``_curvature_violation`` is the check that expands relative
-        # commands first and is authoritative for that case. Keep both: do
-        # not delete this one as "redundant" with the manifest check, and do
-        # not treat the manifest check as redundant with this one.
+        # offset. For a RELATIVE command these literal numbers are offsets
+        # from the current radius, not the requested radii themselves, so the
+        # check is skipped here -- comparing offsets to travel is exactly as
+        # likely to refuse a legitimate relative scan as it is to pass an
+        # illegitimate one. ``validate_scan_launch_state``'s
+        # ``_curvature_violation`` expands a relative command to its real
+        # values first and is authoritative for that case. Keep both: do not
+        # delete this one as "redundant" with the manifest check for the
+        # absolute case, and do not treat the manifest check as redundant
+        # with this one for the relative case.
         axis_spec = (curvature_axes or {}).get(var_lower)
-        if axis_spec is not None:
+        if axis_spec is not None and not relative:
             from instruments.tas_runtime import curvature_command_error
 
             curvature_axis, crystal_name = axis_spec
@@ -6422,12 +6456,18 @@ class TAVIController(QObject):
         dock = self.window.instrument_dock
         monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
         modules = dock.module_values()
-        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris, modules)
+        relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
+        relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
+        hard, soft = self._scan_command_issues(
+            cmd1, cmd2, monocris, anacris, modules,
+            relative_1=relative_1, relative_2=relative_2,
+        )
         hard = hard + self._held_curvature_issues(monocris, anacris)
         return hard, soft
 
     def _scan_command_issues(self, cmd1: str, cmd2: str,
-                             monocris=None, anacris=None, modules=None):
+                             monocris=None, anacris=None, modules=None,
+                             relative_1=False, relative_2=False):
         """(hard, soft) issue lists for two scan-command strings.
 
         Hard means the command cannot run as written -- an unknown or
@@ -6440,7 +6480,12 @@ class TAVIController(QObject):
         the crystals the scan will run with, and ``modules`` the module state
         (e.g. a nested mirror optic combo), which together decide whether a
         curvature axis is refused; the API passes the frozen request's, not
-        the GUI's.
+        the GUI's. ``relative_1``/``relative_2`` are each command's own
+        relative-mode flag (independent per command, exactly like a 2D scan's
+        two commands run under independent modes) -- see
+        ``_validate_single_scan_command`` for why a relative command's literal
+        curvature check must be suppressed rather than checked against the
+        wrong numbers.
         Returns an empty string when the commands are acceptable, or a
         newline-joined description of the blocking issues.
 
@@ -6459,9 +6504,11 @@ class TAVIController(QObject):
         soft = []
         variables = []
 
-        for label, cmd in (("Command 1", cmd1), ("Command 2", cmd2)):
+        for label, cmd, relative in (
+            ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
+        ):
             var, warning = self._validate_single_scan_command(
-                cmd, fixed_axes, curvature_axes
+                cmd, fixed_axes, curvature_axes, relative=relative
             )
             variables.append(var)
             if not warning:
@@ -7640,7 +7687,8 @@ class TAVIController(QObject):
                             for axis in ("rhm", "rvm", "rha", "rva")
                         }
                         cfg = self.instrument.resolution_config(
-                            _vals_with_point_curvature(vals, point_radii), q0, w
+                            _vals_with_point_curvature(vals, point_radii), q0, w,
+                            point_angles=_point_angles(md['mtt'], md['stt'], md['att']),
                         )
                         rr = _resolution(cfg)
                         meta_res = rr
@@ -8603,7 +8651,10 @@ class TAVIController(QObject):
                                 background_resolution = _resolution(
                                     self.instrument.resolution_config(
                                         _vals_with_point_curvature(vals, point_radii),
-                                        q0, float(deltaE)
+                                        q0, float(deltaE),
+                                        point_angles=_point_angles(
+                                            metadata['mtt'], metadata['stt'], metadata['att']
+                                        ),
                                     )
                                 )
                                 if background_needs_sigma_q:
