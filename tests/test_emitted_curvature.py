@@ -76,7 +76,19 @@ def test_api_default_curvature_halves_two_theta_and_matches_pinned_table(
             "scan_command1": "deltaE 0 1 0.5",
         })
         vals = launch["vals"]
-        rhm, rvm, rha, rva = expected
+        # MAGNITUDES, not the signed table. `vals` is the operator/API
+        # contract -- how tightly the crystal is bent, which is what an
+        # operator types and an API client sends. Which side it bends toward
+        # is instrument geometry, derived at the physical boundary where the
+        # McStas parameters are emitted (that is what the *_param assertions
+        # below pin, and they stay signed).
+        #
+        # This is not bookkeeping: tavi/resolution.py reads these same vals
+        # and applies the scattering sense ITSELF -- `monorh = radius_cm(
+        # cfg.rhm) * sm`. A signed value here gets signed twice, and the
+        # analytic resolution then describes a crystal bent the wrong way,
+        # silently, because the emitted McStas geometry is still correct.
+        rhm, rvm, rha, rva = (abs(v) for v in expected)
         assert (vals["rhm"], vals["rvm"], vals["rha"], vals["rva"]) == \
             pytest.approx((rhm, rvm, rha, rva), abs=5e-4)
 
@@ -95,7 +107,9 @@ def test_gui_ideal_bending_halves_two_theta_and_matches_pinned_table(
         ctrl.window.instrument_dock.set_ana_id(ana)
         ideal = ctrl._compute_ideal_bending_values(mtt=2 * mth, att=2 * ath)
         assert ideal is not None
-        rhm, rvm, rha, rva = expected
+        # Magnitudes, for the same reason as the API path above: this value is
+        # written straight into a widget the operator reads and edits.
+        rhm, rvm, rha, rva = (abs(v) for v in expected)
         assert (ideal["rhm"], ideal["rvm"], ideal["rha"], ideal["rva"]) == \
             pytest.approx((rhm, rvm, rha, rva), abs=5e-4)
 
@@ -265,3 +279,48 @@ def test_heusler_refusal_disables_the_ideal_button_not_a_crash():
         assert dock.rhm_ideal_button.text() == "Ideal: --"
         assert dock.rvm_ideal_button.text() == "Ideal: --"
         assert dock.rha_ideal_button.text() == "Ideal: --"
+
+
+def test_operator_surface_holds_magnitudes_while_emitted_geometry_stays_signed():
+    """The two curvature contracts, pinned together rather than apart.
+
+    A negative-branch instrument is the only place they can be told apart:
+    IN12 takes off negative at both crystals, so its emitted radii are
+    negative while everything an operator or an API client touches must stay
+    a positive magnitude.
+
+    They are asserted in one test on purpose. Five separate times in this
+    branch a rule has been enforced in one place and not its twin, and this
+    particular pair failed exactly that way: ideal_curvature returns signed
+    radii, the GUI Ideal button wrote them straight into the field, and
+    tavi/resolution.py applies the scattering sense a second time
+    (`monorh = radius_cm(cfg.rhm) * sm`). The emitted McStas geometry stayed
+    correct throughout, so nothing visible broke -- only the analytic
+    resolution, which a headless campaign consumes without ever seeing a
+    radius.
+    """
+    with _controller("in12") as ctrl:
+        d = ctrl.descriptor
+        mono, ana = d.mono_crystals[0].id, d.ana_crystals[0].id
+        launch = ctrl.build_api_launch_state({
+            "mtt": -55.834, "att": -55.834,
+            "monocris": mono, "anacris": ana,
+            "scan_command1": "deltaE 0 1 0.5",
+        })
+        vals = launch["vals"]
+
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            assert vals[axis] >= 0.0, (
+                f"{axis} reached the operator/API surface signed ({vals[axis]}); "
+                "tavi/resolution.py will apply the branch sense to it again"
+            )
+
+        # ...and the same configuration still emits a negative radius to
+        # McStas, where the curvature centre must sit on the take-off side.
+        ideal = ctrl.instrument_state.ideal_curvature(
+            mono, ana, -55.834 / 2, -55.834 / 2,
+        )
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            assert ideal[axis] < 0.0, (
+                f"{axis} lost its take-off branch sign on the physical path"
+            )

@@ -632,7 +632,7 @@ def test_known_api_field_map_keys_are_unchanged():
         'lattice_a', 'lattice_b', 'lattice_c',
         'lattice_alpha', 'lattice_beta', 'lattice_gamma',
         'kappa', 'psi', 'sample', 'monocris', 'anacris',
-        'rhm', 'rvm', 'rha', 'source_type', 'source_dE',
+        'rhm', 'rvm', 'rha', 'rva', 'source_type', 'source_dE',
         'modules', 'collimation', 'slits_mm',
         'number_neutrons', 'scan_command1', 'scan_command2', 'diagnostic_mode',
     }
