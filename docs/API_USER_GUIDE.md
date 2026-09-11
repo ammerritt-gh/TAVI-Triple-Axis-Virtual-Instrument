@@ -838,6 +838,120 @@ These are populated from the same instrument descriptor + sample library the
 theoretical-resolution adapter reads; they are absent only for an instrument that
 does not implement resolution support.
 
+**Crystal curvature.** A monochromator or analyzer crystal has up to four
+bending-radius axes: `rhm`/`rvm` (mono horizontal/vertical), `rha`/`rva`
+(analyzer horizontal/vertical). Two contracts apply, and mixing them up is the
+single easiest mistake a client can make here:
+
+- Every field you **send** (`rhm`/`rvm`/`rha`/`rva` in a `PATCH /parameters`
+  or `POST /scan` patch) is a **magnitude in metres**. `0` always means FLAT
+  and is always legal — a minimum radius bounds how tightly a bender may
+  bend, never whether it may be straight.
+- `result.applied_curvature` (below) is **signed**: which side the crystal
+  actually bent toward. Never send a value from there back as an `rhm`/etc.
+  input expecting it to mean the same thing — an input is a magnitude, an
+  output is signed geometry.
+
+*Naming a radius HOLDS that axis.* Patching `rhm`/`rvm`/`rha`/`rva` pins that
+one axis to the value you sent for the rest of the request; every axis you do
+not name stays AUTOFOCUS (recomputed from the instrument's optics before
+every point) unless a scan command names it (see below). Naming one radius
+never affects the other three — each axis's mode is independent.
+
+*Held radius vs. mechanical travel.* A HELD radius (or every value a scan
+range would actually run, absolute or relative) is checked against the
+axis's declared travel at submission, before anything runs. Out of travel is
+refused, never silently clamped, as:
+```json
+{"error": {"code": "curvature_out_of_travel",
+  "message": "rhm on the PG[002] monochromator: commanded radius 1 m is tighter than the mechanical minimum of 2 m."}}
+```
+(PUMA's `rhm` has a 2 m mechanical minimum; commanding `1` is refused.) A
+driven axis with no declared minimum/maximum refuses nothing — **IN8 and
+PANDA declare no mechanical travel on any axis**, because neither is
+published, and inventing a limit would be the defect. A **fixed** axis
+(`CurvatureAxis.driven=False` — PUMA's `rva` at a fixed 0.8 m, or PUMA's
+`rhm`/`rvm` once a nested mirror optic (NMO) module is fitted, which pins
+both to flat) accepts **only** its declared radius and refuses every other
+value, `0` included when the declared radius is nonzero:
+```json
+{"error": {"code": "curvature_out_of_travel",
+  "message": "rva on the PG[002] analyser is fixed at 0.8 m and cannot be commanded to 0.5 m."}}
+```
+
+*`curvature_modes`* (`GET /parameters` / `GET /state`) is **read-only derived
+state** — one of `"autofocus"`, `"held"`, `"scanned"` per axis. Writing it is
+refused outright, before any of the checks above run:
+```json
+{"error": {"code": "invalid_parameters", "message": "One or more fields failed",
+  "details": {"errors": {"curvature_modes": "read-only field"}}}}
+```
+It derives from what you sent, never from a separate setting: an axis you
+did not name and no scan command names is AUTOFOCUS; an axis you named a
+radius for (and no scan command names) is HELD; an axis a scan command's
+first token names is SCANNED regardless of anything else, because
+`compute_scan_snapshot` drives it point by point. An **AUTOFOCUS** axis with
+no established focusing model for the mounted crystal (IN12's Heusler
+analyzer: `rva` is driven, but its focusing law is unpublished) cannot be
+answered and is refused —
+```json
+{"error": {"code": "invalid_curvature",
+  "message": "heusler111 declares rva focusing_known=False: no established focusing model to compute an ideal radius from."}}
+```
+— *unless* the request names `rva` explicitly (HELD) or scans it (SCANNED):
+neither asks the missing optics model for an answer, so both are accepted.
+
+*`result.applied_curvature`* is the per-point record of what each point
+**actually** ran with — not what the scan launched with. Curvature stopped
+being constant across a whole scan once autofocus started tracking the
+measurement (a fixed-`Kf` scan can sweep `rhm` from e.g. 11.6 m to 15.5 m
+point to point), so `result.metadata`'s `rhm`/`rvm`/`rha`/`rva` are only the
+**launch reference the scan started from** — the number the request patched
+or the launch-time ideal — never what any individual point ran with. Shape:
+a flat list, index-parallel with `counts` (row-major for a 2D scan: index
+`iy * len(scan_values_1) + ix`, matching how `counts_grid` is addressed as
+`counts_grid[iy][ix]`), one `{"rhm": ..., "rvm": ..., "rha": ..., "rva": ...}`
+dict per point, **SIGNED** — the same convention the McStas per-point files
+and `set_crystal_bending` use. `None` at an index means that point was
+skipped or never measured, exactly like `counts`/`counts_grid` — never a
+flat `0.0` standing in for "not run". The sign is derived from **the point's
+own actual take-off angle** (`sign(sin(A1/2))` for `rhm`/`rvm`,
+`sign(sin(A4/2))` for `rha`/`rva`) — never from the instrument's declared
+scattering sense, because a direct-angle scan can legitimately put a crystal
+on the opposite kinematic branch (PANDA's declared `A4` range spans both
+signs), where the wrong sign would cost the resolution model roughly seven
+orders of magnitude. Worked example (PUMA, `Kf`-fixed 14.7 meV, H=1 K=0 L=0,
+`"scan_command1": "deltaE -3 6 3"`, 4 points; exact values from
+`tests/test_applied_curvature.py`'s
+`test_deterministic_engine_applied_curvature_tracks_each_point`): `rhm`
+differs at every point (the mono take-off tracks the sweeping `Ki` as
+`deltaE` moves) while `rha` and `rva` stay constant (`Kf`, and so the
+analyzer take-off, never moves; `rva` sits at PUMA's fixed 0.8 m) —
+```json
+"applied_curvature": [
+  {"rhm": 11.622126892276503, "rvm": 1.8048675766859756, "rha": 2.303415039562502, "rva": 0.8},
+  {"rhm": 13.027208057840836, "rvm": 1.6101992005397268, "rha": 2.303415039562502, "rva": 0.8},
+  {"rhm": 14.294840540011975, "rvm": 1.4674105626632215, "rha": 2.303415039562502, "rva": 0.8},
+  {"rhm": 15.458873902922761, "rvm": 1.3569164307649897, "rha": 2.303415039562502, "rva": 0.8}
+]
+```
+(all positive here because this scan never crosses to the opposite take-off
+branch; `result.metadata["rhm"]` for this same launch is the single launch
+reference value, unaffected by any of the four points above.)
+
+*Copying a returned result back as the next request's parameters is **not**
+an exact replay.* Three reasons: (1) `result.metadata`'s radii are the
+launch reference, not any one point's actual radii — there is no single
+number in a multi-point AUTOFOCUS/SCANNED scan that reproduces the whole
+run; (2) `curvature_modes` cannot be written, so a captured SCANNED/AUTOFOCUS
+state cannot be restored directly — naming an explicit radius from
+`applied_curvature` instead re-HOLDS that axis, which is a different mode
+than the original run had; (3) an AUTOFOCUS axis recomputes its ideal radius
+from the instrument's current optics at submission time, so the same request
+replayed after a descriptor or module-state change (a different NMO
+selection, an updated crystal declaration) legitimately produces a different
+number, not a bug.
+
 **Background block in `result.metadata`.** Every finished scan — from either
 engine, and **even when no background was planted** — carries a `background`
 object stamped by the one shared helper, so background provenance never depends
@@ -992,9 +1106,11 @@ user presses Enter, so dependent fields update automatically.
 | `psi` | number | degrees | Sample alignment offset ψ. |
 | `monocris` | string | — | Monochromator crystal id. PUMA: `"pg002"` or `"pg002_test"`. |
 | `anacris` | string | — | Analyzer crystal id. PUMA: `"pg002"`. |
-| `rhm` | number | — | Monochromator horizontal bending radius (signed). |
-| `rvm` | number | — | Monochromator vertical bending radius (signed). |
-| `rha` | number | — | Analyzer horizontal bending radius (signed). |
+| `rhm` | number | m | Monochromator horizontal bending radius, magnitude. `0` = flat. See §5 *Crystal curvature* below. |
+| `rvm` | number | m | Monochromator vertical bending radius, magnitude. `0` = flat. |
+| `rha` | number | m | Analyzer horizontal bending radius, magnitude. `0` = flat. |
+| `rva` | number | m | Analyzer vertical bending radius, magnitude. `0` = flat. |
+| `curvature_modes` | object | — | **Read-only.** `{"rhm"/"rvm"/"rha"/"rva": "autofocus"\|"held"\|"scanned"}`. Derived, never writable — see §5 *Crystal curvature*. |
 | `source_type` | string | — | Source model id. PUMA: `"Maxwellian"` or `"Mono"`. |
 | `source_dE` | number | meV | Source energy spread (only meaningful for the `"Mono"` source). |
 | `modules` | object | — | Experimental modules. See below. |
@@ -1284,6 +1400,13 @@ Additional notes:
   measurement", not zero counts.
 - **`503 gui_busy`** means the GUI thread was tied up (often a modal dialog open
   on the operator's screen). Back off a moment and retry.
+- **`rhm`/`rvm`/`rha`/`rva` are magnitudes going in, signed coming out.** A
+  value you send is a bending-radius magnitude in metres (`0` = flat); the
+  per-point radii in `result.applied_curvature` are signed by the point's
+  actual take-off branch. Copying a signed `applied_curvature` value back as
+  an input is fine numerically (inputs take `abs()`) but also **HOLDS** that
+  axis — not the same mode the original point ran in. See §5 *Crystal
+  curvature*.
 
 ---
 
