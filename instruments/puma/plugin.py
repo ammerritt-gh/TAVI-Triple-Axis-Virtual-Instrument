@@ -351,13 +351,18 @@ class PUMAPlugin:
         scan_config.V_selector_installed = modules['v_selector']
         scan_config.source_type = vals['source_type']
         scan_config.source_dE = vals['source_dE']
+        # Curvature radii are plain magnitudes here: an NMO fixing rhm/rvm
+        # flat, or a crystal's own fixed-axis/mechanical-limit policy, is
+        # resolved once via TAS_Instrument.effective_curvature_axis and
+        # enforced at the boundary every path to the instrument state
+        # crosses (TAS_Instrument.set_crystal_bending). Zeroing here too
+        # would be the exact duplicated-policy bug that boundary exists to
+        # prevent -- and would still miss a SCANNED rhm/rvm, which never
+        # passes through scan_config at all.
         scan_config.rhm = vals['rhm']
         scan_config.rvm = vals['rvm']
         scan_config.rha = vals['rha']
         scan_config.rva = vals['rva']
-        if scan_config.NMO_installed != "None":
-            scan_config.rhm = 0
-            scan_config.rvm = 0
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']

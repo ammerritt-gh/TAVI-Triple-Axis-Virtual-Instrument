@@ -506,3 +506,78 @@ def test_scan_config_passes_through_rva_regardless_of_analyser():
     assert _config("pg002", rva=ANA_FIXED_RV).rva == ANA_FIXED_RV
     assert _config(heusler, rva=0.9).rva == pytest.approx(0.9)
     assert _config(heusler, rva=0.0).rva == 0.0
+
+
+def test_heusler_rva_held_does_not_block_an_unrelated_rhm_autofocus(tmp_path):
+    """Packet slice 9, defect B, test 3: the Heusler's rva has no established
+    focusing model, but that is a per-axis fact -- an unrelated AUTOFOCUS
+    axis on the same point (rhm, a MONOCHROMATOR axis) must still track its
+    own take-off angle. Before this slice, ``ideal_curvature`` computed all
+    four axes unconditionally and raised the moment it reached rva, so this
+    exact HELD/AUTOFOCUS combination was refused outright.
+    """
+    pytest.importorskip("mcstasscript")
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    heusler = _heusler_id()
+    state = IN12Plugin().default_state()
+    state.monocris = "pg002"
+    state.anacris = heusler
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 8.288785
+    state.rva = 0.9  # the operator's HELD Heusler radius
+
+    vals = {
+        "deltaE": 0.0, "chi": 0.0,
+        "curvature_modes": {
+            "rhm": "autofocus", "rvm": "held", "rha": "held", "rva": "held",
+        },
+    }
+
+    rhm_values = []
+    rva_magnitudes = []
+    for A1 in (-55.834469, -50.0):
+        scans = [A1, 0.0, 0.0, -55.834469, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        snapshot = compute_scan_snapshot(
+            (scans, 0), 0, "angle", state, vals, str(tmp_path),
+        )
+        assert snapshot.error_flags == [], snapshot.error_flags
+        assert snapshot.metadata["curvature_modes"]["rhm"] == "autofocus"
+        assert snapshot.metadata["curvature_modes"]["rva"] == "held"
+        rhm_values.append(snapshot.metadata["rhm"])
+        rva_magnitudes.append(abs(snapshot.metadata["rva"]))
+
+    assert len({round(v, 6) for v in rhm_values}) == 2, (
+        f"rhm must track its own take-off angle across the scan; got {rhm_values}"
+    )
+    assert rva_magnitudes == pytest.approx([0.9, 0.9]), (
+        "rva must hold the operator's commanded magnitude, unmoved by "
+        f"rhm's autofocus; got {rva_magnitudes}"
+    )
+
+
+def test_heusler_rva_autofocus_is_still_refused_naming_rva(tmp_path):
+    """Packet slice 9, defect B, test 4: the fix stops the Heusler's unknown
+    rva from disabling unrelated axes -- it does NOT licence autofocusing
+    rva itself. There is still no established focusing model for it."""
+    pytest.importorskip("mcstasscript")
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    heusler = _heusler_id()
+    state = IN12Plugin().default_state()
+    state.monocris = "pg002"
+    state.anacris = heusler
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 8.288785
+
+    vals = {
+        "deltaE": 0.0, "chi": 0.0,
+        "curvature_modes": {
+            "rhm": "held", "rvm": "held", "rha": "held", "rva": "autofocus",
+        },
+    }
+    scans = [-55.834469, 0.0, 0.0, -55.834469, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    with pytest.raises(ValueError, match="rva") as excinfo:
+        compute_scan_snapshot((scans, 0), 0, "angle", state, vals, str(tmp_path))
+    assert "focusing_known" in str(excinfo.value)
