@@ -1108,9 +1108,12 @@ Key assertions per file (see §17.4 for the file list):
   the 25 descriptor parameter names.
 - **Plugin:** `isinstance(PUMAPlugin(), InstrumentPlugin)`; id/display/mcstas
   name consistency; `default_state()` matches legacy defaults and returns fresh
-  objects; `scan_config` applies the full GUI mapping (incl. `rva == 0.8`,
-  NMO ⇒ `rhm = rvm = 0`, `alpha_2` list, base not mutated, hidden `mis_omega`
-  propagates); **snapshot `params.keys()` == descriptor parameter names**;
+  objects; `scan_config` applies the full GUI mapping (`alpha_2` list, base not
+  mutated, hidden `mis_omega` propagates) and passes curvature through as
+  magnitudes — `rva == 0.8` is PUMA's PG(002) declaring that axis fixed, and
+  NMO ⇒ flat monochromator is `PUMA_Instrument.optical_radii`; neither is
+  `scan_config`'s to decide any more; **snapshot `params.keys()` == descriptor
+  parameter names**;
   `PUMARunExecutionState is RunExecutionState`; binary fallback ends with
   `PUMA_McScript.exe` and `SimpleNamespace(input_path=tmp, name="Foo")` →
   `Foo.exe`; `crystal_info` equals `mono_ana_crystals_setup`.
@@ -1461,15 +1464,22 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
   `calculate_crystal_bending` (historical name; the one shared producer today
   is `TAS_Instrument.ideal_curvature`) returned signed radii (point-source
   formulas on BOTH sides — the virtual source is a real focal point, unlike
-  PUMA's guide), and `scan_config` applies the branch sign to the GUI
-  magnitudes (rha/rva negative). Measured cost of the wrong sign: **~7 orders
-  of magnitude** in elastic peak intensity. PUMA is unaffected (all its
-  take-offs are the positive branch).
+  PUMA's guide). The sign is no longer applied per plugin: `scan_config` passes
+  magnitudes straight through, and `TAS_Instrument.set_crystal_bending` derives
+  the branch from the **actual local take-off angle** at the point being
+  measured — never from the declared scattering sense, because a direct-angle
+  scan can legitimately put a crystal on the opposite branch (PANDA's declared
+  A4 range spans both signs). Measured cost of the wrong sign: **~7 orders of
+  magnitude** in elastic peak intensity. PUMA's take-offs are all on the
+  positive branch, which is why a sign error there is invisible and why the
+  tests that guard this use IN12 or PANDA.
 - Minimal six-monitor diagnostic set; collimation slots α2/α3/α4
   (20/30/40/60′, default open); no modules (FlatCone/IMPS deferred, §14).
   PLACEHOLDER values (positions, apertures, Cu200 mosaic/r0, analyzer
-  subdivision, hvs height, single vs double PG filter, no bending clamps,
-  rva magnitude 0.31) are marked in-line in both modules. The full inventory
+  subdivision, hvs height, single vs double PG filter, no bending clamps) are
+  marked in-line in both modules. The old `rva magnitude 0.31` placeholder is
+  gone: IN8's Thermes analyser is variable double-focusing and the hardware
+  tracks it, so `rva` is declared driven and follows kf. The full inventory
   of missing/placeholder data, with provenance and a priority order for the
   next data pass, is `instruments/in8/MODEL_STATUS.md`.
 
