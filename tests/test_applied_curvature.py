@@ -108,11 +108,13 @@ def _independently_solved_curvature(ctrl, vals, H, K, L, deltaE):
     AUTOFOCUS ideal curvature -- exactly what ``compute_scan_snapshot``'s
     per-point metadata (``md``) is built from for an AUTOFOCUS axis."""
     qx, qy, qz = ctrl._hkl_to_sample_q(H, K, L, vals)
-    check_state = ctrl.instrument.default_state()
-    check_state.monocris = vals["monocris"]
-    check_state.anacris = vals["anacris"]
-    check_state.K_fixed = vals["K_fixed"]
-    check_state.fixed_E = vals["fixed_E"]
+    # Built through scan_config, the same mapping compute_resolution and the
+    # scan path use, so module state (a fitted mirror optic) reaches the
+    # solve here too; a hand-picked field subset was the D15 defect's shape.
+    check_state = ctrl.instrument.scan_config(
+        ctrl.instrument.default_state(), vals, vals.get("sample_key"),
+        ctrl.diagnostic_settings, ctrl._build_sample_mount(vals),
+    )
     angles, error_flags = check_state.calculate_angles(
         qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
         check_state.monocris, check_state.anacris,

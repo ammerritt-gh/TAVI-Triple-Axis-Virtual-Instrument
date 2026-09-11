@@ -3141,9 +3141,13 @@ class TAVIController(QObject):
         idock = self.window.instrument_dock
         monocris = idock.selected_mono_id()
         anacris = idock.selected_ana_id()
-        rva_axis, _ = self._curvature_axis_specs(monocris, anacris).get(
-            'rva', (CurvatureAxis(), '')
-        )
+        # Resolved against the LIVE module state, exactly as the four-axis
+        # sync loop in update_ideal_bending_buttons resolves its specs -- a
+        # second reading without modules would be a twin that disagrees the
+        # day a module override touches rva.
+        rva_axis, _ = self._curvature_axis_specs(
+            monocris, anacris, modules=idock.module_values()
+        ).get('rva', (CurvatureAxis(), ''))
         return rva_axis
 
     def _apply_rva_axis_policy(self, rva_axis):
