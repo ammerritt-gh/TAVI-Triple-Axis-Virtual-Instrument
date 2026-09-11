@@ -47,6 +47,28 @@ def _operator_magnitudes(ideal):
     """
     return {axis: abs(value) for axis, value in ideal.items()}
 
+
+def _vals_with_point_curvature(vals, applied_radii):
+    """Overlay one point's ACTUALLY APPLIED radii onto a copy of ``vals``.
+
+    ``resolution_config`` (``instruments/resolution_adapter.py``) reads
+    rhm/rvm/rha/rva straight out of ``vals`` as magnitudes and applies the
+    scattering sense itself. The frozen launch ``vals`` carries only the
+    operator's declared/starting radii -- never what an AUTOFOCUS axis (or a
+    scanned curvature axis) actually ran with at THIS point, which is why
+    three separate resolution-model consumers fed it the wrong geometry.
+
+    ``applied_radii`` is the SIGNED per-point dict -- snapshot metadata's
+    rhm/rvm/rha/rva (the physical boundary's output), or the equivalent
+    freshly solved for a point with no snapshot (``compute_resolution``).
+    Reuses ``_operator_magnitudes`` for the same sign strip the operator/API
+    surface already relies on, so the resolution adapter's "arrived signed"
+    guard never has cause to fire.
+    """
+    point_vals = dict(vals)
+    point_vals.update(_operator_magnitudes(applied_radii))
+    return point_vals
+
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
                                    simple_plot_scan_commands, display_existing_data,
@@ -2401,7 +2423,7 @@ class TAVIController(QObject):
         check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
         check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
         check_state.fixed_E = vals.get('fixed_E', 14.7)
-        _, error_flags = check_state.calculate_angles(
+        angles, error_flags = check_state.calculate_angles(
             qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
             check_state.monocris, check_state.anacris,
         )
@@ -2412,11 +2434,59 @@ class TAVIController(QObject):
             )
             return {"ok": False, "reason": reason}
 
+        # This request's OWN curvature, honouring each axis's mode -- there is
+        # no snapshot to read applied radii off here (unlike the scan engines
+        # above), so it is solved the same way compute_snapshot does: stamp
+        # the solved angles onto the state (set_crystal_bending signs off
+        # them), recompute AUTOFOCUS axes at THIS point's own two-theta, keep
+        # a HELD axis's operator value, and let set_crystal_bending itself
+        # pin a fixed axis to its declared radius.
+        mtt, stt, sth, saz, att = angles
+        check_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+        curvature_modes = vals.get('curvature_modes') or {}
+        radii = {}
+        autofocus_axes = []
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            radii[axis] = vals.get(axis)
+            if curvature_modes.get(axis, CurvatureMode.HELD) == CurvatureMode.AUTOFOCUS:
+                autofocus_axes.append(axis)
+        if autofocus_axes:
+            try:
+                ideal = check_state.ideal_curvature(
+                    check_state.monocris, check_state.anacris, mtt / 2, att / 2,
+                )
+            except ValueError as exc:
+                # Same refusal ideal_curvature already gives the GUI Ideal
+                # button and the API launch-state recompute (an unknown
+                # focusing model, e.g. IN12's Heusler rva) -- surfaced with
+                # the same ok:false vocabulary as the feasibility gate above,
+                # not a 500.
+                #
+                # The catch stays broad on purpose: a resolution query should
+                # degrade to a stated refusal rather than a 500, because a
+                # campaign client can act on the first and only retries the
+                # second. But broad also catches things that are not refusals
+                # at all, so it is logged. A silent catch would hide a real
+                # fault behind a perfectly reasonable-looking answer, which is
+                # the failure mode this entire branch has been chasing.
+                log.warning(
+                    "resolution refused for %s/%s at mtt=%.4g att=%.4g: %s",
+                    check_state.monocris, check_state.anacris, mtt, att, exc,
+                )
+                return {"ok": False, "reason": str(exc)}
+            for axis in autofocus_axes:
+                radii[axis] = ideal[axis]
+        check_state.set_crystal_bending(**radii)
+        point_radii = {
+            axis: getattr(check_state, axis)
+            for axis in ("rhm", "rvm", "rha", "rva")
+        }
+
         # Build the instrument's resolution config (optional plugin method).
         res_fn = getattr(self.instrument, "resolution_config", None)
         if not callable(res_fn):
             return {"ok": False, "reason": "resolution not supported for this instrument"}
-        cfg = res_fn(vals, q0, deltaE)
+        cfg = res_fn(_vals_with_point_curvature(vals, point_radii), q0, deltaE)
 
         from tavi.resolution import resolution
         return resolution(cfg, method=method).to_dict()
@@ -7445,9 +7515,18 @@ class TAVIController(QObject):
                     q0 = _background_q_magnitude(md)
 
                     # Resolution kernel for this point (cheap: one config + solve).
+                    # Uses THIS point's own applied radii (md), not the frozen
+                    # launch vals -- an AUTOFOCUS axis or a curvature scan point
+                    # runs with radii that differ point-to-point.
                     rr = None
                     try:
-                        cfg = self.instrument.resolution_config(vals, q0, w)
+                        point_radii = {
+                            axis: md[axis]
+                            for axis in ("rhm", "rvm", "rha", "rva")
+                        }
+                        cfg = self.instrument.resolution_config(
+                            _vals_with_point_curvature(vals, point_radii), q0, w
+                        )
                         rr = _resolution(cfg)
                         meta_res = rr
                     except Exception as exc:
@@ -8378,9 +8457,17 @@ class TAVIController(QObject):
                             try:
                                 from tavi.deterministic_engine import marginal_sigma as _marginal_sigma
                                 from tavi.resolution import resolution as _resolution
+                                # THIS point's own applied radii (metadata), not
+                                # the frozen launch vals -- see the deterministic
+                                # engine's identical fix above.
+                                point_radii = {
+                                    axis: metadata[axis]
+                                    for axis in ("rhm", "rvm", "rha", "rva")
+                                }
                                 background_resolution = _resolution(
                                     self.instrument.resolution_config(
-                                        vals, q0, float(deltaE)
+                                        _vals_with_point_curvature(vals, point_radii),
+                                        q0, float(deltaE)
                                     )
                                 )
                                 if background_needs_sigma_q:
