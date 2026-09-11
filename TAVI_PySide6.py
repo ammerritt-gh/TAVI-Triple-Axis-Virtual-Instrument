@@ -877,8 +877,13 @@ class TaviApiBackend:
         # API scan commands are always absolute (build_api_launch_state hard-codes
         # relative_mode_1/2 False, unlike the GUI-collected launch state) --
         # relative_1/relative_2 default False here for that reason, not omission.
+        # current_values still passes vals' curvature radii through: a future
+        # relative API request would need them, and there is no separate
+        # "widget-free" reading to diverge from the GUI's.
+        current_values = {axis: vals.get(axis) for axis in ("rhm", "rvm", "rha", "rva")}
         hard, soft = controller._scan_command_issues(
             cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules"),
+            current_values=current_values,
         )
         return hard if force else hard + soft
 
@@ -3899,11 +3904,14 @@ class TAVIController(QObject):
         curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
         relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
         relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
+        current_values = self._current_curvature_field_values()
         var1, warning1 = self._validate_single_scan_command(
-            cmd1, fixed_axes, curvature_axes, relative=relative_1
+            cmd1, fixed_axes, curvature_axes, relative=relative_1,
+            current_values=current_values,
         )
         var2, warning2 = self._validate_single_scan_command(
-            cmd2, fixed_axes, curvature_axes, relative=relative_2
+            cmd2, fixed_axes, curvature_axes, relative=relative_2,
+            current_values=current_values,
         )
 
         if warning1:
@@ -4058,7 +4066,8 @@ class TAVIController(QObject):
         return issues
 
     def _validate_single_scan_command(self, command: str, fixed_axes=None,
-                                      curvature_axes=None, relative=False) -> tuple:
+                                      curvature_axes=None, relative=False,
+                                      current_values=None) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
 
         ``fixed_axes`` is the {axis: crystal} mapping from
@@ -4068,22 +4077,21 @@ class TAVIController(QObject):
         ``_curvature_axis_specs`` for the same crystals; omitted means no scan
         range is checked against mechanical travel. A commanded scan endpoint
         outside a driven axis's declared travel is refused the same as a HELD
-        value would be, via ``curvature_command_error`` -- the operator asked
-        for both ends of the range, so both are checked.
+        value would be, via ``curvature_scan_error`` -- the operator asked for
+        the whole range, so every value it expands to is checked, not just the
+        two endpoints (an absolute ``"rhm 0 2 1"`` on an axis with a 2.0 m
+        declared minimum has legal endpoints and an illegal interior point at
+        1.0 m).
 
         ``relative`` is THIS command's own relative-mode flag (a 2D scan's two
-        commands set it independently). The literal start/end this function
-        reads are the values as typed, which are the real requested radii only
-        for an absolute command -- a relative command's real values are the
-        current radius plus these offsets, which this function is never given
-        and so cannot check. So a relative command skips the literal curvature
-        check entirely rather than compare the wrong numbers to travel: the
-        expanded manifest (``validate_scan_launch_state``'s
-        ``_curvature_violation``) is authoritative for that case, and running
-        both would refuse an in-travel relative command exactly as often as it
-        would pass an out-of-travel one -- the false-reject this same check
-        used to produce. Absolute commands are unaffected: the literal check is
-        the only feedback the operator gets while typing, so it stays hard.
+        commands set it independently). For a relative command the literal
+        start/end are offsets from the current radius, not the requested radii
+        themselves; ``current_values`` (an {axis: float-or-None} mapping of the
+        launch's current curvature values, from the GUI's instrument-dock
+        fields or the API's frozen ``vals``) supplies the base a relative
+        command is expanded against. A relative command on an axis whose
+        current value is missing or non-numeric is a hard issue naming the
+        field -- there is no base to expand the offsets against.
 
         A returned variable of ``None`` alongside a warning is a *hard*
         rejection -- the command cannot run as written. Callers must treat it
@@ -4141,33 +4149,29 @@ class TAVIController(QObject):
             return (None, "Invalid numbers. Check start, end, and step values.")
 
         # A commanded scan range on a driven curvature axis is refused, not
-        # clamped, when either endpoint falls outside its declared mechanical
-        # travel -- the operator wrote both numbers deliberately.
-        #
-        # This checks the LITERAL text (start/end as typed) and is therefore
-        # only correct for an ABSOLUTE command: it gives immediate feedback
-        # while typing, before any launch state exists to expand a relative
-        # offset. For a RELATIVE command these literal numbers are offsets
-        # from the current radius, not the requested radii themselves, so the
-        # check is skipped here -- comparing offsets to travel is exactly as
-        # likely to refuse a legitimate relative scan as it is to pass an
-        # illegitimate one. ``validate_scan_launch_state``'s
-        # ``_curvature_violation`` expands a relative command to its real
-        # values first and is authoritative for that case. Keep both: do not
-        # delete this one as "redundant" with the manifest check for the
-        # absolute case, and do not treat the manifest check as redundant
-        # with this one for the relative case.
+        # clamped, when any value it expands to falls outside its declared
+        # mechanical travel -- the operator wrote the range deliberately.
+        # Absolute and relative commands are both checked here now: a
+        # relative command's real requested radii are the current value plus
+        # every offset ``parse_scan_steps`` would produce, which needs a base
+        # value from ``current_values``.
         axis_spec = (curvature_axes or {}).get(var_lower)
-        if axis_spec is not None and not relative:
-            from instruments.tas_runtime import curvature_command_error
-
+        if axis_spec is not None:
             curvature_axis, crystal_name = axis_spec
-            for endpoint in (start, end):
-                error = curvature_command_error(
-                    var_lower, endpoint, curvature_axis, crystal_name
-                )
-                if error:
-                    return (None, error)
+            base_value = None
+            if relative:
+                base_value = (current_values or {}).get(var_lower)
+                if base_value is None:
+                    return (None, f"'{var_name}' is a relative curvature scan "
+                                  f"but its current value is not numeric.")
+            from instruments.tas_runtime import curvature_scan_error
+
+            error = curvature_scan_error(
+                var_lower, start, end, step, relative, base_value,
+                curvature_axis, crystal_name,
+            )
+            if error:
+                return (None, error)
 
         # Check for zero step
         if step == 0:
@@ -6522,13 +6526,34 @@ class TAVIController(QObject):
         hard, soft = self._scan_command_issues(
             cmd1, cmd2, monocris, anacris, modules,
             relative_1=relative_1, relative_2=relative_2,
+            current_values=self._current_curvature_field_values(),
         )
         hard = hard + self._held_curvature_issues(monocris, anacris)
         return hard, soft
 
+    def _current_curvature_field_values(self):
+        """{axis: float-or-None} read straight from the instrument-dock
+        curvature fields -- the base a relative scan command expands
+        against. ``None`` for a field that does not parse as a number,
+        matching ``_held_curvature_issues``'s own read of the same widgets.
+        """
+        idock = self.window.instrument_dock
+        axis_edits = {
+            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit,
+            "rha": idock.rha_edit, "rva": idock.rva_edit,
+        }
+        values = {}
+        for axis, edit in axis_edits.items():
+            try:
+                values[axis] = float(edit.text() or 0)
+            except ValueError:
+                values[axis] = None
+        return values
+
     def _scan_command_issues(self, cmd1: str, cmd2: str,
                              monocris=None, anacris=None, modules=None,
-                             relative_1=False, relative_2=False):
+                             relative_1=False, relative_2=False,
+                             current_values=None):
         """(hard, soft) issue lists for two scan-command strings.
 
         Hard means the command cannot run as written -- an unknown or
@@ -6543,10 +6568,10 @@ class TAVIController(QObject):
         curvature axis is refused; the API passes the frozen request's, not
         the GUI's. ``relative_1``/``relative_2`` are each command's own
         relative-mode flag (independent per command, exactly like a 2D scan's
-        two commands run under independent modes) -- see
-        ``_validate_single_scan_command`` for why a relative command's literal
-        curvature check must be suppressed rather than checked against the
-        wrong numbers.
+        two commands run under independent modes); ``current_values`` is the
+        {axis: float-or-None} mapping of the launch's current curvature
+        values a relative command expands against -- see
+        ``_validate_single_scan_command``.
         Returns an empty string when the commands are acceptable, or a
         newline-joined description of the blocking issues.
 
@@ -6569,7 +6594,8 @@ class TAVIController(QObject):
             ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
         ):
             var, warning = self._validate_single_scan_command(
-                cmd, fixed_axes, curvature_axes, relative=relative
+                cmd, fixed_axes, curvature_axes, relative=relative,
+                current_values=current_values,
             )
             variables.append(var)
             if not warning:
@@ -7055,16 +7081,13 @@ class TAVIController(QObject):
         relative_mode_1 = launch_state.get('relative_mode_1', False)
         relative_mode_2 = launch_state.get('relative_mode_2', False)
 
-        # A relative command's real requested values only exist after
-        # ``_expand`` adds the current radius -- ``_validate_single_scan_command``
-        # checks the literal command text and so only ever sees the offsets
-        # (e.g. "-2.4 -2.0"), which can look inside travel while the expanded
-        # values ("0.1 0.5") are not. That earlier check stays authoritative
-        # for the absolute case (immediate feedback while typing, before a
-        # launch state exists to expand); this is the one that is authoritative
-        # for the relative case, because it is the only check that ever sees
-        # the values a relative scan will actually command.
-        from instruments.tas_runtime import curvature_command_error
+        # ``values`` here is one point's already-expanded values (``_expand``
+        # below has already added the current radius for a relative command),
+        # so each is checked as a single-value "range" (start == end) through
+        # the same ``curvature_scan_error`` ``_validate_single_scan_command``
+        # calls on the whole command text -- one shared primitive for both,
+        # rather than a second copy of the travel comparison here.
+        from instruments.tas_runtime import curvature_scan_error
 
         curvature_axes = self._curvature_axis_specs(
             vals.get('monocris'), vals.get('anacris'), modules=vals.get('modules')
@@ -7076,7 +7099,9 @@ class TAVIController(QObject):
                 if axis_spec is None:
                     continue
                 curvature_axis, crystal_name = axis_spec
-                error = curvature_command_error(var, val, curvature_axis, crystal_name)
+                error = curvature_scan_error(
+                    var, val, val, 1.0, False, None, curvature_axis, crystal_name,
+                )
                 if error:
                     return error
             return None

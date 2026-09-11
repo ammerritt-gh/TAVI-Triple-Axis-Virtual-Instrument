@@ -79,7 +79,8 @@ class _StubController:
             "relative_mode_1": False, "relative_mode_2": False,
         }
 
-    def _scan_command_issues(self, c1, c2, monocris=None, anacris=None, modules=None):
+    def _scan_command_issues(self, c1, c2, monocris=None, anacris=None, modules=None,
+                             relative_1=False, relative_2=False, current_values=None):
         return [], []  # grammar OK
 
     def _count_scan_points(self, c1, c2):
