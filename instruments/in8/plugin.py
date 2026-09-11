@@ -289,18 +289,16 @@ class IN8Plugin:
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
-        # Curvature radii are signed by the scattering branch: the curvature
-        # center must sit on the take-off side, and IN8's analyzer take-off is
-        # the negative branch (sense_ana = -1). The GUI carries magnitudes;
-        # the branch sign is instrument physics, applied here. (Wrong sign =
-        # ~7 orders of magnitude peak loss; measured in the Phase-4 smoke.)
-        scan_config.rhm = abs(vals['rhm'])       # mono take-off: +1 branch
-        scan_config.rvm = abs(vals['rvm'])
-        scan_config.rha = -abs(vals['rha'])      # analyzer take-off: -1 branch
-        # PLACEHOLDER magnitude: vertical analyzer curvature held at the
-        # point-source value for kf = 2.662 (Thermes is variable
-        # double-focusing).
-        scan_config.rva = -0.31
+        # Curvature radii are plain magnitudes here: the branch sign (a
+        # crystal's take-off side) and any fixed-axis/mechanical-limit policy
+        # are enforced once, in TAS_Instrument.set_crystal_bending, the
+        # boundary every path to the instrument state crosses. Signing here
+        # too would be the exact duplicated-policy bug that boundary exists
+        # to prevent.
+        scan_config.rhm = vals['rhm']
+        scan_config.rvm = vals['rvm']
+        scan_config.rha = vals['rha']
+        scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])

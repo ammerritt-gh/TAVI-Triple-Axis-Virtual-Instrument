@@ -4,6 +4,7 @@ import os
 import shutil
 import json
 import hashlib
+import logging
 import time
 import datetime
 import copy
@@ -17,6 +18,8 @@ from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
 from instruments.contract import DEFAULT_MPI_COUNT, PrepFailure, RunExecutionState
+
+log = logging.getLogger(__name__)
 
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
@@ -2221,12 +2224,40 @@ class TAVIController(QObject):
     def get_gui_values(self):
         """Helper to get all GUI values as a dict."""
         try:
+            mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
+            att = float(self.window.instrument_dock.att_edit.text() or 0)
+            monocris = self.window.instrument_dock.selected_mono_id()
+            anacris = self.window.instrument_dock.selected_ana_id()
+            modules = self.window.instrument_dock.module_values()
+            # rva has no GUI widget (nothing drives it directly), so it is
+            # always sourced from the producer: the declared fixed radius for
+            # a fixed axis, the point-source ideal for a driven one. A
+            # degenerate geometry or a crystal with no established focusing
+            # model for this axis (IN12's Heusler) falls back to flat, the
+            # neutral choice absent a real value.
+            try:
+                rva = self.instrument_state.ideal_curvature(
+                    monocris, anacris, mtt / 2, att / 2, modules=modules,
+                )['rva']
+            except ZeroDivisionError:
+                # Degenerate geometry: no take-off, so no focus to compute.
+                rva = 0.0
+            except ValueError as exc:
+                # The analyser declares no established focusing model for this
+                # axis (IN12's Heusler). Flat is what this axis has always got
+                # when unset, so the value does not change -- but it is a real
+                # modelling gap, not a neutral default, and it must not reach
+                # a simulation unannounced.
+                log.warning(
+                    "rva falls back to flat for analyser %r: %s", anacris, exc
+                )
+                rva = 0.0
             return {
-                'mtt': float(self.window.instrument_dock.mtt_edit.text() or 0),
+                'mtt': mtt,
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
                 'chi': float(self.window.instrument_dock.chi_edit.text() or 0),
-                'att': float(self.window.instrument_dock.att_edit.text() or 0),
+                'att': att,
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
                 'Kf': float(self.window.instrument_dock.Kf_edit.text() or 0),
@@ -2252,16 +2283,17 @@ class TAVIController(QObject):
                 # to key None internally but surfaces to the API as "none" so it
                 # round-trips through apply_parameters/isolation restore.
                 'sample': self.window.sample_dock.get_selected_sample_key() or "none",
-                'monocris': self.window.instrument_dock.selected_mono_id(),
-                'anacris': self.window.instrument_dock.selected_ana_id(),
+                'monocris': monocris,
+                'anacris': anacris,
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
                 'rvm': float(self.window.instrument_dock.rvm_edit.text() or 0),
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
+                'rva': rva,
                 'source_type': self.window.instrument_dock.selected_source_id(),
                 'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
                 # Descriptor-driven categories (the plugin's scan_config owns the
                 # mapping from these containers to its instrument state fields).
-                'modules': self.window.instrument_dock.module_values(),
+                'modules': modules,
                 'collimation': self.window.instrument_dock.collimation_values(),
                 'slits_mm': self.window.instrument_dock.slit_values_mm(),
                 'number_neutrons': self.window.simulation_dock.get_number_neutrons(),
@@ -2560,17 +2592,29 @@ class TAVIController(QObject):
                 vals['qx'], vals['qy'], vals['qz'], vals
             )
 
-        # Recompute ideal bending when mtt/att/modules were patched and the
-        # caller did not pin the radii explicitly.
-        if (any(k in patched for k in ('mtt', 'att', 'modules'))
-                and not any(k in patched for k in ('rhm', 'rvm', 'rha'))):
-            ideal = self._ideal_bending_from_modules(
-                vals['mtt'], vals['att'], vals['modules']
-            )
+        # Recompute ideal bending when mtt/att/modules/monocris/anacris were
+        # patched and the caller did not pin the radii explicitly. Selecting
+        # a different crystal changes the curvature policy (a fixed axis, a
+        # different travel), not just the angle, so it retriggers this too.
+        if (any(k in patched for k in
+                ('mtt', 'att', 'modules', 'monocris', 'anacris'))
+                # 'rva' is listed with its siblings although no API request
+                # field sets it yet: pinning one radius has always pinned all
+                # four, and the slice that makes rva settable must not have to
+                # remember to come back here.
+                and not any(k in patched for k in ('rhm', 'rvm', 'rha', 'rva'))):
+            try:
+                ideal = self._ideal_bending_from_modules(
+                    vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
+                    vals['modules'],
+                )
+            except ValueError as exc:
+                raise ApiError(400, "invalid_curvature", str(exc))
             if ideal:
                 vals['rhm'] = ideal['rhm']
                 vals['rvm'] = ideal['rvm']
                 vals['rha'] = ideal['rha']
+                vals['rva'] = ideal['rva']
 
         # At least one non-empty scan command is required (a lone command 2 is
         # swapped into command 1 downstream, so either satisfies the check).
@@ -2829,68 +2873,43 @@ class TAVIController(QObject):
             self.update_ideal_bending_buttons()
 
     def _compute_ideal_bending_values(self, mtt=None, att=None):
-        """Compute ideal absolute bending radii from current angles.
-        
-        When NMO (Nested Mirror Optic) is installed, the ideal monochromator
-        bending is flat (0), since the NMO provides the focusing.
-        
-        For the monochromator: Uses parallel beam formula since the source is
-        effectively at infinity (neutron guide produces quasi-parallel beam).
-        Per McStas Monochromator_curved documentation:
-            RV = 2*L*sin(theta)
-            RH = 2*L/sin(theta)
-        where L = L2 (monochromator to sample distance) and theta is Bragg angle.
-        
-        For the analyzer: Uses point-source formula since the sample is a real
-        point source at L3, focusing to the detector at L4.
+        """Ideal absolute bending radii for the crystals selected in the GUI.
+
+        Thin caller of the shared producer (``TAS_Instrument.ideal_curvature``),
+        naming the crystals the GUI actually has selected and the NMO state
+        from its combo -- never a live-widget read anywhere else, so a
+        hypothetical (mtt, att) passed in by a caller still gets today's real
+        crystal selection. Returns None for a degenerate geometry (zero
+        take-off angle) or a crystal that declares this axis's focusing model
+        unknown (IN12's Heusler ``rva``): the caller already treats None as
+        "show Ideal: --", so a refusal degrades exactly like a degenerate
+        angle always has.
         """
         try:
             if mtt is None:
                 mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
             if att is None:
                 att = float(self.window.instrument_dock.att_edit.text() or 0)
-
-            # Check if NMO is installed - if so, ideal monochromator bending is flat (0)
-            nmo_combo = getattr(self.window.instrument_dock, "nmo_combo", None)
-            nmo_installed = nmo_combo.currentText() if nmo_combo is not None else "None"
-            if nmo_installed != "None":
-                # NMO provides focusing, so ideal monochromator bending is flat
-                rhm = 0
-                rvm = 0
-            else:
-                # Use theta (mtt/2) not 2-theta (mtt) per McStas documentation:
-                # RV = 2*L*sin(theta) where theta is the Bragg angle
-                sin_m = math.sin(math.radians(mtt / 2))
-
-                if sin_m == 0:
-                    return None
-
-                # Parallel beam formula: source effectively at infinity (guide output)
-                # Focus from monochromator to sample at distance L2
-                rhm = 2 * self.instrument_state.L2 / sin_m
-                rvm = 2 * self.instrument_state.L2 * sin_m
-
-                if rhm < 2.0:
-                    rhm = 2.0
-                if rvm < 0.5:
-                    rvm = 0.5
-
-            # Analyzer: point-source formula (sample is real point source)
-            denom_a = (1 / self.instrument_state.L3 + 1 / self.instrument_state.L4)
-            # Use theta (att/2) not 2-theta (att) per McStas documentation
-            sin_a = math.sin(math.radians(att / 2))
-
-            if denom_a == 0 or sin_a == 0:
-                return None
-
-            rha = 2 / sin_a / denom_a
-            rva = 0.8
-
-            if rha < 2.0:
-                rha = 2.0
-
-            return {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+            modules = self.window.instrument_dock.module_values()
+            monocris = self.window.instrument_dock.selected_mono_id()
+            anacris = self.window.instrument_dock.selected_ana_id()
+            return self.instrument_state.ideal_curvature(
+                monocris, anacris, mtt / 2, att / 2, modules=modules,
+            )
+        except (ValueError, ZeroDivisionError) as exc:
+            # Expected refusals: an unknown focusing model, or no take-off
+            # angle to focus at. The caller shows "Ideal: --".
+            log.info("ideal bending unavailable (%s/%s): %s",
+                     monocris, anacris, exc)
+            return None
         except Exception:
+            # Anything else is a wiring bug, not a refusal. It still degrades
+            # to "Ideal: --" rather than taking the window down mid-session,
+            # but it is never silent -- this catch used to hide the traceback
+            # entirely, and it now guards a call into the instrument model
+            # rather than a few lines of arithmetic.
+            log.exception("ideal bending raised unexpectedly (%s/%s)",
+                          monocris, anacris)
             return None
 
     def update_ideal_bending_buttons(self):
@@ -3836,7 +3855,7 @@ class TAVIController(QObject):
         elif var == 'rha':
             return vals.get('rha', 0)
         elif var == 'rva':
-            return vals.get('rva', 0.8)
+            return vals.get('rva', 0)
         
         return 0
     
@@ -4048,7 +4067,7 @@ class TAVIController(QObject):
         # Build scan point template
         scan_point_template = [
             vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
-            vals['rhm'], vals['rvm'], vals['rha'], vals.get('rva', 0.8),
+            vals['rhm'], vals['rvm'], vals['rha'], vals['rva'],
             0, vals.get('kappa', 0), vals.get('psi', 0),
             vals.get('H', 0), vals.get('K', 0), vals.get('L', 0)
         ]
@@ -5134,38 +5153,26 @@ class TAVIController(QObject):
         else:
             self.set_default_parameters()
     
-    def _ideal_bending_from_modules(self, mtt, att, modules):
-        """Widget-free ideal bending radii (mirrors _compute_ideal_bending_values).
+    def _ideal_bending_from_modules(self, mtt, att, monocris, anacris, modules):
+        """Widget-free ideal bending radii for the NAMED crystals.
 
-        The NMO installed-check reads ``modules['nmo']`` instead of the GUI combo
-        so the API launch path never touches widgets. Returns the same
-        ``{"rhm","rvm","rha","rva"}`` dict, or ``None`` for a degenerate geometry.
+        Thin caller of the shared producer, mirroring
+        ``_compute_ideal_bending_values`` minus every widget read: crystals
+        come from the caller's frozen values (a patched API request), never
+        from live GUI selection, which can name a different pair.
+
+        Returns None for a degenerate geometry (zero take-off angle) -- the
+        caller leaves the radii at their prior value, same as before. A
+        crystal whose focusing model is unknown for a driven axis (IN12's
+        Heusler ``rva``) is NOT swallowed: ``ValueError`` propagates so the
+        API path (``build_api_launch_state``) can surface it as a 400
+        instead of silently keeping a stale radius.
         """
         try:
-            nmo = modules.get("nmo", "None") if isinstance(modules, dict) else "None"
-            if nmo not in (None, "None", False):
-                rhm = 0
-                rvm = 0
-            else:
-                sin_m = math.sin(math.radians(mtt / 2))
-                if sin_m == 0:
-                    return None
-                rhm = 2 * self.instrument_state.L2 / sin_m
-                rvm = 2 * self.instrument_state.L2 * sin_m
-                if rhm < 2.0:
-                    rhm = 2.0
-                if rvm < 0.5:
-                    rvm = 0.5
-            denom_a = (1 / self.instrument_state.L3 + 1 / self.instrument_state.L4)
-            sin_a = math.sin(math.radians(att / 2))
-            if denom_a == 0 or sin_a == 0:
-                return None
-            rha = 2 / sin_a / denom_a
-            rva = 0.8
-            if rha < 2.0:
-                rha = 2.0
-            return {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
-        except Exception:
+            return self.instrument_state.ideal_curvature(
+                monocris, anacris, mtt / 2, att / 2, modules=modules,
+            )
+        except ZeroDivisionError:
             return None
 
     def _descriptor_collimation_defaults(self):
@@ -5227,7 +5234,7 @@ class TAVIController(QObject):
             'sample': "Al_bragg" if "Al_bragg" in sample_ids else "none",
             'monocris': d.mono_crystals[0].id,
             'anacris': d.ana_crystals[0].id,
-            'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0,
+            'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0, 'rva': 0.0,
             'source_type': d.source_types[0].id,
             'source_dE': 2.0,
             'modules': modules,
@@ -5239,11 +5246,21 @@ class TAVIController(QObject):
             'diagnostic_mode': False,
         }
 
-        ideal = self._ideal_bending_from_modules(vals['mtt'], vals['att'], modules)
+        try:
+            ideal = self._ideal_bending_from_modules(
+                vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
+                modules,
+            )
+        except ValueError:
+            # The default crystals are always focusing-known; a refusal here
+            # would mean a hand-built descriptor with no valid default pair.
+            # Leave the flat fallbacks above rather than fail every request.
+            ideal = None
         if ideal:
             vals['rhm'] = ideal['rhm']
             vals['rvm'] = ideal['rvm']
             vals['rha'] = ideal['rha']
+            vals['rva'] = ideal['rva']
         return vals
 
     def set_default_parameters(self):

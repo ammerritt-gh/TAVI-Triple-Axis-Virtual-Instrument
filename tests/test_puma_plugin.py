@@ -48,6 +48,7 @@ def _gui_vals(**overrides):
         "rhm": 2.5,
         "rvm": 1.2,
         "rha": 2.5,
+        "rva": 0.8,
         "fixed_E": 14.7,
         "monocris": "pg002",
         "anacris": "pg002",

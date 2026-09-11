@@ -354,7 +354,7 @@ class PUMAPlugin:
         scan_config.rhm = vals['rhm']
         scan_config.rvm = vals['rvm']
         scan_config.rha = vals['rha']
-        scan_config.rva = 0.8
+        scan_config.rva = vals['rva']
         if scan_config.NMO_installed != "None":
             scan_config.rhm = 0
             scan_config.rvm = 0

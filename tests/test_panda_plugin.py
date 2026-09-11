@@ -95,6 +95,7 @@ def _gui_vals(**overrides):
         "rhm": 4.0,
         "rvm": 1.8,
         "rha": 1.65,
+        "rva": 0.60,
         "fixed_E": 4.978451631466585,     # kf = 1.55 A^-1
         "monocris": "pg002",
         "anacris": "pg002",
@@ -153,16 +154,18 @@ def test_scan_config_applies_gui_mapping():
     assert config.diagnostic_settings.get("Detector PSD") is True
 
 
-def test_scan_config_signs_every_radius_negative():
-    """PANDA takes off negative at BOTH crystals, so all four radii are
-    negative -- where IN8 flips only the analyzer. The GUI carries magnitudes."""
+def test_scan_config_passes_through_curvature_magnitudes_unsigned():
+    """scan_config no longer signs or fixes curvature -- that policy lives
+    once in set_crystal_bending (the boundary every path to the instrument
+    state crosses). Whatever the caller hands in comes straight through,
+    positive or already negative."""
     pytest.importorskip("mcstasscript")
     plugin = PANDAPlugin()
     config = plugin.scan_config(plugin.default_state(), _gui_vals(),
                                 "Al_bragg", {}, object())
-    assert (config.rhm, config.rvm, config.rha, config.rva) == (-4.0, -1.8, -1.65, -0.60)
+    assert (config.rhm, config.rvm, config.rha, config.rva) == (4.0, 1.8, 1.65, 0.60)
 
-    # A GUI that already carried a sign must not double-negate it.
+    # A GUI that already carried a sign passes through unchanged too.
     flipped = plugin.scan_config(plugin.default_state(),
                                  _gui_vals(rhm=-4.0, rvm=-1.8, rha=-1.65),
                                  "Al_bragg", {}, object())
