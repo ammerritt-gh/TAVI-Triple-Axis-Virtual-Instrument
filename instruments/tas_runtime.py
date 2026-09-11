@@ -7,13 +7,21 @@ feasibility checks, and point execution here.
 from __future__ import annotations
 
 import copy
+import logging
 import math
 import os
 import subprocess
 
 import numpy as np
 
-from instruments.contract import DEFAULT_MPI_COUNT, PointSnapshot, RunExecutionState
+from instruments.contract import (
+    DEFAULT_MPI_COUNT,
+    CurvatureMode,
+    PointSnapshot,
+    RunExecutionState,
+)
+from instruments.descriptor import CurvatureAxis
+from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.sample_mount import SampleMount
@@ -23,7 +31,123 @@ from tavi.tas_geometry import (
     solve_instrument_angles,
 )
 
+log = logging.getLogger(__name__)
+
 # The TAS class is a general tool for any TAS instrument
+def _clamp_curvature_magnitude(magnitude, min_m, max_m):
+    """Clamp a curvature magnitude to its declared mechanical travel.
+
+    An exact 0 is a deliberate FLAT sentinel -- an unbent crystal, which is
+    real hardware (PUMA with a nested mirror optic fitted, or any genuinely
+    flat assembly) -- and not an out-of-range radius. It is returned
+    untouched, never clamped up to a mechanical minimum. The pre-slice code
+    made the same exception at both of its own clamp sites:
+    ``calculate_crystal_bending`` gated its clamps on the caller's factor
+    being nonzero, and the GUI's Ideal button returned from its flat branch
+    before reaching clamp code at all.
+
+    Shared by the two places that clamp -- ``ideal_curvature`` producing a
+    radius and ``set_crystal_bending`` applying one -- because a rule enforced
+    in only one of them is exactly the class of bug this change exists to
+    remove. PUMA is the case that proves it: its declared 2.0 m / 0.5 m
+    monochromator minima would otherwise bend the NMO's flat monochromator
+    back up on the path that does not produce the radius but merely stores it.
+    """
+    if magnitude == 0.0:
+        return magnitude
+    if min_m is not None and magnitude < min_m:
+        return min_m
+    if max_m is not None and magnitude > max_m:
+        return max_m
+    return magnitude
+
+
+def curvature_command_error(axis, magnitude, curvature_axis, crystal_name=None):
+    """Why an explicitly commanded curvature radius cannot be honoured, or None.
+
+    The refuse-vs-clamp counterpart to ``_clamp_curvature_magnitude``: an
+    AUTOFOCUS ideal is a suggestion nobody chose, so it keeps being clamped by
+    that helper; a HELD radius or a scan-range endpoint is something a person
+    or an API client explicitly asked for, so it is refused here instead of
+    silently rewritten into a different instrument. ``magnitude`` is the
+    signed commanded value exactly as ``set_crystal_bending`` receives it --
+    this compares ``abs(magnitude)``, mirroring both that setter's fixed-axis
+    pin (``abs(value) != magnitude``) and this module's own clamp.
+
+    An exact 0 always means FLAT, which is real hardware -- a minimum radius
+    constrains how tightly a bender may bend, not whether it may be straight.
+    It is exempt from the driven axis's mechanical min/max for the identical
+    reason ``_clamp_curvature_magnitude`` exempts it. A fixed axis has no
+    such exemption: its declared radius is the only value real hardware can
+    be at, 0 included, so a fixed axis whose declared radius is nonzero still
+    refuses a commanded 0.
+    """
+    value = abs(magnitude)
+    # Read by a person in a GUI dialog and by a campaign client in an API error
+    # body, so it is a sentence: which axis, on what, what was asked for, and
+    # what the hardware allows -- in that order, because the operator already
+    # knows what they typed and needs to find the limit.
+    where = f" on the {crystal_name}" if crystal_name else ""
+    if not curvature_axis.driven:
+        fixed = curvature_axis.fixed_radius_m
+        if fixed is not None and value != fixed:
+            return (
+                f"{axis}{where} is fixed at {fixed:.4g} m and cannot be "
+                f"commanded to {value:.4g} m."
+            )
+        return None
+    if value == 0.0:
+        return None
+    min_m, max_m = curvature_axis.min_radius_m, curvature_axis.max_radius_m
+    if min_m is not None and value < min_m:
+        return (
+            f"{axis}{where}: commanded radius {value:.4g} m is tighter than "
+            f"the mechanical minimum of {min_m:.4g} m."
+        )
+    if max_m is not None and value > max_m:
+        return (
+            f"{axis}{where}: commanded radius {value:.4g} m is flatter than "
+            f"the mechanical maximum of {max_m:.4g} m."
+        )
+    return None
+
+
+def curvature_scan_error(axis, start, end, step, relative, base_value,
+                          curvature_axis, crystal_name=None):
+    """First ``curvature_command_error`` found among every value this scan
+    command would actually run, absolute or relative alike.
+
+    Expands ``(axis, start, end, step)`` through ``parse_scan_steps`` --
+    the SAME expansion ``compute_scan_snapshot`` uses at execution -- and
+    checks EVERY resulting value, not just the two endpoints: an absolute
+    PUMA ``"rhm 0 2 1"`` has legal endpoints (0 = flat, 2.0 = the declared
+    minimum) and an illegal interior point at 1.0 m.
+
+    For a relative command the literal numbers are offsets from the current
+    radius, not the requested radii themselves; ``relative`` adds
+    ``base_value`` to every expanded value before checking, so a relative
+    command is judged against the real radii it will run -- exactly what
+    ``set_crystal_bending`` sees at execution. ``base_value`` is ignored for
+    an absolute command. A caller checking one already-resolved value (e.g.
+    a single scan point) may pass ``start == end`` with any nonzero ``step``
+    and ``relative=False``; the expansion then degenerates to that one
+    value.
+
+    Returns the first refusal message, or ``None`` when every value is
+    within the axis's declared policy.
+    """
+    from tavi.utilities import parse_scan_steps
+
+    _, values = parse_scan_steps(f"{axis} {start} {end} {step}")
+    if relative:
+        values = values + base_value
+    for value in values:
+        error = curvature_command_error(axis, float(value), curvature_axis, crystal_name)
+        if error:
+            return error
+    return None
+
+
 class TAS_Instrument:
     """The general setup of a triple-axes spectrometer (TAS) instrument, with useful functions for setting the geometries."""
     def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, A1=0, A2=0, A3=0, A4=0, saz=0, **kwargs):
@@ -66,6 +190,11 @@ class TAS_Instrument:
         self._angle_energies = None
         self.diagnostic_mode = False
         self.diagnostic_settings = {}
+        # Which axes ideal_curvature last clamped, for the caller that builds
+        # per-point metadata. Initialised here so the attribute always exists:
+        # its one reader guards with getattr, and that guard is exactly the
+        # kind of implicit contract this branch spent seven commits removing.
+        self._last_ideal_clamped_axes = ()
 
     def set_parameters(self, **kwargs):
         """Method to set general parameters."""
@@ -155,16 +284,171 @@ class TAS_Instrument:
             'effective_chi': effective_chi,
         }
 
+    def _named_crystal_specs(self):
+        """(mono_spec, ana_spec) CrystalSpec objects for the crystals installed
+        now (``self.monocris``/``self.anacris``), or None where unresolved."""
+        descriptor = self.descriptor()
+        mono_spec = find_crystal_spec(descriptor.mono_crystals, self.monocris)
+        ana_spec = find_crystal_spec(descriptor.ana_crystals, self.anacris)
+        return mono_spec, ana_spec
+
+    def effective_curvature_axis(self, axis, crystal_spec, modules=None):
+        """Resolve what ``axis`` may do RIGHT NOW: the crystal's declaration
+        folded with the current module state.
+
+        The ONE place that answers this question. Every consumer of curvature
+        policy reads it instead of the raw ``CrystalSpec.curvature`` mapping:
+        ``set_crystal_bending`` (pins a fixed axis to its resolved radius),
+        the scan-command validator (refuses a resolved-fixed axis as a scan
+        variable), and ``ideal_curvature`` (returns the resolved radius
+        instead of inventing one). A rule answered independently at two of
+        those three sites -- and not the third -- is exactly the defect this
+        method exists to remove (a nested mirror optic (NMO) fitted on PUMA
+        used to zero ``rhm``/``rvm`` in ``PUMAPlugin.scan_config`` AND in
+        ``PUMA_Instrument.optical_radii``, and a SCANNED axis went through
+        neither).
+
+        The default here returns the crystal's own declaration unmodified --
+        no installed module changes any axis's policy for a general TAS
+        instrument. PUMA overrides this: a fitted NMO does the
+        monochromator's own horizontal/vertical focusing, so ``rhm``/``rvm``
+        read as fixed at 0.0 (FLAT) for as long as it stays fitted, regardless
+        of what the mounted crystal itself declares.
+
+        ``modules`` mirrors ``optical_radii``'s override argument: ``None``
+        reads live module state off ``self``; a caller with no state object
+        (e.g. a frozen API request naming a module configuration the GUI does
+        not currently have selected) supplies it explicitly and it wins.
+        """
+        if crystal_spec is None:
+            return CurvatureAxis()
+        return crystal_spec.curvature.get(axis, CurvatureAxis())
+
     def set_crystal_bending(self, rhm=None, rvm=None, rha=None, rva=None):
-        """Method to set rhm, rvm, rha, and rva values."""
-        if rhm is not None:
-            self.rhm = rhm
-        if rvm is not None:
-            self.rvm = rvm
-        if rha is not None:
-            self.rha = rha
-        if rva is not None:
-            self.rva = rva
+        """Store bending radii, enforcing curvature policy in exactly one place.
+
+        This is the boundary BOTH paths to the instrument state cross: the
+        non-scanned config path, and the *scanned* path that bypasses
+        ``scan_config`` entirely (``compute_scan_snapshot`` reads radii out of
+        ``scans[4:8]`` and calls this setter directly). For each supplied
+        axis:
+
+          1. a fixed axis (``CurvatureAxis.driven is False``) is pinned to its
+             declared ``fixed_radius_m``, overriding whatever was supplied;
+          2. a driven axis is clamped (magnitude only) to ``curvature_limits``;
+          3. the result is signed onto the crystal's ACTUAL LOCAL take-off
+             branch -- ``sign(sin(A1/2))`` for rhm/rvm, ``sign(sin(A4/2))``
+             for rha/rva.
+
+        The sign NEVER comes from ``sense_mono``/``sense_ana``: those declare
+        the instrument's normal kinematic branch, but direct-angle mode can
+        put a crystal on the opposite one (PANDA's declared A4 range spans
+        both signs), and deriving the sign from the sense would defocus a
+        legitimate opposite-branch point by ~7 orders of magnitude.
+
+        Every substitution -- a fixed axis overriding a supplied value, a
+        clamp, a skipped sign -- is logged; nothing is corrected silently.
+
+        RESOLVED: the distinction this used to defer is settled upstream, at
+        submission -- an explicitly commanded radius (a HELD value or a scan
+        range) is refused before anything runs, via ``curvature_command_error``
+        in ``TAVI_PySide6.py``'s ``build_api_launch_state`` (API),
+        ``_held_curvature_issues`` (GUI), and ``_validate_single_scan_command``
+        (both, for a scan range). This method's own clamp remains, deliberately,
+        as the backstop for the two callers that still cannot be refused: the
+        AUTOFOCUS path (nobody chose that number, so there is no command to
+        refuse -- see ``ideal_curvature``) and any caller that reaches this
+        setter directly without going through a submission gate.
+
+        Two deliberate asymmetries with ``ideal_curvature``, both raised in
+        review and both intentional:
+
+        * this method reads the angles off ``self``, while ``ideal_curvature``
+          takes them as arguments. They answer different questions -- "apply
+          this radius at the geometry the instrument is currently in" versus
+          "what would the ideal be at these angles" -- so a caller asking the
+          producer about a hypothetical point must not have its answer signed
+          by wherever the instrument happens to be standing.
+        * the zero check is exact. ``sin(theta) == 0`` means the take-off angle
+          is precisely zero, i.e. ``set_angles`` never ran, which is the only
+          case with no branch to sign onto. A tolerance would wrongly capture a
+          legitimately small take-off angle, whose branch is perfectly well
+          defined.
+        """
+        supplied = {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+        mono_spec, ana_spec = self._named_crystal_specs()
+        crystal_by_axis = {
+            "rhm": mono_spec, "rvm": mono_spec, "rha": ana_spec, "rva": ana_spec,
+        }
+        # The Bragg angle (already halved) each axis takes its branch sign
+        # from -- rhm/rvm off the monochromator two-theta, rha/rva off the
+        # analyser two-theta.
+        theta_by_axis = {
+            "rhm": self.A1 / 2, "rvm": self.A1 / 2,
+            "rha": self.A4 / 2, "rva": self.A4 / 2,
+        }
+
+        for axis, value in supplied.items():
+            if value is None:
+                continue
+            crystal_spec = crystal_by_axis[axis]
+            if crystal_spec is None:
+                # No crystal selected, so there is no declaration to enforce:
+                # the axis reads as driven and unlimited and the supplied value
+                # is stored as given. Production never gets here -- scan_config
+                # sets monocris/anacris before compute_scan_snapshot deep-copies
+                # the state -- so this is a bare-state caller (a test, or a
+                # future one), and it must not pass silently.
+                log.warning(
+                    "set_crystal_bending: %s has no selected crystal; curvature "
+                    "policy (fixed radius, mechanical travel) cannot be enforced",
+                    axis,
+                )
+            curvature_axis = self.effective_curvature_axis(axis, crystal_spec)
+
+            if not curvature_axis.driven:
+                magnitude = curvature_axis.fixed_radius_m
+                if magnitude is not None and abs(value) != magnitude:
+                    log.info(
+                        "set_crystal_bending: %s is fixed at %.4g m on %r; "
+                        "overriding supplied %.4g m",
+                        axis, magnitude, getattr(crystal_spec, "id", None), value,
+                    )
+                if magnitude is None:
+                    magnitude = abs(value)
+            else:
+                magnitude = abs(value)
+                min_m, max_m = self.curvature_limits(
+                    axis, crystal_spec, self.A1 / 2, self.A4 / 2,
+                )
+                clamped = _clamp_curvature_magnitude(magnitude, min_m, max_m)
+                if clamped != magnitude:
+                    log.info(
+                        "set_crystal_bending: %s magnitude %.4g m clamped to "
+                        "%.4g m", axis, magnitude, clamped,
+                    )
+                magnitude = clamped
+
+            sin_theta = math.sin(math.radians(theta_by_axis[axis]))
+            if sin_theta == 0:
+                # An unsolved/infeasible point -- set_angles may not have run,
+                # so there is no real take-off branch to sign onto. Leave the
+                # existing stored radius in place rather than multiply by
+                # zero and silently emit a flat crystal.
+                log.info(
+                    "set_crystal_bending: %s take-off angle is exactly zero; "
+                    "leaving the existing radius (%s) in place",
+                    axis, getattr(self, axis, None),
+                )
+                continue
+
+            signed = math.copysign(magnitude, sin_theta)
+            if math.copysign(1.0, signed) != math.copysign(1.0, value):
+                log.info(
+                    "set_crystal_bending: %s moved from %.4g to %.4g m onto the "
+                    "take-off branch", axis, value, signed,
+                )
+            setattr(self, axis, signed)
 
     def update_diagnostic_settings(self, settings):
         """Update the diagnostic settings."""
@@ -176,6 +460,162 @@ class TAS_Instrument:
         Each instrument state resolves crystals against its own descriptor.
         """
         raise NotImplementedError("Instrument state must supply crystal_info().")
+
+    def descriptor(self):
+        """Return this instrument's InstrumentDescriptor.
+
+        The single source of truth for crystal curvature policy: crystal_info()
+        and the curvature producers below both resolve crystals against it.
+        """
+        raise NotImplementedError("Instrument state must supply descriptor().")
+
+    def curvature_object_distances(self, modules=None):
+        """{'mono_h': (L_in, L_out), 'mono_v': ..., 'ana_h': ..., 'ana_v': ...}
+
+        L_in is math.inf for a plane this instrument treats as parallel-beam.
+        The default is the general point-source pair: object distance L1/L3,
+        image distance L2/L4. An instrument whose optics split the two mono
+        planes onto different object distances (PANDA) or run one plane
+        parallel-beam (PUMA) overrides this.
+        """
+        return {
+            "mono_h": (self.L1, self.L2),
+            "mono_v": (self.L1, self.L2),
+            "ana_h": (self.L3, self.L4),
+            "ana_v": (self.L3, self.L4),
+        }
+
+    def optical_radii(self, mth, ath, modules=None):
+        """UNCONSTRAINED ideal radii (magnitudes) from this instrument's focusing law.
+
+        The default is the general point-source pair: ``RH = 2*f/sin(theta)``,
+        ``RV = 2*f*sin(theta)``, with ``f = 1/(1/L_in + 1/L_out)`` -- and
+        ``f = L_out`` when ``L_in`` is infinite (guarded explicitly rather
+        than letting ``1/inf`` do it silently). PUMA's "parallel beam" formula
+        is exactly this identity with ``L_in = inf``.
+
+        The ONE method a future instrument overrides when its optics are not
+        a point-source (L_in, L_out) pair. Knows nothing about fixedness,
+        limits or branch signs -- those are shared policy above it, in
+        ``ideal_curvature``.
+        """
+        distances = self.curvature_object_distances(modules=modules)
+        thetas = {"mono_h": mth, "mono_v": mth, "ana_h": ath, "ana_v": ath}
+        radii = {}
+        for axis_key, (l_in, l_out) in distances.items():
+            f = l_out if math.isinf(l_in) else 1.0 / (1.0 / l_in + 1.0 / l_out)
+            sin_theta = math.sin(math.radians(thetas[axis_key]))
+            if axis_key.endswith("_h"):
+                radii[axis_key] = abs(2.0 * f / sin_theta)
+            else:
+                radii[axis_key] = abs(2.0 * f * sin_theta)
+        return radii
+
+    def curvature_limits(self, axis, crystal_spec, mth, ath, modules=None):
+        """(min_m, max_m) for a driven axis; defaults to the declared scalars.
+
+        Resolved through ``effective_curvature_axis`` -- the one place a
+        crystal's declaration and the live module state are folded together
+        -- rather than reading ``CrystalSpec.curvature`` directly, which
+        would let a module or subclass override the travel elsewhere (e.g.
+        an angle-dependent bender) while this seam kept answering from the
+        raw, unresolved declaration.
+
+        A seam, not machinery: a bender whose travel depends on take-off
+        angle overrides ``effective_curvature_axis``. Nothing in the tree
+        needs that yet.
+        """
+        curvature_axis = self.effective_curvature_axis(axis, crystal_spec, modules=modules)
+        return curvature_axis.min_radius_m, curvature_axis.max_radius_m
+
+    def ideal_curvature(self, monocris, anacris, mth, ath, modules=None,
+                         requested_axes=None):
+        """Signed ideal radii for the NAMED crystals.
+
+        Crystals are named by the caller, never read from live state: the
+        GUI's live selection and a frozen API request can name different
+        ones -- the same argument ``_fixed_curvature_axes``
+        (``TAVI_PySide6.py``) already makes.
+
+        Per axis: ``effective_curvature_axis`` resolves the crystal's own
+        declaration together with the current module state (e.g. PUMA's NMO);
+        if the resolved policy is ``driven=False``, its ``fixed_radius_m`` is
+        used, otherwise ``optical_radii``'s magnitude is clamped to
+        ``curvature_limits``. Every result is then signed onto the take-off
+        branch at ``mth``/``ath``.
+
+        ``requested_axes`` is the axes the CALLER actually wants an answer
+        for -- ``None`` (the default) means all four, preserving every
+        existing caller's behaviour. An axis outside it is skipped entirely
+        (no key in the result, no exception), which is what lets a caller
+        that only cares about e.g. ``rhm`` ask for it even when a wholly
+        unrelated driven axis on the same crystal has no established
+        focusing model. A REQUESTED driven axis whose resolved policy says
+        ``focusing_known=False`` (IN12's Heusler ``rva``) is REFUSED rather
+        than given an invented radius: there is no established focusing model
+        for that assembly and falling back to flat would silently run a wrong
+        instrument -- but only when somebody actually asked for it; an
+        unrelated axis's ignorance must not disable this one.
+        """
+        descriptor = self.descriptor()
+        mono_spec = find_crystal_spec(descriptor.mono_crystals, monocris)
+        ana_spec = find_crystal_spec(descriptor.ana_crystals, anacris)
+        if mono_spec is None:
+            raise ValueError(f"Unknown monochromator crystal id {monocris!r}")
+        if ana_spec is None:
+            raise ValueError(f"Unknown analyser crystal id {anacris!r}")
+
+        radii = self.optical_radii(mth, ath, modules=modules)
+        axis_plan = (
+            ("rhm", mono_spec, "mono_h", mth),
+            ("rvm", mono_spec, "mono_v", mth),
+            ("rha", ana_spec, "ana_h", ath),
+            ("rva", ana_spec, "ana_v", ath),
+        )
+        result = {}
+        clamped_axes = []
+        for axis, crystal_spec, radii_key, theta in axis_plan:
+            if requested_axes is not None and axis not in requested_axes:
+                continue
+            curvature_axis = self.effective_curvature_axis(
+                axis, crystal_spec, modules=modules
+            )
+            if not curvature_axis.driven:
+                magnitude = curvature_axis.fixed_radius_m
+                if magnitude is None:
+                    # validate_descriptor requires fixed_radius_m iff not
+                    # driven, so this is an unvalidated or hand-built spec.
+                    # Say which axis and crystal, rather than letting copysign
+                    # raise TypeError on None three lines further down.
+                    raise ValueError(
+                        f"{crystal_spec.id} declares {axis} driven=False but "
+                        "carries no fixed_radius_m: there is no radius to hold "
+                        "it at."
+                    )
+            else:
+                if not curvature_axis.focusing_known:
+                    raise ValueError(
+                        f"{crystal_spec.id} declares {axis} "
+                        "focusing_known=False: no established focusing model "
+                        "to compute an ideal radius from."
+                    )
+                magnitude = radii[radii_key]
+                min_m, max_m = self.curvature_limits(
+                    axis, crystal_spec, mth, ath, modules=modules
+                )
+                clamped_magnitude = _clamp_curvature_magnitude(magnitude, min_m, max_m)
+                if clamped_magnitude != magnitude:
+                    clamped_axes.append(axis)
+                magnitude = clamped_magnitude
+            result[axis] = math.copysign(magnitude, math.sin(math.radians(theta)))
+        # Side channel for a caller that needs to know whether the mechanical
+        # travel actually bit this call (AUTOFOCUS provenance in
+        # ``compute_scan_snapshot``), without changing this method's
+        # axis->float return shape for its existing callers (the GUI Ideal
+        # buttons, the API default-value recompute). Same pattern as
+        # ``_solve_point_geometry``'s ``point_state._angle_energies``.
+        self._last_ideal_clamped_axes = tuple(clamped_axes)
+        return result
 
     def build_point_params(self, deltaE):
         """Return the runtime parameter dict for one instrument point."""
@@ -585,14 +1025,48 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     else:
         omega_scan = 0
 
-    if 'rhm' not in [variable_name1, variable_name2]:
-        rhm = point_state.rhm
-    if 'rvm' not in [variable_name1, variable_name2]:
-        rvm = point_state.rvm
-    if 'rha' not in [variable_name1, variable_name2]:
-        rha = point_state.rha
-    if 'rva' not in [variable_name1, variable_name2]:
-        rva = point_state.rva
+    # Per-axis curvature policy for THIS point (design record: curvature
+    # follows the measurement). A scanned axis is decided right here, from
+    # the scan variables already in hand -- the operator never declares it.
+    # Everything else defaults to HELD (today's frozen-launch-state
+    # behaviour) unless the launch state names it AUTOFOCUS.
+    radii = {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+    curvature_modes = vals.get('curvature_modes') or {}
+    scanned_axes = (variable_name1, variable_name2)
+    effective_modes = {}
+    autofocus_axes = []
+    for axis in ("rhm", "rvm", "rha", "rva"):
+        if axis in scanned_axes:
+            effective_modes[axis] = CurvatureMode.SCANNED
+            continue
+        radii[axis] = getattr(point_state, axis)
+        mode = curvature_modes.get(axis, CurvatureMode.HELD)
+        effective_modes[axis] = mode
+        # A point whose geometry did not solve must not autofocus off stale
+        # angles (mtt/att are 0.0 or a pre-error leftover here) -- leave the
+        # axis alone, exactly the degenerate-angle guard set_crystal_bending
+        # already applies to a supplied value.
+        if mode == CurvatureMode.AUTOFOCUS and not error_flags:
+            autofocus_axes.append(axis)
+
+    curvature_clamped = []
+    if autofocus_axes:
+        # This point's OWN solved two-theta, halved once into theta here --
+        # ideal_curvature takes theta, mtt/att are two-theta. requested_axes
+        # is exactly the AUTOFOCUS set: an unrelated HELD/SCANNED axis with
+        # no established focusing model (IN12's Heusler rva) must not refuse
+        # an autofocus this point never asked it to compute.
+        ideal = point_state.ideal_curvature(
+            point_state.monocris, point_state.anacris, mtt / 2, att / 2,
+            requested_axes=autofocus_axes,
+        )
+        clamped_this_point = set(getattr(point_state, "_last_ideal_clamped_axes", ()))
+        for axis in autofocus_axes:
+            radii[axis] = ideal[axis]
+            if axis in clamped_this_point:
+                curvature_clamped.append(axis)
+
+    rhm, rvm, rha, rva = radii["rhm"], radii["rvm"], radii["rha"], radii["rva"]
 
     point_state.omega = omega_scan
     point_state.chi = chi_scan
@@ -600,6 +1074,13 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     point_state.psi = psi_scan
     point_state.saz = saz
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
+    # Read the APPLIED values back off the state rather than keep the
+    # pre-setter locals: set_crystal_bending signs each radius onto the
+    # actual take-off branch (and pins a fixed axis to its declared radius),
+    # so for a scanned curvature axis the pre-setter magnitude and the
+    # emitted sign can disagree. The log line and metadata below must record
+    # what this point actually ran with.
+    rhm, rvm, rha, rva = point_state.rhm, point_state.rvm, point_state.rha, point_state.rva
 
     output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
     orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
@@ -648,6 +1129,14 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         'rvm': rvm,
         'rha': rha,
         'rva': rva,
+        # Provenance: the policy this point actually ran each axis under, and
+        # whether a mechanical limit clipped an autofocus radius -- so a
+        # headless campaign client can tell "focused" from "clamped" without
+        # a log line a human might never see.
+        'curvature_modes': {
+            axis: CurvatureMode(mode).value for axis, mode in effective_modes.items()
+        },
+        'curvature_clamped': curvature_clamped,
         'omega': omega_scan,
         'chi': chi_scan,
         'psi': psi_scan,

@@ -208,6 +208,22 @@ class InstrumentDock(BaseDockWidget):
         self.rha_ideal_button.setToolTip("Set rha to the calculated ideal value")
         focusing_layout.addWidget(self.rha_ideal_button, 1, 2)
 
+        # Beside rha, so the analyser's two axes read as a pair the way the
+        # monochromator's rhm/rvm do. Enable state (editable/disabled) and
+        # whether the Ideal button is offered at all are set per selected
+        # analyser by the controller -- rva is the one axis whose declared
+        # policy (fixed / no established focusing model / ordinary) actually
+        # differs between crystals.
+        focusing_layout.addWidget(QLabel("rva:"), 1, 3)
+        self.rva_edit = QLineEdit()
+        self.rva_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rva_edit, 1, 4)
+        self.rva_ideal_button = QPushButton("Ideal: --")
+        self.rva_ideal_button.setCheckable(True)
+        self.rva_ideal_button.setMaximumWidth(140)
+        self.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
+        focusing_layout.addWidget(self.rva_ideal_button, 1, 5)
+
         main_layout.addWidget(focusing_group)
 
         # Collimations section (rows generated from descriptor.collimation)
@@ -396,7 +412,7 @@ class InstrumentDock(BaseDockWidget):
         edits = [
             self.mtt_edit, self.stt_edit, self.omega_edit, self.chi_edit,
             self.att_edit, self.Ki_edit, self.Ei_edit, self.Kf_edit, self.Ef_edit,
-            self.rhm_edit, self.rvm_edit, self.rha_edit,
+            self.rhm_edit, self.rvm_edit, self.rha_edit, self.rva_edit,
         ]
         for widgets in self.slit_widgets.values():
             edits.extend(widgets.values())

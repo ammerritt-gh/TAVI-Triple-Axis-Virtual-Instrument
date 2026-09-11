@@ -25,6 +25,7 @@ Targets Python 3.11 syntax.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -92,6 +93,23 @@ class AxisLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class CurvatureAxis:
+    """What one curvature axis of an installed crystal assembly can do.
+
+    Magnitudes only, in metres. The branch sign is never authored here: it is
+    derived from the actual take-off angle at the point being measured.
+    """
+
+    driven: bool = True             # an actuator exists and may be commanded
+    fixed_radius_m: float | None = None   # the radius when driven is False
+    min_radius_m: float | None = None     # mechanical travel of a driven axis
+    max_radius_m: float | None = None
+    focusing_known: bool = True     # False -> no established focusing model,
+                                    # so an ideal radius may not be computed
+    provenance: str = ""            # where every number above came from
+
+
+@dataclass(frozen=True, slots=True)
 class CrystalSpec:
     """A selectable monochromator or analyser crystal.
 
@@ -99,6 +117,13 @@ class CrystalSpec:
     ``Monochromator_curved`` slab geometry PUMA needs. The optional fields default
     to ``None`` so a purely-kinematic descriptor (d-spacing only) is still valid --
     useful while IN8's slab geometry is still TODO.
+
+    A "crystal" here is the crystal together with its mount, as an installed
+    package -- operator ruling, 2026-09-11. You do not swap the crystal
+    material and keep the bending motor. This is why curvature policy belongs
+    here and not on a separate mount object; two independent reviews raised
+    the mount objection and it was closed on that ground, so it is not
+    re-litigated.
     """
 
     id: str
@@ -111,12 +136,13 @@ class CrystalSpec:
     gap: float | None = None
     mosaic: float | None = None     # arcmin (horizontal mosaic, FWHM)
     mosaic_v: float | None = None   # arcmin (vertical mosaic, FWHM); None -> use horizontal
-    # Curvature axes THIS crystal assembly holds fixed, as lowercase
-    # scan-command names: a monochromator may fix "rhm"/"rvm", an analyser
-    # "rha"/"rva". A scan over one is refused rather than silently ignored or
-    # silently honoured -- scan_config pins the value but
-    # compute_scan_snapshot reads the radii out of scans[4:8], so an accepted
-    # scan would either do nothing or quietly defeat the pin.
+    # What this crystal assembly's curvature axes can do, keyed by the
+    # existing scan-command names: a monochromator has "rhm"/"rvm", an
+    # analyser "rha"/"rva". A scan over an axis whose CurvatureAxis says
+    # driven=False is refused rather than silently ignored or silently
+    # honoured -- scan_config pins the value but compute_scan_snapshot reads
+    # the radii out of scans[4:8], so an accepted scan would either do
+    # nothing or quietly defeat the pin.
     #
     # It belongs to the crystal, not the instrument: IN12's conventional
     # PG(002) analyser has a fixed vertical focus (1998: produced by tilting
@@ -124,11 +150,42 @@ class CrystalSpec:
     # instrument has no established focusing behaviour at all. Declaring it per
     # instrument would assert something about every crystal from evidence about
     # one.
-    fixed_curvature: tuple[str, ...] = ()
+    #
+    # This is the one field of a frozen CrystalSpec whose contents are mutable:
+    # ``frozen=True`` stops the attribute being rebound, not the mapping being
+    # written into. It is NOT wrapped in a MappingProxyType, because a proxy
+    # cannot be deep-copied and launch state crosses the job-queue seam by
+    # ``copy.deepcopy`` (instruments/contract.py) -- trading a theoretical
+    # mutation for a real crash at the seam is a bad trade. Descriptor factories
+    # rebuild the whole descriptor on every call and nothing hashes a
+    # CrystalSpec, so a stray write cannot outlive its caller. Treat it as
+    # read-only anyway.
+    curvature: Mapping[str, CurvatureAxis] = field(default_factory=dict)
     r0: float | None = None
     reflect_file: str | None = None
     transmit_file: str | None = None
     change_impact: ChangeImpact = ChangeImpact.BUILD  # crystal props are baked into build()
+
+    @property
+    def fixed_curvature(self) -> tuple[str, ...]:
+        """Axes this assembly holds fixed -- derived from ``curvature``.
+
+        A convenience view for tests and reports. Production policy readers
+        (``_fixed_curvature_axes``, the scan-command validator) resolve through
+        ``TAS_Instrument.effective_curvature_axis`` instead, which folds in
+        module state; this raw property does not.
+
+        Ordered alphabetically rather than in declaration order, deliberately:
+        every consumer tests membership (the validator refuses a named axis,
+        the GUI builds an {axis: crystal} mapping), so a stable order that does
+        not depend on how an author happened to write the mapping is the more
+        useful guarantee. Nothing may start depending on declaration order
+        without first moving that dependency somewhere it can be seen.
+        """
+        return tuple(
+            axis for axis, spec in sorted(self.curvature.items())
+            if not spec.driven
+        )
 
 
 @dataclass(frozen=True, slots=True)

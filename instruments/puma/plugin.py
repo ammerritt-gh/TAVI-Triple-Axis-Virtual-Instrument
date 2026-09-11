@@ -24,6 +24,7 @@ from instruments.contract import DEFAULT_MPI_COUNT
 from instruments.descriptor import (
     CollimationSlot,
     CrystalSpec,
+    CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
     ModuleKind,
@@ -77,6 +78,55 @@ _PUMA_PARAMS = (
     ParameterSpec("mount_ry_param", "Static sample mount rotation about y", default=0.0),
     ParameterSpec("mount_rz_param", "Static sample mount rotation about z", default=0.0),
 )
+
+
+# Curvature: PG[002]'s bending minima and fixed analyser radius were reviewed
+# against PUMA's internal instrument documentation and confirmed in
+# discussion with the instrument scientist (operator, 2026-09-11) -- not an
+# independently citable published source, and not the legacy-model-comment
+# provisional status MODEL_STATUS.md:17-18 and SCIENTIST_REVIEW.md Q3 still
+# record for these rows; that documentation correction is tracked separately
+# and lands in its own commit. This does NOT extend to PUMA's arm lengths
+# (L1-L4), which remain provisional legacy-comment figures untouched here.
+_PUMA_CONFIRMED_PROVENANCE = (
+    "Reviewed against PUMA's internal instrument documentation and "
+    "confirmed in discussion with the instrument scientist (operator, "
+    "2026-09-11). Not an independently citable published source."
+)
+_PUMA_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True, min_radius_m=2.0,
+                          provenance=_PUMA_CONFIRMED_PROVENANCE),
+    "rvm": CurvatureAxis(driven=True, min_radius_m=0.5,
+                          provenance=_PUMA_CONFIRMED_PROVENANCE),
+}
+# pg002_test is a fabricated crystal (deliberately wrong d-spacing) with no
+# hardware counterpart, kept only for A1/A2 GUI sanity checks -- its curvature
+# declaration mirrors PG[002]'s so tests exercise the same policy, and asserts
+# nothing about any real assembly.
+_PUMA_TEST_MONO_PROVENANCE = (
+    "Test-only crystal with no hardware counterpart. Its curvature "
+    "declaration mirrors PG(002)'s so tests exercise the same policy; it "
+    "asserts nothing about any real assembly."
+)
+_PUMA_TEST_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True, min_radius_m=2.0,
+                          provenance=_PUMA_TEST_MONO_PROVENANCE),
+    "rvm": CurvatureAxis(driven=True, min_radius_m=0.5,
+                          provenance=_PUMA_TEST_MONO_PROVENANCE),
+}
+_PUMA_ANA_CURVATURE = {
+    "rha": CurvatureAxis(driven=True, min_radius_m=2.0,
+                          provenance=_PUMA_CONFIRMED_PROVENANCE),
+    "rva": CurvatureAxis(
+        driven=False, fixed_radius_m=0.8,
+        provenance=(
+            "Reviewed against PUMA's internal instrument documentation and "
+            "confirmed in discussion with the instrument scientist "
+            "(operator, 2026-09-11). Not an independently citable published "
+            "source."
+        ),
+    ),
+}
 
 
 # Fixed PUMA geometry used to compute monitor placements numerically -- the
@@ -205,6 +255,7 @@ def puma_descriptor() -> InstrumentDescriptor:
                 slab_width=0.0202, slab_height=0.018, n_columns=13, n_rows=9,
                 gap=0.0005, mosaic=35, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_PUMA_MONO_CURVATURE,
             ),
             # Development variant: PG[002] geometry with a deliberately wrong
             # d-spacing, kept for A1/A2 sanity checks in the GUI.
@@ -213,6 +264,7 @@ def puma_descriptor() -> InstrumentDescriptor:
                 slab_width=0.0202, slab_height=0.018, n_columns=13, n_rows=9,
                 gap=0.0005, mosaic=35, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_PUMA_TEST_MONO_CURVATURE,
             ),
         ),
         ana_crystals=(
@@ -221,6 +273,7 @@ def puma_descriptor() -> InstrumentDescriptor:
                 slab_width=0.01, slab_height=0.0295, n_columns=21, n_rows=5,
                 gap=0.0005, mosaic=35, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_PUMA_ANA_CURVATURE,
             ),
         ),
         # Samples come from the shared, instrument-independent library --
@@ -298,13 +351,18 @@ class PUMAPlugin:
         scan_config.V_selector_installed = modules['v_selector']
         scan_config.source_type = vals['source_type']
         scan_config.source_dE = vals['source_dE']
+        # Curvature radii are plain magnitudes here: an NMO fixing rhm/rvm
+        # flat, or a crystal's own fixed-axis/mechanical-limit policy, is
+        # resolved once via TAS_Instrument.effective_curvature_axis and
+        # enforced at the boundary every path to the instrument state
+        # crosses (TAS_Instrument.set_crystal_bending). Zeroing here too
+        # would be the exact duplicated-policy bug that boundary exists to
+        # prevent -- and would still miss a SCANNED rhm/rvm, which never
+        # passes through scan_config at all.
         scan_config.rhm = vals['rhm']
         scan_config.rvm = vals['rvm']
         scan_config.rha = vals['rha']
-        scan_config.rva = 0.8
-        if scan_config.NMO_installed != "None":
-            scan_config.rhm = 0
-            scan_config.rvm = 0
+        scan_config.rva = vals['rva']
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
@@ -407,7 +465,7 @@ class PUMAPlugin:
 
         return check_point_feasibility(config, scan_mode, scan_point, vals)
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for PUMA (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript. NMO
@@ -416,4 +474,6 @@ class PUMAPlugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(puma_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            puma_descriptor(), vals, q0, w, point_angles=point_angles,
+        )

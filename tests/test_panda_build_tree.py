@@ -23,6 +23,7 @@ def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
         "rhm": 4.0,
         "rvm": 1.8,
         "rha": 1.65,
+        "rva": 0.60,
         "fixed_E": 4.978451631466585,       # kf = 1.55 A^-1
         "monocris": monocris,
         "anacris": "pg002",

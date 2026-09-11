@@ -66,7 +66,7 @@ decision, §20.3); if vTAS-identical resolution ever matters, that's a
 |---|---|---|
 | PG002 subdivision | 9×7 of 20×20 mm guessed (≈184×143 vs 180×140 real) | actual slab count/size. *needs IS* |
 | Mosaic | 30′ assumed (copied from mono) | measured analyzer mosaic |
-| rva magnitude | fixed 0.31 (point-source value at kf 2.662) in `scan_config` | Thermes is variable double-focusing — should track kf like rha does; small code change once real behavior is known |
+| rva magnitude | driven (operator ruling, 2026-09-11: the Thermes analyser is variable double-focusing and the hardware tracks it with a motor). AUTOFOCUS now computes it from the same point-source formula as rha, tracking kf like rha does; the old fixed 0.31 placeholder is gone | none pending on drivenness/tracking; the analyzer subdivision/mosaic guesses above still need IS |
 | Cu200 / Si111 analyzers | absent | ILL lists both; same blockers as the mono equivalents |
 
 ### Collimation and slits (all geometry is placeholder)
@@ -107,19 +107,29 @@ freely.
   vTAS carries IN8-IMPS as a separate instrument block if ever needed.
 - Brillouin low-angle vacuum box, sample environments — not modeled.
 
-### GUI wart (code follow-up, not data)
+---
 
-The "Ideal:" bending labels in the controller still use PUMA's parallel-beam
-mono formula and unsigned magnitudes; IN8's own
-`calculate_crystal_bending` (point-source both sides, branch-signed) is
-correct and used by scans, but the advisory labels don't call it yet.
+## Validation record
+
+- **Compiled McStas smoke run: passed** (2026-09-11, on the `crystal-bending-
+  generality` tree). Driven through the production path (`build` →
+  `compute_snapshot` → `run_point`): Al (2,0,0) elastic at kf = 2.662 Å⁻¹,
+  1e7 neutrons, all Soller collimators open, ideal focusing.
+  `detector_I = 5.07902e-07`, `detector_N = 11455`. The previous recorded run
+  at this same configuration (cited as the cross-instrument control in
+  IN12's and PANDA's own Validation records) gave `3.33e-07` / `4908` — this
+  run gained flux, the expected direction for this branch: the corrected
+  monochromator images the real virtual source at L1 onto the sample instead
+  of assuming a beam from infinity, so it focuses more strongly. The reported
+  error is ~2-5% of the value, well outside Monte-Carlo scatter. This is
+  gross-geometry and execution evidence, not a flux calibration.
 
 ---
 
 ## Priority guess for the next data pass
 
 1. Virtual source aperture + spectrum (dominates absolute intensity).
-2. Analyzer subdivision + mosaic and kf-tracked rva (resolution).
+2. Analyzer subdivision + mosaic (resolution); rva now tracks kf.
 3. Collimator geometries (only matters once collimated modes are used —
    default is open/double-focused).
 4. Second PG filter + filter switching.

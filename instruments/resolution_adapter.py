@@ -156,12 +156,44 @@ def _sample_mosaic(descriptor, sample_key, prov):
     return mosaic
 
 
-def build_resolution_config(descriptor, vals, q0, w):
+def _axis_sense(descriptor_sense, angle):
+    """Point-local scattering sense for one axis, or the descriptor's when
+    there is no point (or the take-off angle is degenerate).
+
+    ``Sense``'s value IS the sign of that axis' two-theta readout
+    (``instruments/descriptor.py``), so a solved point's own sense is just
+    the sign of its own two-theta -- a direct-angle command can cross onto
+    the opposite branch from the one the descriptor declares as normal
+    (``set_crystal_bending`` signs curvature the same way, for the same
+    reason). ``angle == 0`` has no branch to read (no solve happened, or the
+    point sits exactly on the degenerate angle) and falls back to the
+    declared sense, exactly like ``set_crystal_bending``'s own zero guard.
+
+    Returns ``(sense, source)`` for provenance.
+    """
+    if angle is None:
+        return int(descriptor_sense), "descriptor Geometry (no solved point)"
+    if angle == 0:
+        return int(descriptor_sense), "descriptor Geometry (degenerate zero two-theta)"
+    return (1 if angle > 0 else -1), f"point-local sign of two-theta={angle:g}"
+
+
+def build_resolution_config(descriptor, vals, q0, w, point_angles=None):
     """Assemble a :class:`tavi.resolution.ResolutionConfig` from descriptor + vals.
 
     Instrument-agnostic; plugins pass their own ``descriptor()``. NMO / velocity
     selector / monochromatic-source flags are read from ``vals`` when present and
     recorded as invalidations (NMO) or warnings, never silently dropped.
+
+    ``point_angles`` is an optional ``{"mtt": ..., "stt": ..., "att": ...}``
+    dict of THIS point's own solved two-theta angles (degrees) -- the same
+    snapshot metadata that already carries them. When given, each axis'
+    scattering sense is read off that point's own angle instead of always
+    being rebuilt from the descriptor's declared (normal-branch) sense --
+    Popovici uses that sense for both the crystal's Bragg angle and its
+    curvature sign, so a caller with no solved point (``point_angles=None``)
+    keeps today's descriptor-only behaviour; a missing individual angle key
+    falls back per-axis the same way.
     """
     from tavi.resolution import ResolutionConfig
 
@@ -170,8 +202,14 @@ def build_resolution_config(descriptor, vals, q0, w):
     invalidations: list = []
 
     geo = descriptor.geometry
-    sm, ss, sa = int(geo.sense_mono), int(geo.sense_sample), int(geo.sense_ana)
-    prov["senses"] = {"sm": sm, "ss": ss, "sa": sa, "source": "descriptor Geometry"}
+    point_angles = point_angles or {}
+    sm, sm_src = _axis_sense(geo.sense_mono, point_angles.get("mtt"))
+    ss, ss_src = _axis_sense(geo.sense_sample, point_angles.get("stt"))
+    sa, sa_src = _axis_sense(geo.sense_ana, point_angles.get("att"))
+    prov["senses"] = {
+        "sm": sm, "ss": ss, "sa": sa,
+        "source": {"sm": sm_src, "ss": ss_src, "sa": sa_src},
+    }
 
     mono, mono_ok = _find_crystal(descriptor.mono_crystals, vals.get("monocris"))
     ana, ana_ok = _find_crystal(descriptor.ana_crystals, vals.get("anacris"))
@@ -197,10 +235,37 @@ def build_resolution_config(descriptor, vals, q0, w):
     bet = descriptor.vertical_divergence or _DEFAULT_BET_ARCMIN
     prov["bet"] = {"value": list(bet), "source": "descriptor default"}
 
-    rhm, rvm, rha = _num(vals.get("rhm")), _num(vals.get("rvm")), _num(vals.get("rha"))
+    def _magnitude(name):
+        """A curvature magnitude from vals, enforced at this boundary.
+
+        This is where the operator-surface contract (magnitudes) meets the
+        physics model, and tavi/resolution.py applies the scattering sense
+        itself -- `anarv = radius_cm(cfg.rva) * sa`. A signed value arriving
+        here is therefore signed twice, and the resulting resolution describes
+        a crystal bent the wrong way. That is not hypothetical: it was live on
+        this repository's negative-branch instruments for three commits, and
+        it was invisible, because the emitted McStas geometry stayed correct
+        and only the analytic half was wrong.
+
+        So the radius is taken as a magnitude and the violation is logged
+        rather than raised: a bad value must not take down a resolution
+        display mid-session, and it must not pass unseen either.
+        """
+        value = _num(vals.get(name))
+        if value is not None and value < 0:
+            warnings.append(
+                f"{name} arrived signed ({value:g} m); the resolution model "
+                "applies the scattering sense itself, so its magnitude is used"
+            )
+            return abs(value)
+        return value
+
+    rhm, rvm, rha = _magnitude("rhm"), _magnitude("rvm"), _magnitude("rha")
+    rva = _magnitude("rva")
     prov["curvature"] = {
-        "rhm": rhm, "rvm": rvm, "rha": rha, "rva": None,
-        "source": "vals rhm/rvm/rha (metres); rva not carried in vals -> None",
+        "rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva,
+        "source": "vals rhm/rvm/rha/rva (metres, magnitudes); "
+                  "tavi/resolution.py applies the scattering sense itself",
     }
 
     modules = vals.get("modules")
@@ -233,7 +298,7 @@ def build_resolution_config(descriptor, vals, q0, w):
         kfix=kfix, fx=fx,
         alf=tuple(alf), bet=tuple(bet),
         q0=q0, w=w,
-        rhm=rhm, rvm=rvm, rha=rha,
+        rhm=rhm, rvm=rvm, rha=rha, rva=rva,
         warnings=tuple(warnings),
         invalidations=tuple(invalidations),
         provenance=prov,

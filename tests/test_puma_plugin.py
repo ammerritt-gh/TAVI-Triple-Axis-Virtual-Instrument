@@ -48,6 +48,7 @@ def _gui_vals(**overrides):
         "rhm": 2.5,
         "rvm": 1.2,
         "rha": 2.5,
+        "rva": 0.8,
         "fixed_E": 14.7,
         "monocris": "pg002",
         "anacris": "pg002",
@@ -105,7 +106,17 @@ def test_scan_config_applies_gui_mapping():
     assert config.diagnostic_settings.get("Detector PSD") is True
 
 
-def test_scan_config_nmo_zeroes_mono_bending():
+def test_scan_config_no_longer_zeroes_mono_bending_itself():
+    """``scan_config`` passes curvature through as plain magnitudes, full
+    stop -- NMO-flat is resolved once, downstream, by ``TAS_Instrument.
+    effective_curvature_axis`` (PUMA's override) and enforced at
+    ``set_crystal_bending``, not decided here or in ``optical_radii``. A
+    second copy of the NMO rule in ``scan_config`` is exactly the recurring
+    defect this branch keeps removing; see
+    ``test_curvature_autofocus.test_autofocus_does_not_bend_a_flat_nmo_monochromator``
+    and ``test_nmo_fitted_flattens_the_scan_config_launch_snapshot_too``
+    below for where the flattening is actually pinned, end to end.
+    """
     pytest.importorskip("mcstasscript")
     plugin = PUMAPlugin()
     config = plugin.scan_config(
@@ -114,8 +125,37 @@ def test_scan_config_nmo_zeroes_mono_bending():
         None, {}, object(),
     )
     assert config.NMO_installed == "Vertical"
-    assert config.rhm == 0 and config.rvm == 0
+    assert config.rhm == 2.5 and config.rvm == 1.2  # unchanged: not scan_config's to decide
     assert config.rha == 2.5  # analyzer bending untouched by the NMO rule
+
+
+def test_nmo_fitted_flattens_the_scan_config_launch_snapshot_too(tmp_path):
+    """Packet slice 9, defect A, test 2: PUMA + NMO with no curvature scan --
+    the emitted monochromator radii are flat through the FULL launch path
+    (scan_config -> compute_snapshot -> set_crystal_bending), not merely
+    inside scan_config's own (now-deleted) copy of the rule."""
+    pytest.importorskip("mcstasscript")
+    plugin = PUMAPlugin()
+    base = plugin.default_state()
+    config = plugin.scan_config(
+        base,
+        _gui_vals(modules={"nmo": "Vertical", "v_selector": False}),
+        None, {}, base.sample_mount,
+    )
+    assert config.rhm == 2.5 and config.rvm == 1.2  # scan_config leaves them alone
+
+    scans = [41.0, -84.0, -42.0, 83.0, 2.5, 1.2, 2.5, 0.8, 0.0, 0.0, 0.0]
+    snapshot = plugin.compute_snapshot(
+        (scans, 0), 0, "angle", config,
+        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+    )
+    assert snapshot.error_flags == []
+    assert snapshot.metadata["rhm"] == 0.0 and snapshot.metadata["rvm"] == 0.0, (
+        "an NMO-fitted monochromator must stay flat through the full launch "
+        f"path, not just in scan_config's own state; got {snapshot.metadata}"
+    )
+    assert snapshot.params["rhm_param"] == 0.0 and snapshot.params["rvm_param"] == 0.0
+    assert snapshot.metadata["rha"] == 2.5, "the NMO focuses the mono, not the analyser"
 
 
 def test_snapshot_params_match_descriptor(tmp_path):

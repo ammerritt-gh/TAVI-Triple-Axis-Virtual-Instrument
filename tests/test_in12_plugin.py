@@ -128,6 +128,7 @@ def _gui_vals(**overrides):
         "rhm": 3.84,
         "rvm": 0.84,
         "rha": 1.98,
+        "rva": 1.40,
         "fixed_E": 8.288785,
         "monocris": "pg002",
         "anacris": "pg002",
@@ -174,13 +175,12 @@ def test_scan_config_applies_gui_mapping():
     assert config is not base and base.alpha_3 == 0   # base not mutated
     assert config.mis_omega == 1.5                    # hidden state propagates
     assert config.K_fixed == "Kf Fixed"
-    # Branch-signed curvature: the GUI carries magnitudes and BOTH IN12 crystals
-    # take off on the negative branch, so all three driven radii come out
-    # negative.
-    assert (config.rhm, config.rvm, config.rha) == (-3.84, -0.84, -1.98)
-    # The analyser's vertical focus is fixed hardware, not a GUI knob, so it
-    # ignores vals entirely and takes the fixed radius on the same branch.
-    assert config.rva == -ANA_FIXED_RV
+    # scan_config is a pass-through of the GUI magnitudes now -- branch
+    # signing and fixed-axis policy (PG's fixed vertical analyser focus
+    # included) live in set_crystal_bending, the shared boundary
+    # compute_scan_snapshot always crosses before a point runs.
+    assert (config.rhm, config.rvm, config.rha, config.rva) == \
+        (3.84, 0.84, 1.98, 1.40)
     assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     assert (config.alpha_1, config.alpha_2, config.alpha_3, config.alpha_4) == \
@@ -190,8 +190,9 @@ def test_scan_config_applies_gui_mapping():
     assert config.diagnostic_settings.get("Detector PSD") is True
 
 
-def test_scan_config_negates_positive_gui_radii():
-    """The GUI may hand back either sign; the branch sign is instrument physics."""
+def test_scan_config_passes_through_a_negative_gui_radius_unchanged():
+    """scan_config no longer signs anything -- a GUI value that already
+    carries a sign passes straight through, same as a positive one."""
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     base = plugin.default_state()
@@ -279,22 +280,26 @@ def test_momentum_feasibility_enforces_solved_axis_limits():
 
 
 def test_crystal_bending_is_rowland_matched_and_branch_signed():
+    """Literals are the pinned reference table (packet slice2 §pinned table),
+    derived from IN12's declared arm lengths -- not recomputed from the
+    implementation under test, which would pass against any policy it
+    happened to adopt."""
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     state = plugin.default_state()
     mth, ath = -27.917234, -27.917234       # both branches negative on IN12
-    rhm, rvm, rha, rva = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    sin_th = math.sin(math.radians(abs(mth)))
-    mono_focus = 1 / (1 / 1.80 + 1 / 1.80)   # = 0.9 m: L1 == L2 by design
-    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
-    assert rhm == pytest.approx(-2 * mono_focus / sin_th)
-    assert rvm == pytest.approx(-2 * mono_focus * sin_th)
-    assert rha == pytest.approx(-2 * ana_focus / sin_th)
+    radii = state.ideal_curvature("pg002", "pg002", mth, ath)
+
+    assert radii["rhm"] == pytest.approx(-3.8445, abs=5e-5)
+    assert radii["rvm"] == pytest.approx(-0.8428, abs=5e-5)
+    assert radii["rha"] == pytest.approx(-1.9794, abs=5e-5)
     # The analyser's vertical radius is fixed hardware, branch-signed but not
     # computed -- and deliberately NOT the Rowland optimum, which is what
     # "fixed" means. Guard that it is not silently tracking the arms.
-    assert rva == -ANA_FIXED_RV
-    assert abs(rva) > 2 * abs(2 * ana_focus * sin_th)
+    assert radii["rva"] == pytest.approx(-ANA_FIXED_RV)
+    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
+    sin_th = math.sin(math.radians(abs(ath)))
+    assert abs(radii["rva"]) > 2 * abs(2 * ana_focus * sin_th)
 
 
 def test_vertical_bending_clamps_at_the_provisional_minimum():
@@ -308,10 +313,10 @@ def test_vertical_bending_clamps_at_the_provisional_minimum():
     from instruments.in12.model import MONO_MIN_RV
 
     state = IN12Plugin().default_state()
-    _, rvm, _, _ = state.calculate_crystal_bending(1, 1, 1, -10.0, -30.0)
+    radii = state.ideal_curvature("pg002", "pg002", -10.0, -30.0)
     ideal = -2 * 0.9 * math.sin(math.radians(10.0))
     assert abs(ideal) < MONO_MIN_RV                  # the clamp really engages
-    assert rvm == pytest.approx(-MONO_MIN_RV)        # clamped, sign preserved
+    assert radii["rvm"] == pytest.approx(-MONO_MIN_RV)  # clamped, sign preserved
 
 
 def test_build_fingerprint_stable_and_sensitive():
@@ -396,9 +401,17 @@ def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
 
 
 def test_set_crystal_bending_is_idempotent_on_already_signed_values():
-    """scan_config signs first; the setter must not flip them back."""
+    """A value already signed onto the take-off branch is not flipped back.
+
+    Real angles are required now: the base setter derives the branch sign
+    from ``self.A1``/``self.A4``, not from an unconditional instrument-wide
+    override (see ``instruments/tas_runtime.py::set_crystal_bending``). No
+    crystal is selected, so every axis reads as driven/unfixed -- the
+    supplied -0.6 m for rva is not IN12's fixed 1.40 m analyser radius.
+    """
     pytest.importorskip("mcstasscript")
     state = IN12Plugin().default_state()
+    state.set_angles(A1=-55.834468, A4=-55.834468)  # IN12's negative take-off branch
     state.set_crystal_bending(rhm=-4.0, rvm=-1.8, rha=-1.65, rva=-0.6)
     assert (state.rhm, state.rvm, state.rha, state.rva) == (-4.0, -1.8, -1.65, -0.6)
     state.set_crystal_bending(rhm=4.0)
@@ -456,41 +469,208 @@ def test_the_heusler_does_not_inherit_pg_s_fixed_vertical_focus():
     state.anacris = heusler
     assert not state.ana_vertical_is_fixed()
 
-    # ...and the runtime radius follows, rather than PG's fixed value.
+    # ...and the ideal radius follows, rather than PG's fixed value: PG gets
+    # its fixed hardware radius, while the Heusler's focusing is unpublished
+    # (focusing_known=False) and is REFUSED rather than given an invented one.
     mth = ath = -27.917234
-    state.anacris = "pg002"
-    _, _, _, rva_pg = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    state.anacris = heusler
-    _, _, _, rva_heusler = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    assert rva_pg == -ANA_FIXED_RV
-    assert rva_heusler != pytest.approx(rva_pg)
-    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
-    assert rva_heusler == pytest.approx(
-        -2 * ana_focus * math.sin(math.radians(abs(ath))))
+    state.monocris = "pg002"
+    radii_pg = state.ideal_curvature("pg002", "pg002", mth, ath)
+    assert radii_pg["rva"] == pytest.approx(-ANA_FIXED_RV)
+    with pytest.raises(ValueError, match="focusing_known"):
+        state.ideal_curvature("pg002", heusler, mth, ath)
 
 
-def test_scan_config_rva_follows_the_selected_analyser():
+def test_scan_config_passes_through_rva_regardless_of_analyser():
+    """scan_config carries rva straight through for every analyser now --
+    PG's fixed vertical focus and the Heusler's unknown one are
+    set_crystal_bending's job (see
+    test_the_heusler_does_not_inherit_pg_s_fixed_vertical_focus), not
+    scan_config's."""
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     heusler = _heusler_id()
     base = plugin.default_state()
 
-    def _config(anacris, rva=None):
+    def _config(anacris, rva):
         vals = {
             "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2,
-            "rhm": 3.0, "rvm": 1.2, "rha": 1.5,
+            "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": rva,
             "fixed_E": 8.288785, "monocris": "pg002", "anacris": anacris,
             "modules": {},
             "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0",
                             "alpha_4": "0"},
             "slits_mm": {"sbl": (30.0, 60.0), "dbl_hgap": 50.0},
         }
-        if rva is not None:
-            vals["rva"] = rva
         return plugin.scan_config(base, vals, None, {}, base.sample_mount)
 
-    assert _config("pg002").rva == -ANA_FIXED_RV
-    # The Heusler takes the GUI magnitude on the take-off branch, like rha.
-    assert _config(heusler, rva=0.9).rva == pytest.approx(-0.9)
-    # Absent a value it is flat, not PG's radius.
-    assert _config(heusler).rva == 0.0
+    assert _config("pg002", rva=ANA_FIXED_RV).rva == ANA_FIXED_RV
+    assert _config(heusler, rva=0.9).rva == pytest.approx(0.9)
+    assert _config(heusler, rva=0.0).rva == 0.0
+
+
+def test_heusler_rva_held_does_not_block_an_unrelated_rhm_autofocus(tmp_path):
+    """Packet slice 9, defect B, test 3: the Heusler's rva has no established
+    focusing model, but that is a per-axis fact -- an unrelated AUTOFOCUS
+    axis on the same point (rhm, a MONOCHROMATOR axis) must still track its
+    own take-off angle. Before this slice, ``ideal_curvature`` computed all
+    four axes unconditionally and raised the moment it reached rva, so this
+    exact HELD/AUTOFOCUS combination was refused outright.
+    """
+    pytest.importorskip("mcstasscript")
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    heusler = _heusler_id()
+    state = IN12Plugin().default_state()
+    state.monocris = "pg002"
+    state.anacris = heusler
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 8.288785
+    state.rva = 0.9  # the operator's HELD Heusler radius
+
+    vals = {
+        "deltaE": 0.0, "chi": 0.0,
+        "curvature_modes": {
+            "rhm": "autofocus", "rvm": "held", "rha": "held", "rva": "held",
+        },
+    }
+
+    rhm_values = []
+    rva_magnitudes = []
+    for A1 in (-55.834469, -50.0):
+        scans = [A1, 0.0, 0.0, -55.834469, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        snapshot = compute_scan_snapshot(
+            (scans, 0), 0, "angle", state, vals, str(tmp_path),
+        )
+        assert snapshot.error_flags == [], snapshot.error_flags
+        assert snapshot.metadata["curvature_modes"]["rhm"] == "autofocus"
+        assert snapshot.metadata["curvature_modes"]["rva"] == "held"
+        rhm_values.append(snapshot.metadata["rhm"])
+        rva_magnitudes.append(abs(snapshot.metadata["rva"]))
+
+    assert len({round(v, 6) for v in rhm_values}) == 2, (
+        f"rhm must track its own take-off angle across the scan; got {rhm_values}"
+    )
+    assert rva_magnitudes == pytest.approx([0.9, 0.9]), (
+        "rva must hold the operator's commanded magnitude, unmoved by "
+        f"rhm's autofocus; got {rva_magnitudes}"
+    )
+
+
+def test_heusler_rva_autofocus_is_still_refused_naming_rva(tmp_path):
+    """Packet slice 9, defect B, test 4: the fix stops the Heusler's unknown
+    rva from disabling unrelated axes -- it does NOT licence autofocusing
+    rva itself. There is still no established focusing model for it."""
+    pytest.importorskip("mcstasscript")
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    heusler = _heusler_id()
+    state = IN12Plugin().default_state()
+    state.monocris = "pg002"
+    state.anacris = heusler
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 8.288785
+
+    vals = {
+        "deltaE": 0.0, "chi": 0.0,
+        "curvature_modes": {
+            "rhm": "held", "rvm": "held", "rha": "held", "rva": "autofocus",
+        },
+    }
+    scans = [-55.834469, 0.0, 0.0, -55.834469, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    with pytest.raises(ValueError, match="rva") as excinfo:
+        compute_scan_snapshot((scans, 0), 0, "angle", state, vals, str(tmp_path))
+    assert "focusing_known" in str(excinfo.value)
+
+
+# ------------------------------------------------- L1/D13: one ideal-radii fn
+#
+# Promoted from the branch's probe script. build_api_launch_state's launch-
+# state refresh (fired when mtt/att/modules/monocris/anacris is patched) used
+# to ask ``ideal_curvature`` for all four radii unconditionally, so an IN12
+# Heusler analyser (``rva`` driven=True, focusing_known=False) refused every
+# such request even when the caller named ``rva`` explicitly (HELD) or
+# scanned it (SCANNED) -- both cases the GUI already accepted via
+# ``_compute_ideal_bending_values``'s own (now shared) askable filter.
+
+
+def _api_controller(instrument_id):
+    """Same fixture as tests/test_rva_gui_axis_policy.py's ``_controller``,
+    reused rather than duplicated -- these tests exercise the same
+    Qt-backed ``TAVIController`` the GUI/API split lives on."""
+    pytest.importorskip("PySide6")
+    pytest.importorskip("mcstasscript")
+    from test_rva_gui_axis_policy import _controller
+    return _controller(instrument_id)
+
+
+def _heusler_ana_id(ctrl):
+    return next(c for c in ctrl.descriptor.ana_crystals if c.id == "heusler111").id
+
+
+def test_api_heusler_with_explicit_rva_is_accepted():
+    """D13: naming rva explicitly HELDs it, so the refresh must not ask
+    ``ideal_curvature`` about it at all."""
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        launch = ctrl.build_api_launch_state({
+            "anacris": heusler, "rva": 0.5, "scan_command1": "H 1.9 2.1 0.1",
+        })
+        assert launch["vals"]["rva"] == 0.5
+
+
+def test_api_heusler_without_rva_is_refused_naming_rva():
+    """The mirror case: rva is genuinely AUTOFOCUS, unscanned, and driven
+    with no established focusing model -- that refusal is the point and
+    must survive the fix (test_heusler_rva_autofocus_is_still_refused_naming_rva
+    pins the same rule one layer down, in compute_scan_snapshot)."""
+    from tavi.api_server import ApiError
+
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        with pytest.raises(ApiError) as excinfo:
+            ctrl.build_api_launch_state({
+                "anacris": heusler, "scan_command1": "H 1.9 2.1 0.1",
+            })
+        assert "rva" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("trigger_field", ["mtt", "att", "modules", "monocris", "anacris"])
+def test_api_heusler_rva_held_survives_every_refresh_trigger(trigger_field):
+    """Every field that fires the launch-state ideal-radii refresh must
+    behave identically for a HELD Heusler rva: the refresh's requested set
+    excludes any axis already HELD by the patch, so the unrelated three
+    AUTOFOCUS axes (all real crystals with an established focusing model)
+    still get a real ideal number."""
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        trigger_values = {
+            "mtt": 41.167, "att": 41.167, "modules": {},
+            "monocris": ctrl.descriptor.mono_crystals[0].id,
+            "anacris": heusler,
+        }
+        patch = {
+            "anacris": heusler, "rva": 1.4, "scan_command1": "H 1.9 2.1 0.1",
+            trigger_field: trigger_values[trigger_field],
+        }
+
+        launch = ctrl.build_api_launch_state(patch)
+        vals = launch["vals"]
+
+        assert vals["rva"] == 1.4
+        assert vals["rhm"] != 0.0
+        assert vals["rvm"] != 0.0
+        assert vals["rha"] != 0.0
+
+
+def test_api_heusler_rva_scanned_needs_no_rva_parameter():
+    """A scan command naming rva promotes it away from a launch-state
+    AUTOFOCUS refresh the same way an explicit HELD value does -- the point
+    solver (compute_scan_snapshot) answers rva's per-point value, so the
+    launch-state refresh must not refuse the request for lacking one."""
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        launch = ctrl.build_api_launch_state({
+            "anacris": heusler, "scan_command1": "rva 0.3 0.6 0.1",
+        })
+        assert launch["vals"]["scan_command1"] == "rva 0.3 0.6 0.1"

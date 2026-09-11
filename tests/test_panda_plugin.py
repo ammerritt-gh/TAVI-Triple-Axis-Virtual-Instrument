@@ -95,6 +95,7 @@ def _gui_vals(**overrides):
         "rhm": 4.0,
         "rvm": 1.8,
         "rha": 1.65,
+        "rva": 0.60,
         "fixed_E": 4.978451631466585,     # kf = 1.55 A^-1
         "monocris": "pg002",
         "anacris": "pg002",
@@ -153,16 +154,18 @@ def test_scan_config_applies_gui_mapping():
     assert config.diagnostic_settings.get("Detector PSD") is True
 
 
-def test_scan_config_signs_every_radius_negative():
-    """PANDA takes off negative at BOTH crystals, so all four radii are
-    negative -- where IN8 flips only the analyzer. The GUI carries magnitudes."""
+def test_scan_config_passes_through_curvature_magnitudes_unsigned():
+    """scan_config no longer signs or fixes curvature -- that policy lives
+    once in set_crystal_bending (the boundary every path to the instrument
+    state crosses). Whatever the caller hands in comes straight through,
+    positive or already negative."""
     pytest.importorskip("mcstasscript")
     plugin = PANDAPlugin()
     config = plugin.scan_config(plugin.default_state(), _gui_vals(),
                                 "Al_bragg", {}, object())
-    assert (config.rhm, config.rvm, config.rha, config.rva) == (-4.0, -1.8, -1.65, -0.60)
+    assert (config.rhm, config.rvm, config.rha, config.rva) == (4.0, 1.8, 1.65, 0.60)
 
-    # A GUI that already carried a sign must not double-negate it.
+    # A GUI that already carried a sign passes through unchanged too.
     flipped = plugin.scan_config(plugin.default_state(),
                                  _gui_vals(rhm=-4.0, rvm=-1.8, rha=-1.65),
                                  "Al_bragg", {}, object())
@@ -246,26 +249,30 @@ def test_momentum_feasibility_enforces_the_five_degree_beam_stop():
 def test_crystal_bending_splits_the_monochromator_object_distance():
     """Horizontal focusing images the virtual source (2.82 m); vertical
     focusing images the guide exit (L1 = 5.00 m). Both radii come out negative
-    on PANDA's take-off branch."""
+    on PANDA's take-off branch.
+
+    Literals are the pinned reference table (packet slice2 §pinned table),
+    derived from PANDA's declared arm lengths -- not recomputed from the
+    implementation under test, which would pass against any policy it
+    happened to adopt. PANDA's row is independently corroborated by
+    ``instruments/panda/MODEL_STATUS.md:114``.
+    """
     pytest.importorskip("mcstasscript")
-    import math
 
     plugin = PANDAPlugin()
     state = plugin.default_state()
     mth, ath = -37.166, -37.166      # signed: PANDA's A1/2 and A4/2 are negative
-    rhm, rvm, rha, rva = state.calculate_crystal_bending(1, 1, 1, mth, ath)
+    radii = state.ideal_curvature("pg002", "pg002", mth, ath)
 
-    sin_th = math.sin(math.radians(mth))
+    assert radii["rhm"] == pytest.approx(-3.9848, abs=5e-5)
+    assert radii["rvm"] == pytest.approx(-1.7869, abs=5e-5)
+    assert radii["rha"] == pytest.approx(-1.6511, abs=5e-5)
+    assert radii["rva"] == pytest.approx(-0.6000, abs=5e-5)
+    # The two monochromator planes must not share an object distance.
     mono_focus_h = 1 / (1 / 2.82 + 1 / 2.10)
     mono_focus_v = 1 / (1 / 5.00 + 1 / 2.10)
-    ana_focus = 1 / (1 / 1.05 + 1 / 0.95)
-    assert rhm == pytest.approx(2 * mono_focus_h / sin_th)
-    assert rvm == pytest.approx(2 * mono_focus_v * sin_th)
-    assert rha == pytest.approx(2 * ana_focus / sin_th)
-    assert rva == pytest.approx(2 * ana_focus * sin_th)
-    # The two monochromator planes must not share an object distance.
     assert mono_focus_h != mono_focus_v
-    assert rhm < 0 and rvm < 0 and rha < 0 and rva < 0
+    assert all(r < 0 for r in radii.values())
 
 
 def test_build_fingerprint_stable_and_sensitive():
@@ -341,9 +348,16 @@ def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
 
 
 def test_set_crystal_bending_is_idempotent_on_already_signed_values():
-    """scan_config signs first; the setter must not flip them back."""
+    """A value already signed onto the take-off branch is not flipped back.
+
+    Real angles and a real crystal are required now: the base setter derives
+    the branch sign from ``self.A1``/``self.A4``, not from an unconditional
+    instrument-wide override (see ``instruments/tas_runtime.py::set_crystal_bending``).
+    """
     pytest.importorskip("mcstasscript")
     state = PANDAPlugin().default_state()
+    state.monocris = state.anacris = "pg002"
+    state.set_angles(A1=-74.332, A4=-74.332)  # PANDA's negative take-off branch
     state.set_crystal_bending(rhm=-4.0, rvm=-1.8, rha=-1.65, rva=-0.6)
     assert (state.rhm, state.rvm, state.rha, state.rva) == (-4.0, -1.8, -1.65, -0.6)
     state.set_crystal_bending(rhm=4.0)

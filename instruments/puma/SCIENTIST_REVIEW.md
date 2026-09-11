@@ -11,8 +11,9 @@ If you only have five minutes, these are the most useful questions:
    current instrument, and exactly which reference points define them?
 2. What are the physical scattering senses/signs of the monochromator, sample,
    and analyser axes?
-3. Are the PG monochromator/analyser slab sizes, counts, mosaics, and bending
-   limits in TAVI correct?
+3. Are the PG monochromator/analyser slab sizes, counts, and mosaics in TAVI
+   correct? (The bending limits and the analyser's fixed vertical radius are
+   answered — see below.)
 4. Which collimators, slits, filters, and detector geometry are actually
    installed, and where are they?
 5. Which NMO and velocity-selector options describe real or planned hardware,
@@ -23,7 +24,19 @@ If you only have five minutes, these are the most useful questions:
 TAVI uses a simplified thermal source, a curved PG monochromator, four
 collimation positions, slits around the sample, an optional nested mirror
 optic, a curved PG analyser, and one ideal detector. It assumes the analyser's
-vertical radius is fixed at 0.8 m and applies legacy minimum bending radii.
+vertical radius is fixed at 0.8 m and applies minimum bending radii (2.0 m
+horizontal, 0.5 m vertical, on both crystals).
+
+## Answered
+
+**Bending limits and the fixed analyser vertical radius (question 3, in
+part):** the operator reviewed these against PUMA's internal instrument
+documentation and confirmed them with the instrument scientist on
+2026-09-11 — the 2.0 m / 0.5 m minimum bending radii and the analyser's
+fixed 0.8 m vertical radius are correct as modeled. This is a review-and-
+confirmation, not an independently citable published source, and not a
+guarantee against a future mechanical change. The slab sizes, counts, and
+mosaics half of question 3 is still open.
 
 ## Other missing information
 

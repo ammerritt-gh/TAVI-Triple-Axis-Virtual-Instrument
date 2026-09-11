@@ -88,34 +88,10 @@ class IN8_Instrument(TAS_Instrument):
 
         return crystal_info_from_descriptor(in8_descriptor(), monocris, anacris)
 
-    def calculate_crystal_bending(self, rhmfac, rvmfac, rhafac, mth, ath):
-        """Ideal bending radii for IN8's double-focusing crystals.
+    def descriptor(self):
+        from instruments.in8.plugin import in8_descriptor
 
-        Point-source formulas on BOTH sides (unlike PUMA, whose guide delivers
-        a quasi-parallel beam to the mono): the horizontal virtual source at L1
-        is a real focal point, so RH = 2/sin(theta)/(1/Lin + 1/Lout) and
-        RV = 2*sin(theta)/(1/Lin + 1/Lout). IN8's analyzer is double-focusing,
-        so rva is computed too (PUMA fixes it at 0.8).
-
-        The radii are SIGNED: theta arrives signed (IN8's A4 is negative), and
-        Monochromator_curved needs the curvature center on the scattering side
-        -- feeding a positive radius to the negative take-off branch defocuses
-        by ~7 orders of magnitude in peak intensity (measured in the Phase-4
-        smoke run). No minimum-radius clamps: IN8's mechanical limits are
-        unknown (PLACEHOLDER; design record §20).
-        """
-        sin_mth = math.sin(math.radians(mth))
-        sin_ath = math.sin(math.radians(ath))
-        mono_focus = 1 / (1 / self.L1 + 1 / self.L2)
-        ana_focus = 1 / (1 / self.L3 + 1 / self.L4)
-
-        rhm = rhmfac * 2 * mono_focus / sin_mth
-        rvm = rvmfac * 2 * mono_focus * sin_mth
-        rha = rhafac * 2 * ana_focus / sin_ath
-        rva = 2 * ana_focus * sin_ath
-
-        print(f"\nrhm: {rhm:.2f} rvm: {rvm:.2f} rha: {rha:.2f} rva: {rva:.2f}")
-        return rhm, rvm, rha, rva
+        return in8_descriptor()
 
     def build_point_params(self, deltaE):
         """Build the runtime parameter snapshot for one instrument point.
