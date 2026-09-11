@@ -2723,21 +2723,39 @@ class TAVIController(QObject):
         # carries sensible values before any point is solved (the real
         # per-point focus still runs in compute_scan_snapshot -- this is just
         # the launch-state snapshot). Per-axis: an axis a caller pinned to an
-        # explicit radius above (now HELD) is never overwritten here, unlike
-        # the old all-or-nothing recompute this replaces, where naming ANY
-        # one radius silently skipped it for all four.
+        # explicit radius above (now HELD, computed above) is never
+        # overwritten here, unlike the old all-or-nothing recompute this
+        # replaces, where naming ANY one radius silently skipped it for all
+        # four. Computed AFTER the HELD loop so a caller naming e.g. rva
+        # excludes it here too; also excludes any axis a non-empty scan
+        # command names (SCANNED, not a launch-state number to fill in --
+        # compute_scan_snapshot answers that per point). Deliberately NOT
+        # filtered through ``_askable_curvature_axes``: an axis that is
+        # genuinely AUTOFOCUS, unscanned, AND driven with no established
+        # focusing model (IN12's Heusler ``rva``) must still reach
+        # ``ideal_curvature`` and raise -- nobody pinned or scanned it, so
+        # there is no radius to run with, and that refusal is the point.
         if any(k in patched for k in
                ('mtt', 'att', 'modules', 'monocris', 'anacris')):
-            try:
-                ideal = self._ideal_bending_from_modules(
-                    vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
-                    vals['modules'],
-                )
-            except ValueError as exc:
-                raise ApiError(400, "invalid_curvature", str(exc))
-            if ideal:
-                for axis in ('rhm', 'rvm', 'rha', 'rva'):
-                    if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
+            requested_axes = {
+                axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+                if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS
+            }
+            for cmd in (vals.get('scan_command1'), vals.get('scan_command2')):
+                cmd = (cmd or "").strip()
+                if not cmd:
+                    continue
+                requested_axes.discard(self.normalize_scan_variable(cmd.split()[0]))
+            if requested_axes:
+                try:
+                    ideal = self._ideal_bending_from_modules(
+                        vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
+                        vals['modules'], requested_axes=requested_axes,
+                    )
+                except ValueError as exc:
+                    raise ApiError(400, "invalid_curvature", str(exc))
+                if ideal:
+                    for axis in requested_axes:
                         vals[axis] = ideal[axis]
 
         # A HELD radius outside its declared mechanical travel, or off a
@@ -3022,16 +3040,17 @@ class TAVIController(QObject):
     def _compute_ideal_bending_values(self, mtt=None, att=None):
         """Ideal absolute bending radii for the crystals selected in the GUI.
 
-        Thin caller of the shared producer (``TAS_Instrument.ideal_curvature``),
-        naming the crystals the GUI actually has selected and the NMO state
-        from its combo -- never a live-widget read anywhere else, so a
-        hypothetical (mtt, att) passed in by a caller still gets today's real
-        crystal selection. Returns None for a degenerate geometry (zero
-        take-off angle); a driven axis whose crystal declares this axis's
-        focusing model unknown (IN12's Heusler ``rva``) is simply left out of
-        ``requested_axes`` rather than blanking the whole result -- the other
-        three axes still get a real ideal. The caller shows "Ideal: --" for a
-        missing key the same way it already does for a fully refused result.
+        Thin caller of ``_ideal_bending_from_modules``, naming the crystals
+        the GUI actually has selected and the NMO state from its combo --
+        never a live-widget read anywhere else, so a hypothetical (mtt, att)
+        passed in by a caller still gets today's real crystal selection.
+        Returns None for a degenerate geometry (zero take-off angle); a
+        driven axis whose crystal declares this axis's focusing model
+        unknown (IN12's Heusler ``rva``) is simply left out of the askable
+        set (``_askable_curvature_axes``) rather than blanking the whole
+        result -- the other three axes still get a real ideal. The caller
+        shows "Ideal: --" for a missing key the same way it already does for
+        a fully refused result.
         """
         try:
             if mtt is None:
@@ -3045,19 +3064,18 @@ class TAVIController(QObject):
             # an unrelated driven axis with none (IN12's Heusler rva) must
             # not disable the other three, which the whole-crystal try/except
             # used to do by construction (any raise blanked all four).
-            axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
-            requested_axes = {
-                axis for axis in ('rhm', 'rvm', 'rha', 'rva')
-                if not (axis_specs.get(axis) and axis_specs[axis][0].driven
-                        and not axis_specs[axis][0].focusing_known)
-            }
-            return _operator_magnitudes(self.instrument_state.ideal_curvature(
-                monocris, anacris, mtt / 2, att / 2, modules=modules,
+            requested_axes = self._askable_curvature_axes(
+                monocris, anacris, modules=modules
+            )
+            return self._ideal_bending_from_modules(
+                mtt, att, monocris, anacris, modules,
                 requested_axes=requested_axes,
-            ))
-        except (ValueError, ZeroDivisionError) as exc:
-            # Expected refusals: an unknown focusing model, or no take-off
-            # angle to focus at. The caller shows "Ideal: --".
+            )
+        except ValueError as exc:
+            # Expected refusal: an unrequested-but-still-raising crystal
+            # lookup failure. A degenerate take-off angle is handled inside
+            # ``_ideal_bending_from_modules`` (ZeroDivisionError -> None) and
+            # never reaches here. The caller shows "Ideal: --".
             log.info("ideal bending unavailable (%s/%s): %s",
                      monocris, anacris, exc)
             return None
@@ -3966,6 +3984,26 @@ class TAVIController(QObject):
                         )
                     break
         return specs
+
+    def _askable_curvature_axes(self, monocris, anacris, modules=None):
+        """Axes an ideal-radius request may legitimately ask for.
+
+        One rule, two callers: the GUI's Ideal buttons want an answer for
+        every askable axis (``_compute_ideal_bending_values``); the API wants
+        askable AND currently AUTOFOCUS AND not named by a scan command
+        (``build_api_launch_state``, ``_default_parameter_values``). An axis
+        is NOT askable when it is driven with no established focusing model
+        (IN12's Heusler ``rva``) -- asking ``ideal_curvature`` for it raises,
+        so the two rungs above filter it out before the call rather than
+        catching the raise for one axis while three others still need an
+        answer.
+        """
+        axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
+        return {
+            axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+            if not (axis_specs.get(axis) and axis_specs[axis][0].driven
+                    and not axis_specs[axis][0].focusing_known)
+        }
 
     def _held_curvature_issues(self, monocris, anacris):
         """Hard-refusal messages for a HELD curvature radius, straight from
@@ -5605,7 +5643,8 @@ class TAVIController(QObject):
         else:
             self.set_default_parameters()
     
-    def _ideal_bending_from_modules(self, mtt, att, monocris, anacris, modules):
+    def _ideal_bending_from_modules(self, mtt, att, monocris, anacris, modules,
+                                     requested_axes=None):
         """Widget-free ideal bending radii for the NAMED crystals.
 
         Thin caller of the shared producer, mirroring
@@ -5613,16 +5652,24 @@ class TAVIController(QObject):
         come from the caller's frozen values (a patched API request), never
         from live GUI selection, which can name a different pair.
 
+        ``requested_axes`` passes straight through to ``ideal_curvature``:
+        ``None`` (the default) asks for all four, same as every caller before
+        this parameter existed. A caller that only wants some axes (e.g. the
+        ones actually AUTOFOCUS right now) should narrow it, so an unrelated
+        axis with no established focusing model (IN12's Heusler ``rva``)
+        cannot refuse an answer nobody asked it for.
+
         Returns None for a degenerate geometry (zero take-off angle) -- the
         caller leaves the radii at their prior value, same as before. A
-        crystal whose focusing model is unknown for a driven axis (IN12's
-        Heusler ``rva``) is NOT swallowed: ``ValueError`` propagates so the
-        API path (``build_api_launch_state``) can surface it as a 400
-        instead of silently keeping a stale radius.
+        REQUESTED crystal/axis whose focusing model is unknown for a driven
+        axis (IN12's Heusler ``rva``) is NOT swallowed: ``ValueError``
+        propagates so the API path (``build_api_launch_state``) can surface
+        it as a 400 instead of silently keeping a stale radius.
         """
         try:
             return _operator_magnitudes(self.instrument_state.ideal_curvature(
                 monocris, anacris, mtt / 2, att / 2, modules=modules,
+                requested_axes=requested_axes,
             ))
         except ZeroDivisionError:
             return None
@@ -5707,14 +5754,24 @@ class TAVIController(QObject):
         }
 
         try:
+            # All four are AUTOFOCUS in the defaults set just above; naming
+            # them explicitly (rather than passing requested_axes=None) makes
+            # that rule visible here rather than implicit in "ask for
+            # everything".
             ideal = self._ideal_bending_from_modules(
                 vals['mtt'], vals['att'], vals['monocris'], vals['anacris'],
-                modules,
+                modules, requested_axes=('rhm', 'rvm', 'rha', 'rva'),
             )
-        except ValueError:
+        except ValueError as exc:
             # The default crystals are always focusing-known; a refusal here
             # would mean a hand-built descriptor with no valid default pair.
-            # Leave the flat fallbacks above rather than fail every request.
+            # Leave the flat fallbacks above rather than fail every request,
+            # but never swallow it silently -- a hand-built descriptor that
+            # hits this is a wiring bug worth seeing in the log.
+            log.warning(
+                "default ideal bending unavailable for %s/%s: %s",
+                vals['monocris'], vals['anacris'], exc,
+            )
             ideal = None
         if ideal:
             # Per axis, honouring the modes set just above -- the same rule
