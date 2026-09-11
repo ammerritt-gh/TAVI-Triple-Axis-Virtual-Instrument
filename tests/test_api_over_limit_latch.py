@@ -208,6 +208,11 @@ class _ManifestController:
     def normalize_scan_variable(self, variable):
         return variable
 
+    def _curvature_axis_specs(self, monocris, anacris):
+        # No curvature axis in this scan's command (deltaE) -- an empty
+        # mapping is exactly what a non-curvature scan gets in production.
+        return {}
+
     def print_to_message_center(self, message):
         raise AssertionError("manifest expansion unexpectedly failed: %s" % message)
 

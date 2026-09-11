@@ -4031,6 +4031,17 @@ class TAVIController(QObject):
         # A commanded scan range on a driven curvature axis is refused, not
         # clamped, when either endpoint falls outside its declared mechanical
         # travel -- the operator wrote both numbers deliberately.
+        #
+        # This checks the LITERAL text (start/end as typed) and is therefore
+        # only correct for an ABSOLUTE command: it gives immediate feedback
+        # while typing, before any launch state exists to expand a relative
+        # offset. It is a false pass for a RELATIVE command, whose real
+        # requested values are the current radius plus these offsets, not
+        # these numbers themselves -- ``validate_scan_launch_state``'s
+        # ``_curvature_violation`` is the check that expands relative
+        # commands first and is authoritative for that case. Keep both: do
+        # not delete this one as "redundant" with the manifest check, and do
+        # not treat the manifest check as redundant with this one.
         axis_spec = (curvature_axes or {}).get(var_lower)
         if axis_spec is not None:
             from instruments.tas_runtime import curvature_command_error
@@ -6881,6 +6892,32 @@ class TAVIController(QObject):
         relative_mode_1 = launch_state.get('relative_mode_1', False)
         relative_mode_2 = launch_state.get('relative_mode_2', False)
 
+        # A relative command's real requested values only exist after
+        # ``_expand`` adds the current radius -- ``_validate_single_scan_command``
+        # checks the literal command text and so only ever sees the offsets
+        # (e.g. "-2.4 -2.0"), which can look inside travel while the expanded
+        # values ("0.1 0.5") are not. That earlier check stays authoritative
+        # for the absolute case (immediate feedback while typing, before a
+        # launch state exists to expand); this is the one that is authoritative
+        # for the relative case, because it is the only check that ever sees
+        # the values a relative scan will actually command.
+        from instruments.tas_runtime import curvature_command_error
+
+        curvature_axes = self._curvature_axis_specs(
+            vals.get('monocris'), vals.get('anacris')
+        )
+
+        def _curvature_violation(values):
+            for var, val in values.items():
+                axis_spec = curvature_axes.get(var)
+                if axis_spec is None:
+                    continue
+                curvature_axis, crystal_name = axis_spec
+                error = curvature_command_error(var, val, curvature_axis, crystal_name)
+                if error:
+                    return error
+            return None
+
         result = {"requested_points": 0, "per_command": [], "infeasible": [],
                   "point_manifest": []}
 
@@ -6908,7 +6945,11 @@ class TAVIController(QObject):
                 return False, f"angle solve error: {exc}", "geometry_solver_error"
 
         def _record(index, values, scan_point):
-            feasible, reason, kind = _feasible(scan_point)
+            curvature_error = _curvature_violation(values)
+            if curvature_error:
+                feasible, reason, kind = False, curvature_error, "curvature_out_of_travel"
+            else:
+                feasible, reason, kind = _feasible(scan_point)
             entry = {"index": index, "values": values, "feasible": feasible,
                      "kind": kind, "reason": reason}
             result["point_manifest"].append(entry)
