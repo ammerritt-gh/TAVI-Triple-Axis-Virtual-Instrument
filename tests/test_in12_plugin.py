@@ -581,3 +581,96 @@ def test_heusler_rva_autofocus_is_still_refused_naming_rva(tmp_path):
     with pytest.raises(ValueError, match="rva") as excinfo:
         compute_scan_snapshot((scans, 0), 0, "angle", state, vals, str(tmp_path))
     assert "focusing_known" in str(excinfo.value)
+
+
+# ------------------------------------------------- L1/D13: one ideal-radii fn
+#
+# Promoted from the branch's probe script. build_api_launch_state's launch-
+# state refresh (fired when mtt/att/modules/monocris/anacris is patched) used
+# to ask ``ideal_curvature`` for all four radii unconditionally, so an IN12
+# Heusler analyser (``rva`` driven=True, focusing_known=False) refused every
+# such request even when the caller named ``rva`` explicitly (HELD) or
+# scanned it (SCANNED) -- both cases the GUI already accepted via
+# ``_compute_ideal_bending_values``'s own (now shared) askable filter.
+
+
+def _api_controller(instrument_id):
+    """Same fixture as tests/test_rva_gui_axis_policy.py's ``_controller``,
+    reused rather than duplicated -- these tests exercise the same
+    Qt-backed ``TAVIController`` the GUI/API split lives on."""
+    pytest.importorskip("PySide6")
+    pytest.importorskip("mcstasscript")
+    from test_rva_gui_axis_policy import _controller
+    return _controller(instrument_id)
+
+
+def _heusler_ana_id(ctrl):
+    return next(c for c in ctrl.descriptor.ana_crystals if c.id == "heusler111").id
+
+
+def test_api_heusler_with_explicit_rva_is_accepted():
+    """D13: naming rva explicitly HELDs it, so the refresh must not ask
+    ``ideal_curvature`` about it at all."""
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        launch = ctrl.build_api_launch_state({
+            "anacris": heusler, "rva": 0.5, "scan_command1": "H 1.9 2.1 0.1",
+        })
+        assert launch["vals"]["rva"] == 0.5
+
+
+def test_api_heusler_without_rva_is_refused_naming_rva():
+    """The mirror case: rva is genuinely AUTOFOCUS, unscanned, and driven
+    with no established focusing model -- that refusal is the point and
+    must survive the fix (test_heusler_rva_autofocus_is_still_refused_naming_rva
+    pins the same rule one layer down, in compute_scan_snapshot)."""
+    from tavi.api_server import ApiError
+
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        with pytest.raises(ApiError) as excinfo:
+            ctrl.build_api_launch_state({
+                "anacris": heusler, "scan_command1": "H 1.9 2.1 0.1",
+            })
+        assert "rva" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("trigger_field", ["mtt", "att", "modules", "monocris", "anacris"])
+def test_api_heusler_rva_held_survives_every_refresh_trigger(trigger_field):
+    """Every field that fires the launch-state ideal-radii refresh must
+    behave identically for a HELD Heusler rva: the refresh's requested set
+    excludes any axis already HELD by the patch, so the unrelated three
+    AUTOFOCUS axes (all real crystals with an established focusing model)
+    still get a real ideal number."""
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        trigger_values = {
+            "mtt": 41.167, "att": 41.167, "modules": {},
+            "monocris": ctrl.descriptor.mono_crystals[0].id,
+            "anacris": heusler,
+        }
+        patch = {
+            "anacris": heusler, "rva": 1.4, "scan_command1": "H 1.9 2.1 0.1",
+            trigger_field: trigger_values[trigger_field],
+        }
+
+        launch = ctrl.build_api_launch_state(patch)
+        vals = launch["vals"]
+
+        assert vals["rva"] == 1.4
+        assert vals["rhm"] != 0.0
+        assert vals["rvm"] != 0.0
+        assert vals["rha"] != 0.0
+
+
+def test_api_heusler_rva_scanned_needs_no_rva_parameter():
+    """A scan command naming rva promotes it away from a launch-state
+    AUTOFOCUS refresh the same way an explicit HELD value does -- the point
+    solver (compute_scan_snapshot) answers rva's per-point value, so the
+    launch-state refresh must not refuse the request for lacking one."""
+    with _api_controller("in12") as ctrl:
+        heusler = _heusler_ana_id(ctrl)
+        launch = ctrl.build_api_launch_state({
+            "anacris": heusler, "scan_command1": "rva 0.3 0.6 0.1",
+        })
+        assert launch["vals"]["scan_command1"] == "rva 0.3 0.6 0.1"
