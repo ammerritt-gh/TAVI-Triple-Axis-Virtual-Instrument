@@ -279,22 +279,26 @@ def test_momentum_feasibility_enforces_solved_axis_limits():
 
 
 def test_crystal_bending_is_rowland_matched_and_branch_signed():
+    """Literals are the pinned reference table (packet slice2 §pinned table),
+    derived from IN12's declared arm lengths -- not recomputed from the
+    implementation under test, which would pass against any policy it
+    happened to adopt."""
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     state = plugin.default_state()
     mth, ath = -27.917234, -27.917234       # both branches negative on IN12
-    rhm, rvm, rha, rva = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    sin_th = math.sin(math.radians(abs(mth)))
-    mono_focus = 1 / (1 / 1.80 + 1 / 1.80)   # = 0.9 m: L1 == L2 by design
-    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
-    assert rhm == pytest.approx(-2 * mono_focus / sin_th)
-    assert rvm == pytest.approx(-2 * mono_focus * sin_th)
-    assert rha == pytest.approx(-2 * ana_focus / sin_th)
+    radii = state.ideal_curvature("pg002", "pg002", mth, ath)
+
+    assert radii["rhm"] == pytest.approx(-3.8445, abs=5e-5)
+    assert radii["rvm"] == pytest.approx(-0.8428, abs=5e-5)
+    assert radii["rha"] == pytest.approx(-1.9794, abs=5e-5)
     # The analyser's vertical radius is fixed hardware, branch-signed but not
     # computed -- and deliberately NOT the Rowland optimum, which is what
     # "fixed" means. Guard that it is not silently tracking the arms.
-    assert rva == -ANA_FIXED_RV
-    assert abs(rva) > 2 * abs(2 * ana_focus * sin_th)
+    assert radii["rva"] == pytest.approx(-ANA_FIXED_RV)
+    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
+    sin_th = math.sin(math.radians(abs(ath)))
+    assert abs(radii["rva"]) > 2 * abs(2 * ana_focus * sin_th)
 
 
 def test_vertical_bending_clamps_at_the_provisional_minimum():
@@ -308,10 +312,10 @@ def test_vertical_bending_clamps_at_the_provisional_minimum():
     from instruments.in12.model import MONO_MIN_RV
 
     state = IN12Plugin().default_state()
-    _, rvm, _, _ = state.calculate_crystal_bending(1, 1, 1, -10.0, -30.0)
+    radii = state.ideal_curvature("pg002", "pg002", -10.0, -30.0)
     ideal = -2 * 0.9 * math.sin(math.radians(10.0))
     assert abs(ideal) < MONO_MIN_RV                  # the clamp really engages
-    assert rvm == pytest.approx(-MONO_MIN_RV)        # clamped, sign preserved
+    assert radii["rvm"] == pytest.approx(-MONO_MIN_RV)  # clamped, sign preserved
 
 
 def test_build_fingerprint_stable_and_sensitive():
@@ -396,9 +400,17 @@ def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
 
 
 def test_set_crystal_bending_is_idempotent_on_already_signed_values():
-    """scan_config signs first; the setter must not flip them back."""
+    """A value already signed onto the take-off branch is not flipped back.
+
+    Real angles are required now: the base setter derives the branch sign
+    from ``self.A1``/``self.A4``, not from an unconditional instrument-wide
+    override (see ``instruments/tas_runtime.py::set_crystal_bending``). No
+    crystal is selected, so every axis reads as driven/unfixed -- the
+    supplied -0.6 m for rva is not IN12's fixed 1.40 m analyser radius.
+    """
     pytest.importorskip("mcstasscript")
     state = IN12Plugin().default_state()
+    state.set_angles(A1=-55.834468, A4=-55.834468)  # IN12's negative take-off branch
     state.set_crystal_bending(rhm=-4.0, rvm=-1.8, rha=-1.65, rva=-0.6)
     assert (state.rhm, state.rvm, state.rha, state.rva) == (-4.0, -1.8, -1.65, -0.6)
     state.set_crystal_bending(rhm=4.0)
@@ -456,17 +468,15 @@ def test_the_heusler_does_not_inherit_pg_s_fixed_vertical_focus():
     state.anacris = heusler
     assert not state.ana_vertical_is_fixed()
 
-    # ...and the runtime radius follows, rather than PG's fixed value.
+    # ...and the ideal radius follows, rather than PG's fixed value: PG gets
+    # its fixed hardware radius, while the Heusler's focusing is unpublished
+    # (focusing_known=False) and is REFUSED rather than given an invented one.
     mth = ath = -27.917234
-    state.anacris = "pg002"
-    _, _, _, rva_pg = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    state.anacris = heusler
-    _, _, _, rva_heusler = state.calculate_crystal_bending(1, 1, 1, mth, ath)
-    assert rva_pg == -ANA_FIXED_RV
-    assert rva_heusler != pytest.approx(rva_pg)
-    ana_focus = 1 / (1 / 1.30 + 1 / 0.72)
-    assert rva_heusler == pytest.approx(
-        -2 * ana_focus * math.sin(math.radians(abs(ath))))
+    state.monocris = "pg002"
+    radii_pg = state.ideal_curvature("pg002", "pg002", mth, ath)
+    assert radii_pg["rva"] == pytest.approx(-ANA_FIXED_RV)
+    with pytest.raises(ValueError, match="focusing_known"):
+        state.ideal_curvature("pg002", heusler, mth, ath)
 
 
 def test_scan_config_rva_follows_the_selected_analyser():
