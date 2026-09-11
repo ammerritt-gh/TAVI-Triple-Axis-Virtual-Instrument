@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
+from instruments.descriptor import CurvatureAxis  # noqa: E402
 from instruments.registry import get_instrument  # noqa: E402
 
 
@@ -71,8 +72,11 @@ def _pin_rva(ctrl, monkeypatch):
 
     pinned = dataclasses.replace(
         ctrl.descriptor,
-        ana_crystals=tuple(dataclasses.replace(c, fixed_curvature=("rva",))
-                           for c in ctrl.descriptor.ana_crystals))
+        ana_crystals=tuple(
+            dataclasses.replace(
+                c, curvature={"rva": CurvatureAxis(driven=False, fixed_radius_m=0.05,
+                                                    provenance="test fixture")})
+            for c in ctrl.descriptor.ana_crystals))
     monkeypatch.setattr(ctrl, "descriptor", pinned, raising=False)
     return pinned
 
@@ -134,7 +138,9 @@ def test_the_pin_follows_the_crystal_the_caller_names(in8_controller, monkeypatc
     ctrl = in8_controller
     ana = ctrl.descriptor.ana_crystals[0]
     other = dataclasses.replace(ana, id="other", display_name="Other")
-    pinned = dataclasses.replace(ana, fixed_curvature=("rva",))
+    pinned = dataclasses.replace(
+        ana, curvature={"rva": CurvatureAxis(driven=False, fixed_radius_m=0.05,
+                                              provenance="test fixture")})
     monkeypatch.setattr(
         ctrl, "descriptor",
         dataclasses.replace(ctrl.descriptor, ana_crystals=(pinned, other)),

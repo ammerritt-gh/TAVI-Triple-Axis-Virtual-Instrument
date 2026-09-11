@@ -40,6 +40,7 @@ from instruments.descriptor import (
     AxisLimits,
     CollimationSlot,
     CrystalSpec,
+    CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
     MonitorSpec,
@@ -78,6 +79,32 @@ _L1, _L2, _L3, _L4 = 5.00, 2.10, 1.05, 0.95
 # distance for the monochromator's horizontal focusing and PANDA's defining
 # primary optic; it is not a Geometry field, so the state class owns it
 # (PANDA_Instrument.l_virtual_source_mono).
+
+# Curvature: no minimum or maximum radius is applied for either crystal.
+# MODEL_STATUS.md records this as confirmed absent from the literature, not
+# merely unlocated -- the 2007 report confirms driven focusing existed but
+# gives no travel, and inventing a clamp would be worse than applying none.
+_PANDA_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True),
+    "rvm": CurvatureAxis(driven=True),
+}
+_PANDA_ANA_CURVATURE = {
+    "rha": CurvatureAxis(driven=True),
+    # Fixed vertical / variable horizontal focusing is confirmed for THIS
+    # assembly by two peer-reviewed PANDA papers (one ties the fixed vertical
+    # geometry to the vertically oriented 1" 3He detector) and by the MLZ page
+    # advertising only variable horizontal focusing. The RADIUS is still
+    # unsourced -- only the fixedness is.
+    "rva": CurvatureAxis(
+        driven=False, fixed_radius_m=0.60,
+        provenance=(
+            "Fixedness confirmed by two peer-reviewed PANDA papers and the "
+            "MLZ page (variable horizontal focusing advertised, vertical "
+            "not); the 0.60 m radius is our own point-focus value for "
+            "kf = 1.55 A^-1, not a sourced mechanical figure (MODEL_STATUS.md)."
+        ),
+    ),
+}
 
 # The full McStas parameter set build_PANDA_instrument declares via
 # add_parameter() -- the per-point snapshot dict shape. The 16 shared core TAS
@@ -184,6 +211,7 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.020, slab_height=0.018, n_columns=11, n_rows=11,
                 gap=0.002, mosaic=20, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_PANDA_MONO_CURVATURE,
             ),
             # Cu(111), the second current monochromator (MLZ: ki = 1.8-7.0
             # A^-1, d quoted as 2.08 A; 2.087 A is the crystallographic value
@@ -200,6 +228,7 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.020, slab_height=0.018, n_columns=11, n_rows=11,
                 gap=0.002, mosaic=30, r0=0.7,
                 reflect_file="NULL", transmit_file="NULL",
+                curvature=_PANDA_MONO_CURVATURE,
             ),
             # Si(111) and the Heusler polarizing face are current PANDA
             # hardware but are deliberately absent: Si(111) is a bent-perfect
@@ -221,15 +250,7 @@ def panda_descriptor() -> InstrumentDescriptor:
                 slab_width=0.013, slab_height=0.025, n_columns=11, n_rows=5,
                 gap=0.003, mosaic=20, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
-                # Fixed vertical / variable horizontal focusing is
-                # confirmed for THIS assembly (two peer-reviewed
-                # papers, one tying the fixed vertical geometry to
-                # the vertically oriented 1" 3He detector; MLZ
-                # advertises only variable horizontal). So rva is
-                # refused as a scan variable rather than silently
-                # defeating the pin scan_config applies. The RADIUS
-                # is still unsourced -- only the fixedness is.
-                fixed_curvature=("rva",),
+                curvature=_PANDA_ANA_CURVATURE,
             ),
         ),
         # Samples come from the shared, instrument-independent library --

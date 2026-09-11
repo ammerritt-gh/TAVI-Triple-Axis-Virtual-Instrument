@@ -54,6 +54,7 @@ from instruments.descriptor import (
     AxisLimits,
     CollimationSlot,
     CrystalSpec,
+    CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
     MonitorSpec,
@@ -116,6 +117,46 @@ _ANA_N_ROWS = 3
 # (~0.43 m at this take-off), which is what a *fixed* focus looks like: right
 # at one setting only.
 ANA_FIXED_RV = 1.40
+
+# Duplicated from instruments.in12.model.MONO_MIN_RH/MONO_MIN_RV to preserve
+# the import-light rule above; asserted equal by tests/test_in12_plugin.py.
+_MONO_MIN_RH = 1.7
+_MONO_MIN_RV = 0.5
+
+_MONO_CLAMP_PROVENANCE = (
+    "Provisional model assumption, not a published mechanical limit -- ILL "
+    "confirms only that both axes are variable, and no source gives the "
+    "mechanical envelope. The vertical minimum is load-bearing above roughly "
+    "|A1| = 32 deg (MODEL_STATUS.md)."
+)
+_IN12_MONO_CURVATURE = {
+    "rhm": CurvatureAxis(driven=True, min_radius_m=_MONO_MIN_RH,
+                          provenance=_MONO_CLAMP_PROVENANCE),
+    "rvm": CurvatureAxis(driven=True, min_radius_m=_MONO_MIN_RV,
+                          provenance=_MONO_CLAMP_PROVENANCE),
+}
+_IN12_ANA_PG002_CURVATURE = {
+    "rha": CurvatureAxis(driven=True),
+    "rva": CurvatureAxis(
+        driven=False, fixed_radius_m=ANA_FIXED_RV,
+        provenance=(
+            "1998 (Schmidt & Fak) confirms the vertical focus is fixed by "
+            "design (tilting the top and bottom crystal rows); 1.40 m is "
+            "Takin's pop_ana_curvv resolution preset, not a measured "
+            "mechanical radius (MODEL_STATUS.md)."
+        ),
+    ),
+}
+# The Heusler's focusing behaviour is unpublished -- not the same claim as
+# "driven": published IN12 experiments describe both a horizontally and a
+# vertically focusing Heusler configuration, and whether that is one
+# reconfigurable assembly or two is unknown (MODEL_STATUS.md). It is driven
+# like rha (no fixed_curvature to inherit from PG's evidence), but no ideal
+# radius may be computed for it -- hence focusing_known=False rather than a
+# claimed mechanical model.
+_IN12_ANA_HEUSLER_CURVATURE = {
+    "rva": CurvatureAxis(driven=True, focusing_known=False),
+}
 
 
 def _slab_size(face, count, gap=_SLAB_GAP):
@@ -234,6 +275,7 @@ def in12_descriptor() -> InstrumentDescriptor:
                 n_columns=11, n_rows=11,
                 gap=_SLAB_GAP, mosaic=24, r0=1.0,
                 reflect_file="HOPG.rfl", transmit_file="HOPG.trm",
+                curvature=_IN12_MONO_CURVATURE,
             ),
         ),
         ana_crystals=(
@@ -259,7 +301,7 @@ def in12_descriptor() -> InstrumentDescriptor:
                 # than silently defeating the pin scan_config applies.
                 # The Heusler option below has no established focusing
                 # behaviour and therefore claims nothing.
-                fixed_curvature=("rva",),
+                curvature=_IN12_ANA_PG002_CURVATURE,
             ),
             # Polarisation-analysis analyser: Heusler(111), d = 3.44 A, ILL
             # face 75 x 145 mm. TAVI models no polarisation, so this changes
@@ -279,6 +321,7 @@ def in12_descriptor() -> InstrumentDescriptor:
                 n_columns=5, n_rows=1,
                 gap=_SLAB_GAP, mosaic=30, r0=0.3,
                 reflect_file="NULL", transmit_file="NULL",
+                curvature=_IN12_ANA_HEUSLER_CURVATURE,
             ),
         ),
         # Samples come from the shared, instrument-independent library --
