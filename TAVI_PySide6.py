@@ -3986,17 +3986,21 @@ class TAVIController(QObject):
         return specs
 
     def _askable_curvature_axes(self, monocris, anacris, modules=None):
-        """Axes an ideal-radius request may legitimately ask for.
+        """Axes the GUI's advisory Ideal labels may ask a radius for.
 
-        One rule, two callers: the GUI's Ideal buttons want an answer for
-        every askable axis (``_compute_ideal_bending_values``); the API wants
-        askable AND currently AUTOFOCUS AND not named by a scan command
-        (``build_api_launch_state``, ``_default_parameter_values``). An axis
-        is NOT askable when it is driven with no established focusing model
-        (IN12's Heusler ``rva``) -- asking ``ideal_curvature`` for it raises,
-        so the two rungs above filter it out before the call rather than
-        catching the raise for one axis while three others still need an
-        answer.
+        One caller, on purpose: ``_compute_ideal_bending_values`` wants an
+        answer for every axis that HAS a focusing model so that an
+        unrelated axis with none (IN12's Heusler ``rva``, driven with
+        ``focusing_known=False``) does not blank the other three labels.
+        That is an advisory-display question. The API's launch refresh
+        (``build_api_launch_state``, ``_default_parameter_values``) asks a
+        different one -- which axes this launch will actually AUTOFOCUS --
+        and deliberately does NOT filter through here: an unaskable axis
+        that is genuinely AUTOFOCUS, unpinned and unscanned must reach
+        ``ideal_curvature`` and be refused naming the axis, because there
+        is no radius to run with. The GUI can never put such an axis into
+        AUTOFOCUS (its Ideal button is disabled), so the two paths do not
+        disagree on any reachable launch; they answer different questions.
         """
         axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
         return {
