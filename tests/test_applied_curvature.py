@@ -15,8 +15,10 @@ The deterministic engine writes no per-point files at all, so it is exercised
 here end to end (fast: no McStas compile/run) through a real ``ScanJob`` --
 this is the ONLY place its truth can live. The McStas per-point-file path is
 already pinned by ``test_emitted_curvature.py`` at the ``compute_snapshot``
-level; the per-point job.result wiring added here is identical code run from
-the same per-point metadata dict, verified by reading (see PR diff).
+level; the per-point job.result wiring on the McStas execution path is
+identical code run from the same per-point metadata dict, exercised below
+with McStas execution itself stubbed (``run_point``/``build``/the detector-
+file reader), isolating the recording boundary from the ray tracing.
 """
 import contextlib
 import os
@@ -100,20 +102,48 @@ def test_deterministic_engine_applied_curvature_tracks_each_point(tmp_path):
         assert result.metadata["rhm"] == pytest.approx(launch_rhm)
 
 
+def _independently_solved_curvature(ctrl, vals, H, K, L, deltaE):
+    """Ground truth for ONE point, independent of ``run_simulation``'s
+    deterministic-engine loop: solve this point's own angles, then its own
+    AUTOFOCUS ideal curvature -- exactly what ``compute_scan_snapshot``'s
+    per-point metadata (``md``) is built from for an AUTOFOCUS axis."""
+    qx, qy, qz = ctrl._hkl_to_sample_q(H, K, L, vals)
+    check_state = ctrl.instrument.default_state()
+    check_state.monocris = vals["monocris"]
+    check_state.anacris = vals["anacris"]
+    check_state.K_fixed = vals["K_fixed"]
+    check_state.fixed_E = vals["fixed_E"]
+    angles, error_flags = check_state.calculate_angles(
+        qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
+        check_state.monocris, check_state.anacris,
+    )
+    assert error_flags == [], (deltaE, error_flags)
+    mtt, _stt, _sth, _saz, att = angles
+    return check_state.ideal_curvature(
+        check_state.monocris, check_state.anacris, mtt / 2, att / 2,
+    )
+
+
 def test_deterministic_engine_leaves_skipped_point_as_none(tmp_path):
     """An infeasible/skipped point leaves ``None`` in applied_curvature, like
     the other index-parallel lists -- never a zero that reads as a flat
     crystal (packet test #4).
+
+    PUMA, H=1 K=0 L=0, Kf-fixed 14.7 meV (the launch defaults):
+    ``check_point_feasibility`` closes the scattering triangle up to
+    deltaE=22 and refuses it from deltaE=23 on (confirmed by direct probe,
+    "scattering triangle does not close"), so "deltaE 15 25 5" (points 15,
+    20, 25) guarantees the LAST point infeasible and the first two feasible
+    -- not an incidental property of whatever range happened to be typed.
     """
     with _controller("puma") as ctrl:
         ctrl.output_directory = str(tmp_path)
         launch = ctrl.build_api_launch_state({
             "H": 1.0, "K": 0.0, "L": 0.0,
-            # A wildly out-of-range deltaE point is expected to fail the
-            # angle solve (error_flags) alongside two feasible ones.
-            "scan_command1": "deltaE -3 3 3",
+            "scan_command1": "deltaE 15 25 5",
         })
         launch["engine"] = "deterministic"
+        vals = launch["vals"]
 
         job = ScanJob(job_id="t-applied-curvature-skip", source="api",
                        launch_state=launch)
@@ -121,13 +151,25 @@ def test_deterministic_engine_leaves_skipped_point_as_none(tmp_path):
 
         result = job.result
         assert result is not None
-        # Whatever the feasibility of these particular points, every entry is
-        # either None (unmeasured/invalid) or a full signed radii dict --
-        # never a bare 0.0 masquerading as a flat crystal.
-        for pt in result.applied_curvature:
-            assert pt is None or (
-                isinstance(pt, dict) and set(pt) == {"rhm", "rvm", "rha", "rva"}
-            ), result.applied_curvature
+        assert len(result.applied_curvature) == 3, result.applied_curvature
+
+        # The skipped point: exactly index 2 (deltaE=25), never a stray 0.0.
+        assert result.applied_curvature[2] is None, result.applied_curvature
+
+        # The neighbours: full signed dicts, matching what the snapshot's own
+        # metadata would have recorded for those points -- not merely
+        # "some dict of the right shape".
+        for idx, deltaE in ((0, 15.0), (1, 20.0)):
+            pt = result.applied_curvature[idx]
+            assert isinstance(pt, dict) and set(pt) == {"rhm", "rvm", "rha", "rva"}, \
+                result.applied_curvature
+            expected = _independently_solved_curvature(
+                ctrl, vals, 1.0, 0.0, 0.0, deltaE
+            )
+            for axis in ("rhm", "rvm", "rha", "rva"):
+                assert pt[axis] == pytest.approx(expected[axis], abs=1e-6), (
+                    idx, axis, pt, expected
+                )
 
 
 def test_curvature_modes_is_read_only_in_schema_and_refused_on_write(tmp_path):
@@ -199,3 +241,66 @@ def test_a_2d_scan_indexes_applied_curvature_the_same_way_as_its_counts(tmp_path
             f"each row is a different deltaE and so a different mono take-off; "
             f"got {first_of_each_row} -- the linear index is wrong"
         )
+
+
+def test_mcstas_job_result_applied_curvature_is_filled_from_point_metadata(
+    tmp_path, monkeypatch
+):
+    """D25: the McStas execution path's applied_curvature recording (the
+    ``point_curvature = {axis: metadata[axis] ...}`` block in
+    ``run_simulation``'s non-deterministic branch) was "verified by
+    reading", not by a test. McStas execution itself is stubbed --
+    ``run_point``, ``build``, and the detector-file reader are replaced with
+    canned results -- so this is a bookkeeping test of the recording
+    boundary, not a ray-tracing test. Same PUMA feasibility boundary as
+    ``test_deterministic_engine_leaves_skipped_point_as_none`` (H=1 K=0 L=0,
+    "deltaE 15 25 5": points 15, 20 feasible, 25 not) so the SAME index is
+    expected None here, on the other execution path.
+    """
+    with _controller("puma") as ctrl:
+        ctrl.output_directory = str(tmp_path)
+
+        def _stub_run_point(instrument, snapshot, output_folder, number_neutrons,
+                             execution_state, mpi_count=1):
+            os.makedirs(output_folder, exist_ok=True)
+            execution_info = {
+                'mode': 'stub', 'returncode': 0, 'stdout': '',
+                'binary_path': None, 'output_folder': output_folder,
+                'error_message': None, 'launcher_argv': [],
+                'armed_direct_run': False,
+            }
+            return "stub-detector-data", [], execution_info
+
+        monkeypatch.setattr(ctrl.instrument, "build", lambda *a, **k: "stub-instrument")
+        monkeypatch.setattr(ctrl.instrument, "run_point", _stub_run_point)
+        monkeypatch.setattr(cm, "read_1Ddetector_file", lambda folder: (1.0, 0.1, 10.0))
+
+        launch = ctrl.build_api_launch_state({
+            "H": 1.0, "K": 0.0, "L": 0.0,
+            "scan_command1": "deltaE 15 25 5",
+        })
+        vals = launch["vals"]
+
+        job = ScanJob(job_id="t-applied-curvature-mcstas", source="api",
+                       launch_state=launch)
+        ctrl.run_simulation(launch, job=job)
+
+        result = job.result
+        assert result is not None
+        assert len(result.applied_curvature) == 3, result.applied_curvature
+
+        # The infeasible point (deltaE=25): None, regardless of the stub's
+        # canned counts -- run_point/the detector read never happen for it.
+        assert result.applied_curvature[2] is None, result.applied_curvature
+
+        for idx, deltaE in ((0, 15.0), (1, 20.0)):
+            pt = result.applied_curvature[idx]
+            assert isinstance(pt, dict) and set(pt) == {"rhm", "rvm", "rha", "rva"}, \
+                result.applied_curvature
+            expected = _independently_solved_curvature(
+                ctrl, vals, 1.0, 0.0, 0.0, deltaE
+            )
+            for axis in ("rhm", "rvm", "rha", "rva"):
+                assert pt[axis] == pytest.approx(expected[axis], abs=1e-6), (
+                    idx, axis, pt, expected
+                )

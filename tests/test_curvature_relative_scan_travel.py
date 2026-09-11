@@ -68,7 +68,14 @@ class _CurvatureManifestController:
         return {"rhm": (self._axis, "PG(002) monochromator")}
 
     def _get_current_value_for_variable(self, var_name, vals, template):
-        return vals.get(var_name, 0)
+        # Delegates to the real controller's name-canonicalising method
+        # (TAVI_PySide6.py:4337): a naive vals.get(var_name, 0) diverges the
+        # moment the normalized variable name is not vals's own key spelling
+        # (e.g. "A1" reads vals['mtt'], not a nonexistent vals['A1']) --
+        # invisible here only because every earlier test scans "rhm", whose
+        # vals key happens to equal the normalized name already.
+        return controller_module.TAVIController._get_current_value_for_variable(
+            self, var_name, vals, template)
 
     def print_to_message_center(self, message):
         raise AssertionError("manifest expansion unexpectedly failed: %s" % message)
@@ -144,6 +151,33 @@ def test_a_relative_scan_expanding_to_exactly_zero_is_accepted():
     assert result["point_manifest"][1]["values"]["rhm"] == pytest.approx(0.5)
     assert result["point_manifest"][1]["feasible"] is False
     assert result["point_manifest"][1]["kind"] == "curvature_out_of_travel"
+
+
+def test_relative_a1_scan_uses_the_real_current_value_lookup_not_a_naive_vals_get():
+    """D19: the stub's ``_get_current_value_for_variable`` must not diverge
+    from the real controller's name-canonicalising method. Every other test
+    here scans "rhm", whose vals key happens to already equal the normalized
+    variable name, so a naive ``vals.get(var_name, 0)`` looked right by
+    accident. "A1" exposes it: ``normalize_scan_variable`` returns "A1", but
+    the real lookup reads ``vals['mtt']`` for A1 -- there is no ``vals['A1']``
+    -- so the naive version silently uses 0 as the relative base instead of
+    the instrument's actual current angle."""
+    launch_state = {
+        "vals": {
+            "scan_command1": "A1 -1 1 1", "scan_command2": "",
+            "mtt": 41.167, "rhm": 2.5,
+            "monocris": "pg002", "anacris": "pg002",
+        },
+        "scan_config": object(),
+        "relative_mode_1": True, "relative_mode_2": False,
+    }
+
+    result = controller_module.TAVIController.validate_scan_launch_state(
+        _CurvatureManifestController(), launch_state)
+
+    assert result["per_command"][0]["values"] == pytest.approx(
+        [40.167, 41.167, 42.167]
+    )
 
 
 def test_an_instrument_declaring_no_travel_refuses_nothing_relative_or_not():

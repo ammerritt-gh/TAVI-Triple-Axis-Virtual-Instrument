@@ -511,16 +511,21 @@ class TAS_Instrument:
                 radii[axis_key] = abs(2.0 * f * sin_theta)
         return radii
 
-    def curvature_limits(self, axis, crystal_spec, mth, ath):
+    def curvature_limits(self, axis, crystal_spec, mth, ath, modules=None):
         """(min_m, max_m) for a driven axis; defaults to the declared scalars.
 
+        Resolved through ``effective_curvature_axis`` -- the one place a
+        crystal's declaration and the live module state are folded together
+        -- rather than reading ``CrystalSpec.curvature`` directly, which
+        would let a module or subclass override the travel elsewhere (e.g.
+        an angle-dependent bender) while this seam kept answering from the
+        raw, unresolved declaration.
+
         A seam, not machinery: a bender whose travel depends on take-off
-        angle overrides this. Nothing in the tree needs that yet.
+        angle overrides ``effective_curvature_axis``. Nothing in the tree
+        needs that yet.
         """
-        curvature_axis = (
-            crystal_spec.curvature.get(axis, CurvatureAxis())
-            if crystal_spec is not None else CurvatureAxis()
-        )
+        curvature_axis = self.effective_curvature_axis(axis, crystal_spec, modules=modules)
         return curvature_axis.min_radius_m, curvature_axis.max_radius_m
 
     def ideal_curvature(self, monocris, anacris, mth, ath, modules=None,
@@ -595,7 +600,9 @@ class TAS_Instrument:
                         "to compute an ideal radius from."
                     )
                 magnitude = radii[radii_key]
-                min_m, max_m = self.curvature_limits(axis, crystal_spec, mth, ath)
+                min_m, max_m = self.curvature_limits(
+                    axis, crystal_spec, mth, ath, modules=modules
+                )
                 clamped_magnitude = _clamp_curvature_magnitude(magnitude, min_m, max_m)
                 if clamped_magnitude != magnitude:
                     clamped_axes.append(axis)
