@@ -193,8 +193,10 @@ def test_zero_is_still_accepted_as_a_held_radius_and_as_a_scan_endpoint():
         ctrl.window.instrument_dock.rhm_edit.setText("0")
         assert ctrl._held_curvature_issues(mono, ana) == []
 
-        # A scan range with a 0 endpoint.
-        hard, _ = ctrl._scan_command_issues("rhm 0 3.0 0.5", "", mono, ana)
+        # A scan range with a 0 endpoint. Every expanded value is checked
+        # (not just the endpoints), so both values here (0 and 2.0) must be
+        # individually legal -- 0 exempt as FLAT, 2.0 exactly the minimum.
+        hard, _ = ctrl._scan_command_issues("rhm 0 2 2", "", mono, ana)
         assert hard == []
 
 

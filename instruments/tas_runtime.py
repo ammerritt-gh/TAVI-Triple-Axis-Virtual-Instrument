@@ -112,6 +112,42 @@ def curvature_command_error(axis, magnitude, curvature_axis, crystal_name=None):
     return None
 
 
+def curvature_scan_error(axis, start, end, step, relative, base_value,
+                          curvature_axis, crystal_name=None):
+    """First ``curvature_command_error`` found among every value this scan
+    command would actually run, absolute or relative alike.
+
+    Expands ``(axis, start, end, step)`` through ``parse_scan_steps`` --
+    the SAME expansion ``compute_scan_snapshot`` uses at execution -- and
+    checks EVERY resulting value, not just the two endpoints: an absolute
+    PUMA ``"rhm 0 2 1"`` has legal endpoints (0 = flat, 2.0 = the declared
+    minimum) and an illegal interior point at 1.0 m.
+
+    For a relative command the literal numbers are offsets from the current
+    radius, not the requested radii themselves; ``relative`` adds
+    ``base_value`` to every expanded value before checking, so a relative
+    command is judged against the real radii it will run -- exactly what
+    ``set_crystal_bending`` sees at execution. ``base_value`` is ignored for
+    an absolute command. A caller checking one already-resolved value (e.g.
+    a single scan point) may pass ``start == end`` with any nonzero ``step``
+    and ``relative=False``; the expansion then degenerates to that one
+    value.
+
+    Returns the first refusal message, or ``None`` when every value is
+    within the axis's declared policy.
+    """
+    from tavi.utilities import parse_scan_steps
+
+    _, values = parse_scan_steps(f"{axis} {start} {end} {step}")
+    if relative:
+        values = values + base_value
+    for value in values:
+        error = curvature_command_error(axis, float(value), curvature_axis, crystal_name)
+        if error:
+            return error
+    return None
+
+
 class TAS_Instrument:
     """The general setup of a triple-axes spectrometer (TAS) instrument, with useful functions for setting the geometries."""
     def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, A1=0, A2=0, A3=0, A4=0, saz=0, **kwargs):

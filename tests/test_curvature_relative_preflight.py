@@ -1,16 +1,17 @@
-"""Packet slice 10, defect 2: the literal travel check does not know about
-relative mode.
+"""Packet slice 10 / D14 / D22: the preflight now expands a relative curvature
+command against its current value instead of comparing its literal offsets
+(or ignoring it) -- one check for both absolute and relative commands.
 
-``_validate_single_scan_command``'s curvature-travel check compares a scan
-command's LITERAL start/end text to a driven axis's declared mechanical
-travel. That is correct for an absolute command but wrong for a relative one,
-whose literal numbers are OFFSETS from the current radius, not the requested
-radii themselves. On PUMA (rhm min_radius_m = 2.0, current rhm = 2.5), the
-relative command ``rhm 0.5 1.0 0.5`` requests 3.0-3.5 m (legal, and the
-expanded manifest correctly accepts it) but the literal check sees 0.5/1.0,
-below the 2.0 m minimum, and hard-refused it -- a false reject, introduced by
-the same commit that fixed the mirror-image false ACCEPT
-(``tests/test_curvature_relative_scan_travel.py``).
+``_validate_single_scan_command``'s curvature-travel check used to compare a
+scan command's LITERAL start/end text to a driven axis's declared mechanical
+travel, correct only for an absolute command: a relative command's literal
+numbers are OFFSETS from the current radius, not the requested radii
+themselves. On PUMA (rhm min_radius_m = 2.0, current rhm = 2.5), the relative
+command ``rhm 0.5 1.0 0.5`` requests 3.0-3.5 m (legal) while
+``rhm -2.4 -2.0 0.2`` requests 0.1-0.5 m (illegal) -- a check that only ever
+saw the literal numbers could not tell these apart and used to skip relative
+commands entirely (D22), leaving the second case unblocked on the GUI Run
+path.
 
 These tests exercise the REAL preflight gate (``_scan_command_issues`` /
 ``_validate_single_scan_command``), shared verbatim by the GUI Run button and
@@ -60,29 +61,27 @@ _CURRENT_RHM = 2.5
 
 
 def test_6_relative_command_that_expands_in_travel_is_accepted_by_the_real_preflight():
-    """RED FIRST: today the literal check sees the bare offsets 0.5/1.0,
-    below PUMA's 2.0 m minimum, and hard-refuses a scan that is actually
-    perfectly legal (it expands to 3.0-3.5 m). Fixed: a relative command's
-    literal endpoints are never compared to mechanical travel here."""
+    """A relative command whose real expansion (3.0-3.5 m off rhm=2.5) is
+    inside PUMA's 2.0 m minimum must not be hard-blocked, given the current
+    radius to expand against."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
 
         hard, _ = ctrl._scan_command_issues(
             _RELATIVE_CMD_IN_TRAVEL, "", mono, ana, relative_1=True,
+            current_values={"rhm": _CURRENT_RHM},
         )
         assert hard == [], (
             f"a relative command whose real expansion (3.0-3.5 m off "
             f"rhm={_CURRENT_RHM}) is well inside PUMA's 2.0 m minimum must "
-            f"not be hard-blocked by a check comparing its bare offsets to "
-            f"that minimum: {hard}"
+            f"not be hard-blocked: {hard}"
         )
 
 
 def test_7_the_same_command_absolute_is_still_refused_on_its_literal_values():
     """Not relative: 0.5 and 1.0 ARE the requested radii, both below PUMA's
     2.0 m minimum -- the literal check must still hard-block, exactly as
-    before. The false-reject fix must not weaken the absolute case, which has
-    no other check while the operator is typing."""
+    before."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
 
@@ -93,19 +92,14 @@ def test_7_the_same_command_absolute_is_still_refused_on_its_literal_values():
         assert "rhm" in hard[0]
 
 
-def test_8_the_branch_original_worked_example_is_still_refused():
-    """The false-accept this branch already fixed (packet slice 7): relative
-    'rhm -2.4 -2.0 0.2' off rhm=2.5 really requests 0.1-0.5 m, well below
-    PUMA's 2.0 m minimum. That refusal lives in the expanded manifest
-    (``validate_scan_launch_state`` / ``_curvature_violation``), which this
-    slice's fix does not touch -- only ``_validate_single_scan_command``'s
-    literal check changed. Pinned here through the REAL PUMA controller (not
-    the manifest unit test's fake stand-in) so the two fixes are proven to
-    coexist, not merely asserted to.
-
-    The false-accept fix and the false-reject fix are the two directions of
-    one rule: a change that silently traded one for the other would still
-    pass every OTHER test in this module while failing this one.
+def test_8_the_branch_original_worked_example_is_refused_by_the_preflight_too():
+    """D14/D22: relative 'rhm -2.4 -2.0 0.2' off rhm=2.5 really requests
+    0.1-0.5 m, well below PUMA's 2.0 m minimum. RED FIRST (D22): the
+    preflight (``_scan_command_issues``, shared by the GUI Run button and the
+    API) used to be blind to this -- it skipped a relative command's
+    curvature check entirely and only the expanded manifest
+    (``validate_scan_launch_state``) caught it. Now both refuse it, given the
+    current radius to expand against.
     """
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
@@ -129,13 +123,14 @@ def test_8_the_branch_original_worked_example_is_still_refused():
         ), result["infeasible"]
         assert "rhm" in result["infeasible"][0]["reason"]
 
-        # And the literal-only preflight is, by construction, blind to it --
-        # pinned so a future change cannot "fix" this by mistake and hide
-        # the fact that the manifest is what is actually doing the work.
+        # The preflight itself now refuses the same command, given the
+        # current radius -- it is no longer blind to the relative case.
         hard, _ = ctrl._scan_command_issues(
             _RELATIVE_CMD_OUT_OF_TRAVEL, "", mono, ana, relative_1=True,
+            current_values={"rhm": _CURRENT_RHM},
         )
-        assert hard == [], (
-            "the real preflight's literal check is not the mechanism that "
-            "refuses this -- the manifest is; this pins that assumption"
+        assert hard, (
+            "the real preflight must refuse a relative command whose "
+            "expansion is out of travel, not defer entirely to the manifest"
         )
+        assert "rhm" in hard[0]
