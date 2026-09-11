@@ -866,7 +866,7 @@ class TaviApiBackend:
         coordinates they were not taken at (ruling 2026-09-10).
         """
         hard, soft = controller._scan_command_issues(
-            cmd1, cmd2, vals.get("monocris"), vals.get("anacris")
+            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules")
         )
         return hard if force else hard + soft
 
@@ -2452,8 +2452,12 @@ class TAVIController(QObject):
                 autofocus_axes.append(axis)
         if autofocus_axes:
             try:
+                # requested_axes = exactly the AUTOFOCUS set: an unrelated
+                # HELD/SCANNED axis with no established focusing model (IN12's
+                # Heusler rva) must not refuse a query that never asked for it.
                 ideal = check_state.ideal_curvature(
                     check_state.monocris, check_state.anacris, mtt / 2, att / 2,
+                    requested_axes=autofocus_axes,
                 )
             except ValueError as exc:
                 # Same refusal ideal_curvature already gives the GUI Ideal
@@ -2731,7 +2735,7 @@ class TAVIController(QObject):
         from instruments.tas_runtime import curvature_command_error
 
         curvature_axis_specs = self._curvature_axis_specs(
-            vals['monocris'], vals['anacris']
+            vals['monocris'], vals['anacris'], modules=vals['modules']
         )
         for axis in ('rhm', 'rvm', 'rha', 'rva'):
             if vals['curvature_modes'][axis] != CurvatureMode.HELD:
@@ -3008,10 +3012,11 @@ class TAVIController(QObject):
         from its combo -- never a live-widget read anywhere else, so a
         hypothetical (mtt, att) passed in by a caller still gets today's real
         crystal selection. Returns None for a degenerate geometry (zero
-        take-off angle) or a crystal that declares this axis's focusing model
-        unknown (IN12's Heusler ``rva``): the caller already treats None as
-        "show Ideal: --", so a refusal degrades exactly like a degenerate
-        angle always has.
+        take-off angle); a driven axis whose crystal declares this axis's
+        focusing model unknown (IN12's Heusler ``rva``) is simply left out of
+        ``requested_axes`` rather than blanking the whole result -- the other
+        three axes still get a real ideal. The caller shows "Ideal: --" for a
+        missing key the same way it already does for a fully refused result.
         """
         try:
             if mtt is None:
@@ -3021,8 +3026,19 @@ class TAVIController(QObject):
             modules = self.window.instrument_dock.module_values()
             monocris = self.window.instrument_dock.selected_mono_id()
             anacris = self.window.instrument_dock.selected_ana_id()
+            # Ask only for the axes with an established focusing model --
+            # an unrelated driven axis with none (IN12's Heusler rva) must
+            # not disable the other three, which the whole-crystal try/except
+            # used to do by construction (any raise blanked all four).
+            axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
+            requested_axes = {
+                axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+                if not (axis_specs.get(axis) and axis_specs[axis][0].driven
+                        and not axis_specs[axis][0].focusing_known)
+            }
             return _operator_magnitudes(self.instrument_state.ideal_curvature(
                 monocris, anacris, mtt / 2, att / 2, modules=modules,
+                requested_axes=requested_axes,
             ))
         except (ValueError, ZeroDivisionError) as exc:
             # Expected refusals: an unknown focusing model, or no take-off
@@ -3845,8 +3861,9 @@ class TAVIController(QObject):
         # currently shows -- this path exists to annotate those widgets.
         dock = self.window.instrument_dock
         monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
-        fixed_axes = self._fixed_curvature_axes(monocris, anacris)
-        curvature_axes = self._curvature_axis_specs(monocris, anacris)
+        modules = dock.module_values()
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris, modules=modules)
+        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
         var1, warning1 = self._validate_single_scan_command(
             cmd1, fixed_axes, curvature_axes
         )
@@ -3865,44 +3882,57 @@ class TAVIController(QObject):
             if conflict:
                 self.window.simulation_dock.set_scan_conflict_warning(conflict)
     
-    def _fixed_curvature_axes(self, monocris, anacris):
-        """{axis: crystal display name} for the two named crystals.
+    def _fixed_curvature_axes(self, monocris, anacris, modules=None):
+        """{axis: crystal display name} for the two named crystals, RIGHT NOW.
 
-        Fixed focusing is a property of the crystal assembly, not the
-        instrument: IN12's conventional PG(002) analyser has a fixed vertical
-        focus while the Heusler option on the same instrument has no
-        established focusing behaviour. So the answer depends on which crystals
-        are selected -- and the *caller* says which, because the GUI's live
-        selection and a frozen API request can name different ones. Reading the
-        dock here would have validated an API scan against whatever crystal the
-        operator happened to have on screen. An unknown or unset id contributes
-        nothing: the gate never invents a restriction.
+        Fixed focusing is a property of the resolved policy, not just the
+        crystal assembly: IN12's conventional PG(002) analyser has a fixed
+        vertical focus while the Heusler option on the same instrument has no
+        established focusing behaviour, AND an instrument's mono radii can
+        read as fixed whenever a nested mirror optic (NMO) is fitted
+        regardless of which monochromator crystal is mounted (``TAS_Instrument.
+        effective_curvature_axis``). So the answer depends on which crystals
+        AND which modules are current -- and the *caller* says both, because
+        the GUI's live selection and a frozen API request can name different
+        ones. Reading the dock here would have validated an API scan against
+        whatever the operator happened to have on screen. An unknown or unset
+        id contributes nothing: the gate never invents a restriction.
+
+        Delegates to ``_curvature_axis_specs`` rather than re-walking the
+        crystal tables independently -- a second lookup here, unaware of
+        ``modules``, is exactly the class of bug (a rule enforced in one path
+        and not its twin) this method exists to avoid reintroducing.
         """
-        fixed = {}
-        for selected_id, specs, label in (
-            (monocris, self.descriptor.mono_crystals, "monochromator"),
-            (anacris, self.descriptor.ana_crystals, "analyser"),
-        ):
-            for spec in specs:
-                if spec.id == selected_id:
-                    for axis in spec.fixed_curvature:
-                        fixed[axis] = f"{spec.display_name} {label}"
-                    break
-        return fixed
+        return {
+            axis: crystal_name
+            for axis, (curvature_axis, crystal_name) in
+            self._curvature_axis_specs(monocris, anacris, modules=modules).items()
+            if not curvature_axis.driven
+        }
 
-    def _curvature_axis_specs(self, monocris, anacris):
-        """{axis: (CurvatureAxis, crystal display name)} for the two named crystals.
+    def _curvature_axis_specs(self, monocris, anacris, modules=None):
+        """{axis: (CurvatureAxis, crystal display name)} for the two named
+        crystals, resolved against the current (or supplied) module state.
 
-        The same crystal resolution ``_fixed_curvature_axes`` uses, but keeping
-        each axis's full declaration -- fixed radius AND mechanical travel --
-        rather than reducing it to fixed-axis membership. ``curvature_command_error``
-        needs both: a HELD radius or a scan-range endpoint can be refused for
-        either reason, and the refusal must judge it against the identical
-        declaration the scan will actually run with, not the GUI's live
-        selection (an API request can name different crystals).
+        The same crystal resolution ``_fixed_curvature_axes`` uses, but
+        keeping each axis's full resolved declaration -- fixed radius AND
+        mechanical travel -- rather than reducing it to fixed-axis
+        membership. ``curvature_command_error`` needs both: a HELD radius or
+        a scan-range endpoint can be refused for either reason, and the
+        refusal must judge it against the identical declaration the scan will
+        actually run with, not the GUI's live selection (an API request can
+        name different crystals or modules).
+
+        Resolution runs through ``self.instrument_state.
+        effective_curvature_axis`` -- the one place a crystal's declaration
+        and the live module state (e.g. a nested mirror optic) are folded
+        together -- rather than reading ``CrystalSpec.curvature`` directly,
+        which would recreate the raw, module-blind view this method used to
+        return.
+        ``modules`` mirrors that resolver's own override argument: ``None``
+        reads live module state; an explicit mapping (e.g. from a frozen API
+        request) wins over it.
         """
-        from instruments.descriptor import CurvatureAxis
-
         specs = {}
         for selected_id, crystal_specs, label in (
             (monocris, self.descriptor.mono_crystals, "monochromator"),
@@ -3912,7 +3942,9 @@ class TAVIController(QObject):
                 if spec.id == selected_id:
                     for axis in ("rhm", "rvm") if label == "monochromator" else ("rha", "rva"):
                         specs[axis] = (
-                            spec.curvature.get(axis, CurvatureAxis()),
+                            self.instrument_state.effective_curvature_axis(
+                                axis, spec, modules=modules
+                            ),
                             f"{spec.display_name} {label}",
                         )
                     break
@@ -3939,7 +3971,9 @@ class TAVIController(QObject):
             "rhm": idock.rhm_edit, "rvm": idock.rvm_edit, "rha": idock.rha_edit,
             "rva": idock.rva_edit,
         }
-        curvature_axis_specs = self._curvature_axis_specs(monocris, anacris)
+        curvature_axis_specs = self._curvature_axis_specs(
+            monocris, anacris, modules=idock.module_values()
+        )
         issues = []
         for axis, edit in axis_edits.items():
             if self.is_bending_locked(axis):
@@ -6387,12 +6421,13 @@ class TAVIController(QObject):
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         dock = self.window.instrument_dock
         monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
-        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
+        modules = dock.module_values()
+        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris, modules)
         hard = hard + self._held_curvature_issues(monocris, anacris)
         return hard, soft
 
     def _scan_command_issues(self, cmd1: str, cmd2: str,
-                             monocris=None, anacris=None):
+                             monocris=None, anacris=None, modules=None):
         """(hard, soft) issue lists for two scan-command strings.
 
         Hard means the command cannot run as written -- an unknown or
@@ -6402,8 +6437,10 @@ class TAVIController(QObject):
 
         Parameterized on strings only -- reads no widgets -- so both the GUI
         Run button and the remote API can call it. ``monocris``/``anacris`` name
-        the crystals the scan will run with, which decides whether a curvature
-        axis is refused; the API passes the frozen request's, not the GUI's.
+        the crystals the scan will run with, and ``modules`` the module state
+        (e.g. a nested mirror optic combo), which together decide whether a
+        curvature axis is refused; the API passes the frozen request's, not
+        the GUI's.
         Returns an empty string when the commands are acceptable, or a
         newline-joined description of the blocking issues.
 
@@ -6415,8 +6452,8 @@ class TAVIController(QObject):
         """
         cmd1 = (cmd1 or "").strip()
         cmd2 = (cmd2 or "").strip()
-        fixed_axes = self._fixed_curvature_axes(monocris, anacris)
-        curvature_axes = self._curvature_axis_specs(monocris, anacris)
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris, modules=modules)
+        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
 
         hard = []
         soft = []
@@ -6454,14 +6491,15 @@ class TAVIController(QObject):
         return hard, soft
 
     def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
-                                     monocris=None, anacris=None) -> str:
+                                     monocris=None, anacris=None,
+                                     modules=None) -> str:
         """Hard and soft issues joined as one string, or "" when there are none.
 
         For callers that only want the text. The API gate reads
         ``_scan_command_issues`` itself, because ``force`` may clear the soft
         issues only (``TaviApiBackend._blocking_scan_issues``).
         """
-        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
+        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris, modules)
         return "\n".join(hard + soft)
 
     # ------------------------------------------------------------- remote API
@@ -6921,7 +6959,7 @@ class TAVIController(QObject):
         from instruments.tas_runtime import curvature_command_error
 
         curvature_axes = self._curvature_axis_specs(
-            vals.get('monocris'), vals.get('anacris')
+            vals.get('monocris'), vals.get('anacris'), modules=vals.get('modules')
         )
 
         def _curvature_violation(values):

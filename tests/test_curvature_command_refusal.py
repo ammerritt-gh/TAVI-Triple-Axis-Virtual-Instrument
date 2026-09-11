@@ -237,6 +237,45 @@ def test_an_autofocus_ideal_outside_travel_is_still_clamped_not_refused():
         assert abs(vals["rha"]) == pytest.approx(2.0)
 
 
+def test_puma_nmo_refuses_a_scanned_rhm_naming_the_nmo():
+    """Packet slice 9, defect A, test 1: a nested mirror optic (NMO) fixes
+    PUMA's rhm/rvm flat -- a legal-looking 'rhm 2.5 3.0 0.5' scan command
+    must be REFUSED, not silently run against a monochromator the rest of
+    the code insists must stay flat.
+
+    Red first: before this slice, ``PUMAPlugin.scan_config`` and
+    ``PUMA_Instrument.optical_radii`` each zeroed rhm/rvm independently, and
+    neither is reached by a SCANNED axis -- so this exact command ran and
+    bent the "flat" monochromator, on both the API and GUI submission paths.
+    """
+    with _controller("puma") as ctrl:
+        d = ctrl.descriptor
+        mono, ana = d.mono_crystals[0].id, d.ana_crystals[0].id
+        modules = {"nmo": "Vertical", "v_selector": False}
+
+        hard, _ = ctrl._scan_command_issues(
+            "rhm 2.5 3.0 0.5", "", mono, ana, modules
+        )
+        assert hard, "a scan over an NMO-fixed rhm must hard-block"
+        assert "rhm" in hard[0] and "fixed" in hard[0]
+
+        ctrl.window.instrument_dock.set_mono_id(mono)
+        ctrl.window.instrument_dock.set_ana_id(ana)
+        ctrl.window.instrument_dock.set_module_values(modules)
+        ctrl.window.simulation_dock.scan_command_1_edit.setText("rhm 2.5 3.0 0.5")
+        ctrl.window.simulation_dock.scan_command_2_edit.setText("")
+        hard_gui, _ = ctrl._preflight_scan_validation()
+        assert hard_gui, "the GUI Run gate must refuse the identical scan"
+        assert "rhm" in hard_gui[0]
+
+        # Without the NMO, the identical command is a perfectly legal scan --
+        # the refusal is the NMO's doing, not an accident of the axis name.
+        hard_flat, _ = ctrl._scan_command_issues(
+            "rhm 2.5 3.0 0.5", "", mono, ana, {"nmo": "None", "v_selector": False}
+        )
+        assert hard_flat == []
+
+
 @pytest.mark.parametrize("instrument_id", ["in8", "panda"])
 def test_instruments_with_no_declared_travel_refuse_nothing(instrument_id):
     """IN8 and PANDA declare no mechanical travel at all -- that asymmetry

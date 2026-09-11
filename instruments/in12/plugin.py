@@ -399,7 +399,11 @@ class IN12Plugin:
 
         Same shape as IN8's, with two IN12 differences: a fourth collimation
         slot (alpha_1, in the guide-exit section) and a monochromator on the
-        negative take-off branch, so BOTH mono radii are negated here.
+        negative take-off branch. The branch sign is NOT applied here --
+        curvature radii pass through as plain magnitudes (see the comment
+        below); ``TAS_Instrument.set_crystal_bending`` signs both mono radii
+        onto the actual take-off branch at the boundary every path to the
+        instrument state crosses.
         """
         vals = gui_values
         collimation = vals['collimation']

@@ -258,11 +258,14 @@ def test_metadata_matches_emitted_params_for_a_scanned_curvature_axis(tmp_path):
     assert snapshot.metadata["rha"] == pytest.approx(expected_rha)
 
 
-def test_heusler_refusal_disables_the_ideal_button_not_a_crash():
+def test_heusler_refusal_disables_only_its_own_ideal_button():
     """IN12's Heusler analyser declares rva focusing_known=False.
-    ideal_curvature refuses to invent a radius for it; the GUI must not
-    crash on that -- it degrades to the same 'Ideal: --' state a degenerate
-    geometry already produces."""
+    ideal_curvature refuses to invent a radius for it, but that refusal is
+    PER-AXIS, not whole-crystal: rhm/rvm/rha are wholly unrelated to the
+    Heusler's rva and must still show a real computed Ideal -- only rva
+    degrades to 'Ideal: --'. (Packet slice 9, defect B, test 5: the
+    producer's per-axis refusal must not disable three unrelated axes.)
+    """
     with _controller("in12") as ctrl:
         dock = ctrl.window.instrument_dock
         d = ctrl.descriptor
@@ -273,12 +276,17 @@ def test_heusler_refusal_disables_the_ideal_button_not_a_crash():
         dock.att_edit.setText("-55.834468")
 
         ideal = ctrl._compute_ideal_bending_values()
-        assert ideal is None
+        assert ideal is not None and "rva" not in ideal
+        assert ideal["rhm"] == pytest.approx(3.844546850290504, abs=1e-6)
+        assert ideal["rvm"] == pytest.approx(0.842752117783446, abs=1e-6)
+        assert ideal["rha"] == pytest.approx(1.9793706555951112, abs=1e-6)
 
         ctrl.update_ideal_bending_buttons()
-        assert dock.rhm_ideal_button.text() == "Ideal: --"
-        assert dock.rvm_ideal_button.text() == "Ideal: --"
-        assert dock.rha_ideal_button.text() == "Ideal: --"
+        assert dock.rhm_ideal_button.text() != "Ideal: --"
+        assert dock.rvm_ideal_button.text() != "Ideal: --"
+        assert dock.rha_ideal_button.text() != "Ideal: --"
+        assert dock.rva_ideal_button.text() == "Ideal: --"
+        assert not dock.rva_ideal_button.isEnabled()
 
 
 def test_operator_surface_holds_magnitudes_while_emitted_geometry_stays_signed():

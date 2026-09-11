@@ -1111,9 +1111,11 @@ Key assertions per file (see §17.4 for the file list):
   objects; `scan_config` applies the full GUI mapping (`alpha_2` list, base not
   mutated, hidden `mis_omega` propagates) and passes curvature through as
   magnitudes — `rva == 0.8` is PUMA's PG(002) declaring that axis fixed, and
-  NMO ⇒ flat monochromator is `PUMA_Instrument.optical_radii`; neither is
-  `scan_config`'s to decide any more; **snapshot `params.keys()` == descriptor
-  parameter names**;
+  NMO ⇒ flat monochromator is `PUMA_Instrument.effective_curvature_axis`
+  (folding the fitted NMO into rhm/rvm's resolved policy for every consumer:
+  the applier, the scan-command validator, and the ideal-radius producer);
+  it is neither `scan_config`'s nor `optical_radii`'s to decide any more;
+  **snapshot `params.keys()` == descriptor parameter names**;
   `PUMARunExecutionState is RunExecutionState`; binary fallback ends with
   `PUMA_McScript.exe` and `SimpleNamespace(input_path=tmp, name="Foo")` →
   `Foo.exe`; `crystal_info` equals `mono_ana_crystals_setup`.

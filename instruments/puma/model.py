@@ -6,6 +6,7 @@ import os
 
 import mcstasscript as ms
 
+from instruments.descriptor import CurvatureAxis
 from instruments.paths import COMPONENTS_DIR
 from instruments.tas_runtime import TAS_Instrument
 from tavi.neutron_conversions import energy2lambda
@@ -99,30 +100,36 @@ class PUMA_Instrument(TAS_Instrument):
         distances["mono_v"] = (math.inf, self.L2)
         return distances
 
-    def optical_radii(self, mth, ath, modules=None):
-        """PUMA's point-source pair, with the monochromator forced flat when a
-        nested mirror optic (NMO) is installed.
+    def effective_curvature_axis(self, axis, crystal_spec, modules=None):
+        """PUMA's rhm/rvm read as fixed FLAT whenever a nested mirror optic
+        (NMO) is fitted, regardless of what the mounted crystal declares.
 
-        A fitted NMO does the horizontal/vertical focusing itself, so the
-        ideal monochromator bending is flat (0) on BOTH planes -- matching the
-        historical Ideal-button behaviour (``TAVI_PySide6.py`` around
-        line 2853) and the build-time factor zeroing
-        (``build_PUMA_instrument`` in this module). Only PUMA has an NMO, so
-        this stays a PUMA override rather than a descriptor concept.
+        A fitted NMO does the monochromator's own horizontal/vertical
+        focusing, so those two axes are not driven for as long as it stays
+        fitted -- matching the historical Ideal-button behaviour
+        (``TAVI_PySide6.py`` around line 2853) and the build-time factor
+        zeroing (``build_PUMA_instrument`` in this module). Only PUMA has an
+        NMO, so this stays a PUMA override rather than a descriptor concept.
 
         NMO state is read from ``self.NMO_installed`` (the live instrument
         state, a string: "None" when absent). ``modules['nmo']`` -- for a
         caller with no state object yet, e.g. a frozen API request -- WINS
-        over ``self.NMO_installed`` when supplied.
+        over ``self.NMO_installed`` when supplied, mirroring the override rule
+        ``optical_radii`` used before this resolver replaced its direct
+        zeroing.
         """
-        radii = super().optical_radii(mth, ath, modules=modules)
         nmo_installed = self.NMO_installed
         if modules is not None and 'nmo' in modules:
             nmo_installed = modules['nmo']
-        if nmo_installed != "None":
-            radii["mono_h"] = 0.0
-            radii["mono_v"] = 0.0
-        return radii
+        if axis in ("rhm", "rvm") and nmo_installed != "None":
+            return CurvatureAxis(
+                driven=False, fixed_radius_m=0.0,
+                provenance=(
+                    "NMO installed: this axis is fixed flat, not driven, "
+                    "for as long as the nested mirror optic stays fitted."
+                ),
+            )
+        return super().effective_curvature_axis(axis, crystal_spec, modules=modules)
 
     def build_point_params(self, deltaE):
         return build_puma_point_params(self, deltaE)

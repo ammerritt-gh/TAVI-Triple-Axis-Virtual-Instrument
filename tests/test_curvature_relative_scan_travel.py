@@ -64,7 +64,7 @@ class _CurvatureManifestController:
         return controller_module.TAVIController.normalize_scan_variable(
             self, variable)
 
-    def _curvature_axis_specs(self, monocris, anacris):
+    def _curvature_axis_specs(self, monocris, anacris, modules=None):
         return {"rhm": (self._axis, "PG(002) monochromator")}
 
     def _get_current_value_for_variable(self, var_name, vals, template):
