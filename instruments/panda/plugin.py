@@ -432,7 +432,7 @@ class PANDAPlugin:
             axis_limits=panda_descriptor().axis_limits,
         )
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for PANDA (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
@@ -442,4 +442,6 @@ class PANDAPlugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(panda_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            panda_descriptor(), vals, q0, w, point_angles=point_angles,
+        )

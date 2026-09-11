@@ -512,7 +512,7 @@ class IN12Plugin:
             axis_limits=in12_descriptor().axis_limits,
         )
 
-    def resolution_config(self, vals, q0, w):
+    def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for IN12 (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
@@ -523,4 +523,6 @@ class IN12Plugin:
         """
         from instruments.resolution_adapter import build_resolution_config
 
-        return build_resolution_config(in12_descriptor(), vals, q0, w)
+        return build_resolution_config(
+            in12_descriptor(), vals, q0, w, point_angles=point_angles,
+        )
