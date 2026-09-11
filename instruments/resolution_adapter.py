@@ -197,10 +197,37 @@ def build_resolution_config(descriptor, vals, q0, w):
     bet = descriptor.vertical_divergence or _DEFAULT_BET_ARCMIN
     prov["bet"] = {"value": list(bet), "source": "descriptor default"}
 
-    rhm, rvm, rha = _num(vals.get("rhm")), _num(vals.get("rvm")), _num(vals.get("rha"))
+    def _magnitude(name):
+        """A curvature magnitude from vals, enforced at this boundary.
+
+        This is where the operator-surface contract (magnitudes) meets the
+        physics model, and tavi/resolution.py applies the scattering sense
+        itself -- `anarv = radius_cm(cfg.rva) * sa`. A signed value arriving
+        here is therefore signed twice, and the resulting resolution describes
+        a crystal bent the wrong way. That is not hypothetical: it was live on
+        this repository's negative-branch instruments for three commits, and
+        it was invisible, because the emitted McStas geometry stayed correct
+        and only the analytic half was wrong.
+
+        So the radius is taken as a magnitude and the violation is logged
+        rather than raised: a bad value must not take down a resolution
+        display mid-session, and it must not pass unseen either.
+        """
+        value = _num(vals.get(name))
+        if value is not None and value < 0:
+            warnings.append(
+                f"{name} arrived signed ({value:g} m); the resolution model "
+                "applies the scattering sense itself, so its magnitude is used"
+            )
+            return abs(value)
+        return value
+
+    rhm, rvm, rha = _magnitude("rhm"), _magnitude("rvm"), _magnitude("rha")
+    rva = _magnitude("rva")
     prov["curvature"] = {
-        "rhm": rhm, "rvm": rvm, "rha": rha, "rva": None,
-        "source": "vals rhm/rvm/rha (metres); rva not carried in vals -> None",
+        "rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva,
+        "source": "vals rhm/rvm/rha/rva (metres, magnitudes); "
+                  "tavi/resolution.py applies the scattering sense itself",
     }
 
     modules = vals.get("modules")
@@ -233,7 +260,7 @@ def build_resolution_config(descriptor, vals, q0, w):
         kfix=kfix, fx=fx,
         alf=tuple(alf), bet=tuple(bet),
         q0=q0, w=w,
-        rhm=rhm, rvm=rvm, rha=rha,
+        rhm=rhm, rvm=rvm, rha=rha, rva=rva,
         warnings=tuple(warnings),
         invalidations=tuple(invalidations),
         provenance=prov,

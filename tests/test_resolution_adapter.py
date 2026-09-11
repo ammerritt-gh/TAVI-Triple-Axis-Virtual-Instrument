@@ -10,8 +10,9 @@ import math
 import pytest
 
 from instruments.in8.plugin import IN8Plugin
+from instruments.in12.plugin import IN12Plugin
 from instruments.puma.plugin import PUMAPlugin
-from tavi.resolution import cooper_nathans
+from tavi.resolution import cooper_nathans, resolution
 
 _EK = 2.072142
 
@@ -196,3 +197,92 @@ def test_in8_no_module_invalidations():
     assert cfg.invalidations == ()
     res = cooper_nathans(cfg)
     assert res.ok is True and res.cn_valid is True
+
+
+# ------------------------------------------------------------------ rva (analyzer
+# vertical curvature): PUMA declares its analyzer vertical radius fixed at 0.8 m,
+# but the adapter used to hard-code "rva": None with a comment saying rva isn't
+# carried in vals -- so every instrument's analytic resolution, including PUMA's,
+# was computed with a flat vertical analyzer. This pins that the adapter now
+# reads vals["rva"] through, and that a flat-vs-curved rva actually changes the
+# Popovici matrix (not just an unused field).
+
+def test_puma_rva_reaches_resolution_config():
+    cfg = PUMAPlugin().resolution_config(_puma_vals(rva=0.8), q0=2.0, w=0.0)
+    assert cfg.rva == pytest.approx(0.8)
+    assert cfg.provenance["curvature"]["rva"] == pytest.approx(0.8)
+
+
+def test_puma_rva_none_still_means_flat():
+    cfg = PUMAPlugin().resolution_config(_puma_vals(), q0=2.0, w=0.0)
+    assert cfg.rva is None
+    assert cfg.provenance["curvature"]["rva"] is None
+
+
+def test_puma_curved_rva_changes_the_matrix_via_dq_z_not_dE():
+    """rva only ever appears in the T-matrix row that feeds dQ_z (analyzer
+    vertical curvature bends the out-of-plane trajectory, not the ki/kf
+    magnitude); for in-plane |Q| the Popovici B-matrix has no dQ_z<->dE
+    coupling, so bragg.dE is invariant to rva while dq_z is not. Pinning
+    both halves of that so a future change that broke the decoupling (or
+    one that broke the wiring entirely, leaving no effect at all) would
+    show up here rather than being read as "no effect either way"."""
+    flat = PUMAPlugin().resolution_config(_puma_vals(rva=None), q0=2.0, w=0.0)
+    curved = PUMAPlugin().resolution_config(_puma_vals(rva=0.8), q0=2.0, w=0.0)
+    res_flat = resolution(flat, method="popovici")
+    res_curved = resolution(curved, method="popovici")
+    assert res_flat.ok and res_curved.ok
+    assert res_flat.matrix != res_curved.matrix
+    assert res_flat.fwhm["dq_z"] != pytest.approx(res_curved.fwhm["dq_z"])
+    assert res_flat.bragg["dE"] == pytest.approx(res_curved.bragg["dE"])
+
+
+def _in12_vals(**overrides):
+    """An IN12 ``vals`` subset. IN12 is the instrument that can show a sign
+    error: it takes off negative at BOTH crystals, where PUMA takes off
+    positive at both and hides one entirely."""
+    vals = {
+        "K_fixed": "Kf Fixed",
+        "fixed_E": 8.2888,
+        "source_type": "Maxwellian",
+        "monocris": "pg002",
+        "anacris": "pg002",
+        "rhm": 3.84, "rvm": 0.84, "rha": 1.98, "rva": 1.40,
+        "collimation": {
+            "alpha_1": "40",
+            "alpha_2": "40",
+            "alpha_3": "40",
+            "alpha_4": "40",
+        },
+    }
+    vals.update(overrides)
+    return vals
+
+
+def test_a_negative_branch_instrument_reaches_the_resolution_model_unsigned():
+    """The boundary where double-signing was live, pinned on the instrument
+    that can actually show it.
+
+    Every other test in this file uses PUMA, which takes off positive at both
+    crystals -- so a sign error there is invisible and those tests pass either
+    way. IN12 takes off negative at both. tavi/resolution.py applies the
+    scattering sense itself, so a signed radius arriving here is signed twice
+    and the analytic resolution describes a crystal bent the wrong way,
+    silently, while the emitted McStas geometry stays correct.
+    """
+    cfg = IN12Plugin().resolution_config(_in12_vals(), q0=1.5, w=0.0)
+    for axis in ("rhm", "rvm", "rha", "rva"):
+        assert getattr(cfg, axis) >= 0.0, f"{axis} reached the model signed"
+        assert cfg.provenance["curvature"][axis] >= 0.0
+
+
+def test_a_signed_radius_is_taken_as_a_magnitude_and_said_so():
+    """Defence in depth at the same boundary: a future caller that hands the
+    adapter a signed radius must not silently produce a double-signed matrix,
+    and must not pass unannounced either."""
+    cfg = IN12Plugin().resolution_config(
+        _in12_vals(rhm=-3.84, rvm=-0.84, rha=-1.98, rva=-1.40), q0=1.5, w=0.0,
+    )
+    assert cfg.rhm == pytest.approx(3.84)
+    assert cfg.rva == pytest.approx(1.40)
+    assert any("arrived signed" in w for w in cfg.warnings), cfg.warnings
