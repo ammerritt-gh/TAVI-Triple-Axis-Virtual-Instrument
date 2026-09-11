@@ -48,25 +48,38 @@ def _operator_magnitudes(ideal):
     return {axis: abs(value) for axis, value in ideal.items()}
 
 
-def _vals_with_point_curvature(vals, applied_radii):
-    """Overlay one point's ACTUALLY APPLIED radii onto a copy of ``vals``.
+def _vals_with_point_state(vals, metadata):
+    """Overlay one point's ACTUALLY APPLIED radii AND kinematics onto a copy
+    of ``vals``.
 
     ``resolution_config`` (``instruments/resolution_adapter.py``) reads
-    rhm/rvm/rha/rva straight out of ``vals`` as magnitudes and applies the
-    scattering sense itself. The frozen launch ``vals`` carries only the
-    operator's declared/starting radii -- never what an AUTOFOCUS axis (or a
-    scanned curvature axis) actually ran with at THIS point, which is why
-    three separate resolution-model consumers fed it the wrong geometry.
+    rhm/rvm/rha/rva straight out of ``vals`` as magnitudes (applying the
+    scattering sense itself) and prefers ``vals['Ki']``/``vals['Kf']`` for
+    the fixed wavevector (``_kfix``). The frozen launch ``vals`` carries only
+    the operator's declared/starting radii and the LAUNCH energies -- never
+    what an AUTOFOCUS or SCANNED curvature axis actually ran with at THIS
+    point, nor this point's own energy transfer under a direct-angle scan,
+    where the snapshot's Ei/Ki/Ef/Kf differ from the launch's (D23): an A4
+    scan under Kf-fixed otherwise hands Popovici a per-point energy transfer
+    against the LAUNCH Kf instead of the point's own.
 
-    ``applied_radii`` is the SIGNED per-point dict -- snapshot metadata's
-    rhm/rvm/rha/rva (the physical boundary's output), or the equivalent
-    freshly solved for a point with no snapshot (``compute_resolution``).
-    Reuses ``_operator_magnitudes`` for the same sign strip the operator/API
-    surface already relies on, so the resolution adapter's "arrived signed"
-    guard never has cause to fire.
+    ``metadata`` is the per-point dict carrying rhm/rvm/rha/rva (SIGNED --
+    the physical boundary's output), Ei/Ki/Ef/Kf, and deltaE -- snapshot
+    metadata (``instruments/tas_runtime.py``'s ``point_energy_metadata``
+    merge), or the equivalent freshly built for a point with no snapshot
+    (``compute_resolution``). Radii are stripped to magnitudes through
+    ``_operator_magnitudes``, the same sign strip the operator/API surface
+    already relies on, so the resolution adapter's "arrived signed" guard
+    never has cause to fire; Ei/Ki/Ef/Kf/deltaE pass through as-is (already
+    unsigned).
     """
     point_vals = dict(vals)
-    point_vals.update(_operator_magnitudes(applied_radii))
+    point_vals.update(_operator_magnitudes(
+        {axis: metadata[axis] for axis in ("rhm", "rvm", "rha", "rva")}
+    ))
+    for key in ("Ei", "Ki", "Ef", "Kf", "deltaE"):
+        if key in metadata:
+            point_vals[key] = metadata[key]
     return point_vals
 
 
@@ -2498,17 +2511,23 @@ class TAVIController(QObject):
             for axis in autofocus_axes:
                 radii[axis] = ideal[axis]
         check_state.set_crystal_bending(**radii)
-        point_radii = {
+        point_state = {
             axis: getattr(check_state, axis)
             for axis in ("rhm", "rvm", "rha", "rva")
         }
+        # This request's own energies, built the identical way the snapshot
+        # builds them (point_energy_metadata): HKL/momentum mode never sets
+        # _angle_energies, so this follows K_fixed + deltaE exactly like
+        # compute_scan_snapshot's equivalent point would.
+        point_state.update(check_state.point_energy_metadata(deltaE))
+        point_state['deltaE'] = deltaE
 
         # Build the instrument's resolution config (optional plugin method).
         res_fn = getattr(self.instrument, "resolution_config", None)
         if not callable(res_fn):
             return {"ok": False, "reason": "resolution not supported for this instrument"}
         cfg = res_fn(
-            _vals_with_point_curvature(vals, point_radii), q0, deltaE,
+            _vals_with_point_state(vals, point_state), q0, deltaE,
             point_angles=_point_angles(mtt, stt, att),
         )
 
@@ -7802,17 +7821,15 @@ class TAVIController(QObject):
                     q0 = _background_q_magnitude(md)
 
                     # Resolution kernel for this point (cheap: one config + solve).
-                    # Uses THIS point's own applied radii (md), not the frozen
-                    # launch vals -- an AUTOFOCUS axis or a curvature scan point
-                    # runs with radii that differ point-to-point.
+                    # Uses THIS point's own applied radii AND kinematics (md),
+                    # not the frozen launch vals -- an AUTOFOCUS axis or a
+                    # curvature scan point runs with radii that differ
+                    # point-to-point, and a direct-angle scan's own Ei/Ki/Ef/Kf
+                    # can differ from the launch's (D23).
                     rr = None
                     try:
-                        point_radii = {
-                            axis: md[axis]
-                            for axis in ("rhm", "rvm", "rha", "rva")
-                        }
                         cfg = self.instrument.resolution_config(
-                            _vals_with_point_curvature(vals, point_radii), q0, w,
+                            _vals_with_point_state(vals, md), q0, w,
                             point_angles=_point_angles(md['mtt'], md['stt'], md['att']),
                         )
                         rr = _resolution(cfg)
@@ -8770,16 +8787,12 @@ class TAVIController(QObject):
                             try:
                                 from tavi.deterministic_engine import marginal_sigma as _marginal_sigma
                                 from tavi.resolution import resolution as _resolution
-                                # THIS point's own applied radii (metadata), not
-                                # the frozen launch vals -- see the deterministic
-                                # engine's identical fix above.
-                                point_radii = {
-                                    axis: metadata[axis]
-                                    for axis in ("rhm", "rvm", "rha", "rva")
-                                }
+                                # THIS point's own applied radii AND kinematics
+                                # (metadata), not the frozen launch vals -- see
+                                # the deterministic engine's identical fix above.
                                 background_resolution = _resolution(
                                     self.instrument.resolution_config(
-                                        _vals_with_point_curvature(vals, point_radii),
+                                        _vals_with_point_state(vals, metadata),
                                         q0, float(deltaE),
                                         point_angles=_point_angles(
                                             metadata['mtt'], metadata['stt'], metadata['att']

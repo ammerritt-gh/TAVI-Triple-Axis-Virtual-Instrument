@@ -44,11 +44,11 @@ def test_background_resolution_solve_uses_this_points_own_applied_radii():
     )[1]
     call_tail = call_tail.split("if background_needs_sigma_q:", 1)[0]
 
-    # Applied radii come from THIS point's own snapshot metadata, not the
-    # frozen launch vals -- the same magnitude-preserving overlay the
-    # deterministic engine and GET /resolution use.
-    assert "metadata[axis]" in call_tail, call_tail
-    assert "_vals_with_point_curvature(vals, point_radii)" in call_tail, call_tail
+    # Applied radii AND kinematics come from THIS point's own snapshot
+    # metadata, not the frozen launch vals -- the same magnitude-preserving,
+    # per-point-energy overlay the deterministic engine and GET /resolution
+    # use (D23).
+    assert "_vals_with_point_state(vals, metadata)" in call_tail, call_tail
 
     # The regression this guards: resolution_config's first argument at this
     # call site must never again be the bare frozen ``vals``.
