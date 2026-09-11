@@ -135,7 +135,11 @@ variant) with inline dict literals. Duplicated again inside `validate_angles()`
 **C. Instrument-specific physics constants.** `PUMA_Instrument.__init__`
 (`:375`) sets arm lengths, slit gaps, NMO/selector flags, source type.
 `calculate_crystal_bending()` (`:426`) encodes PUMA focusing formulas and minimum
-radii (`rhm>=2.0`, `rvm>=0.5`, `rha>=2.0`, `rva=0.8` fixed). `_get_v_selector_frequency`
+radii (`rhm>=2.0`, `rvm>=0.5`, `rha>=2.0`, `rva=0.8` fixed) — historical Phase-0
+state; the method no longer exists, replaced by the one shared producer,
+`TAS_Instrument.ideal_curvature` (`instruments/tas_runtime.py`), driven by each
+crystal's declared `CurvatureAxis` (`docs/INSTRUMENT_AUTHORING.md`).
+`_get_v_selector_frequency`
 (`:480`) hard-codes selector geometry.
 
 **D. Per-point parameter snapshot.** `build_puma_point_params()` (`:524`) and
@@ -1454,12 +1458,13 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
 - **Branch-signed crystal bending (found in the smoke run):**
   `Monochromator_curved` needs the curvature center on the take-off side, so
   the bending radii carry the sign of the branch. IN8's
-  `calculate_crystal_bending` returns signed radii (point-source formulas on
-  BOTH sides — the virtual source is a real focal point, unlike PUMA's guide),
-  and `scan_config` applies the branch sign to the GUI magnitudes
-  (rha/rva negative). Measured cost of the wrong sign: **~7 orders of
-  magnitude** in elastic peak intensity. PUMA is unaffected (all its take-offs
-  are the positive branch).
+  `calculate_crystal_bending` (historical name; the one shared producer today
+  is `TAS_Instrument.ideal_curvature`) returned signed radii (point-source
+  formulas on BOTH sides — the virtual source is a real focal point, unlike
+  PUMA's guide), and `scan_config` applies the branch sign to the GUI
+  magnitudes (rha/rva negative). Measured cost of the wrong sign: **~7 orders
+  of magnitude** in elastic peak intensity. PUMA is unaffected (all its
+  take-offs are the positive branch).
 - Minimal six-monitor diagnostic set; collimation slots α2/α3/α4
   (20/30/40/60′, default open); no modules (FlatCone/IMPS deferred, §14).
   PLACEHOLDER values (positions, apertures, Cu200 mosaic/r0, analyzer
@@ -1487,10 +1492,12 @@ the (already binary-name-agnostic) run layer. All value-identical for PUMA.
 - **Resolved 2026-07-18:** IN8 and PUMA import
   `compute_scan_snapshot`/`run_tas_point`/`TAS_Instrument` from the neutral
   `instruments/tas_runtime.py`; neither model owns another instrument's runtime.
-- `TAVIController._compute_ideal_bending_values` still uses PUMA's
-  parallel-beam mono formula and unsigned magnitudes for the advisory "Ideal:"
-  labels — mildly wrong for IN8 (point-source + signed). Follow-up: route
-  through `state.calculate_crystal_bending`.
+- **Resolved (crystal-bending-generality branch):** `TAVIController._compute_ideal_bending_values`
+  used to reuse PUMA's parallel-beam mono formula and unsigned magnitudes for
+  the advisory "Ideal:" labels regardless of the selected instrument. It is
+  now a thin caller of the one shared producer, `TAS_Instrument.ideal_curvature`,
+  passed the GUI's actual crystal selection, and returns absolute magnitudes
+  (`docs/INSTRUMENT_AUTHORING.md`).
 - **a3 convention: RESOLVED** (user's second live vTAS run). The raw readings
   a3(V1)=125.647 / a3(V3)=69.337 initially suggested a −56.31° difference
   (mirror of the baked branch), but decode exactly as TAVI's Friedel-branch
@@ -1626,7 +1633,8 @@ tracking the arms, so a later "improvement" cannot quietly turn it into a
 computed radius.
 
 Published mechanical bending limits (horizontal ≥ 1.7 m, vertical ≥ 0.5 m) are
-clamped in `calculate_crystal_bending`. With L1 = L2 = 1.8 m the horizontal
+declared as `min_radius_m` on the mono's `CurvatureAxis` entries and clamped by
+`TAS_Instrument.ideal_curvature`. With L1 = L2 = 1.8 m the horizontal
 limit never binds; the vertical one does, above about |A1| = 32°. Neither limit
 could be re-confirmed in the literature round — ILL says only that both axes
 are variable.
