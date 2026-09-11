@@ -412,33 +412,18 @@ class IN12Plugin:
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
-        # Curvature radii are signed by the scattering branch: the curvature
-        # center must sit on the take-off side. IN12 takes off NEGATIVE at both
-        # crystals (sense_mono = sense_ana = -1), so all three driven radii are
-        # negative -- the first TAVI instrument whose monochromator is on the
-        # negative branch. The GUI carries magnitudes; the branch sign is
-        # instrument physics, applied here. (Wrong sign = ~7 orders of
-        # magnitude peak loss; measured on IN8 in the Phase-4 smoke.)
-        scan_config.rhm = -abs(vals['rhm'])
-        scan_config.rvm = -abs(vals['rvm'])
-        scan_config.rha = -abs(vals['rha'])
-        # The PG(002) analyser's vertical focus is FIXED hardware (1998: the
-        # top and bottom crystal rows are permanently tilted), so for it rva is
-        # not a GUI knob and takes the fixed radius on the negative branch.
-        # That evidence is about THAT assembly: the Heusler has no published
-        # focusing behaviour, so it is driven to the point-source optimum
-        # instead of inheriting PG's radius. The crystal's own
-        # fixed_curvature declaration decides, so the runtime policy and the
-        # scan-legality gate can never disagree about which analyser is fixed.
-        if scan_config.ana_vertical_is_fixed():
-            scan_config.rva = -ANA_FIXED_RV
-        else:
-            # Driven like rha: the GUI carries the magnitude (its Ideal button
-            # reads calculate_crystal_bending, which returns the point-source
-            # optimum for an analyser with no fixed focus) and the branch sign
-            # is applied here. Absent a value, flat -- the neutral choice for a
-            # crystal whose focusing behaviour is unpublished.
-            scan_config.rva = -abs(vals.get('rva', 0.0))
+        # Curvature radii are plain magnitudes here: the branch sign (a
+        # crystal's take-off side) and any fixed-axis/mechanical-limit policy
+        # -- including PG(002)'s fixed vertical analyser focus versus the
+        # Heusler's driven one, both read off the crystal's own
+        # fixed_curvature declaration -- are enforced once, in
+        # TAS_Instrument.set_crystal_bending, the boundary every path to the
+        # instrument state crosses. Signing or fixing here too would be the
+        # exact duplicated-policy bug that boundary exists to prevent.
+        scan_config.rhm = vals['rhm']
+        scan_config.rvm = vals['rvm']
+        scan_config.rha = vals['rha']
+        scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])

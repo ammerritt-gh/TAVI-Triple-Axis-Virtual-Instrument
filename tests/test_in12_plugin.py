@@ -128,6 +128,7 @@ def _gui_vals(**overrides):
         "rhm": 3.84,
         "rvm": 0.84,
         "rha": 1.98,
+        "rva": 1.40,
         "fixed_E": 8.288785,
         "monocris": "pg002",
         "anacris": "pg002",
@@ -174,13 +175,12 @@ def test_scan_config_applies_gui_mapping():
     assert config is not base and base.alpha_3 == 0   # base not mutated
     assert config.mis_omega == 1.5                    # hidden state propagates
     assert config.K_fixed == "Kf Fixed"
-    # Branch-signed curvature: the GUI carries magnitudes and BOTH IN12 crystals
-    # take off on the negative branch, so all three driven radii come out
-    # negative.
-    assert (config.rhm, config.rvm, config.rha) == (-3.84, -0.84, -1.98)
-    # The analyser's vertical focus is fixed hardware, not a GUI knob, so it
-    # ignores vals entirely and takes the fixed radius on the same branch.
-    assert config.rva == -ANA_FIXED_RV
+    # scan_config is a pass-through of the GUI magnitudes now -- branch
+    # signing and fixed-axis policy (PG's fixed vertical analyser focus
+    # included) live in set_crystal_bending, the shared boundary
+    # compute_scan_snapshot always crosses before a point runs.
+    assert (config.rhm, config.rvm, config.rha, config.rva) == \
+        (3.84, 0.84, 1.98, 1.40)
     assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     assert (config.alpha_1, config.alpha_2, config.alpha_3, config.alpha_4) == \
@@ -190,8 +190,9 @@ def test_scan_config_applies_gui_mapping():
     assert config.diagnostic_settings.get("Detector PSD") is True
 
 
-def test_scan_config_negates_positive_gui_radii():
-    """The GUI may hand back either sign; the branch sign is instrument physics."""
+def test_scan_config_passes_through_a_negative_gui_radius_unchanged():
+    """scan_config no longer signs anything -- a GUI value that already
+    carries a sign passes straight through, same as a positive one."""
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     base = plugin.default_state()
@@ -479,28 +480,29 @@ def test_the_heusler_does_not_inherit_pg_s_fixed_vertical_focus():
         state.ideal_curvature("pg002", heusler, mth, ath)
 
 
-def test_scan_config_rva_follows_the_selected_analyser():
+def test_scan_config_passes_through_rva_regardless_of_analyser():
+    """scan_config carries rva straight through for every analyser now --
+    PG's fixed vertical focus and the Heusler's unknown one are
+    set_crystal_bending's job (see
+    test_the_heusler_does_not_inherit_pg_s_fixed_vertical_focus), not
+    scan_config's."""
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     heusler = _heusler_id()
     base = plugin.default_state()
 
-    def _config(anacris, rva=None):
+    def _config(anacris, rva):
         vals = {
             "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2,
-            "rhm": 3.0, "rvm": 1.2, "rha": 1.5,
+            "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": rva,
             "fixed_E": 8.288785, "monocris": "pg002", "anacris": anacris,
             "modules": {},
             "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0",
                             "alpha_4": "0"},
             "slits_mm": {"sbl": (30.0, 60.0), "dbl_hgap": 50.0},
         }
-        if rva is not None:
-            vals["rva"] = rva
         return plugin.scan_config(base, vals, None, {}, base.sample_mount)
 
-    assert _config("pg002").rva == -ANA_FIXED_RV
-    # The Heusler takes the GUI magnitude on the take-off branch, like rha.
-    assert _config(heusler, rva=0.9).rva == pytest.approx(-0.9)
-    # Absent a value it is flat, not PG's radius.
-    assert _config(heusler).rva == 0.0
+    assert _config("pg002", rva=ANA_FIXED_RV).rva == ANA_FIXED_RV
+    assert _config(heusler, rva=0.9).rva == pytest.approx(0.9)
+    assert _config(heusler, rva=0.0).rva == 0.0

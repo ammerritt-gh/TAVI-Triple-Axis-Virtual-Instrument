@@ -335,23 +335,16 @@ class PANDAPlugin:
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
-        # Curvature radii are signed by the scattering branch: the curvature
-        # center must sit on the take-off side. PANDA takes off negative at
-        # BOTH crystals (senses -1/+1/-1), so every radius is negative -- where
-        # IN8 only flips the analyzer. The GUI carries magnitudes; the branch
-        # sign is instrument physics, applied here. (Wrong sign = ~7 orders of
-        # magnitude peak loss; measured during the IN8 Phase-4 smoke.)
-        scan_config.rhm = -abs(vals['rhm'])
-        scan_config.rvm = -abs(vals['rvm'])
-        scan_config.rha = -abs(vals['rha'])
-        # PANDA's conventional analyzer vertical curvature is fixed, not
-        # driven. Confirmed: two peer-reviewed PANDA papers describe fixed
-        # vertical / variable horizontal analyzer focusing, one tying the fixed
-        # vertical geometry to the vertically oriented 1" 3He detector, and the
-        # MLZ page advertises only variable horizontal focusing. The RADIUS is
-        # not confirmed by anything -- this is our point-focus value for the
-        # standard cold setting kf = 1.55 A^-1.
-        scan_config.rva = -0.60
+        # Curvature radii are plain magnitudes here: the branch sign (a
+        # crystal's take-off side) and any fixed-axis/mechanical-limit policy
+        # are enforced once, in TAS_Instrument.set_crystal_bending, the
+        # boundary every path to the instrument state crosses. Signing here
+        # too would be the exact duplicated-policy bug that boundary exists
+        # to prevent.
+        scan_config.rhm = vals['rhm']
+        scan_config.rvm = vals['rvm']
+        scan_config.rha = vals['rha']
+        scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])

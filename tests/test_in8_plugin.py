@@ -64,6 +64,7 @@ def _gui_vals(**overrides):
         "rhm": 3.0,
         "rvm": 1.2,
         "rha": 1.5,
+        "rva": 0.31,
         "fixed_E": 14.68,
         "monocris": "pg002",
         "anacris": "pg002",
@@ -110,9 +111,10 @@ def test_scan_config_applies_gui_mapping():
     assert config is not base and base.alpha_3 == 0   # base not mutated
     assert config.mis_omega == 1.5                    # hidden state propagates
     assert config.K_fixed == "Kf Fixed"
-    # Branch-signed curvature: GUI magnitudes; analyzer take-off is the -1
-    # branch so rha/rva come out negative.
-    assert (config.rhm, config.rvm, config.rha, config.rva) == (3.0, 1.2, -1.5, -0.31)
+    # scan_config is a pass-through of the GUI magnitudes now -- branch
+    # signing and fixed-axis policy live in set_crystal_bending, the shared
+    # boundary compute_scan_snapshot always crosses before a point runs.
+    assert (config.rhm, config.rvm, config.rha, config.rva) == (3.0, 1.2, 1.5, 0.31)
     assert config.monocris == config.anacris == "pg002"
     assert config.sample_key == "Al_bragg"
     # Single-select collimation slots -- floats, not PUMA's stacked list.

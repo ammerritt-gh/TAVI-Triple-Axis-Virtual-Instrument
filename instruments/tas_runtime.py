@@ -877,6 +877,13 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     point_state.psi = psi_scan
     point_state.saz = saz
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
+    # Read the APPLIED values back off the state rather than keep the
+    # pre-setter locals: set_crystal_bending signs each radius onto the
+    # actual take-off branch (and pins a fixed axis to its declared radius),
+    # so for a scanned curvature axis the pre-setter magnitude and the
+    # emitted sign can disagree. The log line and metadata below must record
+    # what this point actually ran with.
+    rhm, rvm, rha, rva = point_state.rhm, point_state.rvm, point_state.rha, point_state.rva
 
     output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
     orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
