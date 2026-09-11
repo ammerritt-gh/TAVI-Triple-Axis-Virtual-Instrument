@@ -11,7 +11,8 @@ import re
 import pytest
 
 from instruments._descriptor_examples import in8_descriptor, in12_descriptor
-from instruments.descriptor import AxisLimits
+from instruments.descriptor import AxisLimits, CurvatureAxis
+from instruments.panda.plugin import panda_descriptor
 from instruments.puma.plugin import puma_descriptor
 from instruments.validation import (
     DescriptorValidationError,
@@ -160,6 +161,10 @@ def test_monitor_component_names_unique_and_set():
 # tests/test_puma_build_tree.py.
 
 
+def _fixed_rva(radius=0.3, provenance="test"):
+    return {"rva": CurvatureAxis(driven=False, fixed_radius_m=radius, provenance=provenance)}
+
+
 def test_fixed_curvature_must_name_an_axis_that_side_has():
     """A typo fails open -- the scan is allowed and the pin bypassed.
 
@@ -170,26 +175,78 @@ def test_fixed_curvature_must_name_an_axis_that_side_has():
 
     good = dataclasses.replace(
         base, ana_crystals=tuple(
-            dataclasses.replace(c, fixed_curvature=("rva",))
+            dataclasses.replace(c, curvature=_fixed_rva())
             for c in base.ana_crystals))
-    assert [e for e in validate_descriptor(good) if "fixed_curvature" in e] == []
+    assert [e for e in validate_descriptor(good) if "curvature" in e] == []
 
     wrong_side = dataclasses.replace(
         base, mono_crystals=tuple(
-            dataclasses.replace(c, fixed_curvature=("rva",))
+            dataclasses.replace(c, curvature=_fixed_rva())
             for c in base.mono_crystals))
-    errs = [e for e in validate_descriptor(wrong_side) if "fixed_curvature" in e]
+    errs = [e for e in validate_descriptor(wrong_side) if "curvature" in e]
     assert errs and "is not one of" in errs[0]
 
     typo = dataclasses.replace(
         base, ana_crystals=tuple(
-            dataclasses.replace(c, fixed_curvature=("rva_param",))
+            dataclasses.replace(
+                c, curvature={"rva_param": CurvatureAxis(
+                    driven=False, fixed_radius_m=0.3, provenance="test")})
             for c in base.ana_crystals))
-    assert any("fixed_curvature" in e for e in validate_descriptor(typo))
+    assert any("curvature" in e and "is not one of" in e
+               for e in validate_descriptor(typo))
 
 
-def test_fixed_curvature_defaults_to_empty():
-    """The generic instruments pin nothing, so nothing is refused for them."""
-    for d in (in8_descriptor(), puma_descriptor()):
-        for spec in d.mono_crystals + d.ana_crystals:
-            assert spec.fixed_curvature == ()
+def test_curvature_radius_without_provenance_is_invalid():
+    """An unsourced number in a hardware-looking field must not pass."""
+    base = in8_descriptor()
+    bad = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(
+                c, curvature={"rva": CurvatureAxis(driven=False, fixed_radius_m=0.3)})
+            for c in base.ana_crystals))
+    errs = [e for e in validate_descriptor(bad) if "curvature" in e]
+    assert any("provenance" in e for e in errs)
+
+
+def test_fixed_axis_cannot_carry_travel_limits():
+    base = in8_descriptor()
+    bad = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(
+                c, curvature={"rva": CurvatureAxis(
+                    driven=False, fixed_radius_m=0.3, min_radius_m=0.2,
+                    provenance="test")})
+            for c in base.ana_crystals))
+    errs = [e for e in validate_descriptor(bad) if "curvature" in e]
+    assert any("driven axis" in e for e in errs)
+
+
+def test_curvature_min_must_not_exceed_max():
+    base = in8_descriptor()
+    bad = dataclasses.replace(
+        base, ana_crystals=tuple(
+            dataclasses.replace(
+                c, curvature={"rha": CurvatureAxis(
+                    driven=True, min_radius_m=2.0, max_radius_m=1.0,
+                    provenance="test")})
+            for c in base.ana_crystals))
+    errs = [e for e in validate_descriptor(bad) if "curvature" in e]
+    assert any("min_radius_m must be <= max_radius_m" in e for e in errs)
+
+
+def test_fixed_curvature_reports_declared_fixed_axes():
+    """IN12 PG(002) and PANDA PG(002) fix rva; the IN12 Heusler does not.
+
+    IN8's crystals declare curvature (no clamps known) but nothing fixed, so
+    they still report an empty tuple.
+    """
+    in12 = in12_descriptor()
+    ana = {c.id: c for c in in12.ana_crystals}
+    assert ana["pg002"].fixed_curvature == ("rva",)
+    assert ana["heusler111"].fixed_curvature == ()
+
+    panda_ana = {c.id: c for c in panda_descriptor().ana_crystals}
+    assert panda_ana["pg002"].fixed_curvature == ("rva",)
+
+    for spec in in8_descriptor().mono_crystals + in8_descriptor().ana_crystals:
+        assert spec.fixed_curvature == ()

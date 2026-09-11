@@ -177,17 +177,57 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
                 f"got {lim.lower} / {lim.default} / {lim.upper}"
             )
 
-    # --- S10b: fixed curvature axes -----------------------------------------------
+    # --- S10b: curvature axes -----------------------------------------------------
     for side, specs, allowed in (
         ("mono_crystals", d.mono_crystals, _MONO_CURVATURE),
         ("ana_crystals", d.ana_crystals, _ANA_CURVATURE),
     ):
         for spec in specs:
-            for name in spec.fixed_curvature:
+            for name, axis in spec.curvature.items():
+                prefix = f"{side}[{spec.id!r}].curvature[{name!r}]"
                 if name not in allowed:
                     errors.append(
-                        f"{side}[{spec.id!r}].fixed_curvature: {name!r} is not "
-                        f"one of {sorted(allowed)}"
+                        f"{prefix}: {name!r} is not one of {sorted(allowed)}"
+                    )
+                    continue
+                numbers = [
+                    v for v in (axis.fixed_radius_m, axis.min_radius_m, axis.max_radius_m)
+                    if v is not None
+                ]
+                # Zero is legal and means FLAT, which is why this is >= 0 and
+                # not > 0. It is the repo-wide convention: tavi/resolution.py's
+                # radius_cm maps 0 (and None) to _FLAT_RADIUS_CM, and McStas
+                # Monochromator_curved reads a zero radius as an unbent crystal.
+                # A flat assembly is real hardware, so rejecting 0 here would
+                # refuse a truthful declaration.
+                for value in numbers:
+                    if not _finite(value) or value < 0:
+                        errors.append(
+                            f"{prefix}: radius must be finite and >= 0 (got {value!r})"
+                        )
+                if axis.driven:
+                    if axis.fixed_radius_m is not None:
+                        errors.append(
+                            f"{prefix}: fixed_radius_m must be unset when driven is True"
+                        )
+                else:
+                    if axis.fixed_radius_m is None:
+                        errors.append(
+                            f"{prefix}: fixed_radius_m is required when driven is False"
+                        )
+                    if axis.min_radius_m is not None or axis.max_radius_m is not None:
+                        errors.append(
+                            f"{prefix}: min_radius_m/max_radius_m only apply to a driven axis"
+                        )
+                if (
+                    axis.min_radius_m is not None
+                    and axis.max_radius_m is not None
+                    and axis.min_radius_m > axis.max_radius_m
+                ):
+                    errors.append(f"{prefix}: min_radius_m must be <= max_radius_m")
+                if numbers and not axis.provenance:
+                    errors.append(
+                        f"{prefix}: provenance is required whenever a radius is declared"
                     )
 
     # --- S11: senses -------------------------------------------------------------------
