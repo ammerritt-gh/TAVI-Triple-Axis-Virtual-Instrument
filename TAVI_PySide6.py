@@ -2448,11 +2448,17 @@ class TAVIController(QObject):
         # Feasibility gate: the same per-point angle solve run_simulation applies
         # (throwaway check_state, calculate_angles error flags). Infeasible ->
         # {"ok": false, "reason": ...} with the /validate refusal vocabulary.
-        check_state = self.instrument.default_state()
-        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
-        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
-        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-        check_state.fixed_E = vals.get('fixed_E', 14.7)
+        #
+        # Built through scan_config -- the same mapping compute_scan_snapshot's
+        # launch path and _reciprocal_advisory use -- so module state (e.g.
+        # a fitted nested mirror optic) reaches check_state exactly like every
+        # other curvature consumer, instead of a hand-picked field subset that
+        # a generic controller would have to know one plugin's module names to
+        # extend.
+        check_state = self.instrument.scan_config(
+            self.instrument.default_state(), vals, vals.get('sample_key'),
+            self.diagnostic_settings, self._build_sample_mount(vals),
+        )
         angles, error_flags = check_state.calculate_angles(
             qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
             check_state.monocris, check_state.anacris,
