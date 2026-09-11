@@ -121,9 +121,14 @@ Roadmap order per CONTROL_FEATURES §9:
       env's interpreter is invoked **directly**, which leaves `Library\bin` off
       PATH. Run the suite through the activation the launcher uses --
       `micromamba run -n tavi-dev python -m pytest tests -q` -- and it passes
-      whole in ~70 s. No allowlist needed. Run one suite at a time: two
-      concurrent runs contend for the API server port and fail
-      `test_api_server.py` / `test_api_validation_schema.py` spuriously.
+      whole in ~70 s. No allowlist needed. Run one suite at a time, and never a targeted
+      file while a full run is in flight: concurrent runs contend for the
+      API server port (`test_api_server.py` / `test_api_validation_schema.py`)
+      and for the shared `config/parameters.json`
+      (`test_parameters_persistence.py`) and fail spuriously. In Git Bash
+      `micromamba` is not on PATH; the absolute launcher is in
+      `tests/README.md`, as is the worktree hardlink for the Pb map that
+      `test_dispersion_map.py` otherwise skips silently.
       Written up in `AGENTS.md` step 3 and `tests/README.md`.
 
 - [ ] **Instrument evidence still needing an instrument scientist** - each is
