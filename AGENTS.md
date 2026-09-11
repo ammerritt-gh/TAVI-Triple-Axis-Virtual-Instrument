@@ -11,6 +11,7 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 - **Entrypoint:** `python TAVI_PySide6.py`.
 - **Developer launcher:** `run-tavi-dev.bat` runs the GUI in the local `tavi-dev` micromamba environment.
 - **Dependency manager:** `pip install -r requirements.txt` for standalone Python dependencies; installer docs use micromamba for McStas and Python.
+- **Environment traps:** `.pytest_cache\` (May 2026) has broken ACLs and cannot be read or deleted without an elevated shell (`takeown` then `icacls`); it is gitignored, and pytest recreates its cache elsewhere. Git identity is repo-local (`ammerritt-gh`), so a fresh clone must set it locally before it can commit. The `tavi-dev` activation runs a noisy MSVC/vcvars hook; call the env's `python.exe` directly when clean output matters.
 - **Config location:** `config/*.json` stores local McStas paths, GUI parameters, layout state, and runtime estimates.
 - **Generated output:** simulation results are written under `output/`; McStas can generate `.c`, `.instr`, executables, and detector output files.
 - **External runtime dependency:** McStas 3.4 or later plus a C/C++ compiler for instrument compilation.
