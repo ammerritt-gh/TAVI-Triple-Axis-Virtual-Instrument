@@ -154,6 +154,11 @@ class TAS_Instrument:
         self._angle_energies = None
         self.diagnostic_mode = False
         self.diagnostic_settings = {}
+        # Which axes ideal_curvature last clamped, for the caller that builds
+        # per-point metadata. Initialised here so the attribute always exists:
+        # its one reader guards with getattr, and that guard is exactly the
+        # kind of implicit contract this branch spent seven commits removing.
+        self._last_ideal_clamped_axes = ()
 
     def set_parameters(self, **kwargs):
         """Method to set general parameters."""
