@@ -62,6 +62,56 @@ def _clamp_curvature_magnitude(magnitude, min_m, max_m):
     return magnitude
 
 
+def curvature_command_error(axis, magnitude, curvature_axis, crystal_name=None):
+    """Why an explicitly commanded curvature radius cannot be honoured, or None.
+
+    The refuse-vs-clamp counterpart to ``_clamp_curvature_magnitude``: an
+    AUTOFOCUS ideal is a suggestion nobody chose, so it keeps being clamped by
+    that helper; a HELD radius or a scan-range endpoint is something a person
+    or an API client explicitly asked for, so it is refused here instead of
+    silently rewritten into a different instrument. ``magnitude`` is the
+    signed commanded value exactly as ``set_crystal_bending`` receives it --
+    this compares ``abs(magnitude)``, mirroring both that setter's fixed-axis
+    pin (``abs(value) != magnitude``) and this module's own clamp.
+
+    An exact 0 always means FLAT, which is real hardware -- a minimum radius
+    constrains how tightly a bender may bend, not whether it may be straight.
+    It is exempt from the driven axis's mechanical min/max for the identical
+    reason ``_clamp_curvature_magnitude`` exempts it. A fixed axis has no
+    such exemption: its declared radius is the only value real hardware can
+    be at, 0 included, so a fixed axis whose declared radius is nonzero still
+    refuses a commanded 0.
+    """
+    value = abs(magnitude)
+    # Read by a person in a GUI dialog and by a campaign client in an API error
+    # body, so it is a sentence: which axis, on what, what was asked for, and
+    # what the hardware allows -- in that order, because the operator already
+    # knows what they typed and needs to find the limit.
+    where = f" on the {crystal_name}" if crystal_name else ""
+    if not curvature_axis.driven:
+        fixed = curvature_axis.fixed_radius_m
+        if fixed is not None and value != fixed:
+            return (
+                f"{axis}{where} is fixed at {fixed:.4g} m and cannot be "
+                f"commanded to {value:.4g} m."
+            )
+        return None
+    if value == 0.0:
+        return None
+    min_m, max_m = curvature_axis.min_radius_m, curvature_axis.max_radius_m
+    if min_m is not None and value < min_m:
+        return (
+            f"{axis}{where}: commanded radius {value:.4g} m is tighter than "
+            f"the mechanical minimum of {min_m:.4g} m."
+        )
+    if max_m is not None and value > max_m:
+        return (
+            f"{axis}{where}: commanded radius {value:.4g} m is flatter than "
+            f"the mechanical maximum of {max_m:.4g} m."
+        )
+    return None
+
+
 class TAS_Instrument:
     """The general setup of a triple-axes spectrometer (TAS) instrument, with useful functions for setting the geometries."""
     def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, A1=0, A2=0, A3=0, A4=0, saz=0, **kwargs):
@@ -226,12 +276,16 @@ class TAS_Instrument:
         Every substitution -- a fixed axis overriding a supplied value, a
         clamp, a skipped sign -- is logged; nothing is corrected silently.
 
-        KNOWN INTERIM: an out-of-travel value is *clamped* here. That is right
-        for an automatically chosen ideal and wrong for an explicit operator
-        or API command, which should become a refused point instead of being
-        quietly rewritten. The distinction needs the per-axis AUTOFOCUS /
-        HELD / SCANNED mode a later slice introduces; until then, clamp and
-        log.
+        RESOLVED: the distinction this used to defer is settled upstream, at
+        submission -- an explicitly commanded radius (a HELD value or a scan
+        range) is refused before anything runs, via ``curvature_command_error``
+        in ``TAVI_PySide6.py``'s ``build_api_launch_state`` (API),
+        ``_held_curvature_issues`` (GUI), and ``_validate_single_scan_command``
+        (both, for a scan range). This method's own clamp remains, deliberately,
+        as the backstop for the two callers that still cannot be refused: the
+        AUTOFOCUS path (nobody chose that number, so there is no command to
+        refuse -- see ``ideal_curvature``) and any caller that reaches this
+        setter directly without going through a submission gate.
 
         Two deliberate asymmetries with ``ideal_curvature``, both raised in
         review and both intentional:

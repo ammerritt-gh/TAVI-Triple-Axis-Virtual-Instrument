@@ -2640,6 +2640,30 @@ class TAVIController(QObject):
                     if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
                         vals[axis] = ideal[axis]
 
+        # A HELD radius (the only mode a patch can put an axis into -- rva
+        # has no API field yet and stays AUTOFOCUS) outside its declared
+        # mechanical travel, or off a fixed axis's declared radius, is
+        # refused here rather than silently clamped: the caller named this
+        # value explicitly. The GUI's ``_held_curvature_issues`` runs the
+        # identical check on the equivalent widgets, via the same
+        # ``curvature_command_error``, so an operator and an API client see
+        # the same sentence for the same out-of-travel value.
+        from instruments.tas_runtime import curvature_command_error
+
+        curvature_axis_specs = self._curvature_axis_specs(
+            vals['monocris'], vals['anacris']
+        )
+        for axis in ('rhm', 'rvm', 'rha'):
+            if vals['curvature_modes'][axis] != CurvatureMode.HELD:
+                continue
+            axis_spec = curvature_axis_specs.get(axis)
+            if axis_spec is None:
+                continue
+            curvature_axis, crystal_name = axis_spec
+            error = curvature_command_error(axis, vals[axis], curvature_axis, crystal_name)
+            if error:
+                raise ApiError(400, "curvature_out_of_travel", error)
+
         # At least one non-empty scan command is required (a lone command 2 is
         # swapped into command 1 downstream, so either satisfies the check).
         cmd1 = (vals.get('scan_command1') or "").strip()
@@ -3640,11 +3664,15 @@ class TAVIController(QObject):
         # Validate each command individually, against the crystals the dock
         # currently shows -- this path exists to annotate those widgets.
         dock = self.window.instrument_dock
-        fixed_axes = self._fixed_curvature_axes(
-            dock.selected_mono_id(), dock.selected_ana_id()
+        monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
+        fixed_axes = self._fixed_curvature_axes(monocris, anacris)
+        curvature_axes = self._curvature_axis_specs(monocris, anacris)
+        var1, warning1 = self._validate_single_scan_command(
+            cmd1, fixed_axes, curvature_axes
         )
-        var1, warning1 = self._validate_single_scan_command(cmd1, fixed_axes)
-        var2, warning2 = self._validate_single_scan_command(cmd2, fixed_axes)
+        var2, warning2 = self._validate_single_scan_command(
+            cmd2, fixed_axes, curvature_axes
+        )
         
         if warning1:
             self.window.simulation_dock.set_scan_command_warning(1, warning1)
@@ -3682,12 +3710,93 @@ class TAVIController(QObject):
                     break
         return fixed
 
-    def _validate_single_scan_command(self, command: str, fixed_axes=None) -> tuple:
+    def _curvature_axis_specs(self, monocris, anacris):
+        """{axis: (CurvatureAxis, crystal display name)} for the two named crystals.
+
+        The same crystal resolution ``_fixed_curvature_axes`` uses, but keeping
+        each axis's full declaration -- fixed radius AND mechanical travel --
+        rather than reducing it to fixed-axis membership. ``curvature_command_error``
+        needs both: a HELD radius or a scan-range endpoint can be refused for
+        either reason, and the refusal must judge it against the identical
+        declaration the scan will actually run with, not the GUI's live
+        selection (an API request can name different crystals).
+        """
+        from instruments.descriptor import CurvatureAxis
+
+        specs = {}
+        for selected_id, crystal_specs, label in (
+            (monocris, self.descriptor.mono_crystals, "monochromator"),
+            (anacris, self.descriptor.ana_crystals, "analyser"),
+        ):
+            for spec in crystal_specs:
+                if spec.id == selected_id:
+                    for axis in ("rhm", "rvm") if label == "monochromator" else ("rha", "rva"):
+                        specs[axis] = (
+                            spec.curvature.get(axis, CurvatureAxis()),
+                            f"{spec.display_name} {label}",
+                        )
+                    break
+        return specs
+
+    def _held_curvature_issues(self, monocris, anacris):
+        """Hard-refusal messages for a HELD curvature radius, straight from
+        the instrument-dock widgets.
+
+        Only an axis the operator actually commanded is checked -- one whose
+        Ideal lock is off, i.e. HELD, not AUTOFOCUS (``is_bending_locked``
+        mirrors the same read ``get_gui_values`` uses to set
+        ``curvature_modes``). Refusing an AUTOFOCUS ideal would break a
+        legitimate scan whose optimum leaves the bender's reach; nobody chose
+        that number, so there is nothing to refuse. Runs the identical
+        ``curvature_command_error`` check ``build_api_launch_state`` runs on a
+        patched value, so an operator and an API client see the same sentence
+        for the same out-of-travel value. ``rva`` has no widget yet and is
+        always AUTOFOCUS, so it is never checked here.
+        """
+        from instruments.tas_runtime import curvature_command_error
+
+        idock = self.window.instrument_dock
+        axis_edits = {
+            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit, "rha": idock.rha_edit,
+        }
+        curvature_axis_specs = self._curvature_axis_specs(monocris, anacris)
+        issues = []
+        for axis, edit in axis_edits.items():
+            if self.is_bending_locked(axis):
+                continue
+            axis_spec = curvature_axis_specs.get(axis)
+            if axis_spec is None:
+                continue
+            curvature_axis, crystal_name = axis_spec
+            try:
+                value = float(edit.text() or 0)
+            except ValueError:
+                # A non-numeric radius cannot reach a launch at all:
+                # get_gui_values() returns None for any unparseable field and
+                # _collect_simulation_launch_state bails on that (:2700), so
+                # there is no commanded value here to accept or refuse and
+                # skipping is not a hole. That the operator is not *told* why
+                # the run did nothing is a separate, pre-existing gap in field
+                # validation, not this check's to close.
+                continue
+            error = curvature_command_error(axis, value, curvature_axis, crystal_name)
+            if error:
+                issues.append(error)
+        return issues
+
+    def _validate_single_scan_command(self, command: str, fixed_axes=None,
+                                      curvature_axes=None) -> tuple:
         """Validate a single scan command and return (variable_name, warning_message).
 
         ``fixed_axes`` is the {axis: crystal} mapping from
         ``_fixed_curvature_axes`` for the crystals this scan will actually run
-        with; omitted means no curvature axis is refused.
+        with; omitted means no curvature axis is refused. ``curvature_axes`` is
+        the {axis: (CurvatureAxis, crystal)} mapping from
+        ``_curvature_axis_specs`` for the same crystals; omitted means no scan
+        range is checked against mechanical travel. A commanded scan endpoint
+        outside a driven axis's declared travel is refused the same as a HELD
+        value would be, via ``curvature_command_error`` -- the operator asked
+        for both ends of the range, so both are checked.
 
         A returned variable of ``None`` alongside a warning is a *hard*
         rejection -- the command cannot run as written. Callers must treat it
@@ -3743,7 +3852,22 @@ class TAVIController(QObject):
             step = float(parts[3])
         except ValueError:
             return (None, "Invalid numbers. Check start, end, and step values.")
-        
+
+        # A commanded scan range on a driven curvature axis is refused, not
+        # clamped, when either endpoint falls outside its declared mechanical
+        # travel -- the operator wrote both numbers deliberately.
+        axis_spec = (curvature_axes or {}).get(var_lower)
+        if axis_spec is not None:
+            from instruments.tas_runtime import curvature_command_error
+
+            curvature_axis, crystal_name = axis_spec
+            for endpoint in (start, end):
+                error = curvature_command_error(
+                    var_lower, endpoint, curvature_axis, crystal_name
+                )
+                if error:
+                    return (None, error)
+
         # Check for zero step
         if step == 0:
             return (var_lower, "Step size cannot be zero.")
@@ -6011,6 +6135,13 @@ class TAVIController(QObject):
         ``_scan_command_issues`` so the GUI Run path and the API path share
         one validation implementation.
 
+        Also folds in ``_held_curvature_issues`` (a HELD radius outside its
+        declared travel, or off a fixed axis's declared radius): that check
+        has no scan-command text to attach to, so it belongs beside this
+        wrapper's other pre-launch gate rather than inside
+        ``_scan_command_issues``, which is parameterized on command strings
+        alone.
+
         Returns:
             tuple: (hard, soft) issue lists. Hard cannot be overridden --
             the command does not describe a scan that can run. Soft is the
@@ -6019,9 +6150,10 @@ class TAVIController(QObject):
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         dock = self.window.instrument_dock
-        return self._scan_command_issues(
-            cmd1, cmd2, dock.selected_mono_id(), dock.selected_ana_id()
-        )
+        monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
+        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris)
+        hard = hard + self._held_curvature_issues(monocris, anacris)
+        return hard, soft
 
     def _scan_command_issues(self, cmd1: str, cmd2: str,
                              monocris=None, anacris=None):
@@ -6048,13 +6180,16 @@ class TAVIController(QObject):
         cmd1 = (cmd1 or "").strip()
         cmd2 = (cmd2 or "").strip()
         fixed_axes = self._fixed_curvature_axes(monocris, anacris)
+        curvature_axes = self._curvature_axis_specs(monocris, anacris)
 
         hard = []
         soft = []
         variables = []
 
         for label, cmd in (("Command 1", cmd1), ("Command 2", cmd2)):
-            var, warning = self._validate_single_scan_command(cmd, fixed_axes)
+            var, warning = self._validate_single_scan_command(
+                cmd, fixed_axes, curvature_axes
+            )
             variables.append(var)
             if not warning:
                 continue
