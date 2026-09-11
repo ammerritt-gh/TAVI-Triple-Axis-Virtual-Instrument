@@ -13,7 +13,8 @@ _PB_MAP = Path(__file__).resolve().parents[1] / "components" / "Pb_dft_phonons.d
 
 @pytest.mark.skipif(
     not _PB_MAP.is_file(),
-    reason="Pb DFT map not built; run tools/make_pb_assets.py",
+    reason=("Pb DFT map not built (run tools/make_pb_assets.py) or not "
+            "hardlinked into this worktree -- see tests/README.md"),
 )
 def test_pb_dft_map_has_fcc_zone_centres_and_period_two():
     dispersion = load_dispersion_map(_PB_MAP)

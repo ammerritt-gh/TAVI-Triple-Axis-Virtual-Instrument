@@ -4,10 +4,27 @@ Pytest suite for TAVI's non-GUI logic. Tests import `tavi/` and `instruments/`
 relative to the repo root, so always run from there:
 
 ```
-micromamba run -n tavi-dev python -m pytest tests -q
+micromamba run -n tavi-dev python -m pytest tests -q -ra
+```
+
+From Git Bash `micromamba` is not on PATH; use the absolute launcher:
+
+```
+"/c/Users/AMM/AppData/Local/micromamba/micromamba.exe" run -n tavi-dev python -m pytest tests -q -ra
 ```
 
 Notes:
+
+- **Run one suite at a time, and never a targeted file while a full run is in
+  flight.** Two concurrent runs contend for the API server port
+  (`test_api_server.py`, `test_api_validation_schema.py`) and for the shared
+  `config/parameters.json` (`test_parameters_persistence.py`); both fail
+  spuriously and reproduce as green when run alone.
+- **A fresh `git worktree` skips a test silently.** `components/Pb_dft_phonons.dat`
+  (143 MB, gitignored) is not in a new worktree, so `test_dispersion_map.py`
+  skips. `-ra` above prints the skip; hardlink the file from the main checkout
+  (`fsutil hardlink create <worktree>\components\Pb_dft_phonons.dat
+  <main>\components\Pb_dft_phonons.dat`) to keep the count honest.
 
 - The local micromamba env is `tavi-dev` (the one `run-tavi-dev.bat` uses).
   pytest is not part of `requirements.txt`; install it once into the env with
