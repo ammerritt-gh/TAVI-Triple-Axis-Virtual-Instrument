@@ -20,6 +20,7 @@ Targets Python 3.11 syntax.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from instruments.descriptor import InstrumentDescriptor
@@ -41,6 +42,28 @@ InstrumentState = Any
 # today; the fan-out width is fixed here and referenced by the run-point sites
 # (and recorded on mcstas scan records for future-proofing).
 DEFAULT_MPI_COUNT = 30
+
+
+class CurvatureMode(str, Enum):
+    """Per-axis curvature policy, carried in launch-state ``vals['curvature_modes']``.
+
+    One enum, used by the GUI, the API and the scan loop alike -- there is no
+    second way to express "how should this axis's radius be decided this scan".
+
+    ``FIXED`` is deliberately NOT a mode here: it is a property of the
+    installed assembly (``CurvatureAxis.driven is False``), already enforced
+    in ``TAS_Instrument.set_crystal_bending`` (which pins the axis to its
+    declared ``fixed_radius_m`` regardless of what mode or value is supplied)
+    and already refused as a scan variable elsewhere. A fixed axis has no
+    mode because the operator has no say over it.
+
+    Subclasses ``str`` so a plain value survives the ``copy.deepcopy`` at the
+    job-queue seam (``instruments/contract.py``) same as any other string.
+    """
+
+    AUTOFOCUS = "autofocus"   # recomputed from the optics at every point
+    HELD = "held"             # an explicit magnitude, unchanged for the scan
+    SCANNED = "scanned"       # driven by the scan command, point by point
 
 
 @dataclass
