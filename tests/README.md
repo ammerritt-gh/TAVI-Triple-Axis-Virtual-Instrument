@@ -18,8 +18,10 @@ Notes:
 - **Run one suite at a time, and never a targeted file while a full run is in
   flight.** Two concurrent runs contend for the API server port
   (`test_api_server.py`, `test_api_validation_schema.py`) and for the shared
-  `config/parameters.json` (`test_parameters_persistence.py`); both fail
-  spuriously and reproduce as green when run alone.
+  `config/parameters.json` (every test that constructs a real
+  `TAVIController`, which reads `config/parameters.json` by relative path
+  during construction (`TAVI_PySide6.py:5601`)); both fail spuriously and
+  reproduce as green when run alone.
 - **A fresh `git worktree` skips a test silently.** `components/Pb_dft_phonons.dat`
   (143 MB, gitignored) is not in a new worktree, so `test_dispersion_map.py`
   skips. `-ra` above prints the skip; hardlink the file from the main checkout

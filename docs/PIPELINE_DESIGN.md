@@ -24,14 +24,14 @@ Keep the McStas simulation binary running at near-100% CPU utilization throughou
 Two threads, one queue:
 
 ```
-                    Queue(maxsize=2)
+                    Queue()
   [Prep Thread] ──────────────────────► [Simulation Thread]
   produces snapshots                    consumes snapshots
   (pure Python, GIL-bound)              calls backengine() (subprocess, GIL released)
                                         does inline postprocessing after each point
 ```
 
-The prep thread computes parameter snapshots and pushes them onto a two-item queue. The simulation thread pulls snapshots and executes them. This keeps preparation slightly ahead while bounding memory and stale work; timed queue puts re-check cancellation under backpressure.
+The prep thread computes parameter snapshots and pushes them onto an unbounded queue, so it may run as far ahead of execution as the whole scan allows rather than blocking on a size bound. The simulation thread pulls snapshots and executes them. Memory is bounded in practice by scan length, since snapshots are small dicts; cancellation relies on the stop event checked by both threads, not on backpressure.
 
 Postprocessing stays inline in the simulation thread (no third stage). Postprocessing is lightweight — reading a small detector file, writing a small parameter file, emitting Qt signals — and separating it would add a thread, a second queue, and out-of-order handling complexity for negligible gain.
 
@@ -64,9 +64,9 @@ The drain model means: stop accepting new prep work, finish the in-flight simula
 
 `run_PUMA_instrument()` is split into two functions as part of this change, not deferred. This eliminates ~780 lines of redundant per-point component tree construction and makes the params-dict interface natural.
 
-### 3.5 Queue size: bounded
+### 3.5 Queue size: unbounded
 
-The prep thread uses `Queue(maxsize=2)`, allowing useful overlap without preparing an entire scan ahead of execution. Queue puts poll the stop event so cancellation cannot leave the prep thread permanently blocked by backpressure.
+The prep thread uses an unbounded `Queue()`. It may run the whole scan's snapshots ahead of execution rather than being held back by a size bound. Memory is bounded in practice by scan length — snapshots are small dicts, so even a full scan queued ahead of execution costs little. Cancellation relies on the stop event checked by both threads (Section 3.3), not on backpressure from a bounded queue. A bounded prep queue remains a possible future configuration option, pinned on the board, not a defect in the current design.
 
 ## 4. Refactoring Plan
 
@@ -180,7 +180,7 @@ run_simulation(launch_state):
                                          diagnostic_settings, number_neutrons)
     
     # --- NEW: Create pipeline primitives ---
-    snapshot_queue = queue.Queue(maxsize=2)
+    snapshot_queue = queue.Queue()
     stop_event = threading.Event()
     
     # --- NEW: Start prep thread ---
@@ -241,7 +241,8 @@ def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, vals,
             scan_item, i, scan_mode, scan_config, vals, data_folder
         )
         
-        # Timed puts re-check stop_event while the bounded queue is full.
+        # The queue is unbounded, so this never blocks on a full queue; it
+        # still re-checks stop_event so a cancel does not push past it.
         put_unless_stopped(snapshot_queue, snapshot, stop_event)
     
     # Signal end-of-input
@@ -290,7 +291,7 @@ Main Thread (Qt event loop)
 │
 └── Prep Thread (new, daemon, started by simulation thread)
     ├── Computes param snapshots from scan_parameter_input
-    ├── Pushes snapshots onto Queue(maxsize=2)
+    ├── Pushes snapshots onto Queue()
     └── Exits when all points computed or stop_event set
 ```
 
@@ -420,7 +421,7 @@ Mitigation: wrap the simulation loop in try/except/finally. In the finally block
 
 ### 8.3 Queue deadlock
 
-The bounded queue adds backpressure, so queue puts use short timeouts and re-check `stop_event`. The simulation thread only waits on `queue.get()`, and the prep thread holds no controller locks while preparing snapshots.
+The queue is unbounded, so a full queue cannot block the prep thread; there is no backpressure to deadlock on. The simulation thread only waits on `queue.get()`, and the prep thread holds no controller locks while preparing snapshots.
 
 ### 8.4 Subprocess failure (McStas crash)
 
@@ -464,7 +465,7 @@ The instrument object from plugin `build()` is used by the simulation thread for
 
 ### 2026-05-12
 
-- Plugin `build()` and `run_point()` are implemented for runnable instruments, and `TAVIController.run_simulation()` uses a prep thread plus a bounded `Queue(maxsize=2)` to overlap snapshot preparation with simulation.
+- Plugin `build()` and `run_point()` are implemented for runnable instruments, and `TAVIController.run_simulation()` uses a prep thread plus a bounded `Queue(maxsize=2)` to overlap snapshot preparation with simulation (the bound was later removed; see Decisions).
 - `compute_scan_snapshot()` is now the active per-point API for snapshot generation, and `self.stop_flag` has been replaced by `self.stop_event` (`threading.Event`) in the simulation control path.
 - Scan parameter log messages are prepared inside `compute_scan_snapshot()` but emitted by the simulation thread when the current point begins, so message order matches executed points rather than prep-thread lead time.
 - The simulation thread and prep thread now both consume a frozen scan-local PUMA configuration created at scan start, so mid-run GUI mutations of `self.PUMA` do not affect the in-flight run.
@@ -480,3 +481,8 @@ The instrument object from plugin `build()` is used by the simulation thread for
 - This direct-execution path is documented from the code, but it has not yet been integration-validated in a live McStas environment, so runtime behavior should still be treated as provisional until that smoke test is completed.
 
 Steps 1–4, the controller GUI-state freeze boundary, the stop-event conversion, and the first direct-binary execution slice are now in the live codebase. Runtime tracking is implemented in a simple heuristic form; explicit compile-time measurement and live-environment validation of the direct path still require follow-up.
+
+## Decisions
+
+### 2026-09-12 — the snapshot queue is unbounded
+**Ruled by:** operator. **Context:** the design specified `Queue(maxsize=2)`; the bound was removed in `4e013b3b` when per-stage timing landed, and the documentation kept the old figure. **Decision:** the queue stays unbounded; a bounded prep queue is a possible future configuration option, pinned on `WIP.md`, not a defect. **Why:** no measured problem from running ahead; scans are short and snapshots small. **Transcript:** docs/transcripts/ (this session's record lands at closeout).

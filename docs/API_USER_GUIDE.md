@@ -43,7 +43,7 @@ BASE URL: http://127.0.0.1:8642/api/v1   (JSON in, JSON out; add header
 
 KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
-  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...40 fields...}, budget}
+  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...43 keys returned, 42 writable...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
   POST /validate  body {"parameters":{...},"force":bool,"background":{...}} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates)
   POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
@@ -212,8 +212,8 @@ Liveness probe. No auth required, even when a token is set.
 
 ### GET /state
 Full snapshot: instrument id, access mode, busy flag, the currently running job
-id (or `null`), the list of queued job ids, the complete parameter dict (all 40
-fields — see §6), the configured limits (if any), current budget usage, and the
+id (or `null`), the list of queued job ids, the complete parameter dict (43
+keys returned, 42 writable — see §6), the configured limits (if any), current budget usage, and the
 session's background configuration (the same object `GET /background` returns).
 ```json
 {"instrument": "puma", "mode": "allow", "busy": true, "current_job": "j-0003",
@@ -1079,17 +1079,17 @@ Server-Sent Events stream. See §8.
 
 ## 6. Parameter field reference
 
-All 40 fields returned by `GET /parameters` and writable via `PATCH /parameters`.
+All 43 keys returned by `GET /parameters`; 42 are writable via `PATCH /parameters`, `curvature_modes` is read-only.
 Many are **linked**: writing one triggers the same recompute the GUI does when a
 user presses Enter, so dependent fields update automatically.
 
 | Field | Type | Units | Meaning / linked recompute |
 |---|---|---|---|
-| `mtt` | number | degrees | Monochromator take-off angle (A2). Recomputes energies/Q. |
-| `stt` | number | degrees | Sample scattering angle (A4). |
-| `omega` | number | degrees | Sample rotation (A3; same physical angle as sample θ). |
+| `mtt` | number | degrees | Monochromator take-off angle (scan variable `A1`). Recomputes energies/Q. |
+| `stt` | number | degrees | Sample scattering angle (scan variable `A2`). |
+| `omega` | number | degrees | Sample rotation (scan variable `A3`; same physical angle as sample θ). |
 | `chi` | number | degrees | Sample tilt. |
-| `att` | number | degrees | Analyzer take-off angle. |
+| `att` | number | degrees | Analyzer take-off angle (scan variable `A4`). |
 | `Ki` | number | Å⁻¹ | Incident wavevector. Linked: `Ki` ↔ `Ei`. |
 | `Ei` | number | meV | Incident energy. Linked: `Ei` ↔ `Ki`. |
 | `Kf` | number | Å⁻¹ | Final wavevector. Linked: `Kf` ↔ `Ef`. |
@@ -1111,6 +1111,7 @@ user presses Enter, so dependent fields update automatically.
 | `lattice_gamma` | number | degrees | Lattice angle γ. |
 | `kappa` | number | degrees | Sample alignment offset κ. |
 | `psi` | number | degrees | Sample alignment offset ψ. |
+| `sample` | string | — | Sample id from the shared sample library; the allowed values are the `sample` field's `allowed` list in `GET /schema`. Writable. |
 | `monocris` | string | — | Monochromator crystal id. PUMA: `"pg002"` or `"pg002_test"`. |
 | `anacris` | string | — | Analyzer crystal id. PUMA: `"pg002"`. |
 | `rhm` | number | m | Monochromator horizontal bending radius, magnitude. `0` = flat. See §5 *Crystal curvature* below. |

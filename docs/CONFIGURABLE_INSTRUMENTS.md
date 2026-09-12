@@ -2003,7 +2003,6 @@ Deferred, pinned (TODO.md at merge):
 - test_api_over_limit_latch's _ManifestController still re-implements
   normalize_scan_variable as identity.
 - IN12 `ana_vertical_is_fixed()` reads raw fixed_curvature; zero callers.
-- The "40-field" parameter-table count is stale (43) in four documents.
 - curvature_limits' docstring points at an angle-dependent extension that
   effective_curvature_axis cannot serve without the angle; the seam stays
   as recorded under "angle-dependent bender travel".
