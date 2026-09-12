@@ -165,6 +165,14 @@ def test_both_submission_paths_refuse_the_same_out_of_travel_value_identically()
         ctrl.window.instrument_dock.set_mono_id(mono)
         ctrl.window.instrument_dock.set_ana_id(ana)
         ctrl.window.instrument_dock.rhm_edit.setText(str(out_of_travel))
+        # setText is programmatic, so it does not fire textEdited and does not
+        # clear the Ideal lock the way a user typing here would. Establish the
+        # HELD precondition explicitly: _held_curvature_issues inspects only
+        # unlocked axes, so a controller built on a machine whose
+        # config/parameters.json last saved rhm_ideal_locked=true starts
+        # locked and reports no issue at all.
+        ctrl.unlock_ideal_bending("rhm")
+        assert ctrl.is_bending_locked("rhm") is False
         gui_issues = ctrl._held_curvature_issues(mono, ana)
 
         assert gui_issues == [api_message], (
