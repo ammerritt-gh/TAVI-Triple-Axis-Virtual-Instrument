@@ -1,5 +1,8 @@
 # PUMA Model Status
 
+> **Status:** live
+> **Authority:** the state of the PUMA model: what is verified, approximated, and open
+
 - Model version: **1.0.1**
 - Model date: **2026-07-18**
 - Runtime status: **runnable**

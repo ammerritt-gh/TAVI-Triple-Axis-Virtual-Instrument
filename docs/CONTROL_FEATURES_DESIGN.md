@@ -1,5 +1,7 @@
 # Control Features — Design Document
 
+> **Status:** draft
+
 *Date: 2026-07-03*
 *Status: **Draft**, updated 2026-07-28 — §5 (resolution ellipsoids: `tavi/resolution.py`, Cooper–Nathans and Popovici, `GET /resolution`), §6 (deterministic engine: `tavi/deterministic_engine.py`, `POST /scan` with `engine: "deterministic"`) and §6.7 (independently configured background sources: `tavi/background.py`, `GET`/`PUT /background`, planted by both engines) are implemented and live. **§1 (goto CEN) is implemented on the GUI side** — `tavi/scan_fits.py` and `gui/docks/fitting_dock.py` exist; several decisions supersede the §1 text and the `POST /goto` API surface (§1.5) is deferred, both recorded in **§1.7 Implementation status**, which is authoritative where it disagrees with §1.1–1.6. §2–4 (path scans/campaigns/intents), §7 (virtual clock), and §8 (point-list scans) remain proposed future work; where those sections reference new symbols (e.g. `POST /goto`, `CampaignRegistry`) they do not exist yet.*
 

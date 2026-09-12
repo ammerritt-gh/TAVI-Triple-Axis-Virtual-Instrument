@@ -1,5 +1,7 @@
 # Direct McStas Binary Invocation — Bypassing mcrun.py
 
+> **Status:** live
+
 *Date: 2026-05-20*
 *Status: First implementation slice landed. `TAVIController.run_simulation()` executes through `InstrumentPlugin.run_point()`, which delegates TAS execution to `instruments.tas_runtime.run_tas_point()`. That seam arms and uses a direct-binary path after the first successful `backengine()` materializes the executable. This has not yet been integration-validated in a live McStas environment.*
 

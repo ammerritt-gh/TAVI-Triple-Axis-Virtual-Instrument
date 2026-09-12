@@ -1,5 +1,8 @@
 # McStas Parameters in McStasScript
 
+> **Status:** live
+> **Authority:** which McStas values are run-time parameters and which force a recompile
+
 This document explains how McStas parameters work in McStasScript and how they are implemented in the PUMA instrument definition.
 
 ## Overview: Parameters vs Variables

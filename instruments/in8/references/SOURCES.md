@@ -1,5 +1,7 @@
 # IN8 Sources
 
+> **Status:** live
+
 | Snapshot | Source date/version | Captured | Used for | Status |
 |---|---|---|---|---|
 | [Hiess et al. performance paper](2006-01-01__hiess-in8-performance__v01.md) | 2006; day not present in the extracted copy | before 2026-07-02 | virtual source and IN8 performance context | comparison |

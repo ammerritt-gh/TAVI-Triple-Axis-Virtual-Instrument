@@ -1,5 +1,7 @@
 # TAVI — ongoing TODO
 
+> **Status:** live
+
 Living list. Grouped by theme, roughly dependency-ordered within each group.
 Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first),
 `docs/CONTROL_FEATURES_DESIGN.md` (feature designs + roadmap §9),

@@ -1,4 +1,6 @@
 # TAVI Installation Guide
+
+> **Status:** live
 ## Triple Axis Virtual Instrument for Windows
 
 TAVI is a simulation tool for triple-axis spectrometer (TAS) experiments, built on McStas. This guide covers installation, first-run validation, and troubleshooting.

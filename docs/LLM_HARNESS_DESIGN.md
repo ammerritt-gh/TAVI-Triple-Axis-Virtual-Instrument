@@ -1,5 +1,7 @@
 # Measurement Driver — Design Document
 
+> **Status:** draft
+
 *Status: **Draft**, 2026-07-03 — design only. No driver code exists yet. The
 driver is **not** part of the TAVI tree; it is a client of TAVI's API and of
 ISAR's files, and will almost certainly live in **its own repository**. Nothing

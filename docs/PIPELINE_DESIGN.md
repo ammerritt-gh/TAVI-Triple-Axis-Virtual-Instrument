@@ -1,5 +1,7 @@
 # Pipelined Scan Execution — Design Document
 
+> **Status:** live
+
 *Date: 2026-05-20*
 *Status: Implemented in code for the prep-thread + queue pipeline, the controller GUI-state freeze boundary, the stop-event conversion, per-stage timing capture, and the first direct-binary invocation slice behind `InstrumentPlugin.run_point()` and shared `run_tas_point()`; direct compile-time measurement still remains future work and is inferred from execution timings, and the direct path has not yet been integration-validated in a live McStas environment*
 

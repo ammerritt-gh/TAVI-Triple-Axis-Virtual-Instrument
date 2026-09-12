@@ -1,5 +1,8 @@
 # IN12 Model Status
 
+> **Status:** live
+> **Authority:** the state of the IN12 model: what is verified, approximated, and open
+
 - Model version: **1.0.1**
 - Model date: **2026-09-09**
 - Runtime status: **runnable**

@@ -1,5 +1,8 @@
 # TAVI Tests
 
+> **Status:** live
+> **Authority:** how the test suite is run and what it contends on
+
 Pytest suite for TAVI's non-GUI logic. Tests import `tavi/` and `instruments/`
 relative to the repo root, so always run from there:
 

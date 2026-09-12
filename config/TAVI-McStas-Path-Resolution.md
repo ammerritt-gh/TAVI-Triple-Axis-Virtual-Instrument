@@ -1,5 +1,7 @@
 # TAVI McStas Path Resolution — Proposed Solution
 
+> **Status:** live
+
 ## The Problem
 
 When running TAVI from your development checkout (`C:\Users\AMM\Documents\Github\Science\TAVI`) rather than through the micromamba installer environment, McStasScript can't find your standalone McStas 3.5.16 installation at `C:\mcstas-3.5.16`. This happens because:

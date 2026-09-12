@@ -1,5 +1,7 @@
 # Remote API Server — Design Document
 
+> **Status:** live
+
 *Date: 2026-07-03*
 *Status: Implemented (2026-07-03) — all 5 phases landed and live-verified against a running PUMA GUI (health/state/parameters, PATCH with linked recompute, POST /scan with 1D/2D scans and budget 429s, stop/drain, and SSE streaming all exercised).*
 

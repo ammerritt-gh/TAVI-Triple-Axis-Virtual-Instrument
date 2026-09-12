@@ -1,6 +1,6 @@
 # TAVI Generated Background Model
 
-> **Lifecycle:** Current
+> **Status:** live
 >
 > **Authority:** canonical reference for the physical interpretation and numerical implementation of generated background in TAVI
 >

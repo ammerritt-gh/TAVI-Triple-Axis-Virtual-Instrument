@@ -1,5 +1,7 @@
 # FlatEllipse_finite_mirror_optimized - Optimized NMO Component
 
+> **Status:** live
+
 ## Overview
 
 This is an optimized McStas component for simulating Nested Mirror Optics (NMO) 
