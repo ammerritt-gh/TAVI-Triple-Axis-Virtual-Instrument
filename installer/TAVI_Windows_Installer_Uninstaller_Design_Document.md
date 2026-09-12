@@ -1,5 +1,7 @@
 # TAVI Windows Installer / Uninstaller Design Document
 
+> **Status:** live
+
 _Last updated: 2026-05-22_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.
@@ -244,6 +246,16 @@ set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%"
 ```
 
 and use the known prefix rather than attempting to infer it from noisy activation output.
+
+The micromamba binary itself must be pinned and verified, not downloaded loose:
+
+```bat
+set "MAMBA_VERSION=2.5.0-1"
+set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
+curl -L -o "%MICROMAMBA_EXE%.tmp" "https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64"
+```
+
+Verify the downloaded binary's SHA256 against `EXPECTED_SHA256` before using it; do not run an unverified download. **Not yet implemented (noted 2026-09-12):** the shipping installer defines `EXPECTED_SHA256` but never computes or compares a hash; it runs `micromamba.exe --version` straight after the download. This is a requirement, not a description of current behaviour.
 
 ---
 
@@ -588,7 +600,7 @@ Required behavior:
    - `MCSTAS`
    - `MCSTAS_COMPONENT_PATH`
 3. Check that `%MCSTAS%` exists.
-4. Optionally call Visual Studio `vcvars64.bat` if found.
+4. Optionally call Visual Studio `vcvars64.bat` if found. Locate it via `vswhere.exe` (`%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe`), not a hardcoded version path: VS 2026 installs to `...\Microsoft Visual Studio\18\...`, not `...\2026\...`, so a hardcoded year/version segment breaks detection.
 5. Optionally append Microsoft MPI SDK include/lib paths if found.
 6. Run:
 
@@ -985,6 +997,16 @@ Before publishing a new installer:
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
 
 ---
+
+### Release recipe
+
+For each new release `vX.Y.Z` (done this way for `v1.1.0` and `v1.2.0`):
+
+1. Merge the release branch to `main` and cut the `vX.Y.Z` tag there.
+2. Copy the previous pinned installer to `WINDOWS-install-TAVI-vX.Y.Z.bat` and bump
+   the header comment plus `TAVI_VERSION`/`INSTALLER_VERSION`; nothing else changes.
+3. Create the GitHub release from the tag and attach the pinned installer `.bat` as a
+   release artifact.
 
 ## 23. Recommended future improvements
 

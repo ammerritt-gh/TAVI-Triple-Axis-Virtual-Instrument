@@ -52,7 +52,7 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Observed at:** `c99b67a9`
 - **Effort:** 1–3 hours; one conftest fixture plus whatever `test_parameters_persistence.py` needs to keep exercising the real path deliberately; no application change.
 - **Evidence:**
-  - `TAVI_PySide6.py:5592` — the controller reads `config/parameters.json` by RELATIVE path during construction, so it resolves against the run's working directory.
+  - `TAVI_PySide6.py:5601` — the controller reads `config/parameters.json` by RELATIVE path during construction, so it resolves against the run's working directory.
   - `.gitignore:370` — `config/` is ignored, so the file exists on a developer's machine and never in a fresh clone or worktree.
   - `conftest.py` — guards only against console windows (`MCSTAS`, `CREATE_NO_WINDOW`). Nothing isolates `config/`.
   - `tests/test_curvature_command_refusal.py`, `tests/test_curvature_held_scan_named_skip.py` — two tests were built on a real controller and asserted against the Ideal-lock state without establishing it; fixed at `c99b67a9` by establishing the precondition, which is the symptom, not the cause.

@@ -1,5 +1,7 @@
 # Custom McStas Components
 
+> **Status:** live
+
 This folder contains modified and custom McStas components used in the TAVI simulation framework. These components extend or fix functionality from the standard McStas library to better suit the needs of triple-axis instrument simulations.
 
 ## Component Overview
@@ -171,9 +173,8 @@ A rectangular neutron source with Gaussian or uniform divergence and multiple en
 - `PUMA_mirror_array.txt`: Mirror array configuration for PUMA
 
 ### Documentation
-- `Header_Files_Analysis.md`: Detailed analysis of header file modifications
-- `NMO_Component_Documentation.md`: Extended documentation for NMO components
-- `PHONON_DFT.md`: Canonical `Phonon_DFT` component and dispersion-file contract
+- [`NMO_Component_Documentation.md`](NMO_Component_Documentation.md): Extended documentation for NMO components
+- [`PHONON_DFT.md`](PHONON_DFT.md): Canonical `Phonon_DFT` component and dispersion-file contract
 
 ---
 

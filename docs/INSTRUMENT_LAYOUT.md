@@ -1,5 +1,8 @@
 # Triple-Axis Spectrometer (TAS) - PUMA Instrument Layout
 
+> **Status:** live
+> **Authority:** TAS angle names, sample-orientation offsets and sign conventions
+
 ## Overview
 
 A triple-axis spectrometer (TAS) is a neutron scattering instrument used to measure the energy and momentum transfer of neutrons scattered from a sample. The instrument consists of three main rotation axes that control the path of neutrons from source to detector.

@@ -1,6 +1,9 @@
 # IN8 Model Status
 
-- Model version: **1.0.0**
+> **Status:** live
+> **Authority:** the state of the IN8 model: what is verified, approximated, and open
+
+- Model version: **1.0.1**
 - Model date: **2026-07-18**
 - Runtime status: **runnable**
 - Last evidence review: **2026-07-18**

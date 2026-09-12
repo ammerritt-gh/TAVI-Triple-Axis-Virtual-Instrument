@@ -1,5 +1,8 @@
 # Instrument Packages and Authoring
 
+> **Status:** live
+> **Authority:** the procedure and current policy for adding an instrument package
+
 Every instrument has one directory under `instruments/<id>/`. The directory is
 both its TAVI implementation package and the review bundle that can be sent to
 an instrument scientist.
