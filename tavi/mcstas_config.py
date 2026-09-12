@@ -3,11 +3,16 @@
 This module finds a McStas installation and configures McStasScript at import
 time, so that ms.McStas_instr() calls work regardless of how TAVI is launched.
 
-Resolution order:
-  1. Explicit paths in config/mcstas_config.json
-  2. Auto-detection from known Windows install locations
-  3. Conda/micromamba environment (the installer's approach)
-  4. System PATH fallback
+Resolution order (detect_mcstas):
+  0. MCSTAS / MCSTAS_COMPONENT_PATH from the environment (the launcher's
+     choice), accepted only if it holds Progress_bar.comp and an environment
+     mcrun is found; a valid environment wins even over explicit JSON paths
+  1. Explicit mcrun_path / mcstas_path in config/mcstas_config.json
+     (auto_detect: false stops here)
+  2. The JSON file's search_paths, probed as standalone installs
+  3. Known Windows default install locations
+  4. Conda/micromamba environment (the installer's approach)
+  5. System PATH
 """
 
 import json
