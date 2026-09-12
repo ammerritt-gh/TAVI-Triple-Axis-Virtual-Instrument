@@ -1,6 +1,8 @@
 # TAVI McStas Path Resolution — Proposed Solution
 
-> **Status:** live
+> **Status:** terminal
+>
+> Superseded 2026-09-12: the proposal below landed as `tavi/mcstas_config.py`, which is the live behaviour and differs from this text — it also exports `resolve_mpi_launcher_argv` (imported by `instruments/tas_runtime.py`) and resolves the environment's `MCSTAS` first, before the JSON file. Read the module's docstring and the installer design document sections 10–12 instead; this note awaits absorption and deletion.
 
 ## The Problem
 

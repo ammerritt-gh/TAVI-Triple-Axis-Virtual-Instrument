@@ -73,12 +73,15 @@ instrument.set_parameters(
     rhm_param=2.5
 )
 
-# Run the simulation
+# Run the simulation (McStasScript's default is force_compile=True, so the
+# first call compiles)
 data = instrument.backengine()
 
-# Change parameters and run again - still no recompilation
+# Change parameters and run again - pass force_compile=False or McStasScript
+# recompiles anyway; TAVI does this once the first build has succeeded
+# (instruments/tas_runtime.py, run_tas_point)
 instrument.set_parameters(A1_param=46.0)
-data2 = instrument.backengine()
+data2 = instrument.backengine(force_compile=False)
 ```
 
 ## PUMA Instrument Parameters
@@ -127,7 +130,6 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 |-----------|-------------|
 | `mis_chi_param` | Hidden chi misalignment |
 | `mis_omega_param` | Hidden omega misalignment |
-| `mis_psi_param` | Hidden psi misalignment |
 
 ### Source Parameters
 | Parameter | Description | Used By |

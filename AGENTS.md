@@ -69,7 +69,7 @@ Long simulations run in a Python worker thread started by `TAVIController.run_si
 | Simulation orchestration or scan execution | `TAVI_PySide6.py`, especially `TAVIController` and `run_simulation()` |
 | PUMA instrument geometry or McStasScript setup | `docs/INSTRUMENT_LAYOUT.md`, `docs/MCSTAS_PARAMETERS.md`, `instruments/puma/model.py` |
 | Instrument plugins, registry, descriptors, IN8, adding an instrument | `docs/CONFIGURABLE_INSTRUMENTS.md`, `docs/INSTRUMENT_AUTHORING.md`, `tests/README.md` |
-| McStas path detection/configuration | `tavi/mcstas_config.py`, `config/TAVI-McStas-Path-Resolution.md`, `config/mcstas_config.json` |
+| McStas path detection/configuration | `tavi/mcstas_config.py` (its docstring states the resolution order), `config/mcstas_config.json`, `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §10–12 |
 | Reciprocal-space or HKL/Q conversion | `tavi/reciprocal_space.py`, `tavi/ub_matrix.py`, `docs/INSTRUMENT_LAYOUT.md` |
 | UB matrix or training exercises | `tavi/ub_matrix.py`, `gui/docks/ub_matrix_dock.py`, `gui/docks/misalignment_dock.py` |
 | Runtime estimates | `tavi/runtime_tracker.py`, `config/runtimes.json` behavior |
@@ -242,7 +242,7 @@ For Python changes, use the smallest relevant checks available:
 - `docs/BACKGROUND_MODEL.md` - canonical physicist-facing interpretation, equations, calibration, and limitations of generated background sources.
 - `components/README.md` - custom McStas component overview.
 - `components/PHONON_DFT.md` - canonical TAVI-owned `Phonon_DFT` component and shared dispersion-file contract.
-- `config/TAVI-McStas-Path-Resolution.md` - McStas path-resolution notes.
+- `config/TAVI-McStas-Path-Resolution.md` - the original path-resolution proposal, superseded by `tavi/mcstas_config.py` (terminal).
 - `installer/TAVI-Installation-README.md` - Windows installation and launcher details.
 - `.github/instructions/copilot-instructions.md` - tactical code-style and local-convention rules.
 
