@@ -451,6 +451,17 @@ set "MCSTAS_COMPONENT_PATH=%MCSTAS%"
 
 This duplication is intentional. It reduces dependence on McStasScript’s persisted config and helps subprocesses inherit a valid McStas resource path.
 
+### Why TAVI configures McStasScript itself
+
+Absorbed 2026-09-12 from the retired `config/TAVI-McStas-Path-Resolution.md`. A developer
+checkout run outside the installer's `tavi` environment could not find a standalone McStas:
+McStasScript reads its own configuration file rather than searching `PATH`, and the
+installer's configuration lives inside the `tavi` environment only. `tavi/mcstas_config.py`
+therefore resolves McStas at import time (the `MCSTAS` environment variable first, then
+`config/mcstas_config.json`, then search paths, Windows defaults, the conda environment
+and `PATH`; the module docstring is the authority) and configures McStasScript before any
+instrument is built. `config/mcstas_config.json` is gitignored local state.
+
 ---
 
 ## 13. TAVI source install/update behavior
