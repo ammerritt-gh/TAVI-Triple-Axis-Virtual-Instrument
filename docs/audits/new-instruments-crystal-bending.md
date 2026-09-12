@@ -29,21 +29,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Remedy boundary:** Update the four changed packages' model version/date metadata according to the existing authoring rules. No new version-tracking infrastructure is needed.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently read the behavior-changing diffs and ran the read-only manifest comparison; all four retain their previous version/date, exit 1, 0.16 seconds.
 
-## 7. P4 · Remove focusing-factor fields that no longer affect curvature
-
-- **Observed at:** `d4014742`
-- **Effort:** 0.25–0.5 hours; twelve inert assignments and their misleading comments in four model constructors; no behavior, schema, or interface change.
-- **Evidence:**
-  - `instruments/puma/model.py:65` — assigns `rhmfac`, `rvmfac`, and `rhafac` beside the real radii.
-  - `instruments/in8/model.py:74` — claims factors of 1 mean optimal focusing, then assigns the inert factors.
-  - `instruments/in12/model.py:109` — repeats that claim and the assignments.
-  - `instruments/panda/model.py:82` — repeats that claim and the assignments.
-  - `instruments/tas_runtime.py:488` — the shared optical producer uses object distances and angles, not these factors.
-- **Payoff:** No named or reflective live consumer remains in TAVI, ISAR, or TAS_MCP after deletion of the old per-model producer. The comments still present these fields as tuning controls, so an executor can change a factor while emitted curvature stays unchanged. Removing the obsolete fields closes that misleading implementation path and makes the actual producer easier to find.
-- **Reproduce with:** none — opportunity
-- **Remedy boundary:** Remove only the inert factors and factor-specific claims from the four constructors. Preserve real `rhm`, `rvm`, `rha`, and `rva` fields, the flat-radius explanation, and historical reference assets.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently searched live named/reflective consumers, persistence callers, generated parameter records, and the two external consumers; only the twelve assignments remain in live source.
-
 ## 8. P4 · Align the promised sample-extension contract with the builders
 
 - **Observed at:** `d4014742`
@@ -85,23 +70,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** none — opportunity
 - **Remedy boundary:** Bind each default model's arm lengths and its descriptor/diagnostic coordinates to one package-owned geometry authority. Retain PANDA's virtual-source offset and PUMA's parallel-beam focusing override; analytic-resolution spatial defaults are outside this finding.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently traced both consumers and perturbed only the IN12 descriptor in memory inside a temporary copy; monitor moved to 1.89 m while state `L2` and mono focusing distances stayed 1.80 m.
-
-## 10. P2 · A partial `slits_mm` patch raises `KeyError` at launch
-
-- **Observed at:** `c99b67a9`
-- **Effort:** 0.5–1 hour; one descriptor-defaults refill beside the two that already exist; no API shape change.
-- **Evidence:**
-  - `TAVI_PySide6.py:2717` — `build_api_launch_state` refills an omitted `collimation` slot from the descriptor.
-  - `TAVI_PySide6.py:2726` — and, since PR #33, an omitted `modules` id.
-  - `TAVI_PySide6.py` `_api_field_map` — `slits_mm` is still parsed by the container-only `p_dict` and gets no refill anywhere.
-  - `instruments/puma/plugin.py:379` — indexes `slits_mm['pbl']`, then `:380` `['vbl_hgap']`, `:383` `['dbl_hgap']`.
-  - `instruments/in8/plugin.py:307` — indexes `slits_mm['sbl']`, `:310` `['dbl_hgap']`.
-  - `instruments/in12/plugin.py:436` — indexes `slits_mm['sbl']`, `:439` `['dbl_hgap']`.
-  - `instruments/panda/plugin.py:353` — indexes `slits_mm['ms1']`, `:354` `['ss1']`, `:357` `['ss2']`.
-- **Failure:** Given a patch naming one declared slit and omitting the rest — `{"H": 1.0, "scan_command1": "deltaE 0 1 1", "slits_mm": {"vbl_hgap": 50.0}}` on PUMA, and the equivalent on each other instrument — the parser accepts it and `build_api_launch_state` raises an unhandled `KeyError` for the first omitted slot. All four instruments fail. This is the same defect shape PR #33 fixed for `modules`, on the one container left without a refill. `collimation` is unaffected, having had its refill since before this audit.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/partial_slits.py`
-- **Remedy boundary:** Refill an omitted `slits_mm` id from the descriptor exactly as `collimation` and `modules` do. A slot-value check against the descriptor's `SlitSpec` is the natural companion, and would also close `collimation`'s separate value-validation gap (`p_dict` does not check a slot against `slot.allowed`) — but that is a second, separable rule, and neither is claimed to affect any currently valid request.
-- **Verified:** opus CONFIRMED 2026-09-12 — wrote and ran the isolated reproducer against real offscreen controllers; `KeyError` on PUMA, IN8, IN12 and PANDA, exit 1, 3.36 seconds.
 
 ## 11. P3 · A module-fixed axis reports a commanded radius it did not apply
 
