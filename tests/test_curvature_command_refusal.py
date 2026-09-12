@@ -14,6 +14,7 @@ above all, that the GUI and API submission paths refuse an identical value
 with an identical sentence -- the recurring defect this branch keeps
 producing on other axes.
 """
+import math
 import os
 import sys
 
@@ -85,6 +86,38 @@ def test_a_fixed_axis_commanded_at_its_own_declared_radius_is_not_refused():
     axis = CurvatureAxis(driven=False, fixed_radius_m=0.8)
     assert curvature_command_error("rva", 0.8, axis) is None
     assert curvature_command_error("rva", -0.8, axis) is None  # signed value
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_driven_axis_with_declared_travel_refuses_every_non_finite_magnitude(bad):
+    """The three magnitude comparisons (==0, <min, >max) are each False
+    against NaN, so without an explicit finiteness guard a NaN reaches
+    McStas untouched; inf and -inf must be caught the same way."""
+    axis = CurvatureAxis(driven=True, min_radius_m=2.0, max_radius_m=5.0)
+    error = curvature_command_error("rhm", bad, axis)
+    assert error is not None
+    assert "finite" in error
+
+
+def test_a_driven_axis_with_no_declared_maximum_still_refuses_infinity():
+    """With no declared max_radius_m the ``value > max_m`` comparison never
+    runs at all, so inf used to escape even where NaN might coincidentally
+    be caught elsewhere -- this is that exact hole."""
+    axis = CurvatureAxis(driven=True, min_radius_m=2.0)
+    error = curvature_command_error("rhm", float("inf"), axis)
+    assert error is not None
+    assert "finite" in error
+
+
+def test_a_fixed_axis_refuses_nan_with_the_finite_message_not_the_fixed_radius_one():
+    """A fixed axis already refuses NaN by accident (``value != fixed`` is
+    True for NaN) -- but only when ``fixed_radius_m`` is set, and with the
+    wrong sentence. The finiteness guard must fire first, for both."""
+    axis = CurvatureAxis(driven=False, fixed_radius_m=0.8)
+    error = curvature_command_error("rva", float("nan"), axis, "PG(002) analyser")
+    assert error is not None
+    assert "finite" in error
+    assert "0.8" not in error  # not the fixed-radius mismatch sentence
 
 
 # ------------------------------------------------------------- integration
@@ -276,6 +309,26 @@ def test_puma_nmo_refuses_a_scanned_rhm_naming_the_nmo():
             "rhm 2.5 3.0 0.5", "", mono, ana, {"nmo": "None", "v_selector": False}
         )
         assert hard_flat == []
+
+
+def test_a_non_finite_commanded_radius_is_refused_at_the_api_launch_path():
+    """The wiring test: a NaN reaching ``build_api_launch_state`` -- exactly
+    how a real API client's JSON string field arrives -- must be refused
+    with the existing ``curvature_out_of_travel`` code, not accepted and
+    forwarded to McStas as ``rhm_param=nan``."""
+    with _controller("puma") as ctrl:
+        d = ctrl.descriptor
+        mono, ana = d.mono_crystals[0].id, d.ana_crystals[0].id
+
+        with pytest.raises(cm.ApiError) as excinfo:
+            ctrl.build_api_launch_state({
+                "monocris": mono, "anacris": ana,
+                "rhm": "nan",
+                "scan_command1": "deltaE 0 1 0.5",
+            })
+        assert excinfo.value.status == 400
+        assert excinfo.value.code == "curvature_out_of_travel"
+        assert "finite" in excinfo.value.message
 
 
 @pytest.mark.parametrize("instrument_id", ["in8", "panda"])

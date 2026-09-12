@@ -88,6 +88,8 @@ def curvature_command_error(axis, magnitude, curvature_axis, crystal_name=None):
     # what the hardware allows -- in that order, because the operator already
     # knows what they typed and needs to find the limit.
     where = f" on the {crystal_name}" if crystal_name else ""
+    if not math.isfinite(magnitude):
+        return f"{axis}{where}: commanded radius must be a finite number, not {magnitude!r}."
     if not curvature_axis.driven:
         fixed = curvature_axis.fixed_radius_m
         if fixed is not None and value != fixed:

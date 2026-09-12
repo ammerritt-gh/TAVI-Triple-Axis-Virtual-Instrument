@@ -93,23 +93,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Remedy boundary:** Update the four changed packages' model version/date metadata according to the existing authoring rules. No new version-tracking infrastructure is needed.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently read the behavior-changing diffs and ran the read-only manifest comparison; all four retain their previous version/date, exit 1, 0.16 seconds.
 
-## 6. P3 · Non-finite held radii pass validation on every runnable instrument
-
-- **Observed at:** `c66f9f21`
-- **Effort:** 1–3 hours; shared curvature command/application validation and GUI/API input checks, without a schema change.
-- **Evidence:**
-  - `TAVI_PySide6.py:6784` — numeric API parsing uses `float()` without a finite-value check.
-  - `TAVI_PySide6.py:2688` — an explicitly supplied radius becomes HELD.
-  - `TAVI_PySide6.py:2818` — launch construction delegates its radius refusal to the shared command checker.
-  - `instruments/tas_runtime.py:85` — the checker relies on magnitude comparisons that do not reject NaN on driven axes.
-  - `instruments/tas_runtime.py:420` — application and clamping preserve the non-finite magnitude.
-  - `instruments/tas_runtime.py:445` — signing stores the NaN radius on the point state.
-  - `instruments/tas_runtime.py:1149` — a snapshot with no geometry error emits that state as runtime parameters.
-- **Failure:** Given `{"H": 1.0, "rhm": "nan", "scan_command1": "deltaE 0 1 1"}`, the real API launch constructor accepts the held radius on PUMA, IN8, IN12, and PANDA. Per-point feasibility returns true and snapshot error flags remain empty, while `rhm_param` is NaN on every instrument. Unlike the deferred non-numeric GUI-field issue, conversion succeeds and invalid numeric state reaches executable input. No claim about downstream McStas output is needed or made.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/nonfinite_curvature.py`
-- **Remedy boundary:** Reject non-finite commanded curvature at the shared validation and application boundaries, keeping GUI/API behavior consistent. The observed case is driven `rhm`; check other driven axes when repairing the shared rule.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently exercised all four real offscreen controllers; each emitted `rhm_param=nan`, exit 1, 3.28 seconds.
-
 ## 7. P4 · Remove focusing-factor fields that no longer affect curvature
 
 - **Observed at:** `d4014742`
