@@ -60,6 +60,13 @@ def test_gui_unlocked_out_of_travel_field_is_not_refused_when_the_scan_names_it(
         idock.set_mono_id(mono)
         idock.set_ana_id(ana)
         idock.rhm_edit.setText("1.0")
+        # setText is programmatic, so it does not fire textEdited and does not
+        # clear the Ideal lock the way a user typing here would. Establish the
+        # HELD precondition rather than inherit it: a controller built on a
+        # machine whose config/parameters.json last saved
+        # rhm_ideal_locked=true starts locked, and the unlocked (HELD) case is
+        # this test's whole subject.
+        ctrl.unlock_ideal_bending("rhm")
         assert ctrl.is_bending_locked("rhm") is False
 
         sdock = ctrl.window.simulation_dock
