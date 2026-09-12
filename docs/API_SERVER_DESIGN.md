@@ -6,7 +6,7 @@
 > **Forward note (2026-07-03):** user-facing documentation now lives in
 > `docs/API_USER_GUIDE.md`. That guide is the authoritative reference for
 > clients (humans and LLM agents) — exact endpoints, request/response JSON,
-> the full 40-field parameter table, scan-command syntax, SSE events, budgets,
+> the full parameter table (43 keys, 42 writable), scan-command syntax, SSE events, budgets,
 > and gotchas. This document remains the design/architecture record.
 >
 > **Post-design fixes (not in the original body):**

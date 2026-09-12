@@ -111,8 +111,8 @@ Roadmap order per CONTROL_FEATURES §9:
       metadata never says `scanned` for a scan-named axis (only the per-point
       snapshot does; `applied_curvature` carries the truth); `PATCH /parameters`
       on a module-fixed axis (PUMA rhm with an NMO) reports the requested value
-      while the field syncs to the resolved 0; the "40-field" parameter-table
-      count is stale (43) in four documents.
+      while the field syncs to the resolved 0; the parameter-table count was
+      stale (fixed 2026-09-12: 43 keys returned, 42 writable).
 
 ## GUI
 

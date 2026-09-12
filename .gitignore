@@ -367,7 +367,7 @@ MigrationBackup/
 # Output directory for simulation results
 output/
 # Config files
-config/
+config/*
 
 # McStas generated files
 *.html
@@ -375,6 +375,9 @@ config/
 *.out
 mcstas_*
 !tavi/mcstas_config.py
+# documentation that the artifact patterns above would otherwise swallow
+!docs/MCSTAS_PARAMETERS.md
+!config/TAVI-McStas-Path-Resolution.md
 PUMA_McScript.exe
 PUMA_McScript.instr
 IN8_McScript.exe

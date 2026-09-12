@@ -23,7 +23,7 @@ here is a commitment to land code in TAVI.*
 > `docs/UNIFICATION_DESIGN.md`. Everything the *driver* itself does is a proposal.
 
 > Companion documents. TAVI side: `docs/API_USER_GUIDE.md` (authoritative
-> client-facing API reference — endpoints, the 40-field parameter table, scan
+> client-facing API reference — endpoints, the parameter table, scan
 > grammar, SSE, budgets, gotchas), `docs/API_SERVER_DESIGN.md` (live API
 > architecture), `docs/CONTROL_FEATURES_DESIGN.md` (future TAVI control
 > primitives: goto CEN, path/point-list scans, campaigns, the resolution
