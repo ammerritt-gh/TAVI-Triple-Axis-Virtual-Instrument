@@ -286,6 +286,24 @@ A different scattering representation—a non-regular grid, continuum, diffuse
 map, or magnetic cross-section—is a new model contract, not merely another
 branch.
 
+### Not implemented, recorded 2026-09-12 from the retired design note
+
+Multi-BZ intensity (Phase 3) and a magnon kernel (Phase 4) are unimplemented.
+Multi-BZ intensity has three candidate upgrade paths — an extended
+non-folded grid (`tessellate=0` over a wider file), eigenvector storage with
+a runtime one-phonon structure factor, or a Q-dependent intensity column —
+all compatible with the current `tessellate` flag and the existing
+separation of energy from intensity interpolation. A magnon kernel would
+reuse the same grid infrastructure with `(γr₀)²F²(Q)` and an unpolarized
+`(1 + Q̂_z²)` polarization factor in place of `b²/M`, via a parallel
+`magnon_dispersion` file and `magnon_grid` struct. Separately, `.comp`
+compiles on Windows under MSVC (`cl.exe`) in C89 mode: all variable
+declarations at block top, no bare `struct` keyword in TRACE declarations
+(structs are `typedef`'d), `T` avoided as a local name (reserved for the
+temperature parameter), POSIX shims (`strcasecmp`/`unlink`/`close` →
+`_stricmp`/`_unlink`/`_close`) under `#ifdef _MSC_VER`, `tmpnam()` in place
+of `mkstemp()`, and `#pragma acc routine` guarded out under MSVC.
+
 ## McStas and analytic parity
 
 The two backends deliberately share:
