@@ -106,10 +106,7 @@ class IN12_Instrument(TAS_Instrument):
         self.sbl_wgap = 0.030
         self.sbl_hgap = 0.060
         self.dbl_hgap = 0.050
-        # Crystal bending (m; 0 = flat). Factors of 1 = optimal focusing.
-        self.rhmfac = 1
-        self.rvmfac = 1
-        self.rhafac = 1
+        # Crystal bending (m; 0 = flat).
         self.rhm = 0
         self.rvm = 0
         self.rha = 0
