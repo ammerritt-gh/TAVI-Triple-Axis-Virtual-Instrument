@@ -96,7 +96,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    simple_plot_scan_commands, display_existing_data,
                                    read_parameters_from_file, write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.utilities import parse_scan_steps, incremented_path_writing
+from tavi.utilities import (parse_scan_steps, incremented_path_writing,
+                            normalize_scan_commands)
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
@@ -4508,7 +4509,12 @@ class TAVIController(QObject):
         
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        
+
+        # A lone command 2 must preview exactly like the same text in command 1
+        # (see run_simulation's identical swap); the preview never consults
+        # relative-mode flags, so the two returned here are discarded.
+        cmd1, cmd2, _, _ = normalize_scan_commands(cmd1, cmd2, False, False)
+
         # Get instrument name
         instrument_name = self.instrument.id
 
@@ -4628,10 +4634,15 @@ class TAVIController(QObject):
             tuple: (valid_count, invalid_count)
         """
         import numpy as np
-        
+
+        # A lone command 2 must be counted exactly like the same text in
+        # command 1 (see run_simulation's identical swap); this function does
+        # not take relative-mode flags, so the two returned here are discarded.
+        cmd1, cmd2, _, _ = normalize_scan_commands(cmd1, cmd2, False, False)
+
         # Get current GUI values for validation
         vals = self.get_gui_values()
-        
+
         # Build scan point template
         scan_point_template = [
             vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
@@ -7292,9 +7303,9 @@ class TAVIController(QObject):
                   "point_manifest": []}
 
         # Single-command swap matches run_simulation (a lone command 2 becomes 1).
-        if cmd2 and not cmd1:
-            cmd1, cmd2 = cmd2, ""
-            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+        cmd1, cmd2, relative_mode_1, relative_mode_2 = normalize_scan_commands(
+            cmd1, cmd2, relative_mode_1, relative_mode_2, empty2=""
+        )
 
         scan_mode = self._determine_scan_mode(cmd1, cmd2)
         template = self._build_scan_point_template(scan_mode, vals)
@@ -8282,10 +8293,12 @@ class TAVIController(QObject):
         # with the text -- a lone command 2 becomes command 1 and must keep
         # ITS OWN relative setting, not silently pick up command 1's (empty)
         # one, exactly like validate_scan_launch_state's identical swap.
-        if scan_command2 and not scan_command1:
-            scan_command1 = scan_command2
-            scan_command2 = None
-            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+        scan_command1, scan_command2, relative_mode_1, relative_mode_2 = (
+            normalize_scan_commands(
+                scan_command1, scan_command2, relative_mode_1, relative_mode_2,
+                empty2=None,
+            )
+        )
         
         variable_name1 = ""
         variable_name2 = ""
