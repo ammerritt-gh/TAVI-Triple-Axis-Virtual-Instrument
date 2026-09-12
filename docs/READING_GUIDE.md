@@ -16,7 +16,7 @@ The README is the quick-start surface; this guide is the navigation authority. A
 | What are the custom McStas components? | [components/README.md](../components/README.md) | live |
 | Where is the closed loop going? | [docs/CLOSED_LOOP_DESIGN.md](CLOSED_LOOP_DESIGN.md), [docs/LLM_HARNESS_DESIGN.md](LLM_HARNESS_DESIGN.md) | draft |
 | How is the test suite run? | [tests/README.md](../tests/README.md) | live |
-| What is the McStas path resolution? | `tavi/mcstas_config.py` (module docstring) and the installer design document §10–12; the original proposal [config/TAVI-McStas-Path-Resolution.md](../config/TAVI-McStas-Path-Resolution.md) is superseded | terminal |
+| What is the McStas path resolution? | `tavi/mcstas_config.py` (module docstring) and the [installer design document](../installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md) §10–12 | live |
 | What is in flight, what is it for, what's unpinned? | [WIP.md](../WIP.md) (reaches the [audit ledger](audits/new-instruments-crystal-bending.md)), [DESIGN_GOALS.md](../DESIGN_GOALS.md), [TODO.md](../TODO.md) | live |
 | What are the agent instructions? | [AGENTS.md](../AGENTS.md) | live |
 | What is the vTAS reference material? | [examples/vTAS-README.md](../examples/vTAS-README.md) | live |
