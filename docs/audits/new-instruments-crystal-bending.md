@@ -28,21 +28,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Remedy boundary:** The shared angle-mode feasibility and snapshot/autofocus boundary must agree about singular crystal geometry. Preserve valid opposite-branch scans and distinguish a zero take-off angle from the legal zero-radius flat-crystal command.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently ran the reproducer; A4 = 0° alone produced the claimed failure, exit 1, 1.47 seconds.
 
-## 3. P1 · A batched radius PATCH overwrites an explicitly commanded radius
-
-- **Observed at:** `d4014742`
-- **Effort:** 2–4 hours; controller batch application and curvature-lock refresh, with both key orders checked on all four instruments; no API shape change.
-- **Evidence:**
-  - `TAVI_PySide6.py:6841` — each radius callback unlocks its own axis and then refreshes every curvature field.
-  - `TAVI_PySide6.py:6899` — radius setters have separate callbacks.
-  - `TAVI_PySide6.py:7075` — all parsed setters run before callbacks.
-  - `TAVI_PySide6.py:7088` — callbacks then run sequentially.
-  - `TAVI_PySide6.py:3288` — refresh overwrites any axis whose ideal lock remains set.
-- **Failure:** With both monochromator axes in AUTOFOCUS, `apply_parameters({"rhm":9.0,"rvm":8.0})` reports both values applied with no errors, but the first callback overwrites the still-locked second axis before that axis is unlocked. All four instruments finish with both axes HELD and `rvm` at its ideal value rather than 8.0; reversing the key order instead loses `rhm = 9.0`. For IN8 the two outcomes are `(9.0, 0.8353)` and `(6.7576, 8.0)`. The same explicit values survive direct API launch construction, so PATCH and launch disagree. These are legal driven axes, distinct from the deferred module-fixed reporting mismatch.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/multi_radius_patch.py`
-- **Remedy boundary:** Treat explicitly commanded curvature fields as one batch at the parameter-application/lock-refresh boundary. A refresh must not replace another field's accepted value while that field still carries its previous lock state.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently exercised both key orders on all four real offscreen controllers; all eight cases lost one requested radius, exit 1, 3.31 seconds.
-
 ## 4. P2 · A scan entered only in command box 2 previews zero points
 
 - **Observed at:** `d4014742`
