@@ -118,6 +118,31 @@ def parse_scan_steps(input_string):
     return variable_name, array_values
 
 
+def normalize_scan_commands(cmd1, cmd2, relative_mode_1, relative_mode_2,
+                            empty2=""):
+    """Promote a lone second scan command into the first slot.
+
+    A scan typed only into the second command box must behave exactly like
+    the same text typed into the first: if ``cmd2`` is non-empty and ``cmd1``
+    is empty, command 2 becomes command 1 and the two relative-mode flags
+    move with it -- the promoted command keeps ITS OWN relative setting
+    rather than silently picking up command 1's (empty) one. A genuine
+    two-command pair, or both empty, is returned unchanged.
+
+    ``empty2`` is the value the now-vacated second slot takes; callers differ
+    only in this trivial choice ("" or None).
+
+    Lives here rather than on the controller because the rule is pure text
+    normalisation with no GUI or instrument state, and because
+    ``validate_scan_launch_state`` is deliberately callable unbound against a
+    duck-typed stand-in -- a controller method would break that seam.
+    """
+    if cmd2 and not cmd1:
+        cmd1, cmd2 = cmd2, empty2
+        relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+    return cmd1, cmd2, relative_mode_1, relative_mode_2
+
+
 def incremented_path_writing(base_path, folder_name):
     """Create a folder with an incremented counter if it already exists.
     

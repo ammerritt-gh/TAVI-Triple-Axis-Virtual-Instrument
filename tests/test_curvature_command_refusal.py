@@ -14,6 +14,7 @@ above all, that the GUI and API submission paths refuse an identical value
 with an identical sentence -- the recurring defect this branch keeps
 producing on other axes.
 """
+import math
 import os
 import sys
 
@@ -85,6 +86,38 @@ def test_a_fixed_axis_commanded_at_its_own_declared_radius_is_not_refused():
     axis = CurvatureAxis(driven=False, fixed_radius_m=0.8)
     assert curvature_command_error("rva", 0.8, axis) is None
     assert curvature_command_error("rva", -0.8, axis) is None  # signed value
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_a_driven_axis_with_declared_travel_refuses_every_non_finite_magnitude(bad):
+    """The three magnitude comparisons (==0, <min, >max) are each False
+    against NaN, so without an explicit finiteness guard a NaN reaches
+    McStas untouched; inf and -inf must be caught the same way."""
+    axis = CurvatureAxis(driven=True, min_radius_m=2.0, max_radius_m=5.0)
+    error = curvature_command_error("rhm", bad, axis)
+    assert error is not None
+    assert "finite" in error
+
+
+def test_a_driven_axis_with_no_declared_maximum_still_refuses_infinity():
+    """With no declared max_radius_m the ``value > max_m`` comparison never
+    runs at all, so inf used to escape even where NaN might coincidentally
+    be caught elsewhere -- this is that exact hole."""
+    axis = CurvatureAxis(driven=True, min_radius_m=2.0)
+    error = curvature_command_error("rhm", float("inf"), axis)
+    assert error is not None
+    assert "finite" in error
+
+
+def test_a_fixed_axis_refuses_nan_with_the_finite_message_not_the_fixed_radius_one():
+    """A fixed axis already refuses NaN by accident (``value != fixed`` is
+    True for NaN) -- but only when ``fixed_radius_m`` is set, and with the
+    wrong sentence. The finiteness guard must fire first, for both."""
+    axis = CurvatureAxis(driven=False, fixed_radius_m=0.8)
+    error = curvature_command_error("rva", float("nan"), axis, "PG(002) analyser")
+    assert error is not None
+    assert "finite" in error
+    assert "0.8" not in error  # not the fixed-radius mismatch sentence
 
 
 # ------------------------------------------------------------- integration
@@ -278,6 +311,114 @@ def test_puma_nmo_refuses_a_scanned_rhm_naming_the_nmo():
         assert hard_flat == []
 
 
+def test_a_non_finite_commanded_radius_is_refused_at_the_api_launch_path():
+    """The wiring test: a NaN reaching ``build_api_launch_state`` -- exactly
+    how a real API client's JSON string field arrives -- must be refused, not
+    accepted and forwarded to McStas as ``rhm_param=nan``.
+
+    It is refused at the PARSE boundary (``invalid_parameters``) rather than
+    by ``curvature_command_error`` (``curvature_out_of_travel``), because the
+    radius fields' parser rejects a non-finite value before the command
+    checker is ever reached. That is the earlier and more precise of the two:
+    "your numeric value is invalid" is a different thing from "this radius
+    conflicts with the mechanical travel", and a client can now tell them
+    apart without parsing prose.
+    """
+    with _controller("puma") as ctrl:
+        d = ctrl.descriptor
+        mono, ana = d.mono_crystals[0].id, d.ana_crystals[0].id
+
+        with pytest.raises(cm.ApiError) as excinfo:
+            ctrl.build_api_launch_state({
+                "monocris": mono, "anacris": ana,
+                "rhm": "nan",
+                "scan_command1": "deltaE 0 1 0.5",
+            })
+        assert excinfo.value.status == 400
+        assert excinfo.value.code == "invalid_parameters"
+        assert "finite" in excinfo.value.details["errors"]["rhm"]
+
+
+@pytest.mark.parametrize("cmd", ["rhm nan 4 1", "rhm 0 inf 1", "rhm 0 4 nan",
+                                 "deltaE nan 4 1"])
+def test_a_non_finite_scan_bound_is_refused_not_raised(cmd):
+    """A structured refusal, not a 500.
+
+    ``float()`` accepts "nan"/"inf", and every guard after the conversion
+    compares magnitudes -- all False against NaN -- so a non-finite bound used
+    to reach ``parse_scan_steps``, whose ``int()`` of the step count raises
+    ``ValueError``/``OverflowError``. Uncaught, a client submitting
+    ``"rhm nan 4 1"`` got a 500 where it should have got the documented scan
+    rejection. Covers a non-curvature variable too: the hole was in the shared
+    numeric conversion, not in the curvature branch.
+    """
+    with _controller("puma") as ctrl:
+        var, error = ctrl._validate_single_scan_command(cmd)
+        assert error is not None
+        assert "finite" in error
+
+
+@pytest.mark.parametrize("axis", ["rhm", "rvm", "rha", "rva"])
+def test_a_typed_non_finite_radius_is_refused_by_the_resolution_gate(axis):
+    """The GUI twin of the API's parse-time refusal.
+
+    The radius line edits are unrestricted, so an operator can type "nan".
+    ``compute_resolution`` builds its check state through ``scan_config``,
+    which assigns the value straight onto a fresh state -- upstream of
+    ``set_crystal_bending``'s backstop, which preserves the EXISTING radius
+    and so cannot help once that radius is itself the NaN.
+    """
+    with _controller("puma") as ctrl:
+        edit = getattr(ctrl.window.instrument_dock, f"{axis}_edit")
+        edit.setText("nan")
+
+        result = ctrl.compute_resolution(H=1.0, K=0.0, L=0.0, deltaE=0.0)
+        assert result["ok"] is False
+        assert "finite" in result["reason"]
+        assert axis in result["reason"]
+
+
+def test_a_toggle_module_accepts_pythons_ordinary_bool_leniency():
+    """Pinned, not accidental: ``p_bool`` accepts any int and coerces it, so
+    a TOGGLE module takes ``1``/``0`` as well as ``true``/``false``.
+
+    That leniency is ``p_bool``'s contract for EVERY boolean field in this API
+    (``diagnostic_mode`` included), so tightening it for modules alone would
+    trade one inconsistency for another. Tightening it API-wide is a separate
+    decision; this test exists so the behaviour is deliberate and a future
+    change to it is visible.
+    """
+    with _controller("puma") as ctrl:
+        applied, errors = ctrl.apply_parameters({"modules": {"v_selector": 1}})
+        assert errors == {}
+        assert applied["modules"]["v_selector"] is True
+
+        _, bad = ctrl.apply_parameters({"modules": {"v_selector": "yes"}})
+        assert "modules" in bad
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_a_non_finite_radius_never_reaches_the_widget_through_patch(bad):
+    """PATCH must refuse what launch refuses.
+
+    ``p_float`` is a bare ``float()``, so a PATCH of ``{"rhm": "nan"}`` used
+    to parse and land in the line edit. Nothing downstream caught it:
+    ``compute_resolution`` (behind ``GET /resolution``) copies GUI values
+    into a config by direct assignment, never crossing
+    ``curvature_command_error``, and ``set_crystal_bending``'s backstop only
+    refuses a non-finite it is HANDED -- it cannot undo one already sitting
+    in the field. So the refusal has to happen at the parse boundary.
+    """
+    with _controller("puma") as ctrl:
+        before = ctrl.window.instrument_dock.rhm_edit.text()
+
+        applied, errors = ctrl.apply_parameters({"rhm": bad})
+
+        assert "rhm" not in applied
+        assert "finite" in errors["rhm"]
+        assert ctrl.window.instrument_dock.rhm_edit.text() == before
+
+
 @pytest.mark.parametrize("instrument_id", ["in8", "panda"])
 def test_instruments_with_no_declared_travel_refuse_nothing(instrument_id):
     """IN8 and PANDA declare no mechanical travel at all -- that asymmetry
@@ -300,3 +441,33 @@ def test_instruments_with_no_declared_travel_refuse_nothing(instrument_id):
 
         hard, _ = ctrl._scan_command_issues("rhm 0.01 1000.0 10", "", mono, ana)
         assert hard == []
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12", "panda"])
+def test_the_applier_refuses_a_non_finite_radius_too(instrument_id, bad):
+    """The APPLICATION half of the finite invariant.
+
+    ``curvature_command_error`` closes the three submission gates, but
+    ``set_crystal_bending``'s own docstring calls itself the backstop for
+    "any caller that reaches this setter directly without going through a
+    submission gate" -- and a non-finite value survives every magnitude
+    comparison in it (``abs``, the clamp, the sign), so it used to be stored
+    and emitted as a non-finite McStas parameter. The existing radius is kept
+    instead, exactly as the zero-take-off guard does: there is no meaningful
+    radius here to apply.
+    """
+    instrument = get_instrument(instrument_id)
+    d = instrument.descriptor()
+    state = instrument.default_state()
+    state.monocris = d.mono_crystals[0].id
+    state.anacris = d.ana_crystals[0].id
+    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=41.167)
+
+    state.set_crystal_bending(rhm=5.0)
+    kept = state.rhm
+    assert math.isfinite(kept)
+
+    state.set_crystal_bending(rhm=bad)
+    assert state.rhm == kept, "a non-finite radius must not replace a real one"
+    assert math.isfinite(state.rhm)
