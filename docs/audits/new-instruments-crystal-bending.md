@@ -101,3 +101,47 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** none — opportunity
 - **Remedy boundary:** Bind each default model's arm lengths and its descriptor/diagnostic coordinates to one package-owned geometry authority. Retain PANDA's virtual-source offset and PUMA's parallel-beam focusing override; analytic-resolution spatial defaults are outside this finding.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently traced both consumers and perturbed only the IN12 descriptor in memory inside a temporary copy; monitor moved to 1.89 m while state `L2` and mono focusing distances stayed 1.80 m.
+
+## 10. P2 · A partial `slits_mm` patch raises `KeyError` at launch
+
+- **Observed at:** `c99b67a9`
+- **Effort:** 0.5–1 hour; one descriptor-defaults refill beside the two that already exist; no API shape change.
+- **Evidence:**
+  - `TAVI_PySide6.py:2717` — `build_api_launch_state` refills an omitted `collimation` slot from the descriptor.
+  - `TAVI_PySide6.py:2726` — and, since PR #33, an omitted `modules` id.
+  - `TAVI_PySide6.py` `_api_field_map` — `slits_mm` is still parsed by the container-only `p_dict` and gets no refill anywhere.
+  - `instruments/puma/plugin.py:379` — indexes `slits_mm['pbl']`, then `:380` `['vbl_hgap']`, `:383` `['dbl_hgap']`.
+  - `instruments/in8/plugin.py:307` — indexes `slits_mm['sbl']`, `:310` `['dbl_hgap']`.
+  - `instruments/in12/plugin.py:436` — indexes `slits_mm['sbl']`, `:439` `['dbl_hgap']`.
+  - `instruments/panda/plugin.py:353` — indexes `slits_mm['ms1']`, `:354` `['ss1']`, `:357` `['ss2']`.
+- **Failure:** Given a patch naming one declared slit and omitting the rest — `{"H": 1.0, "scan_command1": "deltaE 0 1 1", "slits_mm": {"vbl_hgap": 50.0}}` on PUMA, and the equivalent on each other instrument — the parser accepts it and `build_api_launch_state` raises an unhandled `KeyError` for the first omitted slot. All four instruments fail. This is the same defect shape PR #33 fixed for `modules`, on the one container left without a refill. `collimation` is unaffected, having had its refill since before this audit.
+- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/partial_slits.py`
+- **Remedy boundary:** Refill an omitted `slits_mm` id from the descriptor exactly as `collimation` and `modules` do. A slot-value check against the descriptor's `SlitSpec` is the natural companion, and would also close `collimation`'s separate value-validation gap (`p_dict` does not check a slot against `slot.allowed`) — but that is a second, separable rule, and neither is claimed to affect any currently valid request.
+- **Verified:** opus CONFIRMED 2026-09-12 — wrote and ran the isolated reproducer against real offscreen controllers; `KeyError` on PUMA, IN8, IN12 and PANDA, exit 1, 3.36 seconds.
+
+## 11. P3 · A module-fixed axis reports a commanded radius it did not apply
+
+- **Observed at:** `c99b67a9`
+- **Effort:** 1–2 hours; the reporting seam between `apply_parameters`' accepted-value list and the resolved curvature policy; no change to the policy itself.
+- **Evidence:**
+  - `TAVI_PySide6.py` `_sync_curvature_fields` — the non-driven branch writes the resolved fixed radius unconditionally, regardless of lock state, which is correct for hardware that genuinely cannot bend.
+  - `instruments/puma/model.py:125` — a fitted nested mirror optic pins both monochromator planes flat.
+  - `TAVI_PySide6.py` `apply_parameters` — reports every parsed field in `applied`, including a radius the resolved policy then overrides.
+- **Failure:** With a module fitted that fixes an axis flat, a PATCH naming that axis reports the commanded value as applied while the field ends at the fixed radius. The override is right; the report is wrong. Carried forward deliberately: the original audit's entry 3 named this as "the deferred module-fixed reporting mismatch" and explicitly scoped itself away from it, so deleting entry 3 with PR #33 would otherwise have erased the only record of it.
+- **Reproduce with:** none yet — inherited from the deleted entry 3 and re-raised by PR #33's pre-PR review; not independently reproduced by this session.
+- **Remedy boundary:** Make the reported `applied` set agree with what the resolved curvature policy actually stored. Do not weaken the override — a module-fixed axis must keep being pinned to its declared radius; only the reporting should stop claiming otherwise.
+- **Verified:** NOT independently reproduced — structurally traced only. Reproduce before scheduling the fix.
+
+## 12. P2 · The suite inherits the operator's saved GUI state
+
+- **Observed at:** `c99b67a9`
+- **Effort:** 1–3 hours; one conftest fixture plus whatever `test_parameters_persistence.py` needs to keep exercising the real path deliberately; no application change.
+- **Evidence:**
+  - `TAVI_PySide6.py:5592` — the controller reads `config/parameters.json` by RELATIVE path during construction, so it resolves against the run's working directory.
+  - `.gitignore:370` — `config/` is ignored, so the file exists on a developer's machine and never in a fresh clone or worktree.
+  - `conftest.py` — guards only against console windows (`MCSTAS`, `CREATE_NO_WINDOW`). Nothing isolates `config/`.
+  - `tests/test_curvature_command_refusal.py`, `tests/test_curvature_held_scan_named_skip.py` — two tests were built on a real controller and asserted against the Ideal-lock state without establishing it; fixed at `c99b67a9` by establishing the precondition, which is the symptom, not the cause.
+- **Failure:** Every test that constructs a real `TAVIController` silently inherits whatever GUI state the operator last saved. Measured 2026-09-12: with `"rhm_ideal_locked": true` in the operator's `config/parameters.json`, the two tests above failed on the main checkout and passed in a fresh worktree, from identical source — and the suite therefore reported 1187 passed / 1 skipped in the worktree and 1186 passed / 2 failed on main at the same commit. The direction is what makes it a defect rather than a nuisance: the *unset* machine is the one that passes, so a green CI or fresh-clone run is the weaker evidence, and a real regression can hide behind a developer's saved state either way.
+- **Reproduce with:** none yet — move `config/parameters.json` aside, run any controller-constructing test, and compare against a run with a file containing `"rhm_ideal_locked": true`.
+- **Remedy boundary:** Point the tests' `config/` at a temporary directory for the session, so a run cannot read or write the operator's saved state. Preserve `test_parameters_persistence.py`'s deliberate exercise of the real read/write path, and preserve the existing serial-run rule — the file is also why that test must not run beside a full suite. Do not "fix" this by making the application path absolute; the relative path is what lets the launcher and the tests each have their own working directory.
+- **Verified:** opus CONFIRMED 2026-09-12 — moved the operator's `config/parameters.json` aside and re-ran the two tests unchanged: 2 failed with the file present, 2 passed with it absent, same commit, same environment. File restored afterwards.
