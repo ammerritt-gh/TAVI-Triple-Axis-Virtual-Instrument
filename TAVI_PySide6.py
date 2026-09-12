@@ -2699,6 +2699,15 @@ class TAVIController(QObject):
             for slot_id, default in self._descriptor_collimation_defaults().items():
                 vals['collimation'].setdefault(slot_id, default)
 
+        # Same hole, same fix, for modules: a patched dict naming only "nmo"
+        # dropped "v_selector", and instruments/puma/plugin.py indexes both
+        # directly (`modules['nmo']`, `modules['v_selector']`) -- KeyError at
+        # launch for a request the PATCH path (set_module_values' `.get(...,
+        # default)`) accepts today.
+        if 'modules' in patched and isinstance(vals.get('modules'), dict):
+            for module_id, default in self._descriptor_module_defaults().items():
+                vals['modules'].setdefault(module_id, default)
+
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
                         'lattice_alpha', 'lattice_beta', 'lattice_gamma')
@@ -5802,6 +5811,26 @@ class TAVIController(QObject):
                 defaults[slot.id] = slot.default
         return defaults
 
+    def _descriptor_module_defaults(self):
+        """{module_id: default} for every module the descriptor declares.
+
+        Twin of ``_descriptor_collimation_defaults`` for the same reason: a
+        patched ``modules`` dict replaces the previous one wholesale, and the
+        plugin indexes every id the descriptor declares (e.g.
+        ``modules['nmo']``, ``modules['v_selector']`` in
+        ``instruments/puma/plugin.py``), so an omitted id must be refilled
+        rather than left missing.
+        """
+        from instruments.descriptor import ModuleKind
+
+        defaults = {}
+        for module in self.descriptor.modules:
+            if module.kind is ModuleKind.CHOICE:
+                defaults[module.id] = str(module.default)
+            else:
+                defaults[module.id] = bool(module.default)
+        return defaults
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -6818,6 +6847,43 @@ class TAVIController(QObject):
                 return v
             return _parse
 
+        def p_modules(v):
+            """Validate a ``modules`` patch against this instrument's own
+            descriptor -- a CHOICE value must be a declared option, a TOGGLE
+            value must be a bool (``p_bool``'s leniency), and an id not on the
+            descriptor is an error. An omitted id is not an error: it is left
+            out of the returned dict entirely, and stays accepted (today's
+            PATCH behaviour, preserved -- ``set_module_values`` and
+            ``build_api_launch_state``'s refill both fall back to the
+            descriptor default for whatever this omits).
+            """
+            from instruments.descriptor import ModuleKind
+
+            if not isinstance(v, dict):
+                raise ValueError("must be an object/dict")
+            declared = {m.id: m for m in self.descriptor.modules}
+            unknown = set(v) - set(declared)
+            if unknown:
+                raise ValueError(
+                    "unknown module(s) %s; declared: %s"
+                    % (sorted(unknown), sorted(declared))
+                )
+            parsed = {}
+            for module_id, value in v.items():
+                module = declared[module_id]
+                if module.kind is ModuleKind.CHOICE:
+                    if value not in module.options:
+                        raise ValueError(
+                            "%s must be one of %s" % (module_id, sorted(module.options))
+                        )
+                    parsed[module_id] = value
+                else:
+                    try:
+                        parsed[module_id] = p_bool(value)
+                    except ValueError as exc:
+                        raise ValueError("%s %s" % (module_id, exc))
+            return parsed
+
         mono_ids = [c.id for c in self.descriptor.mono_crystals]
         ana_ids = [c.id for c in self.descriptor.ana_crystals]
         source_ids = [s.id for s in self.descriptor.source_types]
@@ -6904,7 +6970,7 @@ class TAVIController(QObject):
             'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
             'source_dE': (p_float, set_text(idock.source_dE_edit), None),
             # descriptor-driven containers
-            'modules': (p_dict, idock.set_module_values, self.update_ideal_bending_buttons),
+            'modules': (p_modules, idock.set_module_values, self.update_ideal_bending_buttons),
             'collimation': (p_dict, idock.set_collimation_values, None),
             'slits_mm': (p_dict, idock.set_slit_values_mm, None),
             # simulation control
