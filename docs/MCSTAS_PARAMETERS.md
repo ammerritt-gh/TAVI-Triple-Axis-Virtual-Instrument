@@ -56,11 +56,20 @@ monochromator.RH = instrument.parameters["rhm_param"]
 Parameters can be combined in string expressions:
 
 ```python
-# Using parameter in a calculation
-component.rotation = "A1_param / 2"  # Half the A1 angle
+# Placement takes AT=/ROTATED= lists (or set_AT()/set_ROTATED()); a string
+# element is emitted verbatim into the .instr, so it may name parameters.
+# This is how instruments/puma/model.py places the sample arm:
+sample_arm = instrument.add_component(
+    "sample_arm", "Arm", AT=[0, 0, PUMA.L1],  # PUMA.L1: the model state's arm length
+    RELATIVE="origin",
+    ROTATED=[0, "A1_param", 0],
+)
+
+# Using a parameter in a calculation
+sample_arm.set_ROTATED([0, "A1_param / 2", 0])  # half the A1 angle
 
 # Combining multiple parameters
-component.position = "L1_param + offset_param"
+sample_arm.set_AT([0, 0, "L1_param + offset_param"])
 ```
 
 ### 4. Setting Parameter Values at Runtime
