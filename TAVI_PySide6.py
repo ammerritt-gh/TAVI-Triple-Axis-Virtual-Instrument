@@ -6903,12 +6903,19 @@ class TAVIController(QObject):
         def set_text(edit):
             return lambda v: self._set_and_confirm_text(edit, self._api_fmt(v))
 
-        # --- bending after-handler factory (unlock ideal + refresh labels) ---
-        def bend_after(key):
-            def _after():
+        # --- bending setter factory (write the field, then unlock ideal) ---
+        # The unlock must happen in the SETTER phase, not the after-handler:
+        # apply_parameters() runs every setter before any after-handler runs,
+        # so a batch naming several radii would otherwise have one field's
+        # after-handler (which also refreshes all four locked fields) fire
+        # while a sibling radius is still AUTOFOCUS-locked and overwrite the
+        # value that was just written. Unlocking here means every commanded
+        # axis is already unlocked by the time any refresh happens.
+        def set_bend(key, edit):
+            def _set(v):
+                self._set_and_confirm_text(edit, self._api_fmt(v))
                 self.unlock_ideal_bending(key)
-                self.update_ideal_bending_buttons()
-            return _after
+            return _set
 
         return {
             # angles
@@ -6962,10 +6969,10 @@ class TAVIController(QObject):
                 self.update_anacris_info,
             ),
             # bending radii
-            'rhm': (p_float, set_text(idock.rhm_edit), bend_after('rhm')),
-            'rvm': (p_float, set_text(idock.rvm_edit), bend_after('rvm')),
-            'rha': (p_float, set_text(idock.rha_edit), bend_after('rha')),
-            'rva': (p_float, set_text(idock.rva_edit), bend_after('rva')),
+            'rhm': (p_float, set_bend('rhm', idock.rhm_edit), self.update_ideal_bending_buttons),
+            'rvm': (p_float, set_bend('rvm', idock.rvm_edit), self.update_ideal_bending_buttons),
+            'rha': (p_float, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
+            'rva': (p_float, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
             # source
             'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
             'source_dE': (p_float, set_text(idock.source_dE_edit), None),
