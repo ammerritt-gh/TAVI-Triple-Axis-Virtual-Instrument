@@ -134,17 +134,20 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 ### Source Parameters
 | Parameter | Description | Used By |
 |-----------|-------------|---------|
+| `E0_param` | Source energy (meV) for the monochromatic source | `source.E0` |
 | `nu_param` | Velocity selector frequency | `v_selector` component (only when `V_selector_installed`) |
 
 ## What Requires Recompilation
 
-The following changes **always require recompilation** because they affect which components are included in the instrument:
+The following changes **always require recompilation** because they are baked into the generated instrument, either as which components are present or as component configuration that is not a McStas parameter. The authoritative list is the build-time state hashed by `PUMAPlugin.build_fingerprint()` (`instruments/puma/plugin.py`); the controller reuses the previous compiled binary only when that hash matches:
 
-- **Diagnostic mode settings**: Adding/removing monitors (PSD, DSD, E_monitor)
-- **NMO configuration**: Changing between None/Vertical/Horizontal/Both
-- **Velocity selector**: Enabling/disabling
-- **Sample collimators**: Changing which alpha_2 collimators are installed (30', 40', 60')
-- **Sample type**: Changing the sample component
+- **Diagnostic mode and settings**: adding/removing monitors (PSD, DSD, E_monitor)
+- **NMO configuration**: changing between None/Vertical/Horizontal/Both
+- **Velocity selector**: enabling/disabling
+- **Collimators**: `alpha_1`, the installed `alpha_2` set (30', 40', 60'), `alpha_3`, `alpha_4`
+- **Crystals**: `monocris`, `anacris` (baked into the component tree at build time)
+- **Source**: `source_type`, `source_dE`
+- **Sample type**: changing the sample component (`sample_key`)
 
 These are typically configuration changes made between scans, not during scans, so recompilation is acceptable.
 

@@ -255,7 +255,7 @@ set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9a
 curl -L -o "%MICROMAMBA_EXE%.tmp" "https://github.com/mamba-org/micromamba-releases/releases/download/%MAMBA_VERSION%/micromamba-win-64"
 ```
 
-Verify the downloaded binary's SHA256 against `EXPECTED_SHA256` before using it; do not run an unverified download.
+Verify the downloaded binary's SHA256 against `EXPECTED_SHA256` before using it; do not run an unverified download. **Not yet implemented (noted 2026-09-12):** the shipping installer defines `EXPECTED_SHA256` but never computes or compares a hash; it runs `micromamba.exe --version` straight after the download. This is a requirement, not a description of current behaviour.
 
 ---
 

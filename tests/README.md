@@ -3,7 +3,7 @@
 > **Status:** live
 > **Authority:** how the test suite is run and what it contends on
 
-Pytest suite for TAVI's non-GUI logic. Tests import `tavi/` and `instruments/`
+Pytest suite for TAVI's logic below the visible GUI, including offscreen Qt acceptance tests. Tests import `tavi/` and `instruments/`
 relative to the repo root, so always run from there:
 
 ```
@@ -34,9 +34,11 @@ Notes:
 - The local micromamba env is `tavi-dev` (the one `run-tavi-dev.bat` uses).
   pytest is not part of `requirements.txt`; install it once into the env with
   `micromamba run -n tavi-dev python -m pip install -r requirements-dev.txt`.
-- **No GUI, no McStas runs.** Tests must not launch PySide6 widgets or compile/
-  execute McStas instruments. Pure math, parsing, registry, and source-scan
-  checks only.
+- **No on-screen GUI, no McStas runs.** Tests must not show a window or
+  compile/execute McStas instruments. Offscreen Qt widgets are allowed and
+  used (`QT_QPA_PLATFORM=offscreen`; e.g. `test_dispersion_viewer.py` and the
+  controller tests construct real widgets); math, parsing, registry and
+  source-scan checks make up the rest.
 - **The repo-root `conftest.py` keeps windows off the operator's screen, and
   must stay.** Merely *constructing* `ms.McStas_instr(...)` -- which every
   build-tree test does -- makes McStasScript shell out twice: `mcrun
