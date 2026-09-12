@@ -35,7 +35,7 @@ The operator stopped the third branch halfway and asked whether the process was 
 
 **Entry 11 — module-fixed reporting mismatch.** Never independently reproduced. It was inherited from deleted entry 3's carve-out and re-raised by PR #33's pre-PR review. Reproduce it first and stop if it does not reproduce as described; do not fix a phantom.
 
-**Entry 12 — test isolation of `config/parameters.json`.** The widest blast radius of the three: it changes the starting state of every test that constructs a controller. Discovery established that there is no existing seam for this file (four bare relative literals at `TAVI_PySide6.py:5423`, `:5425`, `:5436`, `:5593`, and `:5436` is where save *creates* the directory); that `tests/test_editable_number_format.py:67` pins one of those literals as *source text* and will break; and that `tests/test_rva_gui_axis_policy.py:301` isolates its own save/load by **changing the working directory**, which an absolute override would silently bypass. A green suite after such a change proves only that it passes with a clean file — the acceptance needs a run against a deliberately hostile `config/parameters.json` (`"rhm_ideal_locked": true` is the measured trigger). `config/instrument_selection.json` is a second saved-state channel through the same mechanism and is not closed by this entry.
+**Entry 12 — test isolation of `config/parameters.json`.** The widest blast radius of the three: it changes the starting state of every test that constructs a controller. Discovery established that there is no existing seam for this file (four bare relative literals at `TAVI_PySide6.py:5432`, `:5434`, `:5446`, `:5601`, and `:5446` is where save *creates* the directory); that `tests/test_editable_number_format.py:67` pins one of those literals as *source text* and will break; and that `tests/test_rva_gui_axis_policy.py:301` isolates its own save/load by **changing the working directory**, which an absolute override would silently bypass. A green suite after such a change proves only that it passes with a clean file — the acceptance needs a run against a deliberately hostile `config/parameters.json` (`"rhm_ideal_locked": true` is the measured trigger). `config/instrument_selection.json` is a second saved-state channel through the same mechanism and is not closed by this entry.
 
 Not in the ledger, named but not filed: the `collimation` container shares a value-validation gap with the other descriptor-driven containers — the API parses it with a dictionary-type check and never checks a slot's value against its declared allowed set.
 
@@ -52,3 +52,25 @@ The operator chose "record what is determined, omit what is not" (keep `Ei` from
 Two candidate conventions are written up in entry 13 as **B** (omit what is undetermined, and teach `|Q|` and the resolution kernel to cope) and **C** (an elastic convention for a transmitting analyser: `Ef = Ei`, `deltaE = 0`). Note that the affected region is a neighbourhood of zero, not a single point — at A4 = ±1° the recorded `Ef` is already 23859 meV, because inverting Bragg near zero take-off diverges.
 
 Done when: the operator has chosen B or C and the chosen convention has landed.
+
+## Bounded snapshot queue option
+
+**State:** pinned
+
+The scan pipeline's snapshot queue is unbounded (operator ruling 2026-09-12, recorded under Decisions in [docs/PIPELINE_DESIGN.md](docs/PIPELINE_DESIGN.md)). If running the whole scan ahead of execution ever shows a measured cost, a configuration key selecting a bounded prep queue is the remedy.
+
+Done when: a config key selects a bounded prep queue, or the operator drops this item.
+
+## Config file reference
+
+**State:** pinned
+
+`config/parameters.json`, `config/api_config.json`, `config/mcstas_config.json` and `config/instrument_selection.json` are operator-facing and no document describes their shape; the 2026-09-12 documentation audit's fresh reader could not answer "what is in the config files" from the documents.
+
+Done when: one document, reached from [docs/READING_GUIDE.md](docs/READING_GUIDE.md), describes each file's keys, defaults and who writes it.
+
+## Documentation baseline
+
+**State:** done
+
+The first documentation audit and setup pass under the shared standard (profile Complex) landed as PR #36 (`d05f4053`): banners, the map [docs/READING_GUIDE.md](docs/READING_GUIDE.md), the deviation block, [DESIGN_GOALS.md](DESIGN_GOALS.md) as a skeleton, four dissolutions, and the corrections the audit found. The stamp is on the map; the next regular audit is weekly and the first deep audit falls due 2026-10-12.

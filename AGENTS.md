@@ -13,7 +13,7 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 - **Entrypoint:** `python TAVI_PySide6.py`.
 - **Developer launcher:** `run-tavi-dev.bat` runs the GUI in the local `tavi-dev` micromamba environment.
 - **Dependency manager:** `pip install -r requirements.txt` for standalone Python dependencies; installer docs use micromamba for McStas and Python.
-- **Environment traps:** `.pytest_cache\` (May 2026) has broken ACLs and cannot be read or deleted without an elevated shell (`takeown` then `icacls`); it is gitignored, and pytest recreates its cache elsewhere. Git identity is repo-local (`ammerritt-gh`), so a fresh clone must set it locally before it can commit. The `tavi-dev` activation runs a noisy MSVC/vcvars hook; call the env's `python.exe` directly when clean output matters. For targeted runs only: the 2026-09-12 session (docs/feedback/2026-09-12-cb30d0a5.md) reported a native crash in matplotlib when the full suite ran that way, not yet reproduced; run the full suite through `micromamba run` until it is.
+- **Environment traps:** `.pytest_cache\` (May 2026) has broken ACLs and cannot be read or deleted without an elevated shell (`takeown` then `icacls`); it is gitignored, and pytest recreates its cache elsewhere. Git identity is repo-local (`ammerritt-gh`), so a fresh clone must set it locally before it can commit. The `tavi-dev` activation runs a noisy MSVC/vcvars hook; call the env's `python.exe` directly when clean output matters. For targeted runs of pure-Python tests only: invoked directly, the interpreter has `Library\bin` off PATH, and anything importing matplotlib or Qt dies with a delay-load fault (0xc06d007f; explained in `TODO.md` Housekeeping, 2026-09-09, and hit again 2026-09-12); run the full suite through `micromamba run`.
 - **Config location:** `config/*.json` stores local McStas paths, GUI parameters, layout state, and runtime estimates.
 - **Generated output:** simulation results are written under `output/`; McStas can generate `.c`, `.instr`, executables, and detector output files.
 - **External runtime dependency:** McStas 3.4 or later plus a C/C++ compiler for instrument compilation.
@@ -242,7 +242,6 @@ For Python changes, use the smallest relevant checks available:
 - `docs/BACKGROUND_MODEL.md` - canonical physicist-facing interpretation, equations, calibration, and limitations of generated background sources.
 - `components/README.md` - custom McStas component overview.
 - `components/PHONON_DFT.md` - canonical TAVI-owned `Phonon_DFT` component and shared dispersion-file contract.
-- `config/TAVI-McStas-Path-Resolution.md` - the original path-resolution proposal, superseded by `tavi/mcstas_config.py` (terminal).
 - `installer/TAVI-Installation-README.md` - Windows installation and launcher details.
 - `.github/instructions/copilot-instructions.md` - tactical code-style and local-convention rules.
 
@@ -311,3 +310,7 @@ stale: "40-field"  # the API exposes 43 keys / 42 writable since the sample fiel
 modes, per-point curvature and kinematics, PR #32; four runnable instruments: PUMA, IN8, IN12, PANDA;
 shared TAS physics fixes; the `Pb_phonon_DFT` sample from Rolf Heid's (KIT)
 committed DFT grid; API `force` clears soft scan-command issues only).*
+
+## Memory — promote or die
+
+- 2026-09-12 · skill: the doc checker counts tracked files only; a new map or goals file must be staged before it can exit 0.
