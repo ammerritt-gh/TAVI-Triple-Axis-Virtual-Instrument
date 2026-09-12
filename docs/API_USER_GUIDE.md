@@ -870,9 +870,13 @@ refused, never silently clamped, as:
 driven axis with no declared minimum/maximum refuses nothing — **IN8 and
 PANDA declare no mechanical travel on any axis**, because neither is
 published, and inventing a limit would be the defect. A commanded radius
-must always be a finite number, on every axis — `NaN` and `+/-inf` are
-refused with `curvature_out_of_travel` regardless of declared travel. A
-**fixed** axis
+must always be a finite number, on every axis, regardless of declared
+travel: `NaN` and `+/-inf` are refused as `invalid_parameters` (the
+`rhm`/`rvm`/`rha`/`rva` fields reject a non-finite value when the request is
+parsed, before any travel is consulted), which is deliberately a different
+code from `curvature_out_of_travel` — "your numeric value is invalid" and
+"this radius conflicts with the hardware's travel" are different problems
+with different fixes. A **fixed** axis
 (`CurvatureAxis.driven=False` — PUMA's `rva` at a fixed 0.8 m, or PUMA's
 `rhm`/`rvm` once a nested mirror optic (NMO) module is fitted, which pins
 both to flat) accepts **only** its declared radius and refuses every other

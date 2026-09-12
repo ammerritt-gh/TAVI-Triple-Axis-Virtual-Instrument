@@ -6928,6 +6928,22 @@ class TAVIController(QObject):
                 self.unlock_ideal_bending(key)
             return _set
 
+        # --- curvature parser: finite, because PATCH writes straight to the
+        # widget. `p_float` is bare float(), so "nan" parses and lands in the
+        # line edit; a later read path (compute_resolution, behind GET
+        # /resolution) copies GUI values into a config by direct assignment,
+        # never crossing curvature_command_error, so neither the submission
+        # gate nor set_crystal_bending's backstop ever sees it. Launch already
+        # refuses a non-finite radius -- refusing it here is what stops PATCH
+        # and launch disagreeing. Scoped to the four radius fields on purpose:
+        # p_float's acceptance of "nan" for the ~30 other numeric fields is a
+        # wider, separately tracked gap.
+        def p_curvature(v):
+            value = float(v)
+            if not math.isfinite(value):
+                raise ValueError("must be a finite number")
+            return value
+
         return {
             # angles
             'mtt': (p_float, set_text(idock.mtt_edit), self.on_mtt_changed),
@@ -6980,10 +6996,10 @@ class TAVIController(QObject):
                 self.update_anacris_info,
             ),
             # bending radii
-            'rhm': (p_float, set_bend('rhm', idock.rhm_edit), self.update_ideal_bending_buttons),
-            'rvm': (p_float, set_bend('rvm', idock.rvm_edit), self.update_ideal_bending_buttons),
-            'rha': (p_float, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
-            'rva': (p_float, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
+            'rhm': (p_curvature, set_bend('rhm', idock.rhm_edit), self.update_ideal_bending_buttons),
+            'rvm': (p_curvature, set_bend('rvm', idock.rvm_edit), self.update_ideal_bending_buttons),
+            'rha': (p_curvature, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
+            'rva': (p_curvature, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
             # source
             'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
             'source_dE': (p_float, set_text(idock.source_dE_edit), None),
