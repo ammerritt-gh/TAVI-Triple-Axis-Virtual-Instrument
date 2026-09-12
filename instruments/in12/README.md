@@ -1,5 +1,7 @@
 # IN12 (ILL)
 
+> **Status:** live
+
 IN12 is a cold-neutron triple-axis spectrometer at the ILL, operated as CRG-B by
 Forschungszentrum Jülich with CEA Grenoble. TAVI models the conventional
 post-2012 configuration: the H144 supermirror guide delivers neutrons to a
@@ -31,4 +33,4 @@ scientist needs to open.
 
 The runnable implementation is [plugin.py](plugin.py) plus [model.py](model.py).
 Its component and data dependencies remain in the repository-level `components/`
-folder.
+folder. Evidence lives in [references/](references/SOURCES.md).

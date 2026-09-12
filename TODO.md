@@ -1,5 +1,7 @@
 # TAVI — ongoing TODO
 
+> **Status:** live
+
 Living list. Grouped by theme, roughly dependency-ordered within each group.
 Design references: `docs/CLOSED_LOOP_DESIGN.md` (system capstone — read first),
 `docs/CONTROL_FEATURES_DESIGN.md` (feature designs + roadmap §9),
@@ -111,8 +113,8 @@ Roadmap order per CONTROL_FEATURES §9:
       metadata never says `scanned` for a scan-named axis (only the per-point
       snapshot does; `applied_curvature` carries the truth); `PATCH /parameters`
       on a module-fixed axis (PUMA rhm with an NMO) reports the requested value
-      while the field syncs to the resolved 0; the "40-field" parameter-table
-      count is stale (43) in four documents.
+      while the field syncs to the resolved 0; the parameter-table count was
+      stale (fixed 2026-09-12: 43 keys returned, 42 writable).
 
 ## GUI
 

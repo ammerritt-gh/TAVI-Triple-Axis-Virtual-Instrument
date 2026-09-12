@@ -1,6 +1,9 @@
 # TAVI Tests
 
-Pytest suite for TAVI's non-GUI logic. Tests import `tavi/` and `instruments/`
+> **Status:** live
+> **Authority:** how the test suite is run and what it contends on
+
+Pytest suite for TAVI's logic below the visible GUI, including offscreen Qt acceptance tests. Tests import `tavi/` and `instruments/`
 relative to the repo root, so always run from there:
 
 ```
@@ -18,8 +21,10 @@ Notes:
 - **Run one suite at a time, and never a targeted file while a full run is in
   flight.** Two concurrent runs contend for the API server port
   (`test_api_server.py`, `test_api_validation_schema.py`) and for the shared
-  `config/parameters.json` (`test_parameters_persistence.py`); both fail
-  spuriously and reproduce as green when run alone.
+  `config/parameters.json` (every test that constructs a real
+  `TAVIController`, which reads `config/parameters.json` by relative path
+  during construction (`TAVI_PySide6.py:5601`)); both fail spuriously and
+  reproduce as green when run alone.
 - **A fresh `git worktree` skips a test silently.** `components/Pb_dft_phonons.dat`
   (143 MB, gitignored) is not in a new worktree, so `test_dispersion_map.py`
   skips. `-ra` above prints the skip; hardlink the file from the main checkout
@@ -29,9 +34,11 @@ Notes:
 - The local micromamba env is `tavi-dev` (the one `run-tavi-dev.bat` uses).
   pytest is not part of `requirements.txt`; install it once into the env with
   `micromamba run -n tavi-dev python -m pip install -r requirements-dev.txt`.
-- **No GUI, no McStas runs.** Tests must not launch PySide6 widgets or compile/
-  execute McStas instruments. Pure math, parsing, registry, and source-scan
-  checks only.
+- **No on-screen GUI, no McStas runs.** Tests must not show a window or
+  compile/execute McStas instruments. Offscreen Qt widgets are allowed and
+  used (`QT_QPA_PLATFORM=offscreen`; e.g. `test_dispersion_viewer.py` and the
+  controller tests construct real widgets); math, parsing, registry and
+  source-scan checks make up the rest.
 - **The repo-root `conftest.py` keeps windows off the operator's screen, and
   must stay.** Merely *constructing* `ms.McStas_instr(...)` -- which every
   build-tree test does -- makes McStasScript shell out twice: `mcrun
@@ -159,3 +166,8 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   `model` modules. `test_instrument_registry.py` imports `instruments.builtin`
   at module scope so its snapshot/restore fixture cannot wipe the built-in
   registrations for later test files.
+- `test_documentation.py` — runs the shared documentation checker
+  (`Agentic-Control-Scheme/bin/doc_check.py`) over this repository so a
+  missing banner, an unreachable document or a broken link fails the suite.
+  The checker path comes from `DOC_CHECK`, falling back to the maintainer's
+  checkout; where neither exists the test skips with the reason printed.

@@ -1,5 +1,7 @@
 # PUMA (FRM-II)
 
+> **Status:** live
+
 PUMA is a thermal triple-axis spectrometer at MLZ. TAVI models it as a chain
 from a configurable neutron source through the monochromator, sample,
 analyser, and one ideal detector.
@@ -23,4 +25,5 @@ reviewing the instrument for us, you only need
 
 McStas components and data remain in the repository-level `components/`
 folder. PUMA uses the NMO component and the two `PUMA_NMO_*Focusing.txt`
-tables from that central location.
+tables from that central location. Evidence lives in
+[references/](references/SOURCES.md).

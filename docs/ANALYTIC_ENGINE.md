@@ -1,8 +1,7 @@
 # TAVI Analytic Engine
 
+> **Status:** live
 > **Owner:** TAVI project
->
-> **Lifecycle:** Maintained
 >
 > **Authority:** Canonical reference for TAVI's deterministic analytic scan engine
 >

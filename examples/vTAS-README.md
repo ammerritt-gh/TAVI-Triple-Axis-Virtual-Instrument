@@ -1,5 +1,7 @@
 # vTAS reference material (local only)
 
+> **Status:** live
+
 The `examples/vTAS/` folder is intentionally untracked (see `.gitignore`) and
 its earlier commits were purged from this repository's history.
 

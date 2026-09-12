@@ -1,6 +1,9 @@
 # IN12 Model Status
 
-- Model version: **1.0.0**
+> **Status:** live
+> **Authority:** the state of the IN12 model: what is verified, approximated, and open
+
+- Model version: **1.0.1**
 - Model date: **2026-09-09**
 - Runtime status: **runnable**
 - Last evidence review: **2026-09-09** (literature round, `references/2026-09-09__in12-literature-round__v02.md`)
