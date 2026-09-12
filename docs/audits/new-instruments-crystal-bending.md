@@ -28,21 +28,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Remedy boundary:** The shared angle-mode feasibility and snapshot/autofocus boundary must agree about singular crystal geometry. Preserve valid opposite-branch scans and distinguish a zero take-off angle from the legal zero-radius flat-crystal command.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently ran the reproducer; A4 = 0° alone produced the claimed failure, exit 1, 1.47 seconds.
 
-## 4. P2 · A scan entered only in command box 2 previews zero points
-
-- **Observed at:** `d4014742`
-- **Effort:** 1–2 hours; controller preview/count normalization and simulation-dock label formatting, with a real offscreen widget check.
-- **Evidence:**
-  - `TAVI_PySide6.py:4500` — preview reads both command boxes without normalization.
-  - `TAVI_PySide6.py:4668` — counting handles command 1 alone.
-  - `TAVI_PySide6.py:4681` — counting handles both commands, leaving command 2 alone with zero counters.
-  - `gui/docks/unified_simulation_dock.py:494` — any nonempty second box takes the two-dimensional label path.
-  - `TAVI_PySide6.py:8212` — execution instead moves a lone second command and its relative flags into the first slot.
-- **Failure:** On IN8, leave command box 1 empty and enter `rva 1 1.2 0.1` in box 2. The real preview says `0 × 3 = 0 points (0 valid / 0 invalid)`, while shared runtime expansion prepares a one-dimensional scan with three feasible points at 1.0, 1.1, and 1.2. The same text in box 1 previews three valid points. This is a preview/count discrepancy; the reproducer intercepts the deterministic engine after shared scan expansion and makes no simulated-count claim.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/second_command_count.py`
-- **Remedy boundary:** Preview and execution must use the same lone-command normalization, including relative-mode flags. The dock must format that normalized scan as one-dimensional.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently compared real widget text, both command placements, and runtime expansion; preview `(0, 0)` versus prepared `(3, 0)`, exit 1, 2.70 seconds.
-
 ## 5. P3 · All four model manifests retain their pre-bending versions
 
 - **Observed at:** `d4014742`
