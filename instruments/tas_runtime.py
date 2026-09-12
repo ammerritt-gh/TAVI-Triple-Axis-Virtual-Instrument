@@ -393,6 +393,21 @@ class TAS_Instrument:
         for axis, value in supplied.items():
             if value is None:
                 continue
+            if not math.isfinite(value):
+                # The application half of the same invariant
+                # ``curvature_command_error`` enforces at the submission
+                # gates. A NaN survives every magnitude comparison below --
+                # ``abs``, the clamp, and the sign -- and would be stored as
+                # a non-finite radius and emitted as a McStas parameter.
+                # Leave the existing radius in place, exactly as the
+                # zero-take-off guard below does: there is no meaningful
+                # radius here to apply.
+                log.warning(
+                    "set_crystal_bending: %s was given a non-finite radius "
+                    "(%r); leaving the existing radius (%s) in place",
+                    axis, value, getattr(self, axis, None),
+                )
+                continue
             crystal_spec = crystal_by_axis[axis]
             if crystal_spec is None:
                 # No crystal selected, so there is no declaration to enforce:
