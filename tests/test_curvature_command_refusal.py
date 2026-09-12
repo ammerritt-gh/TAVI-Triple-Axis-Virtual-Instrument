@@ -353,3 +353,33 @@ def test_instruments_with_no_declared_travel_refuse_nothing(instrument_id):
 
         hard, _ = ctrl._scan_command_issues("rhm 0.01 1000.0 10", "", mono, ana)
         assert hard == []
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12", "panda"])
+def test_the_applier_refuses_a_non_finite_radius_too(instrument_id, bad):
+    """The APPLICATION half of the finite invariant.
+
+    ``curvature_command_error`` closes the three submission gates, but
+    ``set_crystal_bending``'s own docstring calls itself the backstop for
+    "any caller that reaches this setter directly without going through a
+    submission gate" -- and a non-finite value survives every magnitude
+    comparison in it (``abs``, the clamp, the sign), so it used to be stored
+    and emitted as a non-finite McStas parameter. The existing radius is kept
+    instead, exactly as the zero-take-off guard does: there is no meaningful
+    radius here to apply.
+    """
+    instrument = get_instrument(instrument_id)
+    d = instrument.descriptor()
+    state = instrument.default_state()
+    state.monocris = d.mono_crystals[0].id
+    state.anacris = d.ana_crystals[0].id
+    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=41.167)
+
+    state.set_crystal_bending(rhm=5.0)
+    kept = state.rhm
+    assert math.isfinite(kept)
+
+    state.set_crystal_bending(rhm=bad)
+    assert state.rhm == kept, "a non-finite radius must not replace a real one"
+    assert math.isfinite(state.rhm)
