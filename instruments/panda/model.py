@@ -79,10 +79,7 @@ class PANDA_Instrument(TAS_Instrument):
         self.ss1_hgap = 0.080
         self.ss2_wgap = 0.040
         self.ss2_hgap = 0.080
-        # Crystal bending (m; 0 = flat). Factors of 1 = optimal focusing.
-        self.rhmfac = 1
-        self.rvmfac = 1
-        self.rhafac = 1
+        # Crystal bending (m; 0 = flat).
         self.rhm = 0
         self.rvm = 0
         self.rha = 0

@@ -69,6 +69,10 @@ plugins, but built-in packages use the central path.
    `InstrumentDescriptor` (`instruments/descriptor.py`): geometry + senses,
    crystals, `samples=default_sample_library()`, scannable parameters,
    monitors, collimation, slits, source types, axis limits.
+   `descriptor.samples` is the shared library (`tavi/sample_library.py`), not
+   a per-package list — every instrument mounts exactly
+   `default_sample_library()`; `package_validation.py`'s runtime check
+   enforces it (`docs/CONFIGURABLE_INSTRUMENTS.md` §19.5).
    Two `CrystalSpec` fields are easy to miss and both belong to the *crystal*,
    not the instrument: `mosaic_v` for an anisotropic mosaic (the emitter then
    writes McStas's `mosaich`/`mosaicv` pair instead of the single `mosaic`),

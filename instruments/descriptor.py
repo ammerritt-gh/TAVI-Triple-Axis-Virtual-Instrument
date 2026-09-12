@@ -202,9 +202,9 @@ class SampleSpec:
 
     ``component_type=None`` represents the "no sample" path (run without a sample
     component). Samples are physical objects moved between instruments, so the
-    shared table lives in ``tavi/sample_library.py`` and instruments mount it
-    (``samples=default_sample_library()``) rather than owning their own copies;
-    an instrument may still filter or extend the tuple (design record §19).
+    shared table lives in ``tavi/sample_library.py`` and every instrument mounts
+    exactly it (``samples=default_sample_library()``) rather than owning its own
+    copy (design record §19).
     """
 
     id: str

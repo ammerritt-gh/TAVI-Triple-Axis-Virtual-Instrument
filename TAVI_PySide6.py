@@ -2725,6 +2725,15 @@ class TAVIController(QObject):
             for module_id, default in self._descriptor_module_defaults().items():
                 vals['modules'].setdefault(module_id, default)
 
+        # Same hole, same fix, for slits_mm: a patched dict naming only one
+        # declared slit dropped the rest, and every instrument plugin indexes
+        # each slit id directly (e.g. puma/plugin.py's `slits_mm['pbl']`,
+        # `['vbl_hgap']`, `['dbl_hgap']`) -- KeyError at launch for a request
+        # the parser accepts today.
+        if 'slits_mm' in patched and isinstance(vals.get('slits_mm'), dict):
+            for slit_id, default in self._descriptor_slit_defaults().items():
+                vals['slits_mm'].setdefault(slit_id, default)
+
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
                         'lattice_alpha', 'lattice_beta', 'lattice_gamma')
@@ -5868,6 +5877,27 @@ class TAVIController(QObject):
                 defaults[module.id] = bool(module.default)
         return defaults
 
+    def _descriptor_slit_defaults(self):
+        """{slit_id: default} for every slit the descriptor declares.
+
+        Twin of ``_descriptor_collimation_defaults`` for the same reason: a
+        patched ``slits_mm`` dict replaces the previous one wholesale, and the
+        plugins index every id the descriptor declares (e.g.
+        ``slits_mm['pbl']``, ``slits_mm['vbl_hgap']`` in
+        ``instruments/puma/plugin.py``), so an omitted id must be refilled
+        rather than left missing. A two-gap slit's value is a
+        ``(width, height)`` tuple, matching what the plugins' indexing
+        depends on; a single-gap slit's value is a bare scalar.
+        """
+        defaults = {}
+        for slit in self.descriptor.slits:
+            width = float(slit.default_width_mm or 0)
+            if slit.has_width and slit.has_height:
+                defaults[slit.id] = (width, float(slit.default_height_mm or 0))
+            else:
+                defaults[slit.id] = width
+        return defaults
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -5891,13 +5921,7 @@ class TAVIController(QObject):
 
         collimation = self._descriptor_collimation_defaults()
 
-        slits_mm = {}
-        for slit in d.slits:
-            width = float(slit.default_width_mm or 0)
-            if slit.has_width and slit.has_height:
-                slits_mm[slit.id] = (width, float(slit.default_height_mm or 0))
-            else:
-                slits_mm[slit.id] = width
+        slits_mm = self._descriptor_slit_defaults()
 
         sample_ids = {s.id for s in d.samples}
         vals = {

@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Mapping
 
+from tavi.sample_library import default_sample_library
 
 PACKAGE_SCHEMA_VERSION = 1
 PACKAGE_STATUSES = {"runnable", "research", "retired"}
@@ -208,6 +209,12 @@ def validate_packages(
             if descriptor.display_name != metadata.display_name:
                 errors.append(
                     f"{instrument_id}: descriptor display_name does not match instrument.json"
+                )
+            if getattr(descriptor, "samples", None) != default_sample_library():
+                errors.append(
+                    f"{instrument_id}: descriptor.samples must be exactly "
+                    "default_sample_library() -- the shared library is not "
+                    "per-instrument extensible (CONFIGURABLE_INSTRUMENTS.md §19.5)"
                 )
     return errors
 

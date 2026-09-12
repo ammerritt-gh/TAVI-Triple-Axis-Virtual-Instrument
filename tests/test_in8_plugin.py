@@ -40,12 +40,6 @@ def test_descriptor_senses_are_vtas_verified():
     assert (g.sense_mono.value, g.sense_sample.value, g.sense_ana.value) == (1, 1, -1)
 
 
-def test_descriptor_mounts_shared_sample_library():
-    from tavi.sample_library import default_sample_library
-
-    assert in8_descriptor().samples == default_sample_library()
-
-
 def test_cu200_uses_null_reflectivity_sentinel():
     cu200 = next(c for c in in8_descriptor().mono_crystals if c.id == "cu200")
     assert cu200.d_spacing == 1.807

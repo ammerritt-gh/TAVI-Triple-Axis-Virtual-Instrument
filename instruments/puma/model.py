@@ -62,9 +62,6 @@ class PUMA_Instrument(TAS_Instrument):
         self.alpha_2 = [] # mono-sample collimation # note that there are multiple options available in series!
         self.alpha_3 = 0 # sample-ana collimation
         self.alpha_4 = 0 # ana-det collimation
-        self.rhmfac = 1 # monochromator mirror radius of curvature factor - horizontal
-        self.rvmfac = 1 # monochromator mirror radius of curvature factor - vertical
-        self.rhafac = 1 # analyzer mirror radius of curvature factor - horizontal
         self.rhm = 0  # monochromator mirror radius of curvature - horizontal
         self.rvm = 0 # monochromator mirror radius of curvature - vertical
         self.rha = 0 # analyzer mirror radius of curvature - horizontal

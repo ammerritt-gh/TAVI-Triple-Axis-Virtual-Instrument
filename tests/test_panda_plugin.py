@@ -44,12 +44,6 @@ def test_descriptor_senses_have_negative_monochromator():
     assert (g.sense_mono.value, g.sense_sample.value, g.sense_ana.value) == (-1, 1, -1)
 
 
-def test_descriptor_mounts_shared_sample_library():
-    from tavi.sample_library import default_sample_library
-
-    assert panda_descriptor().samples == default_sample_library()
-
-
 def test_descriptor_has_primary_collimation_slot():
     """Unlike IN8, PANDA collimates ahead of the monochromator (alpha_1)."""
     slots = {slot.id: slot for slot in panda_descriptor().collimation}
