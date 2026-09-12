@@ -4,6 +4,6 @@
   "display_name": "PANDA (MLZ)",
   "facility": "MLZ",
   "status": "runnable",
-  "model_version": "1.0.0",
-  "model_date": "2026-09-09"
+  "model_version": "1.0.1",
+  "model_date": "2026-09-12"
 }
