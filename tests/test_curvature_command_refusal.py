@@ -339,6 +339,64 @@ def test_a_non_finite_commanded_radius_is_refused_at_the_api_launch_path():
         assert "finite" in excinfo.value.details["errors"]["rhm"]
 
 
+@pytest.mark.parametrize("cmd", ["rhm nan 4 1", "rhm 0 inf 1", "rhm 0 4 nan",
+                                 "deltaE nan 4 1"])
+def test_a_non_finite_scan_bound_is_refused_not_raised(cmd):
+    """A structured refusal, not a 500.
+
+    ``float()`` accepts "nan"/"inf", and every guard after the conversion
+    compares magnitudes -- all False against NaN -- so a non-finite bound used
+    to reach ``parse_scan_steps``, whose ``int()`` of the step count raises
+    ``ValueError``/``OverflowError``. Uncaught, a client submitting
+    ``"rhm nan 4 1"`` got a 500 where it should have got the documented scan
+    rejection. Covers a non-curvature variable too: the hole was in the shared
+    numeric conversion, not in the curvature branch.
+    """
+    with _controller("puma") as ctrl:
+        var, error = ctrl._validate_single_scan_command(cmd)
+        assert error is not None
+        assert "finite" in error
+
+
+@pytest.mark.parametrize("axis", ["rhm", "rvm", "rha", "rva"])
+def test_a_typed_non_finite_radius_is_refused_by_the_resolution_gate(axis):
+    """The GUI twin of the API's parse-time refusal.
+
+    The radius line edits are unrestricted, so an operator can type "nan".
+    ``compute_resolution`` builds its check state through ``scan_config``,
+    which assigns the value straight onto a fresh state -- upstream of
+    ``set_crystal_bending``'s backstop, which preserves the EXISTING radius
+    and so cannot help once that radius is itself the NaN.
+    """
+    with _controller("puma") as ctrl:
+        edit = getattr(ctrl.window.instrument_dock, f"{axis}_edit")
+        edit.setText("nan")
+
+        result = ctrl.compute_resolution(H=1.0, K=0.0, L=0.0, deltaE=0.0)
+        assert result["ok"] is False
+        assert "finite" in result["reason"]
+        assert axis in result["reason"]
+
+
+def test_a_toggle_module_accepts_pythons_ordinary_bool_leniency():
+    """Pinned, not accidental: ``p_bool`` accepts any int and coerces it, so
+    a TOGGLE module takes ``1``/``0`` as well as ``true``/``false``.
+
+    That leniency is ``p_bool``'s contract for EVERY boolean field in this API
+    (``diagnostic_mode`` included), so tightening it for modules alone would
+    trade one inconsistency for another. Tightening it API-wide is a separate
+    decision; this test exists so the behaviour is deliberate and a future
+    change to it is visible.
+    """
+    with _controller("puma") as ctrl:
+        applied, errors = ctrl.apply_parameters({"modules": {"v_selector": 1}})
+        assert errors == {}
+        assert applied["modules"]["v_selector"] is True
+
+        _, bad = ctrl.apply_parameters({"modules": {"v_selector": "yes"}})
+        assert "modules" in bad
+
+
 @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
 def test_a_non_finite_radius_never_reaches_the_widget_through_patch(bad):
     """PATCH must refuse what launch refuses.

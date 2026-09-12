@@ -2425,6 +2425,22 @@ class TAVIController(QObject):
             raise ApiError(400, "bad_request", "Could not read GUI values")
         vals = dict(vals)
 
+        # The radius line edits are unrestricted, so a typed "nan" survives
+        # get_gui_values' float(). scan_config below assigns vals['rhm'] &c.
+        # straight onto a fresh state, which is upstream of
+        # set_crystal_bending's non-finite backstop -- that backstop preserves
+        # the EXISTING radius, and by then the existing radius is already the
+        # NaN. The API's own radius fields are refused at parse time; this is
+        # the matching gate for a value typed into the GUI, in the refusal
+        # vocabulary this method already uses.
+        bad_axes = [axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+                    if not math.isfinite(float(vals.get(axis, 0.0)))]
+        if bad_axes:
+            return {"ok": False, "reason": (
+                "curvature radius must be a finite number: "
+                + ", ".join(sorted(bad_axes))
+            )}
+
         # Inject the selected sample key (same source _collect_simulation_launch_state
         # uses) so the adapter's eta_s / sample-mosaic path resolves.
         try:
@@ -4259,6 +4275,16 @@ class TAVIController(QObject):
             step = float(parts[3])
         except ValueError:
             return (None, "Invalid numbers. Check start, end, and step values.")
+
+        # float() accepts "nan"/"inf", and every guard below compares
+        # magnitudes -- which are all False against NaN -- so a non-finite
+        # bound would reach parse_scan_steps, whose int() of the step count
+        # raises ValueError/OverflowError. Uncaught, that is a 500 where the
+        # client should have got this structured refusal. Refuse here, beside
+        # the conversion that let it through, so every scanned variable is
+        # covered and not just the curvature axes.
+        if not all(math.isfinite(v) for v in (start, end, step)):
+            return (None, "Start, end, and step must be finite numbers.")
 
         # Check for zero step
         if step == 0:
