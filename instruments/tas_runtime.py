@@ -448,15 +448,20 @@ class TAS_Instrument:
 
             sin_theta = math.sin(math.radians(theta_by_axis[axis]))
             if sin_theta == 0:
-                # An unsolved/infeasible point -- set_angles may not have run,
-                # so there is no real take-off branch to sign onto. Leave the
-                # existing stored radius in place rather than multiply by
-                # zero and silently emit a flat crystal.
+                # Genuinely zero take-off, not an unsolved point: the
+                # direct-beam position, where nothing is reflected and there
+                # is no branch to sign onto. This is now a legal SOLVED
+                # state (the operator's ruling), so it must be STORED, not
+                # left as whatever the previous point happened to leave
+                # behind -- an AUTOFOCUS axis arrives with magnitude 0.0 and
+                # is stored flat; a HELD axis arrives with the operator's
+                # commanded magnitude and keeps it, unflattened.
                 log.info(
-                    "set_crystal_bending: %s take-off angle is exactly zero; "
-                    "leaving the existing radius (%s) in place",
-                    axis, getattr(self, axis, None),
+                    "set_crystal_bending: %s take-off angle is exactly zero "
+                    "(direct beam); storing magnitude %.4g m with no branch "
+                    "sign", axis, magnitude,
                 )
+                setattr(self, axis, magnitude)
                 continue
 
             signed = math.copysign(magnitude, sin_theta)
@@ -515,6 +520,13 @@ class TAS_Instrument:
         a point-source (L_in, L_out) pair. Knows nothing about fixedness,
         limits or branch signs -- those are shared policy above it, in
         ``ideal_curvature``.
+
+        Contract for an override: return a finite magnitude at zero take-off
+        (this default returns 0.0 for both of that crystal's axes) -- the
+        shared policy in ``ideal_curvature`` enforces flat there regardless
+        of what this method returns, so an override is free to do the same
+        or something more specific, but must not raise or return a
+        non-finite value.
         """
         distances = self.curvature_object_distances(modules=modules)
         thetas = {"mono_h": mth, "mono_v": mth, "ana_h": ath, "ana_v": ath}
@@ -522,7 +534,14 @@ class TAS_Instrument:
         for axis_key, (l_in, l_out) in distances.items():
             f = l_out if math.isinf(l_in) else 1.0 / (1.0 / l_in + 1.0 / l_out)
             sin_theta = math.sin(math.radians(thetas[axis_key]))
-            if axis_key.endswith("_h"):
+            if sin_theta == 0:
+                # Zero take-off: the direct-beam position, not a fault. No
+                # take-off means no focusing, so both this crystal's axes are
+                # flat rather than dividing (horizontal) or resting on the
+                # arithmetic coincidence that 2*f*sin(0) is already 0.0
+                # (vertical).
+                radii[axis_key] = 0.0
+            elif axis_key.endswith("_h"):
                 radii[axis_key] = abs(2.0 * f / sin_theta)
             else:
                 radii[axis_key] = abs(2.0 * f * sin_theta)
@@ -616,7 +635,16 @@ class TAS_Instrument:
                         "focusing_known=False: no established focusing model "
                         "to compute an ideal radius from."
                     )
-                magnitude = radii[radii_key]
+                if math.sin(math.radians(theta)) == 0:
+                    # Zero take-off is the direct-beam position, not an
+                    # error: nothing is reflected, so a driven axis is flat
+                    # regardless of what optical_radii returned for it. This
+                    # is shared policy, not an instrument-specific optics
+                    # rule, so it is enforced here rather than left to each
+                    # formula to remember.
+                    magnitude = 0.0
+                else:
+                    magnitude = radii[radii_key]
                 min_m, max_m = self.curvature_limits(
                     axis, crystal_spec, mth, ath, modules=modules
                 )
