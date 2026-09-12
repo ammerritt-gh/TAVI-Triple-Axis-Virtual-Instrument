@@ -313,9 +313,17 @@ def test_puma_nmo_refuses_a_scanned_rhm_naming_the_nmo():
 
 def test_a_non_finite_commanded_radius_is_refused_at_the_api_launch_path():
     """The wiring test: a NaN reaching ``build_api_launch_state`` -- exactly
-    how a real API client's JSON string field arrives -- must be refused
-    with the existing ``curvature_out_of_travel`` code, not accepted and
-    forwarded to McStas as ``rhm_param=nan``."""
+    how a real API client's JSON string field arrives -- must be refused, not
+    accepted and forwarded to McStas as ``rhm_param=nan``.
+
+    It is refused at the PARSE boundary (``invalid_parameters``) rather than
+    by ``curvature_command_error`` (``curvature_out_of_travel``), because the
+    radius fields' parser rejects a non-finite value before the command
+    checker is ever reached. That is the earlier and more precise of the two:
+    "your numeric value is invalid" is a different thing from "this radius
+    conflicts with the mechanical travel", and a client can now tell them
+    apart without parsing prose.
+    """
     with _controller("puma") as ctrl:
         d = ctrl.descriptor
         mono, ana = d.mono_crystals[0].id, d.ana_crystals[0].id
@@ -327,8 +335,30 @@ def test_a_non_finite_commanded_radius_is_refused_at_the_api_launch_path():
                 "scan_command1": "deltaE 0 1 0.5",
             })
         assert excinfo.value.status == 400
-        assert excinfo.value.code == "curvature_out_of_travel"
-        assert "finite" in excinfo.value.message
+        assert excinfo.value.code == "invalid_parameters"
+        assert "finite" in excinfo.value.details["errors"]["rhm"]
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_a_non_finite_radius_never_reaches_the_widget_through_patch(bad):
+    """PATCH must refuse what launch refuses.
+
+    ``p_float`` is a bare ``float()``, so a PATCH of ``{"rhm": "nan"}`` used
+    to parse and land in the line edit. Nothing downstream caught it:
+    ``compute_resolution`` (behind ``GET /resolution``) copies GUI values
+    into a config by direct assignment, never crossing
+    ``curvature_command_error``, and ``set_crystal_bending``'s backstop only
+    refuses a non-finite it is HANDED -- it cannot undo one already sitting
+    in the field. So the refusal has to happen at the parse boundary.
+    """
+    with _controller("puma") as ctrl:
+        before = ctrl.window.instrument_dock.rhm_edit.text()
+
+        applied, errors = ctrl.apply_parameters({"rhm": bad})
+
+        assert "rhm" not in applied
+        assert "finite" in errors["rhm"]
+        assert ctrl.window.instrument_dock.rhm_edit.text() == before
 
 
 @pytest.mark.parametrize("instrument_id", ["in8", "panda"])
