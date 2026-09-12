@@ -12,24 +12,6 @@ All 389 selected instrument and curvature tests passed in 19.69 seconds wall tim
 The 9 verified entries concern accepted inputs, inconsistent interface state, model identification, and remaining competing or obsolete authorities.
 Start with invalid PUMA module options and the batched-radius PATCH; application code is unchanged by this audit.
 
-## 1. P1 · Invalid PUMA mirror options silently build inconsistent optics
-
-- **Observed at:** `d4014742`
-- **Effort:** 1–2 hours; existing API module parser and PUMA launch/build regression, without adding fields or changing supported options.
-- **Evidence:**
-  - `instruments/puma/plugin.py:287` — the NMO choice declares `None`, `Vertical`, `Horizontal`, and `Both`.
-  - `TAVI_PySide6.py:6805` — `p_dict` checks only the container type.
-  - `TAVI_PySide6.py:6907` — the modules field uses that parser.
-  - `instruments/puma/plugin.py:350` — the launch snapshot copies the raw NMO value.
-  - `instruments/puma/model.py:125` — every non-`None` value makes both monochromator planes fixed-flat.
-  - `instruments/puma/model.py:461` — the same broad predicate installs the NMO aperture.
-  - `instruments/puma/model.py:479` — the vertical mirror requires an exact supported choice.
-  - `instruments/puma/model.py:517` — the horizontal mirror likewise requires an exact supported choice.
-- **Failure:** Given `{"H":1.0,"scan_command1":"deltaE 0 1 1","modules":{"nmo":"vertical","v_selector":false}}`, the API launch constructor accepts the lowercase, unsupported option. The resulting PUMA build contains `NMO_slit`, no focusing mirror, and `rhm = rvm = 0`. It silently constructs optics inconsistent with its own installed-module curvature policy instead of refusing the option. This was verified through launch construction and the McStasScript component tree; no neutron-output claim or PATCH claim is made.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/invalid_nmo_option.py`
-- **Remedy boundary:** Validate supplied module values against the selected instrument's existing module descriptors before constructing launch state. Preserve all supported PUMA choices and keep their curvature policy and component topology consistent.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently ran the isolated real-controller/build reproducer; unsupported option accepted, flat mono planes and aperture without mirrors, exit 1, 2.88 seconds.
-
 ## 2. P1 · Accepted scans crossing zero take-off fail during autofocus
 
 - **Observed at:** `c66f9f21`
