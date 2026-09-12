@@ -1,10 +1,10 @@
 """The shared, instrument-independent sample library.
 
 Samples are physical objects that move between instruments, so their specs are
-not owned by any one instrument: every registered instrument mounts this table
-by default (``samples=default_sample_library()`` in its descriptor) and may
-filter or extend it. Design record ``docs/CONFIGURABLE_INSTRUMENTS.md`` §19;
-supersedes the earlier "owned per-instrument" disposition (§6).
+not owned by any one instrument: every registered instrument mounts exactly
+this table (``samples=default_sample_library()`` in its descriptor). Design
+record ``docs/CONFIGURABLE_INSTRUMENTS.md`` §19; supersedes the earlier
+"owned per-instrument" disposition (§6).
 
 Import rules: this module must stay import-light (stdlib +
 ``instruments.descriptor`` only) because instrument plugins import it at module

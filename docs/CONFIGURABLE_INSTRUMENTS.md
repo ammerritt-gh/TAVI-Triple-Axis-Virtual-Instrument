@@ -1341,7 +1341,8 @@ commits; 95 pytest tests.
 - **`tavi/sample_library.py` (new):** `default_sample_library()` — the shared,
   instrument-independent sample table (samples move between instruments;
   supersedes §6's "owned per-instrument" disposition). Every descriptor mounts
-  it (`samples=default_sample_library()`); an instrument may filter/extend.
+  exactly it (`samples=default_sample_library()`); see §19.5 for the
+  withdrawn filter/extend promise.
   `SampleSpec` gains `component_name` (the `Al_bragg` spec keeps the legacy
   `"Al_Bragg"` McStas instance name) and `lattice` (a,b,c,α,β,γ).
 - **`build_PUMA_instrument()` rewrite of the repetitive categories:** the 19
@@ -1394,6 +1395,24 @@ library specs, alpha_2 collimator selection/order, table↔descriptor sync.
 - `SampleSpec.lattice` could also drive a space-group default per sample.
 - IN8 (Phase 4) should build its backbone from `tavi/instrument_helpers.py`;
   anything it cannot express is the signal to extend the helpers.
+
+### 19.5 The extension promise is withdrawn (2026-09-12)
+
+§19.1 above said an instrument "may filter/extend" the shared table. This is
+the THIRD position this design has held: §6 disposed samples as owned
+per-instrument; §19 superseded that with a shared library an instrument
+could still filter or extend; this entry withdraws the extension half of
+§19's promise rather than honouring it.
+
+**Ruling:** every instrument offers exactly the same sample table.
+`default_sample_library()` is the complete, non-extensible set for every
+registered instrument. The promise was never implemented on the build side
+— all four builders already look samples up in the unextended default
+library regardless of what a descriptor carried — so this ruling makes the
+documented contract match the code that was already running, rather than
+building the machinery the promise implied. `instruments/package_validation.py`
+now enforces it at runtime: a descriptor's `samples` must equal
+`default_sample_library()` exactly.
 
 ---
 
