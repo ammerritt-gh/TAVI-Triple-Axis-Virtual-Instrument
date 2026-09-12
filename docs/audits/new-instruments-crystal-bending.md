@@ -29,26 +29,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Remedy boundary:** Update the four changed packages' model version/date metadata according to the existing authoring rules. No new version-tracking infrastructure is needed.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently read the behavior-changing diffs and ran the read-only manifest comparison; all four retain their previous version/date, exit 1, 0.16 seconds.
 
-## 8. P4 · Align the promised sample-extension contract with the builders
-
-- **Observed at:** `d4014742`
-- **Effort:** 2–4 hours; sample lookup in four builders, descriptor/library contract documentation, and sample-catalogue/build assertions; no new registry or GUI/API field.
-- **Evidence:**
-  - `tavi/sample_library.py:5` — instruments may filter or extend their descriptor's shared sample list.
-  - `instruments/descriptor.py:205` — repeats the extension contract.
-  - `docs/CONFIGURABLE_INSTRUMENTS.md:1344` — records that permission as the design.
-  - `gui/docks/unified_sample_dock.py:110` — selection lists descriptor samples.
-  - `TAVI_PySide6.py:6824` — API sample choices also come from the descriptor.
-  - `instruments/puma/model.py:590` — build instead searches the unextended default library.
-  - `instruments/in8/model.py:251` — repeats that independent lookup.
-  - `instruments/in12/model.py:314` — repeats that independent lookup.
-  - `instruments/panda/model.py:295` — repeats that independent lookup.
-  - `tests/test_in12_plugin.py:64` — exact catalogue equality rejects a descriptor extension rather than checking that the builder consumes it.
-- **Payoff:** Current built-in catalogues agree, but following the documented extension path by adding an IN12-only sample ID makes it selectable and descriptor-valid while the builder emits no sample component and prints its existing warning. Replacing descriptor `Al_bragg` with a mosaic of 60 instead emits the shared library's mosaic of 5. Aligning the extension promise, catalogue tests, and build lookup prevents a package author from making a valid-looking sample change that execution ignores. This is an extension-contract opportunity, not a claim that current standard samples are broken.
-- **Reproduce with:** none — opportunity
-- **Remedy boundary:** Make selection and build agree on the supported sample authority, and state the supported extension boundary consistently in the design and authoring documents. Resolve the older GUI-only descriptor wording explicitly if retaining the documented extension promise; preserve instrument-independent shared defaults and the supported no-sample path.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently applied a descriptor-only extension in a temporary copy and built IN12: new ID emitted no sample; replacement mosaic 60 emitted 5, exit 0, 1.66 seconds. A separate temporary suite run exposed the exact-equality guard, confirming the contract mismatch.
-
 ## 9. P4 · Bind instrument geometry to one authority before correcting arm lengths
 
 - **Observed at:** `d4014742`

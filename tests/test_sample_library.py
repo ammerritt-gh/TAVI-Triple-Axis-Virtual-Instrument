@@ -3,7 +3,10 @@
 Samples move between instruments, so the specs live in
 ``tavi/sample_library.py`` and instruments mount them by reference.
 """
-from instruments.puma.plugin import puma_descriptor
+import pytest
+
+import instruments.builtin  # noqa: F401  (registers built-in instruments)
+from instruments.registry import available_instruments, get_instrument
 from tavi.sample_library import default_sample_library
 
 
@@ -48,5 +51,14 @@ def test_analytic_calibration_is_sample_owned():
     assert bragg.elastic == 1.0e-5
 
 
-def test_puma_mounts_the_shared_library():
-    assert puma_descriptor().samples == default_sample_library()
+@pytest.mark.parametrize("instrument_id", [info.id for info in available_instruments()])
+def test_every_instrument_mounts_exactly_the_shared_library(instrument_id):
+    """Consolidates the four per-instrument exact-equality checks that used
+    to live one apiece in test_in8_plugin.py, test_in12_plugin.py,
+    test_panda_plugin.py, and here for PUMA. Kept alongside the
+    ``package_validation`` runtime rule deliberately: the validator is the
+    contract a NEW package must meet, this test is the fast signal that the
+    four packages which exist keep meeting it.
+    """
+    descriptor = get_instrument(instrument_id).descriptor()
+    assert descriptor.samples == default_sample_library()
