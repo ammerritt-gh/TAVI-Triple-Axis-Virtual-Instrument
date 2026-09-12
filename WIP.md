@@ -15,6 +15,6 @@ Done when: the operator has written the body of DESIGN_GOALS.md.
 
 **State:** pinned
 
-Two independently verified curvature-boundary findings and their isolated reproducers are queued in the [audit ledger](docs/audits/new-instruments-crystal-bending.md).
+9 independently verified instrument/curvature findings and opportunities, with isolated defect reproducers, are queued in the [audit ledger](docs/audits/new-instruments-crystal-bending.md).
 
 Done when: the ledger is empty and deleted.
