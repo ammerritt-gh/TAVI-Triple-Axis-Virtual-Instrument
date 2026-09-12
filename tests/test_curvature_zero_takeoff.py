@@ -25,6 +25,7 @@ pytest.importorskip("mcstasscript")
 
 from instruments.in8.model import IN8_Instrument
 from instruments.in12.model import IN12_Instrument
+from instruments.in12.plugin import IN12Plugin
 from instruments.panda.model import PANDA_Instrument
 from instruments.panda.plugin import PANDAPlugin
 from instruments.puma.model import PUMA_Instrument
@@ -210,3 +211,33 @@ def test_a4_zero_held_radius_is_stored_at_its_commanded_magnitude(tmp_path):
     assert snapshot.error_flags == []
     assert abs(snapshot.params["rha_param"]) == pytest.approx(1.234)
     assert snapshot.metadata["curvature_modes"]["rha"] == "held"
+
+
+def test_zero_takeoff_beats_an_unknown_focusing_model():
+    """The zero check must run BEFORE the ``focusing_known`` refusal.
+
+    IN12's Heusler analyser declares ``rva`` driven with
+    ``focusing_known=False`` -- there is no established focusing model, so
+    ``ideal_curvature`` normally refuses to invent a radius for it. But its
+    A4 travel includes zero, and at zero take-off there is no focusing to
+    model: flat is fixed by the geometry, not by the model. With the checks
+    in the other order this axis still raises instead of running, which is
+    the ORIGINAL accepted-then-unrunnable defect surviving for a supported
+    crystal rather than being fixed.
+    """
+    state = IN12_Instrument()
+    descriptor = IN12Plugin().descriptor()
+    mono = descriptor.mono_crystals[0].id
+    heusler = next(c.id for c in descriptor.ana_crystals if "heusler" in c.id)
+
+    # Zero analyser take-off: flat, not a refusal.
+    assert state.ideal_curvature(
+        mono, heusler, 20.0, 0.0, requested_axes=("rva",)
+    ) == {"rva": 0.0}
+
+    # Away from zero the refusal still stands -- this fix must not have
+    # quietly turned focusing_known=False into "invent a radius anyway".
+    with pytest.raises(ValueError, match="focusing_known=False"):
+        state.ideal_curvature(
+            mono, heusler, 20.0, 20.0, requested_axes=("rva",)
+        )

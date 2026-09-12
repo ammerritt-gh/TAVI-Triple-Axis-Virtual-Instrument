@@ -629,12 +629,6 @@ class TAS_Instrument:
                         "it at."
                     )
             else:
-                if not curvature_axis.focusing_known:
-                    raise ValueError(
-                        f"{crystal_spec.id} declares {axis} "
-                        "focusing_known=False: no established focusing model "
-                        "to compute an ideal radius from."
-                    )
                 if math.sin(math.radians(theta)) == 0:
                     # Zero take-off is the direct-beam position, not an
                     # error: nothing is reflected, so a driven axis is flat
@@ -642,7 +636,22 @@ class TAS_Instrument:
                     # is shared policy, not an instrument-specific optics
                     # rule, so it is enforced here rather than left to each
                     # formula to remember.
+                    #
+                    # Checked BEFORE focusing_known, and that order is the
+                    # point: at zero take-off there is no focusing to model,
+                    # so having no established focusing model is irrelevant --
+                    # flat is fixed by the geometry, not by the model. The
+                    # other order leaves the whole accepted-then-unrunnable
+                    # defect in place for IN12's Heusler rva
+                    # (driven=True, focusing_known=False, A4 travel through
+                    # zero), which would raise here instead of running flat.
                     magnitude = 0.0
+                elif not curvature_axis.focusing_known:
+                    raise ValueError(
+                        f"{crystal_spec.id} declares {axis} "
+                        "focusing_known=False: no established focusing model "
+                        "to compute an ideal radius from."
+                    )
                 else:
                     magnitude = radii[radii_key]
                 min_m, max_m = self.curvature_limits(
