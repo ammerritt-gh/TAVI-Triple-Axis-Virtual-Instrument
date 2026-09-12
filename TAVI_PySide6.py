@@ -96,7 +96,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    simple_plot_scan_commands, display_existing_data,
                                    read_parameters_from_file, write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.utilities import parse_scan_steps, incremented_path_writing
+from tavi.utilities import (parse_scan_steps, incremented_path_writing,
+                            normalize_scan_commands)
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
@@ -2424,6 +2425,22 @@ class TAVIController(QObject):
             raise ApiError(400, "bad_request", "Could not read GUI values")
         vals = dict(vals)
 
+        # The radius line edits are unrestricted, so a typed "nan" survives
+        # get_gui_values' float(). scan_config below assigns vals['rhm'] &c.
+        # straight onto a fresh state, which is upstream of
+        # set_crystal_bending's non-finite backstop -- that backstop preserves
+        # the EXISTING radius, and by then the existing radius is already the
+        # NaN. The API's own radius fields are refused at parse time; this is
+        # the matching gate for a value typed into the GUI, in the refusal
+        # vocabulary this method already uses.
+        bad_axes = [axis for axis in ('rhm', 'rvm', 'rha', 'rva')
+                    if not math.isfinite(float(vals.get(axis, 0.0)))]
+        if bad_axes:
+            return {"ok": False, "reason": (
+                "curvature radius must be a finite number: "
+                + ", ".join(sorted(bad_axes))
+            )}
+
         # Inject the selected sample key (same source _collect_simulation_launch_state
         # uses) so the adapter's eta_s / sample-mosaic path resolves.
         try:
@@ -2698,6 +2715,15 @@ class TAVIController(QObject):
         if 'collimation' in patched and isinstance(vals.get('collimation'), dict):
             for slot_id, default in self._descriptor_collimation_defaults().items():
                 vals['collimation'].setdefault(slot_id, default)
+
+        # Same hole, same fix, for modules: a patched dict naming only "nmo"
+        # dropped "v_selector", and instruments/puma/plugin.py indexes both
+        # directly (`modules['nmo']`, `modules['v_selector']`) -- KeyError at
+        # launch for a request the PATCH path (set_module_values' `.get(...,
+        # default)`) accepts today.
+        if 'modules' in patched and isinstance(vals.get('modules'), dict):
+            for module_id, default in self._descriptor_module_defaults().items():
+                vals['modules'].setdefault(module_id, default)
 
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
@@ -4250,6 +4276,16 @@ class TAVIController(QObject):
         except ValueError:
             return (None, "Invalid numbers. Check start, end, and step values.")
 
+        # float() accepts "nan"/"inf", and every guard below compares
+        # magnitudes -- which are all False against NaN -- so a non-finite
+        # bound would reach parse_scan_steps, whose int() of the step count
+        # raises ValueError/OverflowError. Uncaught, that is a 500 where the
+        # client should have got this structured refusal. Refuse here, beside
+        # the conversion that let it through, so every scanned variable is
+        # covered and not just the curvature axes.
+        if not all(math.isfinite(v) for v in (start, end, step)):
+            return (None, "Start, end, and step must be finite numbers.")
+
         # Check for zero step
         if step == 0:
             return (var_lower, "Step size cannot be zero.")
@@ -4499,7 +4535,12 @@ class TAVIController(QObject):
         
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        
+
+        # A lone command 2 must preview exactly like the same text in command 1
+        # (see run_simulation's identical swap); the preview never consults
+        # relative-mode flags, so the two returned here are discarded.
+        cmd1, cmd2, _, _ = normalize_scan_commands(cmd1, cmd2, False, False)
+
         # Get instrument name
         instrument_name = self.instrument.id
 
@@ -4619,10 +4660,15 @@ class TAVIController(QObject):
             tuple: (valid_count, invalid_count)
         """
         import numpy as np
-        
+
+        # A lone command 2 must be counted exactly like the same text in
+        # command 1 (see run_simulation's identical swap); this function does
+        # not take relative-mode flags, so the two returned here are discarded.
+        cmd1, cmd2, _, _ = normalize_scan_commands(cmd1, cmd2, False, False)
+
         # Get current GUI values for validation
         vals = self.get_gui_values()
-        
+
         # Build scan point template
         scan_point_template = [
             vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
@@ -5802,6 +5848,26 @@ class TAVIController(QObject):
                 defaults[slot.id] = slot.default
         return defaults
 
+    def _descriptor_module_defaults(self):
+        """{module_id: default} for every module the descriptor declares.
+
+        Twin of ``_descriptor_collimation_defaults`` for the same reason: a
+        patched ``modules`` dict replaces the previous one wholesale, and the
+        plugin indexes every id the descriptor declares (e.g.
+        ``modules['nmo']``, ``modules['v_selector']`` in
+        ``instruments/puma/plugin.py``), so an omitted id must be refilled
+        rather than left missing.
+        """
+        from instruments.descriptor import ModuleKind
+
+        defaults = {}
+        for module in self.descriptor.modules:
+            if module.kind is ModuleKind.CHOICE:
+                defaults[module.id] = str(module.default)
+            else:
+                defaults[module.id] = bool(module.default)
+        return defaults
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -6818,6 +6884,43 @@ class TAVIController(QObject):
                 return v
             return _parse
 
+        def p_modules(v):
+            """Validate a ``modules`` patch against this instrument's own
+            descriptor -- a CHOICE value must be a declared option, a TOGGLE
+            value must be a bool (``p_bool``'s leniency), and an id not on the
+            descriptor is an error. An omitted id is not an error: it is left
+            out of the returned dict entirely, and stays accepted (today's
+            PATCH behaviour, preserved -- ``set_module_values`` and
+            ``build_api_launch_state``'s refill both fall back to the
+            descriptor default for whatever this omits).
+            """
+            from instruments.descriptor import ModuleKind
+
+            if not isinstance(v, dict):
+                raise ValueError("must be an object/dict")
+            declared = {m.id: m for m in self.descriptor.modules}
+            unknown = set(v) - set(declared)
+            if unknown:
+                raise ValueError(
+                    "unknown module(s) %s; declared: %s"
+                    % (sorted(unknown), sorted(declared))
+                )
+            parsed = {}
+            for module_id, value in v.items():
+                module = declared[module_id]
+                if module.kind is ModuleKind.CHOICE:
+                    if value not in module.options:
+                        raise ValueError(
+                            "%s must be one of %s" % (module_id, sorted(module.options))
+                        )
+                    parsed[module_id] = value
+                else:
+                    try:
+                        parsed[module_id] = p_bool(value)
+                    except ValueError as exc:
+                        raise ValueError("%s %s" % (module_id, exc))
+            return parsed
+
         mono_ids = [c.id for c in self.descriptor.mono_crystals]
         ana_ids = [c.id for c in self.descriptor.ana_crystals]
         source_ids = [s.id for s in self.descriptor.source_types]
@@ -6837,12 +6940,35 @@ class TAVIController(QObject):
         def set_text(edit):
             return lambda v: self._set_and_confirm_text(edit, self._api_fmt(v))
 
-        # --- bending after-handler factory (unlock ideal + refresh labels) ---
-        def bend_after(key):
-            def _after():
+        # --- bending setter factory (write the field, then unlock ideal) ---
+        # The unlock must happen in the SETTER phase, not the after-handler:
+        # apply_parameters() runs every setter before any after-handler runs,
+        # so a batch naming several radii would otherwise have one field's
+        # after-handler (which also refreshes all four locked fields) fire
+        # while a sibling radius is still AUTOFOCUS-locked and overwrite the
+        # value that was just written. Unlocking here means every commanded
+        # axis is already unlocked by the time any refresh happens.
+        def set_bend(key, edit):
+            def _set(v):
+                self._set_and_confirm_text(edit, self._api_fmt(v))
                 self.unlock_ideal_bending(key)
-                self.update_ideal_bending_buttons()
-            return _after
+            return _set
+
+        # --- curvature parser: finite, because PATCH writes straight to the
+        # widget. `p_float` is bare float(), so "nan" parses and lands in the
+        # line edit; a later read path (compute_resolution, behind GET
+        # /resolution) copies GUI values into a config by direct assignment,
+        # never crossing curvature_command_error, so neither the submission
+        # gate nor set_crystal_bending's backstop ever sees it. Launch already
+        # refuses a non-finite radius -- refusing it here is what stops PATCH
+        # and launch disagreeing. Scoped to the four radius fields on purpose:
+        # p_float's acceptance of "nan" for the ~30 other numeric fields is a
+        # wider, separately tracked gap.
+        def p_curvature(v):
+            value = float(v)
+            if not math.isfinite(value):
+                raise ValueError("must be a finite number")
+            return value
 
         return {
             # angles
@@ -6896,15 +7022,15 @@ class TAVIController(QObject):
                 self.update_anacris_info,
             ),
             # bending radii
-            'rhm': (p_float, set_text(idock.rhm_edit), bend_after('rhm')),
-            'rvm': (p_float, set_text(idock.rvm_edit), bend_after('rvm')),
-            'rha': (p_float, set_text(idock.rha_edit), bend_after('rha')),
-            'rva': (p_float, set_text(idock.rva_edit), bend_after('rva')),
+            'rhm': (p_curvature, set_bend('rhm', idock.rhm_edit), self.update_ideal_bending_buttons),
+            'rvm': (p_curvature, set_bend('rvm', idock.rvm_edit), self.update_ideal_bending_buttons),
+            'rha': (p_curvature, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
+            'rva': (p_curvature, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
             # source
             'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
             'source_dE': (p_float, set_text(idock.source_dE_edit), None),
             # descriptor-driven containers
-            'modules': (p_dict, idock.set_module_values, self.update_ideal_bending_buttons),
+            'modules': (p_modules, idock.set_module_values, self.update_ideal_bending_buttons),
             'collimation': (p_dict, idock.set_collimation_values, None),
             'slits_mm': (p_dict, idock.set_slit_values_mm, None),
             # simulation control
@@ -7219,9 +7345,9 @@ class TAVIController(QObject):
                   "point_manifest": []}
 
         # Single-command swap matches run_simulation (a lone command 2 becomes 1).
-        if cmd2 and not cmd1:
-            cmd1, cmd2 = cmd2, ""
-            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+        cmd1, cmd2, relative_mode_1, relative_mode_2 = normalize_scan_commands(
+            cmd1, cmd2, relative_mode_1, relative_mode_2, empty2=""
+        )
 
         scan_mode = self._determine_scan_mode(cmd1, cmd2)
         template = self._build_scan_point_template(scan_mode, vals)
@@ -8209,10 +8335,12 @@ class TAVIController(QObject):
         # with the text -- a lone command 2 becomes command 1 and must keep
         # ITS OWN relative setting, not silently pick up command 1's (empty)
         # one, exactly like validate_scan_launch_state's identical swap.
-        if scan_command2 and not scan_command1:
-            scan_command1 = scan_command2
-            scan_command2 = None
-            relative_mode_1, relative_mode_2 = relative_mode_2, relative_mode_1
+        scan_command1, scan_command2, relative_mode_1, relative_mode_2 = (
+            normalize_scan_commands(
+                scan_command1, scan_command2, relative_mode_1, relative_mode_2,
+                empty2=None,
+            )
+        )
         
         variable_name1 = ""
         variable_name2 = ""

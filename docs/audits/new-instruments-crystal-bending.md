@@ -12,24 +12,6 @@ All 389 selected instrument and curvature tests passed in 19.69 seconds wall tim
 The 9 verified entries concern accepted inputs, inconsistent interface state, model identification, and remaining competing or obsolete authorities.
 Start with invalid PUMA module options and the batched-radius PATCH; application code is unchanged by this audit.
 
-## 1. P1 · Invalid PUMA mirror options silently build inconsistent optics
-
-- **Observed at:** `d4014742`
-- **Effort:** 1–2 hours; existing API module parser and PUMA launch/build regression, without adding fields or changing supported options.
-- **Evidence:**
-  - `instruments/puma/plugin.py:287` — the NMO choice declares `None`, `Vertical`, `Horizontal`, and `Both`.
-  - `TAVI_PySide6.py:6805` — `p_dict` checks only the container type.
-  - `TAVI_PySide6.py:6907` — the modules field uses that parser.
-  - `instruments/puma/plugin.py:350` — the launch snapshot copies the raw NMO value.
-  - `instruments/puma/model.py:125` — every non-`None` value makes both monochromator planes fixed-flat.
-  - `instruments/puma/model.py:461` — the same broad predicate installs the NMO aperture.
-  - `instruments/puma/model.py:479` — the vertical mirror requires an exact supported choice.
-  - `instruments/puma/model.py:517` — the horizontal mirror likewise requires an exact supported choice.
-- **Failure:** Given `{"H":1.0,"scan_command1":"deltaE 0 1 1","modules":{"nmo":"vertical","v_selector":false}}`, the API launch constructor accepts the lowercase, unsupported option. The resulting PUMA build contains `NMO_slit`, no focusing mirror, and `rhm = rvm = 0`. It silently constructs optics inconsistent with its own installed-module curvature policy instead of refusing the option. This was verified through launch construction and the McStasScript component tree; no neutron-output claim or PATCH claim is made.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/invalid_nmo_option.py`
-- **Remedy boundary:** Validate supplied module values against the selected instrument's existing module descriptors before constructing launch state. Preserve all supported PUMA choices and keep their curvature policy and component topology consistent.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently ran the isolated real-controller/build reproducer; unsupported option accepted, flat mono planes and aperture without mirrors, exit 1, 2.88 seconds.
-
 ## 2. P1 · Accepted scans crossing zero take-off fail during autofocus
 
 - **Observed at:** `c66f9f21`
@@ -45,36 +27,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/zero_takeoff.py`
 - **Remedy boundary:** The shared angle-mode feasibility and snapshot/autofocus boundary must agree about singular crystal geometry. Preserve valid opposite-branch scans and distinguish a zero take-off angle from the legal zero-radius flat-crystal command.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently ran the reproducer; A4 = 0° alone produced the claimed failure, exit 1, 1.47 seconds.
-
-## 3. P1 · A batched radius PATCH overwrites an explicitly commanded radius
-
-- **Observed at:** `d4014742`
-- **Effort:** 2–4 hours; controller batch application and curvature-lock refresh, with both key orders checked on all four instruments; no API shape change.
-- **Evidence:**
-  - `TAVI_PySide6.py:6841` — each radius callback unlocks its own axis and then refreshes every curvature field.
-  - `TAVI_PySide6.py:6899` — radius setters have separate callbacks.
-  - `TAVI_PySide6.py:7075` — all parsed setters run before callbacks.
-  - `TAVI_PySide6.py:7088` — callbacks then run sequentially.
-  - `TAVI_PySide6.py:3288` — refresh overwrites any axis whose ideal lock remains set.
-- **Failure:** With both monochromator axes in AUTOFOCUS, `apply_parameters({"rhm":9.0,"rvm":8.0})` reports both values applied with no errors, but the first callback overwrites the still-locked second axis before that axis is unlocked. All four instruments finish with both axes HELD and `rvm` at its ideal value rather than 8.0; reversing the key order instead loses `rhm = 9.0`. For IN8 the two outcomes are `(9.0, 0.8353)` and `(6.7576, 8.0)`. The same explicit values survive direct API launch construction, so PATCH and launch disagree. These are legal driven axes, distinct from the deferred module-fixed reporting mismatch.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/multi_radius_patch.py`
-- **Remedy boundary:** Treat explicitly commanded curvature fields as one batch at the parameter-application/lock-refresh boundary. A refresh must not replace another field's accepted value while that field still carries its previous lock state.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently exercised both key orders on all four real offscreen controllers; all eight cases lost one requested radius, exit 1, 3.31 seconds.
-
-## 4. P2 · A scan entered only in command box 2 previews zero points
-
-- **Observed at:** `d4014742`
-- **Effort:** 1–2 hours; controller preview/count normalization and simulation-dock label formatting, with a real offscreen widget check.
-- **Evidence:**
-  - `TAVI_PySide6.py:4500` — preview reads both command boxes without normalization.
-  - `TAVI_PySide6.py:4668` — counting handles command 1 alone.
-  - `TAVI_PySide6.py:4681` — counting handles both commands, leaving command 2 alone with zero counters.
-  - `gui/docks/unified_simulation_dock.py:494` — any nonempty second box takes the two-dimensional label path.
-  - `TAVI_PySide6.py:8212` — execution instead moves a lone second command and its relative flags into the first slot.
-- **Failure:** On IN8, leave command box 1 empty and enter `rva 1 1.2 0.1` in box 2. The real preview says `0 × 3 = 0 points (0 valid / 0 invalid)`, while shared runtime expansion prepares a one-dimensional scan with three feasible points at 1.0, 1.1, and 1.2. The same text in box 1 previews three valid points. This is a preview/count discrepancy; the reproducer intercepts the deterministic engine after shared scan expansion and makes no simulated-count claim.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/second_command_count.py`
-- **Remedy boundary:** Preview and execution must use the same lone-command normalization, including relative-mode flags. The dock must format that normalized scan as one-dimensional.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently compared real widget text, both command placements, and runtime expansion; preview `(0, 0)` versus prepared `(3, 0)`, exit 1, 2.70 seconds.
 
 ## 5. P3 · All four model manifests retain their pre-bending versions
 
@@ -92,23 +44,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/model_versions.py`
 - **Remedy boundary:** Update the four changed packages' model version/date metadata according to the existing authoring rules. No new version-tracking infrastructure is needed.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently read the behavior-changing diffs and ran the read-only manifest comparison; all four retain their previous version/date, exit 1, 0.16 seconds.
-
-## 6. P3 · Non-finite held radii pass validation on every runnable instrument
-
-- **Observed at:** `c66f9f21`
-- **Effort:** 1–3 hours; shared curvature command/application validation and GUI/API input checks, without a schema change.
-- **Evidence:**
-  - `TAVI_PySide6.py:6784` — numeric API parsing uses `float()` without a finite-value check.
-  - `TAVI_PySide6.py:2688` — an explicitly supplied radius becomes HELD.
-  - `TAVI_PySide6.py:2818` — launch construction delegates its radius refusal to the shared command checker.
-  - `instruments/tas_runtime.py:85` — the checker relies on magnitude comparisons that do not reject NaN on driven axes.
-  - `instruments/tas_runtime.py:420` — application and clamping preserve the non-finite magnitude.
-  - `instruments/tas_runtime.py:445` — signing stores the NaN radius on the point state.
-  - `instruments/tas_runtime.py:1149` — a snapshot with no geometry error emits that state as runtime parameters.
-- **Failure:** Given `{"H": 1.0, "rhm": "nan", "scan_command1": "deltaE 0 1 1"}`, the real API launch constructor accepts the held radius on PUMA, IN8, IN12, and PANDA. Per-point feasibility returns true and snapshot error flags remain empty, while `rhm_param` is NaN on every instrument. Unlike the deferred non-numeric GUI-field issue, conversion succeeds and invalid numeric state reaches executable input. No claim about downstream McStas output is needed or made.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/nonfinite_curvature.py`
-- **Remedy boundary:** Reject non-finite commanded curvature at the shared validation and application boundaries, keeping GUI/API behavior consistent. The observed case is driven `rhm`; check other driven axes when repairing the shared rule.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently exercised all four real offscreen controllers; each emitted `rhm_param=nan`, exit 1, 3.28 seconds.
 
 ## 7. P4 · Remove focusing-factor fields that no longer affect curvature
 
