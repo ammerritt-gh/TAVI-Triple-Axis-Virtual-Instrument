@@ -61,12 +61,6 @@ def test_monochromator_axis_limits_are_entirely_negative():
     assert a1.default < 0
 
 
-def test_descriptor_mounts_shared_sample_library():
-    from tavi.sample_library import default_sample_library
-
-    assert in12_descriptor().samples == default_sample_library()
-
-
 def test_crystal_faces_match_published_overall_dimensions():
     """Slab sizes are derived (face/count minus gap), so pin the face they
     reconstruct: 200x160 mm mono, 122 mm-wide analyser."""

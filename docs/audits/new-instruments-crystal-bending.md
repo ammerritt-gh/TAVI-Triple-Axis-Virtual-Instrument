@@ -12,58 +12,6 @@ All 389 selected instrument and curvature tests passed in 19.69 seconds wall tim
 The 9 verified entries concern accepted inputs, inconsistent interface state, model identification, and remaining competing or obsolete authorities.
 Start with invalid PUMA module options and the batched-radius PATCH; application code is unchanged by this audit.
 
-## 5. P3 · All four model manifests retain their pre-bending versions
-
-- **Observed at:** `d4014742`
-- **Effort:** 0.5–1 hour; version/date metadata in the four instrument manifests, following the existing authoring contract; no physics or API change.
-- **Evidence:**
-  - `docs/INSTRUMENT_AUTHORING.md:12` — descriptor/model changes require a model-version bump.
-  - `docs/INSTRUMENT_AUTHORING.md:48` — executable behavior determines model-version changes.
-  - `instruments/puma/instrument.json:7` — version remains `1.0.0`, dated 2026-07-18.
-  - `instruments/in8/instrument.json:7` — version remains `1.0.0`, dated 2026-07-18.
-  - `instruments/in12/instrument.json:7` — version remains `1.0.0`, dated 2026-09-09.
-  - `instruments/panda/instrument.json:7` — version remains `1.0.0`, dated 2026-09-09.
-  - `instruments/package_validation.py:64` — manifest validation checks version syntax, not correspondence with executable changes.
-- **Failure:** The four manifests are unchanged from before the shared producer/applier migration, although `c93e2442` replaced copied focusing behavior and IN8's literal `rva = -0.31`, and `63e2422d` introduced per-point autofocus, including PUMA. A scientist holding a package labeled `1.0.0` with the same model date cannot distinguish the old bending behavior from the corrected executable model by its declared model version. Git revisions distinguish them; this finding concerns the explicit package-version contract, not runtime/API provenance.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/model_versions.py`
-- **Remedy boundary:** Update the four changed packages' model version/date metadata according to the existing authoring rules. No new version-tracking infrastructure is needed.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently read the behavior-changing diffs and ran the read-only manifest comparison; all four retain their previous version/date, exit 1, 0.16 seconds.
-
-## 7. P4 · Remove focusing-factor fields that no longer affect curvature
-
-- **Observed at:** `d4014742`
-- **Effort:** 0.25–0.5 hours; twelve inert assignments and their misleading comments in four model constructors; no behavior, schema, or interface change.
-- **Evidence:**
-  - `instruments/puma/model.py:65` — assigns `rhmfac`, `rvmfac`, and `rhafac` beside the real radii.
-  - `instruments/in8/model.py:74` — claims factors of 1 mean optimal focusing, then assigns the inert factors.
-  - `instruments/in12/model.py:109` — repeats that claim and the assignments.
-  - `instruments/panda/model.py:82` — repeats that claim and the assignments.
-  - `instruments/tas_runtime.py:488` — the shared optical producer uses object distances and angles, not these factors.
-- **Payoff:** No named or reflective live consumer remains in TAVI, ISAR, or TAS_MCP after deletion of the old per-model producer. The comments still present these fields as tuning controls, so an executor can change a factor while emitted curvature stays unchanged. Removing the obsolete fields closes that misleading implementation path and makes the actual producer easier to find.
-- **Reproduce with:** none — opportunity
-- **Remedy boundary:** Remove only the inert factors and factor-specific claims from the four constructors. Preserve real `rhm`, `rvm`, `rha`, and `rva` fields, the flat-radius explanation, and historical reference assets.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently searched live named/reflective consumers, persistence callers, generated parameter records, and the two external consumers; only the twelve assignments remain in live source.
-
-## 8. P4 · Align the promised sample-extension contract with the builders
-
-- **Observed at:** `d4014742`
-- **Effort:** 2–4 hours; sample lookup in four builders, descriptor/library contract documentation, and sample-catalogue/build assertions; no new registry or GUI/API field.
-- **Evidence:**
-  - `tavi/sample_library.py:5` — instruments may filter or extend their descriptor's shared sample list.
-  - `instruments/descriptor.py:205` — repeats the extension contract.
-  - `docs/CONFIGURABLE_INSTRUMENTS.md:1344` — records that permission as the design.
-  - `gui/docks/unified_sample_dock.py:110` — selection lists descriptor samples.
-  - `TAVI_PySide6.py:6824` — API sample choices also come from the descriptor.
-  - `instruments/puma/model.py:590` — build instead searches the unextended default library.
-  - `instruments/in8/model.py:251` — repeats that independent lookup.
-  - `instruments/in12/model.py:314` — repeats that independent lookup.
-  - `instruments/panda/model.py:295` — repeats that independent lookup.
-  - `tests/test_in12_plugin.py:64` — exact catalogue equality rejects a descriptor extension rather than checking that the builder consumes it.
-- **Payoff:** Current built-in catalogues agree, but following the documented extension path by adding an IN12-only sample ID makes it selectable and descriptor-valid while the builder emits no sample component and prints its existing warning. Replacing descriptor `Al_bragg` with a mosaic of 60 instead emits the shared library's mosaic of 5. Aligning the extension promise, catalogue tests, and build lookup prevents a package author from making a valid-looking sample change that execution ignores. This is an extension-contract opportunity, not a claim that current standard samples are broken.
-- **Reproduce with:** none — opportunity
-- **Remedy boundary:** Make selection and build agree on the supported sample authority, and state the supported extension boundary consistently in the design and authoring documents. Resolve the older GUI-only descriptor wording explicitly if retaining the documented extension promise; preserve instrument-independent shared defaults and the supported no-sample path.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently applied a descriptor-only extension in a temporary copy and built IN12: new ID emitted no sample; replacement mosaic 60 emitted 5, exit 0, 1.66 seconds. A separate temporary suite run exposed the exact-equality guard, confirming the contract mismatch.
-
 ## 9. P4 · Bind instrument geometry to one authority before correcting arm lengths
 
 - **Observed at:** `d4014742`
@@ -85,23 +33,6 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** none — opportunity
 - **Remedy boundary:** Bind each default model's arm lengths and its descriptor/diagnostic coordinates to one package-owned geometry authority. Retain PANDA's virtual-source offset and PUMA's parallel-beam focusing override; analytic-resolution spatial defaults are outside this finding.
 - **Verified:** opus CONFIRMED 2026-09-12 — independently traced both consumers and perturbed only the IN12 descriptor in memory inside a temporary copy; monitor moved to 1.89 m while state `L2` and mono focusing distances stayed 1.80 m.
-
-## 10. P2 · A partial `slits_mm` patch raises `KeyError` at launch
-
-- **Observed at:** `c99b67a9`
-- **Effort:** 0.5–1 hour; one descriptor-defaults refill beside the two that already exist; no API shape change.
-- **Evidence:**
-  - `TAVI_PySide6.py:2717` — `build_api_launch_state` refills an omitted `collimation` slot from the descriptor.
-  - `TAVI_PySide6.py:2726` — and, since PR #33, an omitted `modules` id.
-  - `TAVI_PySide6.py` `_api_field_map` — `slits_mm` is still parsed by the container-only `p_dict` and gets no refill anywhere.
-  - `instruments/puma/plugin.py:379` — indexes `slits_mm['pbl']`, then `:380` `['vbl_hgap']`, `:383` `['dbl_hgap']`.
-  - `instruments/in8/plugin.py:307` — indexes `slits_mm['sbl']`, `:310` `['dbl_hgap']`.
-  - `instruments/in12/plugin.py:436` — indexes `slits_mm['sbl']`, `:439` `['dbl_hgap']`.
-  - `instruments/panda/plugin.py:353` — indexes `slits_mm['ms1']`, `:354` `['ss1']`, `:357` `['ss2']`.
-- **Failure:** Given a patch naming one declared slit and omitting the rest — `{"H": 1.0, "scan_command1": "deltaE 0 1 1", "slits_mm": {"vbl_hgap": 50.0}}` on PUMA, and the equivalent on each other instrument — the parser accepts it and `build_api_launch_state` raises an unhandled `KeyError` for the first omitted slot. All four instruments fail. This is the same defect shape PR #33 fixed for `modules`, on the one container left without a refill. `collimation` is unaffected, having had its refill since before this audit.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/partial_slits.py`
-- **Remedy boundary:** Refill an omitted `slits_mm` id from the descriptor exactly as `collimation` and `modules` do. A slot-value check against the descriptor's `SlitSpec` is the natural companion, and would also close `collimation`'s separate value-validation gap (`p_dict` does not check a slot against `slot.allowed`) — but that is a second, separable rule, and neither is claimed to affect any currently valid request.
-- **Verified:** opus CONFIRMED 2026-09-12 — wrote and ran the isolated reproducer against real offscreen controllers; `KeyError` on PUMA, IN8, IN12 and PANDA, exit 1, 3.36 seconds.
 
 ## 11. P3 · A module-fixed axis reports a commanded radius it did not apply
 
