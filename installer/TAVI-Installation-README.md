@@ -97,7 +97,7 @@ After installation, use the **"TAVI Launcher"** shortcut on your desktop:
 | **[1] Run TAVI** | Start the TAVI application |
 | **[2] Update TAVI** | Fetch and check out the pinned release from GitHub |
 | **[3] Open TAVI folder** | Browse installation files |
-| **[4] Open TAVI shell** | Command prompt with compiler environment bootstrapped |
+| **[4] Open TAVI shell** | Command prompt inside the `tavi` environment (no compiler bootstrap; run `run-tavi.bat` to start TAVI with one) |
 | **[5] Exit** | Close the launcher |
 
 ### Direct Scripts
@@ -110,7 +110,7 @@ These scripts are installed in `%USERPROFILE%\TAVI`:
 | `run-tavi.bat` | Launch TAVI directly |
 | `update-tavi.bat` | Update to the pinned release |
 
-Each launcher script calls the detected `vcvars64.bat x64` inline and appends the MS-MPI include and lib paths before starting TAVI; there is no separate helper script. This is what allows McStas to compile on first run.
+`run-tavi.bat` calls the detected `vcvars64.bat x64` inline and appends the MS-MPI include and lib paths before starting TAVI; the launcher menu's Run option delegates to it. The shell and update options do not bootstrap the compiler. There is no separate helper script. This is what allows McStas to compile on first run.
 
 ---
 
