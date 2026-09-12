@@ -12,23 +12,6 @@ All 389 selected instrument and curvature tests passed in 19.69 seconds wall tim
 The 9 verified entries concern accepted inputs, inconsistent interface state, model identification, and remaining competing or obsolete authorities.
 Start with invalid PUMA module options and the batched-radius PATCH; application code is unchanged by this audit.
 
-## 5. P3 · All four model manifests retain their pre-bending versions
-
-- **Observed at:** `d4014742`
-- **Effort:** 0.5–1 hour; version/date metadata in the four instrument manifests, following the existing authoring contract; no physics or API change.
-- **Evidence:**
-  - `docs/INSTRUMENT_AUTHORING.md:12` — descriptor/model changes require a model-version bump.
-  - `docs/INSTRUMENT_AUTHORING.md:48` — executable behavior determines model-version changes.
-  - `instruments/puma/instrument.json:7` — version remains `1.0.0`, dated 2026-07-18.
-  - `instruments/in8/instrument.json:7` — version remains `1.0.0`, dated 2026-07-18.
-  - `instruments/in12/instrument.json:7` — version remains `1.0.0`, dated 2026-09-09.
-  - `instruments/panda/instrument.json:7` — version remains `1.0.0`, dated 2026-09-09.
-  - `instruments/package_validation.py:64` — manifest validation checks version syntax, not correspondence with executable changes.
-- **Failure:** The four manifests are unchanged from before the shared producer/applier migration, although `c93e2442` replaced copied focusing behavior and IN8's literal `rva = -0.31`, and `63e2422d` introduced per-point autofocus, including PUMA. A scientist holding a package labeled `1.0.0` with the same model date cannot distinguish the old bending behavior from the corrected executable model by its declared model version. Git revisions distinguish them; this finding concerns the explicit package-version contract, not runtime/API provenance.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/model_versions.py`
-- **Remedy boundary:** Update the four changed packages' model version/date metadata according to the existing authoring rules. No new version-tracking infrastructure is needed.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently read the behavior-changing diffs and ran the read-only manifest comparison; all four retain their previous version/date, exit 1, 0.16 seconds.
-
 ## 9. P4 · Bind instrument geometry to one authority before correcting arm lengths
 
 - **Observed at:** `d4014742`
