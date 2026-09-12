@@ -129,3 +129,63 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** none yet — move `config/parameters.json` aside, run any controller-constructing test, and compare against a run with a file containing `"rhm_ideal_locked": true`.
 - **Remedy boundary:** Point the tests' `config/` at a temporary directory for the session, so a run cannot read or write the operator's saved state. Preserve `test_parameters_persistence.py`'s deliberate exercise of the real read/write path, and preserve the existing serial-run rule — the file is also why that test must not run beside a full suite. Do not "fix" this by making the application path absolute; the relative path is what lets the launcher and the tests each have their own working directory.
 - **Verified:** opus CONFIRMED 2026-09-12 — moved the operator's `config/parameters.json` aside and re-ran the two tests unchanged: 2 failed with the file present, 2 passed with it absent, same commit, same environment. File restored afterwards.
+
+## 13. P2 · A direct-beam point invents an energy pair, and no simple fix is available
+
+> **Operator decision pending.** This entry is a DESIGN question, not a ready
+> slice. It is pinned for a fresh session (see WIP.md); do not start it as an
+> ordinary fix.
+
+- **Observed at:** `cba504e4`
+- **Effort:** unknown until the convention is chosen; the two candidate
+  remedies differ by roughly an order of magnitude in blast radius.
+- **Evidence:**
+  - `tavi/neutron_conversions.py:27` — `angle2k(0, d)` returns `0` from its
+    own else-branch.
+  - `instruments/tas_runtime.py` `nominal_energies_from_angles` — guards with
+    `if ki <= 0 or kf <= 0: return None`, discarding the ENTIRE `(Ei, Ef)`
+    pair at a zero analyser take-off even though `A1` still determines `Ei`.
+  - `instruments/tas_runtime.py` `e0_param_value` — therefore skips its "take
+    Ei from the crystals" branch and falls back to `fixed_E` arithmetic.
+  - `instruments/tas_runtime.py` `point_energy_metadata` — likewise falls back
+    to the `K_fixed` branch and records an invented fixed-mode `(Ei, Ef)`.
+  - `TAVI_PySide6.py:141` `_background_q_magnitude` — in angle mode
+    `qx/qy/qz` are `None` by construction, so `|Q|` comes from `Ki`/`Kf`/`stt`.
+  - `TAVI_PySide6.py:7998` — the deterministic engine computes that `|Q|` for
+    EVERY point and feeds it to `resolution_config`; `:8962` does the same for
+    a real McStas run when background is enabled.
+- **Failure:** On IN8 with a Mono source, `fixed_E = 14.68`, and an `A1`
+  selecting `Ei = 20 meV`, an angle-mode A4 scan through zero records
+  `E0_param = 20.0000` at A4 = ±1° and `E0_param = 14.6800` at A4 = 0 — the
+  source energy jumps to `fixed_E` at the one point where the analyser selects
+  nothing, and the recorded `(Ei, Ef)` there is an invented fixed-mode pair.
+  The neighbours are no better in kind: at A4 = ±1° the recorded `Ef` is
+  `23859.5294 meV`, because inverting Bragg near zero take-off diverges. So
+  the affected region is a NEIGHBOURHOOD of zero, not a single point.
+- **Why there is no simple fix:** the obvious remedy — record `Ei` and omit
+  the undetermined `Ef` — was implemented and then withdrawn. `Ef = None`
+  propagates into `_background_q_magnitude`, which needs a number:
+  `float(None)` raises `TypeError`, and that helper feeds the per-point
+  resolution kernel for every deterministic-engine point. Confirmed directly:
+  `_background_q_magnitude({'qx': None, ..., 'Ki': 2.66, 'Kf': None, 'stt': 30.0})`
+  raises `TypeError`. So the honest recording makes the direct-beam point
+  CRASH the engine, on exactly the point the operator's ruling says must run.
+- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/direct_beam_energy.py`
+- **Remedy boundary — two candidate conventions, operator to choose:**
+  - **B, omit what is undetermined.** Record `Ei`, leave `Ef`/`Kf` absent, and
+    teach `|Q|` and the resolution kernel to handle a point with no
+    determined outgoing energy — that point then runs with no resolution
+    kernel and no `|Q|`-keyed background. Honest, but it is real new
+    machinery and yields a simulation datum with no resolution attached.
+  - **C, an elastic convention for a transmitting analyser.** At zero take-off
+    the analyser diffracts nothing and transmits, so the detector sees
+    neutrons at the incident energy: `Ef = Ei`, `deltaE = 0`,
+    `|Q| = 2·ki·sin(θs)`. Everything downstream works with no absent values.
+    Weaker as a RECORD (it asserts an `Ef` the instrument never selected), but
+    it has a physical story rather than being an accident of `fixed_E`
+    arithmetic, and it must be documented at the point of use if chosen.
+  Whichever is chosen should also address the divergent `Ef` in the
+  neighbourhood of zero, not only the exact-zero point.
+- **Verified:** opus CONFIRMED 2026-09-12 — ran the reproducer on `cba504e4`
+  (E0_param 14.68 at A4 = 0 against 20.0 at both neighbours, exit 1, 1.53 s),
+  and separately confirmed the `TypeError` that rules out the simple remedy.
