@@ -1,4 +1,4 @@
-# FlatEllipse_finite_mirror - Optimized NMO Component
+# FlatEllipse_finite_mirror_optimized - Optimized NMO Component
 
 ## Overview
 
@@ -87,7 +87,7 @@ Tab-separated, three columns:
 
 ### Basic usage with automatic mirror calculation:
 ```c
-COMPONENT nmo = FlatEllipse_finite_mirror(
+COMPONENT nmo = FlatEllipse_finite_mirror_optimized(
     LStart = 6.0, LEnd = 6.0,
     lStart = -0.5, lEnd = 0.5,
     r_0 = 0.05, nummirror = 20,
@@ -98,7 +98,7 @@ AT (0, 0, 6) RELATIVE source
 
 ### Using B-values from file:
 ```c
-COMPONENT nmo = FlatEllipse_finite_mirror(
+COMPONENT nmo = FlatEllipse_finite_mirror_optimized(
     LStart = 6.0, LEnd = 6.0,
     lStart = -0.5, lEnd = 0.5,
     mf = 4, mirror_width = 0.0003,
@@ -109,7 +109,7 @@ AT (0, 0, 6) RELATIVE source
 
 ### Full configuration with per-mirror m-values:
 ```c
-COMPONENT nmo = FlatEllipse_finite_mirror(
+COMPONENT nmo = FlatEllipse_finite_mirror_optimized(
     LStart = 6.0, LEnd = 6.0,
     lStart = -0.5, lEnd = 0.5,
     mirror_width = 0.0003,
@@ -123,7 +123,7 @@ AT (0, 0, 6) RELATIVE source
 
 ### Fast test run (no refraction):
 ```c
-COMPONENT nmo = FlatEllipse_finite_mirror(
+COMPONENT nmo = FlatEllipse_finite_mirror_optimized(
     LStart = 6.0, LEnd = 6.0,
     lStart = -0.5, lEnd = 0.5,
     mf = 4, mirror_width = 0.0003,
@@ -145,9 +145,21 @@ This enables verbose warnings for edge cases like negative propagation times.
 ## Dependencies
 
 Required header files (must be in McStas component path):
-- `conic_finite_mirror.h`
-- `calciterativemirrors.h`
+- `conic_finite_mirror_fixed.h`
+- `calciterativemirrors_fixed.h`
 - `read_table-lib` (standard McStas library)
+
+## Why the `_fixed.h` headers exist
+
+The unfixed originals (`conic_finite_mirror.h`, `calciterativemirrors.h`) carry
+three defects: a wrong allocation type (`malloc(n*sizeof(double_t))` instead
+of `sizeof(double)`), a debug `printf` left unguarded in production code, and
+no NULL check after `malloc`. `FlatEllipse_finite_mirror_optimized.comp`
+includes only the fixed pair (`.comp` lines 59-60); the fixed versions guard
+their debug output behind `#ifdef DEBUG_NMO` and add an `fprintf(stderr, ...)`
+NULL check. No `.comp` file in this directory includes the unfixed originals
+— they are retained as the upstream reference only, not because anything
+still depends on them.
 
 ## Performance Notes
 
