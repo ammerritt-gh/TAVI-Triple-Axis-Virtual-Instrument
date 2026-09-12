@@ -107,9 +107,8 @@ These scripts are installed in `%USERPROFILE%\TAVI`:
 | `TAVI-Launcher.bat` | Menu launcher (recommended entry point) |
 | `run-tavi.bat` | Launch TAVI directly |
 | `update-tavi.bat` | Update to the pinned release |
-| `tavi-bootstrap.bat` | Shared bootstrap helper — do not run directly |
 
-All launcher scripts call `tavi-bootstrap.bat`, which initialises the Visual Studio compiler environment (`vcvarsall.bat x64`) and injects MPI paths before starting TAVI. This is what allows McStas to compile on first run.
+Each launcher script calls the detected `vcvars64.bat x64` inline and appends the MS-MPI include and lib paths before starting TAVI; there is no separate helper script. This is what allows McStas to compile on first run.
 
 ---
 
@@ -137,7 +136,7 @@ If the first point fails to compile, the most likely cause is the compiler boots
 
 ### Simulation fails to compile on first run
 
-Make sure you are launching from `TAVI-Launcher.bat` or `run-tavi.bat` (not by running `python TAVI_PySide6.py` directly in a plain command prompt). These scripts call `tavi-bootstrap.bat`, which sets up the compiler environment before TAVI starts.
+Make sure you are launching from `TAVI-Launcher.bat` or `run-tavi.bat` (not by running `python TAVI_PySide6.py` directly in a plain command prompt). These scripts set up the compiler environment before TAVI starts.
 
 If you bypassed the compiler check during installation, re-run the installer with Visual Studio installed to regenerate the launcher scripts with a working bootstrap.
 
@@ -171,7 +170,7 @@ The installer configures McStasScript to use the McStas installation inside the 
 %USERPROFILE%\AppData\Local\micromamba\micromamba.exe run -n tavi python TAVI_PySide6.py
 ```
 
-Note: this bypasses the compiler bootstrap in `tavi-bootstrap.bat`. Simulations may fail to compile unless the Visual Studio environment is already active in the calling shell.
+Note: this bypasses the compiler bootstrap the generated launchers perform. Simulations may fail to compile unless the Visual Studio environment is already active in the calling shell.
 
 ### Updating McStas (conda)
 
@@ -204,7 +203,7 @@ PySide6 is not officially distributed via conda-forge by the Qt Project. The pip
 
 ### Compiler bootstrap rationale
 
-McStas generates and compiles C instrument files at runtime. The compiler must be available in the process environment when `mcrun` is called. The generated launcher scripts call `vcvarsall.bat x64` before starting TAVI, which sets `PATH`, `INCLUDE`, `LIB`, and related variables so `cl.exe` is available to McStas. Launching TAVI directly with `python TAVI_PySide6.py` in a plain shell bypasses this and will cause first-point compile failures.
+McStas generates and compiles C instrument files at runtime. The compiler must be available in the process environment when `mcrun` is called. The generated launcher scripts call `vcvars64.bat x64` before starting TAVI, which sets `PATH`, `INCLUDE`, `LIB`, and related variables so `cl.exe` is available to McStas. Launching TAVI directly with `python TAVI_PySide6.py` in a plain shell bypasses this and will cause first-point compile failures.
 
 ### mcstas_config.json and runtimes.json
 
