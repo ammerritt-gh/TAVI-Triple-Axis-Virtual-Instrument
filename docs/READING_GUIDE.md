@@ -2,6 +2,7 @@
 
 > **Status:** live
 > **Authority:** the one map of TAVI's documentation
+> **Verified against code revision:** `29140c53` (2026-09-12, regular; first baseline, no deep audit yet)
 
 The README is the quick-start surface; this guide is the navigation authority. A new governed document is added here; a change to what a newcomer reads first goes in the README.
 
