@@ -12,22 +12,6 @@ All 389 selected instrument and curvature tests passed in 19.69 seconds wall tim
 The 9 verified entries concern accepted inputs, inconsistent interface state, model identification, and remaining competing or obsolete authorities.
 Start with invalid PUMA module options and the batched-radius PATCH; application code is unchanged by this audit.
 
-## 2. P1 · Accepted scans crossing zero take-off fail during autofocus
-
-- **Observed at:** `c66f9f21`
-- **Effort:** 2–4 hours; shared geometry feasibility and snapshot/autofocus preparation, with GUI/API scan acceptance checks.
-- **Evidence:**
-  - `instruments/panda/plugin.py:304` — declared A4 travel includes zero.
-  - `instruments/tas_runtime.py:932` — direct-angle geometry supplies no error flag for a degenerate crystal angle.
-  - `instruments/tas_runtime.py:953` — feasibility accepts the point when it is inside motor travel.
-  - `instruments/tas_runtime.py:1059` — accepted autofocus points call the producer with their own take-off angles.
-  - `instruments/tas_runtime.py:568` — the producer computes the optical radii before resolving individual axes.
-  - `instruments/tas_runtime.py:509` — horizontal focusing divides by the sine of the Bragg angle.
-- **Failure:** Given PANDA with PG(002) crystals, A1 = −74.332°, A2 = 30°, and an autofocus A4 scan through −1°, 0°, +1°, feasibility accepts all three points. Snapshot preparation succeeds at both neighboring points but raises `ZeroDivisionError` at A4 = 0°, instead of refusing or marking the singular point for skipping. This is an accepted-scan preparation failure; no whole-application crash is claimed.
-- **Reproduce with:** `python -B docs/audits/repro/new-instruments-crystal-bending/zero_takeoff.py`
-- **Remedy boundary:** The shared angle-mode feasibility and snapshot/autofocus boundary must agree about singular crystal geometry. Preserve valid opposite-branch scans and distinguish a zero take-off angle from the legal zero-radius flat-crystal command.
-- **Verified:** opus CONFIRMED 2026-09-12 — independently ran the reproducer; A4 = 0° alone produced the claimed failure, exit 1, 1.47 seconds.
-
 ## 5. P3 · All four model manifests retain their pre-bending versions
 
 - **Observed at:** `d4014742`
