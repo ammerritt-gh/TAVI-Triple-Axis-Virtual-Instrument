@@ -1,5 +1,8 @@
 # Configurable Instruments — Research & Plan
 
+> **Status:** live
+> **Authority:** the design record and decision log of the instrument plugin framework; current authoring policy is INSTRUMENT_AUTHORING.md
+
 **Status:** Design decided; Phase-0 drafted; review §15 folded in (§16);
 Phase 1 + 1.5 IMPLEMENTED (2026-07-02, spec §17). **Phase 2 IMPLEMENTED
 (2026-07-02, spec §18):** the GUI renders from the descriptor (instrument dock,

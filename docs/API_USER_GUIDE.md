@@ -1,5 +1,8 @@
 # TAVI Remote API — User Guide
 
+> **Status:** live
+> **Authority:** the client-facing API contract: endpoints, fields, scan syntax, events
+
 *Last updated: 2026-07-28*
 
 This guide is written for **both humans and LLM agents**. Every example is exact

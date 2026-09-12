@@ -1,5 +1,7 @@
 # The Closed Loop — simulation, analysis, and autonomous measurement
 
+> **Status:** draft
+
 *Status: **Draft**, 2026-07-03. This is the **capstone / umbrella document** for a
 three-project system. The integration seam is **LIVE** — the first closed-loop
 measurement ran today (§7). The measurement **driver** that would close the loop

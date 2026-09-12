@@ -1,8 +1,7 @@
 # TAVI `Phonon_DFT` Component and File Contract
 
+> **Status:** live
 > **Owner:** TAVI project
->
-> **Lifecycle:** Maintained
 >
 > **Authority:** Canonical reference for TAVI's `Phonon_DFT` component and shared data-file contract
 >

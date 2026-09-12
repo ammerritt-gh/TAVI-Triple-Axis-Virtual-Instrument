@@ -1,5 +1,7 @@
 # PUMA Sources
 
+> **Status:** live
+
 No immutable external PUMA source snapshot is currently stored in this
 package. That absence is intentional and is recorded as a gap rather than
 turning legacy code comments into authoritative evidence.

@@ -1,5 +1,7 @@
 # PANDA Sources
 
+> **Status:** live
+
 | Snapshot | Source date/version | Captured | Used for | Status |
 |---|---|---|---|---|
 | [MLZ instrument page](2026-09-09__mlz-panda-page__v01.md) | live page | 2026-09-09 | crystal menu, ki/kf ranges, axis travel, energy/momentum reach, detectors, BAMBUS status | current; authoritative for published specifications |

@@ -1,5 +1,7 @@
 # PANDA Scientist Review
 
+> **Status:** live
+
 PANDA now runs in TAVI. It was built from published sources and the team's
 historical McStas files, with no input yet from anyone who operates the
 instrument — so the questions below are the places where the model is guessing

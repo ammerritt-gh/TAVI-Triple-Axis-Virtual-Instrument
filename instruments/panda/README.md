@@ -1,5 +1,7 @@
 # PANDA (MLZ) — Runnable Package
 
+> **Status:** live
+
 PANDA is the cold three-axes spectrometer at beam tube SR-2 of the FRM II
 (MLZ, Garching), operated by JCNS. It is built for high flux at low incident
 energy: a short source-to-monochromator distance, a supermirror guide feeding a

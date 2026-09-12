@@ -1,5 +1,7 @@
 # Custom McStas Components
 
+> **Status:** live
+
 This folder contains modified and custom McStas components used in the TAVI simulation framework. These components extend or fix functionality from the standard McStas library to better suit the needs of triple-axis instrument simulations.
 
 ## Component Overview

@@ -1,5 +1,7 @@
 # TAVI Windows Installer / Uninstaller Design Document
 
+> **Status:** live
+
 _Last updated: 2026-05-22_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.

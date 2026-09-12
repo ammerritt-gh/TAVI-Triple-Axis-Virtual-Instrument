@@ -1,5 +1,7 @@
 # TAVI - Triple-Axis Virtual Instrument
 
+> **Status:** live
+
 TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments with McStas through McStasScript. The application ships four runnable instrument models (PUMA, IN8, IN12, PANDA) behind one plugin contract and combines a dock-based GUI, McStasScript instrument generation, scan execution, detector data parsing, and live plotting.
 
 ---
@@ -276,6 +278,32 @@ Every scan (GUI Run button or API) runs as a `ScanJob` through one serial worker
 `docs/API_USER_GUIDE.md` is the authoritative client-facing reference (endpoints, the 42-field parameter table (43 keys returned, `curvature_modes` read-only), scan-command syntax `VARIABLE start stop STEP` where the last token is STEP SIZE not point count, SSE events, budgets, gotchas). Its §5 *Crystal curvature* documents the two curvature sign contracts (magnitude in, signed `applied_curvature` out) and `curvature_modes`. `docs/API_SERVER_DESIGN.md` is the design/architecture record.
 
 API scan submissions are always validated before queueing (parse, budget, per-point feasibility via `check_point_feasibility()` in the instrument plugins, ETA): infeasible points reject the job with HTTP 400 unless `allow_partial: true`, which skips them at run time and lists them as `skipped_points` in the result. GUI Run-button scans are never blocked by this validation. Further client-facing endpoints: `POST /validate` (checks without queueing), `GET /schema` (live self-description), `GET /scan/{id}?wait=N` (long-poll), `GET /scan/{id}/plot.png` (512x512 Agg render, `tavi/plot_render.py`), `GET /journal` (session narrative, `tavi/journal.py`), plus `eta` objects with confidence tiers from `tavi/runtime_tracker.py`, `Retry-After` headers, `Idempotency-Key` dedupe, and `isolated: true` per-job parameter isolation. TAVI does no *scientific* data analysis — dispersion fitting, background fitting/subtraction, deciding whether a peak is real — that belongs to the client. Background is the one word that cuts both ways: TAVI **generates** configured background truth through the Qt-free `tavi/background.py` contract (`tavi.background/2`, catalog version 2). `GET`/wholesale `PUT /background` manage the session configuration; an optional per-scan `background` object replaces it wholesale; both engines plant independently enabled/scaled mean sources plus source-keyed sparse cosmic events and always stamp normalized provenance into `result.metadata`. There is no global scale, sample-calibration multiplier, diffuse-sample background, or request-time preset expansion. TAVI never **infers** background from measured data. See `docs/BACKGROUND_MODEL.md`, `docs/CONTROL_FEATURES_DESIGN.md` §6.7, and `docs/ANALYTIC_ENGINE.md`. The one thing it does fit is scan-derived motion: peak centre / COM / max of a 1D scan so the operator can drive the instrument there (goto CEN), which every real TAS control system provides and which is control, not interpretation. That boundary and the implementation are `docs/CONTROL_FEATURES_DESIGN.md` §1 (`tavi/scan_fits.py`, `gui/docks/fitting_dock.py`). `docs/CLOSED_LOOP_DESIGN.md` is the capstone design for the three-component closed-loop system (TAVI instrument / ISAR analysis engine at `..\ISAR` / future measurement driver — read it first); `docs/LLM_HARNESS_DESIGN.md` is the measurement-driver design and `docs/CONTROL_FEATURES_DESIGN.md` the future TAVI control features (goto CEN, path scans, campaigns, deterministic engine, virtual clock).
+
+---
+
+## Documentation
+
+The documentation standard is shared (`doc-audit` skill); only this repository's deviations are recorded here. The map is `docs/READING_GUIDE.md`; the board is `WIP.md`; the goals file is `DESIGN_GOALS.md` (operator-written body). `docs/transcripts/` holds verbatim session records and `docs/feedback/` session feedback records; both are committed and never edited.
+
+```doc-audit
+profile: complex
+map: docs/READING_GUIDE.md
+audit: weekly
+not-docs: docs/transcripts/  # verbatim session records, never edited; links inside are relative to another root
+not-docs: docs/feedback/  # session feedback records, harvested by memory-harvest, never edited
+not-docs: instruments/in8/references/2006-01-01__hiess-in8-performance__v01.md  # source dossier, evidence cited by MODEL_STATUS, never edited
+not-docs: instruments/in8/references/2023-01-01__piovano-ivanov-in8-upgrade__v01.md  # source dossier, evidence, never edited
+not-docs: instruments/in8/references/2026-07-02__vtas-live-crosscheck__v01.md  # measured cross-check record, evidence, never edited
+not-docs: instruments/in12/references/2016-01-01__schmalzl-in12-upgrade__v01.md  # source dossier, evidence, never edited
+not-docs: instruments/in12/references/2026-07-18__in12-research-dossier__v01.md  # research dossier, evidence, never edited
+not-docs: instruments/in12/references/2026-09-09__ill-in12-web-status__v01.md  # dated web snapshot, evidence, never edited
+not-docs: instruments/in12/references/2026-09-09__in12-literature-round__v02.md  # literature round record, evidence, never edited
+not-docs: instruments/panda/references/2007-01-01__panda-overview__v01.md  # source dossier, evidence, never edited
+not-docs: instruments/panda/references/2013-01-01__panda-supermirror-guide__v01.md  # source dossier, evidence, never edited
+not-docs: instruments/panda/references/2026-07-18__panda-research-dossier__v01.md  # research dossier, evidence, never edited
+not-docs: instruments/panda/references/2026-09-09__mlz-panda-page__v01.md  # dated web snapshot, evidence, never edited
+stale: "40-field"  # the API exposes 43 keys / 42 writable since the sample field landed; corrected 2026-09-12
+```
 
 ---
 
