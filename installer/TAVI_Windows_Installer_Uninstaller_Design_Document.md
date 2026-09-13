@@ -1011,13 +1011,19 @@ Before publishing a new installer:
 
 ### Release recipe
 
-For each new release `vX.Y.Z` (done this way for `v1.1.0` and `v1.2.0`):
+For each new release `vX.Y.Z`, `/release X.Y.Z` and `/release X.Y.Z publish`
+run the two phases:
 
-1. Merge the release branch to `main` and cut the `vX.Y.Z` tag there.
-2. Copy the previous pinned installer to `WINDOWS-install-TAVI-vX.Y.Z.bat` and bump
-   the header comment plus `TAVI_VERSION`/`INSTALLER_VERSION`; nothing else changes.
-3. Create the GitHub release from the tag and attach the pinned installer `.bat` as a
-   release artifact.
+1. `/release X.Y.Z` prepares the versioned installer copy and the changelog
+   and opens the release PR: it copies the previous pinned installer to
+   `WINDOWS-install-TAVI-vX.Y.Z.bat` and stamps the header comment plus
+   `TAVI_VERSION`/`INSTALLER_VERSION` there; nothing else changes. The two
+   version variables and the header comment in the copy are stamped by the
+   helper (`release.py prepare`), never by hand.
+2. The operator reviews and merges the PR.
+3. `/release X.Y.Z publish` tags the merged commit and creates the GitHub
+   release from that tag, attaching the already-merged pinned installer
+   `.bat` as the release artifact.
 
 ## 23. Recommended future improvements
 

@@ -302,6 +302,8 @@ not-docs: instruments/panda/references/2013-01-01__panda-supermirror-guide__v01.
 not-docs: instruments/panda/references/2026-07-18__panda-research-dossier__v01.md  # research dossier, evidence, never edited
 not-docs: instruments/panda/references/2026-09-09__mlz-panda-page__v01.md  # dated web snapshot, evidence, never edited
 stale: "40-field"  # the API exposes 43 keys / 42 writable since the sample field landed; corrected 2026-09-12
+not-docs: changelog.d/   # release fragments, harvested and deleted
+not-docs: CHANGELOG.md   # generated release artifact
 ```
 
 ---
@@ -314,5 +316,4 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 ## Memory — promote or die
 
 - 2026-09-12 · skill: the doc checker counts tracked files only; a new map or goals file must be staged before it can exit 0.
-- 2026-09-13 · a fresh worktree lacks the gitignored `CLAUDE.md`; copy it in before the first full run or `test_documentation.py` is red (entry 15).
 - 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
