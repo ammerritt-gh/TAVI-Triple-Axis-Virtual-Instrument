@@ -316,5 +316,4 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 ## Memory — promote or die
 
 - 2026-09-12 · skill: the doc checker counts tracked files only; a new map or goals file must be staged before it can exit 0.
-- 2026-09-13 · a fresh worktree lacks the gitignored `CLAUDE.md`; copy it in before the first full run or `test_documentation.py` is red (entry 15).
 - 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
