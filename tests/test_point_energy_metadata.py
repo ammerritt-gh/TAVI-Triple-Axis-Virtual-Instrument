@@ -161,10 +161,18 @@ def test_angle_mode_a_monochromator_scan_moves_ei():
 
 
 def test_angle_mode_falls_back_when_the_angle_is_degenerate():
-    """A1 = 0 has no Bragg inverse; the frozen field is used rather than a crash."""
-    meta = _angle_snapshot("Kf Fixed", "Maxwellian", 0.0, -41.19,
-                           deltaE_field=1.5).metadata
-    assert meta["deltaE"] == 1.5
+    """A1 = 0 has no Bragg inverse: the monochromator transmits.
+
+    The point is marked (``transmission``), not refused, and the recorded
+    claim about the transfer is withdrawn -- ``metadata['deltaE']`` is None
+    -- while ``snapshot.deltaE``, the frozen McStas INPUT the point actually
+    ran with, is untouched.
+    """
+    snap = _angle_snapshot("Kf Fixed", "Maxwellian", 0.0, -41.19,
+                           deltaE_field=1.5)
+    assert snap.metadata["deltaE"] is None
+    assert snap.deltaE == 1.5
+    assert snap.metadata["transmission"] == ["mono"]
 
 
 @pytest.mark.parametrize("k_fixed,deltaE", [
