@@ -37,7 +37,7 @@ Follow the instructions at [https://github.com/mccode-dev/McCode/blob/main/INSTA
 
 2. **Batch file install**
 
-Download the [batch file installer here](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/blob/main/installer/WINDOWS-install-TAVI.bat) and run it. 
+Download `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself) and run it. 
 
 ### Standalone Installation
 1. **Install McStas**

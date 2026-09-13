@@ -2,6 +2,3 @@ name = "TAVI"                       # release title prefix: "TAVI v1.3.0"
 version_file = "tavi/__init__.py"   # holds the one __version__ = "X.Y.Z" line
 test_command = "\"%LOCALAPPDATA%\\micromamba\\micromamba.exe\" run -n tavi-dev python -m pytest tests -q -ra"  # absolute launcher: micromamba is not on PATH for a subprocess
 test_timeout_seconds = 900          # kills the whole process tree and reports
-installer = "installer/WINDOWS-install-TAVI-v{version}.bat"
-installer_replacements = 3          # count of v<old> -> v<new> in the installer copy
-last_installer_test = "unknown"     # date and result, hand-edited

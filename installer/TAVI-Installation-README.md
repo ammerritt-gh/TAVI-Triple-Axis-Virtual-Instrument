@@ -10,8 +10,8 @@ TAVI is a simulation tool for triple-axis spectrometer (TAS) experiments, built 
 ## Quick Start
 
 1. **Install Visual Studio Build Tools** (see Prerequisites below — do this first)
-2. **Download** `WINDOWS-install-TAVI.bat` from the [installer folder](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/blob/main/installer/WINDOWS-install-TAVI.bat)
-3. **Double-click** `WINDOWS-install-TAVI.bat` to run the installer
+2. **Download** `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself)
+3. **Double-click** the downloaded `.bat` to run the installer
 4. **Wait** 10–20 minutes for installation to complete
 5. **Run a 2-point scan** to validate the installation (see First-Run Validation below)
 
@@ -47,7 +47,7 @@ The installer detects MPI automatically and includes the SDK paths in generated 
 
 ## What the Installer Does
 
-`WINDOWS-install-TAVI.bat` performs these steps automatically:
+The installer performs these steps automatically:
 
 1. **Detects Visual Studio** — via `vswhere.exe`; warns if not found
 2. **Detects MPI SDK** — optional; warns if not found
@@ -82,7 +82,7 @@ cd %USERPROFILE%\TAVI
 git describe --tags
 ```
 
-To update to a new release, re-run the installer (it will reconcile the environment and check out the new tag), or use the **Update TAVI** option in the launcher.
+To move to a newer release, download that release's installer from the [releases page](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases) and run it. The launcher's **Update TAVI** option repairs the current pinned installation (fetches tags, re-checks out the same tag, refreshes pip packages) and never changes which release is installed.
 
 ---
 
@@ -95,7 +95,7 @@ After installation, use the **"TAVI Launcher"** shortcut on your desktop:
 | Option | Description |
 |--------|-------------|
 | **[1] Run TAVI** | Start the TAVI application |
-| **[2] Update TAVI** | Fetch and check out the pinned release from GitHub |
+| **[2] Update TAVI** | Repair the current pinned installation (re-fetch and re-check-out the same tag, refresh pip packages) |
 | **[3] Open TAVI folder** | Browse installation files |
 | **[4] Open TAVI shell** | Command prompt inside the `tavi` environment (no compiler bootstrap; run `run-tavi.bat` to start TAVI with one) |
 | **[5] Exit** | Close the launcher |
@@ -134,7 +134,7 @@ If the first point fails to compile, the most likely cause is the compiler boots
 ### "C++ compiler not found" during install
 
 1. Install Visual Studio Build Tools (see Prerequisites)
-2. Re-run `WINDOWS-install-TAVI.bat` — it will detect the newly installed compiler
+2. Re-run the installer — it will detect the newly installed compiler
 
 ### Simulation fails to compile on first run
 
@@ -144,7 +144,7 @@ If you bypassed the compiler check during installation, re-run the installer wit
 
 ### "MPI launcher could not be resolved" in message center
 
-This indicates an NMO/MPI workflow is active but the Microsoft MPI SDK is not installed or was not found at install time. Install the MPI SDK (see Prerequisites) and re-run `WINDOWS-install-TAVI.bat` to regenerate the launcher scripts with MPI paths included.
+This indicates an NMO/MPI workflow is active but the Microsoft MPI SDK is not installed or was not found at install time. Install the MPI SDK (see Prerequisites) and re-run the installer to regenerate the launcher scripts with MPI paths included.
 
 ### "Failed to download micromamba"
 
