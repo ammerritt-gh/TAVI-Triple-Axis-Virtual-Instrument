@@ -1011,19 +1011,32 @@ Before publishing a new installer:
 
 ### Release recipe
 
-For each new release `vX.Y.Z`, `/release X.Y.Z` and `/release X.Y.Z publish`
-run the two phases:
+Operator ruling, 2026-09-13: the release tool (`bin/release.py` in
+Agentic-Control-Scheme) does not create, check, or upload an installer. A
+release is the version bump, the changelog, the PR, the tag and the GitHub
+release with its notes; an installer is a downstream artifact of a tag,
+written after the tag exists.
 
-1. `/release X.Y.Z` prepares the versioned installer copy and the changelog
-   and opens the release PR: it copies the previous pinned installer to
-   `WINDOWS-install-TAVI-vX.Y.Z.bat` and stamps the header comment plus
-   `TAVI_VERSION`/`INSTALLER_VERSION` there; nothing else changes. The two
-   version variables and the header comment in the copy are stamped by the
-   helper (`release.py prepare`), never by hand.
-2. The operator reviews and merges the PR.
-3. `/release X.Y.Z publish` tags the merged commit and creates the GitHub
-   release from that tag, attaching the already-merged pinned installer
-   `.bat` as the release artifact.
+(a) `/release X.Y.Z` bumps the version, harvests the changelog, and opens
+    the release PR. The operator reviews and merges it. `/release X.Y.Z
+    publish` tags the merged commit and creates the GitHub release with the
+    notes. Nothing in either phase touches `installer/`.
+
+(b) After the tag exists: copy the previous pinned installer to
+    `WINDOWS-install-TAVI-vX.Y.Z.bat`, stamp the header comment and the
+    `TAVI_VERSION` and `INSTALLER_VERSION` lines by hand, make whatever
+    changes the release needs, run it cold on a clean directory against the
+    real tag, commit it on main, and upload it with `gh release upload
+    vX.Y.Z installer\WINDOWS-install-TAVI-vX.Y.Z.bat --clobber`. The release
+    page may exist before its installer does.
+
+(c) For 1.3 specifically: the installer needs a post-clone step that builds
+    `components\Pb_dft_phonons.dat` (gitignored, 150 MB,
+    `tools\make_pb_assets.py`; the target environment already carries numpy
+    and scipy) — `setup-tavi-dev.bat` lines 182-193 are the model.
+
+(d) A macOS installer, when written, is a shell script pinned to the same
+    tag and uploaded the same way.
 
 ## 23. Recommended future improvements
 

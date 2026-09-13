@@ -76,21 +76,33 @@ The first documentation audit and setup pass under the shared standard (profile 
 **State:** pinned
 
 The changelog pipeline is in (PR #38, 77f73e46, 2026-09-13): `tavi.__version__`,
-`changelog.d/` with `release.toml` and thirty fragments since v1.2.0. Before
-`/release 1.3.0` (the skill in Agentic-Control-Scheme; the release waits for the
-operator's word):
+`changelog.d/` with `release.toml` and thirty fragments since v1.2.0.
 
-- The pinned installer copy never generates `components/Pb_dft_phonons.dat`
-  (gitignored, 150 MB, `tools/make_pb_assets.py`), so a fresh 1.3 install lists the
-  lead phonon sample and fails to load it. The 1.3 installer needs a post-clone step
-  that runs the generator; "copy and stamp three lines" is not enough this time.
-- Two commits have no fragment and need the operator's word: "Cleaned up GUI update
-  boxes hints" (what changed for the user?) and the env-setup script repair
-  (developer tooling, probably none).
-- The operator reads `python <ACS>\bin\changelog.py preview --version 1.3.0 --root .`
-  and re-sorts or rewords; the fragments are edited to match.
-- Audit ledger entry 14 (the analytic engine ignores a hidden misalignment) is open;
-  the analytic-engine fragment says "approximate" until it closes.
+Ruling 2026-09-13 (Agentic-Control-Scheme `44b373a`): the release tool does not
+handle installers. A release is the version bump, the changelog, the PR, the tag
+and the GitHub release with its notes; an installer is a post-tag artifact,
+written after the tag exists and uploaded separately (recipe: installer design
+document §22 "Release recipe").
 
-Done when: v1.3.0 is published with its changelog, notes and installer, and this
-entry is deleted.
+Before `/release 1.3.0`:
+
+- The operator reads the preview
+  (`python <ACS>\bin\changelog.py preview --version 1.3.0 --root .`) and
+  reworded fragments are edited to match.
+- Audit ledger entry 14 (the analytic engine ignores a hidden misalignment) is
+  open; the analytic-engine fragment says "approximate" until it closes.
+- The operator's final audit.
+
+After the tag:
+
+- The Windows 1.3 installer, with the phonon-map step
+  (`components/Pb_dft_phonons.dat` via `tools/make_pb_assets.py`), cold-tested,
+  committed, and uploaded (recipe: installer design document §22 "Release
+  recipe").
+- A macOS installer, optional, same route.
+
+The two fragmentless commits are resolved: the GUI hints commit has a fragment
+(this commit); the env-setup repair is developer tooling, none.
+
+Done when: v1.3.0 is published with its changelog and notes, the Windows
+installer uploaded, and this entry is deleted.
