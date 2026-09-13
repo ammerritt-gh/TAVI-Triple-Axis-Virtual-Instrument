@@ -289,14 +289,15 @@ def test_background_q_magnitude_none_for_a_marked_angle_point():
     assert result is None
 
 
-def test_background_q_magnitude_none_for_sample_transmission_with_both_k():
-    """A sample-only transmission still has both Ki and Kf -- |Q| would
-    otherwise compute (critic finding) -- but the point is still marked."""
+def test_background_q_magnitude_keeps_sample_transmission_q_when_both_k_known():
+    """Ruling 7: forward scattering keeps its determined |Q| = |ki - kf|; only
+    a mono/ana transmission (an absent wavevector) withholds it."""
+    ki, kf = 2.8372, 2.6616
     result = cm._background_q_magnitude({
         'qx': None, 'qy': None, 'qz': None,
-        'Ki': 2.5, 'Kf': 2.3, 'stt': 0.0, 'transmission': ['sample'],
+        'Ki': ki, 'Kf': kf, 'stt': 0.0, 'transmission': ['sample'],
     })
-    assert result is None
+    assert result == pytest.approx(ki - kf, rel=1e-9)
 
 
 def test_background_q_magnitude_returns_a_number_for_an_ordinary_point():
