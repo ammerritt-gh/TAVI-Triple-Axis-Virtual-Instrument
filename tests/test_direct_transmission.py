@@ -190,6 +190,19 @@ def test_qspace_forward_scattering_marks_sample_transmission():
     assert snap.metadata["transmission"] == ["sample"]
 
 
+def test_qspace_forward_scattering_survives_float_noise():
+    """|Q| = |ki - kf| solves through acos(1 - epsilon): Ei 25 / Ef 14.68 meV
+    lands at -1.2e-6 deg, not -0.0, and an exact-zero test let it through."""
+    fixed_E = 14.68
+    Ei = 25.0
+    ki, kf = energy2k(Ei), energy2k(fixed_E)
+    snap = _momentum_snapshot("Kf Fixed", "Maxwellian", ki - kf, 0.0, 0.0,
+                              Ei - fixed_E, fixed_E=fixed_E)
+    assert not snap.error_flags
+    assert abs(snap.metadata["stt"]) < 1e-5
+    assert snap.metadata["transmission"] == ["sample"]
+
+
 def test_ordinary_point_transmission_is_empty():
     """Preservation check: an ordinary point is untouched by this change."""
     snap = _momentum_snapshot("Kf Fixed", "Maxwellian", 2.0, 0.0, 0.5, 2.0)
@@ -384,9 +397,12 @@ def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, 
     with _controller("in8") as ctrl:
         ctrl.output_directory = str(tmp_path)
 
+        jobs = []
+
         def _run_now(launch_state, source):
             job = ScanJob(job_id="t-vt-a4", source=source, launch_state=launch_state)
             ctrl.run_simulation(launch_state, job=job)
+            jobs.append(job)
             return job
 
         monkeypatch.setattr(ctrl, "submit_scan_job", _run_now)
@@ -400,6 +416,13 @@ def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, 
         result = backend.submit_scan({**body, "allow_partial": True})
         infeasible = result["validation"]["infeasible"]
         assert any(p["kind"] == "transmission" for p in infeasible), infeasible
+
+        # A preflight-skipped point never reaches the run loop, so the
+        # per-point trace must be seeded from the manifest, not lost.
+        ran = jobs[-1].result
+        assert ran.transmission_points == [{"index": 1, "axes": ["ana"]}]
+        assert [p["kind"] for p in ran.skipped_points] == ["transmission"]
+        assert ran.counts[1] is None
 
         clean = backend.submit_validate({"parameters": patch, "engine": "mcstas"})
         assert clean["would_queue"] is True

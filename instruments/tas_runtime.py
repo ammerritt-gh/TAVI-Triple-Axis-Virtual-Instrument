@@ -956,6 +956,20 @@ def describe_scan_error_flags(error_flags):
     return "; ".join(reasons)
 
 
+# A solved sample two-theta this close to zero IS forward scattering. The
+# Q-space solve reaches it through acos(cos_stt) with cos_stt at 1 - epsilon:
+# a request with |Q| = |ki - kf| lands at 1e-6 deg as often as at -0.0
+# (measured: Ei 25 / Ef 14.68 meV solves to -1.2e-6 deg), so an exact-zero
+# test lets the degenerate geometry through by rounding luck. 1e-5 deg is
+# ten times that noise and 0.04 arcsec of real motion -- nothing physical.
+FORWARD_SCATTERING_TOLERANCE_DEG = 1e-5
+
+
+def is_forward_scattering(stt_deg):
+    """True when a solved sample two-theta is zero to within float noise."""
+    return abs(float(stt_deg)) <= FORWARD_SCATTERING_TOLERANCE_DEG
+
+
 def _solve_point_geometry(point_state, scan_mode, scans, vals):
     """Solve Q and the TAS angles for one scan point (shared core).
 
@@ -1016,7 +1030,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     if not error_flags:
         if angle_energies is not None and angle_energies[0] is None:
             transmission.append("mono")
-        if stt == 0:
+        if is_forward_scattering(stt):
             transmission.append("sample")
         if angle_energies is not None and angle_energies[1] is None:
             transmission.append("ana")
