@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PySide6.QtCore import Qt, QByteArray, QTimer
 from PySide6.QtGui import QAction, QActionGroup
 
+import tavi
 from gui.docks.instrument_dock import InstrumentDock
 from gui.docks.unified_scattering_dock import UnifiedScatteringDock
 from gui.docks.unified_sample_dock import UnifiedSampleDock
@@ -559,7 +560,7 @@ class TAVIMainWindow(QMainWindow):
         """Show the About dialog."""
         QMessageBox.about(self, "About TAVI",
                          "TAVI - Triple-Axis Virtual Instrument\n"
-                         "Version v1.2.0\n\n"
+                         f"Version v{tavi.__version__}\n\n"
                          "A virtual instrument simulator for triple-axis neutron "
                          "spectrometry experiments.\n\n"
                          "Panels can be undocked, moved, and rearranged.\n"

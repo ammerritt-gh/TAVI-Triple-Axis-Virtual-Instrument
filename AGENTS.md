@@ -302,6 +302,8 @@ not-docs: instruments/panda/references/2013-01-01__panda-supermirror-guide__v01.
 not-docs: instruments/panda/references/2026-07-18__panda-research-dossier__v01.md  # research dossier, evidence, never edited
 not-docs: instruments/panda/references/2026-09-09__mlz-panda-page__v01.md  # dated web snapshot, evidence, never edited
 stale: "40-field"  # the API exposes 43 keys / 42 writable since the sample field landed; corrected 2026-09-12
+not-docs: changelog.d/   # release fragments, harvested and deleted
+not-docs: CHANGELOG.md   # generated release artifact
 ```
 
 ---
