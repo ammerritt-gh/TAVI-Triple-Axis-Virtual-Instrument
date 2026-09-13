@@ -106,3 +106,11 @@ The two fragmentless commits are resolved: the GUI hints commit has a fragment
 
 Done when: v1.3.0 is published with its changelog and notes, the Windows
 installer uploaded, and this entry is deleted.
+
+## Audit ledger: release 1.3
+
+**State:** pinned
+
+The [release 1.3 audit](docs/audits/release-1-3.md) records two independently confirmed blockers in GUI energy-derived branches and API angle defaults, with the existing optional and post-release work kept separate.
+
+Done when: the ledger is empty and deleted.
