@@ -46,6 +46,13 @@ instrument, and sample **background** are a separate additive mechanism
 configured per session or per scan — see *Background generation* below — not a
 sample scattering model.
 
+The engine also assumes every crystal reflects and that the sample scatters
+at a non-zero angle — Cooper-Nathans-style resolution has no meaning at
+forward scattering. A point marked `transmission` (a zero take-off on the
+monochromator, sample, or analyser; see `docs/API_USER_GUIDE.md` §5 *Direct
+transmission*) is skipped with NaN counts and a named message, and reported
+infeasible at validation time for analytic (`deterministic`) jobs.
+
 ## Architecture and ownership
 
 The implementation is divided into deep modules with small interfaces:
