@@ -139,7 +139,17 @@ HBAR = 1.05459e-34  # H-bar in J*s
 
 
 def _background_q_magnitude(metadata):
-    """Return |Q| for any executed scan mode from frozen point metadata."""
+    """Return |Q| for any executed scan mode from frozen point metadata.
+
+    ``None`` at a direct-transmission point (``metadata['transmission']``
+    non-empty): a sample-only transmission still has both Ki and Kf, so |Q|
+    would otherwise compute and background would plant there, but the point
+    is still marked -- no claim is made about it. Also ``None`` when a needed
+    Ki/Kf is absent (mono/ana transmission), which the angle-mode branch
+    would otherwise crash on (``float(None)``).
+    """
+    if metadata.get("transmission"):
+        return None
     q_components = (
         metadata.get("qx"),
         metadata.get("qy"),
@@ -147,6 +157,8 @@ def _background_q_magnitude(metadata):
     )
     if all(value is not None for value in q_components):
         return math.sqrt(sum(float(value) ** 2 for value in q_components))
+    if metadata.get("Ki") is None or metadata.get("Kf") is None:
+        return None
     q_lab = lab_q_from_stt(
         float(metadata["Ki"]),
         float(metadata["Kf"]),
@@ -870,9 +882,15 @@ class TaviApiBackend:
         if patch is not None and not isinstance(patch, dict):
             raise ApiError(400, "bad_request", "'parameters' must be a JSON object")
         force = bool(body.get("force", False))
+        # Engine selection (docs/CONTROL_FEATURES_DESIGN.md sec 6.4): a
+        # deterministic client must be able to dry-run the exact body it will
+        # submit -- POST /scan reads these keys, so /validate must too.
+        engine, seed, noiseless = parse_scan_engine(body)
         background = parse_scan_background(body)
         return self._bridge.call_on_gui(
-            lambda: self._validate_scan_on_gui(patch, force, background)
+            lambda: self._validate_scan_on_gui(
+                patch, force, background, engine=engine, seed=seed, noiseless=noiseless,
+            )
         )
 
     @staticmethod
@@ -901,16 +919,23 @@ class TaviApiBackend:
         )
         return hard if force else hard + soft
 
-    def _validate_scan_on_gui(self, patch, force, background=None):
+    def _validate_scan_on_gui(self, patch, force, background=None,
+                              engine="mcstas", seed=None, noiseless=False):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
 
         Builds the launch state from widget-free defaults + the request patch
         (:meth:`build_api_launch_state`), so validation is decoupled from live
-        GUI state and cannot mutate it.
+        GUI state and cannot mutate it. ``engine``/``seed``/``noiseless`` mirror
+        ``_submit_scan_on_gui`` so a dry run reflects exactly the job that
+        would run -- ``validate_scan_launch_state`` reads ``launch_state['engine']``
+        to decide whether a direct-transmission point is reported infeasible.
         """
         controller = self._controller
 
         launch_state = controller.build_api_launch_state(patch)
+        launch_state["engine"] = engine
+        launch_state["seed"] = seed
+        launch_state["noiseless"] = bool(noiseless)
         self._apply_background_to_launch_state(controller, launch_state, background)
         vals = launch_state["vals"]
         cmd1 = vals.get("scan_command1", "")
@@ -2495,6 +2520,14 @@ class TAVIController(QObject):
         # a HELD axis's operator value, and let set_crystal_bending itself
         # pin a fixed axis to its declared radius.
         mtt, stt, sth, saz, att = angles
+        if stt == 0:
+            # Forward scattering: Cooper-Nathans divides by sin(stt) and has
+            # no resolution function there (ruling 7) -- computed from this
+            # request's own solved angles, the same reason text
+            # ``validate_scan_launch_state`` reports for a scan point.
+            return {"ok": False, "reason": (
+                "direct transmission (sample): the analytic engine makes no claim"
+            )}
         check_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
         curvature_modes = vals.get('curvature_modes') or {}
         radii = {}
@@ -5294,13 +5327,22 @@ class TAVIController(QObject):
                 except (ValueError, TypeError):
                     pass
         
-        # Energy transfer
+        # Energy transfer -- undetermined at a direct-transmission point
+        # (``read_parameters_from_file`` maps the file's literal "None" to
+        # ``None``; a raw params dict may still carry the string).
         if 'deltaE' in params:
-            try:
-                metadata['deltaE'] = float(params['deltaE'])
-            except (ValueError, TypeError):
-                pass
-        
+            if params['deltaE'] is None or params['deltaE'] == 'None':
+                metadata['deltaE'] = None
+            else:
+                try:
+                    metadata['deltaE'] = float(params['deltaE'])
+                except (ValueError, TypeError):
+                    pass
+
+        # Direct-transmission marker, when the saved point recorded one.
+        if 'transmission' in params:
+            metadata['transmission'] = params['transmission']
+
         # NMO and velocity selector
         if 'NMO_installed' in params:
             metadata['NMO_installed'] = params['NMO_installed']
@@ -7347,6 +7389,9 @@ class TAVIController(QObject):
         # calls on the whole command text -- one shared primitive for both,
         # rather than a second copy of the travel comparison here.
         from instruments.tas_runtime import curvature_scan_error
+        from instruments import tas_runtime as _tas_runtime
+
+        is_deterministic = launch_state.get('engine') == 'deterministic'
 
         curvature_axes = self._curvature_axis_specs(
             vals.get('monocris'), vals.get('anacris'), modules=vals.get('modules')
@@ -7397,6 +7442,26 @@ class TAVIController(QObject):
                 feasible, reason, kind = False, curvature_error, "curvature_out_of_travel"
             else:
                 feasible, reason, kind = _feasible(scan_point)
+            # The analytic engine assumes every crystal reflects and enforces
+            # it (ruling 3): re-solve a point that PASSED feasibility and, if
+            # it is a direct-transmission geometry, report it infeasible for
+            # this (deterministic-only) job -- never relabel a point already
+            # infeasible for its own reason. Only reached with a real
+            # scan_config/engine, both of which only a deterministic launch
+            # state guarantees (several existing callers pass engine-less
+            # states and an object() stand-in for scan_config).
+            if feasible and is_deterministic:
+                point_state = copy.deepcopy(scan_config)
+                geom = _tas_runtime._solve_point_geometry(
+                    point_state, scan_mode, scan_point, vals
+                )
+                if geom["transmission"]:
+                    feasible = False
+                    kind = "transmission"
+                    reason = (
+                        "direct transmission (%s): the analytic engine makes "
+                        "no claim" % ", ".join(geom["transmission"])
+                    )
             entry = {"index": index, "values": values, "feasible": feasible,
                      "kind": kind, "reason": reason}
             result["point_manifest"].append(entry)
@@ -7791,6 +7856,37 @@ class TAVIController(QObject):
         if 0 <= original_index < len(result.executed_feasible_mask):
             result.executed_feasible_mask[original_index] = True
 
+    @staticmethod
+    def _scan_point_linear_index(*, is_2d_scan, is_single_point_scan,
+                                 idx_1d, idx_x, idx_y, values_1_len):
+        """Same flattening ``_mark_executed_result_point`` and
+        ``applied_curvature`` use: row-major for a 2D scan, 0 for a single
+        point, the raw request-order index otherwise."""
+        if is_2d_scan:
+            return idx_y * values_1_len + idx_x
+        if is_single_point_scan:
+            return 0
+        return idx_1d
+
+    @staticmethod
+    def _scan_point_values(*, is_2d_scan, is_single_point_scan, idx_1d, idx_x, idx_y,
+                           variable_name1, variable_name2, array_values1, array_values2):
+        """``{variable: value}`` naming one scan point, matching the shape
+        ``validate_scan_launch_state``'s ``_record`` builds for the same
+        request-order point."""
+        if is_2d_scan:
+            values = {}
+            if 0 <= idx_x < len(array_values1):
+                values[variable_name1] = float(array_values1[idx_x])
+            if 0 <= idx_y < len(array_values2):
+                values[variable_name2] = float(array_values2[idx_y])
+            return values
+        if is_single_point_scan:
+            return {}
+        if 0 <= idx_1d < len(array_values1):
+            return {variable_name1: float(array_values1[idx_1d])}
+        return {}
+
     def _run_scan_deterministic(self, launch_state, job, scan_parameter_input,
                                 scan_mode, scan_config, is_2d_scan,
                                 is_single_point_scan, variable_name1,
@@ -8008,6 +8104,76 @@ class TAVIController(QObject):
                             and 0 <= idx_1d < len(array_values1):
                         scan_x_values.append(array_values1[idx_1d])
                         scan_counts.append(np.nan)
+                    if job is not None and job.result is not None:
+                        from instruments.tas_runtime import describe_scan_error_flags
+                        point_values = self._scan_point_values(
+                            is_2d_scan=is_2d_scan, is_single_point_scan=is_single_point_scan,
+                            idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            variable_name1=variable_name1, variable_name2=variable_name2,
+                            array_values1=array_values1, array_values2=array_values2,
+                        )
+                        point_index = self._scan_point_linear_index(
+                            is_2d_scan=is_2d_scan, is_single_point_scan=is_single_point_scan,
+                            idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            values_1_len=len(array_values1),
+                        )
+                        with job.lock:
+                            job.result.skipped_points.append({
+                                "index": point_index, "values": point_values,
+                                "kind": "infeasible",
+                                "reason": describe_scan_error_flags(error_flags),
+                            })
+                elif md.get('transmission'):
+                    # Same shape as the error-flag skip above -- the analytic
+                    # engine assumes every crystal reflects and enforces it
+                    # (ruling 3): no |Q|, resolution, background or
+                    # ground-truth evaluation for a marked point.
+                    reason = (
+                        "direct transmission (%s); the analytic engine makes "
+                        "no claim" % ", ".join(md['transmission'])
+                    )
+                    self.message_printed.emit("Point %d: %s" % (i, reason))
+                    if is_2d_scan:
+                        self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
+                                'value_1': float(array_values1[idx_x]),
+                                'value_2': float(array_values2[idx_y]),
+                            })
+                    elif not is_single_point_scan and idx_1d >= 0:
+                        self.scan_point_invalid_1d.emit(idx_1d)
+                        if job is not None:
+                            self._publish_api_event('point_invalid', {
+                                'job_id': job.job_id, 'index': idx_1d,
+                                'value': (float(array_values1[idx_1d])
+                                          if idx_1d < len(array_values1) else None),
+                            })
+                    if not is_2d_scan and not is_single_point_scan \
+                            and 0 <= idx_1d < len(array_values1):
+                        scan_x_values.append(array_values1[idx_1d])
+                        scan_counts.append(np.nan)
+                    if job is not None and job.result is not None:
+                        point_values = self._scan_point_values(
+                            is_2d_scan=is_2d_scan, is_single_point_scan=is_single_point_scan,
+                            idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            variable_name1=variable_name1, variable_name2=variable_name2,
+                            array_values1=array_values1, array_values2=array_values2,
+                        )
+                        point_index = self._scan_point_linear_index(
+                            is_2d_scan=is_2d_scan, is_single_point_scan=is_single_point_scan,
+                            idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                            values_1_len=len(array_values1),
+                        )
+                        with job.lock:
+                            job.result.skipped_points.append({
+                                "index": point_index, "values": point_values,
+                                "kind": "transmission", "reason": reason,
+                            })
+                            job.result.transmission_points.append({
+                                "index": point_index,
+                                "axes": list(md['transmission']),
+                            })
                 else:
                     # (H,K,L) for the ground-truth model: rlu mode carries it
                     # directly; momentum/orientation give Q -> derive hkl via the
@@ -8962,17 +9128,27 @@ class TAVIController(QObject):
                         scan_x_values.append(array_values1[idx_1d])
                         scan_counts.append(np.nan)
                 else:
-                    # Build scan-specific parameters for this point
+                    # Build scan-specific parameters for this point. The
+                    # per-point file takes metadata's own deltaE (None at a
+                    # marked point) -- not the numeric McStas input -- so the
+                    # saved record and the API result cannot disagree with
+                    # each other about what was determined.
                     scan_point_params = {
                         **metadata,
                         'scan_index': i,
-                        'deltaE': deltaE,
                         'number_neutrons': number_neutrons,
                     }
                     # Merge with full GUI vals for completeness; scan_point_params overrides stale vals
                     full_params = {**vals, **scan_point_params}
                     write_parameters_to_file(scan_folder, full_params)
-                    
+
+                    if metadata.get('transmission'):
+                        self.message_printed.emit(
+                            "Point %d: direct transmission (%s); Ei/Ef/deltaE "
+                            "not recorded, McStas counts as simulated"
+                            % (i, ", ".join(metadata['transmission']))
+                        )
+
                     # Read detector file to get counts. `intensity` (McStas I) is
                     # an independent weighted reading, not derived from `counts`
                     # (N), so the background overlay below leaves it untouched.
@@ -8984,65 +9160,72 @@ class TAVIController(QObject):
                     # the unmodified McStas reading.
                     if background.enabled and counts is not None:
                         q0 = _background_q_magnitude(metadata)
-                        sigma_q = None
-                        sigma_e = None
-                        if background_needs_sigma_q or background_needs_sigma_e:
-                            try:
-                                from tavi.deterministic_engine import marginal_sigma as _marginal_sigma
-                                from tavi.resolution import resolution as _resolution
-                                # THIS point's own applied radii AND kinematics
-                                # (metadata), not the frozen launch vals -- see
-                                # the deterministic engine's identical fix above.
-                                background_resolution = _resolution(
-                                    self.instrument.resolution_config(
-                                        _vals_with_point_state(vals, metadata),
-                                        q0, float(deltaE),
-                                        point_angles=_point_angles(
-                                            metadata['mtt'], metadata['stt'], metadata['att']
-                                        ),
-                                    )
-                                )
-                                if background_needs_sigma_q:
-                                    sigma_q = _marginal_sigma(
-                                        background_resolution, 'dq_par'
-                                    )
-                                if background_needs_sigma_e:
-                                    sigma_e = _marginal_sigma(
-                                        background_resolution, 'dE'
-                                    )
-                            except Exception as exc:
-                                self.message_printed.emit(
-                                    f"Point {i}: background resolution widths "
-                                    f"unavailable ({exc}); using catalog "
-                                    f"fallback widths"
-                                )
-                        background_context = _background.BackgroundPointContext(
-                            q_inv_ang=q0,
-                            w_meV=float(deltaE),
-                            sigma_q_inv_ang=sigma_q,
-                            sigma_e_meV=sigma_e,
-                            number_neutrons=number_neutrons,
-                        )
-                        bg_counts = _background.poisson_overlay(
-                            background,
-                            background_context,
-                            background_seed,
-                            i,
-                        )
-                        if bg_counts:
-                            counts = counts + bg_counts
-                        if background_has_events:
-                            event_counts, point_events = (
-                                _background.draw_event_overlay(
-                                    background,
-                                    background_context,
-                                    background_seed,
-                                    i,
-                                )
+                        if q0 is None:
+                            self.message_printed.emit(
+                                "Point %d: background not planted: |Q| "
+                                "undetermined at a direct-transmission point"
+                                % i
                             )
-                            if event_counts:
-                                counts = counts + event_counts
-                            realized_background_events.extend(point_events)
+                        else:
+                            sigma_q = None
+                            sigma_e = None
+                            if background_needs_sigma_q or background_needs_sigma_e:
+                                try:
+                                    from tavi.deterministic_engine import marginal_sigma as _marginal_sigma
+                                    from tavi.resolution import resolution as _resolution
+                                    # THIS point's own applied radii AND kinematics
+                                    # (metadata), not the frozen launch vals -- see
+                                    # the deterministic engine's identical fix above.
+                                    background_resolution = _resolution(
+                                        self.instrument.resolution_config(
+                                            _vals_with_point_state(vals, metadata),
+                                            q0, float(deltaE),
+                                            point_angles=_point_angles(
+                                                metadata['mtt'], metadata['stt'], metadata['att']
+                                            ),
+                                        )
+                                    )
+                                    if background_needs_sigma_q:
+                                        sigma_q = _marginal_sigma(
+                                            background_resolution, 'dq_par'
+                                        )
+                                    if background_needs_sigma_e:
+                                        sigma_e = _marginal_sigma(
+                                            background_resolution, 'dE'
+                                        )
+                                except Exception as exc:
+                                    self.message_printed.emit(
+                                        f"Point {i}: background resolution widths "
+                                        f"unavailable ({exc}); using catalog "
+                                        f"fallback widths"
+                                    )
+                            background_context = _background.BackgroundPointContext(
+                                q_inv_ang=q0,
+                                w_meV=float(deltaE),
+                                sigma_q_inv_ang=sigma_q,
+                                sigma_e_meV=sigma_e,
+                                number_neutrons=number_neutrons,
+                            )
+                            bg_counts = _background.poisson_overlay(
+                                background,
+                                background_context,
+                                background_seed,
+                                i,
+                            )
+                            if bg_counts:
+                                counts = counts + bg_counts
+                            if background_has_events:
+                                event_counts, point_events = (
+                                    _background.draw_event_overlay(
+                                        background,
+                                        background_context,
+                                        background_seed,
+                                        i,
+                                    )
+                                )
+                                if event_counts:
+                                    counts = counts + event_counts
+                                realized_background_events.extend(point_events)
 
                     message = f"Final counts at detector: {int(counts)}"
                     self.message_printed.emit(message)
@@ -9101,6 +9284,17 @@ class TAVIController(QObject):
                                 is_single_point_scan=is_single_point_scan,
                                 idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
                             )
+                            if metadata.get('transmission'):
+                                point_index = self._scan_point_linear_index(
+                                    is_2d_scan=is_2d_scan,
+                                    is_single_point_scan=is_single_point_scan,
+                                    idx_1d=idx_1d, idx_x=idx_x, idx_y=idx_y,
+                                    values_1_len=len(res.scan_values_1),
+                                )
+                                res.transmission_points.append({
+                                    "index": point_index,
+                                    "axes": list(metadata['transmission']),
+                                })
 
                         # Publish the per-point SSE event (outside the lock).
                         if is_2d_scan:

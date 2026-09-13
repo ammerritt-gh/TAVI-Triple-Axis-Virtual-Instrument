@@ -3,6 +3,7 @@
 This module contains functions for reading detector files, managing scan parameters,
 and writing scan data to files.
 """
+import ast
 import os
 import re
 import json
@@ -103,9 +104,9 @@ def read_parameters_from_file(target_folder):
     """
     file_path = os.path.join(target_folder, "scan_parameters.txt")
     parameters = {}
-    
+
     try:
-        with open(file_path, 'r') as file:
+        with open(file_path, 'r', encoding="utf-8") as file:
             for line in file:
                 key_value = line.strip().split(': ')
                 if len(key_value) == 2:
@@ -115,14 +116,27 @@ def read_parameters_from_file(target_folder):
                     value = None
 
                 if value is not None:
-                    try:
-                        value = float(value)
-                    except ValueError:
-                        pass
+                    if value == 'None':
+                        # A direct-transmission point recorded an undetermined
+                        # energy as the literal "None" -- float("None") would
+                        # raise, and the pre-fix behaviour of keeping the
+                        # string silently poisoned any numeric consumer.
+                        value = None
+                    else:
+                        try:
+                            value = float(value)
+                        except ValueError:
+                            if value.startswith('[') and value.endswith(']'):
+                                # e.g. the 'transmission' marker, written as
+                                # str(["ana"]).
+                                try:
+                                    value = ast.literal_eval(value)
+                                except (ValueError, SyntaxError):
+                                    pass
                 parameters[key] = value
     except FileNotFoundError:
         print(f"Warning: Parameter file not found at {file_path}")
-        
+
     return parameters
 
 

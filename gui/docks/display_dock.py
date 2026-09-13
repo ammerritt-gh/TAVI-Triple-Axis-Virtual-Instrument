@@ -19,6 +19,24 @@ from matplotlib.lines import Line2D
 
 from gui.docks.base_dock import BaseDockWidget
 
+
+def _delta_e_info_line(meta):
+    """Return the info-panel ``ΔE`` line for one metadata dict, or ``None``.
+
+    ``None`` at a direct-transmission point (a marked energy is not a
+    number to format) reads as "undetermined", naming the axis (mono/sample/
+    ana) that transmitted rather than silently omitting the line.
+    """
+    if 'deltaE' not in meta:
+        return None
+    if meta['deltaE'] is not None:
+        return f"ΔE = {meta['deltaE']:.3f} meV"
+    axes = meta.get('transmission')
+    return "ΔE = undetermined (direct transmission: %s)" % (
+        ", ".join(axes) if axes else "?"
+    )
+
+
 class SavePlotDialog(QDialog):
     """Dialog for saving plots with preview and customizable information panel."""
     
@@ -392,8 +410,9 @@ class SavePlotDialog(QDialog):
                 info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
             if all(k in meta for k in ['qx', 'qy', 'qz']):
                 info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
-            if 'deltaE' in meta:
-                info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
+            line = _delta_e_info_line(meta)
+            if line is not None:
+                info_lines.append(line)
         
         if self.info_nmo_vs_check.isChecked():
             nmo_vs_parts = []
@@ -568,8 +587,9 @@ class SavePlotDialog(QDialog):
                 info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
             if all(k in meta for k in ['qx', 'qy', 'qz']):
                 info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
-            if 'deltaE' in meta:
-                info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
+            line = _delta_e_info_line(meta)
+            if line is not None:
+                info_lines.append(line)
         
         if self.info_nmo_vs_check.isChecked():
             nmo_vs_parts = []
@@ -1282,8 +1302,9 @@ class DisplayDock(BaseDockWidget):
             info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
         if all(k in meta for k in ['qx', 'qy', 'qz']):
             info_lines.append(f"Q = ({meta['qx']:.4f}, {meta['qy']:.4f}, {meta['qz']:.4f}) Å⁻¹")
-        if 'deltaE' in meta:
-            info_lines.append(f"ΔE = {meta['deltaE']:.3f} meV")
+        line = _delta_e_info_line(meta)
+        if line is not None:
+            info_lines.append(line)
         
         # NMO / Velocity selector
         nmo_vs_parts = []
