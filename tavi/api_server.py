@@ -201,8 +201,12 @@ SCAN_BODY_KEYS = frozenset({
 })
 # "background" is accepted here as well as in SCAN_BODY_KEYS: /validate must run
 # the same checks as the submission it dry-runs, or a caller validates a body
-# that POST /scan would reject.
-VALIDATE_BODY_KEYS = frozenset({"parameters", "force", "background"})
+# that POST /scan would reject. "engine"/"seed"/"noiseless" for the same
+# reason -- a deterministic client must be able to dry-run the exact body it
+# will submit to POST /scan (docs/CONTROL_FEATURES_DESIGN.md sec 6.4).
+VALIDATE_BODY_KEYS = frozenset({
+    "parameters", "force", "background", "engine", "seed", "noiseless",
+})
 STOP_BODY_KEYS = frozenset({"clear_queue"})
 
 
