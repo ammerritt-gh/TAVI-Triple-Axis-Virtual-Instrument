@@ -2520,7 +2520,8 @@ class TAVIController(QObject):
         # a HELD axis's operator value, and let set_crystal_bending itself
         # pin a fixed axis to its declared radius.
         mtt, stt, sth, saz, att = angles
-        if stt == 0:
+        from instruments.tas_runtime import is_forward_scattering
+        if is_forward_scattering(stt):
             # Forward scattering: Cooper-Nathans divides by sin(stt) and has
             # no resolution function there (ruling 7) -- computed from this
             # request's own solved angles, the same reason text
@@ -7458,18 +7459,27 @@ class TAVIController(QObject):
                 if geom["transmission"]:
                     feasible = False
                     kind = "transmission"
+                    axes = list(geom["transmission"])
                     reason = (
                         "direct transmission (%s): the analytic engine makes "
-                        "no claim" % ", ".join(geom["transmission"])
+                        "no claim" % ", ".join(axes)
                     )
             entry = {"index": index, "values": values, "feasible": feasible,
                      "kind": kind, "reason": reason}
+            if kind == "transmission":
+                # The axes travel with the entry: a preflight-skipped point
+                # never reaches the run loop, so this is where
+                # ScanResult.transmission_points learns about it.
+                entry["axes"] = axes
             result["point_manifest"].append(entry)
             if not feasible:
-                result["infeasible"].append({
+                skipped = {
                     "index": index, "values": values, "kind": kind,
                     "reason": reason,
-                })
+                }
+                if kind == "transmission":
+                    skipped["axes"] = axes
+                result["infeasible"].append(skipped)
 
         def _expand(cmd, relative):
             var, values = parse_scan_steps(cmd)
@@ -8764,6 +8774,14 @@ class TAVIController(QObject):
             with job.lock:
                 if job.result is not None:
                     job.result.skipped_points = list(skipped_points)
+                    # A transmission point the preflight skipped is filtered
+                    # out of scan_parameter_input above and never reaches the
+                    # run loop's writer, so seed the per-point trace from the
+                    # manifest here; executed points append later.
+                    job.result.transmission_points = [
+                        {"index": p["index"], "axes": list(p.get("axes") or [])}
+                        for p in skipped_points if p.get("kind") == "transmission"
+                    ]
                     planned = list(launch_state.get('planned_feasible_mask') or [])
                     job.result.planned_feasible_mask = planned
                     job.result.executed_feasible_mask = [False] * len(planned)
