@@ -127,6 +127,13 @@ class ScanResult:
     # recovered from a magnitude. This is the only record of applied
     # curvature for the deterministic engine, which writes no per-point files.
     applied_curvature: List[Optional[Dict[str, float]]] = field(default_factory=list)
+    # A direct-transmission point (a zero two-theta on any crystal, or the
+    # solved sample take-off -- see instruments/tas_runtime.py) carries no
+    # per-point energy in ``metadata`` (that dict is the LAUNCH state). This
+    # is the only per-point trace of a marked point for either engine: one
+    # entry ``{"index", "axes"}`` per marked point, in the same flat index as
+    # ``applied_curvature``. Not pre-sized -- most scans have none.
+    transmission_points: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
         """Return a JSON-safe dict view of this result.
@@ -143,6 +150,7 @@ class ScanResult:
             'max_counts': _json_safe(self.max_counts),
             'output_folder': self.output_folder,
             'skipped_points': _json_safe(self.skipped_points),
+            'transmission_points': _json_safe(self.transmission_points),
             'planned_feasible_mask': _json_safe(self.planned_feasible_mask),
             'executed_feasible_mask': _json_safe(self.executed_feasible_mask),
             'feasible_segments': _json_safe(self.feasible_segments),
