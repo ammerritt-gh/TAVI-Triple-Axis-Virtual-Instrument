@@ -695,7 +695,7 @@ class TAS_Instrument:
         # neither is held, so that arithmetic drifts -- an A4 scan would move
         # E0 while A1, and therefore the real Ei, stood still, starving the
         # beam. Take Ei from the crystals when they are the authority.
-        if self._angle_energies is not None:
+        if self._angle_energies is not None and self._angle_energies[0] is not None:
             return self._angle_energies[0]
         if self.K_fixed == "Kf Fixed":
             return self.fixed_E + deltaE
@@ -724,6 +724,12 @@ class TAS_Instrument:
 
         ``E0_param`` is a *source-distribution* parameter, not a nominal
         energy, and is resolved separately by :meth:`e0_param_value`.
+
+        A crystal that selects nothing (``energies`` carries a ``None``)
+        records that side's ``Ei``/``Ki`` or ``Ef``/``Kf`` as ``None`` too --
+        the ``max(E, 1e-9)`` floor below exists only to keep ``energy2k``
+        finite for a real, if small, energy and must not manufacture a K for
+        an absent one.
         """
         energies = energies if energies is not None else self._angle_energies
         if energies is not None:
@@ -738,13 +744,13 @@ class TAS_Instrument:
         return {
             "E0_param": self.e0_param_value(deltaE),
             "Ei": Ei,
-            "Ki": energy2k(max(Ei, 1e-9)),
+            "Ki": energy2k(max(Ei, 1e-9)) if Ei is not None else None,
             "Ef": Ef,
-            "Kf": energy2k(max(Ef, 1e-9)),
+            "Kf": energy2k(max(Ef, 1e-9)) if Ef is not None else None,
         }
 
     def nominal_energies_from_angles(self, mtt, att):
-        """(Ei, Ef) as the two crystals actually select them, or None.
+        """(Ei, Ef) as the two crystals actually select them, per crystal.
 
         In ``angle`` scan mode the user drives A1 and A4 directly, so BOTH
         energies are whatever the monochromator and analyser select -- neither
@@ -754,9 +760,13 @@ class TAS_Instrument:
         Ei. The launch state's frozen ``deltaE`` does not move either.
 
         This is the inverse of ``calculate_angles`` and agrees with
-        ``calculate_q_and_deltaE``. Returns None when the crystals cannot be
-        resolved or either angle is degenerate, so a point that would error out
-        is left exactly as it was.
+        ``calculate_q_and_deltaE``. A degenerate angle (``angle2k`` returns
+        exactly 0, i.e. ``d*sin(theta) == 0``) means that crystal is
+        transmitting -- it selects nothing, so its slot in the returned pair
+        is ``None`` rather than an invented energy; energy never flows
+        upstream from one crystal to the other. Returns ``None`` as a whole
+        only when the crystal selection itself is unknown, so a point that
+        would error out for that reason is left exactly as it was.
         """
         mono_info, ana_info = self.crystal_info(self.monocris, self.anacris)
         if 'dm' not in mono_info or 'da' not in ana_info:
@@ -766,9 +776,9 @@ class TAS_Instrument:
         # calculate_q_and_deltaE does.
         ki = angle2k(mtt / (2 * self.sense_mono), mono_info['dm'])
         kf = angle2k(att / (2 * self.sense_ana), ana_info['da'])
-        if ki <= 0 or kf <= 0:
-            return None
-        return k2energy(ki), k2energy(kf)
+        Ei = k2energy(ki) if ki > 0 else None
+        Ef = k2energy(kf) if kf > 0 else None
+        return Ei, Ef
 
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
         """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
@@ -946,6 +956,20 @@ def describe_scan_error_flags(error_flags):
     return "; ".join(reasons)
 
 
+# A solved sample two-theta this close to zero IS forward scattering. The
+# Q-space solve reaches it through acos(cos_stt) with cos_stt at 1 - epsilon:
+# a request with |Q| = |ki - kf| lands at 1e-6 deg as often as at -0.0
+# (measured: Ei 25 / Ef 14.68 meV solves to -1.2e-6 deg), so an exact-zero
+# test lets the degenerate geometry through by rounding luck. 1e-5 deg is
+# ten times that noise and 0.04 arcsec of real motion -- nothing physical.
+FORWARD_SCATTERING_TOLERANCE_DEG = 1e-5
+
+
+def is_forward_scattering(stt_deg):
+    """True when a solved sample two-theta is zero to within float noise."""
+    return abs(float(stt_deg)) <= FORWARD_SCATTERING_TOLERANCE_DEG
+
+
 def _solve_point_geometry(point_state, scan_mode, scans, vals):
     """Solve Q and the TAS angles for one scan point (shared core).
 
@@ -990,9 +1014,30 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         # The scanned angles are the authority here, not the frozen field.
         angle_energies = point_state.nominal_energies_from_angles(mtt, att)
         point_state._angle_energies = angle_energies
-        deltaE = (angle_energies[0] - angle_energies[1]
-                  if angle_energies else vals['deltaE'])
+        if angle_energies and angle_energies[0] is not None and angle_energies[1] is not None:
+            deltaE = angle_energies[0] - angle_energies[1]
+        else:
+            deltaE = vals['deltaE']
         saz = vals.get('chi', 0.0)
+
+    # A transmitting crystal (mono or ana selects nothing) or forward
+    # scattering (the solved sample two-theta is exactly 0, in any mode) is
+    # recorded, never invented or refused. Left empty -- rather than
+    # evaluated against the initialised-to-0.0 mtt/stt/att above -- for any
+    # point that did not cleanly solve, since those zeroes are leftovers, not
+    # a solve (see the autofocus guard's identical hazard below).
+    transmission = []
+    if not error_flags:
+        if angle_energies is not None and angle_energies[0] is None:
+            transmission.append("mono")
+        # Angle mode copies the operator's A2 straight into stt: the number is
+        # theirs, so only an exact zero is transmission and 0.000005 deg is an
+        # ordinary (if odd) point. A Q-space solve arrives through
+        # acos(1 - eps) and needs the float-noise tolerance.
+        if (stt == 0) if scan_mode == "angle" else is_forward_scattering(stt):
+            transmission.append("sample")
+        if angle_energies is not None and angle_energies[1] is None:
+            transmission.append("ana")
 
     return {
         "qx": qx, "qy": qy, "qz": qz,
@@ -1000,6 +1045,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         "deltaE": deltaE,
         "mtt": mtt, "stt": stt, "sth": sth, "saz": saz, "att": att,
         "nominal_energies": angle_energies,
+        "transmission": transmission,
         "error_flags": error_flags,
     }
 
@@ -1196,8 +1242,16 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         'psi': psi_scan,
         'kappa': kappa_scan,
     }
+    metadata['transmission'] = geom["transmission"]
     metadata.update(point_state.point_energy_metadata(
         deltaE, energies=geom.get("nominal_energies")))
+    if metadata['transmission'] and (metadata['Ei'] is None or metadata['Ef'] is None):
+        # deltaE stays the numeric McStas INPUT (PointSnapshot.deltaE /
+        # build_point_params keep it); only the recorded claim about the
+        # transfer is withdrawn when the transfer itself is not fully
+        # determined by both crystals. A sample-only transmission (ruling 7)
+        # leaves both energies known, so deltaE stays recorded.
+        metadata['deltaE'] = None
 
     return PointSnapshot(
         params=None if error_flags else point_state.build_point_params(deltaE),

@@ -1835,6 +1835,24 @@ geometry stayed correct — so nothing visible broke and no test caught it.
 - `curvature_modes` is **read-only** on the API. Modes derive from the Ideal locks
   and from which axes a scan command names; a second way to set them would be
   another twin.
+- **Direct transmission (2026-09-13, operator ruling).** Energy is
+  downstream-only: a crystal at zero take-off passes on whatever reaches it
+  and selects nothing, so a transmitting crystal's energy is recorded absent
+  (`null`), never invented (the earlier candidates — `Ef = Ei`, `Ei = Ef`, any
+  fixed-mode fallback presented as a measurement — were rejected as
+  shoehorning a white-beam situation into the Bragg paradigm). The sample
+  axis is different: at a solved zero sample two-theta both crystals still
+  reflect, so `Ei`/`Ef`/`deltaE`/`|Q|` are determined and ARE recorded; the
+  point is marked `["sample"]` and refused only by the analytic engine, since
+  Cooper-Nathans has no resolution function at forward scattering. Exact zero
+  only; the neighbourhood is untouched and no descriptor declares an energy
+  or k range to threshold against (accepted ceiling; upgrade path is a
+  declared per-crystal energy range). `Q = 0` in the Q-space modes stays
+  refused as `zero_q`, unrelated to this convention. Takin and vTAS model no
+  such state either: Takin divides by `sin(theta)` unguarded and fails later
+  as "matrix cannot be inverted"; vTAS returns `+infinity` for k within 1e-6
+  of zero, prints "parameter out of range", and keeps users away with
+  per-axis angle limits.
 
 ### 22.5 Review history, and what each round found
 
