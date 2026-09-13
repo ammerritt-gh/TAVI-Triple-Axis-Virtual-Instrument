@@ -402,6 +402,7 @@ figures/
 .venv/
 
 # agent files
-CLAUDE.md   # the tracked root pointer stays tracked; this keeps any nested copy private
+# the tracked root CLAUDE.md stays tracked; this keeps any nested copy private
+CLAUDE.md
 .github/
 CODEX.md
