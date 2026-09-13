@@ -48,7 +48,7 @@ KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
   GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...43 keys returned, 42 writable...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
-  POST /validate  body {"parameters":{...},"force":bool,"background":{...}} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates)
+  POST /validate  body {"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
   POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
               engine "deterministic" = fast analytic S(Q,w) x resolution + seeded Poisson (validator); check result.metadata.cn_valid
               "background" = complete tavi.background/2 source config; REPLACES the session config for this job (never merges)
@@ -70,7 +70,7 @@ GOLDEN WORKFLOW:
   1. GET /schema  (learn fields, allowed values, and limits for THIS instrument — do this first)
   2. GET /state   (confirm mode=="allow" and busy==false; read current parameters)
   3. PATCH /parameters to set energies/Q/lattice/scan_command1[/2] and number_neutrons
-  4. POST /validate with the same parameters/background you will POST /scan -> only submit if would_queue==true;
+  4. POST /validate with the same parameters/background/engine you will POST /scan -> only submit if would_queue==true;
      if blockers list infeasible points, either fix them or POST /scan with "allow_partial":true
   5. POST /scan  -> capture job_id (the launch state is built from defaults + your "parameters"
      patch only, so a scan never reads or disturbs the GUI; "isolated" is an accepted no-op)
@@ -1450,6 +1450,11 @@ Additional notes:
   transmission*); its neighbours keep their honest Bragg inversion, which
   diverges near zero take-off — PG(002) at 1° two-theta records an `Ef` of
   roughly 24 eV. No threshold or ceiling is applied to that neighbourhood.
+  The instrument's declared axis limits still apply and are a different
+  refusal: IN8's A1 runs 11°–90°, so an A1 = 0 point there is
+  `physical_infeasible` (out of range) for every engine, exactly as on the
+  real instrument -- direct transmission is only reachable where a limit
+  allows it (A4 on IN8, for example).
 
 ---
 

@@ -141,14 +141,18 @@ HBAR = 1.05459e-34  # H-bar in J*s
 def _background_q_magnitude(metadata):
     """Return |Q| for any executed scan mode from frozen point metadata.
 
-    ``None`` at a direct-transmission point (``metadata['transmission']``
-    non-empty): a sample-only transmission still has both Ki and Kf, so |Q|
-    would otherwise compute and background would plant there, but the point
-    is still marked -- no claim is made about it. Also ``None`` when a needed
-    Ki/Kf is absent (mono/ana transmission), which the angle-mode branch
-    would otherwise crash on (``float(None)``).
+    ``None`` when the monochromator or analyser transmitted (no incident or
+    final wavevector was selected, so |Q| is not a claim TAVI can make; the
+    angle-mode branch would otherwise crash on ``float(None)``). A
+    sample-only transmission -- forward scattering with both crystals
+    reflecting -- keeps both wavevectors and its determined |Q| (ruling 7);
+    it is the analytic engine, not |Q|, that has nothing to say there.
     """
-    if metadata.get("transmission"):
+    transmission = metadata.get("transmission") or []
+    if "mono" in transmission or "ana" in transmission:
+        # No incident or final wavevector was selected: |Q| is not a claim
+        # TAVI can make. A sample-only transmission (forward scattering)
+        # keeps both wavevectors and its determined |Q| (ruling 7).
         return None
     q_components = (
         metadata.get("qx"),
@@ -9162,9 +9166,13 @@ class TAVIController(QObject):
 
                     if metadata.get('transmission'):
                         self.message_printed.emit(
-                            "Point %d: direct transmission (%s); Ei/Ef/deltaE "
-                            "not recorded, McStas counts as simulated"
-                            % (i, ", ".join(metadata['transmission']))
+                            "Point %d: direct transmission (%s); %s, McStas "
+                            "counts as simulated"
+                            % (i, ", ".join(metadata['transmission']),
+                               "Ei/Ef/deltaE not recorded"
+                               if metadata.get('deltaE') is None
+                               else "forward scattering, energies recorded, "
+                                    "no analytic resolution here")
                         )
 
                     # Read detector file to get counts. `intensity` (McStas I) is
