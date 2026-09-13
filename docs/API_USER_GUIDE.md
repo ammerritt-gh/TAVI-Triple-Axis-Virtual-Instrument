@@ -326,7 +326,10 @@ to submit.
 some infeasible points is still queued: only the feasible points run, and
 `result.skipped_points` lists each omitted point as `{"index", "values",
 "reason"}`. When `false` (the default), a single infeasible point rejects the
-whole submission with `400 infeasible_points`.
+whole submission with `400 infeasible_points`. `allow_partial` skips
+geometrically infeasible points and, for analytic-engine (`deterministic`)
+jobs, direct-transmission points, listed in `skipped_points` with kind
+`transmission`.
 
 **`isolated`** (optional boolean, default `false`). Accepted and echoed in the
 202 payload and the job snapshot for backward compatibility, but now a **no-op**:
@@ -466,8 +469,10 @@ dispersion-file contract are documented in
 Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
 feasibility, budget, background resolution, and ETA — **without queueing
 anything and without mutating any parameter**. Its accepted body fields are
-optional `parameters`, `force`, and `background`; engine/noise selection,
-`allow_partial`, and queue-only controls belong to `POST /scan`. Any inline
+optional `parameters`, `force`, `background`, `engine`, `seed`, and
+`noiseless` — the same engine/noise selection `POST /scan` accepts, so a dry
+run answers for the exact job the client will submit; `allow_partial` and
+queue-only controls remain `POST /scan`-only. Any inline
 `parameters` patch is applied to a private copy of the default launch state, so
 `/validate` never changes the GUI. Non-mutating, it is **allowed in read-only
 mode**.
@@ -674,6 +679,10 @@ Successful response (serialized resolution result):
   support returns **HTTP 200** with `{"ok": false, "reason": "..."}` — the same
   refusal-string vocabulary as `/validate`, *not* an error envelope. Always check
   `ok` before reading `matrix`/`fwhm` (which are `null` on a refusal).
+- A geometry that solves to a zero sample two-theta (forward scattering) is
+  refused the same way: `{"ok": false, "reason": "direct transmission
+  (sample): the analytic engine makes no claim"}` — Cooper–Nathans has no
+  resolution function there.
 
 ### GET /schema
 Machine-readable self-description of the API, generated at request time from live
@@ -765,7 +774,25 @@ object (see *ETA object* below).
 (e.g. still `queued`). Unknown id → `404 unknown_job`. Once the job has geometry,
 `result.skipped_points` lists any points omitted because they were infeasible and
 the job was submitted with `allow_partial` (empty `[]` for a normal job) — each
-entry is `{"index", "values", "reason"}`.
+entry is `{"index", "values", "kind", "reason"}`. `kind` is
+`physical_infeasible`, `geometry_solver_error`, or `curvature_out_of_travel`
+for an ordinary infeasible point; a direct-transmission point (see below)
+carries kind `transmission`.
+
+**Direct transmission (a zero two-theta).** A zero take-off on the
+monochromator, sample, or analyser is a legal geometry (nothing crashes or
+diverges), but the instrument selects no energy there: TAVI records the
+absent side's `Ei`/`Ki` or `Ef`/`Kf`, and `deltaE` when either is absent, as
+`null` rather than inventing a value, both in the API result and in the
+saved per-point `scan_parameters.txt` (written as the literal `None`).
+`result.transmission_points` is the per-point trace, one `{"index", "axes"}`
+entry per marked point (`axes` drawn from `mono`/`sample`/`ana`) — the only
+place a marked point shows up for either engine, since `result` metadata is
+the launch state. The analytic (`deterministic`) engine makes no claim at
+such a point and skips it (`null` in `result.counts`, an entry in
+`skipped_points` with kind `transmission`); a McStas run executes it as the
+instrument model builds it. See §12 *Gotchas* for how a McStas run behaves
+near, not just at, zero.
 
 **Validation object.** The `validation` block embedded in a `POST /scan` 202
 response (and returned by `POST /validate`) has:
@@ -1418,6 +1445,11 @@ Additional notes:
   an input is fine numerically (inputs take `abs()`) but also **HOLDS** that
   axis — not the same mode the original point ran in. See §5 *Crystal
   curvature*.
+- **A scan through a zero two-theta runs under McStas, not just at the exact
+  point.** Only the exact zero is marked direct transmission (§5 *Direct
+  transmission*); its neighbours keep their honest Bragg inversion, which
+  diverges near zero take-off — PG(002) at 1° two-theta records an `Ef` of
+  roughly 24 eV. No threshold or ceiling is applied to that neighbourhood.
 
 ---
 
