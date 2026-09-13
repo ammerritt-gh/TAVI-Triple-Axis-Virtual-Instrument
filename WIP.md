@@ -70,3 +70,27 @@ Done when: one document, reached from [docs/READING_GUIDE.md](docs/READING_GUIDE
 **State:** done
 
 The first documentation audit and setup pass under the shared standard (profile Complex) landed as PR #36 (`d05f4053`): banners, the map [docs/READING_GUIDE.md](docs/READING_GUIDE.md), the deviation block, [DESIGN_GOALS.md](DESIGN_GOALS.md) as a skeleton, four dissolutions, and the corrections the audit found. The stamp is on the map; the next regular audit is weekly and the first deep audit falls due 2026-10-12.
+
+## Release 1.3: prerequisites
+
+**State:** pinned
+
+The changelog pipeline is in (PR #38, 77f73e46, 2026-09-13): `tavi.__version__`,
+`changelog.d/` with `release.toml` and thirty fragments since v1.2.0. Before
+`/release 1.3.0` (the skill in Agentic-Control-Scheme; the release waits for the
+operator's word):
+
+- The pinned installer copy never generates `components/Pb_dft_phonons.dat`
+  (gitignored, 150 MB, `tools/make_pb_assets.py`), so a fresh 1.3 install lists the
+  lead phonon sample and fails to load it. The 1.3 installer needs a post-clone step
+  that runs the generator; "copy and stamp three lines" is not enough this time.
+- Two commits have no fragment and need the operator's word: "Cleaned up GUI update
+  boxes hints" (what changed for the user?) and the env-setup script repair
+  (developer tooling, probably none).
+- The operator reads `python <ACS>\bin\changelog.py preview --version 1.3.0 --root .`
+  and re-sorts or rewords; the fragments are edited to match.
+- Audit ledger entry 14 (the analytic engine ignores a hidden misalignment) is open;
+  the analytic-engine fragment says "approximate" until it closes.
+
+Done when: v1.3.0 is published with its changelog, notes and installer, and this
+entry is deleted.
