@@ -203,6 +203,16 @@ def test_qspace_forward_scattering_survives_float_noise():
     assert snap.metadata["transmission"] == ["sample"]
 
 
+def test_angle_mode_near_zero_a2_is_not_transmission():
+    """The tolerance is for a SOLVED sample angle. In angle mode the operator
+    typed the number, so 0.000005 deg is an ordinary point, not forward
+    scattering (external reader)."""
+    snap = _angle_snapshot("Kf Fixed", "Maxwellian", 41.19, -41.19,
+                           deltaE_field=0.0, stt=5e-6)
+    assert not snap.error_flags
+    assert snap.metadata["transmission"] == []
+
+
 def test_ordinary_point_transmission_is_empty():
     """Preservation check: an ordinary point is untouched by this change."""
     snap = _momentum_snapshot("Kf Fixed", "Maxwellian", 2.0, 0.0, 0.5, 2.0)

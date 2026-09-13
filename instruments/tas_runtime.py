@@ -1030,7 +1030,11 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     if not error_flags:
         if angle_energies is not None and angle_energies[0] is None:
             transmission.append("mono")
-        if is_forward_scattering(stt):
+        # Angle mode copies the operator's A2 straight into stt: the number is
+        # theirs, so only an exact zero is transmission and 0.000005 deg is an
+        # ordinary (if odd) point. A Q-space solve arrives through
+        # acos(1 - eps) and needs the float-noise tolerance.
+        if (stt == 0) if scan_mode == "angle" else is_forward_scattering(stt):
             transmission.append("sample")
         if angle_energies is not None and angle_energies[1] is None:
             transmission.append("ana")
