@@ -15,7 +15,7 @@ Done when: the operator has written the body of DESIGN_GOALS.md.
 
 **State:** pinned
 
-4 entries remain in the [audit ledger](docs/audits/new-instruments-crystal-bending.md), each with its evidence and, where it is a defect, an isolated reproducer. The three themed branches the harvest was planned as have all landed; what is left is pinned for a fresh session or waiting on an operator decision, which is why this is `pinned` rather than in progress.
+5 entries remain in the [audit ledger](docs/audits/new-instruments-crystal-bending.md) (9, 11, 12 from the harvest; 14 and 15 opened by branch (iv)), each with its evidence and, where it is a defect, an isolated reproducer. Four themed branches have landed; what is left is pinned for a fresh session, which is why this is `pinned` rather than in progress.
 
 ### What landed
 
@@ -25,7 +25,9 @@ Branch (ii) — shared TAS physics — PR #34 (`cba504e4`), clearing entry 2. A 
 
 Branch (iii) — package hygiene, mechanical half — PR #35 (`a9520d16`), clearing entries 10, 7, 8 and 5.
 
-Five entries were cleared across the three branches and four were opened by work that found them, so the ledger went 9 → 4, not 9 → 0.
+Branch (iv) — direct transmission — PR #37 (`0c41b52c`), clearing entry 13. Operator's rulings, 2026-09-13: a zero two-theta on any axis is a legal direct-transmission point, never infeasible for a McStas or GUI scan; energy flows downstream only, so a transmitting crystal's Ei or Ef is recorded absent (`null`), never invented — "Ef = Ei" and "Ei = Ef" were rejected as shoehorning a white-beam situation into the Bragg paradigm (Takin and vTAS model no such state either); the analytic engine assumes non-degenerate geometry and enforces it, skipping any marked point and reporting it infeasible at validation for `deterministic` jobs; the sample axis (forward scattering, ruling 7) records its determined energies and |Q|, is marked, and is refused by the analytic engine alone because Cooper-Nathans has no resolution function there; exact zero for the crystals, a 1e-5° float-noise tolerance for a *solved* sample angle only; `Q = 0` in the Q-space modes stays refused as `zero_q`. The record is `metadata['transmission']`, `ScanResult.transmission_points`, and `skipped_points` kind `transmission`; `POST /validate` accepts `engine`/`seed`/`noiseless`; `GET /resolution` refuses forward scattering. Decision record in `docs/CONFIGURABLE_INSTRUMENTS.md` §22.4.
+
+Six entries were cleared across the four branches and six were opened by work that found them, so the ledger went 9 → 5, not 9 → 0.
 
 ### What was missed, and why each remaining entry is pinned
 
@@ -37,21 +39,13 @@ The operator stopped the third branch halfway and asked whether the process was 
 
 **Entry 12 — test isolation of `config/parameters.json`.** The widest blast radius of the three: it changes the starting state of every test that constructs a controller. Discovery established that there is no existing seam for this file (four bare relative literals at `TAVI_PySide6.py:5432`, `:5434`, `:5446`, `:5601`, and `:5446` is where save *creates* the directory); that `tests/test_editable_number_format.py:67` pins one of those literals as *source text* and will break; and that `tests/test_rva_gui_axis_policy.py:301` isolates its own save/load by **changing the working directory**, which an absolute override would silently bypass. A green suite after such a change proves only that it passes with a clean file — the acceptance needs a run against a deliberately hostile `config/parameters.json` (`"rhm_ideal_locked": true` is the measured trigger). `config/instrument_selection.json` is a second saved-state channel through the same mechanism and is not closed by this entry.
 
-Not in the ledger, named but not filed: the `collimation` container shares a value-validation gap with the other descriptor-driven containers — the API parses it with a dictionary-type check and never checks a slot's value against its declared allowed set.
+**Entry 14 — the analytic engine ignores the hidden misalignment.** Opened by branch (iv) at the operator's prompt. The deterministic engine converts each point's Q to HKL through a sample mount built from the launch values alone (`TAVI_PySide6.py` `_sample_q_to_hkl` → `_build_sample_mount(vals)`), while McStas receives `mis_omega_param`/`mis_chi_param` from the instrument state (`set_misalignment`). In a training exercise with a hidden misalignment the two engines disagree by the hidden offset and the analytic one is the wrong one. Structurally confirmed 2026-09-13, not reproduced: write the reproducer first.
+
+**Entry 15 — the documentation test is red in every fresh clone or worktree.** `CLAUDE.md` is gitignored (`.gitignore` "agent files") and `tests/test_documentation.py` runs the shared checker, which wants the memory section reachable through it. A worktree passes only after the file is copied in by hand; a fresh clone of the public mirror goes red. Track the one-line file or teach the checker that `AGENTS.md` alone is enough.
+
+Not in the ledger, named but not filed: the `collimation` container shares a value-validation gap with the other descriptor-driven containers — the API parses it with a dictionary-type check and never checks a slot's value against its declared allowed set; `p_float` still accepts `"nan"` for some thirty numeric API fields; `k2angle(0, d)` divides by zero with a RuntimeWarning in the forward direction, which no caller reaches from a marked point; runtime skips write `skipped_points` kind `infeasible` while validation-time entries use `physical_infeasible`/`geometry_solver_error` (documented as is; harmonising is a small contract change); `POST /validate` answers `would_queue: true` for a partially infeasible body that `POST /scan` refuses without `allow_partial` (pre-existing convention, same for ordinary infeasible points); and ISAR does not read `result.transmission_points`, so a McStas transmission point stays a valid analysis point there — an ISAR board item, TAVI's side is done.
 
 Done when: the ledger is empty and deleted.
-
-## Direct-beam energy and |Q|: a convention to choose
-
-**State:** pinned
-
-Ledger entry 13, split out of branch (ii) deliberately rather than patched inside it. Making a zero take-off runnable exposed that several quantities derived from it have no determined value, and the obvious remedy does not work.
-
-The operator chose "record what is determined, omit what is not" (keep `Ei` from A1, omit `Ef`). It was implemented and then WITHDRAWN, unpushed, because an absent `Ef` propagates into `_background_q_magnitude`, which needs a number for the per-point resolution kernel on every deterministic-engine point — `float(None)` raises, so the honest recording crashes the engine on exactly the point the ruling says must run. Branch (ii) therefore merged with the pre-existing `fixed_E` fallback intact: unchanged behaviour, not a regression, and not yet improved.
-
-Two candidate conventions are written up in entry 13 as **B** (omit what is undetermined, and teach `|Q|` and the resolution kernel to cope) and **C** (an elastic convention for a transmitting analyser: `Ef = Ei`, `deltaE = 0`). Note that the affected region is a neighbourhood of zero, not a single point — at A4 = ±1° the recorded `Ef` is already 23859 meV, because inverting Bragg near zero take-off diverges.
-
-Done when: the operator has chosen B or C and the chosen convention has landed.
 
 ## Bounded snapshot queue option
 

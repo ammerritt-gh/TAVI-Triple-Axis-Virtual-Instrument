@@ -60,3 +60,28 @@ Start with invalid PUMA module options and the batched-radius PATCH; application
 - **Reproduce with:** none yet — move `config/parameters.json` aside, run any controller-constructing test, and compare against a run with a file containing `"rhm_ideal_locked": true`.
 - **Remedy boundary:** Point the tests' `config/` at a temporary directory for the session, so a run cannot read or write the operator's saved state. Preserve `test_parameters_persistence.py`'s deliberate exercise of the real read/write path, and preserve the existing serial-run rule — the file is also why that test must not run beside a full suite. Do not "fix" this by making the application path absolute; the relative path is what lets the launcher and the tests each have their own working directory.
 - **Verified:** opus CONFIRMED 2026-09-12 — moved the operator's `config/parameters.json` aside and re-ran the two tests unchanged: 2 failed with the file present, 2 passed with it absent, same commit, same environment. File restored afterwards.
+
+## 14. P2 · The analytic engine evaluates at the nominal orientation, not the misaligned one
+
+- **Observed at:** `0c41b52c`
+- **Effort:** 1–2 hours once reproduced; the deterministic engine's HKL derivation and one offscreen test with a hidden misalignment; no schema change.
+- **Evidence:**
+  - `TAVI_PySide6.py` `_sample_q_to_hkl` — converts a point's Q to HKL through `self._build_sample_mount(vals)`, built from the launch values alone.
+  - `TAVI_PySide6.py` `_run_scan_deterministic` — the ground-truth model is evaluated at that HKL for every point; nothing in the loop reads `mis_omega`/`mis_chi`.
+  - `TAVI_PySide6.py` `on_load_misalignment_hash` / `on_clear_misalignment` — the hidden misalignment lives on `instrument_state` via `set_misalignment` and reaches McStas as `mis_omega_param`/`mis_chi_param` through every `build_point_params`.
+- **Failure:** In a training exercise with a hidden misalignment, McStas scatters from the true crystal and the analytic engine from the nominal one, so the two engines disagree by exactly the hidden offset and the analytic result is the wrong one. Raised by the operator on 2026-09-13: analytic mode must take the actual crystal orientation, not "what we said we thought it was".
+- **Reproduce with:** none yet — load a misalignment hash, run the same rlu point through both engines, compare the peak position.
+- **Remedy boundary:** The deterministic engine's HKL for the ground-truth model uses the state's actual orientation (misalignment applied) the way `build_point_params` already hands it to McStas. The resolution kernel and everything else stay as they are.
+- **Verified:** NOT reproduced — structurally traced only. Reproduce before scheduling the fix.
+
+## 15. P3 · `tests/test_documentation.py` is red in every fresh clone or worktree
+
+- **Observed at:** `a1057722`
+- **Effort:** minutes; either track the one-line `CLAUDE.md` or relax the checker's reachability rule.
+- **Evidence:**
+  - `.gitignore` "agent files" block — `CLAUDE.md` is ignored, so it exists on the maintainer's machine and never in a fresh clone or worktree.
+  - `tests/test_documentation.py` — runs the shared checker, which reports "memory section is unreachable by Claude Code: add CLAUDE.md containing @AGENTS.md" and exits non-zero.
+- **Failure:** Measured 2026-09-13 in the branch (iv) worktree: 1 failed until the file was copied in by hand, then green. A fresh clone of the public mirror fails the suite for an environmental reason the test's own docstring says it must not.
+- **Reproduce with:** any fresh `git worktree add`, then the suite.
+- **Remedy boundary:** Make the fresh-clone suite green without a manual step. Do not weaken the checker's other rules.
+- **Verified:** CONFIRMED 2026-09-13 by the branch (iv) executor and the main session (red, copy the file, green).
