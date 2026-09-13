@@ -15,7 +15,7 @@ Done when: the operator has written the body of DESIGN_GOALS.md.
 
 **State:** pinned
 
-4 entries remain in the [audit ledger](docs/audits/new-instruments-crystal-bending.md) (9, 11, 12 from the harvest; 14 and 15 opened by branch (iv)), each with its evidence and, where it is a defect, an isolated reproducer. Four themed branches have landed; what is left is pinned for a fresh session, which is why this is `pinned` rather than in progress.
+4 entries remain in the [audit ledger](docs/audits/new-instruments-crystal-bending.md) (9, 11, 12 from the harvest; 14 opened by branch (iv); 15, also opened by branch (iv), cleared by REL-5), each with its evidence and, where it is a defect, an isolated reproducer. Four themed branches have landed; what is left is pinned for a fresh session, which is why this is `pinned` rather than in progress.
 
 ### What landed
 
@@ -43,7 +43,7 @@ The operator stopped the third branch halfway and asked whether the process was 
 
 **Entry 14 — the analytic engine ignores the hidden misalignment.** Opened by branch (iv) at the operator's prompt. The deterministic engine converts each point's Q to HKL through a sample mount built from the launch values alone (`TAVI_PySide6.py` `_sample_q_to_hkl` → `_build_sample_mount(vals)`), while McStas receives `mis_omega_param`/`mis_chi_param` from the instrument state (`set_misalignment`). In a training exercise with a hidden misalignment the two engines disagree by the hidden offset and the analytic one is the wrong one. Structurally confirmed 2026-09-13, not reproduced: write the reproducer first.
 
-**Entry 15 — the documentation test is red in every fresh clone or worktree.** `CLAUDE.md` is gitignored (`.gitignore` "agent files") and `tests/test_documentation.py` runs the shared checker, which wants the memory section reachable through it. A worktree passes only after the file is copied in by hand; a fresh clone of the public mirror goes red. Track the one-line file or teach the checker that `AGENTS.md` alone is enough.
+**Entry 15 — cleared by REL-5 (2026-09-13):** `CLAUDE.md` is tracked; see What landed.
 
 Not in the ledger, named but not filed: the `collimation` container shares a value-validation gap with the other descriptor-driven containers — the API parses it with a dictionary-type check and never checks a slot's value against its declared allowed set; `p_float` still accepts `"nan"` for some thirty numeric API fields; `k2angle(0, d)` divides by zero with a RuntimeWarning in the forward direction, which no caller reaches from a marked point; runtime skips write `skipped_points` kind `infeasible` while validation-time entries use `physical_infeasible`/`geometry_solver_error` (documented as is; harmonising is a small contract change); `POST /validate` answers `would_queue: true` for a partially infeasible body that `POST /scan` refuses without `allow_partial` (pre-existing convention, same for ordinary infeasible points); and ISAR does not read `result.transmission_points`, so a McStas transmission point stays a valid analysis point there — an ISAR board item, TAVI's side is done.
 
