@@ -16,9 +16,9 @@ Fragments for the next release live in `changelog.d`; see `changelog.d\README.md
 ### Minor features
 
 - The sample loaded for a scan can now be chosen as part of a remote API request, the same way it is chosen in the GUI.
-- A standalone dispersion viewer window plots the phonon dispersion of any sample that ships with a dispersion map, such as the new lead sample, along a chosen crystal direction, with an optional comparison overlay, without running a scan.
+- A standalone dispersion viewer window plots the phonon dispersion of any sample that has a dispersion map, such as the new lead sample, along a chosen crystal direction, with an optional comparison overlay, without running a scan.
 - A Fitting dock fits a peak in your scan data and moves a motor to its centre, maximum or centre-of-mass position, with one click to undo the move.
-- A lead sample with a three-branch phonon dispersion from a DFT calculation by Rolf Heid (KIT) is available in the sample library alongside the simplified samples.
+- A lead sample with a three-branch phonon dispersion from a DFT calculation by Rolf Heid (KIT) is available in the sample library alongside the simplified samples. Its dispersion map is generated on your machine by the installer (or by hand with `tools\make_pb_assets.py`); until then the sample is listed but a run with it fails to load.
 - Each bending direction of a crystal can now be set independently to auto-focus, held at a fixed radius, or driven by a scan, and the analyser's second focusing axis is a real setting rather than a hidden fixed value.
 - A Resolution calculator under the Utilities menu shows the instrument's theoretical momentum and energy resolution at any reciprocal-lattice point and energy transfer you type in, without running a scan.
 - A scan-time benchmark under the Utilities menu measures your computer's simulation speed and uses it for more accurate time estimates before you launch a scan, shown as overhead and neutron rate.
@@ -40,7 +40,7 @@ Fragments for the next release live in `changelog.d`; see `changelog.d\README.md
 - A scan that passes through an instrument's direct-beam position (a crystal at exactly zero degrees) no longer crashes or shows a made-up energy transfer for that point. The point is marked as direct transmission and the values that cannot be known are left blank.
 - An analyser focusing axis that the crystal's design permanently fixes (such as the vertical focus on PANDA or IN12) is now refused if you try to scan it, instead of silently letting the scan override it.
 - Asking for an energy transfer larger than the neutron beam can supply is refused with a clear message instead of silently running a scan with invalid motor angles.
-- IN8's monochromator angle range now matches the range ILL currently publishes, which is narrower at the low-angle end than before.
+- IN8's monochromator angle range now matches the range ILL currently publishes, which is narrower at both ends than before (11 to 90 degrees instead of -40 to 110).
 - Entering or sending an invalid number, such as infinite or not-a-number, for a crystal's bending radius is refused with a clear error instead of being accepted and producing a broken simulation.
 - Choosing an option for an instrument's optional module (such as a beam-focusing mirror) that is not one of the supported choices is now rejected instead of silently building an instrument that does not match what you asked for. Changing only some module options over the API no longer crashes the run.
 - Opening a collimator to its widest, unrestricted setting now genuinely removes it from the beam path, instead of leaving its housing in place to absorb some neutrons.
