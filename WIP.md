@@ -71,42 +71,6 @@ Done when: one document, reached from [docs/READING_GUIDE.md](docs/READING_GUIDE
 
 The first documentation audit and setup pass under the shared standard (profile Complex) landed as PR #36 (`d05f4053`): banners, the map [docs/READING_GUIDE.md](docs/READING_GUIDE.md), the deviation block, [DESIGN_GOALS.md](DESIGN_GOALS.md) as a skeleton, four dissolutions, and the corrections the audit found. The stamp is on the map; the next regular audit is weekly and the first deep audit falls due 2026-10-12.
 
-## Release 1.3: prerequisites
-
-**State:** pinned
-
-The changelog pipeline is in (PR #38, 77f73e46, 2026-09-13): `tavi.__version__`,
-`changelog.d/` with `release.toml` and thirty fragments since v1.2.0.
-
-Ruling 2026-09-13 (Agentic-Control-Scheme `44b373a`): the release tool does not
-handle installers. A release is the version bump, the changelog, the PR, the tag
-and the GitHub release with its notes; an installer is a post-tag artifact,
-written after the tag exists and uploaded separately (recipe: installer design
-document §22 "Release recipe").
-
-Before `/release 1.3.0`:
-
-- The operator reads the preview
-  (`python <ACS>\bin\changelog.py preview --version 1.3.0 --root .`) and
-  reworded fragments are edited to match.
-- Audit ledger entry 14 (the analytic engine ignores a hidden misalignment) is
-  open; the analytic-engine fragment says "approximate" until it closes.
-- The operator's final audit.
-
-After the tag:
-
-- The Windows 1.3 installer, with the phonon-map step
-  (`components/Pb_dft_phonons.dat` via `tools/make_pb_assets.py`), cold-tested,
-  committed, and uploaded (recipe: installer design document §22 "Release
-  recipe").
-- A macOS installer, optional, same route.
-
-The two fragmentless commits are resolved: the GUI hints commit has a fragment
-(this commit); the env-setup repair is developer tooling, none.
-
-Done when: v1.3.0 is published with its changelog and notes, the Windows
-installer uploaded, and this entry is deleted.
-
 ## Audit ledger: release 1.3
 
 **State:** pinned
