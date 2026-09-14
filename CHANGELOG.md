@@ -23,6 +23,7 @@ Fragments for the next release live in `changelog.d`; see `changelog.d\README.md
 - A Resolution calculator under the Utilities menu shows the instrument's theoretical momentum and energy resolution at any reciprocal-lattice point and energy transfer you type in, without running a scan.
 - A scan-time benchmark under the Utilities menu measures your computer's simulation speed and uses it for more accurate time estimates before you launch a scan, shown as overhead and neutron rate.
 - A configurable synthetic nuisance background, with environment, instrument and sample contributions, can be added on top of the simulated counts from a new dialog; it is a plausible background, not a prediction of a real facility's. It is off by default, so existing scans look exactly as before until you turn it on.
+- IN8 gains the collimator slot between source and monochromator that ILL documents, alongside the three slots it already had; it is open by default, so existing IN8 settings run as before.
 
 ### Quality of life
 
@@ -43,6 +44,8 @@ Fragments for the next release live in `changelog.d`; see `changelog.d\README.md
 - IN8's monochromator angle range now matches the range ILL currently publishes, which is narrower at both ends than before (11 to 90 degrees instead of -40 to 110).
 - Entering or sending an invalid number, such as infinite or not-a-number, for a crystal's bending radius is refused with a clear error instead of being accepted and producing a broken simulation.
 - Choosing an option for an instrument's optional module (such as a beam-focusing mirror) that is not one of the supported choices is now rejected instead of silently building an instrument that does not match what you asked for. Changing only some module options over the API no longer crashes the run.
+- The default neutron source now samples the Maxwellian spectrum it documents: its energy distribution was too cold, peaking as intended but with too few neutrons above the peak. Every instrument is affected, and counts at a given setting are lower than in 1.2 (about a quarter lower in the IN8 reference scan), so intensities from the two versions are not directly comparable.
+- IN8's Cu(200) monochromator now carries its documented anisotropic mosaic (25 arcminutes horizontal, 10 vertical) instead of a single 25 arcminute value, which changes its vertical resolution and throughput.
 - Opening a collimator to its widest, unrestricted setting now genuinely removes it from the beam path, instead of leaving its housing in place to absorb some neutrons.
 - Updating one of an instrument's collimation settings over the API no longer clears every other collimation slot you did not mention.
 - Starting a run after changing only some of an instrument's beam-defining slits no longer fails; the slits you did not touch keep their default values.
