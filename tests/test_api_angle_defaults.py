@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from tavi.neutron_conversions import energy2k, k2angle  # noqa: E402
 
 INSTRUMENT_IDS = [info.id for info in available_instruments()]
 
@@ -97,3 +98,27 @@ def test_gui_startup_defaults_match_api_defaults(controller, instrument_id):
         assert math.isclose(gui_vals[key], api_vals[key], abs_tol=1e-3), (
             f"{instrument_id} startup {key}={gui_vals[key]}, API default {api_vals[key]}"
         )
+
+
+@pytest.mark.parametrize("instrument_id", INSTRUMENT_IDS)
+def test_api_energy_patch_rederives_signed_crystal_angle(controller, instrument_id):
+    """The API twin of the GUI energy handlers: a patched Ei/Ef moves its own
+    crystal onto the instrument's signed branch; an explicit angle wins."""
+    plugin = get_instrument(instrument_id)
+    geometry = plugin.descriptor().geometry
+    ctrl = controller
+    default = ctrl.build_api_launch_state({"scan_command1": "A3 35 36 1"})["vals"]
+
+    vals = ctrl.build_api_launch_state({"Ei": 12, "scan_command1": "A3 35 36 1"})["vals"]
+    expected = int(geometry.sense_mono) * 2 * k2angle(energy2k(12), ctrl.monocris_info['dm'])
+    assert math.isclose(vals['mtt'], expected, abs_tol=1e-3), (instrument_id, vals['mtt'], expected)
+    assert math.isclose(vals['att'], default['att'], abs_tol=1e-6)
+
+    vals = ctrl.build_api_launch_state({"Ef": 12, "scan_command1": "A3 35 36 1"})["vals"]
+    expected = int(geometry.sense_ana) * 2 * k2angle(energy2k(12), ctrl.anacris_info['da'])
+    assert math.isclose(vals['att'], expected, abs_tol=1e-3), (instrument_id, vals['att'], expected)
+    assert math.isclose(vals['mtt'], default['mtt'], abs_tol=1e-6)
+
+    vals = ctrl.build_api_launch_state({"Ei": 12, "mtt": 33.0, "scan_command1": "A3 35 36 1"})["vals"]
+    assert vals['mtt'] == 33.0
+
