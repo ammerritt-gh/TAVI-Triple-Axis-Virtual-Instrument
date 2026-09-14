@@ -2,7 +2,7 @@
 
 > **Status:** live
 
-_Last updated: 2026-05-22_
+_Last updated: 2026-09-14_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.
 
@@ -673,6 +673,8 @@ If `%USERPROFILE%\TAVI` does not contain `TAVI_PySide6.py`, it should warn and a
 
 This protects against accidental deletion of a wrong folder.
 
+The POSIX uninstaller applies the same must-not-remove list to its own paths; see §25.
+
 ---
 
 ## 18. Known failure modes and regression tests
@@ -1033,10 +1035,25 @@ written after the tag exists.
 (c) For 1.3 specifically: the installer needs a post-clone step that builds
     `components\Pb_dft_phonons.dat` (gitignored, 150 MB,
     `tools\make_pb_assets.py`; the target environment already carries numpy
-    and scipy) — `setup-tavi-dev.bat` lines 182-193 are the model.
+    and scipy) — `setup-tavi-dev.bat` lines 182-193 are the model. Done in
+    `WINDOWS-install-TAVI-v1.3.0.bat` (2026-09-14): the step warns and
+    continues on failure and records `PB_MAP=ok|missing` in
+    `INSTALL_INFO.txt`. The same file also made the micromamba SHA-256 check
+    real (v1.2.0 declared `EXPECTED_SHA256` and never compared it) and moved
+    the Visual Studio path read out of the block that fills it (§18, the
+    DisableDelayedExpansion parse-time trap: `%VSINSTALLDIR%` inside the
+    block was always empty, so no v1.2.0 launcher carried `vcvars64.bat`).
 
-(d) A macOS installer, when written, is a shell script pinned to the same
-    tag and uploaded the same way.
+(d) macOS and Linux: `POSIX-install-TAVI-v1.3.0.sh` and
+    `POSIX-uninstall-TAVI.sh`, a bash pair pinned to the same tag and
+    uploaded the same way, provisional and never executed on either
+    platform (§25). A later release copies and re-stamps them like the
+    Windows file.
+
+(e) `WINDOWS-install-TAVI.bat`, the unversioned copy that tracks `main`, is
+    unmaintained: it lacks the 1.3 changes and each release derives from the
+    previous *pinned* file, per (b). Delete it or bring it up to date before
+    pointing anyone at it.
 
 ## 23. Recommended future improvements
 
@@ -1084,3 +1101,55 @@ detect known paths explicitly -> validate required resources -> generate launche
 ```
 
 Do not optimize away the checks. They are now part of the installer contract.
+
+---
+
+## 25. POSIX variant (macOS and Linux), provisional
+
+Written 2026-09-14 as `installer/POSIX-install-TAVI-v1.3.0.sh` and
+`installer/POSIX-uninstall-TAVI.sh`; never executed on macOS or Linux by the
+maintainer, who has neither machine. The scripts say so in their headers and
+at run time, and tell the user to stop at the first failure and open an issue
+labelled `platform-installer` with the full output.
+
+Layout, which the uninstaller and every later POSIX installer must honour:
+
+```text
+~/.local/bin/micromamba   micromamba binary, only if the script installed it
+~/micromamba              MAMBA_ROOT_PREFIX, exported on every call
+~/micromamba/envs/tavi    the tavi environment (ENV_PREFIX is read back from
+                          python's sys.prefix after creation, not computed)
+~/TAVI                    the pinned checkout, run-tavi.sh, update-tavi.sh,
+                          run-tavi.command (macOS), INSTALL_INFO.txt
+```
+
+Rules that differ from or extend the Windows script:
+
+- Bash 3.2 syntax only (macOS ships 3.2.57): no associative arrays,
+  `mapfile`, case-conversion expansions or `[[ -v ]]`; `case` tables; `local`
+  declared then assigned; `$HOME` never `~`. `set -euo pipefail`, with every
+  continue-on-failure step written as `if ! cmd; then warn; fi`.
+- Supported tuples: Darwin x86_64/arm64, Linux x86_64/aarch64 with glibc.
+  Anything else exits before downloading.
+- macOS preflight: `xcode-select -p` and `xcrun --sdk macosx --show-sdk-path`
+  must both succeed; the conda-forge compiler that `mcstas-core` pulls in
+  needs that SDK.
+- An existing micromamba (on PATH or at `~/.local/bin/micromamba`) is reused
+  and never overwritten. A fresh download is verified against a SHA-256
+  pinned per platform (the values published with micromamba 2.5.0-1); a
+  mismatch aborts, there is no warn-and-continue.
+- Generated scripts carry the absolute micromamba path and export
+  `MAMBA_ROOT_PREFIX`, so they work when `~/.local/bin` is not on PATH.
+- `INSTALL_INFO.txt` adds `MICROMAMBA_EXE`, `MAMBA_ROOT_PREFIX`, `ENV_PREFIX`,
+  `PB_MAP` and `PLATFORM`; the uninstaller reads it rather than recomputing.
+
+Must-not-remove list for the POSIX uninstaller (§17's counterpart): micromamba
+itself, `MAMBA_ROOT_PREFIX`, any environment other than `tavi`, the Xcode
+tools. `~/TAVI` is removed only when it contains `TAVI_PySide6.py`; otherwise
+the script refuses and exits 1.
+
+Checks that can run on the Windows machine: `bash -n` on both scripts, a grep
+for the forbidden constructs above, the uninstaller's guard test under Git
+Bash with `HOME` pointed at a fixture and a stub `micromamba` on PATH, and the
+`verify_sha256` function sourced and called with a right and a wrong hash.
+Nothing else is verified until a user on either platform reports back.
