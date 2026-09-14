@@ -5959,6 +5959,37 @@ class TAVIController(QObject):
                 defaults[slit.id] = width
         return defaults
 
+    def _reference_angles(self, monocris, anacris):
+        """(mtt, stt, omega, att) for the Al(200) reference point, this instrument's own branch.
+
+        Solved from the active instrument (``calculate_angles`` applies its
+        declared mono/sample/analyser senses -- instruments/tas_runtime.py:783),
+        not PUMA's hard-coded literals: those are only correct for PUMA, and an
+        unpatched API launch on another instrument used to start from them
+        (docs/audits/release-1-3.md entry 2). ``calculate_angles`` reads
+        instrument-fixed crystal geometry and senses only and does not mutate
+        the state it is called on, so the live ``self.instrument_state`` is
+        safe to reuse here.
+
+        Mirrors the qx/qy/qz/deltaE/fixed_E/K_fixed defaults set in
+        ``_default_parameter_values`` (Al (2,0,0), deltaE=0, Kf-fixed at
+        14.7 meV). On a solve error (e.g. a hand-built descriptor with
+        incompatible crystals), the zeroed solve is returned as-is -- no
+        PUMA fallback, since a wrong-instrument default is exactly the bug
+        this closes; the caller sees zeros and the validation path refuses
+        them visibly instead of silently defaulting to another instrument.
+        """
+        angles, error_flags = self.instrument_state.calculate_angles(
+            3.1028, 0.0, 0.0, 0.0, 14.7, "Kf Fixed", monocris, anacris,
+        )
+        if error_flags:
+            log.warning(
+                "reference angle solve failed for %s (mono=%s, ana=%s): %s",
+                self.descriptor.id, monocris, anacris, error_flags,
+            )
+        mtt, stt, sth, saz, att = angles
+        return mtt, stt, sth, att
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -5985,9 +6016,12 @@ class TAVIController(QObject):
         slits_mm = self._descriptor_slit_defaults()
 
         sample_ids = {s.id for s in d.samples}
+        mtt, stt, omega, att = self._reference_angles(
+            d.mono_crystals[0].id, d.ana_crystals[0].id,
+        )
         vals = {
-            'mtt': 41.167, 'stt': -71.2502, 'omega': -35.6251, 'chi': 0.0,
-            'att': 41.167,
+            'mtt': mtt, 'stt': stt, 'omega': omega, 'chi': 0.0,
+            'att': att,
             'Ki': 2.6634, 'Ei': 14.7, 'Kf': 2.6634, 'Ef': 14.7,
             'K_fixed': "Kf Fixed", 'fixed_E': 14.7,
             'qx': 3.1028, 'qy': 0.0, 'qz': 0.0,
@@ -6057,11 +6091,14 @@ class TAVIController(QObject):
         
         self.window.instrument_dock.set_mono_id(self.descriptor.mono_crystals[0].id)
         self.window.instrument_dock.set_ana_id(self.descriptor.ana_crystals[0].id)
-        self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, "41.167")
-        self.window.instrument_dock.stt_edit.setText("-71.2502")
-        self.window.instrument_dock.omega_edit.setText("-35.6251")
+        mtt, stt, omega, att = self._reference_angles(
+            self.descriptor.mono_crystals[0].id, self.descriptor.ana_crystals[0].id,
+        )
+        self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
+        self.window.instrument_dock.stt_edit.setText(format_editable_number(stt))
+        self.window.instrument_dock.omega_edit.setText(format_editable_number(omega))
         self.window.instrument_dock.chi_edit.setText("0")
-        self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, "41.167")
+        self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
         self.window.instrument_dock.Ki_edit.setText("2.6634")
         self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
