@@ -3544,10 +3544,13 @@ class TAVIController(QObject):
         The subsequent loader can keep direct widget writes while malformed or
         null JSON values become visible warnings rather than startup crashes.
         """
+        mtt, stt, omega, att = self._reference_angles(
+            self.descriptor.mono_crystals[0].id, self.descriptor.ana_crystals[0].id,
+        )
         defaults = {
             "rhm_var": 0, "rvm_var": 0, "rha_var": 0, "rva_var": 0,
-            "mtt_var": 41.167, "stt_var": -71.2502, "omega_var": -35.6251,
-            "chi_var": 0, "att_var": 41.167, "Ki_var": 2.6634, "Kf_var": 2.6634,
+            "mtt_var": mtt, "stt_var": stt, "omega_var": omega,
+            "chi_var": 0, "att_var": att, "Ki_var": 2.6634, "Kf_var": 2.6634,
             "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
             "qx_var": 3.1028, "qy_var": 0, "qz_var": 0, "H_var": 2, "K_var": 0,
             "L_var": 0, "deltaE_var": 0, "kappa_var": 0, "psi_offset_var": 0,
@@ -5708,16 +5711,20 @@ class TAVIController(QObject):
                 self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
                     parameters.get("anacris_var"), self.descriptor.ana_crystals
                 ))
+                mtt, stt, omega, att = self._reference_angles(
+                    self.window.instrument_dock.selected_mono_id(),
+                    self.window.instrument_dock.selected_ana_id(),
+                )
                 self._set_tracked_angle_text(
                     'mtt', self.window.instrument_dock.mtt_edit,
-                    parameters.get("mtt_var", "41.167"),
+                    parameters.get("mtt_var", mtt),
                 )
-                self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", "-71.2502")))
-                self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", "-35.6251")))
+                self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", stt)))
+                self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", omega)))
                 self.window.instrument_dock.chi_edit.setText(format_editable_number(parameters.get("chi_var", 0)))
                 self._set_tracked_angle_text(
                     'att', self.window.instrument_dock.att_edit,
-                    parameters.get("att_var", "41.167"),
+                    parameters.get("att_var", att),
                 )
                 self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
                 self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
