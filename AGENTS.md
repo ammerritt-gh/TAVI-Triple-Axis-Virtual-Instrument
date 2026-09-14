@@ -317,3 +317,4 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 
 - 2026-09-12 · skill: the doc checker counts tracked files only; a new map or goals file must be staged before it can exit 0.
 - 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
+- 2026-09-14 · floor: in a worktree session the Bash guard refuses any command whose text contains "git" as a substring, including the scratchpad path (`Documents-Github`); read or write scratchpad files with the Write/Read tools or PowerShell.
