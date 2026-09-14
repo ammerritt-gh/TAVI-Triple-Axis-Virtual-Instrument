@@ -316,8 +316,8 @@ cd ~/TAVI && MCSTAS=$MAMBA_ROOT_PREFIX/envs/tavi/share/mcstas/resources \
 
 ### Uninstalling
 
-`POSIX-uninstall-TAVI.sh` reads `~/TAVI/INSTALL_INFO.txt` for the micromamba binary,
-root prefix and environment name the installer used, removes the `tavi` environment
+`POSIX-uninstall-TAVI.sh` reads `~/TAVI/INSTALL_INFO.txt` for the micromamba binary
+and root prefix the installer used (the environment name is always `tavi`), removes the `tavi` environment
 and `~/TAVI` (only if `TAVI_PySide6.py` is found there), and never removes micromamba
 itself, the root prefix or any other environment.
 

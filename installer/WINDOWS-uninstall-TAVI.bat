@@ -9,6 +9,8 @@ set "INSTALL_DIR=%USERPROFILE%\TAVI"
 set "MICROMAMBA_DIR=%USERPROFILE%\AppData\Local\micromamba"
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
 set "ENV_NAME=tavi"
+:: The root the installer created the env under; never the caller's own.
+set "MAMBA_ROOT_PREFIX=%USERPROFILE%\AppData\Roaming\mamba"
 set "SHORTCUT=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
 
 title TAVI Safe Uninstaller

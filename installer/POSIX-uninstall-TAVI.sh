@@ -24,14 +24,15 @@ main() {
 
     micromamba_exe=""
     mamba_root_prefix=""
-    env_name=""
+    # Fixed: the installer always names the env tavi, and INSTALL_INFO.txt is
+    # not trusted to rename the one environment this script may remove.
+    env_name="tavi"
 
     if [ -f "$INSTALL_DIR/INSTALL_INFO.txt" ]; then
         while IFS='=' read -r key value; do
             case "$key" in
                 MICROMAMBA_EXE) micromamba_exe="$value" ;;
                 MAMBA_ROOT_PREFIX) mamba_root_prefix="$value" ;;
-                ENV_NAME) env_name="$value" ;;
                 *) ;;
             esac
         done < "$INSTALL_DIR/INSTALL_INFO.txt"
@@ -47,10 +48,6 @@ main() {
     if [ -z "${mamba_root_prefix:-}" ]; then
         mamba_root_prefix="$HOME/micromamba"
     fi
-    if [ -z "${env_name:-}" ]; then
-        env_name="tavi"
-    fi
-
     cat <<EOF
 ============================================================================
                     TAVI POSIX Uninstaller
