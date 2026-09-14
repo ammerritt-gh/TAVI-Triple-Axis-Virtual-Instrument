@@ -3088,6 +3088,20 @@ class TAVIController(QObject):
         edit.setText(text)
         self._update_tracked_value(field_name, value, displayed_text=edit.text())
         self._commit_programmatic_feedback([edit])
+
+    def _signed_mtt(self, Ki):
+        """Mono two-theta from Ki, on the instrument's declared readout sense.
+
+        Same rule as the runtime (instruments/tas_runtime.py calculate_angles).
+        """
+        return self.instrument_state.sense_mono * 2 * k2angle(Ki, self.monocris_info['dm'])
+
+    def _signed_att(self, Kf):
+        """Analyser two-theta from Kf, on the instrument's declared readout sense.
+
+        Same rule as the runtime (instruments/tas_runtime.py calculate_angles).
+        """
+        return self.instrument_state.sense_ana * 2 * k2angle(Kf, self.anacris_info['da'])
     
     def update_all_variables(self, skip_crystal_angles=False):
         """
@@ -3136,8 +3150,8 @@ class TAVIController(QObject):
             
             # Only update crystal angles if not skipping (angles are not the source of truth)
             if not skip_crystal_angles:
-                mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
-                att = 2 * k2angle(Kf, self.anacris_info['da'])
+                mtt = self._signed_mtt(Ki)
+                att = self._signed_att(Kf)
                 self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
                 self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
@@ -3567,7 +3581,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Ki and Ei from mtt
-            Ki = angle2k(vals['mtt'] / 2, self.monocris_info['dm'])
+            Ki = angle2k(vals['mtt'] / (2 * self.instrument_state.sense_mono), self.monocris_info['dm'])
             Ei = k2energy(Ki)
             
             self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
@@ -3605,7 +3619,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Kf and Ef from att
-            Kf = angle2k(vals['att'] / 2, self.anacris_info['da'])
+            Kf = angle2k(vals['att'] / (2 * self.instrument_state.sense_ana), self.anacris_info['da'])
             Ef = k2energy(Kf)
             
             self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
@@ -3641,7 +3655,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Ei = k2energy(vals['Ki'])
-            mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
+            mtt = self._signed_mtt(vals['Ki'])
             
             self.window.instrument_dock.Ei_edit.setText(format_editable_number(Ei))
             self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
@@ -3675,7 +3689,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Ki = energy2k(vals['Ei'])
-            mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
+            mtt = self._signed_mtt(Ki)
             
             self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
             self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
@@ -3709,7 +3723,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Ef = k2energy(vals['Kf'])
-            att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
+            att = self._signed_att(vals['Kf'])
             
             self.window.instrument_dock.Ef_edit.setText(format_editable_number(Ef))
             self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
@@ -3743,7 +3757,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Kf = energy2k(vals['Ef'])
-            att = 2 * k2angle(Kf, self.anacris_info['da'])
+            att = self._signed_att(Kf)
             
             self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
             self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
