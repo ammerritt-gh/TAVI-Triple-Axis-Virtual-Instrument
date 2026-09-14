@@ -3545,7 +3545,8 @@ class TAVIController(QObject):
         null JSON values become visible warnings rather than startup crashes.
         """
         mtt, stt, omega, att = self._reference_angles(
-            self.descriptor.mono_crystals[0].id, self.descriptor.ana_crystals[0].id,
+            self._saved_crystal_id(parameters.get("monocris_var"), self.descriptor.mono_crystals),
+            self._saved_crystal_id(parameters.get("anacris_var"), self.descriptor.ana_crystals),
         )
         defaults = {
             "rhm_var": 0, "rvm_var": 0, "rha_var": 0, "rva_var": 0,
