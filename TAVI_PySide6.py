@@ -2814,9 +2814,18 @@ class TAVIController(QObject):
         # on the instrument's signed branch unless the caller named that
         # angle explicitly (an explicit A1/A4 is authoritative, as in the
         # GUI). Without this an angle-mode scan patched with Ei=12 kept the
-        # reference-state A1 and ran near the reference energy.
+        # reference-state A1 and ran near the reference energy. A
+        # non-positive energy is refused here: angle mode takes A1/A4 as
+        # raw authority and never reaches calculate_angles' own Ei/Ef > 0
+        # guard, and a NaN angle passes every limit comparison.
         energy_keys = ('fixed_E', 'K_fixed', 'monocris', 'anacris')
         if any(k in patched for k in energy_keys + ('Ei', 'Ki', 'Ef', 'Kf')):
+            if not (vals['Ei'] > 0 and vals['Ef'] > 0):
+                raise ApiError(
+                    400, "invalid_parameters",
+                    "energy transfer %s leaves Ei=%s, Ef=%s; both must be positive"
+                    % (vals['deltaE'], vals['Ei'], vals['Ef']),
+                )
             mono_info, ana_info = self.instrument.crystal_info(
                 vals['monocris'], vals['anacris']
             )

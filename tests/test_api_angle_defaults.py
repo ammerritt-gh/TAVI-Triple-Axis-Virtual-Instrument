@@ -133,3 +133,15 @@ def test_api_energy_patch_rederives_signed_crystal_angle(controller, instrument_
     assert math.isclose(vals['mtt'], int(geometry.sense_mono) * 2 * k2angle(energy2k(12), dm), abs_tol=1e-3)
     assert math.isclose(vals['att'], int(geometry.sense_ana) * 2 * k2angle(energy2k(12), da), abs_tol=1e-3)
 
+
+
+@pytest.mark.parametrize("instrument_id", INSTRUMENT_IDS)
+def test_api_energy_patch_refuses_non_positive_free_side(controller, instrument_id):
+    """Ki fixed at 5 meV with deltaE=10 leaves Ef=-5: refused with 400, never a NaN angle."""
+    ctrl = controller
+    with pytest.raises(cm.ApiError) as excinfo:
+        ctrl.build_api_launch_state({
+            "K_fixed": "Ki Fixed", "fixed_E": 5, "deltaE": 10, "scan_command1": "A3 35 36 1",
+        })
+    assert excinfo.value.status == 400
+    assert "must be positive" in excinfo.value.message
