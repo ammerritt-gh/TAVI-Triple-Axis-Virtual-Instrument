@@ -2798,12 +2798,16 @@ class TAVIController(QObject):
         elif 'Kf' in patched and 'Ef' not in patched:
             vals['Ef'] = k2energy(vals['Kf'])
         if 'fixed_E' in patched or 'K_fixed' in patched:
+            # Both sides, as the GUI's update_all_variables derives them:
+            # the free side is fixed_E offset by the launch state's deltaE.
             if vals['K_fixed'] == "Ki Fixed":
                 vals['Ei'] = vals['fixed_E']
-                vals['Ki'] = energy2k(vals['Ei'])
+                vals['Ef'] = vals['fixed_E'] - vals['deltaE']
             else:
                 vals['Ef'] = vals['fixed_E']
-                vals['Kf'] = energy2k(vals['Ef'])
+                vals['Ei'] = vals['fixed_E'] + vals['deltaE']
+            vals['Ki'] = energy2k(vals['Ei'])
+            vals['Kf'] = energy2k(vals['Ef'])
 
         # Energy -> crystal angle, the API twin of the GUI's Ei/Ki/Ef/Kf
         # handlers: a patched energy side re-derives its own take-off angle

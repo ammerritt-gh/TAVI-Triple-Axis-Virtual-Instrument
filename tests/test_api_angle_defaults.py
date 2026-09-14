@@ -108,17 +108,28 @@ def test_api_energy_patch_rederives_signed_crystal_angle(controller, instrument_
     geometry = plugin.descriptor().geometry
     ctrl = controller
     default = ctrl.build_api_launch_state({"scan_command1": "A3 35 36 1"})["vals"]
+    # The launch state's own crystals, not the live GUI selection: a saved
+    # parameters.json may have another crystal selected.
+    mono_info, ana_info = ctrl.instrument.crystal_info(default['monocris'], default['anacris'])
+    dm, da = mono_info['dm'], ana_info['da']
 
     vals = ctrl.build_api_launch_state({"Ei": 12, "scan_command1": "A3 35 36 1"})["vals"]
-    expected = int(geometry.sense_mono) * 2 * k2angle(energy2k(12), ctrl.monocris_info['dm'])
+    expected = int(geometry.sense_mono) * 2 * k2angle(energy2k(12), dm)
     assert math.isclose(vals['mtt'], expected, abs_tol=1e-3), (instrument_id, vals['mtt'], expected)
     assert math.isclose(vals['att'], default['att'], abs_tol=1e-6)
 
     vals = ctrl.build_api_launch_state({"Ef": 12, "scan_command1": "A3 35 36 1"})["vals"]
-    expected = int(geometry.sense_ana) * 2 * k2angle(energy2k(12), ctrl.anacris_info['da'])
+    expected = int(geometry.sense_ana) * 2 * k2angle(energy2k(12), da)
     assert math.isclose(vals['att'], expected, abs_tol=1e-3), (instrument_id, vals['att'], expected)
     assert math.isclose(vals['mtt'], default['mtt'], abs_tol=1e-6)
 
     vals = ctrl.build_api_launch_state({"Ei": 12, "mtt": 33.0, "scan_command1": "A3 35 36 1"})["vals"]
     assert vals['mtt'] == 33.0
+
+    # A patched fixed energy moves BOTH sides (deltaE=0 in the defaults, so
+    # Ei = Ef = 12) and therefore both crystal angles, as in the GUI.
+    vals = ctrl.build_api_launch_state({"fixed_E": 12, "scan_command1": "A3 35 36 1"})["vals"]
+    assert math.isclose(vals['Ei'], 12, abs_tol=1e-9) and math.isclose(vals['Ef'], 12, abs_tol=1e-9)
+    assert math.isclose(vals['mtt'], int(geometry.sense_mono) * 2 * k2angle(energy2k(12), dm), abs_tol=1e-3)
+    assert math.isclose(vals['att'], int(geometry.sense_ana) * 2 * k2angle(energy2k(12), da), abs_tol=1e-3)
 
