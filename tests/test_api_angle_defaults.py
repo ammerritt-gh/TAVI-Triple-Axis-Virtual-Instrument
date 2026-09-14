@@ -85,6 +85,15 @@ def test_gui_startup_defaults_match_api_defaults(controller, instrument_id):
     launch = ctrl.build_api_launch_state({"scan_command1": "A3 35 36 1"})
     api_vals = launch["vals"]
 
+    # Establish fresh defaults explicitly: construction restores the
+    # operator's saved config/parameters.json (untracked local state) and
+    # then refreshes mtt/att through the crystal-info updates, so reading
+    # the widgets as constructed would neither isolate this test from a
+    # saved state nor prove the startup writer itself. All four angles are
+    # compared, the sample ones included.
+    ctrl.set_default_parameters()
     gui_vals = ctrl.get_gui_values()
-    assert math.isclose(gui_vals['mtt'], api_vals['mtt'], abs_tol=1e-3)
-    assert math.isclose(gui_vals['att'], api_vals['att'], abs_tol=1e-3)
+    for key in ("mtt", "stt", "omega", "att"):
+        assert math.isclose(gui_vals[key], api_vals[key], abs_tol=1e-3), (
+            f"{instrument_id} startup {key}={gui_vals[key]}, API default {api_vals[key]}"
+        )
