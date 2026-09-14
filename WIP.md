@@ -111,6 +111,6 @@ installer uploaded, and this entry is deleted.
 
 **State:** pinned
 
-The [release 1.3 audit](docs/audits/release-1-3.md) records two independently confirmed blockers in GUI energy-derived branches and API angle defaults, with the existing optional and post-release work kept separate.
+The [release 1.3 audit](docs/audits/release-1-3.md) recorded two independently confirmed blockers in GUI energy-derived branches and API angle defaults; both landed in PR #39 (`54b35951`, 2026-09-14) with per-instrument acceptance tests, plus three API-launch repairs the external reader found on top (energy patches re-derive their crystal angle, a fixed-energy patch moves both energy sides, a non-positive derived energy is refused). The ledger now holds only the optional and post-release pointers to existing entries.
 
 Done when: the ledger is empty and deleted.
