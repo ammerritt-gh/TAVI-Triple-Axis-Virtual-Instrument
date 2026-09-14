@@ -53,7 +53,7 @@ main() {
     local os arch mamba_asset mamba_sha256
     local downloader sdk_path reply
     local micromamba_exe env_prefix conda_packages backup_dir broken_backup
-    local mcstas_resources mcrun progress_bar tmp_cfg pb_map pb_map_file
+    local mcstas_resources mcrun progress_bar tmp_cfg pb_map pb_map_file pb_map_size
     local run_script command_script update_script
 
     # --- Step 1: platform detection ---------------------------------------
@@ -367,9 +367,17 @@ PYEOF
     echo "[Step 5/6] Building the lead-sample dispersion map..."
     pb_map=ok
     pb_map_file="$INSTALL_DIR/components/Pb_dft_phonons.dat"
+    pb_map_size=0
     if [ -e "$pb_map_file" ]; then
+        pb_map_size=$(wc -c < "$pb_map_file" | tr -d ' ')
+    fi
+    if [ "$pb_map_size" -ge 100000000 ]; then
         echo "[OK] components/Pb_dft_phonons.dat already present."
     else
+        if [ -e "$pb_map_file" ]; then
+            echo "[WARN] components/Pb_dft_phonons.dat is truncated; rebuilding it."
+            rm -f "$pb_map_file"
+        fi
         echo "[INFO] Building components/Pb_dft_phonons.dat: about 150 MB, a few minutes,"
         echo "       with no output until it finishes. Please wait."
         if ! (cd "$INSTALL_DIR" && "$micromamba_exe" run -n "$ENV_NAME" python "$INSTALL_DIR/tools/make_pb_assets.py"); then
@@ -423,6 +431,7 @@ set -e
 echo "This installation is pinned to release tag $TAVI_VERSION."
 echo "This script repairs/re-checks that exact tag. It does not pull main."
 cd "$INSTALL_DIR"
+export MAMBA_ROOT_PREFIX="$MAMBA_ROOT_PREFIX"
 echo "[INFO] Fetching tags from GitHub..."
 "$micromamba_exe" run -n $ENV_NAME git fetch --tags origin
 echo "[INFO] Checking out $TAVI_VERSION..."

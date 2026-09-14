@@ -203,8 +203,8 @@ goto create_env
 echo [INFO] Removing existing '%ENV_NAME%' environment...
 "%MICROMAMBA_EXE%" env remove -n %ENV_NAME% -y
 if errorlevel 1 echo [WARN] Environment removal reported an error; continuing.
+set "REMOVED_ENV_BACKUP=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%_old_%RANDOM%_%RANDOM%"
 if exist "%ENV_PREFIX%" (
-    set "REMOVED_ENV_BACKUP=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%_old_%RANDOM%_%RANDOM%"
     echo [WARN] Environment folder still exists after removal.
     echo [INFO] Moving leftover folder to:
     echo        %REMOVED_ENV_BACKUP%
@@ -366,9 +366,15 @@ echo.
 echo [Step 7/8] Building the lead-sample dispersion map...
 set "PB_MAP=ok"
 set "PB_MAP_FILE=%INSTALL_DIR%\components\Pb_dft_phonons.dat"
-if exist "%PB_MAP_FILE%" (
+set "PB_MAP_SIZE=0"
+if exist "%PB_MAP_FILE%" for %%A in ("%PB_MAP_FILE%") do set "PB_MAP_SIZE=%%~zA"
+if %PB_MAP_SIZE% GEQ 100000000 (
     echo [OK] components\Pb_dft_phonons.dat already present.
     goto pb_map_done
+)
+if exist "%PB_MAP_FILE%" (
+    echo [WARN] components\Pb_dft_phonons.dat is truncated; rebuilding it.
+    del "%PB_MAP_FILE%" >nul 2>nul
 )
 echo [INFO] Building components\Pb_dft_phonons.dat: about 150 MB, a few minutes,
 echo        with no output until it finishes. Please wait.
