@@ -5964,8 +5964,8 @@ class TAVIController(QObject):
 
         Solved from the active instrument (``calculate_angles`` applies its
         declared mono/sample/analyser senses -- instruments/tas_runtime.py:783),
-        not PUMA's hard-coded literals: those are only correct for PUMA, and an
-        unpatched API launch on another instrument used to start from them
+        not one instrument's hard-coded literals: an unpatched API launch on
+        any other instrument used to start from those
         (docs/audits/release-1-3.md entry 2). ``calculate_angles`` reads
         instrument-fixed crystal geometry and senses only and does not mutate
         the state it is called on, so the live ``self.instrument_state`` is
@@ -5975,7 +5975,7 @@ class TAVIController(QObject):
         ``_default_parameter_values`` (Al (2,0,0), deltaE=0, Kf-fixed at
         14.7 meV). On a solve error (e.g. a hand-built descriptor with
         incompatible crystals), the zeroed solve is returned as-is -- no
-        PUMA fallback, since a wrong-instrument default is exactly the bug
+        literal fallback, since a wrong-instrument default is exactly the bug
         this closes; the caller sees zeros and the validation path refuses
         them visibly instead of silently defaulting to another instrument.
         """
