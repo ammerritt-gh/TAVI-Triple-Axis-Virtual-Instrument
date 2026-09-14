@@ -2805,6 +2805,28 @@ class TAVIController(QObject):
                 vals['Ef'] = vals['fixed_E']
                 vals['Kf'] = energy2k(vals['Ef'])
 
+        # Energy -> crystal angle, the API twin of the GUI's Ei/Ki/Ef/Kf
+        # handlers: a patched energy side re-derives its own take-off angle
+        # on the instrument's signed branch unless the caller named that
+        # angle explicitly (an explicit A1/A4 is authoritative, as in the
+        # GUI). Without this an angle-mode scan patched with Ei=12 kept the
+        # reference-state A1 and ran near the reference energy.
+        energy_keys = ('fixed_E', 'K_fixed', 'monocris', 'anacris')
+        if any(k in patched for k in energy_keys + ('Ei', 'Ki', 'Ef', 'Kf')):
+            mono_info, ana_info = self.instrument.crystal_info(
+                vals['monocris'], vals['anacris']
+            )
+            if 'mtt' not in patched and any(
+                    k in patched for k in energy_keys + ('Ei', 'Ki')):
+                vals['mtt'] = (self.instrument_state.sense_mono * 2
+                               * k2angle(vals['Ki'], mono_info['dm']))
+                patched.add('mtt')
+            if 'att' not in patched and any(
+                    k in patched for k in energy_keys + ('Ef', 'Kf')):
+                vals['att'] = (self.instrument_state.sense_ana * 2
+                               * k2angle(vals['Kf'], ana_info['da']))
+                patched.add('att')
+
         # HKL<->Q under the (possibly sample-adopted) lattice. HKL is
         # authoritative when position was patched via HKL/lattice/sample; Q is
         # authoritative when patched via qx/qy/qz. LOAD-BEARING: ISAR sends
