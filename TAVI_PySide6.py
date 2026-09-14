@@ -2798,12 +2798,47 @@ class TAVIController(QObject):
         elif 'Kf' in patched and 'Ef' not in patched:
             vals['Ef'] = k2energy(vals['Kf'])
         if 'fixed_E' in patched or 'K_fixed' in patched:
+            # Both sides, as the GUI's update_all_variables derives them:
+            # the free side is fixed_E offset by the launch state's deltaE.
             if vals['K_fixed'] == "Ki Fixed":
                 vals['Ei'] = vals['fixed_E']
-                vals['Ki'] = energy2k(vals['Ei'])
+                vals['Ef'] = vals['fixed_E'] - vals['deltaE']
             else:
                 vals['Ef'] = vals['fixed_E']
-                vals['Kf'] = energy2k(vals['Ef'])
+                vals['Ei'] = vals['fixed_E'] + vals['deltaE']
+            vals['Ki'] = energy2k(vals['Ei'])
+            vals['Kf'] = energy2k(vals['Ef'])
+
+        # Energy -> crystal angle, the API twin of the GUI's Ei/Ki/Ef/Kf
+        # handlers: a patched energy side re-derives its own take-off angle
+        # on the instrument's signed branch unless the caller named that
+        # angle explicitly (an explicit A1/A4 is authoritative, as in the
+        # GUI). Without this an angle-mode scan patched with Ei=12 kept the
+        # reference-state A1 and ran near the reference energy. A
+        # non-positive energy is refused here: angle mode takes A1/A4 as
+        # raw authority and never reaches calculate_angles' own Ei/Ef > 0
+        # guard, and a NaN angle passes every limit comparison.
+        energy_keys = ('fixed_E', 'K_fixed', 'monocris', 'anacris')
+        if any(k in patched for k in energy_keys + ('Ei', 'Ki', 'Ef', 'Kf')):
+            if not (vals['Ei'] > 0 and vals['Ef'] > 0):
+                raise ApiError(
+                    400, "invalid_parameters",
+                    "energy transfer %s leaves Ei=%s, Ef=%s; both must be positive"
+                    % (vals['deltaE'], vals['Ei'], vals['Ef']),
+                )
+            mono_info, ana_info = self.instrument.crystal_info(
+                vals['monocris'], vals['anacris']
+            )
+            if 'mtt' not in patched and any(
+                    k in patched for k in energy_keys + ('Ei', 'Ki')):
+                vals['mtt'] = (self.instrument_state.sense_mono * 2
+                               * k2angle(vals['Ki'], mono_info['dm']))
+                patched.add('mtt')
+            if 'att' not in patched and any(
+                    k in patched for k in energy_keys + ('Ef', 'Kf')):
+                vals['att'] = (self.instrument_state.sense_ana * 2
+                               * k2angle(vals['Kf'], ana_info['da']))
+                patched.add('att')
 
         # HKL<->Q under the (possibly sample-adopted) lattice. HKL is
         # authoritative when position was patched via HKL/lattice/sample; Q is
@@ -3088,6 +3123,20 @@ class TAVIController(QObject):
         edit.setText(text)
         self._update_tracked_value(field_name, value, displayed_text=edit.text())
         self._commit_programmatic_feedback([edit])
+
+    def _signed_mtt(self, Ki):
+        """Mono two-theta from Ki, on the instrument's declared readout sense.
+
+        Same rule as the runtime (instruments/tas_runtime.py calculate_angles).
+        """
+        return self.instrument_state.sense_mono * 2 * k2angle(Ki, self.monocris_info['dm'])
+
+    def _signed_att(self, Kf):
+        """Analyser two-theta from Kf, on the instrument's declared readout sense.
+
+        Same rule as the runtime (instruments/tas_runtime.py calculate_angles).
+        """
+        return self.instrument_state.sense_ana * 2 * k2angle(Kf, self.anacris_info['da'])
     
     def update_all_variables(self, skip_crystal_angles=False):
         """
@@ -3136,8 +3185,8 @@ class TAVIController(QObject):
             
             # Only update crystal angles if not skipping (angles are not the source of truth)
             if not skip_crystal_angles:
-                mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
-                att = 2 * k2angle(Kf, self.anacris_info['da'])
+                mtt = self._signed_mtt(Ki)
+                att = self._signed_att(Kf)
                 self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
                 self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
             
@@ -3508,10 +3557,14 @@ class TAVIController(QObject):
         The subsequent loader can keep direct widget writes while malformed or
         null JSON values become visible warnings rather than startup crashes.
         """
+        mtt, stt, omega, att = self._reference_angles(
+            self._saved_crystal_id(parameters.get("monocris_var"), self.descriptor.mono_crystals),
+            self._saved_crystal_id(parameters.get("anacris_var"), self.descriptor.ana_crystals),
+        )
         defaults = {
             "rhm_var": 0, "rvm_var": 0, "rha_var": 0, "rva_var": 0,
-            "mtt_var": 41.167, "stt_var": -71.2502, "omega_var": -35.6251,
-            "chi_var": 0, "att_var": 41.167, "Ki_var": 2.6634, "Kf_var": 2.6634,
+            "mtt_var": mtt, "stt_var": stt, "omega_var": omega,
+            "chi_var": 0, "att_var": att, "Ki_var": 2.6634, "Kf_var": 2.6634,
             "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
             "qx_var": 3.1028, "qy_var": 0, "qz_var": 0, "H_var": 2, "K_var": 0,
             "L_var": 0, "deltaE_var": 0, "kappa_var": 0, "psi_offset_var": 0,
@@ -3567,7 +3620,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Ki and Ei from mtt
-            Ki = angle2k(vals['mtt'] / 2, self.monocris_info['dm'])
+            Ki = angle2k(vals['mtt'] / (2 * self.instrument_state.sense_mono), self.monocris_info['dm'])
             Ei = k2energy(Ki)
             
             self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
@@ -3605,7 +3658,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             # Update Kf and Ef from att
-            Kf = angle2k(vals['att'] / 2, self.anacris_info['da'])
+            Kf = angle2k(vals['att'] / (2 * self.instrument_state.sense_ana), self.anacris_info['da'])
             Ef = k2energy(Kf)
             
             self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
@@ -3641,7 +3694,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Ei = k2energy(vals['Ki'])
-            mtt = 2 * k2angle(vals['Ki'], self.monocris_info['dm'])
+            mtt = self._signed_mtt(vals['Ki'])
             
             self.window.instrument_dock.Ei_edit.setText(format_editable_number(Ei))
             self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
@@ -3675,7 +3728,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Ki = energy2k(vals['Ei'])
-            mtt = 2 * k2angle(Ki, self.monocris_info['dm'])
+            mtt = self._signed_mtt(Ki)
             
             self.window.instrument_dock.Ki_edit.setText(format_editable_number(Ki))
             self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
@@ -3709,7 +3762,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Ef = k2energy(vals['Kf'])
-            att = 2 * k2angle(vals['Kf'], self.anacris_info['da'])
+            att = self._signed_att(vals['Kf'])
             
             self.window.instrument_dock.Ef_edit.setText(format_editable_number(Ef))
             self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
@@ -3743,7 +3796,7 @@ class TAVIController(QObject):
         try:
             self.updating = True
             Kf = energy2k(vals['Ef'])
-            att = 2 * k2angle(Kf, self.anacris_info['da'])
+            att = self._signed_att(Kf)
             
             self.window.instrument_dock.Kf_edit.setText(format_editable_number(Kf))
             self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
@@ -5672,16 +5725,20 @@ class TAVIController(QObject):
                 self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
                     parameters.get("anacris_var"), self.descriptor.ana_crystals
                 ))
+                mtt, stt, omega, att = self._reference_angles(
+                    self.window.instrument_dock.selected_mono_id(),
+                    self.window.instrument_dock.selected_ana_id(),
+                )
                 self._set_tracked_angle_text(
                     'mtt', self.window.instrument_dock.mtt_edit,
-                    parameters.get("mtt_var", "41.167"),
+                    parameters.get("mtt_var", mtt),
                 )
-                self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", "-71.2502")))
-                self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", "-35.6251")))
+                self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", stt)))
+                self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", omega)))
                 self.window.instrument_dock.chi_edit.setText(format_editable_number(parameters.get("chi_var", 0)))
                 self._set_tracked_angle_text(
                     'att', self.window.instrument_dock.att_edit,
-                    parameters.get("att_var", "41.167"),
+                    parameters.get("att_var", att),
                 )
                 self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
                 self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
@@ -5945,6 +6002,37 @@ class TAVIController(QObject):
                 defaults[slit.id] = width
         return defaults
 
+    def _reference_angles(self, monocris, anacris):
+        """(mtt, stt, omega, att) for the Al(200) reference point, this instrument's own branch.
+
+        Solved from the active instrument (``calculate_angles`` applies its
+        declared mono/sample/analyser senses -- instruments/tas_runtime.py:783),
+        not one instrument's hard-coded literals: an unpatched API launch on
+        any other instrument used to start from those
+        (docs/audits/release-1-3.md entry 2). ``calculate_angles`` reads
+        instrument-fixed crystal geometry and senses only and does not mutate
+        the state it is called on, so the live ``self.instrument_state`` is
+        safe to reuse here.
+
+        Mirrors the qx/qy/qz/deltaE/fixed_E/K_fixed defaults set in
+        ``_default_parameter_values`` (Al (2,0,0), deltaE=0, Kf-fixed at
+        14.7 meV). On a solve error (e.g. a hand-built descriptor with
+        incompatible crystals), the zeroed solve is returned as-is -- no
+        literal fallback, since a wrong-instrument default is exactly the bug
+        this closes; the caller sees zeros and the validation path refuses
+        them visibly instead of silently defaulting to another instrument.
+        """
+        angles, error_flags = self.instrument_state.calculate_angles(
+            3.1028, 0.0, 0.0, 0.0, 14.7, "Kf Fixed", monocris, anacris,
+        )
+        if error_flags:
+            log.warning(
+                "reference angle solve failed for %s (mono=%s, ana=%s): %s",
+                self.descriptor.id, monocris, anacris, error_flags,
+            )
+        mtt, stt, sth, saz, att = angles
+        return mtt, stt, sth, att
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -5971,9 +6059,12 @@ class TAVIController(QObject):
         slits_mm = self._descriptor_slit_defaults()
 
         sample_ids = {s.id for s in d.samples}
+        mtt, stt, omega, att = self._reference_angles(
+            d.mono_crystals[0].id, d.ana_crystals[0].id,
+        )
         vals = {
-            'mtt': 41.167, 'stt': -71.2502, 'omega': -35.6251, 'chi': 0.0,
-            'att': 41.167,
+            'mtt': mtt, 'stt': stt, 'omega': omega, 'chi': 0.0,
+            'att': att,
             'Ki': 2.6634, 'Ei': 14.7, 'Kf': 2.6634, 'Ef': 14.7,
             'K_fixed': "Kf Fixed", 'fixed_E': 14.7,
             'qx': 3.1028, 'qy': 0.0, 'qz': 0.0,
@@ -6043,11 +6134,14 @@ class TAVIController(QObject):
         
         self.window.instrument_dock.set_mono_id(self.descriptor.mono_crystals[0].id)
         self.window.instrument_dock.set_ana_id(self.descriptor.ana_crystals[0].id)
-        self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, "41.167")
-        self.window.instrument_dock.stt_edit.setText("-71.2502")
-        self.window.instrument_dock.omega_edit.setText("-35.6251")
+        mtt, stt, omega, att = self._reference_angles(
+            self.descriptor.mono_crystals[0].id, self.descriptor.ana_crystals[0].id,
+        )
+        self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
+        self.window.instrument_dock.stt_edit.setText(format_editable_number(stt))
+        self.window.instrument_dock.omega_edit.setText(format_editable_number(omega))
         self.window.instrument_dock.chi_edit.setText("0")
-        self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, "41.167")
+        self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
         self.window.instrument_dock.Ki_edit.setText("2.6634")
         self.window.instrument_dock.Kf_edit.setText("2.6634")
         self.window.instrument_dock.Ei_edit.setText("14.7")
