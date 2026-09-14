@@ -4,4 +4,4 @@ This package contains core functionality for the TAVI application,
 extracted and refactored from legacy code.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
