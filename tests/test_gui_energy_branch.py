@@ -49,28 +49,31 @@ def test_energy_edits_write_signed_crystal_angle(controller, instrument_id):
     geometry = plugin.descriptor().geometry
     ctrl = controller
 
+    # Each case uses an energy no earlier case left tracked in the same
+    # wavevector field, so the handler's unchanged-value guard cannot
+    # short-circuit and the Ki/Kf handlers are really exercised.
     cases = [
-        ("Ei", "mtt", int(geometry.sense_mono), lambda: ctrl.monocris_info['dm']),
-        ("Ef", "att", int(geometry.sense_ana), lambda: ctrl.anacris_info['da']),
-        ("Ki", "mtt", int(geometry.sense_mono), lambda: ctrl.monocris_info['dm']),
-        ("Kf", "att", int(geometry.sense_ana), lambda: ctrl.anacris_info['da']),
+        ("Ei", 12.0, "mtt", int(geometry.sense_mono), lambda: ctrl.monocris_info['dm']),
+        ("Ef", 12.0, "att", int(geometry.sense_ana), lambda: ctrl.anacris_info['da']),
+        ("Ki", 10.0, "mtt", int(geometry.sense_mono), lambda: ctrl.monocris_info['dm']),
+        ("Kf", 10.0, "att", int(geometry.sense_ana), lambda: ctrl.anacris_info['da']),
     ]
-    for field, angle_field, sense, d_spacing in cases:
+    for field, energy, angle_field, sense, d_spacing in cases:
         ctrl.update_angles_from_q()
         edit = getattr(ctrl.window.instrument_dock, field + "_edit")
         if field in ("Ki", "Kf"):
-            text = cm.format_editable_number(energy2k(12))
+            text = cm.format_editable_number(energy2k(energy))
         else:
-            text = "12"
+            text = cm.format_editable_number(energy)
         edit.setText(text)
         edit.editingFinished.emit()
 
         vals = ctrl.get_gui_values()
         actual = vals[angle_field]
-        k = energy2k(12)
+        k = energy2k(energy)
         expected = sense * 2 * k2angle(k, d_spacing())
         assert math.isclose(actual, expected, abs_tol=1e-3), (
-            f"{instrument_id} {field}=12: {angle_field}={actual}, expected {expected}"
+            f"{instrument_id} {field}={energy}: {angle_field}={actual}, expected {expected}"
         )
 
 
