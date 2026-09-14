@@ -1141,7 +1141,8 @@ Rules that differ from or extend the Windows script:
 - Generated scripts carry the absolute micromamba path and export
   `MAMBA_ROOT_PREFIX`, so they work when `~/.local/bin` is not on PATH.
 - `INSTALL_INFO.txt` adds `MICROMAMBA_EXE`, `MAMBA_ROOT_PREFIX`, `ENV_PREFIX`,
-  `PB_MAP` and `PLATFORM`; the uninstaller reads it rather than recomputing.
+  `PB_MAP` and `PLATFORM`; the uninstaller reads the binary and root prefix
+  from it rather than recomputing, and never lets it rename the env it removes.
 
 Must-not-remove list for the POSIX uninstaller (§17's counterpart): micromamba
 itself, `MAMBA_ROOT_PREFIX`, any environment other than `tavi`, the Xcode
