@@ -25,10 +25,7 @@ echo   Environment      : %ENV_NAME%
 echo   Desktop shortcut : %SHORTCUT%
 echo.
 echo This will NOT remove:
-echo   micromamba itself
-echo   tavi-dev or any other environment
-echo   Visual Studio / Build Tools
-echo   Microsoft MPI SDK
+echo   micromamba itself or any other environment
 echo.
 choice /C YN /M "Proceed"
 if errorlevel 2 exit /b 0
