@@ -79,14 +79,6 @@ The [release 1.3 audit](docs/audits/release-1-3.md) recorded two independently c
 
 Done when: the ledger is empty and deleted.
 
-## Installer build 3: release assets
-
-**State:** done (assets re-uploaded 2026-09-15 13:30 UTC; remove at the next closeout)
-
-PR #42 (`e1b2c1c5`) made the v1.3.0 installers conda-only (no pip step, environment rebuilt every run, existing-env detection by `conda-meta\history`; build 2). PR #43 (`608ab8f1`, 2026-09-15) made the Windows installer ship conda-forge GCC (`gcc_win-64=16.2.0`, `msmpi`), point McStas's in-env `mccode_config.json` at it (unlinked first: conda hardlinks the file into the cache and every env), and gate the install on a serial and MPI compile of `PSI_DMC`; Visual Studio and the MPI SDK are no longer needed (`INSTALLER_VERSION=v1.3.0-3`). The two release assets on the v1.3.0 page still carry build 1, which fails with `uninstall-no-record-file` whenever PyPI's PySide6 is ahead of conda-forge's and requires Visual Studio. Record in `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §22(f)-(g) and "McStas compiler (build 3)".
-
-Done when: the operator has said to re-upload, and `gh release upload v1.3.0 installer\WINDOWS-install-TAVI-v1.3.0.bat installer\POSIX-install-TAVI-v1.3.0.sh --clobber` has run.
-
 ## MPI rank default fails on small Linux hosts
 
 **State:** pinned
@@ -102,11 +94,3 @@ Done when: a 1.3.1 slice lands the default with one test, and the POSIX installe
 `tavi-dev` (`setup-tavi-dev.bat`, `run-tavi-dev.bat`) still relies on Visual Studio and the `vcvars` hook; the installed `tavi` env uses conda-forge GCC since PR #43. Moving the dev env the same way (add `gcc_win-64=16.2.0 msmpi`, write the five overrides into its own `mccode_config.json` after unlinking) removes the split and the noisy activation. The `-B` sysroot quirk and the NCrystal `.lib` path are the overrides most likely to go stale on a McStas or GCC bump.
 
 Done when: `setup-tavi-dev.bat` builds the env with GCC and the suite's McStas-touching tests pass without Visual Studio present.
-
-## Tests never write local state
-
-**State:** done
-
-On 2026-09-14 the release test run closed a real offscreen main window (`tests/test_api_partial_collimation.py`) and its `closeEvent` saved a layout with every dock hidden into the operator's real `config/view_layout.json`; the same run rewrote `parameters.json` and `runtimes.json`. Landed 2026-09-15 on main: every config reader and writer resolves through `tavi/local_state.py` (`TAVI_CONFIG_DIR` override), the root `conftest.py` points the override at a temp copy of `config/` for the session, and a session tripwire fails the run if any real `config/` file or `output/` entry changed anyway. The record is the `conftest.py` docstring and `tests/README.md`.
-
-Done when: remove at the next closeout; the tripwire is the standing guard.
