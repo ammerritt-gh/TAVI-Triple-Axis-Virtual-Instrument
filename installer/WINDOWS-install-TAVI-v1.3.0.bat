@@ -340,6 +340,12 @@ if exist "%USER_MCCODE%" (
     echo        %USER_MCCODE%
     move /Y "%USER_MCCODE%" "%USER_MCCODE%.bak-%RANDOM%" >nul
 )
+if exist "%USER_MCCODE%" (
+    echo [ERROR] Could not move that file aside. It would override the compiler
+    echo         configured below. Close programs that may hold it, or rename it, and retry.
+    pause
+    exit /b 1
+)
 "%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%TEMP%\tavi_gcc_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
 if errorlevel 1 (
     echo [ERROR] Failed to configure the McStas compiler.
