@@ -32,7 +32,7 @@ The installer performs these steps automatically:
 2. **Creates the `tavi` environment** — with Python 3.11, McStas, GCC (conda-forge) and MS-MPI, and all dependencies, including PySide6 and McStasScript from conda-forge; an existing environment is removed and rebuilt
 3. **Clones TAVI** — from GitHub at the release pinned in the installer
 4. **Configures McStasScript** — so it can find the McStas installation in the conda environment
-5. **Configures and compile-checks the McStas compiler** — points McStas's own config at the environment's GCC (five overrides, written into the environment's copy of `mccode_config.json`), then compiles and runs the `PSI_DMC_simple` example serial and under MPI. A serial failure is fatal and stops the install; an MPI failure only warns (`MPI=missing` in `INSTALL_INFO.txt`) since serial McStas still works
+5. **Configures and compile-checks the McStas compiler** — points McStas's own config at the environment's GCC (five overrides, written into the environment's copy of `mccode_config.json`), moves aside any stale per-user McStas config that would override it, then compiles and runs the `PSI_DMC` example serially and under MPI. Either failure stops the install: TAVI runs every simulation under MPI
 6. **Builds the lead-sample dispersion map** — `components\Pb_dft_phonons.dat`, about 150 MB, a few minutes with no output. It is optional: if the step fails the installer warns, records `PB_MAP=missing` in `INSTALL_INFO.txt` and continues; the "Pb: Phonon DFT" sample then stays listed but a run with it fails at asset load until you open the TAVI shell and run `python tools\make_pb_assets.py`
 7. **Creates launcher scripts**
 
@@ -114,11 +114,7 @@ The installer already compile-checks the compiler before it finishes, so a first
 
 ### Compiler check failed during install
 
-Look at `%TEMP%\tavi_compile_check\serial.log` for the compiler error, then re-run the installer (it rebuilds the environment from scratch).
-
-### MPI check warned
-
-Serial simulations work; MPI runs use `mpiexec` from the environment. Look at `%TEMP%\tavi_compile_check\mpi.log` if you need MPI and it is not working.
+Look at `%TEMP%\tavi_compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed) for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI.
 
 ### "Failed to download micromamba"
 

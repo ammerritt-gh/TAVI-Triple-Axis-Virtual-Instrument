@@ -332,6 +332,14 @@ echo [Step 5/7] Configuring and checking the McStas compiler...
 >> "%TEMP%\tavi_gcc_config.py" echo cfg.unlink()
 >> "%TEMP%\tavi_gcc_config.py" echo cfg.write_text(json.dumps(data, indent=4), encoding="utf-8")
 >> "%TEMP%\tavi_gcc_config.py" echo print("[TAVI] McStas compiler set to conda-forge GCC")
+:: McStas reads a per-user config for this env name ahead of the env's own file;
+:: a stale one (a previous McStas setup) would override the compiler set below.
+set "USER_MCCODE=%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_%ENV_NAME%\mccode_config.json"
+if exist "%USER_MCCODE%" (
+    echo [INFO] Moving aside a per-user McStas config that would override this environment:
+    echo        %USER_MCCODE%
+    move /Y "%USER_MCCODE%" "%USER_MCCODE%.bak-%RANDOM%" >nul
+)
 "%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%TEMP%\tavi_gcc_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
 if errorlevel 1 (
     echo [ERROR] Failed to configure the McStas compiler.
@@ -343,15 +351,17 @@ del "%TEMP%\tavi_gcc_config.py" >nul 2>nul
 set "GATE_DIR=%TEMP%\tavi_compile_check"
 if exist "%GATE_DIR%" rmdir /s /q "%GATE_DIR%"
 mkdir "%GATE_DIR%"
-copy /Y "%MCSTAS_RESOURCES%\examples\PSI\PSI_DMC_simple\PSI_DMC_simple.instr" "%GATE_DIR%\" >nul
+:: PSI_DMC rather than PSI_DMC_simple: its PowderN sample requests the NCrystal
+:: flags, so the gate exercises every override, not just CC/CFLAGS/MPIFLAGS.
+copy /Y "%MCSTAS_RESOURCES%\examples\PSI\PSI_DMC\PSI_DMC.instr" "%GATE_DIR%\" >nul
 if errorlevel 1 (
-    echo [ERROR] Could not find the PSI_DMC_simple example instrument to test-compile.
+    echo [ERROR] Could not find the PSI_DMC example instrument to test-compile.
     pause
     exit /b 1
 )
 cd /d "%GATE_DIR%"
 echo [INFO] Compiling and running a test instrument, serial...
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c PSI_DMC_simple.instr -n 1000 -d serial lambda=2.5666 > "%GATE_DIR%\serial.log" 2>&1
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c PSI_DMC.instr -n 1000 -d serial lambda=2.5666 > "%GATE_DIR%\serial.log" 2>&1
 if errorlevel 1 (
     echo [ERROR] The C compiler could not build a McStas instrument.
     echo         Log: %GATE_DIR%\serial.log
@@ -360,14 +370,16 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [INFO] Compiling and running a test instrument, MPI...
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c --mpi=2 PSI_DMC_simple.instr -n 1000 -d mpi lambda=2.5666 > "%GATE_DIR%\mpi.log" 2>&1
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c --mpi=2 PSI_DMC.instr -n 1000 -d mpi lambda=2.5666 > "%GATE_DIR%\mpi.log" 2>&1
 if errorlevel 1 (
-    set "MPI=missing"
-    echo [WARN] MPI run failed; TAVI works without MPI. Log: %GATE_DIR%\mpi.log
-) else (
-    set "MPI=ok"
-    echo [OK] Compiler check passed, serial and MPI.
+    echo [ERROR] The MPI build or run of a McStas instrument failed. TAVI runs every
+    echo         simulation under MPI, so this installation would not work.
+    echo         Log: %GATE_DIR%\mpi.log
+    cd /d "%INSTALL_DIR%"
+    pause
+    exit /b 1
 )
+echo [OK] Compiler check passed, serial and MPI.
 cd /d "%INSTALL_DIR%"
 echo.
 
@@ -423,7 +435,6 @@ echo ENV_PREFIX=%ENV_PREFIX%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo REPO_URL=https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo PB_MAP=%PB_MAP%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo COMPILER=gcc_win-64>> "%INSTALL_DIR%\INSTALL_INFO.txt"
-echo MPI=%MPI%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo [OK] Wrote install metadata to %INSTALL_DIR%\INSTALL_INFO.txt
 echo.
 echo ============================================================================
@@ -440,11 +451,6 @@ if "%PB_MAP%"=="missing" (
     echo [WARN] The lead-sample dispersion map was not built. The "Pb: Phonon DFT"
     echo        sample will not run until you open the TAVI shell and run:
     echo            python tools\make_pb_assets.py
-)
-if "%MPI%"=="missing" (
-    echo.
-    echo [WARN] The MPI compiler check failed. Serial simulations work; MPI runs
-    echo        will not. Log: %GATE_DIR%\mpi.log
 )
 echo.
 echo Run:
