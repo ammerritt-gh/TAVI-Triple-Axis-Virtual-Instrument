@@ -2,7 +2,7 @@
 
 > **Status:** live
 
-_Last updated: 2026-09-14_
+_Last updated: 2026-09-15_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.
 
@@ -21,6 +21,11 @@ The Windows installer is responsible for:
 3. Verifying or warning about external build/runtime prerequisites:
    - Visual Studio C++ compiler bootstrap.
    - Microsoft MPI SDK.
+
+   > **Superseded 2026-09-15 (build 3):** there is no external prerequisite
+   > any more. The compiler (conda-forge GCC) ships inside the `tavi`
+   > environment and is configured and compile-checked by the installer
+   > itself. See "McStas compiler (build 3)" below.
 4. Installing or reusing micromamba without modifying global shell startup behavior.
 5. Creating or updating the `tavi` micromamba environment.
 6. Installing the required McStas package set.
@@ -623,8 +628,13 @@ Required behavior:
    - `MCSTAS`
    - `MCSTAS_COMPONENT_PATH`
 3. Check that `%MCSTAS%` exists.
-4. Optionally call Visual Studio `vcvars64.bat` if found. Locate it via `vswhere.exe` (`%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe`), not a hardcoded version path: VS 2026 installs to `...\Microsoft Visual Studio\18\...`, not `...\2026\...`, so a hardcoded year/version segment breaks detection.
-5. Optionally append Microsoft MPI SDK include/lib paths if found.
+4. ~~Optionally call Visual Studio `vcvars64.bat` if found. Locate it via `vswhere.exe` (`%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe`), not a hardcoded version path: VS 2026 installs to `...\Microsoft Visual Studio\18\...`, not `...\2026\...`, so a hardcoded year/version segment breaks detection.~~
+5. ~~Optionally append Microsoft MPI SDK include/lib paths if found.~~
+
+   > **Superseded 2026-09-15 (build 3):** `run-tavi.bat` no longer bootstraps
+   > a compiler at launch time. The environment's own McStas config already
+   > points at conda-forge GCC, configured once during install. See "McStas
+   > compiler (build 3)" below.
 6. Run:
 
 ```bat
@@ -661,6 +671,80 @@ The shell option should run a shell inside the `tavi` environment but must not a
 
 ---
 
+### McStas compiler (build 3)
+
+conda-forge's Windows McStas package is configured for `cl.exe` and only
+locates an installed Visual Studio; every user previously had to install
+Visual Studio Build Tools (and, for MPI, the Microsoft MPI SDK) before
+McStas would compile. Spike evidence (2026-09-15, scratch env `tavi-gcc`):
+conda-forge `gcc_win-64` (MinGW-w64 GCC 16.2) compiles and runs McStas 3.7.1
+instruments, serial and under `mpiexec` (MPI recompile pulls in `msmpi.dll`
+from the conda `msmpi` package, which also ships `mpiexec.exe`), including
+TAVI's PUMA instrument with its custom components and lattice/phonon files.
+
+The installer adds `gcc_win-64` and `msmpi` to the `tavi` environment's
+package list, then overrides five entries in the environment's own copy of
+`mccode_config.json` (`<ENV_PREFIX>\share\mcstas\tools\Python\mccodelib\mccode_config.json`),
+backing up the package's MSVC original alongside it first:
+
+- `CC`, `MPICC` — the environment's `x86_64-w64-mingw32-gcc.exe`.
+- `CFLAGS` — include/lib paths under `${CONDA_PREFIX}` plus
+  `-B${CONDA_PREFIX}/Library/x86_64-w64-mingw32/sysroot/usr/lib/`: conda-forge's
+  GCC looks for `crt2.o` in `sysroot/usr/lib`, and the package puts it there
+  rather than in `sysroot/lib`, so without the `-B` flag linking fails.
+- `MPIFLAGS` — `-DUSE_MPI -lmsmpi`.
+- `NCRYSTALFLAGS` — rewritten from the package's MSVC syntax
+  (`ncrystal-config` output assumes `cl.exe`).
+
+The config is written **inside the environment**, not
+`%USERPROFILE%\AppData\mcstas\...` (the per-environment user config McStas
+also reads): it dies with the environment, there is exactly one source of
+truth to keep in sync with a McStas upgrade, and nothing under `%APPDATA%`
+needs cleaning up at uninstall. `vs2022_win-64` (pulled in by `mcstas-core`
+via `c-compiler`) still gets installed and only locates MSVC; with GCC
+configured it is inert.
+
+The file is **unlinked before it is written**. conda links package files
+into an environment as NTFS hardlinks to the package cache, so the
+environment's `mccode_config.json`, the cache copy and every other
+environment with the same McStas package are one inode. The first build 3
+cold run wrote the file in place and thereby rewrote the config of the
+operator's `tavi-dev` and `tavi` environments and the cache (found
+2026-09-15; restored from the `.conda` archive with
+`micromamba package extract`). `Path.unlink()` followed by a fresh write
+gives the environment its own file; the backup copy is a real copy too.
+
+Before writing the config, a per-user McStas config for this environment
+name (`%USERPROFILE%\AppData\mcstas\<version>_tavi\mccode_config.json`,
+which `mcrun` reads ahead of the environment's file) is moved aside with an
+`[INFO]` line: a stale one from an earlier McStas setup would silently
+override the compiler just configured (external reader, 2026-09-15). If
+the move fails and the file is still there, the install stops with
+`[ERROR]`: a machine that still has Visual Studio would otherwise pass the
+gate through the stale `cl.exe` config and stay silently dependent on it.
+
+The installer then gates the install on a real compile: it copies the
+`PSI_DMC` example into a scratch directory under `%TEMP%` and runs
+`mcrun -c ... -n 1000 lambda=2.5666`, once `-d serial` and once
+`-d mpi --mpi=2`. `PSI_DMC` rather than `PSI_DMC_simple` because its
+PowderN sample requests the NCrystal flags, so all five overrides are
+exercised. Either failure is `[ERROR]` and stops the install (exit 1): TAVI
+runs every simulation point under MPI (`DEFAULT_MPI_COUNT` in
+`instruments/contract.py`, no serial fallback), so an install whose MPI
+build fails would fail at the first scan instead — the external reader's
+P1 on the warn-only first draft. The gate directory
+(`%TEMP%\tavi_compile_check`) is left in place after the install; its
+`serial.log`/`mpi.log` are the first thing to check if compilation fails
+later.
+
+A machine with no Visual Studio was simulated by hiding the environment's
+`vswhere.exe`: the `vs2022_win-64` activation prints a few "not recognized"
+lines on every `micromamba run` and McStas still compiles and runs (exit 0).
+Not yet run on a machine that truly lacks it. A McStas version upgrade should re-check all five
+overrides, the `-B` quirk in particular.
+
+---
+
 ## 17. Safe uninstaller design
 
 The safe uninstaller must remove only:
@@ -677,9 +761,11 @@ It must explicitly not remove:
 micromamba itself
 tavi-dev
 any other environment
-Visual Studio / Build Tools
-Microsoft MPI SDK
 ```
+
+(the compiler lives inside the `tavi` environment as of build 3, so
+removing it is covered by removing the environment; see "McStas compiler
+(build 3)" above.)
 
 It must not delete `%USERPROFILE%\AppData\Roaming\mamba` or `%USERPROFILE%\AppData\Local\micromamba`.
 
@@ -889,8 +975,11 @@ A normal user should need only:
 1. Windows 10/11.
 2. Internet access.
 3. Permission to write under their own user profile.
-4. Visual Studio C++ Build Tools installed for full McStas compilation capability.
-5. Microsoft MPI SDK recommended/required for MPI workflows.
+4. ~~Visual Studio C++ Build Tools installed for full McStas compilation capability.~~
+5. ~~Microsoft MPI SDK recommended/required for MPI workflows.~~
+
+   > **Superseded 2026-09-15 (build 3):** nothing beyond Windows 10/11 and
+   > disk/network. See "McStas compiler (build 3)" below.
 
 The installer should install within user-writable locations:
 
@@ -902,7 +991,7 @@ The installer should install within user-writable locations:
 
 It should not require Administrator privileges for the core install.
 
-If Visual Studio or MSMPI are missing, warn clearly rather than corrupting the install. Only fail hard when TAVI cannot run in the intended mode.
+~~If Visual Studio or MSMPI are missing, warn clearly rather than corrupting the install. Only fail hard when TAVI cannot run in the intended mode.~~ Superseded 2026-09-15 (build 3): the compile gate fails hard on a serial or an MPI compile failure, since TAVI runs every point under MPI. See "McStas compiler (build 3)" below.
 
 ---
 
@@ -1019,6 +1108,7 @@ Before publishing a new installer:
 - [ ] Installer verifies `Progress_bar.comp` or the current required component.
 - [ ] Launcher sets `MCSTAS` and `MCSTAS_COMPONENT_PATH`.
 - [ ] Launcher runs via explicit `micromamba.exe run -n tavi`.
+- [ ] Installer's compile gate passes serial and MPI on `PSI_DMC`.
 - [ ] Safe uninstaller does not remove micromamba itself.
 - [ ] Safe uninstaller does not remove `tavi-dev`.
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
@@ -1074,6 +1164,13 @@ written after the tag exists.
     environment, rebuild-always, Qt smoke check. Re-uploaded over the
     v1.3.0 release assets with `--clobber`; `INSTALL_INFO.txt` tells the
     builds apart.
+
+(g) 2026-09-15: build 3 of the v1.3.0 installers
+    (`INSTALLER_VERSION=v1.3.0-3`) — conda-forge GCC (`gcc_win-64`) and
+    `msmpi` added to the environment, Visual Studio detection and the MPI
+    SDK check dropped, McStas's own config pointed at GCC inside the
+    environment, and the install gated on a real serial and MPI compile of
+    `PSI_DMC`. See "McStas compiler (build 3)" above.
 
 ## 23. Recommended future improvements
 
