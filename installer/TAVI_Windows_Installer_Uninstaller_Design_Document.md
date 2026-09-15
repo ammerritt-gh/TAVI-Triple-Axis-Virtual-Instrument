@@ -718,7 +718,10 @@ Before writing the config, a per-user McStas config for this environment
 name (`%USERPROFILE%\AppData\mcstas\<version>_tavi\mccode_config.json`,
 which `mcrun` reads ahead of the environment's file) is moved aside with an
 `[INFO]` line: a stale one from an earlier McStas setup would silently
-override the compiler just configured (external reader, 2026-09-15).
+override the compiler just configured (external reader, 2026-09-15). If
+the move fails and the file is still there, the install stops with
+`[ERROR]`: a machine that still has Visual Studio would otherwise pass the
+gate through the stale `cl.exe` config and stay silently dependent on it.
 
 The installer then gates the install on a real compile: it copies the
 `PSI_DMC` example into a scratch directory under `%TEMP%` and runs
