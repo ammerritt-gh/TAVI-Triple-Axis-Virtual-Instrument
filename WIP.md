@@ -79,13 +79,29 @@ The [release 1.3 audit](docs/audits/release-1-3.md) recorded two independently c
 
 Done when: the ledger is empty and deleted.
 
-## Installer build 2: release assets
+## Installer build 3: release assets
 
 **State:** pinned
 
-PR #42 (`e1b2c1c5`, 2026-09-15) made the v1.3.0 installers conda-only (no pip step, environment rebuilt every run, a `QApplication` smoke check, existing-env detection by `conda-meta\history`; `INSTALLER_VERSION=v1.3.0-2`). The two release assets on the v1.3.0 page still carry build 1, which fails with `uninstall-no-record-file` whenever PyPI's PySide6 is ahead of conda-forge's. Record in `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §22(f).
+PR #42 (`e1b2c1c5`) made the v1.3.0 installers conda-only (no pip step, environment rebuilt every run, existing-env detection by `conda-meta\history`; build 2). PR #43 (`608ab8f1`, 2026-09-15) made the Windows installer ship conda-forge GCC (`gcc_win-64=16.2.0`, `msmpi`), point McStas's in-env `mccode_config.json` at it (unlinked first: conda hardlinks the file into the cache and every env), and gate the install on a serial and MPI compile of `PSI_DMC`; Visual Studio and the MPI SDK are no longer needed (`INSTALLER_VERSION=v1.3.0-3`). The two release assets on the v1.3.0 page still carry build 1, which fails with `uninstall-no-record-file` whenever PyPI's PySide6 is ahead of conda-forge's and requires Visual Studio. Record in `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §22(f)-(g) and "McStas compiler (build 3)".
 
 Done when: the operator has said to re-upload, and `gh release upload v1.3.0 installer\WINDOWS-install-TAVI-v1.3.0.bat installer\POSIX-install-TAVI-v1.3.0.sh --clobber` has run.
+
+## MPI rank default fails on small Linux hosts
+
+**State:** pinned
+
+`DEFAULT_MPI_COUNT = 30` in `instruments/contract.py` is used for every simulation point (`run_tas_point`, no serial fallback). Linux users reported failures (operator, 2026-09-15): the conda McStas on Linux uses Open MPI, which refuses more ranks than cores unless told to oversubscribe, so an eight-core laptop fails at the first point; MS-MPI on Windows oversubscribes silently, which is why it never showed here. Proposed fix for 1.3.1: default to the machine's core count capped at 30, with the GUI and API overrides unchanged; Open MPI would also accept `--oversubscribe` in `MPIRUN`, but fewer ranks is the honest default.
+
+Done when: a 1.3.1 slice lands the default with one test, and the POSIX installer's compile gate runs `--mpi=2` like the Windows one.
+
+## Dev environment still compiles with MSVC
+
+**State:** pinned
+
+`tavi-dev` (`setup-tavi-dev.bat`, `run-tavi-dev.bat`) still relies on Visual Studio and the `vcvars` hook; the installed `tavi` env uses conda-forge GCC since PR #43. Moving the dev env the same way (add `gcc_win-64=16.2.0 msmpi`, write the five overrides into its own `mccode_config.json` after unlinking) removes the split and the noisy activation. The `-B` sysroot quirk and the NCrystal `.lib` path are the overrides most likely to go stale on a McStas or GCC bump.
+
+Done when: `setup-tavi-dev.bat` builds the env with GCC and the suite's McStas-touching tests pass without Visual Studio present.
 
 ## Tests never write local state
 
