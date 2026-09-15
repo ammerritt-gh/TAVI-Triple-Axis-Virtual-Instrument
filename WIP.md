@@ -78,3 +78,11 @@ The first documentation audit and setup pass under the shared standard (profile 
 The [release 1.3 audit](docs/audits/release-1-3.md) recorded two independently confirmed blockers in GUI energy-derived branches and API angle defaults; both landed in PR #39 (`54b35951`, 2026-09-14) with per-instrument acceptance tests, plus three API-launch repairs the external reader found on top (energy patches re-derive their crystal angle, a fixed-energy patch moves both energy sides, a non-positive derived energy is refused). The ledger now holds only the optional and post-release pointers to existing entries.
 
 Done when: the ledger is empty and deleted.
+
+## Installer build 2: release assets
+
+**State:** pinned
+
+PR #42 (`e1b2c1c5`, 2026-09-15) made the v1.3.0 installers conda-only (no pip step, environment rebuilt every run, a `QApplication` smoke check, existing-env detection by `conda-meta\history`; `INSTALLER_VERSION=v1.3.0-2`). The two release assets on the v1.3.0 page still carry build 1, which fails with `uninstall-no-record-file` whenever PyPI's PySide6 is ahead of conda-forge's. Record in `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §22(f).
+
+Done when: the operator has said to re-upload, and `gh release upload v1.3.0 installer\WINDOWS-install-TAVI-v1.3.0.bat installer\POSIX-install-TAVI-v1.3.0.sh --clobber` has run.
