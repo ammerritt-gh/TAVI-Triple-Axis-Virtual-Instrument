@@ -20,11 +20,15 @@ Notes:
 
 - **Run one suite at a time, and never a targeted file while a full run is in
   flight.** Two concurrent runs contend for the API server port
-  (`test_api_server.py`, `test_api_validation_schema.py`) and for the shared
-  `config/parameters.json` (every test that constructs a real
-  `TAVIController`, which reads `config/parameters.json` by relative path
-  during construction (`TAVI_PySide6.py:5601`)); both fail spuriously and
-  reproduce as green when run alone.
+  (`test_api_server.py`, `test_api_validation_schema.py`); it fails spuriously
+  and reproduces as green when run alone.
+- **Local state is isolated.** `conftest.py` sets `TAVI_CONFIG_DIR` for the
+  whole session to a temp copy of `config/`; every reader/writer in the app
+  resolves its config path through `tavi.local_state.config_path()`, which
+  honors that override, so nothing a test does reaches the operator's real
+  `config/` files. An autouse session fixture re-hashes the real `config/`
+  at teardown and fails the session if anything changed anyway. A test that
+  needs to write local state uses `tmp_path`.
 - **A fresh `git worktree` skips a test silently.** `components/Pb_dft_phonons.dat`
   (143 MB, gitignored) is not in a new worktree, so `test_dispersion_map.py`
   skips. `-ra` above prints the skip; hardlink the file from the main checkout

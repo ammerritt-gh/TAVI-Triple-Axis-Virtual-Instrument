@@ -2,7 +2,7 @@
 from pathlib import Path
 
 
-SCRIPT = Path("setup-tavi-dev.bat").read_text(encoding="utf-8")
+SCRIPT = (Path(__file__).resolve().parents[1] / "setup-tavi-dev.bat").read_text(encoding="utf-8")
 DIGEST = "56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
 
 

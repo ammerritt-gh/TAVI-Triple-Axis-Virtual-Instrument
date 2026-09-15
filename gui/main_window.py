@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, QByteArray, QTimer
 from PySide6.QtGui import QAction, QActionGroup
 
 import tavi
+from tavi.local_state import config_path as local_config_path
 from gui.docks.instrument_dock import InstrumentDock
 from gui.docks.unified_scattering_dock import UnifiedScatteringDock
 from gui.docks.unified_sample_dock import UnifiedSampleDock
@@ -25,8 +26,6 @@ from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
 class TAVIMainWindow(QMainWindow):
     """Main window for TAVI application with dockable panels."""
     
-    # Layout config file path
-    LAYOUT_CONFIG_FILE = "config/view_layout.json"
     LAYOUT_VERSION = 2
     
     def __init__(self, descriptor=None, instrument_infos=None,
@@ -549,12 +548,7 @@ class TAVIMainWindow(QMainWindow):
     
     def _get_layout_config_path(self):
         """Get the path to the layout config file."""
-        # Store in config directory at project root
-        project_root = os.path.dirname(os.path.dirname(__file__))
-        config_dir = os.path.join(project_root, "config")
-        # Create config directory if it doesn't exist
-        os.makedirs(config_dir, exist_ok=True)
-        return os.path.join(project_root, self.LAYOUT_CONFIG_FILE)
+        return str(local_config_path("view_layout.json"))
     
     def _show_about(self):
         """Show the About dialog."""

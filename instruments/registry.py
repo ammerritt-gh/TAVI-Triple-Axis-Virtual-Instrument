@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from instruments.contract import InstrumentPlugin
+from tavi.local_state import config_path as local_config_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +76,7 @@ def _selection_config_path(config_path=None) -> Path:
     """Resolve the selection config path (default: ``config/`` under repo root)."""
     if config_path is not None:
         return Path(config_path)
-    return Path(__file__).resolve().parent.parent / "config" / _SELECTION_FILENAME
+    return local_config_path(_SELECTION_FILENAME)
 
 
 def load_last_instrument(

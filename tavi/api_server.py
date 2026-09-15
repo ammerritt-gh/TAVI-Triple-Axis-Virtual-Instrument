@@ -47,6 +47,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
+from tavi.local_state import config_path as local_config_path
+
 
 # Sentinel pushed into every SSE client queue on shutdown so handler loops exit.
 SSE_CLOSE = object()
@@ -277,7 +279,7 @@ def load_api_config(config_path=None):
     keys from the file win per-key; ``limits`` is merged per-key too.
     """
     if config_path is None:
-        config_path = Path(__file__).resolve().parent.parent / "config" / "api_config.json"
+        config_path = local_config_path("api_config.json")
     else:
         config_path = Path(config_path)
 
