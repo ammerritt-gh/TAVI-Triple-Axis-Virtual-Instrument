@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# TAVI POSIX installer - release-pinned v1.3.0
+# TAVI POSIX installer - release-pinned v1.3.0 (build 2, 2026-09-15: conda-only environment)
 #
 # PROVISIONAL: written 2026-09-14 and never executed on macOS or Linux by the
 # maintainer. This mirrors installer/WINDOWS-install-TAVI-v1.3.0.bat step by
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 TAVI_VERSION="v1.3.0"
-INSTALLER_VERSION="v1.3.0"
+INSTALLER_VERSION="v1.3.0-2"
 PYTHON_VERSION="3.11"
 MCSTAS_VERSION="3.7.1"
 MAMBA_VERSION="2.5.0-1"
@@ -145,7 +145,7 @@ The uninstaller removes the env and the folder.
 This installer will do the following:
   1. Install or reuse micromamba at:
      $HOME/.local/bin/micromamba
-  2. Create or update the micromamba environment '$ENV_NAME' at:
+  2. Create or rebuild the micromamba environment '$ENV_NAME' at:
      $MAMBA_ROOT_PREFIX
   3. Install or update TAVI at:
      $INSTALL_DIR
@@ -156,8 +156,9 @@ This installer will do the following:
 This installer will NOT run 'micromamba shell init' and will NOT modify any
 shell startup file (.bashrc, .zshrc, etc).
 
-If an existing '$ENV_NAME' environment is found, you will be asked whether to
-recreate it or update it in place before any removal occurs.
+If an existing '$ENV_NAME' environment is found it is removed and rebuilt
+from scratch. Package downloads are cached, so a rebuild is much faster
+than the first install.
 ============================================================================
 EOF
     printf '%s' "Continue with TAVI installation? [y/N] "
@@ -219,28 +220,17 @@ EOF
     echo
 
     # --- Step 5: environment ---------------------------------------------------
-    echo "[Step 2/6] Creating or updating environment '$ENV_NAME'..."
-    conda_packages="python=$PYTHON_VERSION mcstas=$MCSTAS_VERSION mcstas-core=$MCSTAS_VERSION mcstas-data=$MCSTAS_VERSION mcstas-mcgui=$MCSTAS_VERSION mcstas-vis=$MCSTAS_VERSION numpy scipy matplotlib h5py pyyaml git"
+    echo "[Step 2/6] Creating or rebuilding environment '$ENV_NAME'..."
+    conda_packages="python=$PYTHON_VERSION mcstas=$MCSTAS_VERSION mcstas-core=$MCSTAS_VERSION mcstas-data=$MCSTAS_VERSION mcstas-mcgui=$MCSTAS_VERSION mcstas-vis=$MCSTAS_VERSION numpy scipy matplotlib h5py pyyaml git pyside6 mcstasscript"
     env_prefix="$MAMBA_ROOT_PREFIX/envs/$ENV_NAME"
 
     if [ -d "$env_prefix/conda-meta" ]; then
-        echo "[INFO] Environment '$ENV_NAME' already exists."
-        printf '%s' "Recreate from scratch (y) or update in place (N)? "
-        read -r reply || reply=""
-        case "${reply:-}" in
-            y|Y)
-                echo "[INFO] Removing existing '$ENV_NAME' environment..."
-                if ! "$micromamba_exe" env remove -n "$ENV_NAME" -y; then
-                    echo "[WARN] Environment removal reported an error; continuing." >&2
-                fi
-                echo "[INFO] Creating environment with packages: $conda_packages"
-                "$micromamba_exe" create -n "$ENV_NAME" $conda_packages -c conda-forge -c nodefaults -y
-                ;;
-            *)
-                echo "[INFO] Updating environment with packages: $conda_packages"
-                "$micromamba_exe" install -n "$ENV_NAME" $conda_packages -c conda-forge -c nodefaults -y
-                ;;
-        esac
+        echo "[INFO] Environment '$ENV_NAME' already exists; rebuilding it from scratch."
+        if ! "$micromamba_exe" env remove -n "$ENV_NAME" -y; then
+            echo "[WARN] Environment removal reported an error; continuing." >&2
+        fi
+        echo "[INFO] Creating environment with packages: $conda_packages"
+        "$micromamba_exe" create -n "$ENV_NAME" $conda_packages -c conda-forge -c nodefaults -y
     elif [ -e "$env_prefix" ]; then
         echo "[WARN] A non-conda or incomplete folder already exists at:" >&2
         echo "       $env_prefix" >&2
@@ -265,16 +255,12 @@ EOF
         "$micromamba_exe" create -n "$ENV_NAME" $conda_packages -c conda-forge -c nodefaults -y
     fi
 
-    echo "[INFO] Installing/upgrading pip packages..."
-    if ! "$micromamba_exe" run -n "$ENV_NAME" python -m pip install --upgrade pip; then
-        echo "[ERROR] Failed to upgrade pip." >&2
+    echo "[INFO] Checking that the GUI toolkit and McStasScript load..."
+    if ! QT_QPA_PLATFORM=offscreen "$micromamba_exe" run -n "$ENV_NAME" python -c 'from PySide6.QtWidgets import QApplication; import mcstasscript; QApplication([]); print("[OK] PySide6 and McStasScript load.")'; then
+        echo "[ERROR] PySide6 or McStasScript failed to load in environment '$ENV_NAME'." >&2
+        echo "[INFO] Run this installer again; it rebuilds the environment from scratch." >&2
         exit 1
     fi
-    if ! "$micromamba_exe" run -n "$ENV_NAME" python -m pip install --upgrade PySide6 mcstasscript; then
-        echo "[ERROR] Pip package install failed." >&2
-        exit 1
-    fi
-    echo "[OK] Python packages ready."
     echo
 
     env_prefix=$("$micromamba_exe" run -n "$ENV_NAME" python -c 'import sys; print(sys.prefix)')
@@ -436,8 +422,11 @@ echo "[INFO] Fetching tags from GitHub..."
 "$micromamba_exe" run -n $ENV_NAME git fetch --tags origin
 echo "[INFO] Checking out $TAVI_VERSION..."
 "$micromamba_exe" run -n $ENV_NAME git checkout "$TAVI_VERSION"
-echo "[INFO] Updating pip packages within the pinned installation environment..."
-"$micromamba_exe" run -n $ENV_NAME python -m pip install --upgrade PySide6 mcstasscript
+echo "[INFO] Checking that the GUI toolkit and McStasScript load..."
+if ! QT_QPA_PLATFORM=offscreen "$micromamba_exe" run -n $ENV_NAME python -c 'from PySide6.QtWidgets import QApplication; import mcstasscript; QApplication([]); print("[OK] PySide6 and McStasScript load.")'; then
+    echo "[ERROR] The '$ENV_NAME' environment is broken. Run the TAVI installer again; it rebuilds the environment." >&2
+    exit 1
+fi
 echo "[OK] Repair complete. Installed source remains pinned to $TAVI_VERSION."
 EOF
     chmod +x "$update_script"

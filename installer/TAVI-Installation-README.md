@@ -54,7 +54,7 @@ The installer performs these steps automatically:
 1. **Detects Visual Studio** — via `vswhere.exe`; warns if not found
 2. **Detects MPI SDK** — optional; warns if not found
 3. **Installs micromamba** — a lightweight conda package manager (pinned version with checksum verification)
-4. **Creates the `tavi` environment** — with Python 3.11, McStas, and all dependencies; or reconciles an existing environment to the current package manifest
+4. **Creates the `tavi` environment** — with Python 3.11, McStas, and all dependencies, including PySide6 and McStasScript from conda-forge; an existing environment is removed and rebuilt
 5. **Clones TAVI** — from GitHub at the release pinned in the installer
 6. **Configures McStasScript** — so it can find the McStas installation in the conda environment
 7. **Builds the lead-sample dispersion map** — `components\Pb_dft_phonons.dat`, about 150 MB, a few minutes with no output. It is optional: if the step fails the installer warns, records `PB_MAP=missing` in `INSTALL_INFO.txt` and continues; the "Pb: Phonon DFT" sample then stays listed but a run with it fails at asset load until you open the TAVI shell and run `python tools\make_pb_assets.py`
@@ -85,7 +85,7 @@ cd %USERPROFILE%\TAVI
 git describe --tags
 ```
 
-To move to a newer release, download that release's installer from the [releases page](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases) and run it. The launcher's **Update TAVI** option repairs the current pinned installation (fetches tags, re-checks out the same tag, refreshes pip packages) and never changes which release is installed.
+To move to a newer release, download that release's installer from the [releases page](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases) and run it. The launcher's **Update TAVI** option repairs the current pinned installation (fetches tags, re-checks out the same tag, checks that the GUI toolkit and McStasScript load) and never changes which release is installed.
 
 ---
 
@@ -98,7 +98,7 @@ After installation, use the **"TAVI Launcher"** shortcut on your desktop:
 | Option | Description |
 |--------|-------------|
 | **[1] Run TAVI** | Start the TAVI application |
-| **[2] Update TAVI** | Repair the current pinned installation (re-fetch and re-check-out the same tag, refresh pip packages) |
+| **[2] Update TAVI** | Repair the current pinned installation (re-fetch and re-check-out the same tag, check that the GUI toolkit and McStasScript load) |
 | **[3] Open TAVI folder** | Browse installation files |
 | **[4] Open TAVI shell** | Command prompt inside the `tavi` environment (no compiler bootstrap; run `run-tavi.bat` to start TAVI with one) |
 | **[5] Exit** | Close the launcher |
@@ -159,7 +159,7 @@ Check available disk space (~3 GB needed) and internet connection. Run again wit
 
 ### Import errors on launch (`No module named 'PySide6'`, etc.)
 
-Use option **[2] Update TAVI** from the launcher, which also reinstalls pip packages. Alternatively, run `update-tavi.bat` directly.
+Run the installer again. It removes the `tavi` environment and rebuilds it from the package list; downloads are cached so this is quick. Option **[2] Update TAVI** only reports whether the environment loads; it does not repair it.
 
 ### McStas not found / wrong McStas version used
 
@@ -201,9 +201,9 @@ It never removes micromamba itself, Visual Studio, the MPI SDK, or any other mic
 
 Faster installation and environment solving, smaller footprint, and better handling of complex dependency chains like McStas.
 
-### Why PySide6 via pip?
+### Why PySide6 from conda-forge, not pip?
 
-PySide6 is not officially distributed via conda-forge by the Qt Project. The pip version is better maintained and avoids Qt library conflicts.
+Because conda-forge matplotlib already depends on the conda-forge PySide6, which pins the environment's Qt. A pip PySide6 installed on top cannot replace it (the conda package has no pip RECORD file) and, when forced, loads against the wrong Qt DLLs. One package manager per environment: every Python package in `tavi` comes from conda-forge, and the installer verifies that PySide6 and McStasScript load before it continues (2026-09-15).
 
 ### Compiler bootstrap rationale
 
@@ -268,7 +268,7 @@ Afterwards:
 
 ```bash
 bash ~/TAVI/run-tavi.sh          # start TAVI
-bash ~/TAVI/update-tavi.sh       # repair the pinned install (same tag, refreshed pip packages)
+bash ~/TAVI/update-tavi.sh       # repair the pinned install (same tag, environment check)
 bash POSIX-uninstall-TAVI.sh     # remove the tavi environment and ~/TAVI
 ```
 
@@ -294,8 +294,7 @@ MM=~/.local/bin/micromamba
 # 2. environment
 $MM create -n tavi python=3.11 mcstas=3.7.1 mcstas-core=3.7.1 mcstas-data=3.7.1 \
   mcstas-mcgui=3.7.1 mcstas-vis=3.7.1 numpy scipy matplotlib h5py pyyaml git \
-  -c conda-forge -c nodefaults -y
-$MM run -n tavi python -m pip install --upgrade pip PySide6 mcstasscript
+  pyside6 mcstasscript -c conda-forge -c nodefaults -y
 
 # 3. source, pinned to the release tag
 $MM run -n tavi git clone --branch v1.3.0 --depth 1 --single-branch \
