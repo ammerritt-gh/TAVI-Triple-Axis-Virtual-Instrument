@@ -1,12 +1,12 @@
 @echo off
 setlocal DisableDelayedExpansion
 
-:: TAVI Windows installer - release-pinned v1.3.0 (build 2, 2026-09-15: conda-only environment)
+:: TAVI Windows installer - release-pinned v1.3.0 (build 3, 2026-09-15: conda-forge GCC, no Visual Studio)
 :: Conservative batch style: no micromamba shell init, no generated echo blocks,
 :: no delayed expansion, and no nested cmd AutoRun dependency except where unavoidable.
 
 set "TAVI_VERSION=v1.3.0"
-set "INSTALLER_VERSION=v1.3.0-2"
+set "INSTALLER_VERSION=v1.3.0-3"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
@@ -37,17 +37,17 @@ echo.
 echo This installer will set up TAVI for this Windows user account.
 echo.
 echo It will do the following:
-echo   1. Check for a Visual Studio C++ compiler bootstrap.
-echo   2. Check for Microsoft MPI SDK headers/libraries.
-echo   3. Install or reuse micromamba at:
+echo   1. Install or reuse micromamba at:
 echo      %MICROMAMBA_DIR%
-echo   4. Create or rebuild the micromamba environment:
+echo   2. Create or rebuild the micromamba environment:
 echo      %ENV_NAME%
-echo   5. Install or update TAVI at:
+echo      A C compiler (GCC from conda-forge) is installed with it; Visual Studio is not needed.
+echo   3. Install or update TAVI at:
 echo      %INSTALL_DIR%
-echo   6. Configure McStas/McStasScript paths for the installed environment.
-echo   7. Build the lead-sample dispersion map (150 MB, a few minutes).
-echo   8. Create run/update/launcher scripts inside the TAVI folder.
+echo   4. Configure McStas/McStasScript paths for the installed environment.
+echo   5. Configure and compile-check the McStas compiler.
+echo   6. Build the lead-sample dispersion map (150 MB, a few minutes).
+echo   7. Create run/update/launcher scripts inside the TAVI folder.
 echo.
 echo This installer will NOT run micromamba shell init.
 echo This installer will NOT remove your whole micromamba installation.
@@ -67,7 +67,7 @@ if errorlevel 2 (
     exit /b 0
 )
 echo.
-echo [Step 0/8] Cleaning broken cmd.exe AutoRun hooks...
+echo [Step 0/7] Cleaning broken cmd.exe AutoRun hooks...
 reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun > "%TEMP%\tavi_autorun_hkcu.txt" 2>nul
 findstr /i "micromamba mamba" "%TEMP%\tavi_autorun_hkcu.txt" >nul 2>nul
 if "%ERRORLEVEL%"=="0" (
@@ -79,40 +79,7 @@ if "%ERRORLEVEL%"=="0" (
 del "%TEMP%\tavi_autorun_hkcu.txt" >nul 2>nul
 echo.
 
-echo [Step 1/8] Checking Visual Studio compiler...
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-set "VCVARS="
-set "VSINSTALLDIR="
-if exist "%VSWHERE%" (
-    "%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath > "%TEMP%\tavi_vs.txt" 2>nul
-)
-:: Read outside the block: under DisableDelayedExpansion a %VAR% inside the
-:: block that set it expands at parse time, before set /p has run.
-if exist "%TEMP%\tavi_vs.txt" set /p VSINSTALLDIR=<"%TEMP%\tavi_vs.txt"
-del "%TEMP%\tavi_vs.txt" >nul 2>nul
-if not "%VSINSTALLDIR%"=="" (
-    if exist "%VSINSTALLDIR%\VC\Auxiliary\Build\vcvars64.bat" set "VCVARS=%VSINSTALLDIR%\VC\Auxiliary\Build\vcvars64.bat"
-)
-if "%VCVARS%"=="" (
-    echo [WARN] Visual Studio compiler bootstrap not found. McStas compilation may fail.
-) else (
-    echo [OK] Visual Studio bootstrap: %VCVARS%
-)
-echo.
-
-echo [Step 2/8] Checking Microsoft MPI SDK...
-set "MPI_INCLUDE="
-set "MPI_LIB="
-if exist "%ProgramFiles(x86)%\Microsoft SDKs\MPI\Include\mpi.h" (
-    set "MPI_INCLUDE=%ProgramFiles(x86)%\Microsoft SDKs\MPI\Include"
-    set "MPI_LIB=%ProgramFiles(x86)%\Microsoft SDKs\MPI\Lib\x64"
-    echo [OK] Microsoft MPI SDK found.
-) else (
-    echo [WARN] Microsoft MPI SDK not found. Basic simulations may still work.
-)
-echo.
-
-echo [Step 3/8] Setting up micromamba...
+echo [Step 1/7] Setting up micromamba...
 if not exist "%MICROMAMBA_DIR%" mkdir "%MICROMAMBA_DIR%"
 if not exist "%MICROMAMBA_EXE%" (
     echo [INFO] Downloading micromamba %MAMBA_VERSION%...
@@ -150,8 +117,8 @@ if not exist "%MICROMAMBA_EXE%" (
 echo [OK] Micromamba ready.
 echo.
 
-echo [Step 4/8] Creating or rebuilding environment '%ENV_NAME%'...
-set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git pyside6 mcstasscript"
+echo [Step 2/7] Creating or rebuilding environment '%ENV_NAME%'...
+set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git pyside6 mcstasscript gcc_win-64=16.2.0 msmpi"
 
 :: Detect by the conda-meta history file, not by "micromamba env list":
 :: its lines are indented, so an anchored findstr never matched (found 2026-09-15).
@@ -227,7 +194,7 @@ if errorlevel 1 (
 )
 echo.
 
-echo [Step 5/8] Installing or updating TAVI source...
+echo [Step 3/7] Installing or updating TAVI source...
 if exist "%INSTALL_DIR%\.git" goto update_repo
 if exist "%INSTALL_DIR%" goto backup_existing
 goto clone_repo
@@ -297,7 +264,7 @@ if not exist "%INSTALL_DIR%\tavi\mcstas_config.py" (
 echo [OK] TAVI source ready.
 echo.
 
-echo [Step 6/8] Detecting McStas paths...
+echo [Step 4/7] Detecting McStas paths...
 echo [INFO] Using environment prefix:
 echo        %ENV_PREFIX%
 
@@ -345,7 +312,84 @@ echo [OK] mcrun directory : %MCRUN_DIR%
 del "%TEMP%\tavi_config_mcstas.py" >nul 2>nul
 echo.
 
-echo [Step 7/8] Building the lead-sample dispersion map...
+echo [Step 5/7] Configuring and checking the McStas compiler...
+> "%TEMP%\tavi_gcc_config.py" echo import json, pathlib, shutil, sys
+>> "%TEMP%\tavi_gcc_config.py" echo cfg = pathlib.Path(sys.argv[1])          # env's mccode_config.json
+>> "%TEMP%\tavi_gcc_config.py" echo backup = cfg.with_name("mccode_config.msvc.json")
+>> "%TEMP%\tavi_gcc_config.py" echo if not backup.exists():
+>> "%TEMP%\tavi_gcc_config.py" echo     shutil.copy2(cfg, backup)            # the package's MSVC original
+>> "%TEMP%\tavi_gcc_config.py" echo data = json.loads(backup.read_text(encoding="utf-8"))
+>> "%TEMP%\tavi_gcc_config.py" echo c = data["compilation"]
+>> "%TEMP%\tavi_gcc_config.py" echo gcc = "${CONDA_PREFIX}/Library/bin/x86_64-w64-mingw32-gcc.exe"
+>> "%TEMP%\tavi_gcc_config.py" echo c["CC"] = gcc
+>> "%TEMP%\tavi_gcc_config.py" echo c["MPICC"] = gcc
+>> "%TEMP%\tavi_gcc_config.py" echo # paths quoted: mcrun splits these with mslex and a profile may contain a space
+>> "%TEMP%\tavi_gcc_config.py" echo c["CFLAGS"] = '-O2 -DNDEBUG -D_POSIX_SOURCE -B"${CONDA_PREFIX}/Library/x86_64-w64-mingw32/sysroot/usr/lib/" -I"${CONDA_PREFIX}/Library/include" -L"${CONDA_PREFIX}/Library/lib"'
+>> "%TEMP%\tavi_gcc_config.py" echo c["MPIFLAGS"] = "-DUSE_MPI -lmsmpi"
+>> "%TEMP%\tavi_gcc_config.py" echo c["NCRYSTALFLAGS"] = '-I"${CONDA_PREFIX}/include" "${CONDA_PREFIX}/Lib/NCrystal.lib"'
+>> "%TEMP%\tavi_gcc_config.py" echo # conda hardlinks package files into the cache and every other env;
+>> "%TEMP%\tavi_gcc_config.py" echo # an in-place write would edit them all, so give this env its own file.
+>> "%TEMP%\tavi_gcc_config.py" echo cfg.unlink()
+>> "%TEMP%\tavi_gcc_config.py" echo cfg.write_text(json.dumps(data, indent=4), encoding="utf-8")
+>> "%TEMP%\tavi_gcc_config.py" echo print("[TAVI] McStas compiler set to conda-forge GCC")
+:: McStas reads a per-user config for this env name ahead of the env's own file;
+:: a stale one (a previous McStas setup) would override the compiler set below.
+set "USER_MCCODE=%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_%ENV_NAME%\mccode_config.json"
+if exist "%USER_MCCODE%" (
+    echo [INFO] Moving aside a per-user McStas config that would override this environment:
+    echo        %USER_MCCODE%
+    move /Y "%USER_MCCODE%" "%USER_MCCODE%.bak-%RANDOM%" >nul
+)
+if exist "%USER_MCCODE%" (
+    echo [ERROR] Could not move that file aside. It would override the compiler
+    echo         configured below. Close programs that may hold it, or rename it, and retry.
+    pause
+    exit /b 1
+)
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%TEMP%\tavi_gcc_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
+if errorlevel 1 (
+    echo [ERROR] Failed to configure the McStas compiler.
+    pause
+    exit /b 1
+)
+del "%TEMP%\tavi_gcc_config.py" >nul 2>nul
+
+set "GATE_DIR=%TEMP%\tavi_compile_check"
+if exist "%GATE_DIR%" rmdir /s /q "%GATE_DIR%"
+mkdir "%GATE_DIR%"
+:: PSI_DMC rather than PSI_DMC_simple: its PowderN sample requests the NCrystal
+:: flags, so the gate exercises every override, not just CC/CFLAGS/MPIFLAGS.
+copy /Y "%MCSTAS_RESOURCES%\examples\PSI\PSI_DMC\PSI_DMC.instr" "%GATE_DIR%\" >nul
+if errorlevel 1 (
+    echo [ERROR] Could not find the PSI_DMC example instrument to test-compile.
+    pause
+    exit /b 1
+)
+cd /d "%GATE_DIR%"
+echo [INFO] Compiling and running a test instrument, serial...
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c PSI_DMC.instr -n 1000 -d serial lambda=2.5666 > "%GATE_DIR%\serial.log" 2>&1
+if errorlevel 1 (
+    echo [ERROR] The C compiler could not build a McStas instrument.
+    echo         Log: %GATE_DIR%\serial.log
+    cd /d "%INSTALL_DIR%"
+    pause
+    exit /b 1
+)
+echo [INFO] Compiling and running a test instrument, MPI...
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c --mpi=2 PSI_DMC.instr -n 1000 -d mpi lambda=2.5666 > "%GATE_DIR%\mpi.log" 2>&1
+if errorlevel 1 (
+    echo [ERROR] The MPI build or run of a McStas instrument failed. TAVI runs every
+    echo         simulation under MPI, so this installation would not work.
+    echo         Log: %GATE_DIR%\mpi.log
+    cd /d "%INSTALL_DIR%"
+    pause
+    exit /b 1
+)
+echo [OK] Compiler check passed, serial and MPI.
+cd /d "%INSTALL_DIR%"
+echo.
+
+echo [Step 6/7] Building the lead-sample dispersion map...
 set "PB_MAP=ok"
 set "PB_MAP_FILE=%INSTALL_DIR%\components\Pb_dft_phonons.dat"
 set "PB_MAP_SIZE=0"
@@ -375,12 +419,12 @@ if errorlevel 1 (
 :pb_map_done
 echo.
 
-echo [Step 8/8] Creating launchers...
+echo [Step 7/7] Creating launchers...
 set "RUN_SCRIPT=%INSTALL_DIR%\run-tavi.bat"
 set "UPDATE_SCRIPT=%INSTALL_DIR%\update-tavi.bat"
 set "LAUNCHER_SCRIPT=%INSTALL_DIR%\TAVI-Launcher.bat"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCnNldCAiTUNTVEFTPV9fTUNTVEFTX1JFU09VUkNFU19fIgpzZXQgIk1DU1RBU19DT01QT05FTlRfUEFUSD0lTUNTVEFTJSIKZWNobyBbVEFWSV0gTUNTVEFTPSVNQ1NUQVMlCgppZiBub3QgZXhpc3QgIiVNQ1NUQVMlIiAoCiAgICBlY2hvIFtFUlJPUl0gTWNTdGFzIHJlc291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6CiAgICBlY2hvICAgICAgICAgJU1DU1RBUyUKICAgIHBhdXNlCiAgICBleGl0IC9iIDEKKQoKaWYgbm90ICJfX1ZDVkFSU19fIj09IiIgKAogICAgY2FsbCAiX19WQ1ZBUlNfXyIgeDY0CikKCmlmIG5vdCAiX19NUElfSU5DTFVERV9fIj09IiIgc2V0ICJJTkNMVURFPSVJTkNMVURFJTtfX01QSV9JTkNMVURFX18iCmlmIG5vdCAiX19NUElfTElCX18iPT0iIiBzZXQgIkxJQj0lTElCJTtfX01QSV9MSUJfXyIKCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gcHl0aG9uIFRBVklfUHlTaWRlNi5weQppZiBlcnJvcmxldmVsIDEgcGF1c2UKZW5kbG9jYWwK')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__MCSTAS_RESOURCES__',$env:MCSTAS_RESOURCES).Replace('__VCVARS__',$env:VCVARS).Replace('__MPI_INCLUDE__',$env:MPI_INCLUDE).Replace('__MPI_LIB__',$env:MPI_LIB); Set-Content -Path $env:RUN_SCRIPT -Value $s -Encoding ASCII"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCnNldCAiTUNTVEFTPV9fTUNTVEFTX1JFU09VUkNFU19fIgpzZXQgIk1DU1RBU19DT01QT05FTlRfUEFUSD0lTUNTVEFTJSIKZWNobyBbVEFWSV0gTUNTVEFTPSVNQ1NUQVMlCgppZiBub3QgZXhpc3QgIiVNQ1NUQVMlIiAoCiAgICBlY2hvIFtFUlJPUl0gTWNTdGFzIHJlc291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6CiAgICBlY2hvICAgICAgICAgJU1DU1RBUyUKICAgIHBhdXNlCiAgICBleGl0IC9iIDEKKQoKIl9fTUlDUk9NQU1CQV9FWEVfXyIgcnVuIC1uIF9fRU5WX05BTUVfXyBweXRob24gVEFWSV9QeVNpZGU2LnB5CmlmIGVycm9ybGV2ZWwgMSBwYXVzZQplbmRsb2NhbAo=')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__MCSTAS_RESOURCES__',$env:MCSTAS_RESOURCES); Set-Content -Path $env:RUN_SCRIPT -Value $s -Encoding ASCII"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCmVjaG8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQplY2hvICAgICAgICAgICAgICAgICAgICAgICBUQVZJIFJlcGFpciBTY3JpcHQKZWNobyAgICAgICAgICAgICAgICAgICAgICAgUmVsZWFzZTogX19UQVZJX1ZFUlNJT05fXwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNoby4KZWNobyBUaGlzIGluc3RhbGxhdGlvbiBpcyBwaW5uZWQgdG8gcmVsZWFzZSB0YWcgX19UQVZJX1ZFUlNJT05fXy4KZWNobyBUaGlzIHNjcmlwdCByZXBhaXJzL3JlLWNoZWNrcyB0aGF0IGV4YWN0IHRhZy4gSXQgZG9lcyBub3QgcHVsbCBtYWluLgplY2hvLgplY2hvIFtJTkZPXSBGZXRjaGluZyB0YWdzIGZyb20gR2l0SHViLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGZldGNoIC0tdGFncyBvcmlnaW4KaWYgZXJyb3JsZXZlbCAxIGdvdG8gOmZhaWwKCmVjaG8gW0lORk9dIENoZWNraW5nIG91dCBfX1RBVklfVkVSU0lPTl9fLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGNoZWNrb3V0ICJfX1RBVklfVkVSU0lPTl9fIgppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNobyBbSU5GT10gQ2hlY2tpbmcgdGhhdCB0aGUgR1VJIHRvb2xraXQgYW5kIE1jU3Rhc1NjcmlwdCBsb2FkLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gcHl0aG9uIC1jICJmcm9tIFB5U2lkZTYuUXRXaWRnZXRzIGltcG9ydCBRQXBwbGljYXRpb247IGltcG9ydCBtY3N0YXNzY3JpcHQ7IFFBcHBsaWNhdGlvbihbXSk7IHByaW50KCdbT0tdIFB5U2lkZTYgYW5kIE1jU3Rhc1NjcmlwdCBsb2FkLicpIgppZiBlcnJvcmxldmVsIDEgZ290byA6ZW52ZmFpbAoKZWNoby4KZWNobyBbT0tdIFJlcGFpciBjb21wbGV0ZS4gSW5zdGFsbGVkIHNvdXJjZSByZW1haW5zIHBpbm5lZCB0byBfX1RBVklfVkVSU0lPTl9fLgplY2hvIFRvIHVwZ3JhZGUgdG8gYSBuZXdlciBUQVZJIHJlbGVhc2UsIGRvd25sb2FkIHRoYXQgcmVsZWFzZSdzIGluc3RhbGxlci4KcGF1c2UKZXhpdCAvYiAwCgo6ZW52ZmFpbAplY2hvIFtFUlJPUl0gVGhlICdfX0VOVl9OQU1FX18nIGVudmlyb25tZW50IGlzIGJyb2tlbi4gUnVuIHRoZSBUQVZJIGluc3RhbGxlciBhZ2FpbjsgaXQgcmVidWlsZHMgdGhlIGVudmlyb25tZW50LgpwYXVzZQpleGl0IC9iIDEKCjpmYWlsCmVjaG8gW0VSUk9SXSBSZXBhaXIgZmFpbGVkLiBDaGVjayB5b3VyIGludGVybmV0IGNvbm5lY3Rpb24sIGxvY2FsIGNoYW5nZXMsIG9yIHdoZXRoZXIgdGhlIHRhZyBleGlzdHMgb24gR2l0SHViLgpwYXVzZQpleGl0IC9iIDEK')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION); Set-Content -Path $env:UPDATE_SCRIPT -Value $s -Encoding ASCII"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCnRpdGxlIFRBVkkgTGF1bmNoZXIKCjptZW51CmNscwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNobyAgICAgICAgICAgICAgICAgICAgICAgICBUQVZJIExhdW5jaGVyCmVjaG8gICAgICAgICAgICAgICAgICBUcmlwbGUgQXhpcyBWaXJ0dWFsIEluc3RydW1lbnQKZWNobyAgICAgICAgICAgICAgICAgIFJlbGVhc2U6IF9fVEFWSV9WRVJTSU9OX18KZWNobyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CmVjaG8uCmVjaG8gICBbMV0gUnVuIFRBVkkKZWNobyAgIFsyXSBVcGRhdGUgVEFWSQplY2hvICAgWzNdIE9wZW4gVEFWSSBmb2xkZXIKZWNobyAgIFs0XSBPcGVuIFRBVkkgc2hlbGwKZWNobyAgIFs1XSBFeGl0CmVjaG8uCmNob2ljZSAvQyAxMjM0NSAvTSAiU2VsZWN0IG9wdGlvbiIKaWYgZXJyb3JsZXZlbCA1IGV4aXQgL2IgMAppZiBlcnJvcmxldmVsIDQgZ290byA6c2hlbGwKaWYgZXJyb3JsZXZlbCAzIGdvdG8gOmZvbGRlcgppZiBlcnJvcmxldmVsIDIgZ290byA6dXBkYXRlCmlmIGVycm9ybGV2ZWwgMSBnb3RvIDpydW4KZ290byA6bWVudQoKOnJ1bgpjYWxsICJfX1JVTl9TQ1JJUFRfXyIKZ290byA6bWVudQoKOnVwZGF0ZQpjYWxsICJfX1VQREFURV9TQ1JJUFRfXyIKZ290byA6bWVudQoKOmZvbGRlcgpleHBsb3JlciAiX19JTlNUQUxMX0RJUl9fIgpnb3RvIDptZW51Cgo6c2hlbGwKY2QgL2QgIl9fSU5TVEFMTF9ESVJfXyIKIl9fTUlDUk9NQU1CQV9FWEVfXyIgcnVuIC1uIF9fRU5WX05BTUVfXyBjbWQgL2sKZ290byA6bWVudQo=')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION).Replace('__RUN_SCRIPT__',$env:RUN_SCRIPT).Replace('__UPDATE_SCRIPT__',$env:UPDATE_SCRIPT); Set-Content -Path $env:LAUNCHER_SCRIPT -Value $s -Encoding ASCII"
 
@@ -396,6 +440,7 @@ echo ENV_NAME=%ENV_NAME%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo ENV_PREFIX=%ENV_PREFIX%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo REPO_URL=https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo PB_MAP=%PB_MAP%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo COMPILER=gcc_win-64>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo [OK] Wrote install metadata to %INSTALL_DIR%\INSTALL_INFO.txt
 echo.
 echo ============================================================================
@@ -405,6 +450,7 @@ echo Environment : %ENV_NAME%
 echo TAVI version: %TAVI_VERSION%
 echo Installer   : %INSTALLER_VERSION%
 echo McStas      : %MCSTAS_VERSION%
+echo Compiler    : GCC (conda-forge)
 echo ============================================================================
 if "%PB_MAP%"=="missing" (
     echo.
