@@ -714,15 +714,25 @@ operator's `tavi-dev` and `tavi` environments and the cache (found
 `micromamba package extract`). `Path.unlink()` followed by a fresh write
 gives the environment its own file; the backup copy is a real copy too.
 
+Before writing the config, a per-user McStas config for this environment
+name (`%USERPROFILE%\AppData\mcstas\<version>_tavi\mccode_config.json`,
+which `mcrun` reads ahead of the environment's file) is moved aside with an
+`[INFO]` line: a stale one from an earlier McStas setup would silently
+override the compiler just configured (external reader, 2026-09-15).
+
 The installer then gates the install on a real compile: it copies the
-`PSI_DMC_simple` example into a scratch directory under `%TEMP%` and runs
+`PSI_DMC` example into a scratch directory under `%TEMP%` and runs
 `mcrun -c ... -n 1000 lambda=2.5666`, once `-d serial` and once
-`-d mpi --mpi=2`. A serial failure is `[ERROR]` and stops the install (exit
-1) — TAVI cannot function without a serial compiler. An MPI failure is only
-`[WARN]` (`MPI=missing` in `INSTALL_INFO.txt`) since serial McStas already
-covers ordinary TAVI use. The gate directory (`%TEMP%\tavi_compile_check`)
-is left in place after the install; its `serial.log`/`mpi.log` are the
-first thing to check if compilation fails later.
+`-d mpi --mpi=2`. `PSI_DMC` rather than `PSI_DMC_simple` because its
+PowderN sample requests the NCrystal flags, so all five overrides are
+exercised. Either failure is `[ERROR]` and stops the install (exit 1): TAVI
+runs every simulation point under MPI (`DEFAULT_MPI_COUNT` in
+`instruments/contract.py`, no serial fallback), so an install whose MPI
+build fails would fail at the first scan instead — the external reader's
+P1 on the warn-only first draft. The gate directory
+(`%TEMP%\tavi_compile_check`) is left in place after the install; its
+`serial.log`/`mpi.log` are the first thing to check if compilation fails
+later.
 
 A machine with no Visual Studio was simulated by hiding the environment's
 `vswhere.exe`: the `vs2022_win-64` activation prints a few "not recognized"
@@ -978,7 +988,7 @@ The installer should install within user-writable locations:
 
 It should not require Administrator privileges for the core install.
 
-~~If Visual Studio or MSMPI are missing, warn clearly rather than corrupting the install. Only fail hard when TAVI cannot run in the intended mode.~~ Superseded 2026-09-15 (build 3): the compile gate fails hard on a serial compile failure and only warns on an MPI failure, since serial McStas is the mode TAVI needs. See "McStas compiler (build 3)" below.
+~~If Visual Studio or MSMPI are missing, warn clearly rather than corrupting the install. Only fail hard when TAVI cannot run in the intended mode.~~ Superseded 2026-09-15 (build 3): the compile gate fails hard on a serial or an MPI compile failure, since TAVI runs every point under MPI. See "McStas compiler (build 3)" below.
 
 ---
 
@@ -1095,7 +1105,7 @@ Before publishing a new installer:
 - [ ] Installer verifies `Progress_bar.comp` or the current required component.
 - [ ] Launcher sets `MCSTAS` and `MCSTAS_COMPONENT_PATH`.
 - [ ] Launcher runs via explicit `micromamba.exe run -n tavi`.
-- [ ] Installer's compile gate passes serial; MPI warns or passes.
+- [ ] Installer's compile gate passes serial and MPI on `PSI_DMC`.
 - [ ] Safe uninstaller does not remove micromamba itself.
 - [ ] Safe uninstaller does not remove `tavi-dev`.
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
@@ -1156,8 +1166,8 @@ written after the tag exists.
     (`INSTALLER_VERSION=v1.3.0-3`) — conda-forge GCC (`gcc_win-64`) and
     `msmpi` added to the environment, Visual Studio detection and the MPI
     SDK check dropped, McStas's own config pointed at GCC inside the
-    environment, and the install gated on a real serial (+ MPI, warn-only)
-    compile of `PSI_DMC_simple`. See "McStas compiler (build 3)" above.
+    environment, and the install gated on a real serial and MPI compile of
+    `PSI_DMC`. See "McStas compiler (build 3)" above.
 
 ## 23. Recommended future improvements
 
