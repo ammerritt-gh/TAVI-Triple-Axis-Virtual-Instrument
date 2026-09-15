@@ -323,9 +323,10 @@ echo [Step 5/7] Configuring and checking the McStas compiler...
 >> "%TEMP%\tavi_gcc_config.py" echo gcc = "${CONDA_PREFIX}/Library/bin/x86_64-w64-mingw32-gcc.exe"
 >> "%TEMP%\tavi_gcc_config.py" echo c["CC"] = gcc
 >> "%TEMP%\tavi_gcc_config.py" echo c["MPICC"] = gcc
->> "%TEMP%\tavi_gcc_config.py" echo c["CFLAGS"] = "-O2 -DNDEBUG -D_POSIX_SOURCE -B${CONDA_PREFIX}/Library/x86_64-w64-mingw32/sysroot/usr/lib/ -I${CONDA_PREFIX}/Library/include -L${CONDA_PREFIX}/Library/lib"
+>> "%TEMP%\tavi_gcc_config.py" echo # paths quoted: mcrun splits these with mslex and a profile may contain a space
+>> "%TEMP%\tavi_gcc_config.py" echo c["CFLAGS"] = '-O2 -DNDEBUG -D_POSIX_SOURCE -B"${CONDA_PREFIX}/Library/x86_64-w64-mingw32/sysroot/usr/lib/" -I"${CONDA_PREFIX}/Library/include" -L"${CONDA_PREFIX}/Library/lib"'
 >> "%TEMP%\tavi_gcc_config.py" echo c["MPIFLAGS"] = "-DUSE_MPI -lmsmpi"
->> "%TEMP%\tavi_gcc_config.py" echo c["NCRYSTALFLAGS"] = "-I${CONDA_PREFIX}/include ${CONDA_PREFIX}/Lib/NCrystal.lib"
+>> "%TEMP%\tavi_gcc_config.py" echo c["NCRYSTALFLAGS"] = '-I"${CONDA_PREFIX}/include" "${CONDA_PREFIX}/Lib/NCrystal.lib"'
 >> "%TEMP%\tavi_gcc_config.py" echo # conda hardlinks package files into the cache and every other env;
 >> "%TEMP%\tavi_gcc_config.py" echo # an in-place write would edit them all, so give this env its own file.
 >> "%TEMP%\tavi_gcc_config.py" echo cfg.unlink()
