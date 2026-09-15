@@ -81,7 +81,7 @@ Done when: the ledger is empty and deleted.
 
 ## Installer build 3: release assets
 
-**State:** pinned
+**State:** done (assets re-uploaded 2026-09-15 13:30 UTC; remove at the next closeout)
 
 PR #42 (`e1b2c1c5`) made the v1.3.0 installers conda-only (no pip step, environment rebuilt every run, existing-env detection by `conda-meta\history`; build 2). PR #43 (`608ab8f1`, 2026-09-15) made the Windows installer ship conda-forge GCC (`gcc_win-64=16.2.0`, `msmpi`), point McStas's in-env `mccode_config.json` at it (unlinked first: conda hardlinks the file into the cache and every env), and gate the install on a serial and MPI compile of `PSI_DMC`; Visual Studio and the MPI SDK are no longer needed (`INSTALLER_VERSION=v1.3.0-3`). The two release assets on the v1.3.0 page still carry build 1, which fails with `uninstall-no-record-file` whenever PyPI's PySide6 is ahead of conda-forge's and requires Visual Studio. Record in `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §22(f)-(g) and "McStas compiler (build 3)".
 
