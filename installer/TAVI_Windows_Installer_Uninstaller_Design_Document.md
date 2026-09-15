@@ -269,12 +269,16 @@ Create the environment using pinned core packages.
 
 ### Case B: valid `tavi` environment exists
 
-Ask whether to:
+Removed and recreated from the package list, no prompt (decision 2026-09-15: an
+environment is a function of its spec and is never repaired in place; the
+installer's opening prompt already names the rebuild; micromamba's package
+cache makes it a link step).
 
-- recreate from scratch, or
-- update in place.
-
-Do not remove without confirmation.
+Detection is `if exist "%ENV_PREFIX%\conda-meta\history"`. The earlier
+`micromamba env list | findstr /r /c:"^tavi[ ]"` never matched, because the
+listing indents every line; every "existing environment" run before
+2026-09-15 reached this case only through the broken-prefix fallback prompt.
+Found by the second cold run of build 2, when that fallback had been removed.
 
 ### Case C: broken folder exists at target prefix
 
@@ -322,7 +326,7 @@ The environment must include the McStas package family, pinned consistently to t
 ```bat
 set "MCSTAS_VERSION=3.7.1"
 
-set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git"
+set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git pyside6 mcstasscript"
 ```
 
 Known issue encountered:
@@ -332,12 +336,20 @@ Known issue encountered:
 - But TAVI still failed because `Progress_bar.comp` was not visible to McStasScript.
 - Therefore installing packages is insufficient; the resource path and specific component must be verified.
 
-Pip packages:
+Python packages: all from conda-forge, including `pyside6` and `mcstasscript`;
+there is no pip step.
 
-```bat
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% pip install --upgrade pip
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% pip install --upgrade PySide6 mcstasscript
-```
+Why (2026-09-15): conda-forge matplotlib depends on `pyside6`, which pins
+`qt6-main`; the conda `pyside6`/`shiboken6` dist-info has no RECORD so pip can
+never uninstall it; `pip install --upgrade PySide6` was a no-op only while
+PyPI and conda-forge matched, and failed with `uninstall-no-record-file` on
+2026-09-15 when PyPI (6.11.2) was ahead of the solved conda package
+(6.11.1); forcing it with `--ignore-installed` loaded PySide6 6.11.2 against
+Qt 6.11.1 in `Library\bin` (`DLL load failed while importing QtWidgets`).
+
+The install step ends with a smoke check that instantiates a QApplication
+and imports mcstasscript; the generated repair script runs the same check
+and never mutates packages.
 
 Future maintainers should consider pinning PySide6 and McStasScript if newer versions introduce regressions. At minimum, the installer must print package versions or make them easy to inspect.
 
@@ -628,7 +640,9 @@ Required behavior:
 1. `git fetch origin`
 2. `git checkout %TAVI_VERSION%`
 3. `git pull --ff-only origin %TAVI_VERSION%`
-4. Upgrade pip-side packages as needed.
+4. Check that PySide6 (a `QApplication`) and mcstasscript load; on failure
+   say to run the installer again. The script never installs or upgrades
+   packages (2026-09-15).
 5. Pause and report failures clearly.
 
 ### `TAVI-Launcher.bat`
@@ -1055,6 +1069,12 @@ written after the tag exists.
     previous *pinned* file, per (b). Delete it or bring it up to date before
     pointing anyone at it.
 
+(f) 2026-09-15: build 2 of the v1.3.0 installers
+    (`INSTALLER_VERSION=v1.3.0-2`, file names unchanged) — conda-only
+    environment, rebuild-always, Qt smoke check. Re-uploaded over the
+    v1.3.0 release assets with `--clobber`; `INSTALL_INFO.txt` tells the
+    builds apart.
+
 ## 23. Recommended future improvements
 
 1. Replace batch with a small PowerShell installer or Python bootstrapper for safer string handling.
@@ -1075,7 +1095,7 @@ written after the tag exists.
    - compiler availability,
    - MPI availability.
 5. Add fallback in TAVI from `Progress_bar` to `Arm` if `Progress_bar.comp` is not available.
-6. Consider pinning `PySide6` and `mcstasscript` after testing known-good versions.
+6. Consider pinning `pyside6` and `mcstasscript` conda versions after testing known-good ones.
 7. Store installer version in the installed TAVI directory for support/debugging.
 
 ---

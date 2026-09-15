@@ -1,12 +1,12 @@
 @echo off
 setlocal DisableDelayedExpansion
 
-:: TAVI Windows installer - release-pinned v1.3.0
+:: TAVI Windows installer - release-pinned v1.3.0 (build 2, 2026-09-15: conda-only environment)
 :: Conservative batch style: no micromamba shell init, no generated echo blocks,
 :: no delayed expansion, and no nested cmd AutoRun dependency except where unavoidable.
 
 set "TAVI_VERSION=v1.3.0"
-set "INSTALLER_VERSION=v1.3.0"
+set "INSTALLER_VERSION=v1.3.0-2"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
@@ -41,7 +41,7 @@ echo   1. Check for a Visual Studio C++ compiler bootstrap.
 echo   2. Check for Microsoft MPI SDK headers/libraries.
 echo   3. Install or reuse micromamba at:
 echo      %MICROMAMBA_DIR%
-echo   4. Create or update the micromamba environment:
+echo   4. Create or rebuild the micromamba environment:
 echo      %ENV_NAME%
 echo   5. Install or update TAVI at:
 echo      %INSTALL_DIR%
@@ -54,8 +54,9 @@ echo This installer will NOT remove your whole micromamba installation.
 echo This installer may remove a broken cmd.exe AutoRun hook only if it contains
 echo micromamba or mamba text from a previous failed install.
 echo.
-echo If an existing '%ENV_NAME%' environment is found, you will be asked whether to
-echo recreate it or update it in place before any removal occurs.
+echo If an existing '%ENV_NAME%' environment is found it is removed and rebuilt
+echo from scratch. Package downloads are cached, so a rebuild is much faster
+echo than the first install.
 echo If a broken non-conda folder exists at the target environment path, you will
 echo be asked whether to move it aside before creating a new environment.
 echo.
@@ -149,29 +150,17 @@ if not exist "%MICROMAMBA_EXE%" (
 echo [OK] Micromamba ready.
 echo.
 
-echo [Step 4/8] Creating or updating environment '%ENV_NAME%'...
-set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git"
+echo [Step 4/8] Creating or rebuilding environment '%ENV_NAME%'...
+set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git pyside6 mcstasscript"
 
-"%MICROMAMBA_EXE%" env list > "%TEMP%\tavi_envs.txt" 2>nul
-findstr /r /c:"^%ENV_NAME%[ ]" "%TEMP%\tavi_envs.txt" >nul 2>nul
-if "%ERRORLEVEL%"=="0" (
-    echo [INFO] Environment '%ENV_NAME%' already exists.
-    choice /C YN /M "Recreate from scratch (Y) or update in place (N)"
-    if errorlevel 2 goto update_env
-    if errorlevel 1 goto remove_env
+:: Detect by the conda-meta history file, not by "micromamba env list":
+:: its lines are indented, so an anchored findstr never matched (found 2026-09-15).
+if exist "%ENV_PREFIX%\conda-meta\history" (
+    echo [INFO] Environment '%ENV_NAME%' already exists; rebuilding it from scratch.
+    goto remove_env
 )
 
-if exist "%ENV_PREFIX%" (
-    if exist "%ENV_PREFIX%\conda-meta\history" (
-        echo [WARN] Environment folder exists but was not listed by micromamba:
-        echo        %ENV_PREFIX%
-        choice /C YN /M "Treat this as an existing environment and update in place"
-        if errorlevel 2 goto broken_prefix
-        if errorlevel 1 goto update_env
-    ) else (
-        goto broken_prefix
-    )
-)
+if exist "%ENV_PREFIX%" goto broken_prefix
 goto create_env
 
 :broken_prefix
@@ -225,24 +214,17 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-goto pip_packages
+goto smoke_check
 
-:update_env
-echo [INFO] Updating environment with packages:
-echo        %CONDA_PACKAGES%
-"%MICROMAMBA_EXE%" install -n %ENV_NAME% %CONDA_PACKAGES% -c conda-forge -c nodefaults -y
-if errorlevel 1 echo [WARN] Conda update reported an error; continuing to pip step.
-
-:pip_packages
-echo [INFO] Installing/upgrading pip packages...
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% pip install --upgrade pip
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% pip install --upgrade PySide6 mcstasscript
+:smoke_check
+echo [INFO] Checking that the GUI toolkit and McStasScript load...
+"%MICROMAMBA_EXE%" run -n %ENV_NAME% python -c "from PySide6.QtWidgets import QApplication; import mcstasscript; QApplication([]); print('[OK] PySide6 and McStasScript load.')"
 if errorlevel 1 (
-    echo [ERROR] Pip package install failed.
+    echo [ERROR] PySide6 or McStasScript failed to load in environment '%ENV_NAME%'.
+    echo [INFO] Run this installer again; it rebuilds the environment from scratch.
     pause
     exit /b 1
 )
-echo [OK] Python packages ready.
 echo.
 
 echo [Step 5/8] Installing or updating TAVI source...
@@ -399,7 +381,7 @@ set "UPDATE_SCRIPT=%INSTALL_DIR%\update-tavi.bat"
 set "LAUNCHER_SCRIPT=%INSTALL_DIR%\TAVI-Launcher.bat"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCnNldCAiTUNTVEFTPV9fTUNTVEFTX1JFU09VUkNFU19fIgpzZXQgIk1DU1RBU19DT01QT05FTlRfUEFUSD0lTUNTVEFTJSIKZWNobyBbVEFWSV0gTUNTVEFTPSVNQ1NUQVMlCgppZiBub3QgZXhpc3QgIiVNQ1NUQVMlIiAoCiAgICBlY2hvIFtFUlJPUl0gTWNTdGFzIHJlc291cmNlIGRpcmVjdG9yeSBub3QgZm91bmQ6CiAgICBlY2hvICAgICAgICAgJU1DU1RBUyUKICAgIHBhdXNlCiAgICBleGl0IC9iIDEKKQoKaWYgbm90ICJfX1ZDVkFSU19fIj09IiIgKAogICAgY2FsbCAiX19WQ1ZBUlNfXyIgeDY0CikKCmlmIG5vdCAiX19NUElfSU5DTFVERV9fIj09IiIgc2V0ICJJTkNMVURFPSVJTkNMVURFJTtfX01QSV9JTkNMVURFX18iCmlmIG5vdCAiX19NUElfTElCX18iPT0iIiBzZXQgIkxJQj0lTElCJTtfX01QSV9MSUJfXyIKCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gcHl0aG9uIFRBVklfUHlTaWRlNi5weQppZiBlcnJvcmxldmVsIDEgcGF1c2UKZW5kbG9jYWwK')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__MCSTAS_RESOURCES__',$env:MCSTAS_RESOURCES).Replace('__VCVARS__',$env:VCVARS).Replace('__MPI_INCLUDE__',$env:MPI_INCLUDE).Replace('__MPI_LIB__',$env:MPI_LIB); Set-Content -Path $env:RUN_SCRIPT -Value $s -Encoding ASCII"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCmVjaG8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQplY2hvICAgICAgICAgICAgICAgICAgICAgICBUQVZJIFJlcGFpciBTY3JpcHQKZWNobyAgICAgICAgICAgICAgICAgICAgICAgUmVsZWFzZTogX19UQVZJX1ZFUlNJT05fXwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNoby4KZWNobyBUaGlzIGluc3RhbGxhdGlvbiBpcyBwaW5uZWQgdG8gcmVsZWFzZSB0YWcgX19UQVZJX1ZFUlNJT05fXy4KZWNobyBUaGlzIHNjcmlwdCByZXBhaXJzL3JlLWNoZWNrcyB0aGF0IGV4YWN0IHRhZy4gSXQgZG9lcyBub3QgcHVsbCBtYWluLgplY2hvLgplY2hvIFtJTkZPXSBGZXRjaGluZyB0YWdzIGZyb20gR2l0SHViLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGZldGNoIC0tdGFncyBvcmlnaW4KaWYgZXJyb3JsZXZlbCAxIGdvdG8gOmZhaWwKCmVjaG8gW0lORk9dIENoZWNraW5nIG91dCBfX1RBVklfVkVSU0lPTl9fLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGNoZWNrb3V0ICJfX1RBVklfVkVSU0lPTl9fIgppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNobyBbSU5GT10gVXBkYXRpbmcgcGlwIHBhY2thZ2VzIHdpdGhpbiB0aGUgcGlubmVkIGluc3RhbGxhdGlvbiBlbnZpcm9ubWVudC4uLgoiX19NSUNST01BTUJBX0VYRV9fIiBydW4gLW4gX19FTlZfTkFNRV9fIHBpcCBpbnN0YWxsIC0tdXBncmFkZSBQeVNpZGU2IG1jc3Rhc3NjcmlwdAppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNoby4KZWNobyBbT0tdIFJlcGFpciBjb21wbGV0ZS4gSW5zdGFsbGVkIHNvdXJjZSByZW1haW5zIHBpbm5lZCB0byBfX1RBVklfVkVSU0lPTl9fLgplY2hvIFRvIHVwZ3JhZGUgdG8gYSBuZXdlciBUQVZJIHJlbGVhc2UsIGRvd25sb2FkIHRoYXQgcmVsZWFzZSdzIGluc3RhbGxlci4KcGF1c2UKZXhpdCAvYiAwCgo6ZmFpbAplY2hvIFtFUlJPUl0gUmVwYWlyIGZhaWxlZC4gQ2hlY2sgeW91ciBpbnRlcm5ldCBjb25uZWN0aW9uLCBsb2NhbCBjaGFuZ2VzLCBvciB3aGV0aGVyIHRoZSB0YWcgZXhpc3RzIG9uIEdpdEh1Yi4KcGF1c2UKZXhpdCAvYiAxCg==')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION); Set-Content -Path $env:UPDATE_SCRIPT -Value $s -Encoding ASCII"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCmNkIC9kICJfX0lOU1RBTExfRElSX18iCmVjaG8gPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQplY2hvICAgICAgICAgICAgICAgICAgICAgICBUQVZJIFJlcGFpciBTY3JpcHQKZWNobyAgICAgICAgICAgICAgICAgICAgICAgUmVsZWFzZTogX19UQVZJX1ZFUlNJT05fXwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNoby4KZWNobyBUaGlzIGluc3RhbGxhdGlvbiBpcyBwaW5uZWQgdG8gcmVsZWFzZSB0YWcgX19UQVZJX1ZFUlNJT05fXy4KZWNobyBUaGlzIHNjcmlwdCByZXBhaXJzL3JlLWNoZWNrcyB0aGF0IGV4YWN0IHRhZy4gSXQgZG9lcyBub3QgcHVsbCBtYWluLgplY2hvLgplY2hvIFtJTkZPXSBGZXRjaGluZyB0YWdzIGZyb20gR2l0SHViLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGZldGNoIC0tdGFncyBvcmlnaW4KaWYgZXJyb3JsZXZlbCAxIGdvdG8gOmZhaWwKCmVjaG8gW0lORk9dIENoZWNraW5nIG91dCBfX1RBVklfVkVSU0lPTl9fLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gZ2l0IGNoZWNrb3V0ICJfX1RBVklfVkVSU0lPTl9fIgppZiBlcnJvcmxldmVsIDEgZ290byA6ZmFpbAoKZWNobyBbSU5GT10gQ2hlY2tpbmcgdGhhdCB0aGUgR1VJIHRvb2xraXQgYW5kIE1jU3Rhc1NjcmlwdCBsb2FkLi4uCiJfX01JQ1JPTUFNQkFfRVhFX18iIHJ1biAtbiBfX0VOVl9OQU1FX18gcHl0aG9uIC1jICJmcm9tIFB5U2lkZTYuUXRXaWRnZXRzIGltcG9ydCBRQXBwbGljYXRpb247IGltcG9ydCBtY3N0YXNzY3JpcHQ7IFFBcHBsaWNhdGlvbihbXSk7IHByaW50KCdbT0tdIFB5U2lkZTYgYW5kIE1jU3Rhc1NjcmlwdCBsb2FkLicpIgppZiBlcnJvcmxldmVsIDEgZ290byA6ZW52ZmFpbAoKZWNoby4KZWNobyBbT0tdIFJlcGFpciBjb21wbGV0ZS4gSW5zdGFsbGVkIHNvdXJjZSByZW1haW5zIHBpbm5lZCB0byBfX1RBVklfVkVSU0lPTl9fLgplY2hvIFRvIHVwZ3JhZGUgdG8gYSBuZXdlciBUQVZJIHJlbGVhc2UsIGRvd25sb2FkIHRoYXQgcmVsZWFzZSdzIGluc3RhbGxlci4KcGF1c2UKZXhpdCAvYiAwCgo6ZW52ZmFpbAplY2hvIFtFUlJPUl0gVGhlICdfX0VOVl9OQU1FX18nIGVudmlyb25tZW50IGlzIGJyb2tlbi4gUnVuIHRoZSBUQVZJIGluc3RhbGxlciBhZ2FpbjsgaXQgcmVidWlsZHMgdGhlIGVudmlyb25tZW50LgpwYXVzZQpleGl0IC9iIDEKCjpmYWlsCmVjaG8gW0VSUk9SXSBSZXBhaXIgZmFpbGVkLiBDaGVjayB5b3VyIGludGVybmV0IGNvbm5lY3Rpb24sIGxvY2FsIGNoYW5nZXMsIG9yIHdoZXRoZXIgdGhlIHRhZyBleGlzdHMgb24gR2l0SHViLgpwYXVzZQpleGl0IC9iIDEK')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION); Set-Content -Path $env:UPDATE_SCRIPT -Value $s -Encoding ASCII"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('QGVjaG8gb2ZmCnNldGxvY2FsCnRpdGxlIFRBVkkgTGF1bmNoZXIKCjptZW51CmNscwplY2hvID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0KZWNobyAgICAgICAgICAgICAgICAgICAgICAgICBUQVZJIExhdW5jaGVyCmVjaG8gICAgICAgICAgICAgICAgICBUcmlwbGUgQXhpcyBWaXJ0dWFsIEluc3RydW1lbnQKZWNobyAgICAgICAgICAgICAgICAgIFJlbGVhc2U6IF9fVEFWSV9WRVJTSU9OX18KZWNobyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CmVjaG8uCmVjaG8gICBbMV0gUnVuIFRBVkkKZWNobyAgIFsyXSBVcGRhdGUgVEFWSQplY2hvICAgWzNdIE9wZW4gVEFWSSBmb2xkZXIKZWNobyAgIFs0XSBPcGVuIFRBVkkgc2hlbGwKZWNobyAgIFs1XSBFeGl0CmVjaG8uCmNob2ljZSAvQyAxMjM0NSAvTSAiU2VsZWN0IG9wdGlvbiIKaWYgZXJyb3JsZXZlbCA1IGV4aXQgL2IgMAppZiBlcnJvcmxldmVsIDQgZ290byA6c2hlbGwKaWYgZXJyb3JsZXZlbCAzIGdvdG8gOmZvbGRlcgppZiBlcnJvcmxldmVsIDIgZ290byA6dXBkYXRlCmlmIGVycm9ybGV2ZWwgMSBnb3RvIDpydW4KZ290byA6bWVudQoKOnJ1bgpjYWxsICJfX1JVTl9TQ1JJUFRfXyIKZ290byA6bWVudQoKOnVwZGF0ZQpjYWxsICJfX1VQREFURV9TQ1JJUFRfXyIKZ290byA6bWVudQoKOmZvbGRlcgpleHBsb3JlciAiX19JTlNUQUxMX0RJUl9fIgpnb3RvIDptZW51Cgo6c2hlbGwKY2QgL2QgIl9fSU5TVEFMTF9ESVJfXyIKIl9fTUlDUk9NQU1CQV9FWEVfXyIgcnVuIC1uIF9fRU5WX05BTUVfXyBjbWQgL2sKZ290byA6bWVudQo=')); $s=$s.Replace('__INSTALL_DIR__',$env:INSTALL_DIR).Replace('__MICROMAMBA_EXE__',$env:MICROMAMBA_EXE).Replace('__ENV_NAME__',$env:ENV_NAME).Replace('__TAVI_VERSION__',$env:TAVI_VERSION).Replace('__RUN_SCRIPT__',$env:RUN_SCRIPT).Replace('__UPDATE_SCRIPT__',$env:UPDATE_SCRIPT); Set-Content -Path $env:LAUNCHER_SCRIPT -Value $s -Encoding ASCII"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($env:SHORTCUT); $s.TargetPath=$env:LAUNCHER_SCRIPT; $s.WorkingDirectory=$env:INSTALL_DIR; $s.Description='TAVI Launcher'; $s.Save()" 2>nul
