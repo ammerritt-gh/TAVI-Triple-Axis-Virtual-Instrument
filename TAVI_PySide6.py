@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
+from tavi.local_state import config_path as local_config_path
+
 from instruments.contract import (
     DEFAULT_MPI_COUNT,
     CurvatureMode,
@@ -1428,7 +1430,7 @@ class TAVIController(QObject):
         Preserves any other keys; creates the file (and config dir) if absent.
         Failures are surfaced to the message center, never swallowed silently.
         """
-        config_path = os.path.join(os.getcwd(), "config", "api_config.json")
+        config_path = str(local_config_path("api_config.json"))
         data = {}
         try:
             if os.path.exists(config_path):
@@ -5529,9 +5531,10 @@ class TAVIController(QObject):
         # blocks in the file are preserved; anything else is discarded.
         parameters["_schema"] = self.PARAMETERS_SCHEMA_VERSION
         document = {}
-        if os.path.exists("config/parameters.json"):
+        parameters_path = local_config_path("parameters.json")
+        if os.path.exists(parameters_path):
             try:
-                with open("config/parameters.json", "r") as file:
+                with open(parameters_path, "r", encoding="utf-8") as file:
                     existing = json.load(file)
                 if isinstance(existing, dict):
                     document = {
@@ -5541,9 +5544,7 @@ class TAVIController(QObject):
             except (json.JSONDecodeError, OSError):
                 document = {}
         document[self.instrument.id] = parameters
-        # Ensure config directory exists
-        os.makedirs("config", exist_ok=True)
-        with open("config/parameters.json", "w") as file:
+        with open(parameters_path, "w", encoding="utf-8") as file:
             json.dump(document, file)
         self.print_to_message_center("Parameters saved successfully")
 
@@ -5698,8 +5699,9 @@ class TAVIController(QObject):
 
     def load_parameters(self):
         """Load parameters from JSON file."""
-        if os.path.exists("config/parameters.json"):
-            with open("config/parameters.json", "r", encoding="utf-8") as file:
+        parameters_path = local_config_path("parameters.json")
+        if os.path.exists(parameters_path):
+            with open(parameters_path, "r", encoding="utf-8") as file:
                 parameters = self._parameters_block(json.load(file))
                 parameters = self._normalise_loaded_numbers(parameters)
 

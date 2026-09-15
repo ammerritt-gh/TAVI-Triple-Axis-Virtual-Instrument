@@ -1,7 +1,9 @@
 """Repo-root pytest configuration.
 
-Its whole job is to stop a test run from putting windows on the operator's
-screen. McStasScript's ``McStas_instr.__init__`` shells out twice on every
+Two jobs, neither optional.
+
+First: stop a test run from putting windows on the operator's screen.
+McStasScript's ``McStas_instr.__init__`` shells out twice on every
 construction -- and the build-tree tests construct one per instrument, per
 module:
 
@@ -27,13 +29,32 @@ Two guards, because either alone leaves a hole:
 
 ``CREATE_NO_WINDOW`` suppresses the console without detaching the process, so
 stdout/stderr capture, exit codes and timeouts all behave exactly as before.
+
+Second: stop a test run from writing the operator's local state. On
+2026-09-14, closing a real offscreen main window during a release test run
+(``tests/test_api_partial_collimation.py``) saved the layout into the
+operator's real ``config/view_layout.json`` with every dock hidden --
+``closeEvent`` in ``gui/main_window.py`` does that on any window close, test
+or not. Every config reader/writer in the app resolves its path through
+``tavi.local_state.config_path()``, which honors the ``TAVI_CONFIG_DIR``
+environment variable; this file points that variable at a temp copy of
+``config/`` for the whole session, so nothing a test does can reach the real
+files. A session-scoped tripwire fixture below re-hashes the real
+``config/`` directory at teardown and fails the session if anything changed
+regardless -- a test that bypassed the override, or a second process writing
+beside this one.
 """
+import hashlib
 import inspect
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
+
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
 def _resolve_mcstas_resources():
@@ -120,6 +141,19 @@ def install_no_window_guard():
 
 
 def pytest_configure(config):
+    # Guard 0: local state isolation -- must run before anything imports
+    # tavi.local_state, so every reader/writer this session touches resolves
+    # to the temp copy instead of the operator's real config/.
+    tmp_dir = tempfile.mkdtemp(prefix="tavi-test-config-")
+    real_config = os.path.join(REPO_ROOT, "config")
+    tmp_config = os.path.join(tmp_dir, "config")
+    if os.path.isdir(real_config):
+        shutil.copytree(real_config, tmp_config, dirs_exist_ok=True)
+    else:
+        os.makedirs(tmp_config, exist_ok=True)
+    os.environ["TAVI_CONFIG_DIR"] = tmp_config
+    config._tavi_config_tmp_dir = tmp_dir
+
     # Guard 1: MCSTAS present -> McStasScript skips its shell=True probe.
     if "MCSTAS" not in os.environ:
         resources = _resolve_mcstas_resources()
@@ -128,6 +162,68 @@ def pytest_configure(config):
 
     # Guard 2: nothing this session starts may open a console window.
     install_no_window_guard()
+
+
+def pytest_unconfigure(config):
+    tmp_dir = getattr(config, "_tavi_config_tmp_dir", None)
+    if tmp_dir:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _snapshot_local_state():
+    """{relative path: sha256} of the real config/, plus output/'s entries.
+
+    ``config/`` is walked recursively (skipping ``.pytest_cache`` and
+    ``__pycache__``) so a changed file anywhere under it is caught; ``output/``
+    is listed one level deep only -- a whole scan folder appearing there is
+    the signal, not its contents.
+    """
+    files = {}
+    config_dir = os.path.join(REPO_ROOT, "config")
+    if os.path.isdir(config_dir):
+        for root, dirs, names in os.walk(config_dir):
+            dirs[:] = [
+                d for d in dirs if d not in (".pytest_cache", "__pycache__")
+            ]
+            for name in names:
+                full = os.path.join(root, name)
+                rel = os.path.relpath(full, REPO_ROOT).replace(os.sep, "/")
+                try:
+                    with open(full, "rb") as fh:
+                        files[rel] = hashlib.sha256(fh.read()).hexdigest()
+                except OSError:
+                    continue
+    output_dir = os.path.join(REPO_ROOT, "output")
+    output_entries = set(os.listdir(output_dir)) if os.path.isdir(output_dir) else set()
+    return files, output_entries
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _local_state_untouched():
+    """Fail the session if anything reached the operator's real config/ or output/.
+
+    Isolation (``TAVI_CONFIG_DIR``, set in ``pytest_configure``) should make
+    this impossible; the tripwire exists for the case where isolation itself
+    has a hole -- a reader/writer that still resolves its own path, or a
+    second process running beside this one.
+    """
+    before_files, before_output = _snapshot_local_state()
+    yield
+    after_files, after_output = _snapshot_local_state()
+    changed = sorted(
+        rel for rel in set(before_files) | set(after_files)
+        if before_files.get(rel) != after_files.get(rel)
+    )
+    added_output = sorted(after_output - before_output)
+    if changed or added_output:
+        lines = ["tests wrote the operator's local state:"]
+        lines.extend(f"  {rel}" for rel in changed)
+        lines.extend(f"  output/{name} (added)" for name in added_output)
+        lines.append(
+            "if TAVI or a second pytest was running beside this suite, that "
+            "is the writer; otherwise a test bypassed TAVI_CONFIG_DIR."
+        )
+        pytest.fail("\n".join(lines))
 
 
 @pytest.fixture(scope="session", autouse=True)

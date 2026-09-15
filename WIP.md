@@ -86,3 +86,11 @@ Done when: the ledger is empty and deleted.
 PR #42 (`e1b2c1c5`, 2026-09-15) made the v1.3.0 installers conda-only (no pip step, environment rebuilt every run, a `QApplication` smoke check, existing-env detection by `conda-meta\history`; `INSTALLER_VERSION=v1.3.0-2`). The two release assets on the v1.3.0 page still carry build 1, which fails with `uninstall-no-record-file` whenever PyPI's PySide6 is ahead of conda-forge's. Record in `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §22(f).
 
 Done when: the operator has said to re-upload, and `gh release upload v1.3.0 installer\WINDOWS-install-TAVI-v1.3.0.bat installer\POSIX-install-TAVI-v1.3.0.sh --clobber` has run.
+
+## Tests never write local state
+
+**State:** done
+
+On 2026-09-14 the release test run closed a real offscreen main window (`tests/test_api_partial_collimation.py`) and its `closeEvent` saved a layout with every dock hidden into the operator's real `config/view_layout.json`; the same run rewrote `parameters.json` and `runtimes.json`. Landed 2026-09-15 on main: every config reader and writer resolves through `tavi/local_state.py` (`TAVI_CONFIG_DIR` override), the root `conftest.py` points the override at a temp copy of `config/` for the session, and a session tripwire fails the run if any real `config/` file or `output/` entry changed anyway. The record is the `conftest.py` docstring and `tests/README.md`.
+
+Done when: remove at the next closeout; the tripwire is the standing guard.

@@ -11,6 +11,7 @@ import os
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, asdict, fields as dataclass_fields
 
+from tavi.local_state import config_path as local_config_path
 from tavi.time_model import (
     fit_affine_time_model,
     per_point_estimate,
@@ -54,7 +55,6 @@ class RuntimeTracker:
         records: Dictionary mapping instrument names to list of ScanRecords
     """
     
-    DEFAULT_CONFIG_PATH = "config/runtimes.json"
     MAX_RECORDS = 100
 
     # One-time key migration: scans recorded before the instrument registry
@@ -69,7 +69,7 @@ class RuntimeTracker:
         Args:
             config_path: Path to config file, defaults to config/runtimes.json
         """
-        self.config_path = config_path or self.DEFAULT_CONFIG_PATH
+        self.config_path = config_path or str(local_config_path("runtimes.json"))
         self.max_records = self.MAX_RECORDS
         self.records: Dict[str, List[ScanRecord]] = {}
         # Schema v2: per-machine profiles keyed by machine_id.

@@ -23,6 +23,8 @@ import shlex
 import shutil
 from pathlib import Path
 
+from tavi.local_state import config_path as local_config_path
+
 
 def _find_project_root():
     """Walk up from this file to find the TAVI project root (contains TAVI_PySide6.py)."""
@@ -35,7 +37,7 @@ def _find_project_root():
 
 
 PROJECT_ROOT = _find_project_root()
-CONFIG_FILE = PROJECT_ROOT / "config" / "mcstas_config.json"
+CONFIG_FILE = local_config_path("mcstas_config.json")
 
 _MPI_PLACEHOLDER_TOKENS = {
     "%*",

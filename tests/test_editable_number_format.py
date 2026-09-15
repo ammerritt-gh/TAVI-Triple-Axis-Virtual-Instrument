@@ -3,8 +3,10 @@ import ast
 import math
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_TAVI_SOURCE = REPO_ROOT / "TAVI_PySide6.py"
 
-_module = ast.parse(Path("TAVI_PySide6.py").read_text(encoding="utf-8"))
+_module = ast.parse(_TAVI_SOURCE.read_text(encoding="utf-8"))
 _function = next(node for node in _module.body if isinstance(node, ast.FunctionDef) and node.name == "format_editable_number")
 _namespace = {"math": math}
 exec(compile(ast.Module(body=[_function], type_ignores=[]), "TAVI_PySide6.py", "exec"), _namespace)
@@ -28,14 +30,14 @@ def test_editable_number_handles_nonfinite_explicitly():
 
 
 def test_numeric_parameter_loads_route_through_the_shared_formatter():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     assert "setText(str(parameters.get(" not in source
     assert source.count("format_editable_number(parameters.get(") >= 20
     assert source.count("format_editable_number(parameters.get(\"lattice_") == 6
 
 
 def test_linked_energy_handlers_use_formatter_and_tracking_updates():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     for name in ("on_Ki_changed", "on_Ei_changed", "on_Kf_changed", "on_Ef_changed"):
         block = source[source.index(f"def {name}"):source.index("\n    def ", source.index(f"def {name}") + 1)]
         assert "format_editable_number(" in block
@@ -43,7 +45,7 @@ def test_linked_energy_handlers_use_formatter_and_tracking_updates():
 
 
 def test_internal_angle_writes_track_exact_displayed_text():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     start = source.index("def _set_tracked_angle_text")
     helper = source[start:source.index("\n    def ", start + 1)]
     assert "text = format_editable_number(value)" in helper
@@ -59,17 +61,17 @@ def test_internal_angle_writes_track_exact_displayed_text():
 
 
 def test_load_normalization_and_api_precision_contract_are_present():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     assert "def _normalise_loaded_numbers" in source
     assert "except (TypeError, ValueError):" in source
     assert "if not math.isfinite(number):" in source
     assert "parameters = self._normalise_loaded_numbers(parameters)" in source
-    assert 'open("config/parameters.json", "r", encoding="utf-8")' in source
+    assert 'open(parameters_path, "r", encoding="utf-8")' in source
     assert 'return "%.10g" % float(v)' in source
 
 
 def test_reciprocal_and_angle_updates_track_the_text_they_display():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     tracked = source[source.index("def _update_tracked_value"):source.index("\n    def ", source.index("def _update_tracked_value") + 1)]
     assert "displayed_text: str | None = None" in tracked
     assert "text = displayed_text if displayed_text is not None" in tracked
@@ -91,7 +93,7 @@ def test_reciprocal_and_angle_updates_track_the_text_they_display():
 
 
 def test_reciprocal_snapshot_and_live_paths_are_separate_and_covered():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     assert "def request_reciprocal_snapshot" in source
     assert "live_move_requested.connect(self.apply_reciprocal_live_move)" in source
     assert "reciprocal_live_result.connect(reciprocal_dock.set_live_result)" in source
@@ -134,7 +136,7 @@ def test_snapshot_request_is_not_lost_inside_a_controller_transaction():
 
 
 def test_reflection_table_is_explicit_opt_in_and_persisted_display_setting():
-    source = Path("TAVI_PySide6.py").read_text(encoding="utf-8")
+    source = _TAVI_SOURCE.read_text(encoding="utf-8")
     refresh = source[source.index("def refresh_reciprocal_reflections"):source.index("\n    @Slot", source.index("def refresh_reciprocal_reflections") + 1)]
     assert "use_sample_reflection_table_check.isChecked()" in refresh
     assert "if use_table and source:" in refresh
