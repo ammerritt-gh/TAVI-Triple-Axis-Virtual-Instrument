@@ -153,9 +153,9 @@ echo.
 echo [Step 4/8] Creating or rebuilding environment '%ENV_NAME%'...
 set "CONDA_PACKAGES=python=%PYTHON_VERSION% mcstas=%MCSTAS_VERSION% mcstas-core=%MCSTAS_VERSION% mcstas-data=%MCSTAS_VERSION% mcstas-mcgui=%MCSTAS_VERSION% mcstas-vis=%MCSTAS_VERSION% numpy scipy matplotlib h5py pyyaml git pyside6 mcstasscript"
 
-"%MICROMAMBA_EXE%" env list > "%TEMP%\tavi_envs.txt" 2>nul
-findstr /r /c:"^%ENV_NAME%[ ]" "%TEMP%\tavi_envs.txt" >nul 2>nul
-if "%ERRORLEVEL%"=="0" (
+:: Detect by the conda-meta history file, not by "micromamba env list":
+:: its lines are indented, so an anchored findstr never matched (found 2026-09-15).
+if exist "%ENV_PREFIX%\conda-meta\history" (
     echo [INFO] Environment '%ENV_NAME%' already exists; rebuilding it from scratch.
     goto remove_env
 )

@@ -274,6 +274,12 @@ environment is a function of its spec and is never repaired in place; the
 installer's opening prompt already names the rebuild; micromamba's package
 cache makes it a link step).
 
+Detection is `if exist "%ENV_PREFIX%\conda-meta\history"`. The earlier
+`micromamba env list | findstr /r /c:"^tavi[ ]"` never matched, because the
+listing indents every line; every "existing environment" run before
+2026-09-15 reached this case only through the broken-prefix fallback prompt.
+Found by the second cold run of build 2, when that fallback had been removed.
+
 ### Case C: broken folder exists at target prefix
 
 Micromamba may fail with:
