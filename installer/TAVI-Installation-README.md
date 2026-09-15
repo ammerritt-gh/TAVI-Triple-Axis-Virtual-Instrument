@@ -146,11 +146,9 @@ The installer configures McStasScript to use the McStas installation inside the 
 %USERPROFILE%\AppData\Local\micromamba\micromamba.exe run -n tavi python TAVI_PySide6.py
 ```
 
-### Updating McStas (conda)
+### Updating McStas
 
-```batch
-%USERPROFILE%\AppData\Local\micromamba\micromamba.exe install -n tavi mcstas mcstas-core -c conda-forge -y
-```
+Do not update McStas in place with `micromamba install`: a new McStas package brings its own `mccode_config.json`, which points at Visual Studio's `cl.exe` again, and the next simulation fails to compile. A newer McStas arrives with a newer installer, which rebuilds the environment and re-applies the GCC configuration.
 
 ### Uninstalling TAVI
 
