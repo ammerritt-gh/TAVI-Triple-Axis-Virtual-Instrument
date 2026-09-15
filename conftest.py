@@ -153,6 +153,9 @@ def pytest_configure(config):
         os.makedirs(tmp_config, exist_ok=True)
     os.environ["TAVI_CONFIG_DIR"] = tmp_config
     config._tavi_config_tmp_dir = tmp_dir
+    # The tripwire baseline is taken here, before collection, so a module
+    # that writes local state at import time cannot become its own baseline.
+    config._tavi_local_state_before = _snapshot_local_state()
 
     # Guard 1: MCSTAS present -> McStasScript skips its shell=True probe.
     if "MCSTAS" not in os.environ:
@@ -175,8 +178,8 @@ def _snapshot_local_state():
 
     ``config/`` is walked recursively (skipping ``.pytest_cache`` and
     ``__pycache__``) so a changed file anywhere under it is caught; ``output/``
-    is listed one level deep only -- a whole scan folder appearing there is
-    the signal, not its contents.
+    is listed one level deep only -- a whole scan folder appearing or
+    vanishing there is the signal, not its contents.
     """
     files = {}
     config_dir = os.path.join(REPO_ROOT, "config")
@@ -199,7 +202,7 @@ def _snapshot_local_state():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _local_state_untouched():
+def _local_state_untouched(request):
     """Fail the session if anything reached the operator's real config/ or output/.
 
     Isolation (``TAVI_CONFIG_DIR``, set in ``pytest_configure``) should make
@@ -207,7 +210,7 @@ def _local_state_untouched():
     has a hole -- a reader/writer that still resolves its own path, or a
     second process running beside this one.
     """
-    before_files, before_output = _snapshot_local_state()
+    before_files, before_output = request.config._tavi_local_state_before
     yield
     after_files, after_output = _snapshot_local_state()
     changed = sorted(
@@ -215,10 +218,12 @@ def _local_state_untouched():
         if before_files.get(rel) != after_files.get(rel)
     )
     added_output = sorted(after_output - before_output)
-    if changed or added_output:
+    removed_output = sorted(before_output - after_output)
+    if changed or added_output or removed_output:
         lines = ["tests wrote the operator's local state:"]
         lines.extend(f"  {rel}" for rel in changed)
         lines.extend(f"  output/{name} (added)" for name in added_output)
+        lines.extend(f"  output/{name} (removed)" for name in removed_output)
         lines.append(
             "if TAVI or a second pytest was running beside this suite, that "
             "is the writer; otherwise a test bypassed TAVI_CONFIG_DIR."
