@@ -20,12 +20,28 @@ and MPI tests, but its TAVI Monte Carlo failure is not yet identified. The
 [handoff](docs/HANDOFF-spaced-profile-install.md) records the evidence and the
 one-transfer USB constraint. The support recorder in `tools/support/` captures
 an actual GUI failure, including the first-point McStasScript command and raw
-output. A spaced save-folder name reproduced a missing-instrument/no-data failure
-locally; this is a candidate, not a confirmed remote diagnosis. Installer build-4
-and old Doctor edits are still separate uncommitted work.
+output. The strongest current candidate is the generated launcher's missing
+environment root: `run -n tavi` can reopen the old profile environment while the
+Doctor selects the relocated one. This mechanism reproduced locally; the remote
+launch environment is unknown. The recorder explicitly selects the repaired
+prefix, so it may mask this launcher fault. See handoff §11 before transferring it.
+Installer build-4 and old Doctor edits remain separate uncommitted work.
 
 Done when: the returned report establishes the remote cause and the relevant
 fix or workaround is verified. Do not request repeated revised probes.
+
+## Monte Carlo output folders containing spaces
+
+**State:** pinned
+
+McStasScript's unquoted `-d` output path breaks the first-point run when the full
+save path contains spaces. Reproduced with the actual GUI Run button; see the
+[remote-install handoff §10](docs/HANDOFF-spaced-profile-install.md#10-one-transfer-support-recorder-and-local-findings-2026-09-17).
+The operator believes the affected user's save folder had no spaces, so this is
+a separate confirmed defect, not the assumed explanation of her installation.
+
+Done when: first-point Monte Carlo runs succeed for both spaced and space-free
+output paths through the actual GUI.
 
 ## Audit ledger: new instruments and crystal bending
 

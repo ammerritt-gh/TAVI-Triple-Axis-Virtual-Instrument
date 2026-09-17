@@ -3,7 +3,7 @@
 > **Status:** live
 
 Basic McStas runtime verified; remote TAVI failure still unconfirmed.
-An actual-GUI recorder is now available; see §10 before sending anything.
+An actual-GUI recorder is available; read §11's launcher caveat before sending it.
 **Date:** 2026-09-17
 **Workstream:** installer v1.3.0 build 4 / remote user support
 
@@ -174,7 +174,9 @@ green end to end locally.
 5. **`detect_mcstas()` Strategy 0** pairs an `MCSTAS` env-var resources path with a
    conda-env `mcrun` without checking they are the same installation. Observed on the
    dev box producing McStas 3.6.14 resources with a 3.7.1 mcrun when `MCSTAS` was
-   unset. `run-tavi.bat` always sets it, so production is unaffected.
+   unset. The earlier conclusion that setting `MCSTAS` protects production was
+   incorrect: it sets the resources path, not the Python/mcrun environment.
+   See §11 for the generated launcher's missing environment root.
 
 ---
 
@@ -185,10 +187,10 @@ green end to end locally.
 | Installer build 1 (warn-only Visual Studio check, no gate) | No. Her install is build 4 with `COMPILER=gcc_win-64`. |
 | `libmamba Invalid package cache file` warning | Benign. Caused by §7.3, self-heals on re-extract. |
 | Missing C compiler / Visual Studio | No. GCC compiles and runs; the VS activation noise in every log is inert. |
-| `DEFAULT_MPI_COUNT = 30` too high for her machine | No. 30 ranks verified working there. |
+| MPI refuses 30 ranks on her machine | No. The example ran at 30 ranks. TAVI sample-specific memory demand is a separate question (§11). |
 | `mpiexec` not resolvable | No. Absolute path resolved, direct launch verified. |
 | Stale per-user McStas config overriding the compiler | No. Absent. |
-| Spaces anywhere in the McStas pipeline | Eliminated by relocation and verified space-free. |
+| Spaces anywhere in the McStas pipeline | Only the Doctor's selected paths were verified. The normal launcher can select the old environment (§11); output-path spaces are a separate defect (§10). |
 
 The Visual Studio `cannot find the path specified` lines fill most of every log. They
 are the `vs2022_win-64` activation hook on a machine without Visual Studio, documented
@@ -203,10 +205,11 @@ them; read only the `[OK]`/`[PROBLEM]` lines and the last line of each failed co
   actions; the T2 seats were skipped on the operator's explicit instruction).
 - Changelog fragment for the space-safe install — `changelog.d/` exists, this is
   user-facing.
-- The headless probe in §5, and the answer it produces.
+- Establish the normal GUI's selected environment; §5's iterative probe proposal
+  is superseded by the one-transfer constraint and §11's recorder caveat.
 - Upstream McStas issue for §7.1.
 - §7.2, §7.3, §7.4, §7.5.
-- `WIP.md` board entry for this workstream.
+- The workstream and the separate output-path defect are now pinned in `WIP.md`.
 
 ---
 
@@ -259,6 +262,83 @@ fresh fallback agents after the Claude launcher failed, and the PA diff review
 was clean. T1 required no panel/external-reader seat. Goals body and Inbox were
 empty; this work adds support for the existing Windows operator workflow.
 
-Next: inspect the returned recorder report before attributing the remote failure
-to the output-path bug or changing production code. The original installer,
-uninstaller and old Doctor edits remain separate outstanding work.
+The original installer, uninstaller and old Doctor edits remain separate
+outstanding work. The later investigation below changes the hypothesis ranking
+and exposes a limitation of the recorder's explicit environment selection.
+
+## 11. Alternative hypotheses and launcher mismatch (2026-09-17)
+
+**Operator correction:** the affected user's save folder probably did not contain
+spaces. Keep the reproduced output-path defect pinned independently; do not
+attribute this remote failure to it without evidence.
+
+### Leading candidate: normal launcher reopens the old environment
+
+The build-4 installer sets `MAMBA_ROOT_PREFIX=C:\TAVI-Data\mamba` inside
+`setlocal`. Its generated `run-tavi.bat` template (base64 at installer line 486)
+sets `MCSTAS` to the new resources, but launches with:
+
+```bat
+"__MICROMAMBA_EXE__" run -n __ENV_NAME__ python TAVI_PySide6.py
+```
+
+It neither sets `MAMBA_ROOT_PREFIX` nor passes `-r` or an exact `-p` prefix.
+The generated menu's Open TAVI shell has the same omission. The installer does
+not persist its root via `setx` or shell initialization. The standalone Doctor,
+in contrast, explicitly sets the relocated root before its tests.
+
+**Locally reproduced mechanism:** remove inherited `MAMBA_*` and `CONDA_*`
+variables, copy micromamba 2.5.0 to an unrelated space-free directory, and run
+that executable with `--no-rc info --json`. Its base remains
+`C:\Users\AMM\AppData\Roaming\mamba`. From that relocated executable,
+`--no-rc run -n tavi where.exe python` selects the original profile's
+`...\mamba\envs\tavi\python.exe`. Merely moving micromamba does not relocate
+its default environment root. Both checks exited 0; each had a 20 s timeout.
+
+If her earlier profile installation remains, a normal double-click can therefore
+load source/resources from `C:\TAVI-Data` but Python and mcrun from
+`C:\Users\Mallika Boddapati\...`. `detect_mcstas()` explicitly permits this
+combination: `_probe_conda_env()` uses `sys.prefix` (lines 337-340), then
+Strategy 0 returns that mcrun with the separately supplied resources (421-424).
+This reintroduces the known unquoted-mcrun-script failure while deterministic
+simulation still works and the correctly rooted Doctor passes.
+
+**Scope of conclusion:** the launcher defect and local selection mechanism are
+confirmed. Her actual normal-launch `sys.executable`, inherited root, installed
+launcher contents and remaining old environment are not captured. A persistent
+correct root would avoid this failure. A launch directly from the installer
+could also inherit the correct temporary root. Do not call this a confirmed
+remote diagnosis yet. A stale shortcut selecting an old source tree is another
+possible variation, also unconfirmed.
+
+### Other hypotheses checked
+
+| Candidate | Evidence and current weight |
+|---|---|
+| GCC cannot compile TAVI's custom instrument | Reduced: locally compiled PUMA with Al Bragg, Al Phonon DFT and Pb Phonon DFT using cached GCC 16.2.0 and installer-style flags. All initialized, ran 1000 neutrons on 2 MPI ranks and wrote `detector.dat`. This covers these components, not every instrument/module combination or her exact environment. |
+| Pb sample exhausts memory at 30 ranks | Conditional, not ruled out by the Doctor. The Pb grid has 3,090,903 rows; each rank parses its own full file into a doubling-capacity double table before building its grid. The text buffer and numeric table coexist during parsing. This can require hundreds of MB per rank, unlike PSI_DMC. No memory-exhaustion failure has been observed remotely or reproduced locally. |
+| Missing/unreadable sample assets | Conditional. `Phonon_DFT` exits during initialization if a named reflection or dispersion file cannot be read. The install record says `PB_MAP=ok`, reducing the missing-map hypothesis for the repaired tree, but it does not establish which source tree the GUI opens. Shipped Al/Pb samples use LAZ files, so CIF conversion is not their normal path. |
+| Generated binary blocked or component directory unwritable | No positive evidence. Doctor tests its own example and directory, so it does not prove these TAVI-specific operations succeed. Rank below the confirmed launcher discrepancy. |
+
+GCC validation command: `python %TEMP%\tavi-support-checks.py
+output\install-diagnosis\test_gcc.py -s` (scratch scripts, not routine suite).
+Final result: **3 passed in 17.72 s**, 19.5 s including activation under a
+120 s process-tree timeout. Used the existing development Python/McStas/MPI
+with a separate cached GCC environment and per-run `--override-config`; installed
+compiler configs were not changed. Initial construction-only defaults lacked
+runtime parameter values, then supplied zero source energy; these test setup
+errors were corrected before the successful run. Detector counts were zero at
+this tiny arbitrary-angle check: this establishes compilation, initialization,
+execution and output, not scientific intensity correctness.
+
+### Consequence for the one-transfer recorder
+
+`Record-TAVI.bat` explicitly selects the repaired environment with `-p`.
+**It can therefore mask the normal launcher's missing-root defect.** A successful
+recorded run would not clear normal launching. Its launcher/old-install inventory
+is still useful, but its active environment describes the recorder's choice.
+Do not spend the single transfer on the assumption that it reproduces the normal
+shortcut's environment. No revised remote probe has been requested or sent in
+this investigation. Decide the smallest launcher correction or capture of normal
+launch selection before using that transfer; installer changes remain a separate
+release slice.
