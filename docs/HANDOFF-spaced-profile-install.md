@@ -239,7 +239,7 @@ folder`. The recorder captured the exact command, raw subprocess error and
 the controller's caught exception. Relocating the installation does not protect
 against a spaced save-folder name. No production fix has been applied.
 
-Validation: 5 focused recorder tests passed in 1.73 s (caught worker exception,
+Validation: the initial 5 focused recorder tests passed in 1.73 s (caught worker exception,
 raw failed command output including `check=True`, archive after startup failure,
 abrupt exit and timeout). The earlier real offscreen GUI success/failure test
 plus the initial 3 recorder checks passed together in 8.09 s.
@@ -247,6 +247,17 @@ The actual batch launcher was also run from a spaced package path against a
 deliberately failing installed entrypoint, then against a missing environment:
 both retained the required report. Local GUI compilation used the development
 MSVC environment; it does not validate the remote GCC instrument build.
+
+Final review added capture of `scan_config`'s internal fields, including hidden
+misalignment and the sample mount; its regression failed before the repair.
+After the repair, `micromamba run -n tavi-dev python -m pytest tests -q -ra`
+passed: **1267 passed, 746 warnings in 111.66 s**, no skips (115.3 s with
+activation, within the 120 s process-tree timeout). The final support test count
+is 6. The follow-up review found no further defect. Execution stayed direct
+because this was a coupled diagnostic measurement loop; critic/reviewer used
+fresh fallback agents after the Claude launcher failed, and the PA diff review
+was clean. T1 required no panel/external-reader seat. Goals body and Inbox were
+empty; this work adds support for the existing Windows operator workflow.
 
 Next: inspect the returned recorder report before attributing the remote failure
 to the output-path bug or changing production code. The original installer,

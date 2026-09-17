@@ -163,9 +163,13 @@ class Recorder:
                 fields = {k: v for k, v in frame.f_locals.items()
                           if k in ("launch_state", "params_snapshot", "output_folder", "number_neutrons",
                                    "execution_state", "mpi_count", "message", "scan_item", "vals", "data_folder")}
-                # Keep exact frozen settings, without serializing the full instrument object graph.
+                # The frozen state includes hidden alignment and the sample mount,
+                # which cannot be reconstructed from the visible GUI values alone.
                 if isinstance(fields.get("launch_state"), dict):
-                    fields["launch_state"] = {k: v for k, v in fields["launch_state"].items() if k != "scan_config"}
+                    launch = dict(fields["launch_state"])
+                    config = launch.get("scan_config")
+                    launch["scan_config"] = dict(vars(config)) if hasattr(config, "__dict__") else config
+                    fields["launch_state"] = launch
                 if name == "backengine":
                     instrument = frame.f_locals.get("self")
                     fields["instrument"] = {k: getattr(instrument, k, None)
