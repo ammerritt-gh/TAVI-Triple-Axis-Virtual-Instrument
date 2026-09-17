@@ -91,9 +91,12 @@ copy /Y "%DELEGATE%" "%UNINST_COPY%" >nul
 if errorlevel 1 goto copy_failed
 echo [INFO] Handing over to the uninstaller that came with this installation.
 echo.
-start "" /d "%TEMP%" "%UNINST_COPY%" "%TAVI_BASE%"
-endlocal
-exit /b 0
+:: In this console, not a new window - see the note in uninstall-tavi.bat.
+cd /d "%TEMP%"
+call "%UNINST_COPY%" "%TAVI_BASE%"
+:: Not reached when the copy runs: it ends the process. Never fall through into
+:: the legacy removal below, which assumes no layout-2 uninstaller was found.
+exit
 
 :legacy
 :: No installed uninstaller. Either this predates 1.3.1, or the file is gone.

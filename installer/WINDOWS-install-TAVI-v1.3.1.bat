@@ -497,7 +497,9 @@ echo.
 echo To remove TAVI later, start the launcher and choose "Uninstall TAVI".
 echo.
 if "%PB_MAP%"=="missing" echo [WARN] The lead-sample dispersion map was not built; see the message above.
-explorer "%TAVI_BASE%"
+if "%UNATTENDED%"=="no" explorer "%TAVI_BASE%"
+:: Opening the folder is the point of the feature, but a run started with
+:: /dir has no one watching, and a test should never put a window on screen.
 pause
 endlocal
 exit /b 0
