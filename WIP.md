@@ -13,7 +13,32 @@ Done when: the operator has written the body of DESIGN_GOALS.md.
 
 ## Remote Windows Monte Carlo installation failure
 
-**State:** pinned
+**State:** in progress, slice 1 of 1
+
+The launcher repair is built and on **PR #46** (branch `installer-1.3.1`,
+unmerged). The frontier, the acceptance already run and the seven items left
+open are in [the installer 1.3.1 handoff](docs/HANDOFF-installer-1-3-1.md);
+read its fresh-session brief before anything else. In short: every micromamba
+call now selects the environment by an explicit prefix rather than by a name
+resolved against an inherited root, which is the defect the investigation
+below identified; a cold install of the shipping file, one real Monte Carlo
+point through the installed launcher, and an uninstall through the launcher
+menu all passed on the development machine. The installer must not be uploaded
+as a release asset until the `v1.3.1` tag exists and a cold install has been
+run against that tag.
+
+The evidence and the ruled-out causes stay in
+[the spaced-profile handoff](docs/HANDOFF-spaced-profile-install.md); its
+§7.2, §7.3, §7.4 and §7.5 defects are still unfixed and still listed there.
+
+The remote acceptance is unchanged and is what closes this entry: the affected
+user runs her ordinary shortcut and her usual Monte Carlo run after the field
+repair (`installer/TAVI-Repair-Launchers.bat`, which rebinds an existing
+1.3.0 installation's launchers without reinstalling). No new probe, no
+repeated revised diagnostics.
+
+<details>
+<summary>The investigation that led here (2026-09-17, still accurate)</summary>
 
 The spaced-profile build-4 installation passes the example instrument's serial
 and MPI tests, but its TAVI Monte Carlo failure is not yet identified. The
@@ -30,10 +55,14 @@ and §12 give the later fix scope (Run, shell and repair/update), existing-insta
 repair and local/remote acceptance. Memory has no positive evidence and is lower
 priority; the output-path defect is pinned separately below.
 Installer build-4 and old Doctor edits remain separate uncommitted work.
+</details>
 
 Done when: corrected launchers select the intended environment and the affected
 user's ordinary Monte Carlo run succeeds, or evidence establishes and resolves
 another cause. Do not require a new report or request repeated revised probes.
+The first half is built but not landed; PR #46 must merge, and the seven open
+items in the installer handoff must be dispositioned, before the remote check
+is worth asking for.
 
 ## Monte Carlo output folders containing spaces
 
