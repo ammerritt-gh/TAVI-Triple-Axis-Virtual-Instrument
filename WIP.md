@@ -11,6 +11,22 @@ States: `pinned` | `in progress, slice n of m` | `landed untested` | `done` | `r
 
 Done when: the operator has written the body of DESIGN_GOALS.md.
 
+## Remote Windows Monte Carlo installation failure
+
+**State:** pinned
+
+The spaced-profile build-4 installation passes the example instrument's serial
+and MPI tests, but its TAVI Monte Carlo failure is not yet identified. The
+[handoff](docs/HANDOFF-spaced-profile-install.md) records the evidence and the
+one-transfer USB constraint. The support recorder in `tools/support/` captures
+an actual GUI failure, including the first-point McStasScript command and raw
+output. A spaced save-folder name reproduced a missing-instrument/no-data failure
+locally; this is a candidate, not a confirmed remote diagnosis. Installer build-4
+and old Doctor edits are still separate uncommitted work.
+
+Done when: the returned report establishes the remote cause and the relevant
+fix or workaround is verified. Do not request repeated revised probes.
+
 ## Audit ledger: new instruments and crystal bending
 
 **State:** pinned

@@ -21,3 +21,4 @@ The README is the quick-start surface; this guide is the navigation authority. A
 | What are the agent instructions? | [AGENTS.md](../AGENTS.md) | live |
 | What is the vTAS reference material? | [examples/vTAS-README.md](../examples/vTAS-README.md) | live |
 | What is the installer design? | [installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md](../installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md) | live |
+| How do I record a failed Windows Monte Carlo run for offline support? | [Support recorder](../tools/support/README.md), [spaced-profile installation handoff](HANDOFF-spaced-profile-install.md) | live |
