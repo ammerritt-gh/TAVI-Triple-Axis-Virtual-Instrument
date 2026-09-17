@@ -285,7 +285,11 @@ if "%VBPATH:~0,2%"=="\\" set "VB_REASON=network and device paths are not support
 if defined VB_REASON goto :eof
 if not "%VBPATH%"=="%VBPATH: =%" set "VB_REASON=it contains a space, and McStas cannot compile from a path with a space in it"
 if defined VB_REASON goto :eof
-set VBPATH| findstr /r /c:"[^A-Za-z0-9_.:=\\-]" >nul
+:: Every allowed character is listed rather than given as a range: findstr
+:: resolves a range like A-Z through the machine's collation order, which
+:: places accented Latin letters inside it. C:\TAVE-with-an-acute was
+:: measured passing the range form, and McStas cannot compile from it.
+set VBPATH| findstr /r /c:"[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:=\\-]" >nul
 if not errorlevel 1 set "VB_REASON=it contains a character McStas cannot handle - use only letters, digits, dot, dash and underscore"
 if defined VB_REASON goto :eof
 if not "%VBPATH%"=="%VBPATH:..=%" set "VB_REASON=it contains .."
