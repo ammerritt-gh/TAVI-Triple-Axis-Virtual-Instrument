@@ -139,7 +139,7 @@ Run the installer again, pointed at the same install folder. It removes the envi
 
 ### McStas not found / wrong McStas version used
 
-The installer configures McStasScript to use the McStas installation inside the `tavi` conda environment. If a system-wide McStas installation (from the standalone installer) is interfering, the launcher scripts override the `MCSTAS` environment variable. If you see unexpected McStas paths in the TAVI message center, re-run the installer to regenerate the launcher scripts.
+The installer configures McStasScript to use the McStas installation inside the TAVI folder's own environment (`<base>\tavi-env`). If a system-wide McStas installation (from the standalone installer) is interfering, the launcher scripts override the `MCSTAS` environment variable. If you see unexpected McStas paths in the TAVI message center, re-run the installer, which reinstalls the launcher scripts.
 
 ---
 
@@ -171,7 +171,7 @@ Anything else you have put in the install folder is left alone and reported at t
 
 If the launcher itself is missing or damaged, run `<your install folder>\uninstall-tavi.bat` directly, or download `WINDOWS-uninstall-TAVI.bat` from the releases page — a standalone fallback that finds your installation (by argument, by its own saved location record, in the usual default folders, or by asking) and hands off to the uninstaller that came with it. It also knows how to remove an installation from before version 1.3.1.
 
-It never removes micromamba itself or any other micromamba environment you may have (`tavi-dev` included). On macOS and Linux, `POSIX-uninstall-TAVI.sh` follows the same rules.
+It removes the micromamba and the package cache that live inside the TAVI folder, because they belong to that installation. It never touches a micromamba installed anywhere else, and never any other environment you may have (`tavi-dev` included). On macOS and Linux, `POSIX-uninstall-TAVI.sh` follows the same rules.
 
 ---
 

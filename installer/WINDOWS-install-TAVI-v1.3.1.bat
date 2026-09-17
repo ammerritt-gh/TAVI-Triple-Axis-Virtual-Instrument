@@ -97,14 +97,18 @@ echo   Press Enter to use:
 echo       %DEFAULT_BASE%
 echo   or type a full path, for example D:\TAVI
 echo.
-set "TAVI_BASE="
-if defined PRESET_BASE set "TAVI_BASE=%PRESET_BASE%"
-if defined TAVI_BASE goto base_given
-set /p "TAVI_BASE=Install folder: "
+set "VBPATH="
+if defined PRESET_BASE set "VBPATH=%PRESET_BASE%"
+if defined VBPATH goto base_given
+:: Straight into VBPATH: set /p stores what was typed without parsing it, and
+:: :validate_base_var vets it there. Going through `call :validate_base "%VAR%"`
+:: would expand the raw value onto a command line first, where a quote in it
+:: ends the quoted region and the rest becomes commands.
+set /p "VBPATH=Install folder: "
 
 :base_given
-if not defined TAVI_BASE set "TAVI_BASE=%DEFAULT_BASE%"
-call :validate_base "%TAVI_BASE%"
+if not defined VBPATH set "VBPATH=%DEFAULT_BASE%"
+call :validate_base_var
 if defined VB_REASON goto base_refused
 :: take the normalised value back (a trailing backslash has been stripped)
 set "TAVI_BASE=%VBPATH%"
@@ -132,7 +136,7 @@ exit /b 1
 :base_check
 if not exist "%TAVI_BASE%\" goto base_ready
 if exist "%TAVI_BASE%\.tavi-install-root" goto base_has_tavi
-if exist "%TAVI_BASE%\TAVI_PySide6.py" goto base_has_legacy
+if exist "%TAVI_BASE%\TAVI_PySide6.py" goto base_maybe_legacy
 :: An install that died partway leaves a folder with no ownership marker - the
 :: marker is written last - so without this it would be refused below as "some
 :: other folder" and the user would be stuck. The record says STATE=installing
@@ -150,6 +154,21 @@ echo.
 goto retry_base
 
 :base_has_tavi
+:: The same identity test the uninstaller applies before it deletes anything.
+:: The marker's presence alone is not proof: its INSTALL_ID has to match
+:: INSTALL_INFO.txt's, and the layout has to be one this installer built.
+call :read_install_identity
+if "%ID_OK%"=="yes" goto base_has_tavi_ok
+echo.
+echo [ERROR] %TAVI_BASE% carries a TAVI marker whose identity does not check
+echo         out against its INSTALL_INFO.txt, or records a folder layout this
+echo         installer did not build. Nothing in it will be touched.
+echo         Remove it with the uninstaller that installed it, or choose
+echo         another folder.
+echo.
+goto retry_base
+
+:base_has_tavi_ok
 echo.
 echo [INFO] There is already a TAVI installation in:
 echo            %TAVI_BASE%
@@ -179,6 +198,25 @@ if exist "%TAVI_BASE%\compile_check" rd /s /q "%TAVI_BASE%\compile_check" 2>nul
 if exist "%TAVI_BASE%\app" goto wipe_failed
 if exist "%TAVI_BASE%\tavi-env" goto wipe_failed
 goto base_ready
+
+:base_maybe_legacy
+:: TAVI_PySide6.py alone proves nothing. Every checkout of this project has
+:: one, including a developer's own clone, and the branch below offers to
+:: delete the whole folder. An INSTALLATION also carries an INSTALL_INFO.txt
+:: and a generated run-tavi.bat, neither of which is in the repository.
+if not exist "%TAVI_BASE%\INSTALL_INFO.txt" goto base_is_a_checkout
+if not exist "%TAVI_BASE%\run-tavi.bat" goto base_is_a_checkout
+goto base_has_legacy
+
+:base_is_a_checkout
+echo.
+echo [ERROR] That folder holds TAVI's source code, but it is not a TAVI
+echo         installation: it has no INSTALL_INFO.txt and no run-tavi.bat.
+echo         It looks like a copy of the project's repository, and this
+echo         installer will not delete one.
+echo         Choose a new or empty folder instead.
+echo.
+goto retry_base
 
 :base_has_legacy
 echo.
@@ -650,6 +688,27 @@ pause
 exit /b 1
 
 :: ---------------------------------------------------------------------------
+:read_install_identity
+:: Sets ID_OK=yes only when <base>\.tavi-install-root and <base>\INSTALL_INFO.txt
+:: agree on INSTALL_ID and the layout is this installer's. The same test the
+:: uninstaller makes before it deletes anything: a marker on its own is not
+:: proof of ownership, and this branch authorises a recursive delete.
+set "ID_OK=no"
+set "RI_MARK="
+set "RI_INFO="
+set "RI_LAYOUT="
+if not exist "%TAVI_BASE%\.tavi-install-root" goto :eof
+if not exist "%TAVI_BASE%\INSTALL_INFO.txt" goto :eof
+for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\.tavi-install-root") do if /i "%%A"=="INSTALL_ID" set "RI_MARK=%%B"
+for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="INSTALL_ID" set "RI_INFO=%%B"
+for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="LAYOUT" set "RI_LAYOUT=%%B"
+if not defined RI_MARK goto :eof
+if not defined RI_INFO goto :eof
+if /i not "%RI_MARK%"=="%RI_INFO%" goto :eof
+if not "%RI_LAYOUT%"=="%LAYOUT%" goto :eof
+set "ID_OK=yes"
+goto :eof
+
 :read_record_state
 :: %1 = the base being considered. Sets REC_PARTIAL=yes when the install record
 :: names this same folder and says an install was still in progress. The record
@@ -724,8 +783,23 @@ exit /b 1
 :: ---------------------------------------------------------------------------
 :validate_base
 set "VBPATH=%~1"
+
+:validate_base_var
+:: Entry point for a caller that has already put the raw value in VBPATH -
+:: `set /p` does that without parsing it. Everything below is ordered so that
+:: the whitelist, which reads the value through a pipe rather than expanding
+:: it, runs before any line expands %VBPATH% at all.
 set "VB_REASON="
 if not defined VBPATH set "VB_REASON=the path is empty"
+if defined VB_REASON goto :eof
+:: Every allowed character is listed rather than given as a range: findstr
+:: resolves a range like A-Z through the machine's collation order, which
+:: places accented Latin letters inside it. C:\TAVE-with-an-acute was
+:: measured passing the range form, and McStas cannot compile from it.
+:: A double quote is not in this set either, which is what stops a pasted
+:: "C:\..." or a crafted value from ending a quoted region further down.
+set VBPATH| findstr /r /c:"[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:=\\-]" >nul
+if not errorlevel 1 set "VB_REASON=it contains a character McStas cannot handle - use only letters, digits, dot, dash and underscore, with no quotes"
 if defined VB_REASON goto :eof
 if "%VBPATH:~-1%"=="\" set "VBPATH=%VBPATH:~0,-1%"
 if not defined VBPATH set "VB_REASON=the path is empty"
@@ -737,13 +811,6 @@ if defined VB_REASON goto :eof
 if "%VBPATH:~0,2%"=="\\" set "VB_REASON=network and device paths are not supported"
 if defined VB_REASON goto :eof
 if not "%VBPATH%"=="%VBPATH: =%" set "VB_REASON=it contains a space, and McStas cannot compile from a path with a space in it"
-if defined VB_REASON goto :eof
-:: Every allowed character is listed rather than given as a range: findstr
-:: resolves a range like A-Z through the machine's collation order, which
-:: places accented Latin letters inside it. C:\TAVE-with-an-acute was
-:: measured passing the range form, and McStas cannot compile from it.
-set VBPATH| findstr /r /c:"[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:=\\-]" >nul
-if not errorlevel 1 set "VB_REASON=it contains a character McStas cannot handle - use only letters, digits, dot, dash and underscore"
 if defined VB_REASON goto :eof
 if not "%VBPATH%"=="%VBPATH:..=%" set "VB_REASON=it contains .."
 if defined VB_REASON goto :eof
@@ -765,9 +832,25 @@ if /i "%VBPATH%"=="%ProgramFiles%" set "VB_REASON=Program Files cannot be the TA
 if defined VB_REASON goto :eof
 if /i "%VBPATH%"=="%SystemDrive%\Users" set "VB_REASON=that folder cannot be the TAVI folder"
 if defined VB_REASON goto :eof
-if not exist "%VBPATH%\" goto :eof
-for %%I in ("%VBPATH%") do set "VB_LEAF=%%~nxI"
-for %%I in ("%VBPATH%") do set "VB_PARENT=%%~dpI"
+:: Walk every existing component, not just the last one. A junction anywhere
+:: above the base makes the real target different from the path on screen, and
+:: this routine authorises a recursive delete. Checking only the leaf let
+:: C:\SomeJunction\TAVI through, and a base that did not exist yet was not
+:: checked at all.
+set "VB_WALK=%VBPATH%"
+
+:vb_walk
+if not defined VB_WALK goto :eof
+if "%VB_WALK:~3%"=="" goto :eof
+for %%I in ("%VB_WALK%") do set "VB_LEAF=%%~nxI"
+for %%I in ("%VB_WALK%") do set "VB_PARENT=%%~dpI"
+if not exist "%VB_WALK%\" goto vb_walk_up
 dir /a:l /b "%VB_PARENT%" 2>nul | findstr /i /x /c:"%VB_LEAF%" >nul
-if not errorlevel 1 set "VB_REASON=it is a junction or a symbolic link, which may point somewhere else entirely"
-goto :eof
+if not errorlevel 1 set "VB_REASON=%VB_WALK% is a junction or a symbolic link, which may point somewhere else entirely"
+if defined VB_REASON goto :eof
+
+:vb_walk_up
+if "%VB_PARENT:~-1%"=="\" set "VB_PARENT=%VB_PARENT:~0,-1%"
+if /i "%VB_PARENT%"=="%VB_WALK%" goto :eof
+set "VB_WALK=%VB_PARENT%"
+goto vb_walk

@@ -111,7 +111,37 @@ def run_validate_only(path, value, **kwargs):
 #    pinned with a quoted -p.
 # ===========================================================================
 
-NAMED_SELECTION_PATTERNS = ("run -n", "create -n", "env remove -n")
+# Match the *concept*, not today's spelling: `run --name tavi` is the same
+# defect as `run -n tavi`. But only micromamba's OWN name flag counts - the
+# program it launches has its own options, and `mcrun ... -n 1000` is a neutron
+# count. So look only at the tokens that belong to micromamba: those before the
+# subcommand, and the one directly after it.
+_SUBCOMMANDS = {"run", "create", "install", "update", "remove", "env"}
+_NAME_FLAGS = {"-n", "--name"}
+
+
+def _micromamba_name_flag(line):
+    """The micromamba name selector on this line, or None.
+
+    Tokens are scanned from the executable up to and including the flag that
+    directly follows the subcommand; anything past that belongs to the program
+    micromamba is launching, not to micromamba.
+    """
+    marker = '"%MICROMAMBA_EXE%"'
+    if marker not in line:
+        return None
+    tokens = line.split(marker, 1)[1].split()
+    for index, token in enumerate(tokens):
+        if token in _NAME_FLAGS:
+            return token
+        if token in _SUBCOMMANDS:
+            # `env remove -n` puts the subcommand's own verb in between
+            tail = tokens[index + 1:index + 3] if token == "env" else tokens[index + 1:index + 2]
+            for candidate in tail:
+                if candidate in _NAME_FLAGS:
+                    return candidate
+            return None
+    return None
 
 # An "invocation" is a line that actually calls micromamba with a subcommand
 # (run/create/env...), as opposed to a mere existence check
@@ -125,15 +155,23 @@ def _code_lines(text):
 
 
 def _named_selection_violations(text):
-    code = "\n".join(_code_lines(text))
-    return [p for p in NAMED_SELECTION_PATTERNS if p in code]
+    return [line.strip() for line in _code_lines(text) if _micromamba_name_flag(line)]
 
 
 def _unpinned_invocations(text):
-    """Invocation lines missing a quoted -p flag."""
+    """Invocation lines missing a quoted -r or a quoted -p.
+
+    Both, not either: the stated invariant is that every call names the root
+    AND the prefix explicitly, so that neither an inherited MAMBA_ROOT_PREFIX
+    nor an inherited CONDA_PREFIX can reach the decision. An earlier version of
+    this helper made -r optional, which would have passed a file that had
+    quietly gone back to relying on the environment for it.
+    """
     bad = []
-    for line in text.splitlines():
-        if _INVOKE_RE.search(line) and not re.search(r'-p\s+"[^"]+"', line):
+    for line in _code_lines(text):
+        if not _INVOKE_RE.search(line):
+            continue
+        if not re.search(r'-p\s+"[^"]+"', line) or not re.search(r'-r\s+"[^"]+"', line):
             bad.append(line.strip())
     return bad
 
@@ -160,7 +198,15 @@ def test_old_v1_3_0_still_uses_named_selection():
     text = _read(INSTALL_1_3_0)
     violations = _named_selection_violations(text)
     assert violations, "expected the v1.3.0 installer to still use named selection"
-    assert "run -n" in violations and "create -n" in violations
+    joined = "\n".join(violations)
+    assert "run -n" in joined and "create -n" in joined
+    # and the detector must not be fooled by a program's own -n: the old file's
+    # compile gate passes "-n 1000" to mcrun on a line that selects by name too,
+    # while these lines select nothing and must not be reported.
+    assert _micromamba_name_flag('"%MICROMAMBA_EXE%" -r "%R%" run -p "%P%" mcrun -c x.instr -n 1000') is None
+    assert _micromamba_name_flag('"%MICROMAMBA_EXE%" run -n tavi python x.py') == "-n"
+    assert _micromamba_name_flag('"%MICROMAMBA_EXE%" run --name tavi python x.py') == "--name"
+    assert _micromamba_name_flag('"%MICROMAMBA_EXE%" env remove -n tavi -y') == "-n"
 
 
 # ===========================================================================
@@ -240,6 +286,11 @@ REFUSE_CASES = [
     ("C:\\Data(old)\\TAVI", "parentheses"),
     # "&rem" and not "&calc": if the guard ever regresses, an injected `rem` is a
     # no-op, where an injected `calc` opens a window on whoever ran the suite.
+    # A double quote was the gap the PR review found: it ends the quoted region
+    # of whatever line expands the value, so the rest becomes command text. It
+    # is also what Explorer's "Copy as path" puts around a pasted path.
+    ('C:\\TAVI"', "double quote"),
+    ('"C:\\TAVI"', "path pasted with surrounding quotes"),
     ("C:\\TAVI&rem", "ampersand"),
     ("C:\\TAVI^x", "caret"),
     ("C:\\TAVI;x", "semicolon"),
@@ -550,7 +601,7 @@ def test_menu_exits_cleanly_on_five():
 # ===========================================================================
 # 6. Destructive uninstall path, sandboxed under tmp_path.
 #
-# uninstall-tavi.bat relaunches itself via "start" (a detached process) only
+# uninstall-tavi.bat hands over to a copy of itself in %TEMP%, in the same
 # when it finds itself running from *inside* the folder it targets (the
 # normal double-click case, matching where the installer places it). Called
 # with an explicit target directory from anywhere else -- exactly how these

@@ -804,7 +804,7 @@ those into it.
 
 `[6] Uninstall TAVI` confirms (twice when `app\output` is non-empty), copies
 `<base>\uninstall-tavi.bat` to `%TEMP%`, runs it detached with
-`start "" /d "%TEMP%"` and exits immediately so nothing in this process
+`cd /d "%TEMP%"` and `call`, in the console already open, so nothing here
 holds the base folder open.
 
 The shell option should run a shell inside the environment but must not alter global shell startup.
@@ -1114,7 +1114,9 @@ Symptom:
 
 Regression prevention:
 
-- Safe uninstaller removes only `ENV_NAME=tavi`.
+- The uninstaller removes only the environment belonging to the installation
+  it was pointed at (layout 2: `<base>\tavi-env`; layout 1: the `ENV_PREFIX`
+  recorded in that installation's `INSTALL_INFO.txt`).
 - Never remove micromamba itself.
 - Never remove `tavi-dev`.
 
@@ -1207,6 +1209,120 @@ Regression prevention:
 - Every allowed character is enumerated instead of ranged.
 - The test table carries an accented capital, an accented lowercase and a
   non-Latin symbol.
+
+---
+
+### Failure: an error message re-introduces the injection it just refused
+
+Found while running the validator's own test table, 2026-09-17.
+
+Symptom:
+
+- Rejecting the deliberately hostile test path `C:\TAVI&calc` opened Windows
+  Calculator — repeatedly, because the test table ran in a loop.
+
+Cause:
+
+- The refusal message did `echo Path: %TAVI_BASE%`. That message exists
+  precisely *because* the path failed validation, so it is the string in the
+  whole script most likely to contain a command separator; expanding it onto a
+  command line let `&` split the line and run what followed.
+
+Regression prevention:
+
+- Every refusal prints the offending value through `set VBPATH`, never
+  `echo %VAR%`. The test table carries `&`, `^`, `;`, `,`, a quote and a path
+  pasted with surrounding quotes, and uses `&rem` rather than `&calc` so a
+  regression cannot put a window on whoever runs the suite.
+
+---
+
+### Failure: a source checkout mistaken for an installation
+
+Found by the pre-PR external review, 2026-09-17. **This one could have
+destroyed a developer's working copy.**
+
+Symptom:
+
+- Typing a path that contains TAVI's source — including the maintainer's own
+  clone — into the install-folder prompt made the installer announce "There is
+  a TAVI installation from before version 1.3.1 in: …" and offer to
+  `rd /s /q` the entire folder, git history included.
+
+Cause:
+
+- `:base_has_legacy` treated the presence of `TAVI_PySide6.py` as proof of an
+  installation. Every checkout of this project has that file. The uninstaller's
+  own design note already said a sentinel is not ownership; the installer's
+  migration path did not follow it.
+
+Regression prevention:
+
+- A pre-1.3.1 installation must also carry `INSTALL_INFO.txt` **and** a
+  generated `run-tavi.bat`, neither of which is tracked in the repository.
+  Without both, the installer refuses and says the folder looks like a copy of
+  the repository.
+- Reinstalling over a layout-2 base likewise requires the full ownership test
+  (`INSTALL_ID` match plus a known `LAYOUT`), not the marker's mere presence.
+
+---
+
+### Failure: validation that a junction above the base can walk around
+
+Found by the same review.
+
+Symptom:
+
+- `C:\SomeJunction\TAVI` passed validation when `SomeJunction` was the link and
+  `TAVI` an ordinary directory inside its target; a base that did not exist yet
+  was not reparse-checked at all. The installer could then create, and later
+  recursively delete through, a junctioned ancestor.
+
+Regression prevention:
+
+- `:validate_base` walks every existing component up to the drive root and
+  refuses if any of them is a reparse point. The test table covers an existing
+  base beneath a junction and a not-yet-existing one.
+
+---
+
+### Failure: the unvetted value reaches a command line before the validator
+
+Found by the same review.
+
+Symptom:
+
+- `call :validate_base "%TAVI_BASE%"` expands the raw value into a quoted
+  argument. A value containing a double quote ends that quoted region, so the
+  rest becomes command text — the same class as the message defect above, one
+  layer earlier. Pasting a path with Explorer's "Copy as path", which wraps it
+  in quotes, is the benign version of the same input.
+
+Regression prevention:
+
+- The character whitelist runs first, before any line expands the value, and it
+  reads the value through `set NAME |` rather than expanding it. A double quote
+  is not in the allowed set.
+- The install prompt reads straight into `VBPATH` with `set /p`, which stores
+  what was typed without parsing it, and calls `:validate_base_var` to vet it
+  in place.
+
+---
+
+### Failure: one install record, several installations
+
+Found by the same review, after the layout-2 half had already been fixed.
+
+Symptom:
+
+- Uninstalling installation A deleted `%LOCALAPPDATA%\TAVI\install-record.txt`
+  even when it named installation B, leaving B undiscoverable by the Doctor,
+  the support recorder and the standalone uninstaller.
+
+Regression prevention:
+
+- Both uninstall lanes remove the record only when its `TAVI_BASE` is the base
+  just removed.
 
 ---
 
@@ -1349,13 +1465,22 @@ Before publishing a new installer:
 - [ ] Installer detects McStas resources using known prefix, not captured noisy output.
 - [ ] Installer verifies `Progress_bar.comp` or the current required component.
 - [ ] Launcher sets `MCSTAS` and `MCSTAS_COMPONENT_PATH`.
-- [ ] Launcher runs via explicit `micromamba.exe run -n tavi`.
+- [ ] Launcher runs via explicit `micromamba.exe -r "<root>" run -p "<prefix>"`,
+      quoted, with no `-n`/`--name` anywhere.
 - [ ] Installer's compile gate passes serial and MPI on `PSI_DMC`.
-- [ ] Safe uninstaller does not remove micromamba itself.
+- [ ] Safe uninstaller removes no micromamba outside the installation it is
+      removing. From layout 2 it DOES remove `<base>\micromamba`, which that
+      installation owns; it must never touch one somewhere else.
 - [ ] Safe uninstaller does not remove `tavi-dev`.
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
 - [ ] No environment is selected by name (`-n`) anywhere in the installer or any launcher — every micromamba call passes both `-r` and `-p`.
-- [ ] `:validate_base`'s path-validation table (accept/refuse cases) passes in all three copies (`WINDOWS-install-TAVI-vX.Y.Z.bat`, `installer/launchers/uninstall-tavi.bat`, `WINDOWS-uninstall-TAVI.bat`) and the three copies are byte-identical.
+- [ ] `:validate_base`'s path-validation table (accept/refuse cases) passes in all
+      four copies (`WINDOWS-install-TAVI-vX.Y.Z.bat`,
+      `installer/launchers/uninstall-tavi.bat`, `WINDOWS-uninstall-TAVI.bat`,
+      `installer/TAVI-Repair-Launchers.bat`) and the four copies are byte-identical.
+- [ ] No recursive delete is authorised by a `TAVI_PySide6.py` sentinel alone:
+      the installer's migration branches and the uninstaller all require an
+      ownership token or an installation-only file the repository never carries.
 - [ ] The uninstaller refuses a base folder without a matching ownership token (`.tavi-install-root` `INSTALL_ID` == `INSTALL_INFO.txt` `INSTALL_ID`).
 - [ ] The cold install (`/dir <path>`) has been run against the real tag on a clean directory.
 

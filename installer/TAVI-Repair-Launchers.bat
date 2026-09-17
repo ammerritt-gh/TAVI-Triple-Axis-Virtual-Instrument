@@ -299,8 +299,23 @@ goto failed
 :: ---------------------------------------------------------------------------
 :validate_base
 set "VBPATH=%~1"
+
+:validate_base_var
+:: Entry point for a caller that has already put the raw value in VBPATH -
+:: `set /p` does that without parsing it. Everything below is ordered so that
+:: the whitelist, which reads the value through a pipe rather than expanding
+:: it, runs before any line expands %VBPATH% at all.
 set "VB_REASON="
 if not defined VBPATH set "VB_REASON=the path is empty"
+if defined VB_REASON goto :eof
+:: Every allowed character is listed rather than given as a range: findstr
+:: resolves a range like A-Z through the machine's collation order, which
+:: places accented Latin letters inside it. C:\TAVE-with-an-acute was
+:: measured passing the range form, and McStas cannot compile from it.
+:: A double quote is not in this set either, which is what stops a pasted
+:: "C:\..." or a crafted value from ending a quoted region further down.
+set VBPATH| findstr /r /c:"[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:=\\-]" >nul
+if not errorlevel 1 set "VB_REASON=it contains a character McStas cannot handle - use only letters, digits, dot, dash and underscore, with no quotes"
 if defined VB_REASON goto :eof
 if "%VBPATH:~-1%"=="\" set "VBPATH=%VBPATH:~0,-1%"
 if not defined VBPATH set "VB_REASON=the path is empty"
@@ -312,13 +327,6 @@ if defined VB_REASON goto :eof
 if "%VBPATH:~0,2%"=="\\" set "VB_REASON=network and device paths are not supported"
 if defined VB_REASON goto :eof
 if not "%VBPATH%"=="%VBPATH: =%" set "VB_REASON=it contains a space, and McStas cannot compile from a path with a space in it"
-if defined VB_REASON goto :eof
-:: Every allowed character is listed rather than given as a range: findstr
-:: resolves a range like A-Z through the machine's collation order, which
-:: places accented Latin letters inside it. C:\TAVE-with-an-acute was
-:: measured passing the range form, and McStas cannot compile from it.
-set VBPATH| findstr /r /c:"[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:=\\-]" >nul
-if not errorlevel 1 set "VB_REASON=it contains a character McStas cannot handle - use only letters, digits, dot, dash and underscore"
 if defined VB_REASON goto :eof
 if not "%VBPATH%"=="%VBPATH:..=%" set "VB_REASON=it contains .."
 if defined VB_REASON goto :eof
@@ -340,9 +348,25 @@ if /i "%VBPATH%"=="%ProgramFiles%" set "VB_REASON=Program Files cannot be the TA
 if defined VB_REASON goto :eof
 if /i "%VBPATH%"=="%SystemDrive%\Users" set "VB_REASON=that folder cannot be the TAVI folder"
 if defined VB_REASON goto :eof
-if not exist "%VBPATH%\" goto :eof
-for %%I in ("%VBPATH%") do set "VB_LEAF=%%~nxI"
-for %%I in ("%VBPATH%") do set "VB_PARENT=%%~dpI"
+:: Walk every existing component, not just the last one. A junction anywhere
+:: above the base makes the real target different from the path on screen, and
+:: this routine authorises a recursive delete. Checking only the leaf let
+:: C:\SomeJunction\TAVI through, and a base that did not exist yet was not
+:: checked at all.
+set "VB_WALK=%VBPATH%"
+
+:vb_walk
+if not defined VB_WALK goto :eof
+if "%VB_WALK:~3%"=="" goto :eof
+for %%I in ("%VB_WALK%") do set "VB_LEAF=%%~nxI"
+for %%I in ("%VB_WALK%") do set "VB_PARENT=%%~dpI"
+if not exist "%VB_WALK%\" goto vb_walk_up
 dir /a:l /b "%VB_PARENT%" 2>nul | findstr /i /x /c:"%VB_LEAF%" >nul
-if not errorlevel 1 set "VB_REASON=it is a junction or a symbolic link, which may point somewhere else entirely"
-goto :eof
+if not errorlevel 1 set "VB_REASON=%VB_WALK% is a junction or a symbolic link, which may point somewhere else entirely"
+if defined VB_REASON goto :eof
+
+:vb_walk_up
+if "%VB_PARENT:~-1%"=="\" set "VB_PARENT=%VB_PARENT:~0,-1%"
+if /i "%VB_PARENT%"=="%VB_WALK%" goto :eof
+set "VB_WALK=%VB_PARENT%"
+goto vb_walk

@@ -63,13 +63,19 @@ echo [INFO] Installation found at the default location: %INSTALL_DIR%
 
 :paths_ready
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
-set "WORK_DIR=%TAVI_BASE%\tavi_doctor"
+:: Layout 2 keeps INSTALL_INFO.txt beside the launchers in the base; layout 1
+:: kept it inside the program folder. Looking in the wrong one made every
+:: healthy 1.3.1 installation report "[PROBLEM] No INSTALL_INFO.txt".
+set "INFO_FILE=%INSTALL_DIR%\INSTALL_INFO.txt"
+if exist "%TAVI_BASE%\.tavi-install-root" set "INFO_FILE=%TAVI_BASE%\INSTALL_INFO.txt"
+:: A folder of the operator's that happens to be called tavi_doctor is not
+:: ours to delete, and this file is a read-only diagnostic.
+set "WORK_DIR=%TAVI_BASE%\tavi_doctor_%RANDOM%%RANDOM%"
 set "LOG=%WORK_DIR%\TAVI-doctor-report.txt"
 set "SUMMARY=%WORK_DIR%\TAVI-doctor-summary.txt"
 
 title TAVI Doctor
 
-if exist "%WORK_DIR%" rmdir /s /q "%WORK_DIR%"
 mkdir "%WORK_DIR%" 2>nul
 if not exist "%WORK_DIR%" (
     echo [ERROR] Could not create the working folder: %WORK_DIR%
@@ -143,10 +149,10 @@ if exist "%RECORD%" (
     echo    (not present)
 )
 echo.
-if exist "%INSTALL_DIR%\INSTALL_INFO.txt" (
-    type "%INSTALL_DIR%\INSTALL_INFO.txt"
+if exist "%INFO_FILE%" (
+    type "%INFO_FILE%"
 ) else (
-    echo [PROBLEM] No INSTALL_INFO.txt at %INSTALL_DIR%
+    echo [PROBLEM] No INSTALL_INFO.txt at %INFO_FILE%
     echo           Either TAVI is not installed there, or an older installer was used.
 )
 echo.
