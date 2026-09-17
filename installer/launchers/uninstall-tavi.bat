@@ -36,15 +36,24 @@ title TAVI Uninstaller
 
 :: Running from inside the folder we are about to delete: Windows will not
 :: remove a process's current directory, and cmd reads this file line by line
-:: as it goes, so re-launch from %TEMP% and let this copy end here.
+:: as it goes, so it could not read another line once the file is gone.
+::
+:: Hand over to a copy in %TEMP%, in THIS console. Not "start": that would
+:: open a second window on the user for no reason, and a test driving this
+:: script cannot suppress a console that cmd creates for a detached process.
+:: `cd` first so nothing here holds the folder, then `call` - and the copy
+:: ends the whole process with `exit`, so control never returns to this file.
 if /i not "%SELF_DIR%"=="%TAVI_BASE%" goto not_in_place
 set "SELF_COPY=%TEMP%\tavi-uninstall-%RANDOM%%RANDOM%.bat"
 copy /Y "%~f0" "%SELF_COPY%" >nul
 if errorlevel 1 goto copy_failed
-echo [INFO] Restarting the uninstaller from a temporary folder...
-start "" /d "%TEMP%" "%SELF_COPY%" "%TAVI_BASE%" %AUTO%
-endlocal
-exit /b 0
+cd /d "%TEMP%"
+call "%SELF_COPY%" "%TAVI_BASE%" %AUTO%
+:: Not reached when the copy runs, because it ends the process. Reached only if
+:: the copy returned without doing so - and then falling through into the
+:: removal below would be the one thing this hand-off exists to prevent, since
+:: this file is inside the folder being deleted.
+exit
 
 :not_in_place
 cd /d "%SystemDrive%\"
@@ -168,7 +177,7 @@ if exist "%ENV_PREFIX%" echo     %ENV_PREFIX%
 echo.
 pause
 endlocal
-exit /b 1
+exit 1
 
 :not_installed
 echo [INFO] Nothing to remove: %TAVI_BASE% does not exist.
@@ -220,13 +229,13 @@ goto refused_end
 echo.
 pause
 endlocal
-exit /b 1
+exit 1
 
 :finished
 echo.
 pause
 endlocal
-exit /b 0
+exit 0
 
 :drop_record
 :: There is one record for the user, not one per installation. Removing it

@@ -114,14 +114,16 @@ set "UNINST_COPY=%TEMP%\tavi-uninstall-%RANDOM%%RANDOM%.bat"
 copy /Y "%TAVI_BASE%\uninstall-tavi.bat" "%UNINST_COPY%" >nul
 if errorlevel 1 goto uninstall_copy_failed
 echo.
-echo [INFO] Starting the uninstaller in a new window and closing this one, so
-echo        that nothing here holds the folder open.
-:: /d puts the new process's working directory outside the tree it deletes:
-:: Windows refuses to remove a directory that is some process's current one,
-:: and this window's own working directory is inside the installation.
-start "" /d "%TEMP%" "%UNINST_COPY%" "%TAVI_BASE%" /y
-endlocal
-exit /b 0
+:: Hand over in THIS console rather than opening another window. `cd` first,
+:: because Windows will not remove a directory that is some process's current
+:: one and this one's is inside the installation; then `call`, and the copy
+:: ends the process itself - this file is inside the folder being deleted, so
+:: cmd could not read another line from it afterwards.
+cd /d "%TEMP%"
+call "%UNINST_COPY%" "%TAVI_BASE%" /y
+:: Not reached when the copy runs: it ends the process. Never fall through into
+:: the menu from here - this file may already have been deleted.
+exit
 
 :uninstall_missing
 echo.

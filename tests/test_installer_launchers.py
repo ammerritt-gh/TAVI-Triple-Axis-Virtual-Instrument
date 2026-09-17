@@ -670,6 +670,33 @@ def test_uninstall_leaves_extra_user_files_and_the_base_folder_standing(tmp_path
 
 
 @pytest.mark.parametrize("script", LABEL_FILES)
+def test_nothing_in_the_install_path_opens_a_console(script):
+    """`start` gives the new process its own console window.
+
+    Two reasons that is wrong here. For the operator it is a window appearing
+    for no reason in the middle of an uninstall. For this suite it is a window
+    that cannot be suppressed: conftest.py puts CREATE_NO_WINDOW on processes
+    the session creates, and a process cmd detaches with `start` is not one of
+    them. The uninstall hand-off gets the same guarantees by changing directory
+    out of the tree and `call`ing the copy in the console already open, with the
+    copy ending the process so the caller never reads its deleted self.
+
+    installer/TAVI-Doctor.bat is not in this list: it opens its own report in
+    Notepad for a human who double-clicked it, and has a /quiet flag for
+    everyone else.
+    """
+    with open(script, encoding="utf-8", errors="replace", newline="") as stream:
+        offenders = [
+            f"{number}: {line.strip()}"
+            for number, line in enumerate(stream, 1)
+            if re.match(r"^\s*start\s", line)
+        ]
+    assert not offenders, (
+        f"{os.path.basename(script)} opens a console window: {offenders}"
+    )
+
+
+@pytest.mark.parametrize("script", LABEL_FILES)
 def test_no_redirection_follows_a_value_on_an_echo_line(script):
     """`echo NAME=%VALUE%> "file"` eats a value that ends in a digit.
 
