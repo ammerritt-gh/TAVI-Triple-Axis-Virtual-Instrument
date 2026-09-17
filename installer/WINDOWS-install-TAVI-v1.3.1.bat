@@ -22,6 +22,17 @@ set "LAYOUT=2"
 :: so tests can drive :validate_base over a table of paths in this real file.
 if /i "%~1"=="/validate-only" goto validate_only
 
+:: /dir <path> answers the install-folder question without asking, for an
+:: unattended run - the cold install that the release checklist requires before
+:: this file is published. The path is validated exactly as a typed one, and a
+:: refusal stops rather than re-prompting, because there may be no one to ask.
+:: It does not skip the confirmation, and it never approves removing an
+:: installation that is already there.
+set "PRESET_BASE="
+if /i "%~1"=="/dir" set "PRESET_BASE=%~2"
+set "UNATTENDED=no"
+if defined PRESET_BASE set "UNATTENDED=yes"
+
 :: Everything lives under one folder the user chooses. Layout 2:
 ::   <base>\app            the pinned checkout, output\ and config\
 ::   <base>\tavi-env       Python, McStas, GCC, MS-MPI
@@ -87,7 +98,11 @@ echo       %DEFAULT_BASE%
 echo   or type a full path, for example D:\TAVI
 echo.
 set "TAVI_BASE="
+if defined PRESET_BASE set "TAVI_BASE=%PRESET_BASE%"
+if defined TAVI_BASE goto base_given
 set /p "TAVI_BASE=Install folder: "
+
+:base_given
 if not defined TAVI_BASE set "TAVI_BASE=%DEFAULT_BASE%"
 call :validate_base "%TAVI_BASE%"
 if defined VB_REASON goto base_refused
@@ -99,12 +114,31 @@ goto base_check
 echo.
 echo [ERROR] That folder cannot be used: %VB_REASON%
 echo.
+goto retry_base
+
+:: Every path that would ask for another folder comes through here. An
+:: unattended run has nobody to ask, and must not loop on the one folder it was
+:: given - including when a confirmation it cannot answer leaves an existing
+:: installation in place, which is the behaviour we want: /dir never removes one.
+:retry_base
+if "%UNATTENDED%"=="yes" goto unattended_stop
 goto ask_base
+
+:unattended_stop
+echo [INFO] Started with /dir, so there is nobody to ask for another folder.
+pause
+exit /b 1
 
 :base_check
 if not exist "%TAVI_BASE%\" goto base_ready
 if exist "%TAVI_BASE%\.tavi-install-root" goto base_has_tavi
 if exist "%TAVI_BASE%\TAVI_PySide6.py" goto base_has_legacy
+:: An install that died partway leaves a folder with no ownership marker - the
+:: marker is written last - so without this it would be refused below as "some
+:: other folder" and the user would be stuck. The record says STATE=installing
+:: precisely so this case is recognisable.
+call :read_record_state "%TAVI_BASE%"
+if "%REC_PARTIAL%"=="yes" goto base_has_partial
 dir /b /a "%TAVI_BASE%" 2>nul | findstr /r "." >nul
 if errorlevel 1 goto base_ready
 echo.
@@ -113,7 +147,7 @@ echo             %TAVI_BASE%
 echo         Uninstalling TAVI later removes this folder, so it must be a new
 echo         or empty folder, or an existing TAVI installation.
 echo.
-goto ask_base
+goto retry_base
 
 :base_has_tavi
 echo.
@@ -122,7 +156,23 @@ echo            %TAVI_BASE%
 echo        It will be removed and installed again from scratch.
 set "OLD_APP=%TAVI_BASE%\app"
 call :confirm_wipe "%TAVI_BASE%" "%OLD_APP%"
-if not "%WIPE_OK%"=="yes" goto ask_base
+if not "%WIPE_OK%"=="yes" goto retry_base
+if exist "%TAVI_BASE%\app" rd /s /q "%TAVI_BASE%\app" 2>nul
+if exist "%TAVI_BASE%\tavi-env" rd /s /q "%TAVI_BASE%\tavi-env" 2>nul
+if exist "%TAVI_BASE%\compile_check" rd /s /q "%TAVI_BASE%\compile_check" 2>nul
+if exist "%TAVI_BASE%\app" goto wipe_failed
+if exist "%TAVI_BASE%\tavi-env" goto wipe_failed
+goto base_ready
+
+:base_has_partial
+echo.
+echo [INFO] An earlier installation into this folder did not finish:
+echo            %TAVI_BASE%
+echo        Its half-built program folder and environment will be cleared and
+echo        built again. The packages already downloaded are kept, so this is
+echo        much quicker than starting over.
+call :confirm_wipe "%TAVI_BASE%" "%TAVI_BASE%\app"
+if not "%WIPE_OK%"=="yes" goto retry_base
 if exist "%TAVI_BASE%\app" rd /s /q "%TAVI_BASE%\app" 2>nul
 if exist "%TAVI_BASE%\tavi-env" rd /s /q "%TAVI_BASE%\tavi-env" 2>nul
 if exist "%TAVI_BASE%\compile_check" rd /s /q "%TAVI_BASE%\compile_check" 2>nul
@@ -137,7 +187,7 @@ echo            %TAVI_BASE%
 echo        Version 1.3.1 keeps the program in an "app" folder inside it, so
 echo        the old installation has to be removed first.
 call :confirm_wipe "%TAVI_BASE%" "%TAVI_BASE%"
-if not "%WIPE_OK%"=="yes" goto ask_base
+if not "%WIPE_OK%"=="yes" goto retry_base
 rd /s /q "%TAVI_BASE%" 2>nul
 if exist "%TAVI_BASE%" goto wipe_failed
 :: An installation from before 1.3.1 also put a shortcut on the desktop; it
@@ -582,6 +632,22 @@ pause
 exit /b 1
 
 :: ---------------------------------------------------------------------------
+:read_record_state
+:: %1 = the base being considered. Sets REC_PARTIAL=yes when the install record
+:: names this same folder and says an install was still in progress. The record
+:: only ever locates; the decision it feeds is "offer to clear", never "delete".
+set "REC_PARTIAL=no"
+set "REC_BASE="
+set "REC_STATE="
+if not exist "%LOCALAPPDATA%\TAVI\install-record.txt" goto :eof
+for /f "usebackq tokens=1,* delims==" %%A in ("%LOCALAPPDATA%\TAVI\install-record.txt") do if /i "%%A"=="TAVI_BASE" set "REC_BASE=%%B"
+for /f "usebackq tokens=1,* delims==" %%A in ("%LOCALAPPDATA%\TAVI\install-record.txt") do if /i "%%A"=="STATE" set "REC_STATE=%%B"
+if not defined REC_BASE goto :eof
+if /i not "%REC_BASE%"=="%~1" goto :eof
+if not "%REC_STATE%"=="installing" goto :eof
+set "REC_PARTIAL=yes"
+goto :eof
+
 :confirm_wipe
 :: %1 = folder that will be removed, %2 = the folder holding output\ and config\
 :: Sets WIPE_OK=yes only on an explicit Y. Removing an old installation destroys
