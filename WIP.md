@@ -24,11 +24,16 @@ output. The strongest current candidate is the generated launcher's missing
 environment root: `run -n tavi` can reopen the old profile environment while the
 Doctor selects the relocated one. This mechanism reproduced locally; the remote
 launch environment is unknown. The recorder explicitly selects the repaired
-prefix, so it may mask this launcher fault. See handoff §11 before transferring it.
+prefix, so it may mask this launcher fault. Hold the recorder; another Doctor run
+is not needed before repairing the launcher. The handoff's fresh-session brief
+and §12 give the later fix scope (Run, shell and repair/update), existing-install
+repair and local/remote acceptance. Memory has no positive evidence and is lower
+priority; the output-path defect is pinned separately below.
 Installer build-4 and old Doctor edits remain separate uncommitted work.
 
-Done when: the returned report establishes the remote cause and the relevant
-fix or workaround is verified. Do not request repeated revised probes.
+Done when: corrected launchers select the intended environment and the affected
+user's ordinary Monte Carlo run succeeds, or evidence establishes and resolves
+another cause. Do not require a new report or request repeated revised probes.
 
 ## Monte Carlo output folders containing spaces
 
