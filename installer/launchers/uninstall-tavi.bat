@@ -133,15 +133,13 @@ if exist "%MARKER%" del /f /q "%MARKER%" 2>nul
 rd "%TAVI_BASE%" 2>nul
 
 if exist "%TAVI_BASE%" goto base_kept
-if exist "%RECORD%" del /f /q "%RECORD%" 2>nul
-rd "%LOCALAPPDATA%\TAVI" 2>nul
+call :drop_record
 goto removed_clean
 
 :base_kept
 :: A bare rd refuses a folder that still holds something, so this is the user's
 :: own content and is reported rather than removed.
-if exist "%RECORD%" del /f /q "%RECORD%" 2>nul
-rd "%LOCALAPPDATA%\TAVI" 2>nul
+call :drop_record
 echo.
 echo [OK] TAVI has been removed.
 echo.
@@ -200,7 +198,13 @@ goto refused_end
 
 :refused
 echo [ERROR] Refusing to uninstall from this path: %VB_REASON%
-echo         Path: %TAVI_BASE%
+echo         The path was:
+:: Printed through "set", never "echo %VAR%". This message exists precisely
+:: because the path failed validation, so it is the one string in the script
+:: most likely to contain an ampersand - and echoing it would split the command
+:: line and run whatever follows. Measured: a rejected C:\TAVI&calc launched
+:: Calculator from this very line.
+set VBPATH
 goto refused_end
 
 :cancelled
@@ -223,6 +227,20 @@ echo.
 pause
 endlocal
 exit /b 0
+
+:drop_record
+:: There is one record for the user, not one per installation. Removing it
+:: because some other installation was uninstalled would leave the one still on
+:: the machine unfindable by the Doctor, the support recorder and the standalone
+:: uninstaller. So it goes only when it names the folder just removed.
+if not exist "%RECORD%" goto :eof
+set "DR_BASE="
+for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "DR_BASE=%%B"
+if not defined DR_BASE goto :eof
+if /i not "%DR_BASE%"=="%TAVI_BASE%" goto :eof
+del /f /q "%RECORD%" 2>nul
+rd "%LOCALAPPDATA%\TAVI" 2>nul
+goto :eof
 
 :validate_only
 call :validate_base "%~2"
