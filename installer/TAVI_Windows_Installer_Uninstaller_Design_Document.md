@@ -2,7 +2,7 @@
 
 > **Status:** live
 
-_Last updated: 2026-09-15_
+_Last updated: 2026-09-17_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.
 
@@ -23,31 +23,55 @@ The Windows installer is responsible for:
    - Microsoft MPI SDK.
 
    > **Superseded 2026-09-15 (build 3):** there is no external prerequisite
-   > any more. The compiler (conda-forge GCC) ships inside the `tavi`
+   > any more. The compiler (conda-forge GCC) ships inside the `tavi-env`
    > environment and is configured and compile-checked by the installer
    > itself. See "McStas compiler (build 3)" below.
-4. Installing or reusing micromamba without modifying global shell startup behavior.
-5. Creating or updating the `tavi` micromamba environment.
-6. Installing the required McStas package set.
-7. Installing/updating the TAVI source tree under the user profile.
-8. Configuring McStas/McStasScript paths.
-9. Creating launcher scripts:
-   - `run-tavi.bat`
-   - `update-tavi.bat`
-   - `TAVI-Launcher.bat`
-10. Creating a desktop launcher shortcut when possible.
-11. Failing early when a required runtime resource is missing.
+4. Asking where TAVI should live, one folder the user chooses (or
+   confirms a default), and validating that path before using it anywhere.
+   **Added 2026-09-17 (v1.3.1):** see "One chosen folder (v1.3.1)" below.
+5. Installing or reusing micromamba without modifying global shell startup behavior.
+6. Creating or updating the environment, always selected by prefix
+   (`-r <root> -p <prefix>`), never by name.
+   **Superseded 2026-09-17 (v1.3.1):** see "One chosen folder (v1.3.1)" below;
+   §7's `-n %ENV_NAME%` pattern describes an earlier release.
+7. Installing the required McStas package set.
+8. Installing/updating the TAVI source tree inside the chosen folder.
+9. Configuring McStas/McStasScript paths.
+10. Copying the four launcher scripts, shipped in `installer/launchers/` and
+    no longer generated, into the chosen folder:
+    - `run-tavi.bat`
+    - `update-tavi.bat`
+    - `TAVI-Launcher.bat`
+    - `uninstall-tavi.bat`
+
+    > **Superseded 2026-09-17 (v1.3.1):** launchers were previously written
+    > by the installer from base64/echo templates. See "One chosen folder
+    > (v1.3.1)" below.
+11. Creating a launcher shortcut inside the chosen folder (`TAVI Launcher.lnk`),
+    not on the desktop. **Superseded 2026-09-17 (v1.3.1).**
+12. Failing early when a required runtime resource is missing.
 
 ### Uninstaller responsibilities
 
-The Windows uninstaller is responsible for removing only the user-installed TAVI application:
+The Windows uninstaller is responsible for removing only the user-installed TAVI application, from a folder it can prove it owns:
 
-1. Ask for confirmation.
-2. Remove the `tavi` micromamba environment.
-3. Remove `%USERPROFILE%\TAVI`.
-4. Remove the desktop shortcut.
-5. Never remove micromamba itself.
-6. Never remove unrelated environments such as `tavi-dev`.
+1. Ask for confirmation (twice, when `app\output` holds scan results).
+2. Require an ownership token: `<base>\.tavi-install-root` must exist and
+   its `INSTALL_ID` must match `INSTALL_INFO.txt`'s. Refuse otherwise.
+3. Remove the children the installer created, by name (`app`, `tavi-env`,
+   `micromamba`, `mamba`, `compile_check`, the four launchers), verified by
+   existence check and retried rather than trusted on `rd`'s exit code.
+4. Remove `INSTALL_INFO.txt`, the marker and the install-location record
+   only after the payload above is confirmed gone.
+5. Leave the base folder itself, and anything the user put beside `app\`,
+   in place if a bare `rd` on it fails — it never runs `rd /s /q` on the
+   base.
+6. Never remove micromamba itself, any other environment, or the developer
+   environment `tavi-dev`.
+
+**Superseded 2026-09-17 (v1.3.1):** items 1-6 above replace the earlier
+fixed-path list (`%USERPROFILE%\TAVI`, environment name `tavi`, a desktop
+shortcut); see "One chosen folder (v1.3.1)" below and §17.
 
 ---
 
@@ -70,37 +94,70 @@ The installer should not:
 
 ## 3. Key paths and names
 
-Current intended defaults:
+**Superseded 2026-09-17 (v1.3.1):** the defaults below (`ENV_NAME=tavi`,
+`%USERPROFILE%\TAVI`, a `%USERPROFILE%\AppData\Roaming\mamba` root, a desktop
+shortcut) describe releases through 1.3.0. Current defaults, one chosen
+folder, layout 2 (see "One chosen folder (v1.3.1)" under §5):
 
 ```bat
-set "TAVI_VERSION=main"
+set "TAVI_VERSION=v1.3.1"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
+set "LAYOUT=2"
 
-set "INSTALL_DIR=%USERPROFILE%\TAVI"
-set "MICROMAMBA_DIR=%USERPROFILE%\AppData\Local\micromamba"
+set "TAVI_BASE=%USERPROFILE%\TAVI"
+:: or %SystemDrive%\TAVI-Data when the profile cannot hold McStas -
+:: see :validate_base, §5
+
+set "INSTALL_DIR=%TAVI_BASE%\app"
+set "ENV_PREFIX=%TAVI_BASE%\tavi-env"
+set "MAMBA_ROOT_PREFIX=%TAVI_BASE%\mamba"
+set "MICROMAMBA_DIR=%TAVI_BASE%\micromamba"
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
-
-set "ENV_NAME=tavi"
-set "MAMBA_ROOT_PREFIX=%USERPROFILE%\AppData\Roaming\mamba"
-set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%"
-set "SHORTCUT=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
+set "GATE_DIR=%TAVI_BASE%\compile_check"
+set "SHORTCUT=%TAVI_BASE%\TAVI Launcher.lnk"
+set "MARKER=%TAVI_BASE%\.tavi-install-root"
+set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
 ```
+
+There is no `ENV_NAME` any more: the environment is always selected by its
+exact prefix (`-r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%"`), never by a name
+resolved against an inherited root. The folder is named `tavi-env`, not
+`env`: McStas keys its per-user config on the basename of
+`CONDA_DEFAULT_ENV`, which micromamba sets to the whole prefix path whenever
+the prefix's parent is not literally `envs` (true here, since the prefix
+lives directly under `%TAVI_BASE%`) — see "One chosen folder (v1.3.1)".
 
 Important distinction:
 
 - The **developer** launcher may run from a checkout such as:
   - `C:\Users\AMM\Documents\Github\Science\TAVI`
   - environment: `tavi-dev`
-- The **user installer** must run from:
-  - `%USERPROFILE%\TAVI`
-  - environment: `tavi`
+- The **user installer** puts everything under one folder the user chose,
+  `%TAVI_BASE%` above, with the checkout at `%TAVI_BASE%\app` and the
+  environment at `%TAVI_BASE%\tavi-env`.
 
-The uninstaller must affect only the user-installed copy, not the developer checkout.
+The uninstaller must affect only the user-installed copy, not the developer checkout, and refuses to act on any base folder it cannot prove it owns (§17).
 
 ---
 
 ## 4. Required user-facing behavior
+
+**Added 2026-09-17 (v1.3.1):** before any of the explanation below, the
+installer asks where TAVI should be installed. It proposes a default
+(`%USERPROFILE%\TAVI`, or `%SystemDrive%\TAVI-Data` when the profile itself
+fails validation — a space or accented character in the profile path breaks
+McStas's own launchers), accepts Enter to take that default or a typed path,
+and validates whatever it gets through `:validate_base` (§5) before using it
+anywhere: no spaces, no accented/non-ASCII characters, no UNC/device path,
+no `..`, must start with a drive letter, not a drive root, not one of a
+short list of reserved system folders, and not a junction or symlink. A
+refused path re-prompts (or, started unattended with `/dir`, stops rather
+than looping — §9 of the code comments in
+`WINDOWS-install-TAVI-v1.3.1.bat`). An existing TAVI installation at the
+chosen path is confirmed and wiped before reinstalling; a pre-1.3.1
+installation at that path is confirmed and wiped the same way, and its
+dangling desktop shortcut is removed too.
 
 The installer must begin with a clear explanation and a confirmation prompt.
 
@@ -109,18 +166,26 @@ Minimum required explanation:
 - It will check Visual Studio compiler support.
 - It will check Microsoft MPI SDK.
 - It will install or reuse micromamba.
-- It will create/update the `tavi` environment.
-- It will install/update TAVI under `%USERPROFILE%\TAVI`.
+- It will create/update the environment.
+- It will install/update TAVI inside the chosen folder.
 - It will configure McStas/McStasScript paths.
-- It will create launcher scripts.
+- It will copy the launcher scripts into the chosen folder.
+
+  > **Superseded 2026-09-17 (v1.3.1):** the Visual Studio/MPI SDK checks are
+  > gone (build 3, above); "under `%USERPROFILE%\TAVI`" and "create launcher
+  > scripts" are now "inside the chosen folder" and "copy the launcher
+  > scripts" — see "One chosen folder (v1.3.1)" under §5.
 
 It must explicitly state:
 
 - It will **not** run `micromamba shell init`.
 - It will **not** remove the whole micromamba installation.
 - It may remove a broken `cmd.exe` AutoRun hook only if it contains `micromamba` or `mamba`.
-- It will ask before recreating the `tavi` environment.
+- It will ask before recreating the environment.
 - It will ask before moving aside a broken non-conda environment folder.
+- **Added 2026-09-17 (v1.3.1):** the installation cannot be moved afterwards
+  — the environment and generated config carry the absolute prefix. Only the
+  shortcut can be moved.
 
 Required prompt:
 
@@ -128,7 +193,7 @@ Required prompt:
 choice /C YN /M "Continue with TAVI installation"
 ```
 
-The safe uninstaller must likewise explain what it removes and what it does not remove, then prompt before proceeding.
+The safe uninstaller must likewise explain what it removes and what it does not remove, then prompt before proceeding — twice, when `app\output` holds scan results (§17).
 
 ---
 
@@ -187,6 +252,11 @@ These are not normal package failures. They indicate `cmd.exe` parsing corruptio
 
 ### Launcher generation
 
+> **Superseded 2026-09-17 (v1.3.1):** launchers are no longer generated at
+> all. This subsection's constraints (below) described how generation had to
+> be done safely; "One chosen folder (v1.3.1)" explains what replaced it and
+> why the historical reason for generation no longer applies.
+
 Launcher files may be generated using a safer method such as PowerShell `Set-Content` from a controlled template. If base64 templates are used, the design goal is to avoid fragile batch parser expansion while writing nested batch files.
 
 Any future replacement approach must satisfy:
@@ -196,6 +266,54 @@ Any future replacement approach must satisfy:
 - no unescaped generated `&&`,
 - safe with paths containing parentheses,
 - safe with empty optional variables.
+
+### One chosen folder (v1.3.1)
+
+Everything the installer creates now lives under one folder the user
+chooses (`%TAVI_BASE%`, §3, §4), in a fixed layout stamped `LAYOUT=2`:
+`app\` (the checkout, with `output\` and `config\`), `tavi-env\` (the
+environment), `micromamba\`, `mamba\` (package cache / root prefix),
+`compile_check\` (the install-time compile gate and its logs), the four
+launcher `.bat` files, `INSTALL_INFO.txt` and `.tavi-install-root`.
+
+**Environment selected by prefix, never by name.** Every micromamba call in
+the installer and every launcher passes a quoted `-r "%MAMBA_ROOT_PREFIX%"`
+and `-p "%ENV_PREFIX%"`. This is the release's central repair:
+`micromamba run -n tavi` resolves the name against whatever root the caller
+happens to have inherited, so a relocated installation could load its
+program files from one place and its Python and `mcrun` from a stale
+same-named environment elsewhere — reintroducing the McStas failure the
+relocation existed to prevent. Reproduced on the development machine: the
+same command line returned two different `sys.prefix` values depending only
+on an inherited `MAMBA_ROOT_PREFIX`, while `-p` returned the intended one in
+both cases.
+
+**The environment folder is `tavi-env`, not `env`, and this is
+load-bearing.** McStas derives its per-user config directory from the
+basename of `CONDA_DEFAULT_ENV`, and micromamba sets that variable to the
+whole prefix path whenever the prefix's parent directory is not literally
+`envs` (verified against micromamba 2.5.0). So the per-user file `mcrun`
+reads ahead of the environment's own is now
+`%USERPROFILE%\AppData\mcstas\3.7.1_tavi-env\mccode_config.json`. The
+v1.3.0 installer hardcoded `_tavi` and, unchanged, would have moved aside a
+file that no longer matters while the one that does was left in place.
+
+**Launchers are shipped files, not generated ones.** They were base64 blobs
+substituted by PowerShell (the constraints above describe that era); they
+are now ordinary files in `installer/launchers/` — `run-tavi.bat`,
+`update-tavi.bat`, `TAVI-Launcher.bat`, `uninstall-tavi.bat` — copied into
+the base folder by the installer, and every path inside them is derived
+from their own location via `%~dp0`. They sit in the base folder and not
+inside `app\` so that `update-tavi.bat`'s own `git checkout` cannot rewrite
+a batch file `cmd.exe` is reading line by line while it runs. The installer
+refuses to build a layout-2 folder if the release it cloned does not carry
+`installer/launchers/LAYOUT` containing `LAYOUT=2`, rather than half-build
+one from a pre-1.3.1 tag.
+
+**The installation is not relocatable.** Conda packages and the generated
+`mccode_config.json` carry the absolute prefix. Moving `%TAVI_BASE%` breaks
+the environment; only the `TAVI Launcher.lnk` shortcut inside it can be
+moved.
 
 ---
 
@@ -610,25 +728,36 @@ It should warn clearly if `Progress_bar.comp` or any future required component i
 
 ## 16. Launcher expectations
 
-The installer must create:
+**Superseded 2026-09-17 (v1.3.1):** the paths, the `run -n %ENV_NAME%`
+pattern and the five-item menu below describe releases through 1.3.0.
+Current behaviour, layout 2 (§3, §5 "One chosen folder"):
+
+The installer copies, rather than generates, four launchers from
+`installer/launchers/` into `%TAVI_BASE%`:
 
 ```text
-%USERPROFILE%\TAVI\run-tavi.bat
-%USERPROFILE%\TAVI\update-tavi.bat
-%USERPROFILE%\TAVI\TAVI-Launcher.bat
-%USERPROFILE%\Desktop\TAVI Launcher.lnk
+%TAVI_BASE%\run-tavi.bat
+%TAVI_BASE%\update-tavi.bat
+%TAVI_BASE%\TAVI-Launcher.bat
+%TAVI_BASE%\uninstall-tavi.bat
+%TAVI_BASE%\TAVI Launcher.lnk
 ```
+
+Every micromamba call in every launcher passes both `-r "<mamba root>"` and
+`-p "<env prefix>"`, each derived from the launcher's own location
+(`%~dp0`) — never `-n <name>`. See §3 and §5.
 
 ### `run-tavi.bat`
 
 Required behavior:
 
-1. `cd /d "%INSTALL_DIR%"`
-2. Set:
-   - `MCSTAS`
-   - `MCSTAS_COMPONENT_PATH`
+1. `cd /d "%INSTALL_DIR%"` (`%TAVI_BASE%\app`).
+2. Set `MCSTAS` and `MCSTAS_COMPONENT_PATH`, and clear the five
+   `MCSTAS_*_OVERRIDE` variables for this process, so a value left over in
+   the user's environment cannot silently replace the compiler the
+   installer gated on at install time.
 3. Check that `%MCSTAS%` exists.
-4. ~~Optionally call Visual Studio `vcvars64.bat` if found. Locate it via `vswhere.exe` (`%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe`), not a hardcoded version path: VS 2026 installs to `...\Microsoft Visual Studio\18\...`, not `...\2026\...`, so a hardcoded year/version segment breaks detection.~~
+4. ~~Optionally call Visual Studio `vcvars64.bat` if found.~~
 5. ~~Optionally append Microsoft MPI SDK include/lib paths if found.~~
 
    > **Superseded 2026-09-15 (build 3):** `run-tavi.bat` no longer bootstraps
@@ -638,7 +767,7 @@ Required behavior:
 6. Run:
 
 ```bat
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% python TAVI_PySide6.py
+"%MICROMAMBA_EXE%" -r "%MAMBA_ROOT%" run -p "%ENV_PREFIX%" python TAVI_PySide6.py
 ```
 
 7. Pause if TAVI exits with an error.
@@ -647,27 +776,38 @@ Required behavior:
 
 Required behavior:
 
-1. `git fetch origin`
-2. `git checkout %TAVI_VERSION%`
-3. `git pull --ff-only origin %TAVI_VERSION%`
-4. Check that PySide6 (a `QApplication`) and mcstasscript load; on failure
+1. `git fetch --tags origin`
+2. `git checkout %TAVI_VERSION%` (read from `INSTALL_INFO.txt`)
+3. Check that PySide6 (a `QApplication`) and mcstasscript load; on failure
    say to run the installer again. The script never installs or upgrades
    packages (2026-09-15).
-5. Pause and report failures clearly.
+4. Pause and report failures clearly.
 
 ### `TAVI-Launcher.bat`
 
-Required menu:
+Required menu, six items — `[5] Exit` keeps its pre-1.3.1 number so that an
+existing user's muscle memory does not land on the destructive option:
 
 ```text
 [1] Run TAVI
-[2] Update TAVI
+[2] Repair TAVI
 [3] Open TAVI folder
 [4] Open TAVI shell
 [5] Exit
+[6] Uninstall TAVI
 ```
 
-The shell option should run a shell inside the `tavi` environment but must not alter global shell startup.
+The menu dispatches on exact `ERRORLEVEL` comparisons for each of 1-6, never
+a descending `if errorlevel` ladder: `choice` returns 255 on error and 0 on
+Ctrl-C, and a ladder with the destructive option first would route both of
+those into it.
+
+`[6] Uninstall TAVI` confirms (twice when `app\output` is non-empty), copies
+`<base>\uninstall-tavi.bat` to `%TEMP%`, runs it detached with
+`start "" /d "%TEMP%"` and exits immediately so nothing in this process
+holds the base folder open.
+
+The shell option should run a shell inside the environment but must not alter global shell startup.
 
 ---
 
@@ -747,31 +887,54 @@ overrides, the `-B` quirk in particular.
 
 ## 17. Safe uninstaller design
 
-The safe uninstaller must remove only:
+**Superseded 2026-09-17 (v1.3.1):** the fixed-path list below (`%USERPROFILE%\TAVI`,
+an environment named `tavi`, a desktop shortcut, a `TAVI_PySide6.py` sniff test)
+describes releases through 1.3.0. Current design, layout 2:
 
-```text
-%USERPROFILE%\TAVI
-tavi environment
-%USERPROFILE%\Desktop\TAVI Launcher.lnk
-```
+The uninstaller (`installer/launchers/uninstall-tavi.bat`, invoked directly
+or via the launcher menu's `[6]`) removes only a base folder it can prove is
+a TAVI installation it created:
+
+**Ownership token, required before anything is deleted.** `<base>\.tavi-install-root`
+must exist and its `INSTALL_ID` must match the `INSTALL_ID` in
+`<base>\INSTALL_INFO.txt`. A `TAVI_PySide6.py` sentinel is not enough — every
+checkout of the project has one. `<base>\INSTALL_INFO.txt`'s `LAYOUT` must
+also read `2`; a different layout is refused with a pointer to the
+uninstaller that shipped with that installation. The `%LOCALAPPDATA%\TAVI\install-record.txt`
+locator (§ "One chosen folder (v1.3.1)") only *finds* a base folder this way
+— it never substitutes for the ownership check.
+
+**Named children, never `rd /s /q` on the base.** It removes, by name:
+`app`, `tavi-env`, `micromamba`, `mamba`, `compile_check`, the four launcher
+`.bat` files and the `.lnk` shortcut. Because `rd` reports success even when
+it silently skipped a file another process held open, each removal is
+verified by an existence test, not by `ERRORLEVEL`; a bounded number of
+retries follow a short wait if something is still there. Only once every
+payload folder is confirmed gone does it remove `INSTALL_INFO.txt`, the
+`.tavi-install-root` marker and the uninstaller's own copy of itself, then
+run a bare `rd` on the base — which Windows refuses for a non-empty folder,
+so anything the user put beside `app\` survives and is reported by name
+rather than deleted.
 
 It must explicitly not remove:
 
 ```text
-micromamba itself
-tavi-dev
-any other environment
+micromamba installed anywhere else
+tavi-dev, or any environment other than the one this installation created
 ```
 
-(the compiler lives inside the `tavi` environment as of build 3, so
-removing it is covered by removing the environment; see "McStas compiler
-(build 3)" above.)
+(the compiler lives inside the `tavi-env` environment, so removing it is
+covered by removing the environment; see "McStas compiler (build 3)" above.)
 
-It must not delete `%USERPROFILE%\AppData\Roaming\mamba` or `%USERPROFILE%\AppData\Local\micromamba`.
+This protects against accidental deletion of the wrong folder, and against
+one installation's uninstaller reaching into another's environment.
 
-If `%USERPROFILE%\TAVI` does not contain `TAVI_PySide6.py`, it should warn and ask before deleting anyway.
-
-This protects against accidental deletion of a wrong folder.
+`WINDOWS-uninstall-TAVI.bat` is the standalone fallback for a damaged or
+pre-1.3.1 installation: it locates the base (argument, then the install
+record, then the old default locations, then by asking) and hands off to
+`<base>\uninstall-tavi.bat` when one exists — which matches that
+installation's own layout — falling back to a legacy removal path (by
+`TAVI_PySide6.py` and `INSTALL_INFO.txt`) only when no delegate is found.
 
 The POSIX uninstaller applies the same must-not-remove list to its own paths; see §25.
 
@@ -968,6 +1131,85 @@ Before and after uninstall:
 
 ---
 
+### Failure: a digit before a redirection becomes a stream number
+
+Found by the first cold run of the v1.3.1 installer, 2026-09-17.
+
+Symptom:
+
+- `INSTALL_INFO.txt` and `.tavi-install-root` came out with **no `LAYOUT`
+  line at all**, and the uninstaller then refused every genuine installation
+  as "a different version of the TAVI installer (layout "")".
+
+Cause:
+
+- `echo LAYOUT=%LAYOUT%>> "file"` expands to `echo LAYOUT=2>> "file"`. `cmd`
+  reads the digit immediately before a redirection operator as the stream
+  number, so this appends *stderr* to the file and writes `LAYOUT=` to the
+  console. The value is silently eaten. Any value ending in a digit is
+  exposed; `LAYOUT=2` is the shortest possible case.
+
+Regression prevention:
+
+- Put the redirection **first**: `>> "file" echo LAYOUT=%LAYOUT%`. The
+  installer already used that form for its generated Python helpers; every
+  write now uses it.
+- `tests/test_installer_launchers.py` asserts the installed
+  `INSTALL_INFO.txt` and marker carry a `LAYOUT` line.
+
+---
+
+### Failure: a stray script in `%TEMP%` shadows a standard-library module
+
+Found by the same cold run.
+
+Symptom:
+
+- Step 4 printed a `FileNotFoundError` traceback from inside `mcstasscript`'s
+  own `import copy`, and McStasScript's paths were never configured. The
+  install continued and reported success, because that call had no
+  `errorlevel` check.
+
+Cause:
+
+- The helper script ran as `python "%TEMP%\tavi_config_mcstas.py"`, and Python
+  puts a script's own directory first on `sys.path`. An unrelated `copy.py`
+  left in the operator's `%TEMP%` therefore shadowed the standard library for
+  every import inside that run.
+
+Regression prevention:
+
+- Helper scripts run from `%TAVI_BASE%\install_work`, a folder the installer
+  creates and removes; `%TEMP%` is no longer used for anything executable.
+- The McStasScript configuration step now checks `errorlevel` and stops.
+
+---
+
+### Failure: `findstr` character ranges follow the machine's collation
+
+Found by `tests/test_installer_launchers.py` while it was being written.
+
+Symptom:
+
+- `:validate_base` accepted `C:\TAVÉ`. An accented path passes validation and
+  McStas then fails to compile from it, which is the confusing first-scan
+  failure the validation exists to prevent.
+
+Cause:
+
+- The class was written `[^A-Za-z0-9_.:=\\-]`. `findstr` resolves a range
+  through the locale's collation order, which places accented Latin letters
+  inside `A-Z`. A non-Latin character (`€`, CJK, Cyrillic) was refused
+  correctly, so the gap was specific to accented Latin letters.
+
+Regression prevention:
+
+- Every allowed character is enumerated instead of ranged.
+- The test table carries an accented capital, an accented lowercase and a
+  non-Latin symbol.
+
+---
+
 ## 19. Minimal user requirements
 
 A normal user should need only:
@@ -1112,6 +1354,10 @@ Before publishing a new installer:
 - [ ] Safe uninstaller does not remove micromamba itself.
 - [ ] Safe uninstaller does not remove `tavi-dev`.
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
+- [ ] No environment is selected by name (`-n`) anywhere in the installer or any launcher — every micromamba call passes both `-r` and `-p`.
+- [ ] `:validate_base`'s path-validation table (accept/refuse cases) passes in all three copies (`WINDOWS-install-TAVI-vX.Y.Z.bat`, `installer/launchers/uninstall-tavi.bat`, `WINDOWS-uninstall-TAVI.bat`) and the three copies are byte-identical.
+- [ ] The uninstaller refuses a base folder without a matching ownership token (`.tavi-install-root` `INSTALL_ID` == `INSTALL_INFO.txt` `INSTALL_ID`).
+- [ ] The cold install (`/dir <path>`) has been run against the real tag on a clean directory.
 
 ---
 
@@ -1171,6 +1417,30 @@ written after the tag exists.
     SDK check dropped, McStas's own config pointed at GCC inside the
     environment, and the install gated on a real serial and MPI compile of
     `PSI_DMC`. See "McStas compiler (build 3)" above.
+
+(h) 2026-09-17: v1.3.1 (`WINDOWS-install-TAVI-v1.3.1.bat`,
+    `INSTALLER_VERSION=v1.3.1-1`) — one chosen folder (§3, §5 "One chosen
+    folder (v1.3.1)"): the user picks a base folder, validated by
+    `:validate_base`, and everything lands under it (`app`, `tavi-env`,
+    `micromamba`, `mamba`, `compile_check`, the four launchers, marked
+    `LAYOUT=2`). The environment is always selected by prefix (`-r`/`-p`),
+    never by name — the release's central repair, since name resolution
+    against an inherited root could load a relocated install's Python and
+    `mcrun` from a stale environment elsewhere. The environment folder is
+    named `tavi-env` (not `env`), because that basename becomes McStas's
+    per-user config directory name whenever the prefix's parent isn't
+    literally `envs`. Launchers are shipped files in `installer/launchers/`,
+    copied rather than generated, living beside `app\` so `update-tavi.bat`'s
+    own checkout can't rewrite a launcher `cmd.exe` is reading. Uninstall
+    moved into the launcher menu as `[6]`, backed by an ownership-token
+    check (`.tavi-install-root` `INSTALL_ID` == `INSTALL_INFO.txt`) and a
+    named-children removal that never runs `rd /s /q` on the base (§17). A
+    `%LOCALAPPDATA%\TAVI\install-record.txt` locator finds an installation
+    (written as soon as the base exists) but never authorises deleting one.
+    The installation is not relocatable: only the shortcut can move.
+    `TAVI-Repair-Launchers.bat` is a new one-shot field repair that rewrites
+    a pre-1.3.1 machine's three launchers to select its environment by exact
+    prefix, without reinstalling anything.
 
 ## 23. Recommended future improvements
 
