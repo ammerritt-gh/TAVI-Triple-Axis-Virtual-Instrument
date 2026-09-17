@@ -2,6 +2,12 @@
 
 > **Status:** live
 
+> **Superseded as a next action, 2026-09-17.** The launcher repair this document
+> asks for is **built** and on PR #46; start from
+> [the installer 1.3.1 handoff](HANDOFF-installer-1-3-1.md) instead. This
+> document remains the record of the investigation, the evidence, the ruled-out
+> causes (§8) and the defects found but not fixed (§7.2–§7.5, still open).
+
 **Start here: repair the launcher's environment selection next.** The defect is
 confirmed locally and is the leading explanation of the remote failure; the
 remote cause is not yet proven. No further Doctor run is needed before this fix.
