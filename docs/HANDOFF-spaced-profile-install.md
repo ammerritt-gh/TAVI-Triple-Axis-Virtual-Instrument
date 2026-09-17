@@ -2,10 +2,44 @@
 
 > **Status:** live
 
-Basic McStas runtime verified; remote TAVI failure still unconfirmed.
-An actual-GUI recorder is available; read §11's launcher caveat before sending it.
+**Start here: repair the launcher's environment selection next.** The defect is
+confirmed locally and is the leading explanation of the remote failure; the
+remote cause is not yet proven. No further Doctor run is needed before this fix.
 **Date:** 2026-09-17
 **Workstream:** installer v1.3.0 build 4 / remote user support
+
+## Fresh-session brief
+
+- **Symptom:** deterministic TAVI works, Monte Carlo fails; the repaired
+  installation's Doctor successfully compiles and runs a stock instrument.
+- **Leading cause:** the installer relocates the environment for the spaced
+  Windows profile, but generated launchers still select it by name (`-n tavi`)
+  without the relocated root. Normal launching can reopen the old broken
+  environment; the Doctor explicitly selects the new one. Setting `MCSTAS`
+  alone does not select Python or mcrun. Evidence and limitations are in §11.
+- **Next action:** bind generated launchers to the installer's exact
+  `ENV_PREFIX`, including normal Run, Open TAVI shell and repair/update calls.
+  Deliver a small launcher repair for the existing installation as well as the
+  installer correction; a reinstall is not required. Detailed scope and checks
+  are in §12. No launcher fix has been implemented in this session.
+- **Do not repeat diagnostics:** another Doctor run tests the already-working
+  environment and cannot distinguish this fault. USB transfer is difficult:
+  the operator permits ONE diagnostic transfer, not successive revised probes.
+  The existing recorder uses `-p` and can mask the suspected fault; hold it.
+- **Alternative causes:** missing compiler, broken MPI and a 30-rank launch
+  refusal were excluded in the Doctor's environment (§8). Three TAVI sample
+  builds passed locally with GCC (§11). Output-path spaces are a separate
+  confirmed bug; the operator believes her save folder had none. Memory has no
+  positive evidence and is low priority; it is not mathematically ruled out.
+- **Repository state at handoff:** `main`, findings through `69b2621b`;
+  recorder commits `449e0708` and `3c6506ba`. The build-4 installer/uninstaller
+  edits and untracked Doctor in §6 predate this investigation and remain
+  uncommitted. Preserve them and review their diff before implementing the fix.
+  These local edits are NOT included in a fresh clone just by pulling `main`.
+
+The user requested this write-up so the launcher can be fixed in a later
+session. Do not interpret this document as a request to start that release work
+or to send a probe now. Begin with this brief, §8, §11 and §12; §5 is historical.
 
 ---
 
@@ -92,11 +126,11 @@ it produced paraphrases only. Do not ask a fourth time — capture it mechanical
 
 ---
 
-## 5. Earlier proposal — headless probe (superseded by §10)
+## 5. Historical probe API notes — not the next action
 
-Write a script that drives TAVI's own scan path with no Qt, run it on her machine via
-the doctor or the TAVI shell, and print the full traceback plus `execution_info`.
-This closes the loop without depending on anyone copying console text.
+The original proposal was an incremental headless probe followed by a GUI probe.
+It was superseded by the one-transfer constraint and then by the launcher finding.
+Do not execute that sequence. The API notes below are retained only as reference.
 
 API surface, verified against source:
 
@@ -116,12 +150,8 @@ API surface, verified against source:
 - The run itself is [instruments/tas_runtime.py](../instruments/tas_runtime.py):
   `run_tas_point` (line 1323), `_run_point_direct` (line 1282).
 
-If the probe fails, the traceback is the answer. If it passes, the fault is above the
-plugin layer — in `TAVIController`, the prep-thread pipeline, or result loading — and
-the next probe drives the GUI offscreen (`QT_QPA_PLATFORM=offscreen`).
-
-Cheaper alternative if someone is at the machine: Launcher → **[4] Open TAVI shell** →
-`python TAVI_PySide6.py` → run one point → copy the console.
+The generated Open TAVI shell has the same environment-selection defect as Run;
+it is not an independent known-good baseline (§11).
 
 ---
 
@@ -181,6 +211,11 @@ green end to end locally.
 ---
 
 ## 8. Ruled out — do not re-tread
+
+**Boundary:** these remote results describe the environment explicitly selected
+by the Doctor, not the environment an ordinary shortcut selected. An old
+environment may still contain the original faults. The final row corrects an
+earlier overbroad exclusion; it is not itself a ruled-out hypothesis.
 
 | Hypothesis | Verdict |
 |---|---|
@@ -342,3 +377,68 @@ shortcut's environment. No revised remote probe has been requested or sent in
 this investigation. Decide the smallest launcher correction or capture of normal
 launch selection before using that transfer; installer changes remain a separate
 release slice.
+
+## 12. Later launcher repair: scope and acceptance
+
+**Recommendation communicated to the operator:** confidence is sufficient to
+repair the confirmed launcher defect first, without another Doctor or recorder
+run. The operator also considers memory unlikely. Verification of her usual
+Monte Carlo run after the launcher repair is the remaining remote acceptance,
+not a request for another diagnostic package.
+
+### Where the fix belongs
+
+The authoritative generator is
+`installer/WINDOWS-install-TAVI-v1.3.0.bat`, not a generated local `run-tavi.bat`.
+At the investigated working-tree revision, `ENV_PREFIX` is resolved at line 57;
+three base64 templates and their placeholder replacements are at lines 486-488:
+
+| Generated surface | Required coverage |
+|---|---|
+| `RUN_SCRIPT` / `run-tavi.bat` | The Python GUI launch must select the exact installed environment. |
+| `UPDATE_SCRIPT` / repair script | Every micromamba call must select that same environment, including git and import checks. Preserve the existing pinned-release behavior. |
+| `LAUNCHER_SCRIPT` / menu | Open TAVI shell must select it too; Run and Update must call the corrected scripts. |
+
+Prefer the existing resolved `ENV_PREFIX` as a quoted `-p` argument. For example,
+the template's GUI command would become:
+
+```bat
+"__MICROMAMBA_EXE__" run -p "__ENV_PREFIX__" python TAVI_PySide6.py
+```
+
+Add the corresponding placeholder substitution when generating each affected
+script. Use resolved installer values, not a hardcoded `C:` drive or user name.
+Setting a root locally in each generated script is an alternative, but selecting
+the exact prefix directly avoids dependence on inherited root configuration.
+Do not use a global `setx` change as the repair. Keep quoted paths, correct working
+directories, McStas resource variables and visible errors.
+
+Also provide a narrow way to repair the scripts already installed on the affected
+computer: changing the installer alone does not update her existing launchers.
+Use the installed paths/record; preserve the old launchers for rollback. Rebuilding
+the environment, changing scientific code, changing MPI defaults and repairing
+the separate output-path bug are outside this fix. This is future T2 release work;
+the current session only records findings.
+
+### Local checks before delivery
+
+1. Reproduce wrong selection with both an old/default `tavi` environment and a
+   relocated `tavi` environment present. Start outside the installer/activated
+   environment, with no inherited root; also check an explicitly stale root.
+2. Execute the actual generated batch scripts after correction. Verify
+   `sys.executable`/`sys.prefix` and the detected mcrun/resources all belong to the
+   intended installation. Cover the default layout and relocated spaced-profile
+   layout; ensure a missing intended prefix fails visibly rather than selecting
+   another environment. Decode/check every template and substitution, not just
+   the first Run command.
+3. Check menu shell and repair/update environment selection without fetching or
+   checking out releases merely to test it. A local recorder/stub can verify those
+   commands; retain the real GUI launch as a separate integration check.
+4. Through the corrected launcher environment, use real offscreen Qt widgets to
+   run one small Monte Carlo point in a space-free output folder. Require fresh
+   compilation and detector output; deterministic success alone is insufficient.
+   Keep existing config isolation, no-window guards and bounded test timeouts.
+5. After delivering the small launcher repair, her ordinary shortcut and usual
+   Monte Carlo run are the remote check. If it still fails, first verify the
+   corrected launcher was actually used; then reassess the lower-ranked causes
+   from available evidence. Do not restart the repeated-probe loop.

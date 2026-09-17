@@ -21,4 +21,5 @@ The README is the quick-start surface; this guide is the navigation authority. A
 | What are the agent instructions? | [AGENTS.md](../AGENTS.md) | live |
 | What is the vTAS reference material? | [examples/vTAS-README.md](../examples/vTAS-README.md) | live |
 | What is the installer design? | [installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md](../installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md) | live |
-| How do I record a failed Windows Monte Carlo run for offline support? | [Support recorder](../tools/support/README.md), [spaced-profile installation handoff](HANDOFF-spaced-profile-install.md) | live |
+| Why does the remote Windows install run deterministic mode but fail Monte Carlo, and what should be fixed next? | [Installation handoff: start here](HANDOFF-spaced-profile-install.md#fresh-session-brief), including launcher repair scope and ruled-out causes | live |
+| How do I record a failed Windows Monte Carlo run for offline support? | Read the [handoff's recorder caveat](HANDOFF-spaced-profile-install.md#consequence-for-the-one-transfer-recorder) first, then [Support recorder](../tools/support/README.md) | live |
