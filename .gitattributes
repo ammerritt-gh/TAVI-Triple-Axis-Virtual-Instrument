@@ -1,0 +1,5 @@
+# Batch files are shipped to Windows users and run by cmd.exe. Pin them to CRLF
+# in every checkout, rather than trusting the cloning client's core.autocrlf:
+# the installer clones with the git inside the conda environment, not with Git
+# for Windows, and its defaults are not ours to assume.
+*.bat text eol=crlf
