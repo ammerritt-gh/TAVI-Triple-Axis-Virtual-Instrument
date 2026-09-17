@@ -144,7 +144,10 @@ goto legacy_remove_dir
 
 :legacy_env_refused
 echo [WARN] Not removing the recorded environment path, because it does not
-echo        look like one this installer created: %ENV_PREFIX%
+echo        look like one this installer created (%VB_REASON%). It was:
+:: Through "set", never "echo %VAR%": this path failed validation, so it is
+:: exactly the string that must not reach a command line. See :validate_base.
+set VBPATH
 goto legacy_remove_dir
 
 :legacy_no_env
@@ -187,7 +190,13 @@ goto failed
 
 :refused
 echo [ERROR] Refusing to uninstall from this path: %VB_REASON%
-echo         Path: %TAVI_BASE%
+echo         The path was:
+:: Printed through "set", never "echo %VAR%". This message exists precisely
+:: because the path failed validation, so it is the one string in the script
+:: most likely to contain an ampersand - and echoing it would split the command
+:: line and run whatever follows. Measured: a rejected C:\TAVI&calc launched
+:: Calculator from this very line.
+set VBPATH
 goto failed
 
 :copy_failed

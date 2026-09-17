@@ -48,7 +48,10 @@ set /p "INSTALL_DIR=Type the full path of the TAVI program folder: "
 if not defined INSTALL_DIR goto no_install
 
 :have_dir
-if "%INSTALL_DIR:~-1%"=="\" set "INSTALL_DIR=%INSTALL_DIR:~0,-1%"
+:: Validate before anything - including a message - expands what was typed.
+call :validate_base "%INSTALL_DIR%"
+if defined VB_REASON goto typed_refused
+set "INSTALL_DIR=%VBPATH%"
 if not exist "%INSTALL_DIR%\TAVI_PySide6.py" goto no_install
 if not exist "%INSTALL_DIR%\INSTALL_INFO.txt" goto no_info
 
@@ -61,24 +64,23 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") 
 
 if not defined ENV_PREFIX goto no_env_recorded
 if not defined MICROMAMBA_EXE goto no_env_recorded
-if not exist "%ENV_PREFIX%\python.exe" goto env_missing
-if not exist "%MICROMAMBA_EXE%" goto micromamba_missing
-:: %%~fI collapses the .. before validation rather than writing one into a
-:: generated launcher.
-if not defined MAMBA_ROOT for %%I in ("%ENV_PREFIX%\..\..") do set "MAMBA_ROOT=%%~fI"
 
-:: Everything below is written verbatim into new batch files, so every value
-:: read out of INSTALL_INFO.txt is checked first: that file is ordinary text on
-:: disk, and a path carrying & or ^ would produce a launcher that does
-:: something other than launching TAVI.
-call :validate_base "%INSTALL_DIR%"
-if defined VB_REASON goto value_refused
+:: Validated before ANY later line expands them - including the error messages
+:: below, which would otherwise be the one place an unchecked path reaches a
+:: command line. INSTALL_INFO.txt is ordinary text on disk, and these values are
+:: also written verbatim into new batch files further down.
 call :validate_base "%ENV_PREFIX%"
-if defined VB_REASON goto value_refused
-call :validate_base "%MAMBA_ROOT%"
 if defined VB_REASON goto value_refused
 call :validate_base "%MICROMAMBA_EXE%"
 if defined VB_REASON goto value_refused
+:: %%~fI collapses the .. before validation rather than writing one into a
+:: generated launcher.
+if not defined MAMBA_ROOT for %%I in ("%ENV_PREFIX%\..\..") do set "MAMBA_ROOT=%%~fI"
+call :validate_base "%MAMBA_ROOT%"
+if defined VB_REASON goto value_refused
+
+if not exist "%ENV_PREFIX%\python.exe" goto env_missing
+if not exist "%MICROMAMBA_EXE%" goto micromamba_missing
 
 set "MCSTAS_RES=%ENV_PREFIX%\share\mcstas\resources"
 if not exist "%MCSTAS_RES%" set "MCSTAS_RES=%ENV_PREFIX%\Library\share\mcstas\resources"
@@ -218,9 +220,17 @@ pause
 endlocal
 exit /b 0
 
+:typed_refused
+echo [ERROR] That path cannot be used: %VB_REASON%
+echo         The path was:
+:: Through "set", never "echo %VAR%" - see the note on :validate_base.
+set VBPATH
+goto failed
+
 :no_install
 echo [ERROR] That folder does not contain TAVI_PySide6.py, so it is not a TAVI
-echo         program folder: %INSTALL_DIR%
+echo         program folder:
+echo             %INSTALL_DIR%
 goto failed
 
 :no_info

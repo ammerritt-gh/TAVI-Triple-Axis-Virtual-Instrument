@@ -210,6 +210,12 @@ set "MAMBA_ROOT_PREFIX=%TAVI_BASE%\mamba"
 set "MICROMAMBA_DIR=%TAVI_BASE%\micromamba"
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
 set "GATE_DIR=%TAVI_BASE%\compile_check"
+:: Helper scripts run from a folder this installer owns, never %TEMP%:
+:: python puts a script's own directory first on sys.path, so any stray .py
+:: left in the user's temp folder shadows a standard-library module of the
+:: same name. Measured on a cold install - a leftover copy.py broke
+:: mcstasscript's "import copy" and the McStasScript configuration below.
+set "WORK_DIR=%TAVI_BASE%\install_work"
 set "SHORTCUT=%TAVI_BASE%\TAVI Launcher.lnk"
 set "MARKER=%TAVI_BASE%\.tavi-install-root"
 set "RECORD_DIR=%LOCALAPPDATA%\TAVI"
@@ -242,6 +248,7 @@ if not "%ERRORLEVEL%"=="1" goto cancelled
 
 if not exist "%TAVI_BASE%" mkdir "%TAVI_BASE%" 2>nul
 if not exist "%TAVI_BASE%" goto base_uncreatable
+if not exist "%WORK_DIR%" mkdir "%WORK_DIR%" 2>nul
 
 :: The record is written now, not at the end: an install that dies after the
 :: environment solve has 3 GB on disk in a folder only the user knows about,
@@ -253,8 +260,8 @@ if not exist "%RECORD_DIR%" mkdir "%RECORD_DIR%" 2>nul
 
 echo.
 echo [Step 0/7] Cleaning broken cmd.exe AutoRun hooks...
-reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun > "%TEMP%\tavi_autorun_hkcu.txt" 2>nul
-findstr /i "micromamba mamba" "%TEMP%\tavi_autorun_hkcu.txt" >nul 2>nul
+reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun > "%WORK_DIR%\tavi_autorun_hkcu.txt" 2>nul
+findstr /i "micromamba mamba" "%WORK_DIR%\tavi_autorun_hkcu.txt" >nul 2>nul
 if "%ERRORLEVEL%"=="0" goto autorun_clean
 echo [OK] No stale HKCU micromamba AutoRun hook found.
 goto autorun_done
@@ -264,7 +271,7 @@ reg delete "HKCU\Software\Microsoft\Command Processor" /v AutoRun /f >nul 2>nul
 echo [OK] Removed HKCU cmd AutoRun hook containing micromamba/mamba.
 
 :autorun_done
-del "%TEMP%\tavi_autorun_hkcu.txt" >nul 2>nul
+del "%WORK_DIR%\tavi_autorun_hkcu.txt" >nul 2>nul
 echo.
 
 echo [Step 1/7] Setting up micromamba...
@@ -326,42 +333,43 @@ if not exist "%MCRUN_DIR%\mcrun.bat" if not exist "%MCRUN_DIR%\mcrun.exe" set "M
 if not exist "%MCRUN_DIR%\mcrun.bat" if not exist "%MCRUN_DIR%\mcrun.exe" set "MCRUN_DIR=%ENV_PREFIX%\bin"
 if not exist "%MCSTAS_RESOURCES%" goto no_resources
 if not exist "%MCRUN_DIR%\mcrun.bat" if not exist "%MCRUN_DIR%\mcrun.exe" goto no_mcrun
-dir /s /b "%MCSTAS_RESOURCES%\Progress_bar.comp" > "%TEMP%\tavi_progress.txt" 2>nul
-findstr /r "." "%TEMP%\tavi_progress.txt" >nul 2>nul
+dir /s /b "%MCSTAS_RESOURCES%\Progress_bar.comp" > "%WORK_DIR%\tavi_progress.txt" 2>nul
+findstr /r "." "%WORK_DIR%\tavi_progress.txt" >nul 2>nul
 if not "%ERRORLEVEL%"=="0" goto no_progress_bar
-del "%TEMP%\tavi_progress.txt" >nul 2>nul
+del "%WORK_DIR%\tavi_progress.txt" >nul 2>nul
 echo [OK] McStas resources: %MCSTAS_RESOURCES%
 echo [OK] mcrun directory : %MCRUN_DIR%
 
-> "%TEMP%\tavi_config_mcstas.py" echo import mcstasscript as ms
->> "%TEMP%\tavi_config_mcstas.py" echo c = ms.Configurator()
->> "%TEMP%\tavi_config_mcstas.py" echo c.set_mcrun_path(r"%MCRUN_DIR%")
->> "%TEMP%\tavi_config_mcstas.py" echo c.set_mcstas_path(r"%MCSTAS_RESOURCES%")
->> "%TEMP%\tavi_config_mcstas.py" echo print("[TAVI] McStasScript configured")
-"%MICROMAMBA_EXE%" -r "%MAMBA_ROOT_PREFIX%" run -p "%ENV_PREFIX%" python "%TEMP%\tavi_config_mcstas.py"
-del "%TEMP%\tavi_config_mcstas.py" >nul 2>nul
+> "%WORK_DIR%\tavi_config_mcstas.py" echo import mcstasscript as ms
+>> "%WORK_DIR%\tavi_config_mcstas.py" echo c = ms.Configurator()
+>> "%WORK_DIR%\tavi_config_mcstas.py" echo c.set_mcrun_path(r"%MCRUN_DIR%")
+>> "%WORK_DIR%\tavi_config_mcstas.py" echo c.set_mcstas_path(r"%MCSTAS_RESOURCES%")
+>> "%WORK_DIR%\tavi_config_mcstas.py" echo print("[TAVI] McStasScript configured")
+"%MICROMAMBA_EXE%" -r "%MAMBA_ROOT_PREFIX%" run -p "%ENV_PREFIX%" python "%WORK_DIR%\tavi_config_mcstas.py"
+if errorlevel 1 goto mcstasscript_config_failed
+del "%WORK_DIR%\tavi_config_mcstas.py" >nul 2>nul
 echo.
 
 echo [Step 5/7] Configuring and checking the McStas compiler...
-> "%TEMP%\tavi_gcc_config.py" echo import json, pathlib, shutil, sys
->> "%TEMP%\tavi_gcc_config.py" echo cfg = pathlib.Path(sys.argv[1])          # env's mccode_config.json
->> "%TEMP%\tavi_gcc_config.py" echo backup = cfg.with_name("mccode_config.msvc.json")
->> "%TEMP%\tavi_gcc_config.py" echo if not backup.exists():
->> "%TEMP%\tavi_gcc_config.py" echo     shutil.copy2(cfg, backup)            # the package's MSVC original
->> "%TEMP%\tavi_gcc_config.py" echo data = json.loads(backup.read_text(encoding="utf-8"))
->> "%TEMP%\tavi_gcc_config.py" echo c = data["compilation"]
->> "%TEMP%\tavi_gcc_config.py" echo gcc = "${CONDA_PREFIX}/Library/bin/x86_64-w64-mingw32-gcc.exe"
->> "%TEMP%\tavi_gcc_config.py" echo c["CC"] = gcc
->> "%TEMP%\tavi_gcc_config.py" echo c["MPICC"] = gcc
->> "%TEMP%\tavi_gcc_config.py" echo # paths quoted: mcrun splits these with mslex and a profile may contain a space
->> "%TEMP%\tavi_gcc_config.py" echo c["CFLAGS"] = '-O2 -DNDEBUG -D_POSIX_SOURCE -B"${CONDA_PREFIX}/Library/x86_64-w64-mingw32/sysroot/usr/lib/" -I"${CONDA_PREFIX}/Library/include" -L"${CONDA_PREFIX}/Library/lib"'
->> "%TEMP%\tavi_gcc_config.py" echo c["MPIFLAGS"] = "-DUSE_MPI -lmsmpi"
->> "%TEMP%\tavi_gcc_config.py" echo c["NCRYSTALFLAGS"] = '-I"${CONDA_PREFIX}/include" "${CONDA_PREFIX}/Lib/NCrystal.lib"'
->> "%TEMP%\tavi_gcc_config.py" echo # conda hardlinks package files into the cache and every other env;
->> "%TEMP%\tavi_gcc_config.py" echo # an in-place write would edit them all, so give this env its own file.
->> "%TEMP%\tavi_gcc_config.py" echo cfg.unlink()
->> "%TEMP%\tavi_gcc_config.py" echo cfg.write_text(json.dumps(data, indent=4), encoding="utf-8")
->> "%TEMP%\tavi_gcc_config.py" echo print("[TAVI] McStas compiler set to conda-forge GCC")
+> "%WORK_DIR%\tavi_gcc_config.py" echo import json, pathlib, shutil, sys
+>> "%WORK_DIR%\tavi_gcc_config.py" echo cfg = pathlib.Path(sys.argv[1])          # env's mccode_config.json
+>> "%WORK_DIR%\tavi_gcc_config.py" echo backup = cfg.with_name("mccode_config.msvc.json")
+>> "%WORK_DIR%\tavi_gcc_config.py" echo if not backup.exists():
+>> "%WORK_DIR%\tavi_gcc_config.py" echo     shutil.copy2(cfg, backup)            # the package's MSVC original
+>> "%WORK_DIR%\tavi_gcc_config.py" echo data = json.loads(backup.read_text(encoding="utf-8"))
+>> "%WORK_DIR%\tavi_gcc_config.py" echo c = data["compilation"]
+>> "%WORK_DIR%\tavi_gcc_config.py" echo gcc = "${CONDA_PREFIX}/Library/bin/x86_64-w64-mingw32-gcc.exe"
+>> "%WORK_DIR%\tavi_gcc_config.py" echo c["CC"] = gcc
+>> "%WORK_DIR%\tavi_gcc_config.py" echo c["MPICC"] = gcc
+>> "%WORK_DIR%\tavi_gcc_config.py" echo # paths quoted: mcrun splits these with mslex and a profile may contain a space
+>> "%WORK_DIR%\tavi_gcc_config.py" echo c["CFLAGS"] = '-O2 -DNDEBUG -D_POSIX_SOURCE -B"${CONDA_PREFIX}/Library/x86_64-w64-mingw32/sysroot/usr/lib/" -I"${CONDA_PREFIX}/Library/include" -L"${CONDA_PREFIX}/Library/lib"'
+>> "%WORK_DIR%\tavi_gcc_config.py" echo c["MPIFLAGS"] = "-DUSE_MPI -lmsmpi"
+>> "%WORK_DIR%\tavi_gcc_config.py" echo c["NCRYSTALFLAGS"] = '-I"${CONDA_PREFIX}/include" "${CONDA_PREFIX}/Lib/NCrystal.lib"'
+>> "%WORK_DIR%\tavi_gcc_config.py" echo # conda hardlinks package files into the cache and every other env;
+>> "%WORK_DIR%\tavi_gcc_config.py" echo # an in-place write would edit them all, so give this env its own file.
+>> "%WORK_DIR%\tavi_gcc_config.py" echo cfg.unlink()
+>> "%WORK_DIR%\tavi_gcc_config.py" echo cfg.write_text(json.dumps(data, indent=4), encoding="utf-8")
+>> "%WORK_DIR%\tavi_gcc_config.py" echo print("[TAVI] McStas compiler set to conda-forge GCC")
 :: mcrun reads a per-user config for this environment ahead of the environment's
 :: own file. Its name is the basename of CONDA_DEFAULT_ENV, which for a prefix
 :: outside an "envs" folder is the prefix's own last component - "tavi-env"
@@ -375,9 +383,9 @@ move /Y "%USER_MCCODE%" "%USER_MCCODE%.bak-%RANDOM%" >nul
 if exist "%USER_MCCODE%" goto user_mccode_stuck
 
 :user_mccode_clear
-"%MICROMAMBA_EXE%" -r "%MAMBA_ROOT_PREFIX%" run -p "%ENV_PREFIX%" python "%TEMP%\tavi_gcc_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
+"%MICROMAMBA_EXE%" -r "%MAMBA_ROOT_PREFIX%" run -p "%ENV_PREFIX%" python "%WORK_DIR%\tavi_gcc_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
 if errorlevel 1 goto gcc_config_failed
-del "%TEMP%\tavi_gcc_config.py" >nul 2>nul
+del "%WORK_DIR%\tavi_gcc_config.py" >nul 2>nul
 
 if exist "%GATE_DIR%" rd /s /q "%GATE_DIR%"
 mkdir "%GATE_DIR%"
@@ -436,29 +444,29 @@ if errorlevel 1 goto launcher_copy_failed
 copy /Y "%INSTALL_DIR%\installer\launchers\uninstall-tavi.bat" "%TAVI_BASE%\uninstall-tavi.bat" >nul
 if errorlevel 1 goto launcher_copy_failed
 
-echo TAVI_VERSION=%TAVI_VERSION%> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo LAYOUT=%LAYOUT%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo INSTALL_ID=%INSTALL_ID%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo INSTALLER_VERSION=%INSTALLER_VERSION%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo PYTHON_VERSION=%PYTHON_VERSION%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo MCSTAS_VERSION=%MCSTAS_VERSION%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo MAMBA_VERSION=%MAMBA_VERSION%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo TAVI_BASE=%TAVI_BASE%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo INSTALL_DIR=%INSTALL_DIR%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo ENV_PREFIX=%ENV_PREFIX%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo MICROMAMBA_DIR=%MICROMAMBA_DIR%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo MAMBA_ROOT_PREFIX=%MAMBA_ROOT_PREFIX%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo RELOCATED=%RELOCATED%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo REPO_URL=https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo PB_MAP=%PB_MAP%>> "%TAVI_BASE%\INSTALL_INFO.txt"
-echo COMPILER=gcc_win-64>> "%TAVI_BASE%\INSTALL_INFO.txt"
+> "%TAVI_BASE%\INSTALL_INFO.txt" echo TAVI_VERSION=%TAVI_VERSION%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo LAYOUT=%LAYOUT%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo INSTALL_ID=%INSTALL_ID%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo INSTALLER_VERSION=%INSTALLER_VERSION%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo PYTHON_VERSION=%PYTHON_VERSION%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo MCSTAS_VERSION=%MCSTAS_VERSION%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo MAMBA_VERSION=%MAMBA_VERSION%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo TAVI_BASE=%TAVI_BASE%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo INSTALL_DIR=%INSTALL_DIR%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo ENV_PREFIX=%ENV_PREFIX%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo MICROMAMBA_DIR=%MICROMAMBA_DIR%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo MAMBA_ROOT_PREFIX=%MAMBA_ROOT_PREFIX%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo RELOCATED=%RELOCATED%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo REPO_URL=https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo PB_MAP=%PB_MAP%
+>> "%TAVI_BASE%\INSTALL_INFO.txt" echo COMPILER=gcc_win-64
 
 :: The ownership marker is what the uninstaller requires before it deletes
 :: anything: a TAVI_PySide6.py sentinel is not enough, because every checkout of
 :: the project has one.
-echo LAYOUT=%LAYOUT%> "%MARKER%"
-echo INSTALL_ID=%INSTALL_ID%>> "%MARKER%"
-echo THIS FOLDER BELONGS TO TAVI. Uninstalling TAVI deletes what is in it.>> "%MARKER%"
+> "%MARKER%" echo LAYOUT=%LAYOUT%
+>> "%MARKER%" echo INSTALL_ID=%INSTALL_ID%
+>> "%MARKER%" echo THIS FOLDER BELONGS TO TAVI. Uninstalling TAVI deletes what is in it.
 
 set "LNK_TARGET=%TAVI_BASE%\TAVI-Launcher.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($env:SHORTCUT); $s.TargetPath=$env:LNK_TARGET; $s.WorkingDirectory=$env:TAVI_BASE; $s.Description='TAVI Launcher'; $s.Save()" 2>nul
@@ -467,6 +475,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject
 >> "%RECORD%" echo STATE=complete
 >> "%RECORD%" echo INSTALL_ID=%INSTALL_ID%
 
+if exist "%WORK_DIR%" rd /s /q "%WORK_DIR%" 2>nul
 echo [OK] Launchers and shortcut created.
 echo.
 echo ============================================================================
@@ -589,7 +598,7 @@ exit /b 1
 echo [ERROR] Progress_bar.comp was not found under:
 echo         %MCSTAS_RESOURCES%
 echo [INFO] McStas is installed, but this package layout lacks a component TAVI needs.
-del "%TEMP%\tavi_progress.txt" >nul 2>nul
+del "%WORK_DIR%\tavi_progress.txt" >nul 2>nul
 pause
 exit /b 1
 
@@ -598,6 +607,13 @@ echo [ERROR] Could not move aside this file:
 echo         %USER_MCCODE%
 echo         It would override the compiler configured by this installer.
 echo [INFO] Close programs that may hold it, or rename it by hand, and retry.
+pause
+exit /b 1
+
+:mcstasscript_config_failed
+echo [ERROR] Could not configure McStasScript's McStas paths.
+echo [INFO]  The message above says why. Run this installer again; if it
+echo         repeats, report it with that message.
 pause
 exit /b 1
 
