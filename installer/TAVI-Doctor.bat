@@ -16,7 +16,31 @@ set "MCSTAS_VERSION=3.7.1"
 :: internal or external command" -- a property of the shell, not the install.
 set "NoDefaultCurrentDirectoryInExePath="
 
-:: Same space-safe base resolution as the installer (build 4). Keep these in step.
+:: layout 2 (1.3.1+): the base folder is user-chosen at install time and
+:: cannot be computed by rule, so the installer leaves a locator behind at
+:: %LOCALAPPDATA%\TAVI\install-record.txt. Same resolution order as
+:: tools/support/Record-TAVI.bat and installer/launchers/uninstall-tavi.bat --
+:: keep these in step.
+set "LAYOUT=1"
+set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
+set "REC_BASE="
+if exist "%RECORD%" for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "REC_BASE=%%B"
+if not defined REC_BASE goto default_base
+if not exist "%REC_BASE%\.tavi-install-root" goto default_base
+
+set "LAYOUT=2"
+set "TAVI_BASE=%REC_BASE%"
+set "INSTALL_DIR=%TAVI_BASE%\app"
+set "ENV_PREFIX=%TAVI_BASE%\tavi-env"
+set "MICROMAMBA_DIR=%TAVI_BASE%\micromamba"
+set "MAMBA_ROOT_PREFIX=%TAVI_BASE%\mamba"
+set "RELOCATED=n/a (layout 2: user-chosen base)"
+echo [INFO] Installation found from the install record: %TAVI_BASE%
+goto paths_ready
+
+:default_base
+:: Pre-1.3.1 layout: same space-safe base resolution as that installer
+:: (build 4). Keep these in step.
 set "TAVI_BASE=%USERPROFILE%"
 set "INSTALL_DIR=%USERPROFILE%\TAVI"
 set "MICROMAMBA_DIR=%USERPROFILE%\AppData\Local\micromamba"
@@ -24,7 +48,7 @@ set "MAMBA_ROOT_PREFIX=%USERPROFILE%\AppData\Roaming\mamba"
 set "RELOCATED=no"
 
 if not "%USERPROFILE%"=="%USERPROFILE: =%" goto relocate_base
-goto paths_ready
+goto default_ready
 
 :relocate_base
 set "TAVI_BASE=%SystemDrive%\TAVI-Data"
@@ -32,11 +56,13 @@ set "INSTALL_DIR=%SystemDrive%\TAVI-Data\TAVI"
 set "MICROMAMBA_DIR=%SystemDrive%\TAVI-Data\micromamba"
 set "MAMBA_ROOT_PREFIX=%SystemDrive%\TAVI-Data\mamba"
 set "RELOCATED=yes"
-goto paths_ready
+
+:default_ready
+set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%"
+echo [INFO] Installation found at the default location: %INSTALL_DIR%
 
 :paths_ready
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
-set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%"
 set "WORK_DIR=%TAVI_BASE%\tavi_doctor"
 set "LOG=%WORK_DIR%\TAVI-doctor-report.txt"
 set "SUMMARY=%WORK_DIR%\TAVI-doctor-summary.txt"
@@ -63,7 +89,7 @@ call :diagnostics > "%LOG%" 2>&1
 > "%SUMMARY%" echo TAVI DOCTOR SUMMARY - %DATE% %TIME%
 >> "%SUMMARY%" echo Full log: %LOG%
 >> "%SUMMARY%" echo.
-findstr /c:"[OK]" /c:"[PROBLEM]" /c:"detect_mcstas" /c:"resolve_mpi_launcher" /c:"which('mpiexec')" /c:"DEFAULT_MPI_COUNT" /c:"INSTALLER_VERSION" /c:"RELOCATED" /c:"ENV_PREFIX" "%LOG%" >> "%SUMMARY%"
+findstr /c:"[OK]" /c:"[PROBLEM]" /c:"detect_mcstas" /c:"resolve_mpi_launcher" /c:"which('mpiexec')" /c:"DEFAULT_MPI_COUNT" /c:"INSTALLER_VERSION" /c:"LAYOUT" /c:"RELOCATED" /c:"ENV_PREFIX" "%LOG%" >> "%SUMMARY%"
 >> "%SUMMARY%" echo.
 >> "%SUMMARY%" echo (Visual Studio "cannot find the path" lines in the full log are expected
 >> "%SUMMARY%" echo  and harmless; McStas compiles with GCC, not Visual Studio.)
@@ -94,6 +120,8 @@ echo ---------------------------------------------------------------- [1] PATHS
 echo USERPROFILE       = %USERPROFILE%
 echo TEMP              = %TEMP%
 echo SystemDrive       = %SystemDrive%
+echo LAYOUT            = %LAYOUT%
+echo RECORD            = %RECORD%
 echo RELOCATED         = %RELOCATED%
 echo TAVI_BASE         = %TAVI_BASE%
 echo INSTALL_DIR       = %INSTALL_DIR%
@@ -108,6 +136,13 @@ if exist "%ENV_PREFIX%\conda-meta\history" (echo [OK] Environment exists.) else 
 echo.
 
 echo ------------------------------------------------------- [2] INSTALL RECORD
+echo Locator at %RECORD%:
+if exist "%RECORD%" (
+    type "%RECORD%"
+) else (
+    echo    (not present)
+)
+echo.
 if exist "%INSTALL_DIR%\INSTALL_INFO.txt" (
     type "%INSTALL_DIR%\INSTALL_INFO.txt"
 ) else (
@@ -118,11 +153,12 @@ echo.
 
 echo -------------------------------------------------- [3] OTHER TAVI INSTALLS
 echo Anything listed here is a leftover that may be launched by mistake:
-if exist "%USERPROFILE%\TAVI\TAVI_PySide6.py" echo    found: %USERPROFILE%\TAVI
-if exist "%SystemDrive%\TAVI\TAVI_PySide6.py" echo    found: %SystemDrive%\TAVI
-if exist "%SystemDrive%\TAVI-Data\TAVI\TAVI_PySide6.py" echo    found: %SystemDrive%\TAVI-Data\TAVI
-if exist "%USERPROFILE%\AppData\Roaming\mamba\envs\%ENV_NAME%\conda-meta\history" echo    found env: %USERPROFILE%\AppData\Roaming\mamba\envs\%ENV_NAME%
-if exist "%SystemDrive%\TAVI-Data\mamba\envs\%ENV_NAME%\conda-meta\history" echo    found env: %SystemDrive%\TAVI-Data\mamba\envs\%ENV_NAME%
+if exist "%REC_BASE%\.tavi-install-root" echo    found (layout 2, from install record): %REC_BASE%
+if exist "%USERPROFILE%\TAVI\TAVI_PySide6.py" echo    found (layout 1): %USERPROFILE%\TAVI
+if exist "%SystemDrive%\TAVI\TAVI_PySide6.py" echo    found (layout 1): %SystemDrive%\TAVI
+if exist "%SystemDrive%\TAVI-Data\TAVI\TAVI_PySide6.py" echo    found (layout 1): %SystemDrive%\TAVI-Data\TAVI
+if exist "%USERPROFILE%\AppData\Roaming\mamba\envs\%ENV_NAME%\conda-meta\history" echo    found env (layout 1): %USERPROFILE%\AppData\Roaming\mamba\envs\%ENV_NAME%
+if exist "%SystemDrive%\TAVI-Data\mamba\envs\%ENV_NAME%\conda-meta\history" echo    found env (layout 1): %SystemDrive%\TAVI-Data\mamba\envs\%ENV_NAME%
 echo.
 
 echo ------------------------------------------------------ [4] McSTAS BINARIES
@@ -140,12 +176,26 @@ if exist "%ENV_PREFIX%\bin\mcrun.bat" type "%ENV_PREFIX%\bin\mcrun.bat"
 echo.
 
 echo --------------------------------------------------- [5] McSTAS COMPILER CONFIG
-echo Per-user config that overrides the environment's own, if present:
-if exist "%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_%ENV_NAME%\mccode_config.json" (
-    echo [PROBLEM] %USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_%ENV_NAME%\mccode_config.json exists
+echo Per-user config that overrides the environment's own, if present.
+echo Micromamba keys this file by the BASENAME of CONDA_DEFAULT_ENV, which is
+echo the whole prefix path whenever the prefix's parent is not literally
+echo "envs" (verified against micromamba 2.5.0) -- so layout 2 (env at
+echo ^<base^>\tavi-env, parent is the base folder, not "envs") keys under
+echo "_tavi-env", while layout 1 (env at .../envs/tavi) keys under "_tavi".
+echo Both candidates are reported so this stays useful against either layout:
+set "MCSTAS_CFG_L1=%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_%ENV_NAME%\mccode_config.json"
+set "MCSTAS_CFG_L2=%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_tavi-env\mccode_config.json"
+if exist "%MCSTAS_CFG_L1%" (
+    echo [PROBLEM] (layout 1) %MCSTAS_CFG_L1% exists
     echo           and takes precedence over the compiler the installer configured.
 ) else (
-    echo [OK] No overriding per-user McStas config.
+    echo [OK] (layout 1) No overriding per-user McStas config at %MCSTAS_CFG_L1%
+)
+if exist "%MCSTAS_CFG_L2%" (
+    echo [PROBLEM] (layout 2) %MCSTAS_CFG_L2% exists
+    echo           and takes precedence over the compiler the installer configured.
+) else (
+    echo [OK] (layout 2) No overriding per-user McStas config.
 )
 echo.
 echo Environment's own compiler settings:
@@ -154,7 +204,7 @@ echo Environment's own compiler settings:
 >> "%WORK_DIR%\show_config.py" echo c = d.get("compilation", {})
 >> "%WORK_DIR%\show_config.py" echo for k in ("CC", "MPICC", "MPIRUN", "MPIFLAGS", "CFLAGS", "NCRYSTALFLAGS"):
 >> "%WORK_DIR%\show_config.py" echo     print("   ", k, "=", c.get(k))
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%WORK_DIR%\show_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
+"%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" python "%WORK_DIR%\show_config.py" "%ENV_PREFIX%\share\mcstas\tools\Python\mccodelib\mccode_config.json"
 echo.
 
 echo ------------------------------------------------ [6] WHAT TAVI ITSELF FINDS
@@ -175,7 +225,7 @@ echo MCSTAS = %MCSTAS%
 >> "%WORK_DIR%\probe.py" echo print("   mcstasscript config      =", m._get_mcstasscript_config_path())
 >> "%WORK_DIR%\probe.py" echo from instruments.contract import DEFAULT_MPI_COUNT
 >> "%WORK_DIR%\probe.py" echo print("   DEFAULT_MPI_COUNT        =", DEFAULT_MPI_COUNT)
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% python "%WORK_DIR%\probe.py" "%INSTALL_DIR%"
+"%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" python "%WORK_DIR%\probe.py" "%INSTALL_DIR%"
 echo.
 
 echo ---------------------------------------------------- [7] TEST SIMULATIONS
@@ -189,7 +239,7 @@ cd /d "%WORK_DIR%"
 
 echo.
 echo --- 7a: serial (compile and run) ---
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c PSI_DMC.instr -n 1000 -d serial lambda=2.5666
+"%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" mcrun -c PSI_DMC.instr -n 1000 -d serial lambda=2.5666
 if errorlevel 1 (echo [PROBLEM] serial run FAILED) else (echo [OK] serial run passed)
 
 echo.
@@ -198,12 +248,12 @@ echo --- 7b: MPI with 2 ranks (what the installer checks) ---
 :: from 7a, every rank then believes it is the master, and the run dies in a
 :: storm of "unable to create directory (mcuse_dir)" -- a fault in the test, not
 :: in the machine. Found 2026-09-17 by shipping exactly that mistake.
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c --mpi=2 PSI_DMC.instr -n 1000 -d mpi2 lambda=2.5666
+"%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" mcrun -c --mpi=2 PSI_DMC.instr -n 1000 -d mpi2 lambda=2.5666
 if errorlevel 1 (echo [PROBLEM] 2-rank MPI run FAILED) else (echo [OK] 2-rank MPI run passed)
 
 echo.
 echo --- 7c: MPI with 30 ranks (what TAVI actually uses for every scan point) ---
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% mcrun -c --mpi=30 PSI_DMC.instr -n 1000 -d mpi30 lambda=2.5666
+"%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" mcrun -c --mpi=30 PSI_DMC.instr -n 1000 -d mpi30 lambda=2.5666
 if errorlevel 1 (echo [PROBLEM] 30-rank MPI run FAILED -- this is the rank count TAVI uses) else (echo [OK] 30-rank MPI run passed)
 
 echo.
@@ -213,7 +263,7 @@ echo --- 7d: direct launch, exactly as TAVI runs every point after the first ---
 set "MPIEXEC=%ENV_PREFIX%\Library\bin\mpiexec.exe"
 if not exist "%MPIEXEC%" set "MPIEXEC=mpiexec"
 echo Launcher: %MPIEXEC%
-"%MICROMAMBA_EXE%" run -n %ENV_NAME% "%MPIEXEC%" -np 30 PSI_DMC.exe --ncount=1000 --dir=direct30 lambda=2.5666
+"%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" "%MPIEXEC%" -np 30 PSI_DMC.exe --ncount=1000 --dir=direct30 lambda=2.5666
 if errorlevel 1 (echo [PROBLEM] direct 30-rank launch FAILED -- this is TAVI's own run path) else (echo [OK] direct 30-rank launch passed)
 
 echo.
