@@ -1,24 +1,70 @@
 @echo off
 setlocal DisableDelayedExpansion
 
-:: TAVI Windows installer - release-pinned v1.3.0 (build 3, 2026-09-15: conda-forge GCC, no Visual Studio)
+:: TAVI Windows installer - release-pinned v1.3.0
+:: (build 4, 2026-09-17: space-safe install paths)
+:: (build 3, 2026-09-15: conda-forge GCC, no Visual Studio)
 :: Conservative batch style: no micromamba shell init, no generated echo blocks,
 :: no delayed expansion, and no nested cmd AutoRun dependency except where unavoidable.
 
 set "TAVI_VERSION=v1.3.0"
-set "INSTALLER_VERSION=v1.3.0-3"
+set "INSTALLER_VERSION=v1.3.0-4"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
 set "EXPECTED_SHA256=56e3a55be1d8858f51ec9902bbc0825d7a18dc43c8558cd8d8b4e1f3d9af7bb4"
 
+set "ENV_NAME=tavi"
+
+:: McStas cannot run from a path containing a space. Its own launchers expand an
+:: unquoted %BINDIR%: with a profile like "C:\Users\Jane Doe" the mcrun.bat command
+:: splits at the space and python is handed "C:\Users\Jane" as the script to run.
+:: Every .bat in the McStas bin directory has this (measured on a user's machine,
+:: 2026-09-17; upstream bug, not TAVI's). So when the profile carries a space, the
+:: environment, the source and the compile gate all move to a space-free base.
+::
+:: INSTALL_DIR must stay a directory of its own with nothing nested inside it:
+:: the clone requires it empty, and the "not a Git repository" branch below moves
+:: whatever it finds there aside -- which would carry off the environment.
+set "TAVI_BASE=%USERPROFILE%"
 set "INSTALL_DIR=%USERPROFILE%\TAVI"
 set "MICROMAMBA_DIR=%USERPROFILE%\AppData\Local\micromamba"
-set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
-set "ENV_NAME=tavi"
 set "MAMBA_ROOT_PREFIX=%USERPROFILE%\AppData\Roaming\mamba"
+set "GATE_DIR=%TEMP%\tavi_compile_check"
+set "RELOCATED=no"
+
+if not "%USERPROFILE%"=="%USERPROFILE: =%" goto relocate_base
+if not "%TEMP%"=="%TEMP: =%" goto relocate_gate
+goto paths_ready
+
+:relocate_base
+set "TAVI_BASE=%SystemDrive%\TAVI-Data"
+set "INSTALL_DIR=%SystemDrive%\TAVI-Data\TAVI"
+set "MICROMAMBA_DIR=%SystemDrive%\TAVI-Data\micromamba"
+set "MAMBA_ROOT_PREFIX=%SystemDrive%\TAVI-Data\mamba"
+set "GATE_DIR=%SystemDrive%\TAVI-Data\compile_check"
+set "RELOCATED=yes"
+goto paths_ready
+
+:relocate_gate
+:: Profile is clean but %TEMP% is not; only the compile gate needs moving.
+set "GATE_DIR=%SystemDrive%\TAVI-Data\compile_check"
+set "RELOCATED=gate"
+goto paths_ready
+
+:paths_ready
+set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
 set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%"
 set "SHORTCUT=%USERPROFILE%\Desktop\TAVI Launcher.lnk"
+
+if not exist "%TAVI_BASE%" mkdir "%TAVI_BASE%" 2>nul
+if not exist "%TAVI_BASE%" (
+    echo [ERROR] Could not create the TAVI base folder:
+    echo         %TAVI_BASE%
+    echo [INFO] Create that folder manually, then run this installer again.
+    pause
+    exit /b 1
+)
 
 title TAVI Installer
 
@@ -33,6 +79,21 @@ echo Python version:    %PYTHON_VERSION%
 echo McStas version:    %MCSTAS_VERSION%
 echo Micromamba:        %MAMBA_VERSION%
 echo.
+
+if "%RELOCATED%"=="yes" (
+    echo [INFO] Your Windows profile folder contains a space:
+    echo            %USERPROFILE%
+    echo        McStas cannot compile or run from a path containing a space, so
+    echo        TAVI and its environment will be installed under:
+    echo            %TAVI_BASE%
+    echo        This is normal and nothing else on your machine is affected.
+    echo.
+)
+if "%RELOCATED%"=="gate" (
+    echo [INFO] Your temporary folder contains a space, so the compile check will
+    echo        run under %TAVI_BASE% instead.
+    echo.
+)
 
 echo This installer will set up TAVI for this Windows user account.
 echo.
@@ -201,12 +262,9 @@ goto clone_repo
 
 :backup_existing
 echo [WARN] %INSTALL_DIR% exists but is not a Git repository.
-set "BACKUP_DIR=%USERPROFILE%\TAVI_backup_%RANDOM%_%RANDOM%"
+set "BACKUP_DIR=%TAVI_BASE%\TAVI_backup_%RANDOM%_%RANDOM%"
 echo [INFO] Moving existing folder to: %BACKUP_DIR%
-ren "%INSTALL_DIR%" "%~nx0_TAVI_BACKUP_DO_NOT_USE" >nul 2>nul
-if exist "%INSTALL_DIR%" (
-    move "%INSTALL_DIR%" "%BACKUP_DIR%" >nul 2>nul
-)
+move "%INSTALL_DIR%" "%BACKUP_DIR%" >nul 2>nul
 if exist "%INSTALL_DIR%" (
     echo [ERROR] Could not move existing TAVI folder.
     echo [INFO] Close Explorer/editors/terminals using %INSTALL_DIR%, or manually rename it.
@@ -354,7 +412,8 @@ if errorlevel 1 (
 )
 del "%TEMP%\tavi_gcc_config.py" >nul 2>nul
 
-set "GATE_DIR=%TEMP%\tavi_compile_check"
+:: GATE_DIR is resolved at the top of this script: %TEMP% normally, or a
+:: space-free folder when %TEMP% or the profile carries a space.
 if exist "%GATE_DIR%" rmdir /s /q "%GATE_DIR%"
 mkdir "%GATE_DIR%"
 :: PSI_DMC rather than PSI_DMC_simple: its PowderN sample requests the NCrystal
@@ -438,6 +497,11 @@ echo MCSTAS_VERSION=%MCSTAS_VERSION%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo MAMBA_VERSION=%MAMBA_VERSION%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo ENV_NAME=%ENV_NAME%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo ENV_PREFIX=%ENV_PREFIX%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo TAVI_BASE=%TAVI_BASE%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo INSTALL_DIR=%INSTALL_DIR%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo MICROMAMBA_DIR=%MICROMAMBA_DIR%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo MAMBA_ROOT_PREFIX=%MAMBA_ROOT_PREFIX%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
+echo RELOCATED=%RELOCATED%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo REPO_URL=https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo PB_MAP=%PB_MAP%>> "%INSTALL_DIR%\INSTALL_INFO.txt"
 echo COMPILER=gcc_win-64>> "%INSTALL_DIR%\INSTALL_INFO.txt"
@@ -447,6 +511,7 @@ echo ===========================================================================
 echo Installation complete.
 echo Installed to: %INSTALL_DIR%
 echo Environment : %ENV_NAME%
+echo Env folder  : %ENV_PREFIX%
 echo TAVI version: %TAVI_VERSION%
 echo Installer   : %INSTALLER_VERSION%
 echo McStas      : %MCSTAS_VERSION%
