@@ -4,11 +4,30 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 import zipfile
 
 import pytest
 
 from tools.support.tavi_record import Recorder, supervise
+
+
+def test_frozen_internal_instrument_state_is_captured(tmp_path):
+    recorder = Recorder(tmp_path, tmp_path / "report")
+    scope = {}
+    exec(compile("def run_simulation(launch_state):\n    return None\n",
+                 str(tmp_path / "TAVI_PySide6.py"), "exec"), scope)
+    launch = {"vals": {"omega": 0}, "scan_config": SimpleNamespace(mis_omega=7.5, mis_chi=-2)}
+    recorder.install()
+    try:
+        scope["run_simulation"](launch)
+    finally:
+        recorder.restore()
+        recorder.stream.close()
+    events = [json.loads(line) for line in (tmp_path / "report/events.jsonl").read_text(encoding="utf-8").splitlines()]
+    event = next(e for e in events if e["kind"] == "call")
+    assert event["fields"]["launch_state"]["scan_config"] == {"mis_omega": 7.5, "mis_chi": -2}
+    assert launch["scan_config"].mis_omega == 7.5
 
 
 def test_worker_caught_exception_and_exact_subprocess_output(tmp_path):
