@@ -315,7 +315,6 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 
 ## Memory — promote or die
 
-- 2026-09-12 · skill: the doc checker counts tracked files only; a new map or goals file must be staged before it can exit 0.
 - 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
 - 2026-09-14 · floor: in a worktree session the Bash guard refuses any command text containing "git", even the scratchpad path; use Read/Write or PowerShell there.
 - 2026-09-15 · floor: the tool shells set `NoDefaultCurrentDirectoryInExePath=1`; `mcrun`'s bare `name.exe` launch fails until it is emptied in that shell.
