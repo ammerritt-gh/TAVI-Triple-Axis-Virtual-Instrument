@@ -504,7 +504,7 @@ class UBMatrixDock(BaseDockWidget):
         self.check_in_plane_label.setStyleSheet("font-size: 11px;")
         training_layout.addWidget(self.check_in_plane_label)
 
-        self.check_out_of_plane_label = QLabel("Out-of-plane (\u03ba\u2192\u03c7): --")
+        self.check_out_of_plane_label = QLabel("Out-of-plane (\u03ba\u2192sgl): --")
         self.check_out_of_plane_label.setStyleSheet("font-size: 11px;")
         training_layout.addWidget(self.check_out_of_plane_label)
 
@@ -708,7 +708,7 @@ class UBMatrixDock(BaseDockWidget):
             # Clear check results
             self.check_orientation_label.setText("Orientation: --")
             self.check_in_plane_label.setText("In-plane (\u03c8\u2192\u03c9): --")
-            self.check_out_of_plane_label.setText("Out-of-plane (\u03ba\u2192\u03c7): --")
+            self.check_out_of_plane_label.setText("Out-of-plane (\u03ba\u2192sgl): --")
             self.check_overall_label.setText("Overall: --")
 
     def update_check_results(self, results: dict):
@@ -737,7 +737,7 @@ class UBMatrixDock(BaseDockWidget):
 
         oop = results.get('out_of_plane', 'way_off')
         self.check_out_of_plane_label.setText(
-            f"Out-of-plane (\u03ba\u2192\u03c7): {results.get('out_of_plane_hint', '--')}"
+            f"Out-of-plane (\u03ba\u2192sgl): {results.get('out_of_plane_hint', '--')}"
         )
         self.check_out_of_plane_label.setStyleSheet(
             f"color: {status_colors.get(oop, 'gray')}; font-size: 11px;"

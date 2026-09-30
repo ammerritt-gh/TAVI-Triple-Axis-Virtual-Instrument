@@ -46,7 +46,7 @@ BASE URL: http://127.0.0.1:8642/api/v1   (JSON in, JSON out; add header
 
 KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
-  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...43 keys returned, 42 writable...}, budget}
+  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...44 keys returned, 43 writable...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
   POST /validate  body {"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
   POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
@@ -215,8 +215,8 @@ Liveness probe. No auth required, even when a token is set.
 
 ### GET /state
 Full snapshot: instrument id, access mode, busy flag, the currently running job
-id (or `null`), the list of queued job ids, the complete parameter dict (43
-keys returned, 42 writable — see §6), the configured limits (if any), current budget usage, and the
+id (or `null`), the list of queued job ids, the complete parameter dict (44
+keys returned, 43 writable — see §6), the configured limits (if any), current budget usage, and the
 session's background configuration (the same object `GET /background` returns).
 ```json
 {"instrument": "puma", "mode": "allow", "busy": true, "current_job": "j-0003",
@@ -1109,7 +1109,7 @@ Server-Sent Events stream. See §8.
 
 ## 6. Parameter field reference
 
-All 43 keys returned by `GET /parameters`; 42 are writable via `PATCH /parameters`, `curvature_modes` is read-only.
+All 44 keys returned by `GET /parameters`; 43 are writable via `PATCH /parameters`, `curvature_modes` is read-only.
 Many are **linked**: writing one triggers the same recompute the GUI does when a
 user presses Enter, so dependent fields update automatically.
 
@@ -1118,7 +1118,8 @@ user presses Enter, so dependent fields update automatically.
 | `mtt` | number | degrees | Monochromator take-off angle (scan variable `A1`). Recomputes energies/Q. |
 | `stt` | number | degrees | Sample scattering angle (scan variable `A2`). |
 | `omega` | number | degrees | Sample rotation (scan variable `A3`; same physical angle as sample θ). |
-| `chi` | number | degrees | Sample tilt. |
+| `sgl` | number | degrees | Lower goniometer arc readout (tilt about the beam axis, rides on the turntable). Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. |
+| `sgu` | number | degrees | Upper goniometer arc readout (rides on `sgl`). Same rules as `sgl`. |
 | `att` | number | degrees | Analyzer take-off angle (scan variable `A4`). |
 | `Ki` | number | Å⁻¹ | Incident wavevector. Linked: `Ki` ↔ `Ei`. |
 | `Ei` | number | meV | Incident energy. Linked: `Ei` ↔ `Ki`. |
@@ -1139,8 +1140,8 @@ user presses Enter, so dependent fields update automatically.
 | `lattice_alpha` | number | degrees | Lattice angle α. |
 | `lattice_beta` | number | degrees | Lattice angle β. |
 | `lattice_gamma` | number | degrees | Lattice angle γ. |
-| `kappa` | number | degrees | Sample alignment offset κ. |
-| `psi` | number | degrees | Sample alignment offset ψ. |
+| `kappa` | number | degrees | Correction κ of the lower arc `sgl`. |
+| `psi` | number | degrees | Correction ψ of the turntable (A3). |
 | `sample` | string | — | Sample id from the shared sample library; the allowed values are the `sample` field's `allowed` list in `GET /schema`. Writable. |
 | `monocris` | string | — | Monochromator crystal id. PUMA: `"pg002"` or `"pg002_test"`. |
 | `anacris` | string | — | Analyzer crystal id. PUMA: `"pg002"`. |
@@ -1158,6 +1159,8 @@ user presses Enter, so dependent fields update automatically.
 | `scan_command1` | string | — | First scan command (§7). Empty string = no scan on this axis. |
 | `scan_command2` | string | — | Second scan command (§7). Both set = 2D scan. |
 | `diagnostic_mode` | boolean | — | Enable per-point diagnostic capture. |
+
+**Removed field.** `chi` is gone. The old `chi` was a tilt fixed to the beam under the turntable, so treating it as an alias of an arc would give different physics under the same name. Writing it, in `PATCH /parameters` or in the `parameters` of `POST /scan` / `POST /validate`, returns `400 invalid_parameters`. The error names the two arcs: `{"errors": {"chi": "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper); 'kappa' is the lower-arc correction"}}`.
 
 **Dict-valued fields** — when writing these, send an object keyed by slot id.
 Missing keys fall back to instrument defaults.

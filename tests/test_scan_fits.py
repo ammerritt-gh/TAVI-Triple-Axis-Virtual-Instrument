@@ -626,7 +626,7 @@ def test_known_api_field_map_keys_are_unchanged():
     *and* re-check ``SCAN_VARIABLE_TO_FIELD`` in ``tavi/scan_fits.py``.
     """
     known = {
-        'mtt', 'stt', 'omega', 'chi', 'att',
+        'mtt', 'stt', 'omega', 'sgl', 'sgu', 'att',
         'Ki', 'Ei', 'Kf', 'Ef', 'K_fixed', 'fixed_E',
         'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
         'lattice_a', 'lattice_b', 'lattice_c',

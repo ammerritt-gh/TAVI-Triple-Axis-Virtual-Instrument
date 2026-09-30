@@ -47,13 +47,13 @@ The sample dock is for configuring the sample within the beam of the instrument.
 - Sample alignment offsets are used with the misalignment training (below) to correct for any sample misalignment.
 
 ### Sample goniometer
-The sample sits on a turntable (A3, the ω field) carrying two crossed arcs, a lower arc `sgl` and an upper arc `sgu`. For every Q or HKL point TAVI finds the arc setting with the smallest tilt that brings Q into the scattering plane, within the arcs' travel: IN12 ±20°, PANDA ±15°, and unlimited on PUMA and IN8, whose travel no source documents. A point the arcs cannot reach is refused with the arc, the angle it needs and its travel. For now the χ field shows the lower arc; ψ corrects the turntable and κ the lower arc.
+The sample sits on a turntable (A3, the ω field) carrying two crossed arcs, a lower arc `sgl` and an upper arc `sgu`. For every Q or HKL point TAVI finds the arc setting with the smallest tilt that brings Q into the scattering plane, within the arcs' travel: IN12 ±20°, PANDA ±15°, and unlimited on PUMA and IN8, whose travel no source documents. A point the arcs cannot reach is refused with the arc, the angle it needs and its travel. The instrument dock shows both arc readouts, `sgl` and `sgu` (their tooltips give the travel). They are solved whenever Q or HKL changes; typing an arc value reads Q back through both arcs. ψ corrects the turntable and κ the lower arc. The old χ field is gone: a saved session's χ value loads into `sgl`.
 
 A saved session whose UB matrix is not the default simulates a different crystal orientation than before this change. Until now the McStas sample received the inverse of the rotation the UB described, so a crystal oriented 23° one way was simulated 23° the other way; it now sits where the UB puts it. In such a session, re-check peak positions or refit the UB.
 
 ### Misalignment Training Dock
 By default, the sample is perfectly aligned in the beam. It is possible to create an obfuscated misalignment in the sample that can then be corrected, for example when training a student in aligning a sample. To generate and correct a misalignment, follow these steps:
-1. Enter the desired misalignment in ω (in-place) and χ (out-of-plane) angles. Click "generate hash" and delete these entries if the student will be using the computer later.
+1. Enter the desired misalignment of the turntable (ω mis, in-plane) and of the lower arc (sgl mis, out-of-plane). Click "generate hash" and delete these entries if the student will be using the computer later.
 2. Enter the misalignment hash in the box and load it, either within the same run or shared with a student, to add a hidden misalignment to the sample.
 3. In the sample dock, the student may enter offsets to correct the misalignment. Note that misalignment + correction = 0 ideally.
 4. A student may check the alignment (roughly) in the dock with the provided button.
