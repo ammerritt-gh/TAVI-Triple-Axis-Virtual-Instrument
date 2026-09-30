@@ -15,6 +15,12 @@ Done when: the operator has written the body of DESIGN_GOALS.md.
 
 **State:** in progress, slice 1 of 1
 
+**Next session (operator, 2026-09-30: "we'll handle #1 tomorrow"):** finish
+PR #46, then release v1.3.1 carrying both it and the MPI fix (PR #47), so the
+release-pinned Linux installer stops shipping the fixed 30 (see "MPI rank
+default fails on small Linux hosts" below). Options not taken: tagging `main`
+now and moving this repair to a later version; a workaround post only.
+
 The launcher repair is built and on **PR #46** (branch `installer-1.3.1`,
 unmerged). The frontier, the acceptance already run and the seven items left
 open are in [the installer 1.3.1 handoff](docs/HANDOFF-installer-1-3-1.md);
@@ -151,7 +157,9 @@ Done when: the ledger is empty and deleted.
 
 Open MPI on Linux refuses more ranks than cores, so the old fixed 30 failed at the first point on ordinary laptops (issue #45); MS-MPI on Windows oversubscribes silently. PR #47 (`613d16fd`, 2026-09-30) made the count a setting: default 4 (operator ruling, not core-count-aware), set from Config → MPI processes…, stored in `config/settings.json`, frozen per scan and used by every run, record and estimate. Deferred from that job: saving over a corrupt `settings.json` drops its other keys (matters once a second setting lands); the `estimate_scan_seconds` docstring does not mention the same-count filter.
 
-Done when: the POSIX installer's compile gate runs `--mpi=2` like the Windows one.
+**Not yet reaching users:** both installers are pinned to the `v1.3.0` tag, which still hard-codes 30 with no Config menu, so a fresh Linux install still fails at the first scan. Issue #45 was closed on GitHub before any release carried the fix. The POSIX installer has no MPI check at all (the Windows one runs `mcrun -c --mpi=2`), so it cannot catch this at install time.
+
+Done when: v1.3.1 is released with PR #47 and both installers point at it, and the POSIX installer runs an MPI compile check (`--mpi=2`) like the Windows one.
 
 ## Dev environment still compiles with MSVC
 
