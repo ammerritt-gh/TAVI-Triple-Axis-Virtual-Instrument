@@ -422,7 +422,7 @@ def _in12_vals(**overrides):
         "modules": {},
         "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "30", "alpha_4": "0"},
         "slits_mm": {"sbl": (30.0, 60.0), "dbl_hgap": 50.0},
-        "deltaE": 0.0, "chi": 0.0,
+        "deltaE": 0.0,
     }
     vals.update(overrides)
     return vals
@@ -465,27 +465,55 @@ def test_unreachable_elevation_is_refused_identically_everywhere(tmp_path):
     assert describe_scan_error_flags(snapshot.error_flags) == reason
 
 
-def test_angle_mode_reads_the_arcs_and_checks_their_travel():
+def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
     from instruments import tas_runtime
+    from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
 
-    _, config = _in12_config(_in12_vals())
+    plugin, config = _in12_config(_in12_vals())
     angles, flags = copy.deepcopy(config).calculate_stage_angles(
         2.0, 0.0, 0.0, 0.0, IN12_E, "Kf Fixed", "pg002", "pg002")
     assert flags == []
-    scan_point = [angles[0], angles[1], angles[2], angles[4], 3.84, 0.84, 1.98, 1.40,
-                  0.0, 0.0, 0.0]
 
-    for patch, expected in (({"chi": 5.0}, (5.0, 0.0)),
-                            ({"chi": 5.0, "sgl": 3.0, "sgu": -2.0}, (3.0, -2.0))):
-        geom = tas_runtime._solve_point_geometry(
-            copy.deepcopy(config), "angle", scan_point, _in12_vals(**patch))
-        assert geom["error_flags"] == []
-        assert (geom["sgl"], geom["sgu"]) == expected
+    def point(sgl, sgu):
+        scan_point = [0.0] * SCAN_POINT_LENGTH
+        scan_point[:8] = [angles[0], angles[1], angles[2], angles[4], 3.84, 0.84, 1.98, 1.40]
+        scan_point[SLOT_SGL], scan_point[SLOT_SGU] = sgl, sgu
+        return scan_point
+
+    geom = tas_runtime._solve_point_geometry(
+        copy.deepcopy(config), "angle", point(3.0, -2.0), _in12_vals())
+    assert geom["error_flags"] == []
+    assert (geom["sgl"], geom["sgu"]) == (3.0, -2.0)
+
+    # The per-point record carries the arcs, not the retired chi.
+    snapshot = plugin.compute_snapshot((point(3.0, -2.0), 0), 0, "angle", config,
+                                       _in12_vals(), str(tmp_path))
+    assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (3.0, -2.0)
+    assert "chi" not in snapshot.metadata
+    assert (snapshot.params["sgl_param"], snapshot.params["sgu_param"]) == (3.0, -2.0)
+
+    # An 11-slot point (written before the sgu slot) runs with sgu = 0.
+    geom = tas_runtime._solve_point_geometry(
+        copy.deepcopy(config), "angle", point(3.0, -2.0)[:11], _in12_vals())
+    assert (geom["sgl"], geom["sgu"]) == (3.0, 0.0)
 
     feasible, reason = tas_runtime.check_point_feasibility(
-        config, "angle", scan_point, _in12_vals(chi=25.0))
+        config, "angle", point(25.0, 0.0), _in12_vals())
     assert not feasible
     assert reason == "sgl 25° is outside its travel [-20, 20]°"
+
+
+def test_old_scan_folder_reads_chi_as_sgl(tmp_path):
+    from tavi.data_processing import read_parameters_from_file
+
+    (tmp_path / "scan_parameters.txt").write_text(
+        "scan_command1: chi 0 2 1\nchi: 2.5\nkappa: 0.0\n", encoding="utf-8")
+    params = read_parameters_from_file(str(tmp_path))
+    assert params["sgl"] == 2.5 and params["chi"] == 2.5
+
+    (tmp_path / "scan_parameters.txt").write_text(
+        "chi: 2.5\nsgl: 1.0\n", encoding="utf-8")
+    assert read_parameters_from_file(str(tmp_path))["sgl"] == 1.0
 
 
 # --- locked mode --------------------------------------------------------------------

@@ -196,9 +196,11 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
 
 `compute_scan_snapshot` (shared) consumes per-point `scans` lists with a
 fixed layout: indices 0–3 are mode-specific (qx/qy/qz/ΔE, H/K/L/ΔE, or
-A1–A4), 4–7 are rhm/rvm/rha/rva, 8–10 are chi/kappa/psi (chi an extra
-lower-arc offset). In angle mode the arcs come from the launch values `sgl`
-and `sgu` (`chi` standing in for `sgl` when `sgl` is absent). Every instrument's
+A1–A4), 4–7 are rhm/rvm/rha/rva, then the stage slots `SLOT_SGL` (8),
+`SLOT_KAPPA` (9), `SLOT_PSI` (10) and `SLOT_SGU` (11) from
+`instruments/tas_runtime.py` (`SCAN_POINT_LENGTH` = 12). Angle mode reads the
+arcs from their slots; Q modes solve them per point. A point of 11 slots,
+written before the `sgu` slot existed, runs with `sgu` = 0. Every instrument's
 `build_point_params()` must return exactly the descriptor's parameter names.
 
 ## What the shared helpers cover vs what stays literal
@@ -208,7 +210,7 @@ and `sgu` (`chi` standing in for `sgl` when `sgl` is absent). Every instrument's
 | Diagnostic monitors | `emit_monitors` (+ `size_overrides` for crystal-sized ones) |
 | Mono/analyzer assemblies | `emit_crystal_assembly` (cradle Arm + `Monochromator_curved` from the crystal-info dict) |
 | Sample | `emit_sample` (shared library lookup in build()) |
-| Sample orientation | `emit_sample_orientation_arms` (one `sample_mount` Arm rotated by `sample_rx/ry/rz_param`; declare those three plus the inspection-only `chi_param`, `kappa_param`, `mis_chi_param`, `psi_param`, `mis_omega_param`, and splat `**self.sample_orientation_params()` into `build_point_params()`) |
+| Sample orientation | `emit_sample_orientation_arms` (one `sample_mount` Arm rotated by `sample_rx/ry/rz_param`; declare those three plus the inspection-only `sgl_param`, `sgu_param`, `kappa_param`, `mis_chi_param`, `psi_param`, `mis_omega_param`, and splat `**self.sample_orientation_params()` into `build_point_params()`) |
 | Slits | `emit_slit` (`rotated=None` omits the ROTATED clause) |
 | Collimators | `emit_collimator` (divergence 0 = open aperture) |
 | Crystal dicts | `crystal_spec_to_info` / `find_crystal_spec` / `crystal_info_from_descriptor` |

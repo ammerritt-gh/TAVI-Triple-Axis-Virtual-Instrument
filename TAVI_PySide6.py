@@ -25,6 +25,13 @@ from instruments.contract import (
     PrepFailure,
     RunExecutionState,
 )
+from instruments.tas_runtime import (
+    SCAN_POINT_LENGTH,
+    SLOT_KAPPA,
+    SLOT_PSI,
+    SLOT_SGL,
+    SLOT_SGU,
+)
 
 log = logging.getLogger(__name__)
 
@@ -3100,10 +3107,10 @@ class TAVIController(QObject):
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
             return lower
-        if lower in ["chi", "kappa", "psi"]:
+        if lower in ["sgl", "sgu", "kappa", "psi"]:
             return lower
         return name
-    
+
     def _field_value_changed(self, field_name: str, current_value: float, tolerance: float = 1e-9) -> bool:
         """
         Check if a field value has actually changed from its previous value.
@@ -4345,8 +4352,8 @@ class TAVIController(QObject):
         Returns:
             tuple: (normalized_variable_name or None, warning_message or None)
         """
-        from gui.docks.unified_simulation_dock import VALID_SCAN_VARIABLES
-        
+        from gui.docks.unified_simulation_dock import SCAN_CHI_REFUSAL, VALID_SCAN_VARIABLES
+
         if not command:
             return (None, None)
         
@@ -4365,7 +4372,12 @@ class TAVIController(QObject):
         # Handle 2theta as alias for A2
         if var_lower == "2theta":
             var_lower = "a2"
-        
+
+        # The old chi was a beam-fixed tilt under the turntable; no arc is
+        # that axis, so it is refused by name rather than aliased (D6).
+        if var_lower == "chi":
+            return (None, SCAN_CHI_REFUSAL)
+
         # Check for known variable name
         if var_lower not in VALID_SCAN_VARIABLES:
             # Try to suggest similar names
@@ -4373,7 +4385,7 @@ class TAVIController(QObject):
             if suggestions:
                 return (None, f"Unknown variable '{var_name}'. Did you mean: {', '.join(suggestions)}?")
             else:
-                return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, chi, etc.")
+                return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, sgl, sgu, etc.")
         
         # A curvature axis the SELECTED crystal holds fixed is not scannable.
         # Refusing is the point: scan_config pins it, but compute_scan_snapshot
@@ -4469,6 +4481,11 @@ class TAVIController(QObject):
         under the winning mode's units. The result is measurements labelled with
         coordinates they were not taken at, which is worse than a refusal.
 
+        An arc (``sgl``/``sgu``) scanned beside a Q, HKL or energy-transfer
+        variable is the same kind of lie: that makes it a Q-mode scan, which
+        solves the arcs per point, so the arc command would be silently
+        ignored (A6).
+
         Every other conflict this class detects is a judgement call -- scanning
         H against the sample offset psi is a supported combination -- so those
         stay overridable.
@@ -4476,7 +4493,15 @@ class TAVIController(QObject):
         q_vars = {"qx", "qy", "qz"}
         hkl_vars = {"h", "k", "l"}
         return ((v1 in q_vars and v2 in hkl_vars)
-                or (v1 in hkl_vars and v2 in q_vars))
+                or (v1 in hkl_vars and v2 in q_vars)
+                or TAVIController._is_arc_in_q_mode(v1, v2))
+
+    @staticmethod
+    def _is_arc_in_q_mode(v1: str, v2: str) -> bool:
+        """True when one command scans an arc and the other makes it a Q mode."""
+        arcs = {"sgl", "sgu"}
+        q_mode = {"qx", "qy", "qz", "deltae", "h", "k", "l"}
+        return (v1 in arcs and v2 in q_mode) or (v2 in arcs and v1 in q_mode)
 
     def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
         """Check if two scan variables conflict with each other.
@@ -4498,6 +4523,10 @@ class TAVIController(QObject):
         if v1 == v2:
             return f"⚠ Both commands scan '{v1}' - use different parameters"
         
+        if self._is_arc_in_q_mode(v1, v2):
+            return ("Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, "
+                    "so they cannot be scanned in it; scan 'kappa' (the lower-arc "
+                    "correction) instead, or scan the arcs in angle mode")
         if self._is_unexecutable_conflict(v1, v2):
             return ("Conflict: Q and HKL scans describe the same target momentum "
                     "under the current sample mount")
@@ -4552,13 +4581,15 @@ class TAVIController(QObject):
             return vals.get('omega', 0)
         elif var == 'a4':
             return vals.get('att', 0)
-        # Sample orientation (chi, kappa, psi)
-        elif var == 'chi':
-            return scan_point_template[8] if len(scan_point_template) > 8 else 0
+        # Sample stage slots (arcs, corrections)
+        elif var == 'sgl':
+            return scan_point_template[SLOT_SGL]
+        elif var == 'sgu':
+            return scan_point_template[SLOT_SGU]
         elif var == 'kappa':
-            return scan_point_template[9] if len(scan_point_template) > 9 else 0
+            return scan_point_template[SLOT_KAPPA]
         elif var == 'psi' or var == 'omega':
-            return scan_point_template[10] if len(scan_point_template) > 10 else 0
+            return scan_point_template[SLOT_PSI]
         # Crystal bending
         elif var == 'rhm':
             return vals.get('rhm', 0)
@@ -4801,26 +4832,11 @@ class TAVIController(QObject):
         # Get current GUI values for validation
         vals = self.get_gui_values()
 
-        # Build scan point template
-        scan_point_template = [
-            vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
-            vals['rhm'], vals['rvm'], vals['rha'], vals['rva'],
-            0, vals.get('kappa', 0), vals.get('psi', 0),
-            vals.get('H', 0), vals.get('K', 0), vals.get('L', 0)
-        ]
-        
-        variable_to_index = {
-            'qx': 0, 'qy': 1, 'qz': 2, 'deltae': 3,
-            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-            'chi': 8, 'kappa': 9, 'psi': 10, 'omega': 10,
-            'h': 11, 'k': 12, 'l': 13,
-            'a1': 0, 'a2': 1, 'a3': 2, 'a4': 3,  # Angle mode
-            '2theta': 1,
-        }
-        
-        # Determine scan mode
+        # Determine scan mode, and the same template and slot map the run uses
         scan_mode = self._determine_scan_mode(cmd1, cmd2)
-        
+        scan_point_template = self._build_scan_point_template(scan_mode, vals)
+        variable_to_index = self._SCAN_VARIABLE_TO_INDEX
+
         # Create a throwaway instrument state for validation - use GUI values, not
         # the live state (it may not be updated until run_simulation is called)
         check_state = self.instrument.default_state()
@@ -4838,10 +4854,10 @@ class TAVIController(QObject):
             variable_name2, array_values2 = parse_scan_steps(cmd2) if cmd2 else (None, [])
             
             if variable_name1:
-                variable_name1 = self.normalize_scan_variable(variable_name1).lower()
+                variable_name1 = self.normalize_scan_variable(variable_name1)
             if variable_name2:
-                variable_name2 = self.normalize_scan_variable(variable_name2).lower()
-            
+                variable_name2 = self.normalize_scan_variable(variable_name2)
+
             # 1D scan
             if cmd1 and not cmd2:
                 for value1 in array_values1:
@@ -4897,8 +4913,7 @@ class TAVIController(QObject):
                 )
                 return not error_flags
             elif scan_mode == "rlu":
-                H, K, L = scan_point[11], scan_point[12], scan_point[13]
-                deltaE = scan_point[3]
+                H, K, L, deltaE = scan_point[:4]
                 qx, qy, qz = component_q_to_instrument_q(
                     check_state.sample_mount.hkl_to_q(H, K, L)
                 )
@@ -4925,8 +4940,8 @@ class TAVIController(QObject):
         """
         momentum_vars = {'qx', 'qy', 'qz', 'deltae'}
         rlu_vars = {'h', 'k', 'l'}
-        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta'}
-        orientation_vars = {'omega', 'chi', 'psi', 'kappa'}
+        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta', 'sgl', 'sgu'}
+        orientation_vars = {'omega', 'psi', 'kappa'}
         
         vars_used = set()
         for cmd in [cmd1, cmd2]:
@@ -7491,20 +7506,21 @@ class TAVIController(QObject):
             return npts(c2)
         return npts(c1) * npts(c2)
 
-    # Scan-variable -> scan-point index, mirroring run_simulation. Kept as a
-    # class attribute so the validation expansion and the run share one map.
+    # Scan-variable -> scan-point index: the one map the GUI point count, the
+    # API validation expansion and run_simulation all use (slot layout in
+    # instruments.tas_runtime). omega steps the psi slot.
     _SCAN_VARIABLE_TO_INDEX = {
         'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
         'H': 0, 'K': 1, 'L': 2,
         'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
-        'omega': 10, '2theta': 1,
+        'omega': SLOT_PSI, '2theta': 1,
         'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-        'chi': 8, 'kappa': 9, 'psi': 10,
+        'sgl': SLOT_SGL, 'sgu': SLOT_SGU, 'kappa': SLOT_KAPPA, 'psi': SLOT_PSI,
     }
 
     def _build_scan_point_template(self, scan_mode, vals):
-        """Build the 11-element scan-point template (mirrors run_simulation)."""
-        template = [0] * 11
+        """The scan-point template every scan path expands from."""
+        template = [0] * SCAN_POINT_LENGTH
         if scan_mode == "momentum":
             template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         elif scan_mode == "rlu":
@@ -7513,9 +7529,11 @@ class TAVIController(QObject):
             template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
         elif scan_mode == "orientation":
             template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        template[8] = 0
-        template[9] = vals['kappa']
-        template[10] = vals['psi']
+        # The arc readouts drive angle mode; Q modes solve the arcs instead.
+        template[SLOT_SGL] = vals['sgl']
+        template[SLOT_SGU] = vals['sgu']
+        template[SLOT_KAPPA] = vals['kappa']
+        template[SLOT_PSI] = vals['psi']
         return template
 
     def validate_scan_launch_state(self, launch_state):
@@ -7823,7 +7841,7 @@ class TAVIController(QObject):
             "scan_variables": [
                 "H", "K", "L", "qx", "qy", "qz", "deltaE",
                 "A1", "A2", "A3", "A4", "omega", "2theta",
-                "chi", "kappa", "psi", "rhm", "rvm", "rha", "rva",
+                "sgl", "sgu", "kappa", "psi", "rhm", "rvm", "rha", "rva",
             ],
             "scan_command_grammar": (
                 "VARIABLE start stop STEP. The third number (the last token) is "
@@ -8650,35 +8668,9 @@ class TAVIController(QObject):
         
         scan_mode = self._determine_scan_mode(scan_command1, scan_command2)
         
-        # Mapping for scannable parameters
-        # Indices: 0-3: Q/HKL/angles, 4-7: bending, 8-10: sample orientation (chi, kappa, psi)
-        # A3 is the calculated sample angle.  omega/psi are in-plane orientation offsets.
-        variable_to_index = {
-            'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-            'H': 0, 'K': 1, 'L': 2, 'deltaE': 3,
-            'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
-            'omega': 10, '2theta': 1,
-            'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-            'chi': 8, 'kappa': 9, 'psi': 10
-        }
-        
-        # Initialize scan point template
-        # Extended to 11 elements: 0-3: Q/HKL/angles, 4-7: bending, 8-10: chi/kappa/psi
-        # Note: omega is normalized to A3, so no separate index needed
-        scan_point_template = [0] * 11
-        if scan_mode == "momentum":
-            scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        elif scan_mode == "rlu":
-            scan_point_template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
-        elif scan_mode == "angle":
-            scan_point_template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
-        elif scan_mode == "orientation":
-            # For orientation scans, use current Q values but scan static offsets.
-            scan_point_template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        # Static chi offset is not the visible calculated chi/saz instrument angle.
-        scan_point_template[8] = 0
-        scan_point_template[9] = vals['kappa']
-        scan_point_template[10] = vals['psi']
+        # The one slot map and template (instruments.tas_runtime slot layout).
+        variable_to_index = self._SCAN_VARIABLE_TO_INDEX
+        scan_point_template = self._build_scan_point_template(scan_mode, vals)
         
         # Track if this is a single-point scan (no scan commands)
         is_single_point_scan = not scan_command1 and not scan_command2
@@ -9177,7 +9169,6 @@ class TAVIController(QObject):
                 rha = metadata['rha']
                 rva = metadata['rva']
                 omega_scan = metadata['omega']
-                chi_scan = metadata['chi']
                 psi_scan = metadata['psi']
                 kappa_scan = metadata['kappa']
                 timing = snapshot.timing

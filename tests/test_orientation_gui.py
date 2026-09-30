@@ -180,3 +180,54 @@ def test_api_arcs_are_writable_fields_in_the_schema(controller):
     assert {"sgl", "sgu"} <= set(names) and "chi" not in names
     params = controller.get_gui_values()
     assert "chi" not in params and (params["sgl"], params["sgu"]) == (2.5, -1.5)
+
+
+# --- 1.8 (A6): the arcs as scan variables -------------------------------------------
+
+def test_chi_scan_is_refused_naming_the_arcs(controller):
+    hard, _soft = controller._scan_command_issues("chi 0 2 1", "")
+    assert len(hard) == 1 and "'sgl'" in hard[0] and "'sgu'" in hard[0]
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    result = backend.submit_validate({"parameters": {"scan_command1": "chi 0 2 1"}})
+    assert result["would_queue"] is False
+    assert any("'sgl'" in b and "'sgu'" in b for b in result["blockers"])
+
+
+def test_arc_scan_in_a_q_mode_is_refused_naming_kappa(controller):
+    for other in ("H 1.9 2.1 0.1", "qx 2 2.2 0.1", "deltaE 0 2 1"):
+        hard, _soft = controller._scan_command_issues("sgl 0 2 1", other)
+        assert len(hard) == 1 and "kappa" in hard[0], (other, hard)
+    # Alone (or with an angle), an arc scan is an angle-mode scan.
+    for pair in (("sgu 0 2 1", ""), ("sgl 0 2 1", "A3 30 31 1")):
+        assert controller._scan_command_issues(*pair) == ([], [])
+        assert controller._determine_scan_mode(*pair) == "angle"
+
+
+def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path):
+    """The arcs patched over the API reach the sample arm of an angle-mode scan
+    point, composed here from the stage description (A3 about y, sgl about x,
+    sgu about z; physical = readout + correction + zero error)."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+
+    launch = controller.build_api_launch_state(
+        {"sgl": 3.0, "sgu": -2.0, "scan_command1": "A3 35 36 1"})
+    assert controller.validate_scan_launch_state(launch)["infeasible"] == []
+    vals, config = launch["vals"], launch["scan_config"]
+    point = controller._build_scan_point_template("angle", vals)
+    point[controller._SCAN_VARIABLE_TO_INDEX["A3"]] = 35.0
+    snapshot = controller.instrument.compute_snapshot(
+        (point, 0), 0, "angle", config, vals, str(tmp_path))
+    params = snapshot.params
+
+    def rot(axis, deg):
+        a, t = np.asarray(axis, dtype=float), math.radians(deg)
+        k = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+        return np.eye(3) + math.sin(t) * k + (1 - math.cos(t)) * (k @ k)
+
+    stage = (rot((0, 1, 0), 35.0 + config.psi + config.mis_omega)
+             @ rot((1, 0, 0), 3.0 + config.kappa + config.mis_chi)
+             @ rot((0, 0, 1), -2.0))
+    arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
+                                 params["sample_rz_param"])
+    assert np.allclose(arm, (stage @ config.sample_mount.R_mount).T, rtol=0.0, atol=1e-12)
+    assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (3.0, -2.0)

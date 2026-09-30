@@ -41,6 +41,14 @@ from tavi.tas_geometry import (
 
 log = logging.getLogger(__name__)
 
+# A scan point is a list of SCAN_POINT_LENGTH numbers: slots 0-3 are the
+# mode's coordinates (qx qy qz dE, H K L dE, or A1 A2 A3 A4), 4-7 the radii
+# rhm rvm rha rva, then the stage slots below. The arc slots are read in
+# angle mode only; Q modes solve the arcs per point. A point of 11 slots
+# (written before the upper-arc slot existed) has sgu = 0.
+SLOT_SGL, SLOT_KAPPA, SLOT_PSI, SLOT_SGU = 8, 9, 10, 11
+SCAN_POINT_LENGTH = 12
+
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):
     """Clamp a curvature magnitude to its declared mechanical travel.
@@ -183,7 +191,6 @@ class TAS_Instrument:
         self.sense_ana = 1
         # Sample orientation angles (user-controllable)
         self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
-        self.chi = 0    # the `chi` scan slot: an extra lower-arc offset
         # Operator corrections (visible): turntable and lower arc.
         self.psi = 0    # turntable correction
         self.kappa = 0  # lower-arc correction
@@ -217,7 +224,7 @@ class TAS_Instrument:
             else:
                 print(f"Parameter '{key}' not found.")
 
-    def set_angles(self, A1=None, A2=None, A3=None, A4=None, omega=None, chi=None, kappa=None, psi=None):
+    def set_angles(self, A1=None, A2=None, A3=None, A4=None, omega=None, kappa=None, psi=None):
         """Method to set A1-A4 angles and sample orientation angles."""
         if A1 is not None:
             self.A1 = A1
@@ -229,8 +236,6 @@ class TAS_Instrument:
             self.A4 = A4
         if omega is not None:
             self.omega = omega
-        if chi is not None:
-            self.chi = chi
         if kappa is not None:
             self.kappa = kappa
         if psi is not None:
@@ -258,19 +263,20 @@ class TAS_Instrument:
         correction + hidden zero error. Read only by the McStas sample arm."""
         return {
             "A3": self.A3 + self.psi + self.mis_omega,
-            "sgl": self.sgl + self.chi + self.kappa + self.mis_chi,
+            "sgl": self.sgl + self.kappa + self.mis_chi,
             "sgu": self.sgu,
         }
 
     def sample_orientation_params(self):
         """Per-point McStas parameters of the sample: the single sample arm's
         rotation (``sample_arm_euler`` of the physical angles and the mount),
-        plus the corrections and zero errors as inspection values."""
+        plus the arc readouts, corrections and zero errors as inspection values."""
         rx, ry, rz = sample_arm_euler(
             self.goniometer, self.physical_stage_angles(), self.sample_mount.R_mount
         )
         return {
-            "chi_param": self.chi,
+            "sgl_param": self.sgl,
+            "sgu_param": self.sgu,
             "kappa_param": self.kappa,
             "mis_chi_param": self.mis_chi,
             "psi_param": self.psi,
@@ -1039,10 +1045,9 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
             deltaE = angle_energies[0] - angle_energies[1]
         else:
             deltaE = vals['deltaE']
-        # The operator sets the arcs here; a launch state without `sgl`
-        # carries the lower arc in the visible `chi` field.
-        sgl = float(vals.get('sgl', vals.get('chi', 0.0)))
-        sgu = float(vals.get('sgu', 0.0))
+        # The operator sets the arcs here, through their scan slots.
+        sgl = float(scans[SLOT_SGL])
+        sgu = float(scans[SLOT_SGU]) if len(scans) > SLOT_SGU else 0.0
         point_state.sgl, point_state.sgu = sgl, sgu
         for ax in point_state.goniometer[1:]:
             value = {"sgl": sgl, "sgu": sgu}.get(ax.name, 0.0)
@@ -1144,7 +1149,9 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     q_vector = (qx, qy, qz) if qx is not None and qy is not None and qz is not None else None
 
     rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-    chi_scan, kappa_scan, psi_scan = scans[8], scans[9], scans[10]
+    kappa_scan, psi_scan = scans[SLOT_KAPPA], scans[SLOT_PSI]
+    # The arcs this point runs at: solved (Q modes) or its own slots (angle).
+    sgl, sgu = geom["sgl"], geom["sgu"]
 
     if scan_mode == "angle":
         omega_scan = scans[2]
@@ -1199,7 +1206,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     rhm, rvm, rha, rva = radii["rhm"], radii["rvm"], radii["rha"], radii["rva"]
 
     point_state.omega = omega_scan
-    point_state.chi = chi_scan
     point_state.kappa = kappa_scan
     point_state.psi = psi_scan
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
@@ -1212,7 +1218,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     rhm, rvm, rha, rva = point_state.rhm, point_state.rvm, point_state.rha, point_state.rva
 
     output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
-    orientation_info = f"ω={omega_scan:.2f}, χ={chi_scan:.2f}, ψ={psi_scan:.2f}, κ={kappa_scan:.2f}"
+    orientation_info = (f"ω={omega_scan:.2f}, sgl={sgl:.2f}, sgu={sgu:.2f}, "
+                        f"ψ={psi_scan:.2f}, κ={kappa_scan:.2f}")
     if scan_mode == "momentum":
         log_message = (
             f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
@@ -1267,7 +1274,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         },
         'curvature_clamped': curvature_clamped,
         'omega': omega_scan,
-        'chi': chi_scan,
+        'sgl': sgl,
+        'sgu': sgu,
         'psi': psi_scan,
         'kappa': kappa_scan,
     }

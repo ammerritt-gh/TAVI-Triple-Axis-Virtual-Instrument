@@ -172,7 +172,8 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 | `omega` | `psi` | **Both** `omega` and `psi` step template slot 10, which is seeded from the `psi` field. A scan named `omega` therefore moves `psi`; mapping it to an `omega` field would move the wrong axis. |
 | `psi`, `kappa` | same name | |
 | `rhm`, `rvm`, `rha` | same name | Bender curvatures. |
-| `chi` | `None` | Template slot 8 is hardcoded `0` rather than seeded from the `chi` field, so the field↔slot relationship is unverified — a goto could double-apply an offset. Refused until that is settled. |
+| `sgl`, `sgu` | same name | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 11) are seeded from these fields. |
+| `chi` | `None` | Retired (the arcs replaced it). An old scan named `chi` is refused by name, not treated as unknown. |
 | `rva` | `None` | No settable field exists in `_api_field_map`. |
 
 An unknown variable also returns `None`. The GUI disables all three goto buttons with the reason in their tooltip.
@@ -185,7 +186,7 @@ An unknown variable also returns `None`. The GUI disables all three goto buttons
 
 ### 2.1 The gap
 
-A scan command varies **exactly one** index of the 11-element `scan_point_template` (`TAVI_PySide6.py` ~:4116; the `variable_to_index` map ~:4109). So a straight line in reciprocal space where **H and K change together** — any zone/dispersion direction that is not axis-aligned, e.g. `(1,0,0)→(1,1,0)` or an off-axis `(0.5,0.5,0)→(1.5,1.5,0)` — is **inexpressible today**. The operator can only fake it with a coarse 2D grid and discard the off-diagonal points. Constant-energy cuts along an arbitrary Q-line, the bread-and-butter of dispersion mapping, cannot be scanned in one command.
+A scan command varies **exactly one** index of the 12-element `scan_point_template` (`TAVI_PySide6.py` ~:4116; the `variable_to_index` map ~:4109). So a straight line in reciprocal space where **H and K change together** — any zone/dispersion direction that is not axis-aligned, e.g. `(1,0,0)→(1,1,0)` or an off-axis `(0.5,0.5,0)→(1.5,1.5,0)` — is **inexpressible today**. The operator can only fake it with a coarse 2D grid and discard the off-diagonal points. Constant-energy cuts along an arbitrary Q-line, the bread-and-butter of dispersion mapping, cannot be scanned in one command.
 
 ### 2.2 Motivation
 
@@ -194,7 +195,7 @@ A scan command varies **exactly one** index of the 11-element `scan_point_templa
 
 ### 2.3 Design — a first-class scan mode, new point-generator only
 
-A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` in `instruments/tas_runtime.py` already accepts a fully-populated 11-element `scan_point` and computes angles from `scan_point[:4]`. It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
+A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` in `instruments/tas_runtime.py` already accepts a fully-populated 12-element `scan_point` and computes angles from `scan_point[:4]`. It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
 
 Definition of a path scan:
 
@@ -208,7 +209,7 @@ The generator:
 # proposed: TAVIController._build_path_scan_points(from_hkl, to_hkl, n, template)
 for i in range(n):
     f = i / (n - 1)
-    scan_point = template[:]                     # copies bending + chi/kappa/psi
+    scan_point = template[:]                     # copies bending + stage slots
     scan_point[0] = from_h + f * (to_h - from_h)  # H  (or qx)
     scan_point[1] = from_k + f * (to_k - from_k)  # K  (or qy)
     scan_point[2] = from_l + f * (to_l - from_l)  # L  (or qz)
@@ -632,7 +633,7 @@ POST /scan
     "parameters": { "H": 1.0, "K": 0.0, "L": 0.0 } }
 ```
 
-Implementation is **another point-generator branch feeding the existing snapshot pipeline** — the *same insertion point* as path scans (§2), and even simpler: no interpolation, just place each listed value into the scanned index of the 11-element `scan_point` template and emit `(scan_point, i)` tuples. Validation, budget, and per-point feasibility run **unchanged** (each listed value is one point, checked exactly as a grid point is). The result is a **1D** `ScanResult` with `variable_1` = the named variable and `scan_values_1` = the (sorted) value list; `counts`, `valid_mask_1`, and every SSE event are identical to a command scan.
+Implementation is **another point-generator branch feeding the existing snapshot pipeline** — the *same insertion point* as path scans (§2), and even simpler: no interpolation, just place each listed value into the scanned index of the 12-element `scan_point` template and emit `(scan_point, i)` tuples. Validation, budget, and per-point feasibility run **unchanged** (each listed value is one point, checked exactly as a grid point is). The result is a **1D** `ScanResult` with `variable_1` = the named variable and `scan_values_1` = the (sorted) value list; `counts`, `valid_mask_1`, and every SSE event are identical to a command scan.
 
 `scan_points`, `scan_commands`, and `scan_path` are mutually exclusive per job (400 if more than one is present). The frozen `launch_state` gains a `scan_kind: "points"` marker plus the value list so the worker selects the branch. GUI exposure comes later (an editable value table); the API is the v1 surface.
 
@@ -676,7 +677,7 @@ Throughout: preserve the analysis/control boundary of §0. If a proposed additio
 
 ## 10. Notes where the codebase shaped this design
 
-- **`compute_scan_snapshot` is already path-ready.** The shared implementation in `instruments/tas_runtime.py` consumes a fully-populated 11-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** TAS-runtime change — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
+- **`compute_scan_snapshot` is already path-ready.** The shared implementation in `instruments/tas_runtime.py` consumes a fully-populated 12-element `scan_point` (`scans[:4]` for Q/HKL/E) and never assumes a single varying index, so path scans need **no** TAS-runtime change — only the point-generator in `TAVI_PySide6.py` (~:4159) changes. This confirms the brief's "new point-generator, not new physics".
 - **The scan-command grammar is the real constraint**, not the physics: `_validate_single_scan_command` (:2090) and `parse_scan_steps` (`tavi/utilities.py:91`) hard-code "one variable, four tokens, last = step". Path scans deliberately sidestep this grammar with a structured `scan_path` body rather than extending the string syntax (which cannot express coupled variables cleanly).
 - **1D output sorts by x** (`write_1D_scan` via `argsort`, :4900) — fine for monotonic path fraction, but `display_dock._get_axis_label` (:672) has **no `"path"` case** and would mislabel the axis; a small addition is required (flagged in §2.5).
 - **`ScanResult.counts` uses `None` for unmeasured/invalid points**, so `compute_motion` must drop `None`/NaN before fitting — designed in (§1.3).

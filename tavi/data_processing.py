@@ -137,6 +137,10 @@ def read_parameters_from_file(target_folder):
     except FileNotFoundError:
         print(f"Warning: Parameter file not found at {file_path}")
 
+    # A folder written before the goniometer arcs records the lower arc as
+    # 'chi'; read it as 'sgl' (the old key stays for old 'chi' scan commands).
+    if 'chi' in parameters and 'sgl' not in parameters:
+        parameters['sgl'] = parameters['chi']
     return parameters
 
 

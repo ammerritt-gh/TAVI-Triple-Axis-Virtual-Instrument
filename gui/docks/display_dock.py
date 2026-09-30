@@ -707,7 +707,7 @@ class DisplayDock(BaseDockWidget):
             return 'ΔE (meV)'
         elif variable_name in ['H', 'K', 'L']:
             return f'{variable_name} (r.l.u.)'
-        elif variable_name in ['omega', 'chi', 'kappa', 'psi']:
+        elif variable_name in ['omega', 'sgl', 'sgu', 'chi', 'kappa', 'psi']:  # chi: old scans
             return f'{variable_name} (°)'
         elif variable_name in ['mtt', 'stt', 'att', 'A1', 'A2', 'A3', 'A4']:
             return f'{variable_name} (°)'
@@ -1535,6 +1535,6 @@ class DisplayDock(BaseDockWidget):
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
             return lower
-        if lower in ["omega", "chi", "kappa", "psi"]:
+        if lower in ["omega", "sgl", "sgu", "chi", "kappa", "psi"]:  # chi: old scans
             return lower
         return name

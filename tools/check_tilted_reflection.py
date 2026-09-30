@@ -16,8 +16,9 @@ above the plane at 45 deg azimuth on the stage and levelling it needs both
 arcs (about 2.8 deg each). The operator's UB is the truth. The setting is
 solved through the real runtime (``calculate_stage_angles`` ->
 ``tavi.orientation.solve_stage``); the scans go through IN8's own
-``scan_config``, ``build``, ``compute_snapshot`` (angle mode, arcs from
-``sgl``/``sgu``) and ``run_point``, exactly the path the application uses.
+``scan_config``, ``build``, ``compute_snapshot`` (angle mode, arcs in the
+point's ``sgl``/``sgu`` slots) and ``run_point``, exactly the path the
+application uses.
 
 Scans: 13 A3 points around the predicted A3 at the solved arcs, then the same
 13 points with both arcs at zero. Counts are the detector's N; errors are
@@ -64,8 +65,18 @@ IN8_VALS = {
     "monocris": "pg002", "anacris": "pg002", "modules": {},
     "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0", "alpha_4": "0"},
     "slits_mm": {"sbl": (40.0, 100.0), "dbl_hgap": 40.0},
-    "deltaE": 0.0, "chi": 0.0,
+    "deltaE": 0.0,
 }
+
+
+def _angle_point(mtt, stt, a3, att, sgl, sgu):
+    """An angle-mode scan point, the arcs in their own slots."""
+    from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
+
+    point = [0.0] * SCAN_POINT_LENGTH
+    point[:4] = [mtt, stt, a3, att]
+    point[SLOT_SGL], point[SLOT_SGU] = sgl, sgu
+    return point
 
 
 def _hygiene():
@@ -168,8 +179,8 @@ def main():
           + ", ".join(f"{v:.3f}" for v in a3_points))
     for label, (arc_l, arc_u) in scans.items():
         snapshot = plugin.compute_snapshot(
-            ([mtt, stt, a3, att, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0), 0, "angle",
-            config, dict(vals, sgl=arc_l, sgu=arc_u), str(root / "plan"))
+            (_angle_point(mtt, stt, a3, att, arc_l, arc_u), 0), 0, "angle",
+            config, vals, str(root / "plan"))
         p = snapshot.params
         print(f"  {label:12s} sgl = {arc_l:8.4f}  sgu = {arc_u:8.4f}  centre-point sample arm "
               f"ROTATED = ({p['sample_rx_param']:.4f}, {p['sample_ry_param']:.4f}, "
@@ -191,8 +202,8 @@ def main():
         folder.mkdir(parents=True, exist_ok=True)   # McStasScript needs the parent to exist
         for index, a3_value in enumerate(a3_points):
             snapshot = plugin.compute_snapshot(
-                ([mtt, stt, float(a3_value), att, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], index),
-                index, "angle", config, dict(vals, sgl=arc_l, sgu=arc_u), str(folder))
+                (_angle_point(mtt, stt, float(a3_value), att, arc_l, arc_u), index),
+                index, "angle", config, vals, str(folder))
             started = time.perf_counter()
             _data, run_flags, info = plugin.run_point(
                 instrument, snapshot, snapshot.output_folder, ncount, execution,

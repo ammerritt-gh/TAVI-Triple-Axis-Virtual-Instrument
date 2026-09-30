@@ -67,9 +67,10 @@ _PUMA_PARAMS = (
     ParameterSpec("dbl_hgap_param", "Detector slit horizontal gap", unit="m"),
     # Sample orientation: the single sample arm (generic TAS; every TAVI instrument
     # using the shared sample arm declares these).
-    ParameterSpec("chi_param", "User chi - out-of-plane tilt", default=0.0),
-    ParameterSpec("kappa_param", "Kappa - chi alignment offset", default=0.0),
-    ParameterSpec("mis_chi_param", "Hidden chi misalignment (training)", default=0.0),
+    ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0),
+    ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0),
+    ParameterSpec("kappa_param", "Kappa - lower-arc correction", default=0.0),
+    ParameterSpec("mis_chi_param", "Hidden lower-arc zero error (training)", default=0.0),
     ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
     ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
     ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),

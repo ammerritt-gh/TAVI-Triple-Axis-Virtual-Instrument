@@ -50,7 +50,7 @@ Keep `InstrumentPlugin.run_point()` as the controller-facing execution seam. PUM
 Confirmed from `mccode.sim` output and `mccode.py` source:
 
 ```
-<mpi-launcher> -np <mpi_count> PUMA_McScript.exe --ncount=1000000 --dir=C:\path\to\scan_0001 A1_param=45.0 A2_param=-30.0 saz_param=0.0 ...
+<mpi-launcher> -np <mpi_count> PUMA_McScript.exe --ncount=1000000 --dir=C:\path\to\scan_0001 A1_param=45.0 A2_param=-30.0 sample_ry_param=12.5 ...
 ```
 
 The params snapshot dict already carries the exact McStas runtime parameter names needed for CLI `name=value` arguments. The `--dir` flag specifies the output directory for detector files. McStas creates the directory if it doesn't exist.
