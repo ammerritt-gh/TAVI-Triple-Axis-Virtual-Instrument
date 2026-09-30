@@ -24,10 +24,10 @@ from instruments.descriptor import CurvatureAxis
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
+from tavi.orientation import q_mount_from_legacy_angles
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
-    q_instrument_from_angles,
     solve_instrument_angles,
 )
 
@@ -904,12 +904,9 @@ class TAS_Instrument:
         # Compute Q in the public instrument/GUI convention:
         # qx and qy span the horizontal scattering plane; qz is vertical.
         try:
-            qx, qy, qz = q_instrument_from_angles(sth, saz, stt, ki, kf)
-            if self.sense_sample > 0:
-                # Flipped-branch solutions align the Friedel partner -Q with
-                # the beam (vTAS convention; see solve_instrument_angles), so
-                # the raw inverse recovers -Q.
-                qx, qy, qz = -qx, -qy, -qz
+            qx, qy, qz = component_q_to_instrument_q(
+                q_mount_from_legacy_angles(sth, saz, stt, ki, kf, self.sense_sample)
+            )
         except Exception as exc:
             error_flags.append("q")
             print(f"Invalid Q from sample angles: {exc}")

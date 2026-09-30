@@ -1456,9 +1456,13 @@ smoke before registration was declared done.
   to three decimals; their a3(V1) = 125.647 is TAVI's +35.647 plus exactly
   90.000 — vTAS displayed the cubic-equivalent (0,2,0) setting for that
   point. The raw inverse of a +1-branch solution recovers −Q;
-  `calculate_q_and_deltaE` negates it back, so instrument-level round trips
-  return +Q exactly. Same Bragg planes either way (verified in the McStas
-  smoke: the −Q branch gives an equally real peak).
+  `tavi/orientation.py` `q_mount_from_legacy_angles` negates it back, and both
+  `calculate_q_and_deltaE` and the UB fit (`ObservedPeak.q_lab`, sense from
+  the peak's signed stt) read Q through it, so instrument-level round trips
+  and fits return +Q exactly. (Until 2026-10-01 the fit skipped the negation
+  and a +1-sense UB came out 180° about the plane normal.) Same Bragg planes
+  either way (verified in the McStas smoke: the −Q branch gives an equally
+  real peak).
 
 ### 20.2 Shared-code generalization
 
