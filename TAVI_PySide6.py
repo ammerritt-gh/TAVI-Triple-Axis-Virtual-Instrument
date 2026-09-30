@@ -5826,10 +5826,10 @@ class TAVIController(QObject):
                     # Decode and apply the misalignment to the instrument
                     try:
                         from gui.docks.misalignment_dock import decode_misalignment
-                        omega_m, chi_m, psi_m = decode_misalignment(mis_hash)
-                        self.instrument_state.set_misalignment(omega_m, chi_m, psi_m)
+                        omega_m, chi_m = decode_misalignment(mis_hash)
+                        self.instrument_state.set_misalignment(mis_omega=omega_m, mis_chi=chi_m)
                         # Store in dock and update UI to show it's loaded
-                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m, psi_m)
+                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m)
                         self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
                         self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
                         self.window.misalignment_dock.check_alignment_button.setEnabled(True)
