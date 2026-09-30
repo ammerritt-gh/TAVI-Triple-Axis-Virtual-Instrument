@@ -80,6 +80,18 @@ frame at the corrections in force. The crystal sits at the **physical** angles,
 readout + correction + hidden zero error (`mis_omega` on A3, `mis_chi` on sgl),
 and only the McStas sample arm reads those.
 
+A peak recorded with Take Position carries its stage record: every readout,
+the corrections in force, ki, kf and the sense (`tavi/orientation.py`
+`stage_record`; never a zero error). The UB fit reads each peak at readout +
+(correction at record time − correction now) (`record_angles`), its physical
+dial position in today's readout frame, so changing ψ or κ after a peak was
+taken does not move that peak. A correction is not a mount rotation once the arcs
+move, so a fit across a correction change is exact only where the new
+corrections cancel the zero errors (or the peaks are in the plane); elsewhere
+it is the least-squares U. A peak without a record (a save from before the
+goniometer, a TAS_MCP peak) is a **legacy** peak: its (ω, χ, 2θ) triple keeps
+the old meaning, and the UB dock marks it.
+
 ### The McStas sample chain
 
 One Arm, `sample_mount`, at the sample position relative to `sample_arm` (z

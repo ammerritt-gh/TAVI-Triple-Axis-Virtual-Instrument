@@ -31,6 +31,7 @@ from instruments.tas_runtime import (
     SLOT_PSI,
     SLOT_SGL,
     SLOT_SGU,
+    stage_corrections,
 )
 
 log = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import (parse_scan_steps, incremented_path_writing,
                             normalize_scan_commands)
 from tavi.sample_mount import SampleMount
+from tavi.orientation import stage_record
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
     instrument_q_to_component_q,
@@ -5066,30 +5068,20 @@ class TAVIController(QObject):
     def on_calculate_ub(self):
         """Calculate UB matrix from observed peaks in the UB dock."""
         try:
-            peaks_data = self.window.ub_matrix_dock.get_all_peak_data()
-            # Build ObservedPeak list
-            self.ub_matrix.peaks = []
-            for pd in peaks_data:
-                if pd is None:
-                    continue
-                peak = ObservedPeak(
-                    hkl=pd['hkl'],
-                    angles=pd['angles'],
-                    ki=pd['ki'],
-                    kf=pd['kf'],
-                    locked=pd.get('locked', False),
-                )
-                self.ub_matrix.peaks.append(peak)
+            self.ub_matrix.peaks = self._peaks_from_dock()
 
             # Sync lattice from GUI
             vals = self.get_gui_values()
+            corrections = None
             if vals:
                 self.ub_matrix.set_lattice(
                     vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                     vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
                 )
+                # The UB lives in the readout frame of the corrections in force.
+                corrections = stage_corrections(vals['psi'], vals['kappa'])
 
-            U = self.ub_matrix.calculate_U_from_peaks()
+            U = self.ub_matrix.calculate_U_from_peaks(corrections)
             self._update_ub_display()
             self.print_to_message_center(
                 f"UB matrix calculated from {len([p for p in self.ub_matrix.peaks if p.is_valid])} peaks"
@@ -5102,19 +5094,7 @@ class TAVIController(QObject):
     def on_refine_lattice(self):
         """Refine lattice parameters from observed peaks."""
         try:
-            peaks_data = self.window.ub_matrix_dock.get_all_peak_data()
-            self.ub_matrix.peaks = []
-            for pd in peaks_data:
-                if pd is None:
-                    continue
-                peak = ObservedPeak(
-                    hkl=pd['hkl'],
-                    angles=pd['angles'],
-                    ki=pd['ki'],
-                    kf=pd['kf'],
-                    locked=pd.get('locked', False),
-                )
-                self.ub_matrix.peaks.append(peak)
+            self.ub_matrix.peaks = self._peaks_from_dock()
 
             result = self.ub_matrix.refine_lattice()
             refined = result['lattice']
@@ -5166,21 +5146,34 @@ class TAVIController(QObject):
             self.print_to_message_center(f"Invalid UB matrix: {e}")
 
     def on_take_peak_position(self, peak_index: int):
-        """Fill peak angle fields from current instrument position."""
+        """Take Position: record the stage readouts of every goniometer axis,
+        the corrections in force, ki, kf and the sense into the peak's stage
+        record. The readouts are the dock fields (A3 is the ω field); hidden
+        zero errors are never read."""
         vals = self.get_gui_values()
         if not vals:
             return
         pw = self.window.ub_matrix_dock.get_peak_widget(peak_index)
         if pw:
-            pw.set_angles_from_position(
-                vals['omega'], vals['sgl'], vals['stt'],
-                vals['Ki'], vals['Kf'],
+            readouts = {"A3": vals['omega'], "sgl": vals['sgl'], "sgu": vals['sgu']}
+            record = stage_record(
+                self.instrument_state.goniometer, readouts,
+                corrections=stage_corrections(vals['psi'], vals['kappa']),
+                ki=vals['Ki'], kf=vals['Kf'], sense=self.instrument_state.sense_sample,
             )
+            pw.set_angles_from_position(record, vals['stt'], vals['Ki'], vals['Kf'])
+            shown = ", ".join(f"{name}={value:.2f}°" for name, value in record["angles"].items())
             self.print_to_message_center(
                 f"Peak {peak_index + 1}: position taken "
-                f"(ω={vals['omega']:.2f}°, sgl={vals['sgl']:.2f}°, 2θ={vals['stt']:.2f}°, "
+                f"({shown}, 2θ={vals['stt']:.2f}°, ψ={vals['psi']:.2f}°, κ={vals['kappa']:.2f}°, "
                 f"ki={vals['Ki']:.4f}, kf={vals['Kf']:.4f})"
             )
+
+    def _peaks_from_dock(self):
+        """The UB dock's peak entries as ObservedPeaks (stage record and sense
+        included; a peak without a record is a legacy peak)."""
+        return [ObservedPeak.from_dict(pd)
+                for pd in self.window.ub_matrix_dock.get_all_peak_data() if pd is not None]
 
     def _on_peak_added(self):
         """Connect signals for newly added peak widget."""

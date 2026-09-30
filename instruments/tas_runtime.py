@@ -49,6 +49,12 @@ log = logging.getLogger(__name__)
 SLOT_SGL, SLOT_KAPPA, SLOT_PSI, SLOT_SGU = 8, 9, 10, 11
 SCAN_POINT_LENGTH = 12
 
+
+def stage_corrections(psi, kappa):
+    """The operator corrections per goniometer axis: psi turns the turntable,
+    kappa the lower arc; the upper arc has none."""
+    return {"A3": float(psi), "sgl": float(kappa)}
+
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):
     """Clamp a curvature magnitude to its declared mechanical travel.
@@ -261,9 +267,10 @@ class TAS_Instrument:
     def physical_stage_angles(self):
         """Stage angles the crystal really sits at: readout + operator
         correction + hidden zero error. Read only by the McStas sample arm."""
+        corrections = stage_corrections(self.psi, self.kappa)
         return {
-            "A3": self.A3 + self.psi + self.mis_omega,
-            "sgl": self.sgl + self.kappa + self.mis_chi,
+            "A3": self.A3 + corrections["A3"] + self.mis_omega,
+            "sgl": self.sgl + corrections["sgl"] + self.mis_chi,
             "sgu": self.sgu,
         }
 

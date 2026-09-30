@@ -104,7 +104,7 @@ class TAVIMainWindow(QMainWindow):
             pass
         
         # UB Matrix Panel (initially hidden, opened from Sample panel)
-        self.ub_matrix_dock = UBMatrixDock(self)
+        self.ub_matrix_dock = UBMatrixDock(self, descriptor=self.descriptor)
         try:
             self.ub_matrix_dock.setFloating(True)
             self.ub_matrix_dock.setVisible(False)

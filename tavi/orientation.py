@@ -102,13 +102,44 @@ def q_mount_from_stage(gonio, angles, stt, ki, kf, sense_sample):
     return -q if sense_sample > 0 else q
 
 
-def stage_record(gonio, angles):
+def stage_record(gonio, angles, corrections=None, ki=None, kf=None, sense=None):
     """A JSON-friendly record of a stage setting that describes its own axes:
-    ``{"axes": [[name, [x, y, z]], ...], "angles": {name: degrees}}``."""
-    return {
+    ``{"axes": [[name, [x, y, z]], ...], "angles": {name: degrees}}``, the
+    ``angles`` being the readouts of every axis.
+
+    Take Position adds what was in force when the peak was taken:
+    ``"corrections"`` ({name: degrees}, the operator corrections per axis),
+    ``"ki"``, ``"kf"`` and ``"sense"``. Hidden zero errors are never recorded.
+    A record without ``"corrections"`` is read in the frame of the moment
+    (see ``record_angles``).
+    """
+    record = {
         "axes": [[ax.name, [float(v) for v in ax.axis]] for ax in gonio],
         "angles": {ax.name: float(angles.get(ax.name, 0.0)) for ax in gonio},
     }
+    if corrections is not None:
+        record["corrections"] = {ax.name: float(corrections.get(ax.name, 0.0))
+                                 for ax in gonio}
+    for key, value in (("ki", ki), ("kf", kf)):
+        if value is not None:
+            record[key] = float(value)
+    if sense is not None:
+        record["sense"] = int(sense)
+    return record
+
+
+def record_angles(record, corrections=None):
+    """A recorded setting in today's readout frame (the fit rule, A1):
+    readout + (correction at record time - correction now), per axis, so a
+    correction changed after the peak was taken does not move the peak.
+    ``corrections`` None, or a record without corrections, reads the
+    readouts as they are."""
+    angles = {name: float(value) for name, value in record["angles"].items()}
+    taken = record.get("corrections")
+    if taken is None or corrections is None:
+        return angles
+    return {name: value + float(taken.get(name, 0.0)) - float(corrections.get(name, 0.0))
+            for name, value in angles.items()}
 
 
 def gonio_from_record(record):
