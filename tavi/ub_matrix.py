@@ -21,8 +21,8 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
 
+from tavi.orientation import q_mount_from_legacy_angles
 from tavi.sample_mount import reciprocal_basis_tas
-from tavi.tas_geometry import instrument_q_to_component_q, q_instrument_from_angles
 
 
 # Obfuscation key for training hash encoding (not cryptographic security)
@@ -52,26 +52,6 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
     return reciprocal_basis_tas(a, b, c, alpha, beta, gamma)
 
 
-def angles_to_q_lab(sth, saz, stt, ki, kf):
-    """Convert instrument angles to Q vector in lab frame.
-
-    Uses the same public Q convention as ``instruments.tas_runtime``, then
-    converts into mounted component coordinates for UB fitting.
-
-    Args:
-        sth: Sample theta (omega) in degrees.
-        saz: Sample azimuthal angle in degrees.
-        stt: Sample two-theta in degrees.
-        ki: Incident wavevector (inverse Angstroms).
-        kf: Scattered wavevector (inverse Angstroms).
-
-    Returns:
-        np.ndarray: [qx, qy, qz] in inverse Angstroms.
-    """
-    q_instrument = q_instrument_from_angles(sth, saz, stt, ki, kf)
-    return instrument_q_to_component_q(q_instrument)
-
-
 def validate_rotation_matrix(matrix: np.ndarray, atol: float = 1e-3) -> np.ndarray:
     """Return matrix as float array if it is a proper 3D rotation."""
     rotation = np.asarray(matrix, dtype=float)
@@ -93,24 +73,35 @@ class ObservedPeak:
 
     Attributes:
         hkl: Miller indices (H, K, L).
-        angles: Instrument angles (omega/sth, chi/saz, stt) in degrees.
+        angles: Legacy sample triple (omega/sth, chi/saz, stt) in degrees;
+            stt is the signed readout.
         ki: Incident wavevector at observation (inverse Angstroms).
         kf: Scattered wavevector at observation (inverse Angstroms).
         locked: Whether this peak entry is locked from editing.
+        sense_sample: Sample scattering sense (+1/-1) the peak was taken on.
+            None (a legacy save, a TAS_MCP peak) resolves to the sign of stt.
+        stage: Optional full stage record (readouts, corrections, ki, kf,
+            sense); None for a peak read with the legacy triple's meaning.
     """
     hkl: tuple = (0.0, 0.0, 0.0)
     angles: tuple = (0.0, 0.0, 0.0)  # (sth, saz, stt)
     ki: float = 0.0
     kf: float = 0.0
     locked: bool = False
+    sense_sample: Optional[int] = None
+    stage: Optional[dict] = None
+
+    def __post_init__(self):
+        if self.sense_sample is None:
+            self.sense_sample = 1 if self.angles[2] > 0 else -1
 
     @property
     def q_lab(self) -> np.ndarray:
-        """Compute Q in mounted sample frame from stored angles and wavevectors."""
+        """U @ B @ hkl in the mounted sample frame, from the stored setting."""
         sth, saz, stt = self.angles
         if self.ki <= 0 or self.kf <= 0:
             return np.array([0.0, 0.0, 0.0])
-        return angles_to_q_lab(sth, saz, stt, self.ki, self.kf)
+        return q_mount_from_legacy_angles(sth, saz, stt, self.ki, self.kf, self.sense_sample)
 
     @property
     def is_valid(self) -> bool:
@@ -131,6 +122,8 @@ class ObservedPeak:
             'ki': self.ki,
             'kf': self.kf,
             'locked': self.locked,
+            'sense_sample': self.sense_sample,
+            'stage': self.stage,
         }
 
     @classmethod
@@ -142,6 +135,8 @@ class ObservedPeak:
             ki=d.get('ki', 0.0),
             kf=d.get('kf', 0.0),
             locked=d.get('locked', False),
+            sense_sample=d.get('sense_sample'),
+            stage=d.get('stage'),
         )
 
 
@@ -238,6 +233,8 @@ def refine_U_matrix(peaks: list, B: np.ndarray) -> np.ndarray:
 
     # SVD
     Usvd, S, Vt = np.linalg.svd(H_mat)
+    if S[1] < 1e-8 * S[0]:
+        raise ValueError("Peaks are collinear — cannot determine U.")
 
     # Ensure proper rotation (det = +1, not reflection)
     d = np.linalg.det(Vt.T @ Usvd.T)
