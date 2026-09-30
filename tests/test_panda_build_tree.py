@@ -59,8 +59,7 @@ def plain_instrument():
 _BEAM_ORDER = [
     "origin", "source", "virtual_source",
     "mono_cradle", "monochromator", "sample_arm",
-    "sample_slit", "sample_gonio", "sample_chi_arm", "sample_cradle",
-    "sample_mount", "analyzer_arm", "sample_exit_slit",
+    "sample_slit", "sample_mount", "analyzer_arm", "sample_exit_slit",
     "analyzer_cradle", "analyzer", "detector_arm",
     "detector",
 ]
@@ -69,8 +68,7 @@ _BEAM_ORDER = [
 _BEAM_ORDER_COLLIMATED = [
     "origin", "source", "primary_collimator", "virtual_source",
     "mono_cradle", "monochromator", "sample_arm", "sample_collimator",
-    "sample_slit", "sample_gonio", "sample_chi_arm", "sample_cradle",
-    "sample_mount", "analyzer_arm", "sample_exit_slit", "analyzer_collimator",
+    "sample_slit", "sample_mount", "analyzer_arm", "sample_exit_slit", "analyzer_collimator",
     "analyzer_cradle", "analyzer", "detector_arm", "detector_collimator",
     "detector",
 ]

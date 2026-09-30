@@ -57,7 +57,6 @@ _PUMA_PARAMS = (
     ParameterSpec("A4_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("nu_param", "Velocity selector frequency"),
-    ParameterSpec("saz_param", "Sample azimuthal angle (out-of-plane)"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending"),
     ParameterSpec("rvm_param", "Monochromator vertical bending"),
     ParameterSpec("rha_param", "Analyzer horizontal bending"),
@@ -66,18 +65,16 @@ _PUMA_PARAMS = (
     ParameterSpec("pbl_hgap_param", "Pre-sample slit horizontal gap", unit="m"),
     ParameterSpec("pbl_vgap_param", "Pre-sample slit vertical gap", unit="m"),
     ParameterSpec("dbl_hgap_param", "Detector slit horizontal gap", unit="m"),
-    # Sample-orientation / mount hierarchy (generic TAS; every TAVI instrument
-    # using the shared sample-orientation arms declares these).
+    # Sample orientation: the single sample arm (generic TAS; every TAVI instrument
+    # using the shared sample arm declares these).
     ParameterSpec("chi_param", "User chi - out-of-plane tilt", default=0.0),
     ParameterSpec("kappa_param", "Kappa - chi alignment offset", default=0.0),
     ParameterSpec("mis_chi_param", "Hidden chi misalignment (training)", default=0.0),
     ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
     ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
-    ParameterSpec("chi_total", "Total chi = chi + kappa + mis_chi", default=0.0),
-    ParameterSpec("omega_offset_total", "Total omega offset = psi + mis_omega", default=0.0),
-    ParameterSpec("mount_rx_param", "Static sample mount rotation about x", default=0.0),
-    ParameterSpec("mount_ry_param", "Static sample mount rotation about y", default=0.0),
-    ParameterSpec("mount_rz_param", "Static sample mount rotation about z", default=0.0),
+    ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),
+    ParameterSpec("sample_ry_param", "Sample arm rotation about y (stage and mount)", default=0.0),
+    ParameterSpec("sample_rz_param", "Sample arm rotation about z (stage and mount)", default=0.0),
 )
 
 

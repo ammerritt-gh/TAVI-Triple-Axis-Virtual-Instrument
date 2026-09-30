@@ -58,8 +58,7 @@ def plain_instrument():
 # collimator component exists at all.
 _BEAM_ORDER = [
     "origin", "source", "mono_cradle", "monochromator",
-    "sample_arm", "sample_slit", "sample_gonio",
-    "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
+    "sample_arm", "sample_slit", "sample_mount", "analyzer_arm",
     "analyzer_cradle", "analyzer", "detector_arm",
     "detector_slit", "detector",
 ]
@@ -67,8 +66,7 @@ _BEAM_ORDER = [
 # The same backbone with all four Sollers inserted.
 _BEAM_ORDER_COLLIMATED = [
     "origin", "source", "mono_collimator", "mono_cradle", "monochromator",
-    "sample_arm", "sample_collimator", "sample_slit", "sample_gonio",
-    "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
+    "sample_arm", "sample_collimator", "sample_slit", "sample_mount", "analyzer_arm",
     "analyzer_collimator", "analyzer_cradle", "analyzer", "detector_arm",
     "detector_collimator", "detector_slit", "detector",
 ]

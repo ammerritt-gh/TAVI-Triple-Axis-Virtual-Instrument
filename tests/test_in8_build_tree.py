@@ -58,8 +58,7 @@ def plain_instrument():
 # collimator component exists at all.
 _BEAM_ORDER = [
     "origin", "source", "mono_cradle", "monochromator", "sample_arm",
-    "sample_slit", "sample_gonio", "sample_chi_arm",
-    "sample_cradle", "sample_mount", "analyzer_arm", "analyzer_filter",
+    "sample_slit", "sample_mount", "analyzer_arm", "analyzer_filter",
     "analyzer_cradle", "analyzer", "detector_arm",
     "detector_slit", "detector",
 ]
@@ -67,8 +66,7 @@ _BEAM_ORDER = [
 # The same backbone with every Soller inserted.
 _BEAM_ORDER_COLLIMATED = [
     "origin", "source", "mono_collimator", "mono_cradle", "monochromator",
-    "sample_arm", "sample_collimator", "sample_slit", "sample_gonio",
-    "sample_chi_arm", "sample_cradle", "sample_mount", "analyzer_arm",
+    "sample_arm", "sample_collimator", "sample_slit", "sample_mount", "analyzer_arm",
     "analyzer_filter", "analyzer_collimator", "analyzer_cradle", "analyzer",
     "detector_arm", "detector_collimator", "detector_slit", "detector",
 ]
@@ -229,6 +227,16 @@ def test_sample_emission_from_shared_library():
     assert "Al_Bragg" in by_name                     # legacy capital-B name
     names = _component_names(instrument)
     assert names.index("sample_mount") < names.index("Al_Bragg") < names.index("analyzer_arm")
+
+
+def test_sample_orientation_is_one_runtime_arm(plain_instrument):
+    """The stage and the mount reach McStas through one Arm (shared emitter)."""
+    by_name = {c.name: c for c in plain_instrument.component_list}
+    assert not {"sample_gonio", "sample_chi_arm", "sample_cradle"} & set(by_name)
+    arm = by_name["sample_mount"]
+    assert arm.component_name == "Arm"
+    assert arm.AT_relative == arm.ROTATED_relative == "RELATIVE sample_arm"
+    assert list(arm.ROTATED_data) == ["sample_rx_param", "sample_ry_param", "sample_rz_param"]
 
 
 def test_no_sample_warns_and_omits_component(capsys):

@@ -349,6 +349,20 @@ coupling. The three controller sites that need a bare state to poke generic TAS
 fields into for validation get `default_state()`; the fields they set
 (`monocris/anacris/K_fixed/fixed_E/sample_mount`) are `TAS_Instrument`
 *base-class* attributes, so setting them directly is instrument-agnostic.
+
+The sample stage is the descriptor's `goniometer`, and the shared runtime
+solves every Q or HKL point on it (`TAS_Instrument.calculate_stage_angles` →
+`tavi/orientation.py` `solve_stage`): `compute_snapshot` and
+`check_point_feasibility` take the same path, so a stage that cannot reach a
+point refuses it with the solver's own words (an error flag
+`"stage: <reason>"`, rendered by `describe_scan_error_flags`) in API
+validation, the GUI run and the real scan alike. The mount and the stage reach
+McStas as one `sample_mount` Arm: `build_point_params` fills
+`sample_rx/ry/rz_param` from `TAS_Instrument.sample_orientation_params`, i.e.
+`sample_arm_euler(goniometer, physical angles, sample_mount.R_mount)`, so the
+`sample_mount` argument above decides the simulated crystal and no plugin
+builds sample rotations of its own.
+
 The shared queue deep-copies the complete launch state once more before
 registry insertion. A plugin that returns an object graph which cannot be
 deep-copied therefore fails scan submission closed; live resources belong

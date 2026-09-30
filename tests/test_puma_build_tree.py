@@ -164,8 +164,7 @@ def test_no_sample_build_warns_and_adds_nothing(capsys, plain_instrument):
     assert not sample_names & set(_component_names(instrument))
     assert "Warning: No sample selected" in capsys.readouterr().out
     # sanity: mount hierarchy still present
-    for arm in ("sample_gonio", "sample_chi_arm", "sample_cradle", "sample_mount"):
-        assert arm in _component_names(plain_instrument)
+    assert "sample_mount" in _component_names(plain_instrument)
 
 
 def test_horizontal_nmo_offset_applies_only_when_both_units_are_installed():

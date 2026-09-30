@@ -4992,9 +4992,10 @@ class TAVIController(QObject):
             # Only update if value actually changed (avoid spurious editingFinished signals)
             if not self._field_value_changed('chi', chi):
                 return
-            self.instrument_state.saz = chi
+            # The chi control is the lower-arc (sgl) readout.
+            self.instrument_state.sgl = chi
             self.print_to_message_center(f"Sample χ updated: {chi}° (out-of-plane)")
-            # Calculated chi/saz affects qz - trigger recalculation
+            # The lower arc moves Q out of the plane - trigger recalculation
             self.on_angles_changed()
         except ValueError:
             self.print_to_message_center("Invalid chi value")

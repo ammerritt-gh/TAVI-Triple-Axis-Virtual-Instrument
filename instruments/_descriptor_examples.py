@@ -12,8 +12,8 @@ comparison printout:
     python -m instruments._descriptor_examples
 
 ``_CORE_PARAMS`` documents the shared "core" TAS parameter set every
-instrument's ``scannable_parameters`` starts from (the sample-orientation /
-mount hierarchy of ``tavi/instrument_helpers.py``); the real plugins inline
+instrument's ``scannable_parameters`` starts from (the single sample arm of
+``tavi/instrument_helpers.py``); the real plugins inline
 these in their full parameter tuples.
 
 Targets Python 3.11 syntax.
@@ -27,26 +27,23 @@ from instruments.panda.plugin import panda_descriptor  # noqa: F401  (re-export)
 from instruments.puma.plugin import puma_descriptor  # noqa: F401  (re-export)
 
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
-# (slits, bending, selector) are appended per instrument. The sample-orientation /
-# mount parameters are part of the core because they come from the generic
-# sample-orientation hierarchy every TAVI instrument reuses.
+# (slits, bending, selector) are appended per instrument. The sample-arm
+# parameters are part of the core because every TAVI instrument emits the same
+# single sample arm (the stage at its physical angles and the crystal mount).
 _CORE_PARAMS = (
     ParameterSpec("A1_param", "Monochromator 2-theta angle"),
     ParameterSpec("A2_param", "Sample 2-theta angle"),
     ParameterSpec("A3_param", "Sample theta (phi) angle"),
     ParameterSpec("A4_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
-    ParameterSpec("saz_param", "Sample azimuthal angle (out-of-plane)"),
     ParameterSpec("chi_param", "User chi - out-of-plane tilt", default=0.0),
     ParameterSpec("kappa_param", "Kappa - chi alignment offset", default=0.0),
     ParameterSpec("mis_chi_param", "Hidden chi misalignment (training)", default=0.0),
     ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
     ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
-    ParameterSpec("chi_total", "Total chi = chi + kappa + mis_chi", default=0.0),
-    ParameterSpec("omega_offset_total", "Total omega offset = psi + mis_omega", default=0.0),
-    ParameterSpec("mount_rx_param", "Static sample mount rotation about x", default=0.0),
-    ParameterSpec("mount_ry_param", "Static sample mount rotation about y", default=0.0),
-    ParameterSpec("mount_rz_param", "Static sample mount rotation about z", default=0.0),
+    ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),
+    ParameterSpec("sample_ry_param", "Sample arm rotation about y (stage and mount)", default=0.0),
+    ParameterSpec("sample_rz_param", "Sample arm rotation about z (stage and mount)", default=0.0),
 )
 
 

@@ -168,8 +168,6 @@ def _get_point_energy_metadata(PUMA, deltaE):
 
 def build_puma_point_params(PUMA, deltaE):
     """Build the runtime parameter snapshot for one instrument point."""
-    sample_angles = PUMA.get_sample_angle_components()
-    mount_rx, mount_ry, mount_rz = PUMA.sample_mount.mount_euler_deg
     return {
         "A1_param": PUMA.A1,
         "A2_param": PUMA.A2,
@@ -177,7 +175,6 @@ def build_puma_point_params(PUMA, deltaE):
         "A4_param": PUMA.A4,
         "E0_param": _get_E0_param_value(PUMA, deltaE),
         "nu_param": _get_v_selector_frequency(PUMA, deltaE),
-        "saz_param": PUMA.saz,
         "rhm_param": PUMA.rhm,
         "rvm_param": PUMA.rvm,
         "rha_param": PUMA.rha,
@@ -186,16 +183,7 @@ def build_puma_point_params(PUMA, deltaE):
         "pbl_hgap_param": PUMA.pbl_hgap,
         "pbl_vgap_param": PUMA.pbl_vgap,
         "dbl_hgap_param": PUMA.dbl_hgap,
-        "chi_param": sample_angles["chi"],
-        "kappa_param": sample_angles["kappa"],
-        "mis_chi_param": sample_angles["mis_chi"],
-        "psi_param": sample_angles["psi"],
-        "mis_omega_param": sample_angles["mis_omega"],
-        "chi_total": sample_angles["effective_chi"],
-        "omega_offset_total": sample_angles["effective_omega_offset"],
-        "mount_rx_param": mount_rx,
-        "mount_ry_param": mount_ry,
-        "mount_rz_param": mount_rz,
+        **PUMA.sample_orientation_params(),
     }
 
 
@@ -228,7 +216,6 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
     instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
-    instrument.add_parameter("saz_param", comment="Sample azimuthal angle (out-of-plane).")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
     instrument.add_parameter("rha_param", comment="Analyzer horizontal bending.")
@@ -561,21 +548,18 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
                            'Sample PSD @ Sample', 'Sample DSD @ Sample',
                            'Sample EMonitor @ Sample')
 
-        # Sample orientation hierarchy:
-        # 1. sample_gonio: applies calculated saz (out-of-plane tilt from qz)
-        # 2. sample_chi_arm: applies user chi + kappa (chi offset) + hidden chi misalignment
-        # 3. sample_cradle: applies A3 (calculated sample theta) + psi (omega offset) + hidden omega/psi misalignment
-        #
+        # Sample orientation (shared with every TAVI instrument): one
+        # sample_mount Arm whose runtime rotation carries the goniometer at
+        # its physical angles and the crystal mount; the corrections and
+        # zero errors are declared for inspection only.
         instrument.add_parameter("chi_param", value=0, comment="User chi - out-of-plane tilt")
         instrument.add_parameter("kappa_param", value=0, comment="Kappa - chi alignment offset")
         instrument.add_parameter("mis_chi_param", value=0, comment="Hidden chi misalignment (training)")
         instrument.add_parameter("psi_param", value=0, comment="Psi - omega alignment offset")
         instrument.add_parameter("mis_omega_param", value=0, comment="Hidden omega misalignment (training)")
-        instrument.add_parameter("chi_total", value=0, comment="Total chi = chi + kappa + mis_chi")
-        instrument.add_parameter("omega_offset_total", value=0, comment="Total omega offset = psi + mis_omega")
-        instrument.add_parameter("mount_rx_param", value=0, comment="Static sample mount rotation about x")
-        instrument.add_parameter("mount_ry_param", value=0, comment="Static sample mount rotation about y")
-        instrument.add_parameter("mount_rz_param", value=0, comment="Static sample mount rotation about z")
+        instrument.add_parameter("sample_rx_param", value=0, comment="Sample arm rotation about x (stage and mount)")
+        instrument.add_parameter("sample_ry_param", value=0, comment="Sample arm rotation about y (stage and mount)")
+        instrument.add_parameter("sample_rz_param", value=0, comment="Sample arm rotation about z (stage and mount)")
         
         sample_mount = emit_sample_orientation_arms(instrument,
                                                     relative="sample_arm",

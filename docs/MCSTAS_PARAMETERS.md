@@ -102,9 +102,8 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 |-----------|-------------|---------|
 | `A1_param` | Monochromator 2-theta angle | `mono_cradle` rotation |
 | `A2_param` | Sample 2-theta angle | `analyzer_arm` rotation |
-| `A3_param` | Sample theta (phi) angle | `sample_cradle` rotation |
+| `A3_param` | Sample turntable readout | Inspection (the turntable reaches McStas through `sample_r*_param`) |
 | `A4_param` | Analyzer 2-theta angle | `analyzer_cradle`, `detector_arm` rotation |
-| `saz_param` | Sample azimuthal angle (out-of-plane) | `sample_gonio` rotation |
 
 ### Crystal Bending Parameters
 | Parameter | Description | Used By |
@@ -125,20 +124,33 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 ### Sample Orientation Parameters
 | Parameter | Description | Used By |
 |-----------|-------------|---------|
-| `chi_param` | User chi - out-of-plane tilt | Debugging/inspection |
-| `kappa_param` | Chi alignment offset | Debugging/inspection |
-| `psi_param` | Omega alignment offset | Debugging/inspection |
-| `chi_total` | Combined chi (chi + kappa + mis_chi) | `sample_chi_arm` rotation |
-| `omega_offset_total` | Combined omega offset (psi + misalignments) | `sample_cradle` rotation |
-| `mount_rx_param` | Static sample mount rotation about x | `sample_mount` rotation |
-| `mount_ry_param` | Static sample mount rotation about y | `sample_mount` rotation |
-| `mount_rz_param` | Static sample mount rotation about z | `sample_mount` rotation |
+| `sample_rx_param` | Sample arm rotation about x | `sample_mount` rotation |
+| `sample_ry_param` | Sample arm rotation about y | `sample_mount` rotation |
+| `sample_rz_param` | Sample arm rotation about z | `sample_mount` rotation |
+| `chi_param` | The `chi` scan slot (an extra lower-arc offset) | Debugging/inspection |
+| `kappa_param` | Lower-arc (`sgl`) correction | Debugging/inspection |
+| `psi_param` | Turntable (A3) correction | Debugging/inspection |
+
+The whole sample orientation is one Arm. `sample_rx/ry/rz_param` are the McStas
+Euler angles of `(R_stage · U)^T`, where `R_stage` is the goniometer (A3, `sgl`,
+`sgu`) at its **physical** angles (readout + correction + hidden zero error)
+and `U` is the crystal mount (`tavi/orientation.py` `sample_arm_euler`, filled
+per point by `TAS_Instrument.sample_orientation_params`). They are runtime
+parameters: a new A3, arc setting, correction or UB never recompiles, and
+`build_fingerprint` does not see them. Every instrument shares this set.
+
+A `Single_crystal` sample takes its lattice from its reflection file and lays
+it out in the component's own frame. Cubic Al cannot tell the frames apart; a
+non-cubic `Single_crystal` sample must give explicit lattice vectors
+(`ax, ay, az`, `bx, ...`) in TAVI's frame (a along x, b in the horizontal xz
+plane, c completing it: `tavi/sample_mount.py` `reciprocal_basis_tas`), or its
+crystal axes will not be where the UB says.
 
 ### Hidden Misalignment Parameters (Training)
 | Parameter | Description |
 |-----------|-------------|
-| `mis_chi_param` | Hidden chi misalignment |
-| `mis_omega_param` | Hidden omega misalignment |
+| `mis_chi_param` | Hidden lower-arc (`sgl`) zero error, inspection only |
+| `mis_omega_param` | Hidden turntable (A3) zero error, inspection only |
 
 ### Source Parameters
 | Parameter | Description | Used By |
