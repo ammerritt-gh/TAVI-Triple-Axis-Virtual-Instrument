@@ -5,13 +5,14 @@ Includes the builder<->descriptor source-scan: the ``add_parameter`` names in
 ``scannable_parameters`` exactly. Pure text scan -- no mcstasscript import.
 """
 import dataclasses
+import math
 import os
 import re
 
 import pytest
 
 from instruments._descriptor_examples import in8_descriptor, in12_descriptor
-from instruments.descriptor import AxisLimits, CurvatureAxis
+from instruments.descriptor import AxisLimits, CurvatureAxis, GonioAxis
 from instruments.panda.plugin import panda_descriptor
 from instruments.puma.plugin import puma_descriptor
 from instruments.validation import (
@@ -250,3 +251,54 @@ def test_fixed_curvature_reports_declared_fixed_axes():
 
     for spec in in8_descriptor().mono_crystals + in8_descriptor().ana_crystals:
         assert spec.fixed_curvature == ()
+
+
+# --- Goniometer (sample stage as data) -----------------------------------------
+
+@pytest.mark.parametrize(("factory", "travel"), [
+    (puma_descriptor, math.inf),     # undocumented
+    (in8_descriptor, math.inf),      # undocumented
+    (in12_descriptor, 20.0),         # ILL characteristics
+    (panda_descriptor, 15.0),        # MLZ teaching notes via the dossier
+])
+def test_goniometer_declares_turntable_and_two_arcs(factory, travel):
+    d = factory()
+    assert [(ax.name, ax.axis) for ax in d.goniometer] == [
+        ("A3", (0.0, 1.0, 0.0)), ("sgl", (1.0, 0.0, 0.0)), ("sgu", (0.0, 0.0, 1.0)),
+    ]
+    assert (d.goniometer[0].lower, d.goniometer[0].upper) == (-math.inf, math.inf)
+    for arc in d.goniometer[1:]:
+        assert (arc.lower, arc.upper) == (-travel, travel)
+    # Infinite (undocumented) bounds are legal, structurally and runnable.
+    assert validate_descriptor(d, runnable=True) == []
+
+
+def _with_gonio(*axes):
+    return dataclasses.replace(puma_descriptor(), goniometer=tuple(axes))
+
+
+def _axis(name="sgl", axis=(1.0, 0.0, 0.0), lower=-20.0, upper=20.0):
+    return GonioAxis(name, axis, AxisLimits(lower, 0.0, upper))
+
+
+_A3 = _axis("A3", (0.0, 1.0, 0.0), -math.inf, math.inf)
+
+
+@pytest.mark.parametrize(("axes", "expected"), [
+    ((_A3, _axis(axis=(1.0, 1.0, 0.0))), "unit vector"),
+    ((_axis("A3"), _axis()), "must be vertical"),
+    ((_A3, _axis(), _axis(axis=(0.0, 0.0, 1.0))), "duplicate axis name"),
+    ((_A3, _axis(lower=20.0, upper=-20.0)), "lower <= default <= upper"),
+    ((_A3, _axis(lower=math.nan)), "lower <= default <= upper"),
+    ((_A3, _axis(), _axis("sgu"), _axis("phi")), "at most three axes"),
+    ((_A3, _axis("2arc")), "valid identifier"),
+], ids=["non-unit", "turntable-not-vertical", "duplicate", "unordered", "nan",
+        "four-axes", "bad-name"])
+def test_goniometer_structural_negative_cases(axes, expected):
+    assert any(expected in e for e in validate_descriptor(_with_gonio(*axes)))
+
+
+def test_runnable_requires_a_goniometer():
+    bare = _with_gonio()
+    assert validate_descriptor(bare) == []          # structurally fine
+    assert any("goniometer" in e for e in validate_descriptor(bare, runnable=True))

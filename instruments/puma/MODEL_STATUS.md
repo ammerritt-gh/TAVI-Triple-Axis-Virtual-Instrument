@@ -24,6 +24,7 @@ credible disagreement; **missing** is not modeled or lacks usable evidence.
 | Velocity selector | Optional test component | TAVI user guide says it does not exist on PUMA | conflicting | Keep visibly experimental; confirm whether it should remain. |
 | Detector | One ideal 25.4 mm by 1 m Monitor | Live model | provisional | Replace with measured detector geometry/efficiency if needed. |
 | Source spectrum | Mono or simplified Maxwellian source | Live model | provisional | Obtain a measured or facility-approved spectrum. |
+| Sample goniometer | Turntable A3 carrying two crossed arcs, lower `sgl` (about x) and upper `sgu` (about z); arc travel **undocumented**, enforced as unlimited | No source in `references/` or elsewhere in the repository gives PUMA's arc travel | missing | Obtain the goniometer's travel; declare it in `tas_goniometer(...)` in `plugin.py`. |
 
 The current code, not this table, remains executable truth. Accepted evidence
 must update both the code and this record in the same reviewed change.

@@ -235,6 +235,41 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
         if not isinstance(getattr(g, name), Sense):
             errors.append(f"geometry.{name}: must be a Sense enum member")
 
+    # --- S12: goniometer -----------------------------------------------------------------
+    # Undocumented travel is declared as +/-inf (descriptor.UNDOCUMENTED), so
+    # infinite bounds are legal here; NaN and an unordered range are not.
+    if len(d.goniometer) > 3:
+        errors.append(
+            "goniometer: at most three axes (turntable plus two arcs); "
+            "the stage solver handles no more"
+        )
+    seen_axes = set()
+    for index, ax in enumerate(d.goniometer):
+        prefix = f"goniometer[{ax.name!r}]"
+        if not ax.name or not _C_IDENT_RE.match(ax.name):
+            errors.append(f"{prefix}: name must be a valid identifier")
+        if ax.name in seen_axes:
+            errors.append(f"goniometer: duplicate axis name {ax.name!r}")
+        seen_axes.add(ax.name)
+        vector = tuple(ax.axis)
+        if len(vector) != 3 or not all(_finite(v) for v in vector):
+            errors.append(f"{prefix}: axis must be three finite numbers")
+            continue
+        if abs(math.sqrt(sum(v * v for v in vector)) - 1.0) > 1e-9:
+            errors.append(f"{prefix}: axis must be a unit vector (got {vector!r})")
+        elif index == 0 and abs(abs(vector[1]) - 1.0) > 1e-9:
+            errors.append(
+                f"{prefix}: the first axis is the turntable and must be vertical (y)"
+            )
+        lim = ax.limits
+        if any(math.isnan(v) for v in (lim.lower, lim.default, lim.upper)) or not (
+            _finite(lim.default) and lim.lower <= lim.default <= lim.upper
+        ):
+            errors.append(
+                f"{prefix}: expected lower <= default <= upper with a finite "
+                f"default, got {lim.lower} / {lim.default} / {lim.upper}"
+            )
+
     if not runnable:
         return errors
 
@@ -290,6 +325,10 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
     ):
         if not items:
             errors.append(f"{list_name}: runnable instrument needs at least one entry")
+
+    # --- R6: a stage to solve on -------------------------------------------------------------------
+    if not d.goniometer:
+        errors.append("goniometer: runnable instrument must declare its sample stage")
 
     return errors
 
