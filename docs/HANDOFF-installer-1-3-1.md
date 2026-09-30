@@ -6,6 +6,12 @@
 undone (§6). Nothing is uncommitted. Do not upload the installer to a release
 until §5's gate is met.**
 
+**Added 2026-09-30 (operator ruling, recorded in the board's installer entry):** v1.3.1 must also carry
+PR #47, which lands the configurable MPI count (default 4). Both installers are pinned to the
+`v1.3.0` tag, which hard-codes 30 processes, so fresh Linux installs crash at the first scan until
+v1.3.1 ships. The POSIX installer needs its tag bumped too, and it gains an MPI compile check
+(`mcrun -c --mpi=2`) like the Windows one; see the board entry "MPI rank default fails on small Linux hosts".
+
 **Date:** 2026-09-17
 **Workstream:** Windows installer 1.3.1 / the spaced-profile remote failure
 

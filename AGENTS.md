@@ -318,4 +318,4 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 - 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
 - 2026-09-15 · floor: the tool shells set `NoDefaultCurrentDirectoryInExePath=1`; `mcrun`'s bare `name.exe` launch fails until it is emptied in that shell.
 - 2026-09-15 · floor: a file inside a conda env is a hardlink into the package cache and every sibling env; unlink before writing, never write in place.
-- 2026-09-30 · skill: an external_unit payload must tell ChatGPT to name the request id and full revision SHA on its first line; `acs-job submit` refuses a reply that does not, and a follow-up ask can collide with another session's review in the shared tab.
+- 2026-09-30 · skill: an external_unit payload must ask ChatGPT to name the revision SHA on line 1, or `acs-job submit` refuses its reply.
