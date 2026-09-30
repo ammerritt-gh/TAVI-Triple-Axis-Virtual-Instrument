@@ -21,7 +21,11 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
 
-from tavi.orientation import q_mount_from_legacy_angles
+from tavi.orientation import (
+    gonio_from_record,
+    q_mount_from_legacy_angles,
+    q_mount_from_stage,
+)
 from tavi.sample_mount import reciprocal_basis_tas
 
 
@@ -80,8 +84,10 @@ class ObservedPeak:
         locked: Whether this peak entry is locked from editing.
         sense_sample: Sample scattering sense (+1/-1) the peak was taken on.
             None (a legacy save, a TAS_MCP peak) resolves to the sign of stt.
-        stage: Optional full stage record (readouts, corrections, ki, kf,
-            sense); None for a peak read with the legacy triple's meaning.
+        stage: Optional stage record (``tavi.orientation.stage_record``:
+            the axes and their angles in the frame the UB lives in). When
+            present, Q is read through the full stage and only ``stt`` of
+            ``angles`` is used; None reads the legacy triple's meaning.
     """
     hkl: tuple = (0.0, 0.0, 0.0)
     angles: tuple = (0.0, 0.0, 0.0)  # (sth, saz, stt)
@@ -101,6 +107,9 @@ class ObservedPeak:
         sth, saz, stt = self.angles
         if self.ki <= 0 or self.kf <= 0:
             return np.array([0.0, 0.0, 0.0])
+        if self.stage is not None:
+            return q_mount_from_stage(gonio_from_record(self.stage), self.stage["angles"],
+                                      stt, self.ki, self.kf, self.sense_sample)
         return q_mount_from_legacy_angles(sth, saz, stt, self.ki, self.kf, self.sense_sample)
 
     @property

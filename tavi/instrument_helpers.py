@@ -89,32 +89,22 @@ def emit_sample(instrument, spec, *, relative, at=(0.0, 0.0, 0.0),
     return component
 
 
-def emit_sample_orientation_arms(instrument, *, relative, distance,
-                                 saz_param="saz_param",
-                                 chi_expr="chi_total",
-                                 omega_expr="A3_param + omega_offset_total",
-                                 mount_params=("mount_rx_param",
-                                               "mount_ry_param",
-                                               "mount_rz_param")):
-    """The generic TAS sample orientation hierarchy.
+SAMPLE_ARM_PARAMS = ("sample_rx_param", "sample_ry_param", "sample_rz_param")
 
-    sample_gonio (saz) -> sample_chi_arm (chi) -> sample_cradle (omega) ->
-    sample_mount (static mount rotations). Component names are fixed -- they are
-    part of the shared-parameter contract every instrument's ParameterSpec block
-    declares. Returns the mount component name.
+
+def emit_sample_orientation_arms(instrument, *, relative, distance):
+    """The sample's orientation: one ``sample_mount`` Arm at the sample position.
+
+    Its ROTATED runtime parameters carry the whole stage and the crystal
+    mount, ``(R_stage(physical angles) @ U)^T`` as McStas Euler angles
+    (``tavi.orientation.sample_arm_euler``, filled per point by
+    ``TAS_Instrument.sample_orientation_params``), so a stage of any shape
+    needs no tree change and no recompilation. The sample is emitted
+    RELATIVE to it. Returns the arm's name.
     """
-    instrument.add_component("sample_gonio", "Arm",
-                             AT=[0, 0, distance], ROTATED=[saz_param, 0, 0],
-                             RELATIVE=relative)
-    instrument.add_component("sample_chi_arm", "Arm",
-                             AT=[0, 0, 0], ROTATED=[chi_expr, 0, 0],
-                             RELATIVE="sample_gonio")
-    instrument.add_component("sample_cradle", "Arm",
-                             AT=[0, 0, 0], ROTATED=[0, omega_expr, 0],
-                             RELATIVE="sample_chi_arm")
     instrument.add_component("sample_mount", "Arm",
-                             AT=[0, 0, 0], ROTATED=list(mount_params),
-                             RELATIVE="sample_cradle")
+                             AT=[0, 0, distance], ROTATED=list(SAMPLE_ARM_PARAMS),
+                             RELATIVE=relative)
     return "sample_mount"
 
 

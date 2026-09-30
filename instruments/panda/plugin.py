@@ -108,7 +108,7 @@ _PANDA_ANA_CURVATURE = {
 }
 
 # The full McStas parameter set build_PANDA_instrument declares via
-# add_parameter() -- the per-point snapshot dict shape. The 16 shared core TAS
+# add_parameter() -- the per-point snapshot dict shape. The 13 shared core TAS
 # parameters plus PANDA's bending and its three motorized apertures.
 _PANDA_PARAMS = (
     ParameterSpec("A1_param", "Monochromator 2-theta angle"),
@@ -116,7 +116,6 @@ _PANDA_PARAMS = (
     ParameterSpec("A3_param", "Sample phi angle"),
     ParameterSpec("A4_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
-    ParameterSpec("saz_param", "Sample azimuthal angle (out-of-plane)"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending"),
     ParameterSpec("rvm_param", "Monochromator vertical bending"),
     ParameterSpec("rha_param", "Analyzer horizontal bending"),
@@ -126,17 +125,15 @@ _PANDA_PARAMS = (
     ParameterSpec("ss1_hgap_param", "Pre-sample slit vertical gap", unit="m"),
     ParameterSpec("ss2_wgap_param", "Sample exit slit horizontal gap", unit="m"),
     ParameterSpec("ss2_hgap_param", "Sample exit slit vertical gap", unit="m"),
-    # Sample-orientation / mount hierarchy (generic TAS; shared with PUMA/IN8).
+    # Sample orientation: the single sample arm (generic TAS; shared with PUMA/IN8).
     ParameterSpec("chi_param", "User chi - out-of-plane tilt", default=0.0),
     ParameterSpec("kappa_param", "Kappa - chi alignment offset", default=0.0),
     ParameterSpec("mis_chi_param", "Hidden chi misalignment (training)", default=0.0),
     ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
     ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
-    ParameterSpec("chi_total", "Total chi = chi + kappa + mis_chi", default=0.0),
-    ParameterSpec("omega_offset_total", "Total omega offset = psi + mis_omega", default=0.0),
-    ParameterSpec("mount_rx_param", "Static sample mount rotation about x", default=0.0),
-    ParameterSpec("mount_ry_param", "Static sample mount rotation about y", default=0.0),
-    ParameterSpec("mount_rz_param", "Static sample mount rotation about z", default=0.0),
+    ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),
+    ParameterSpec("sample_ry_param", "Sample arm rotation about y (stage and mount)", default=0.0),
+    ParameterSpec("sample_rz_param", "Sample arm rotation about z (stage and mount)", default=0.0),
 )
 
 _SAMPLE_REGION = ("sample_region",)

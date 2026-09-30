@@ -24,11 +24,19 @@ from instruments.descriptor import CurvatureAxis
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.orientation import q_mount_from_legacy_angles
+from tavi.orientation import (
+    StageUnreachable,
+    q_mount_from_stage,
+    sample_arm_euler,
+    solve_stage,
+)
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
+    _normalize_deg,
     component_q_to_instrument_q,
-    solve_instrument_angles,
+    instrument_q_to_component_q,
+    lab_q_from_stt,
+    stt_from_q_norm,
 )
 
 log = logging.getLogger(__name__)
@@ -152,7 +160,7 @@ def curvature_scan_error(axis, start, end, step, relative, base_value,
 
 class TAS_Instrument:
     """The general setup of a triple-axes spectrometer (TAS) instrument, with useful functions for setting the geometries."""
-    def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, A1=0, A2=0, A3=0, A4=0, saz=0, **kwargs):
+    def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, A1=0, A2=0, A3=0, A4=0, **kwargs):
         self.parameters = kwargs
         self.L1 = L1 # source-mono arm length
         self.L2 = L2 # mono-sample arm length
@@ -160,9 +168,12 @@ class TAS_Instrument:
         self.L4 = L4 # ana-det arm length
         self.A1 = A1 # mono two-theta angle
         self.A2 = A2 # sample two-theta angle (phi)
-        self.A3 = A3 # sample theta angle (psi)
+        self.A3 = A3 # sample turntable readout
         self.A4 = A4 # ana two-theta angle
-        self.saz = saz # sample z-angle
+        # Goniometer arc readouts (descriptor goniometer): lower arc about x,
+        # upper arc about z, both riding on the A3 turntable.
+        self.sgl = 0.0
+        self.sgu = 0.0
         # Scattering senses (vTAS sm/ss/sa convention): the numeric sign of the
         # mono/sample/analyzer two-theta readout. Defaults are TAVI's historical
         # baked convention (locked by tests/test_sign_conventions.py); each
@@ -172,13 +183,13 @@ class TAS_Instrument:
         self.sense_ana = 1
         # Sample orientation angles (user-controllable)
         self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
-        self.chi = 0    # static out-of-plane sample orientation offset
-        # Sample alignment offsets (user-controllable)
-        self.psi = 0    # omega alignment offset (in-plane) - set during alignment
-        self.kappa = 0  # chi alignment offset (out-of-plane) - set during alignment
-        # Hidden misalignment angles (for training exercises)
-        self.mis_omega = 0  # hidden misalignment in omega (in-plane)
-        self.mis_chi = 0    # hidden misalignment in chi (out-of-plane)
+        self.chi = 0    # the `chi` scan slot: an extra lower-arc offset
+        # Operator corrections (visible): turntable and lower arc.
+        self.psi = 0    # turntable correction
+        self.kappa = 0  # lower-arc correction
+        # Hidden zero errors (training exercises): turntable and lower arc.
+        self.mis_omega = 0
+        self.mis_chi = 0
         self.K_fixed = "Ki_fixed" # working in Ki- or Kf-fixed mode
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
@@ -237,53 +248,36 @@ class TAS_Instrument:
         if mis_chi is not None:
             self.mis_chi = mis_chi
 
-    def get_effective_sample_angles(self):
-        """Return effective sample angle OFFSETS (not including calculated A3).
+    @property
+    def goniometer(self):
+        """The sample stage (descriptor goniometer): A3, sgl, sgu."""
+        return self.descriptor().goniometer
 
-        The total in-plane rotation is: A3 (calculated) + psi (offset) + mis_omega
-        The total out-of-plane tilt is: chi + kappa (offset) + mis_chi
-
-        Note: omega is NOT added here because omega IS the calculated A3 (just displayed).
-
-        Returns:
-            tuple: (effective_omega_offset, effective_chi) for backwards compatibility
-        """
-        # Effective in-plane OFFSET: psi offset + omega misalignment (added to calculated A3)
-        effective_omega_offset = self.psi + self.mis_omega
-        # Effective out-of-plane tilt: chi + kappa offset + chi misalignment
-        effective_chi = self.chi + self.kappa + self.mis_chi
-        return effective_omega_offset, effective_chi
-
-    def get_sample_angle_components(self):
-        """Return all individual sample angle components for clear tracking.
-
-        This method provides explicit access to each angle component separately,
-        making it easier to understand how each angle contributes to the final
-        sample orientation in the instrument.
-
-        Returns:
-            dict: Dictionary containing all individual angle components:
-                - 'omega': Sample rotation angle (in-plane, user-controllable)
-                - 'chi': Sample tilt angle (out-of-plane, user-controllable)
-                - 'psi': Omega alignment offset (in-plane, set during alignment)
-                - 'kappa': Chi alignment offset (out-of-plane, set during alignment)
-                - 'mis_omega': Hidden omega misalignment (in-plane, for training)
-                - 'mis_chi': Hidden chi misalignment (out-of-plane, for training)
-                - 'effective_omega_offset': Combined in-plane offset (psi + mis_omega)
-                - 'effective_chi': Combined out-of-plane tilt (chi + kappa + mis_chi)
-        """
-        effective_omega_offset = self.psi + self.mis_omega
-        effective_chi = self.chi + self.kappa + self.mis_chi
-
+    def physical_stage_angles(self):
+        """Stage angles the crystal really sits at: readout + operator
+        correction + hidden zero error. Read only by the McStas sample arm."""
         return {
-            'omega': self.omega,
-            'chi': self.chi,
-            'psi': self.psi,
-            'kappa': self.kappa,
-            'mis_omega': self.mis_omega,
-            'mis_chi': self.mis_chi,
-            'effective_omega_offset': effective_omega_offset,
-            'effective_chi': effective_chi,
+            "A3": self.A3 + self.psi + self.mis_omega,
+            "sgl": self.sgl + self.chi + self.kappa + self.mis_chi,
+            "sgu": self.sgu,
+        }
+
+    def sample_orientation_params(self):
+        """Per-point McStas parameters of the sample: the single sample arm's
+        rotation (``sample_arm_euler`` of the physical angles and the mount),
+        plus the corrections and zero errors as inspection values."""
+        rx, ry, rz = sample_arm_euler(
+            self.goniometer, self.physical_stage_angles(), self.sample_mount.R_mount
+        )
+        return {
+            "chi_param": self.chi,
+            "kappa_param": self.kappa,
+            "mis_chi_param": self.mis_chi,
+            "psi_param": self.psi,
+            "mis_omega_param": self.mis_omega,
+            "sample_rx_param": rx,
+            "sample_ry_param": ry,
+            "sample_rz_param": rz,
         }
 
     def _named_crystal_specs(self):
@@ -781,21 +775,38 @@ class TAS_Instrument:
         return Ei, Ef
 
     def calculate_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
-        """Sets up the mono-sample-analyzer-detector angles based on the scattering parameters"""
+        """``[mtt, stt, A3, sgl, att]`` and error flags: the first five of
+        :meth:`calculate_stage_angles`. The upper arc ``sgu`` is not in this
+        list; a caller that drives or records the stage uses the full solve."""
+        angles, error_flags = self.calculate_stage_angles(
+            qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris)
+        return angles[:5], error_flags
+
+    def calculate_stage_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
+        """``[mtt, stt, A3, sgl, att, sgu]`` and error flags for a mount-frame Q
+        (instrument convention) and energy transfer.
+
+        The sample stage is solved by ``tavi.orientation.solve_stage`` on this
+        instrument's goniometer: readouts that put the per-sense ``-/+ U B hkl``
+        on the lab scattering vector with the smallest arc tilt inside travel.
+        A stage that cannot reach the point adds a ``"stage: <reason>"`` flag,
+        so every refusal path reports the solver's own words.
+        """
         error_flags = []
+        failed = [0, 0, 0, 0, 0, 0]
 
         # Check for zero momentum transfer early to avoid division by zero
         if qx == 0 and qy == 0 and qz == 0:
             print("\nInvalid: zero momentum transfer (qx=qy=qz=0)")
             error_flags.append("zero_q")
-            return [0, 0, 0, 0, 0], error_flags
+            return failed, error_flags
 
         # Retrieve mono/ana crystal information
         monochromator_info, analyzer_info = self.crystal_info(monocris, anacris)
         if 'dm' not in monochromator_info or 'da' not in analyzer_info:
             print(f"\nInvalid: unknown crystal selection (mono: {monocris}, ana: {anacris})")
             error_flags.append("invalid_crystal")
-            return [0, 0, 0, 0, 0], error_flags
+            return failed, error_flags
 
         # pre-calculate values from parameters
         q = math.sqrt(qx**2 + qy**2 + qz**2)
@@ -815,7 +826,7 @@ class TAS_Instrument:
             print("\nInvalid: energy transfer %s leaves Ei=%s, Ef=%s; both must be positive"
                   % (deltaE, Ei_nominal, Ef_nominal))
             error_flags.append("energy")
-            return [0, 0, 0, 0, 0], error_flags
+            return failed, error_flags
 
         K = energy2k(fixed_E)
 
@@ -846,34 +857,43 @@ class TAS_Instrument:
                 print("\nCannot compute analyzer two theta angle as momentum transfer invalid")
                 error_flags.append("att")
 
+        q_instrument = np.array([qx, qy, qz], dtype=float)
+        q_mount = instrument_q_to_component_q(q_instrument)
         try:
-            sample_angles = solve_instrument_angles(
-                np.array([qx, qy, qz], dtype=float), ki, kf,
-                sense_sample=self.sense_sample,
-            )
-            stt = sample_angles.stt
-        except ValueError as exc:
+            stt = stt_from_q_norm(float(np.linalg.norm(q_instrument)), ki, kf,
+                                  self.sense_sample)
+        except ValueError:
             print("\nSample two theta angle invalid")
             stt = 0
             error_flags.append("stt")
-            sample_angles = None
 
+        sth = sgl = sgu = 0.0
         if "stt" in error_flags:
             print("\nCannot compute sample theta angle as sample two theta angle invalid")
-            sth = 0
-            saz = 0
         else:
-            sth = sample_angles.sth
-            saz = sample_angles.saz
+            # vTAS Friedel convention: the +1 branch aligns -U B hkl with Q_lab.
+            signed = -q_mount if self.sense_sample > 0 else q_mount
+            try:
+                stage = solve_stage(self.goniometer, signed, lab_q_from_stt(ki, kf, stt))
+            except StageUnreachable as exc:
+                print(f"\nSample stage cannot reach this Q: {exc}")
+                error_flags.append(STAGE_FLAG_PREFIX + str(exc))
+            else:
+                sth, sgl, sgu = stage["A3"], stage["sgl"], stage["sgu"]
+                if self.sense_sample > 0:
+                    sth = _normalize_deg(sth)   # the legacy +1-branch readout
 
+        print(f"\nmtt: {mtt:.2f} ki: {ki:.3f} Ei: {Ei:.3f} stt: {stt:.3f} sth: {sth:.3f} sgl: {sgl:.3f} sgu: {sgu:.3f} Q: {q:.2f} kf: {kf:.3f} Ef: {Ef:.3f} att: {att:.2f}")
 
-        print(f"\nmtt: {mtt:.2f} ki: {ki:.3f} Ei: {Ei:.3f} stt: {stt:.3f} sth: {sth:.3f} saz: {saz:.3f} Q: {q:.2f} kf: {kf:.3f} Ef: {Ef:.3f} att: {att:.2f}")
+        return [mtt, stt, sth, sgl, att, sgu], error_flags
 
-        angles_array = [mtt, stt, sth, saz, att]
-        return(angles_array, error_flags)
+    def calculate_q_and_deltaE(self, mtt, stt, sth, sgl, att, fixed_E, K_fixed, monocris,
+                               anacris, sgu=0.0):
+        """Computes qx, qy, qz, and deltaE from the angles and fixed energy.
 
-    def calculate_q_and_deltaE(self, mtt, stt, sth, saz, att, fixed_E, K_fixed, monocris, anacris):
-        """Computes qx, qy, qz, and deltaE based on the given angles and fixed energy configuration"""
+        The stage setting is (A3 = ``sth``, ``sgl``, ``sgu``) readouts; Q is
+        read through the full stage (``tavi.orientation.q_mount_from_stage``).
+        """
         error_flags = []
 
         # Retrieve mono/ana crystal information
@@ -904,9 +924,10 @@ class TAS_Instrument:
         # Compute Q in the public instrument/GUI convention:
         # qx and qy span the horizontal scattering plane; qz is vertical.
         try:
-            qx, qy, qz = component_q_to_instrument_q(
-                q_mount_from_legacy_angles(sth, saz, stt, ki, kf, self.sense_sample)
-            )
+            qx, qy, qz = component_q_to_instrument_q(q_mount_from_stage(
+                self.goniometer, {"A3": sth, "sgl": sgl, "sgu": sgu},
+                stt, ki, kf, self.sense_sample,
+            ))
         except Exception as exc:
             error_flags.append("q")
             print(f"Invalid Q from sample angles: {exc}")
@@ -936,6 +957,10 @@ _ERROR_FLAG_REASONS = {
     "energy": "energy transfer leaves no neutron (Ei or Ef would be <= 0)",
 }
 
+# A flag that carries its own reason: the stage solver's refusal
+# (StageUnreachable), which names the axis, the angle it needs and its travel.
+STAGE_FLAG_PREFIX = "stage: "
+
 
 def describe_scan_error_flags(error_flags):
     """Return a short human string for a list of TAS angle error flags.
@@ -947,7 +972,10 @@ def describe_scan_error_flags(error_flags):
         return ""
     reasons = []
     for flag in error_flags:
-        reason = _ERROR_FLAG_REASONS.get(flag, "angle solve failed (%s)" % flag)
+        if flag.startswith(STAGE_FLAG_PREFIX):
+            reason = flag[len(STAGE_FLAG_PREFIX):]
+        else:
+            reason = _ERROR_FLAG_REASONS.get(flag, "angle solve failed (%s)" % flag)
         if reason not in reasons:
             reasons.append(reason)
     return "; ".join(reasons)
@@ -975,35 +1003,31 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     uses. For feasible momentum/rlu/orientation points -- and always for
     ``angle`` mode -- this applies ``point_state.set_angles``; callers that only
     want the error flags pass a throwaway copy. Returns a dict with keys
-    ``qx qy qz H K L deltaE mtt stt sth saz att error_flags``.
+    ``qx qy qz H K L deltaE mtt stt sth sgl sgu att error_flags``; the arc
+    readouts ``sgl``/``sgu`` are also set on ``point_state``.
     """
     error_flags = []
     angle_energies = None   # angle mode only: (Ei, Ef) from the crystals
     qx = qy = qz = None
     H = K = L = None
     deltaE = 0.0
-    mtt = stt = sth = att = saz = 0.0
+    mtt = stt = sth = att = sgl = sgu = 0.0
 
-    if scan_mode in ("momentum", "orientation"):
-        qx, qy, qz, deltaE = scans[:4]
-        angles_array, error_flags = point_state.calculate_angles(
+    if scan_mode in ("momentum", "orientation", "rlu"):
+        if scan_mode == "rlu":
+            H, K, L, deltaE = scans[:4]
+            q_component = point_state.sample_mount.hkl_to_q(H, K, L)
+            qx, qy, qz = component_q_to_instrument_q(np.array(q_component, dtype=float))
+        else:
+            qx, qy, qz, deltaE = scans[:4]
+        angles_array, error_flags = point_state.calculate_stage_angles(
             qx, qy, qz, deltaE, point_state.fixed_E, point_state.K_fixed,
             point_state.monocris, point_state.anacris
         )
         if not error_flags:
-            mtt, stt, sth, saz, att = angles_array
+            mtt, stt, sth, sgl, att, sgu = angles_array
             point_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
-    elif scan_mode == "rlu":
-        H, K, L, deltaE = scans[:4]
-        q_component = point_state.sample_mount.hkl_to_q(H, K, L)
-        qx, qy, qz = component_q_to_instrument_q(np.array(q_component, dtype=float))
-        angles_array, error_flags = point_state.calculate_angles(
-            qx, qy, qz, deltaE, point_state.fixed_E, point_state.K_fixed,
-            point_state.monocris, point_state.anacris
-        )
-        if not error_flags:
-            mtt, stt, sth, saz, att = angles_array
-            point_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+            point_state.sgl, point_state.sgu = sgl, sgu
     else:
         A1, A2, A3, A4 = scans[:4]
         point_state.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
@@ -1015,7 +1039,18 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
             deltaE = angle_energies[0] - angle_energies[1]
         else:
             deltaE = vals['deltaE']
-        saz = vals.get('chi', 0.0)
+        # The operator sets the arcs here; a launch state without `sgl`
+        # carries the lower arc in the visible `chi` field.
+        sgl = float(vals.get('sgl', vals.get('chi', 0.0)))
+        sgu = float(vals.get('sgu', 0.0))
+        point_state.sgl, point_state.sgu = sgl, sgu
+        for ax in point_state.goniometer[1:]:
+            value = {"sgl": sgl, "sgu": sgu}.get(ax.name, 0.0)
+            if not ax.lower <= value <= ax.upper:
+                error_flags.append(
+                    f"{STAGE_FLAG_PREFIX}{ax.name} {value:.4g}° is outside its "
+                    f"travel [{ax.lower:.4g}, {ax.upper:.4g}]°"
+                )
 
     # A transmitting crystal (mono or ana selects nothing) or forward
     # scattering (the solved sample two-theta is exactly 0, in any mode) is
@@ -1040,7 +1075,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         "qx": qx, "qy": qy, "qz": qz,
         "H": H, "K": K, "L": L,
         "deltaE": deltaE,
-        "mtt": mtt, "stt": stt, "sth": sth, "saz": saz, "att": att,
+        "mtt": mtt, "stt": stt, "sth": sth, "sgl": sgl, "sgu": sgu, "att": att,
         "nominal_energies": angle_energies,
         "transmission": transmission,
         "error_flags": error_flags,
@@ -1103,9 +1138,7 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     qx, qy, qz = geom["qx"], geom["qy"], geom["qz"]
     H, K, L = geom["H"], geom["K"], geom["L"]
     deltaE = geom["deltaE"]
-    mtt, stt, sth, saz, att = (
-        geom["mtt"], geom["stt"], geom["sth"], geom["saz"], geom["att"]
-    )
+    mtt, stt, sth, att = geom["mtt"], geom["stt"], geom["sth"], geom["att"]
     error_flags = geom["error_flags"]
 
     q_vector = (qx, qy, qz) if qx is not None and qy is not None and qz is not None else None
@@ -1169,7 +1202,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     point_state.chi = chi_scan
     point_state.kappa = kappa_scan
     point_state.psi = psi_scan
-    point_state.saz = saz
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
     # Read the APPLIED values back off the state rather than keep the
     # pre-setter locals: set_crystal_bending signs each radius onto the

@@ -173,10 +173,14 @@ def solve_instrument_angles(
 ) -> TASAngles:
     """Solve TAS sample angles for Q in the public instrument/GUI convention.
 
+    The legacy free-Q helper: a turntable plus a beam-fixed tilt ``saz``
+    beneath it, no travel. Kept for TAS_MCP (and ISAR's vendored copy); TAVI
+    itself solves the sample stage with ``tavi.orientation.solve_stage``.
+
     See solve_sample_angles for the ``sense_sample=+1`` (Friedel -Q / vTAS)
     convention. The inverse of a +1-branch solution recovers -Q through
-    ``q_instrument_from_angles``; instrument-level callers negate it back
-    (``TAS_Instrument.calculate_q_and_deltaE``).
+    ``q_instrument_from_angles``; callers negate it back
+    (``tavi.orientation.q_mount_from_legacy_angles``).
     """
     q = np.asarray(q_instrument, dtype=float)
     if q.shape != (3,):

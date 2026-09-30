@@ -196,7 +196,9 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
 
 `compute_scan_snapshot` (shared) consumes per-point `scans` lists with a
 fixed layout: indices 0–3 are mode-specific (qx/qy/qz/ΔE, H/K/L/ΔE, or
-A1–A4), 4–7 are rhm/rvm/rha/rva, 8–10 are chi/kappa/psi. Every instrument's
+A1–A4), 4–7 are rhm/rvm/rha/rva, 8–10 are chi/kappa/psi (chi an extra
+lower-arc offset). In angle mode the arcs come from the launch values `sgl`
+and `sgu` (`chi` standing in for `sgl` when `sgl` is absent). Every instrument's
 `build_point_params()` must return exactly the descriptor's parameter names.
 
 ## What the shared helpers cover vs what stays literal
@@ -206,7 +208,7 @@ A1–A4), 4–7 are rhm/rvm/rha/rva, 8–10 are chi/kappa/psi. Every instrument'
 | Diagnostic monitors | `emit_monitors` (+ `size_overrides` for crystal-sized ones) |
 | Mono/analyzer assemblies | `emit_crystal_assembly` (cradle Arm + `Monochromator_curved` from the crystal-info dict) |
 | Sample | `emit_sample` (shared library lookup in build()) |
-| Orientation hierarchy | `emit_sample_orientation_arms` (gonio→chi→cradle→mount; pairs with the 10 orientation parameters) |
+| Sample orientation | `emit_sample_orientation_arms` (one `sample_mount` Arm rotated by `sample_rx/ry/rz_param`; declare those three plus the inspection-only `chi_param`, `kappa_param`, `mis_chi_param`, `psi_param`, `mis_omega_param`, and splat `**self.sample_orientation_params()` into `build_point_params()`) |
 | Slits | `emit_slit` (`rotated=None` omits the ROTATED clause) |
 | Collimators | `emit_collimator` (divergence 0 = open aperture) |
 | Crystal dicts | `crystal_spec_to_info` / `find_crystal_spec` / `crystal_info_from_descriptor` |

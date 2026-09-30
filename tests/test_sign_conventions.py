@@ -151,9 +151,16 @@ def test_p3_skew_q_elastic(tas):
     assert stt < 0 and sth > 0
 
 
-def test_p4_out_of_plane_saz(tas):
-    mtt, stt, sth, saz, att = _angles(tas, 1.55, 0.0, 0.3, 0.0, 14.7, "Ki Fixed")
-    assert saz == pytest.approx(-10.954063, abs=1e-3)
+def test_p4_out_of_plane_upper_arc(tas):
+    # Q along mount x with a vertical part: the upper arc (about z) levels it
+    # by the elevation the legacy beam-fixed saz used to carry; the lower arc
+    # stays at 0 (the smallest-tilt setting).
+    angles, error_flags = tas.calculate_stage_angles(
+        1.55, 0.0, 0.3, 0.0, 14.7, "Ki Fixed", "pg002", "pg002")
+    assert error_flags == []
+    mtt, stt, sth, sgl, att, sgu = angles
+    assert sgl == pytest.approx(0.0, abs=1e-9)
+    assert sgu == pytest.approx(-10.954063, abs=1e-3)
 
 
 def test_p6_inelastic_kf_fixed(tas):

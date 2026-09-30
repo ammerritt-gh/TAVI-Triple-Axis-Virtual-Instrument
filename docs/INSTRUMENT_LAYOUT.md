@@ -43,36 +43,51 @@ These angles are calculated automatically based on the desired momentum transfer
 
 ## Sample Orientation
 
-### Actual Sample Angles
+### The sample stage (goniometer)
 
-The sample has two controllable orientation angles that are calculated from the Q-vector:
+Each instrument declares its sample stage as data (`goniometer` in its
+descriptor, `instruments/descriptor.py`), outermost axis first. Every TAS has
+the same three axes:
 
-| Angle | Symbol | Type | Description |
-|-------|--------|------|-------------|
-| **ω** | omega | In-plane rotation | Sample rotation about vertical (Y) axis - **equals A3 (sth)** |
-| **χ** | chi | Out-of-plane tilt | Sample tilt about horizontal (X) axis |
+| Axis | Rotation axis (stage at zero) | Description |
+|------|-------------------------------|-------------|
+| **A3** | vertical (Y) | Turntable; the omega field shows it (ω = A3 = sth) |
+| **sgl** | horizontal (X) | Lower arc, riding on the turntable |
+| **sgu** | horizontal (Z) | Upper arc, riding on the lower arc |
 
-**Key Relationship**: ω = A3 (sth). The omega field displays the calculated sample theta angle.
+A mount-frame vector goes to the lab as `v_lab = R_A3 · R_sgl · R_sgu · v_mount`
+(right-handed rotations). Arc travel comes from a cited source (IN12 ±20°,
+PANDA ±15°) or is "undocumented" and unlimited (PUMA, IN8); each instrument's
+`MODEL_STATUS.md` says which.
 
-### Sample Alignment Offsets
+For a Q or HKL target, `tavi/orientation.py` `solve_stage` levels Q with the
+smallest total arc tilt inside travel and turns it onto the scattering vector
+with A3; a Q the arcs cannot level is refused, naming the arc, the angle it
+would need and its travel. An in-plane Q needs no tilt and gets today's A3.
+The sign convention is vTAS's: sense +1 puts `−U·B·hkl` on Q_lab, sense −1
+`+U·B·hkl`. Until the controls are renamed, the χ field is the lower arc
+`sgl`.
 
-These offsets are used to correct for sample misalignment and are set during initial alignment:
+### Corrections and physical angles
 
-| Offset | Symbol | Applied to | Description |
-|--------|--------|-----------|-------------|
-| **ψ** | psi | ω offset | In-plane alignment correction (added to omega) |
-| **κ** | kappa | χ offset | Out-of-plane alignment correction (added to chi) |
+| Offset | Symbol | Corrects | Description |
+|--------|--------|----------|-------------|
+| **ψ** | psi | A3 | Turntable correction |
+| **κ** | kappa | sgl | Lower-arc correction |
 
-**Purpose**: The offsets allow you to align the sample's crystal axes with the instrument coordinates without changing the calculated angles.
+The solved angles are **readouts**: the operator's UB lives in the readout
+frame at the corrections in force. The crystal sits at the **physical** angles,
+readout + correction + hidden zero error (`mis_omega` on A3, `mis_chi` on sgl),
+and only the McStas sample arm reads those.
 
-### Effective Sample Rotation
+### The McStas sample chain
 
-The actual sample rotation in the McStas simulation includes:
-
-- **In-plane**: `A3 + ψ + misalignments`
-- **Out-of-plane**: `χ + κ + misalignments`
-
-Note that ω is not added separately since ω = A3 already.
+One Arm, `sample_mount`, at the sample position relative to `sample_arm` (z
+along ki, y up). Its runtime rotation `sample_rx/ry/rz_param` is
+`(R_stage(physical) · U)^T` as McStas Euler angles
+(`tavi/orientation.py` `sample_arm_euler`), because for an Arm
+`R_abs(child) = R_rel · R_abs(parent)` and `v_local = R_abs · v_global`. The
+sample component is emitted relative to it with no rotation of its own.
 
 ## Hidden Misalignment Angles (Training Mode)
 
