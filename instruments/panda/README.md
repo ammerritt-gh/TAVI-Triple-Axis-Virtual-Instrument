@@ -34,7 +34,7 @@ What is in the beam, in order:
 5. **Soller `ca2`, sample slit `ss1`** — 15′/40′/60′ or open, and PANDA's
    motorized pre-sample aperture.
 6. **Sample** — mounted through the shared orientation hierarchy
-   (goniometer → chi → cradle → mount) from `tavi/sample_library.py`.
+   (one sample arm carrying the goniometer and the crystal mount) from `tavi/sample_library.py`.
 7. **Sample exit slit `ss2`, Soller `ca3`, analyzer** — PG(002), 11 × 5 = 55
    pieces, horizontally focusing.
 8. **Soller `ca4`, detector** — the 1″ high-pressure ³He tube used in the

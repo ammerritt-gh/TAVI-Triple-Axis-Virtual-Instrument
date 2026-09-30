@@ -127,7 +127,8 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 | `sample_rx_param` | Sample arm rotation about x | `sample_mount` rotation |
 | `sample_ry_param` | Sample arm rotation about y | `sample_mount` rotation |
 | `sample_rz_param` | Sample arm rotation about z | `sample_mount` rotation |
-| `chi_param` | The `chi` scan slot (an extra lower-arc offset) | Debugging/inspection |
+| `sgl_param` | Lower arc `sgl` readout | Debugging/inspection |
+| `sgu_param` | Upper arc `sgu` readout | Debugging/inspection |
 | `kappa_param` | Lower-arc (`sgl`) correction | Debugging/inspection |
 | `psi_param` | Turntable (A3) correction | Debugging/inspection |
 

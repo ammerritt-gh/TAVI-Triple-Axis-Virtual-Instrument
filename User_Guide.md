@@ -72,6 +72,8 @@ Scans are simulations over multiple points. Scans can be 1D or 2D, with 1 or 2 s
 **IMPORTANT**
 Scan commands use the current setup of the instrument and *then* override it with the scan command. For example, if you would like to scan over H, but keep K=L=ΔE=0, enter K=L=ΔE=0 in the scattering dock, but enter anything for H; it will be replaced point-by-point with the scan command. Any follow-on calculations will happen automatically, so e.g. a scan over H will automatically change instrument angles. Note that some scan elements are incompatible with each other due to conflicting calculations, these are forbidden and you sholuld see a warning.
 
+The goniometer arcs `sgl` and `sgu` can be scanned in angle mode: on their own, or with A1–A4. Beside a Q, HKL or ΔE command they are refused, because such a scan solves the arcs at every point; scan κ, the lower-arc correction, instead. The old `chi` scan variable is refused with a message naming the arcs. A scan folder saved before this change still loads, with its χ read as `sgl`.
+
 TAVI tries to inform you if you use the wrong commands, the wrong format, or if something looks off, but it will not catch everything.
 
 ### Background
@@ -181,7 +183,7 @@ the range changed since you did, or the fit failed); the tooltip says which.
 
 The goto buttons are also disabled while any scan is queued or running — the
 instrument is not moved out from under a measurement — and for scan variables
-that have no settable field to move (`chi`, `rva`, and anything unrecognised),
+that have no settable field to move (`rva`, the retired `chi` of an old scan, and anything unrecognised),
 which the tooltip names.
 
 **Revert** undoes the last goto, restoring the field to the value it had

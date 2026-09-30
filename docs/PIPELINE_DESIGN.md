@@ -114,15 +114,14 @@ Build-time (affect component tree / require recompilation):
 Per-point (McStas parameters, set via `set_parameters()`):
 - A1_param, A2_param, A3_param, A4_param
 - E0_param
-- saz_param
 - rhm_param, rvm_param, rha_param, rva_param
 - vbl_hgap_param, pbl_hgap_param, pbl_vgap_param, dbl_hgap_param
-- chi_param, kappa_param, mis_chi_param, psi_param, mis_omega_param
-- chi_total, omega_offset_total
+- sample_rx_param, sample_ry_param, sample_rz_param (the single sample arm)
+- sgl_param, sgu_param, kappa_param, mis_chi_param, psi_param, mis_omega_param (inspection)
 
 This classification already exists implicitly — `add_parameter()` calls define the per-point set, `add_component()` calls with conditionals define the build-time set. The refactor makes it explicit at the function boundary.
 
-**Parameter defaults:** `add_parameter("chi_param", value=...)` defaults are overwritten by `set_parameters()` before `backengine()` runs. Instrument builders should use zero/placeholder defaults because actual point values come from `PointSnapshot.params`.
+**Parameter defaults:** `add_parameter("kappa_param", value=...)` defaults are overwritten by `set_parameters()` before `backengine()` runs. Instrument builders should use zero/placeholder defaults because actual point values come from `PointSnapshot.params`.
 
 ### Step 2: Define the params snapshot
 
@@ -344,7 +343,6 @@ snapshot = {
         'A3_param': float,
         'A4_param': float,
         'E0_param': float,
-        'saz_param': float,
         'rhm_param': float,
         'rvm_param': float,
         'rha_param': float,
@@ -353,13 +351,15 @@ snapshot = {
         'pbl_hgap_param': float,
         'pbl_vgap_param': float,
         'dbl_hgap_param': float,
-        'chi_param': float,
+        'sgl_param': float,
+        'sgu_param': float,
         'kappa_param': float,
         'mis_chi_param': float,
         'psi_param': float,
         'mis_omega_param': float,
-        'chi_total': float,
-        'omega_offset_total': float,
+        'sample_rx_param': float,
+        'sample_ry_param': float,
+        'sample_rz_param': float,
     },
 
     # Pipeline metadata
@@ -386,7 +386,8 @@ snapshot = {
         'rha': float,
         'rva': float,
         'omega': float,
-        'chi': float,
+        'sgl': float,
+        'sgu': float,
         'psi': float,
         'kappa': float,
         'E0_param': float,

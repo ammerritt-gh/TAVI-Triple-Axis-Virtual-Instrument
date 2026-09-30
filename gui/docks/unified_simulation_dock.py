@@ -21,24 +21,30 @@ LINKED_PARAMETER_GROUPS = {
     "sample_theta": {"omega", "a3"},
     # A3, omega, and psi all affect in-plane sample rotation
     "sample_in_plane_offset": {"omega", "a3", "psi"},
-    # Sample orientation - chi/kappa both control out-of-plane tilt
-    "sample_out_plane": {"chi", "kappa"},
+    # The lower arc sgl and its correction kappa move the same axis
+    "sample_out_plane": {"sgl", "kappa"},
 }
 
 # Define mode conflicts - scanning orientation angles conflicts with momentum/HKL scans
+# (an arc with a Q/HKL variable is refused outright; see TAVIController._is_arc_in_q_mode)
 MODE_CONFLICTS = {
     # Orientation angles conflict with momentum/HKL because they change the Q-to-angle mapping
-    "orientation_vs_q": ({"omega", "a3", "chi", "psi", "kappa"}, {"qx", "qy", "qz", "h", "k", "l"}),
+    "orientation_vs_q": ({"omega", "a3", "psi", "kappa"}, {"qx", "qy", "qz", "h", "k", "l"}),
 }
 
 # Known valid scan variables with descriptions
 VALID_SCAN_VARIABLES = {
     "qx", "qy", "qz", "deltae", "h", "k", "l",
     "a1", "a2", "a3", "a4", "2theta",
-    "omega", "chi", "kappa", "psi",
+    "omega", "sgl", "sgu", "kappa", "psi",
     "rhm", "rvm", "rha", "rva",
     "vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"
 }
+
+# The refusal for a scan over the retired chi (the old beam-fixed tilt under
+# the turntable), shared by the GUI and the API.
+SCAN_CHI_REFUSAL = ("'chi' is no longer a scan variable: scan the arcs 'sgl' (lower) "
+                    "or 'sgu' (upper) in angle mode, or 'kappa', the lower-arc correction")
 
 # Descriptions for each scan variable (for help dialog)
 SCAN_VARIABLE_DESCRIPTIONS = {
@@ -55,9 +61,10 @@ SCAN_VARIABLE_DESCRIPTIONS = {
     "a3": "Sample θ rotation angle (degrees) - same as ω (omega)",
     "a4": "Analyzer 2θ angle (degrees)",
     "omega": "Sample θ rotation angle (degrees) - alias for A3",
-    "chi": "Sample out-of-plane tilt χ (degrees)",
-    "psi": "Alignment offset for ω (degrees)",
-    "kappa": "Alignment offset for χ (degrees)",
+    "sgl": "Lower goniometer arc (degrees) - angle-mode scans only; Q/HKL scans solve it",
+    "sgu": "Upper goniometer arc (degrees) - angle-mode scans only; Q/HKL scans solve it",
+    "psi": "Correction of the turntable A3 (degrees)",
+    "kappa": "Correction of the lower arc sgl (degrees)",
     "rhm": "Monochromator horizontal bending radius (m)",
     "rvm": "Monochromator vertical bending radius (m)",
     "rha": "Analyzer horizontal bending radius (m)",
@@ -421,7 +428,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         categories = [
             ("Reciprocal Space", ["h", "k", "l", "qx", "qy", "qz", "deltae"]),
             ("Instrument Angles", ["a1", "a2", "2theta", "a3", "a4"]),
-            ("Sample Orientation", ["omega", "chi", "psi", "kappa"]),
+            ("Sample Orientation", ["omega", "sgl", "sgu", "psi", "kappa"]),
             ("Crystal Focusing", ["rhm", "rvm", "rha", "rva"]),
             ("Slit Apertures", ["vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"]),
         ]

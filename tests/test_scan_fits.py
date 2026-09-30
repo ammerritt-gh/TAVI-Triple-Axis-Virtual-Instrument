@@ -466,6 +466,7 @@ def test_scan_variable_to_field_rows():
         "qx": "qx", "qy": "qy", "qz": "qz",
         "A1": "mtt", "A2": "stt", "2theta": "stt", "A3": "omega", "A4": "att",
         "omega": "psi", "psi": "psi", "kappa": "kappa",
+        "sgl": "sgl", "sgu": "sgu",
         "chi": None, "rva": None,
         "rhm": "rhm", "rvm": "rvm", "rha": "rha",
     }

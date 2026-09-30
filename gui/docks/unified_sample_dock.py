@@ -275,7 +275,7 @@ class UnifiedSampleDock(BaseDockWidget):
         orientation_layout.addWidget(QLabel("°"), 0, 5)
         
         # Info label
-        orientation_info = QLabel("ψ: offset for ω, κ: offset for χ")
+        orientation_info = QLabel("ψ: correction of ω (A3), κ: correction of sgl")
         orientation_info.setStyleSheet("color: gray; font-size: 10px;")
         orientation_layout.addWidget(orientation_info, 1, 0, 1, 6)
         

@@ -64,7 +64,7 @@ SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them vi
   SYNTAX: "VARIABLE start stop STEP". The 3rd number (last token) is the STEP SIZE, not a point count.
   "H 1.99 2.01 0.01" = 3 points (1.99, 2.00, 2.01). A step larger than the range is an error.
   Two non-empty commands = a 2D scan (points multiply). One command = 1D. None = single point.
-  Scannable variables: H K L, qx qy qz, deltaE, A1 A2 A3 A4, omega, 2theta, chi kappa psi, rhm rvm rha rva.
+  Scannable variables: H K L, qx qy qz, deltaE, A1 A2 A3 A4, omega, 2theta, sgl sgu (angle mode only; chi is refused), kappa psi, rhm rvm rha rva.
 
 GOLDEN WORKFLOW:
   1. GET /schema  (learn fields, allowed values, and limits for THIS instrument — do this first)
@@ -695,7 +695,7 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
    {"name": "monocris", "type": "string", "allowed": ["pg002", "pg002_test"]},
    {"...": "one entry per writable parameter"}],
  "scan_variables": ["H", "K", "L", "qx", "qy", "qz", "deltaE", "A1", "A2",
-   "A3", "A4", "omega", "2theta", "chi", "kappa", "psi", "rhm", "rvm", "rha", "rva"],
+   "A3", "A4", "omega", "2theta", "sgl", "sgu", "kappa", "psi", "rhm", "rvm", "rha", "rva"],
  "engines": ["mcstas", "deterministic"],
  "scan_body_fields": [
    {"name": "engine", "type": "string", "allowed": ["mcstas", "deterministic"],
@@ -1210,7 +1210,9 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 | `A1` `A2` `A3` `A4` | raw instrument angles |
 | `omega` | sample rotation (alias of A3) |
 | `2theta` | sample two-theta (alias of A2's index) |
-| `chi` `kappa` `psi` | sample tilt / alignment offsets |
+| `sgl` `sgu` | the goniometer arcs, in angle mode only (with A1-A4 or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. Scan `kappa` there instead. |
+| `kappa` `psi` | the corrections of the lower arc and the turntable |
+| `chi` | refused: retired, the error names `sgl`/`sgu` |
 | `rhm` `rvm` `rha` `rva` | crystal bending radii |
 
 Examples:

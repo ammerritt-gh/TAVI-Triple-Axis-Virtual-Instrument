@@ -731,14 +731,15 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # _SCAN_VARIABLE_TO_INDEX: angle-mode slots are [mtt, stt, omega, att] so A1->mtt,
 # A2/2theta->stt, A3->omega, A4->att. Scan variables 'omega' and 'psi' both step
 # template slot 10, which is seeded from the psi field -> both map to 'psi'.
-# 'chi' is None: its template slot 8 is hardcoded 0 rather than seeded from the chi
-# field, so the field<->slot relationship is unverified (a goto could double-apply
-# an offset). 'rva' is None: no settable field exists in _api_field_map.
+# 'sgl'/'sgu' (angle-mode scans only) step slots seeded from their own fields.
+# 'chi' is None: a retired variable, known only so an old scan's goto is refused
+# by name. 'rva' is None: no settable field exists in _api_field_map.
 SCAN_VARIABLE_TO_FIELD = {
     "H": "H", "K": "K", "L": "L", "deltaE": "deltaE",
     "qx": "qx", "qy": "qy", "qz": "qz",
     "A1": "mtt", "A2": "stt", "2theta": "stt", "A3": "omega", "A4": "att",
     "omega": "psi", "psi": "psi", "kappa": "kappa",
+    "sgl": "sgl", "sgu": "sgu",
     "chi": None, "rva": None,
     "rhm": "rhm", "rvm": "rvm", "rha": "rha",
 }

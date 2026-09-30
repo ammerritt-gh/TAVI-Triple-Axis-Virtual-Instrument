@@ -65,8 +65,8 @@ smallest total arc tilt inside travel and turns it onto the scattering vector
 with A3; a Q the arcs cannot level is refused, naming the arc, the angle it
 would need and its travel. An in-plane Q needs no tilt and gets today's A3.
 The sign convention is vTAS's: sense +1 puts `−U·B·hkl` on Q_lab, sense −1
-`+U·B·hkl`. Until the controls are renamed, the χ field is the lower arc
-`sgl`.
+`+U·B·hkl`. The instrument dock shows the readouts A3 (the ω field), `sgl`
+and `sgu`; editing any of them reads Q back through the full stage.
 
 ### Corrections and physical angles
 
@@ -164,8 +164,9 @@ The instrument can scan any of the following parameters:
 
 ### Instrument Angles
 - **A1, A2, A3, A4**: Direct angle control (angle mode)
-- **ω, χ**: Sample orientation (orientation mode)
-- **ψ, κ**: Alignment offsets
+- **sgl, sgu**: The goniometer arcs (angle mode only; refused beside Q/HKL/ΔE)
+- **ω**: Steps the ψ slot (orientation mode)
+- **ψ, κ**: Corrections of the turntable and the lower arc
 
 ### Crystal Focusing
 - **rhm, rvm, rha, rva**: Crystal bending radii
@@ -178,7 +179,7 @@ The instrument can scan any of the following parameters:
 - Energy transfer ΔE (meV)
 
 ### Instrument Dock
-- **Instrument Angles**: A1, A2, A4, ω, χ (calculated from Q)
+- **Instrument Angles**: A1, A2, A4, ω (A3), sgl, sgu (calculated from Q)
 - **Energies**: Ki, Kf, Ei, Ef
 - **Crystal Focusing**: rhm, rvm, rha, rva
 
@@ -203,13 +204,13 @@ Scan in momentum space (qx, qy, qz). Direct control of momentum transfer.
 Directly control instrument angles (A1, A2, A3, A4). Bypass automatic calculation.
 
 ### Orientation Mode
-Scan sample orientation angles (ω, χ, ψ, κ) while keeping Q fixed.
+Scan the corrections (ω, ψ, κ) while keeping Q fixed.
 
 ## Key Relationships Summary
 
 1. **ω = A3 (sth)**: Omega displays the calculated sample theta
 2. **Total in-plane rotation**: A3 + ψ + misalignments
-3. **Total out-of-plane tilt**: χ + κ + misalignments
+3. **Lower arc, physical**: sgl + κ + misalignments (the upper arc sgu has no correction)
 4. **ΔE = Ei - Ef**: Energy transfer
 5. **Q = Ki - Kf**: Momentum transfer (vector)
 6. **ψ, κ are offsets only**: They don't change with Q, only during alignment
