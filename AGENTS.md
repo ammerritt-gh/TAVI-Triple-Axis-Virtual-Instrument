@@ -14,7 +14,7 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 - **Developer launcher:** `run-tavi-dev.bat` runs the GUI in the local `tavi-dev` micromamba environment.
 - **Dependency manager:** `pip install -r requirements.txt` for standalone Python dependencies; installer docs use micromamba for McStas and Python.
 - **Environment traps:** `.pytest_cache\` (May 2026) has broken ACLs and cannot be read or deleted without an elevated shell (`takeown` then `icacls`); it is gitignored, and pytest recreates its cache elsewhere. Git identity is repo-local (`ammerritt-gh`), so a fresh clone must set it locally before it can commit. The `tavi-dev` activation runs a noisy MSVC/vcvars hook; call the env's `python.exe` directly when clean output matters. For targeted runs of pure-Python tests only: invoked directly, the interpreter has `Library\bin` off PATH, and anything importing matplotlib or Qt dies with a delay-load fault (0xc06d007f; explained in `TODO.md` Housekeeping, 2026-09-09, and hit again 2026-09-12); run the full suite through `micromamba run`.
-- **Config location:** `config/*.json` stores local McStas paths, GUI parameters, layout state, and runtime estimates. Resolved by `tavi/local_state.py`; `TAVI_CONFIG_DIR` overrides, used by the tests.
+- **Config location:** `config/*.json` stores local McStas paths, GUI parameters, layout state, runtime estimates, and Config-menu preferences (`settings.json`: the MPI process count, via `tavi/settings.py`). Resolved by `tavi/local_state.py`; `TAVI_CONFIG_DIR` overrides, used by the tests.
 - **Generated output:** simulation results are written under `output/`; McStas can generate `.c`, `.instr`, executables, and detector output files.
 - **External runtime dependency:** McStas 3.4+ and a C compiler. The installer's `tavi` env carries conda-forge GCC (`gcc_win-64`) with McStas's config pointed at it; the `tavi-dev` env still uses MSVC.
 - **Dependencies to change carefully:** `mcstasscript`, `PySide6`, `matplotlib`, and McStas path handling all affect launch and simulation behavior.
@@ -53,7 +53,7 @@ Long simulations run in a Python worker thread started by `TAVIController.run_si
 
 ### Local State and Output
 
-`config/parameters.json`, `config/view_layout.json`, and `config/runtimes.json` are user/local runtime state. `output/` contains simulation results and scan folders. Treat these as generated state unless the task explicitly asks to change defaults or fixtures.
+`config/parameters.json`, `config/view_layout.json`, `config/runtimes.json`, and `config/settings.json` are user/local runtime state. `output/` contains simulation results and scan folders. Treat these as generated state unless the task explicitly asks to change defaults or fixtures.
 
 ### Custom McStas Components
 
@@ -318,3 +318,4 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 - 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
 - 2026-09-15 · floor: the tool shells set `NoDefaultCurrentDirectoryInExePath=1`; `mcrun`'s bare `name.exe` launch fails until it is emptied in that shell.
 - 2026-09-15 · floor: a file inside a conda env is a hardlink into the package cache and every sibling env; unlink before writing, never write in place.
+- 2026-09-30 · skill: an external_unit payload must tell ChatGPT to name the request id and full revision SHA on its first line; `acs-job submit` refuses a reply that does not, and a follow-up ask can collide with another session's review in the shared tab.

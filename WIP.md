@@ -149,9 +149,9 @@ Done when: the ledger is empty and deleted.
 
 **State:** pinned
 
-`DEFAULT_MPI_COUNT = 30` in `instruments/contract.py` is used for every simulation point (`run_tas_point`, no serial fallback). Linux users reported failures (operator, 2026-09-15): the conda McStas on Linux uses Open MPI, which refuses more ranks than cores unless told to oversubscribe, so an eight-core laptop fails at the first point; MS-MPI on Windows oversubscribes silently, which is why it never showed here. Proposed fix for 1.3.1: default to the machine's core count capped at 30, with the GUI and API overrides unchanged; Open MPI would also accept `--oversubscribe` in `MPIRUN`, but fewer ranks is the honest default.
+Open MPI on Linux refuses more ranks than cores, so the old fixed 30 failed at the first point on ordinary laptops (issue #45); MS-MPI on Windows oversubscribes silently. PR #47 (`613d16fd`, 2026-09-30) made the count a setting: default 4 (operator ruling, not core-count-aware), set from Config → MPI processes…, stored in `config/settings.json`, frozen per scan and used by every run, record and estimate. Deferred from that job: saving over a corrupt `settings.json` drops its other keys (matters once a second setting lands); the `estimate_scan_seconds` docstring does not mention the same-count filter.
 
-Done when: a 1.3.1 slice lands the default with one test, and the POSIX installer's compile gate runs `--mpi=2` like the Windows one.
+Done when: the POSIX installer's compile gate runs `--mpi=2` like the Windows one.
 
 ## Dev environment still compiles with MSVC
 
