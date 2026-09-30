@@ -2,6 +2,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
@@ -132,6 +133,26 @@ def test_mount_rotation_roundtrips_to_mccode_euler_angles():
     rx, ry, rz = mccode_euler_from_matrix(rotation)
 
     assert_vec_close(mccode_rotation_matrix(rx, ry, rz), rotation)
+
+
+def _right_handed(axis, deg):
+    """Active right-handed rotation about a unit axis, written out here."""
+    a = np.asarray(axis, dtype=float)
+    t = math.radians(deg)
+    k = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
+    return np.eye(3) + math.sin(t) * k + (1 - math.cos(t)) * (k @ k)
+
+
+# A TAS stage R = Ry(A3) Rx(sgl) Rz(sgu) with sgl = 0 and A3 = +/-90 deg puts
+# the McStas arm's (R U)^T exactly on the Euler gimbal (ry = +/-90), where
+# only rx +/- rz is determined. Near-gimbal settings test the conditioning.
+@pytest.mark.parametrize("a3", [90.0, -90.0, 90.0 - 1e-7, -90.0 + 1e-9, 37.0, -128.0])
+@pytest.mark.parametrize("sgu", [0.0, 12.5, -33.0])
+def test_mccode_euler_rebuilds_stage_rotation_through_the_gimbal(a3, sgu):
+    stage = _right_handed((0, 1, 0), a3) @ _right_handed((0, 0, 1), sgu)
+    target = stage.T
+    rebuilt = mccode_rotation_matrix(*mccode_euler_from_matrix(target))
+    assert np.allclose(rebuilt, target, rtol=0.0, atol=1e-12), (rebuilt - target)
 
 
 def test_ub_from_observed_peaks_recovers_mount_matrix():
