@@ -3895,8 +3895,8 @@ class TAVIController(QObject):
                 self._update_tracked_value('qx', qx)
                 self._update_tracked_value('qy', qy)
                 self._update_tracked_value('qz', qz)
-        except Exception:
-            pass
+        except Exception as exc:
+            self.print_to_message_center(f"Q update from angles failed: {exc}")
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -3939,8 +3939,8 @@ class TAVIController(QObject):
             self._update_tracked_value('H', H)
             self._update_tracked_value('K', K)
             self._update_tracked_value('L', L)
-        except:
-            pass
+        except Exception as exc:
+            self.print_to_message_center(f"HKL update from Q failed: {exc}")
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -3979,8 +3979,8 @@ class TAVIController(QObject):
             self._update_tracked_value('qx', qx)
             self._update_tracked_value('qy', qy)
             self._update_tracked_value('qz', qz)
-        except:
-            pass
+        except Exception as exc:
+            self.print_to_message_center(f"Q update from HKL failed: {exc}")
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4051,8 +4051,8 @@ class TAVIController(QObject):
                 self._update_tracked_value('omega', sth)
                 self._update_tracked_value('chi', saz)
                 self._update_tracked_value('stt', stt)
-        except Exception:
-            pass
+        except Exception as exc:
+            self.print_to_message_center(f"Angle update from Q failed: {exc}")
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -5188,8 +5188,8 @@ class TAVIController(QObject):
         try:
             plane_info = self.ub_matrix.get_plane_info()
             self.window.ub_matrix_dock.update_plane_info(plane_info)
-        except Exception:
-            pass
+        except Exception as exc:
+            self.print_to_message_center(f"Scattering-plane refresh failed: {exc}")
         # Update sample dock indicator
         if hasattr(self.window, 'sample_dock'):
             self.window.sample_dock.update_ub_indicator(not self.ub_matrix.is_identity)
