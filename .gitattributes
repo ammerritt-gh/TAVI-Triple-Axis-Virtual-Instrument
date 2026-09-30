@@ -1,0 +1,4 @@
+# Pin script line endings regardless of core.autocrlf: release assets are
+# attached from a working tree, and bash rejects CRLF while cmd misreads LF.
+*.sh text eol=lf
+*.bat text eol=crlf
