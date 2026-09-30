@@ -62,6 +62,7 @@ from instruments.descriptor import (
     Sense,
     SlitSpec,
     SourceType,
+    tas_goniometer,
 )
 from tavi.sample_library import default_sample_library
 
@@ -372,6 +373,8 @@ def in12_descriptor() -> InstrumentDescriptor:
             "A2": AxisLimits(-120.0, 101.737423, 120.0),
             "A4": AxisLimits(-140.0, -55.834469, 140.0),
         },
+        # Sample goniometer +/-20 deg: ILL characteristics (MODEL_STATUS.md).
+        goniometer=tas_goniometer(20.0),
         # Vertical (out-of-plane) Soller divergences BET1..4 (arcmin, FWHM).
         # The 2001 IN12 scan header records BET1 = BET2 = BET3 = BET4 = 120'.
         vertical_divergence=(120.0, 120.0, 120.0, 120.0),

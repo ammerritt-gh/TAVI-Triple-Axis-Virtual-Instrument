@@ -25,6 +25,7 @@ Targets Python 3.11 syntax.
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -90,6 +91,47 @@ class AxisLimits:
     lower: float
     default: float
     upper: float
+
+
+# Travel no source documents: enforced as unlimited, labelled "undocumented" in
+# the instrument's MODEL_STATUS.md. Infinite rather than None, so every float
+# comparison against an AxisLimits keeps working.
+UNDOCUMENTED = math.inf
+
+
+@dataclass(frozen=True, slots=True)
+class GonioAxis:
+    """One rotation axis of the sample stage, as data.
+
+    ``axis`` is the unit rotation vector in the stage frame with every axis at
+    zero (McStas sample frame: x, z horizontal, y up); a positive angle turns
+    right-handedly about it. A goniometer is a tuple of these, outermost
+    (the turntable) first: ``R_stage = R_1 @ R_2 @ ... @ R_N``. Provenance for
+    ``limits`` lives in the instrument's MODEL_STATUS.md.
+    """
+
+    name: str
+    axis: tuple[float, float, float]
+    limits: AxisLimits
+
+    @property
+    def lower(self) -> float:
+        return self.limits.lower
+
+    @property
+    def upper(self) -> float:
+        return self.limits.upper
+
+
+def tas_goniometer(arc_travel: float = UNDOCUMENTED) -> tuple[GonioAxis, ...]:
+    """A TAS sample stage: turntable ``A3`` about y carrying a lower arc ``sgl``
+    about x and an upper arc ``sgu`` about z, each arc within +/-``arc_travel``
+    degrees. The turntable turns freely."""
+    return (
+        GonioAxis("A3", (0.0, 1.0, 0.0), AxisLimits(-math.inf, 0.0, math.inf)),
+        GonioAxis("sgl", (1.0, 0.0, 0.0), AxisLimits(-arc_travel, 0.0, arc_travel)),
+        GonioAxis("sgu", (0.0, 0.0, 1.0), AxisLimits(-arc_travel, 0.0, arc_travel)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,6 +394,9 @@ class InstrumentDescriptor:
     slits: tuple[SlitSpec, ...] = ()
     source_types: tuple[SourceType, ...] = ()
     axis_limits: dict[str, AxisLimits] = field(default_factory=dict)
+    # The sample stage, outermost axis (the vertical turntable) first; see
+    # GonioAxis. A runnable instrument must declare one.
+    goniometer: tuple[GonioAxis, ...] = ()
     institute: str = ""
     description: str = ""
     component_path: str | None = None        # extra McStas input_path for custom comps

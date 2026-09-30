@@ -71,7 +71,10 @@ plugins, but built-in packages use the central path.
 1. **Descriptor** — write `<id>_descriptor()` returning an
    `InstrumentDescriptor` (`instruments/descriptor.py`): geometry + senses,
    crystals, `samples=default_sample_library()`, scannable parameters,
-   monitors, collimation, slits, source types, axis limits.
+   monitors, collimation, slits, source types, axis limits, and the sample
+   stage: `goniometer=tas_goniometer(arc_travel)` with the arcs' travel from
+   a cited source, or `tas_goniometer()` (undocumented, unlimited) when none
+   exists — say which in `MODEL_STATUS.md`; never invent a limit.
    `descriptor.samples` is the shared library (`tavi/sample_library.py`), not
    a per-package list — every instrument mounts exactly
    `default_sample_library()`; `package_validation.py`'s runtime check

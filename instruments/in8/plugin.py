@@ -41,6 +41,7 @@ from instruments.descriptor import (
     Sense,
     SlitSpec,
     SourceType,
+    tas_goniometer,
 )
 from tavi.sample_library import default_sample_library
 
@@ -248,6 +249,9 @@ def in8_descriptor() -> InstrumentDescriptor:
             "A2": AxisLimits(-120.0, 71.30, 120.0),
             "A4": AxisLimits(-120.0, -41.19, 120.0),
         },
+        # Sample stage: no source documents IN8's arc travel, so it is
+        # undocumented (unlimited); MODEL_STATUS.md says so.
+        goniometer=tas_goniometer(),
         # Vertical (out-of-plane) Soller divergences BET1..4 (arcmin, FWHM). IN8's
         # secondary spectrometer carries no surveyed per-blade vertical Soller
         # data; 120 arcmin is a documented uniform default (recorded as such in

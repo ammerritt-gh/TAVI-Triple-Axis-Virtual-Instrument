@@ -310,7 +310,8 @@ class InstrumentPlugin(Protocol):
     def descriptor(self) -> InstrumentDescriptor: ...
         # The GUI-facing knobs: crystals_mono/ana, samples, monitors,
         # modules, collimation, slits, source_types, scannable_parameters,
-        # geometry (L1..L4 + senses), axis_limits, detector contract.
+        # geometry (L1..L4 + senses), axis_limits, goniometer (the sample
+        # stage as data), detector contract.
 
     def default_state(self) -> InstrumentState: ...
         # Fresh state with the instrument's defaults. Used for (a) the
@@ -1078,7 +1079,12 @@ uniqueness; parameter names unique and valid C identifiers; `primary_detector`
 non-empty; v1 detector contract exactly `detector.dat`/`1d_monitor`; module
 `CHOICE` default ∈ options / `TOGGLE` default is bool; collimation default ∈
 allowed; L2/L3/L4 finite > 0 (`l1_source_mono` exempt — vTAS omits it);
-axis limits `lower ≤ default ≤ upper`, finite; senses are `Sense` members.
+axis limits `lower ≤ default ≤ upper`, finite; senses are `Sense` members;
+the `goniometer` (the sample stage, `GonioAxis` tuples outermost first) has
+at most three axes, unique identifier names, unit axis vectors, a vertical
+first axis (the turntable), and `lower ≤ default ≤ upper` with a finite
+default — infinite bounds are legal and mean travel no source documents
+(`descriptor.UNDOCUMENTED`, labelled so in `MODEL_STATUS.md`).
 
 *Amendments found during implementation (2026-07-02):* (a) `SourceType.id`
 joined the legacy-string exceptions — PUMA's ids are the GUI combo strings
@@ -1088,10 +1094,13 @@ joined the legacy-string exceptions — PUMA's ids are the GUI combo strings
 value.
 
 **Runnable-only (registered instruments must pass; examples may fail):** no
-`nan`/`inf` anywhere (incl. `l1_source_mono` > 0); crystal specs complete (all
+`nan`/`inf` anywhere except undocumented goniometer travel (incl.
+`l1_source_mono` > 0); crystal specs complete (all
 optional fields non-None, numerics finite/positive); `mcstas_name` set and a
 valid C identifier; `component_path` exists on disk if set; non-empty libraries
-(≥1 mono crystal, ana crystal, sample, source type, scannable parameter).
+(≥1 mono crystal, ana crystal, sample, source type, scannable parameter); a
+declared `goniometer` (every TAS uses `tas_goniometer(arc_travel)`: `A3` about
+y carrying `sgl` about x and `sgu` about z).
 
 Expected results: fixed `puma_descriptor()` → `[]` at `runnable=True`;
 `in8_descriptor()` → `[]` at `runnable=False`, and at `runnable=True` errors

@@ -38,7 +38,7 @@ parameter preset — but the items in `SCIENTIST_REVIEW.md` are what remain.
 |---|---|---|
 | **Scattering senses** | **mono −1, sample +1, analyser −1** (the "W" configuration) | three independent lines — see below |
 | Axis limits | mono 2θ −140…−10°, sample ±120°, analyser ±140° | ILL |
-| Sample goniometer | ±20° | ILL |
+| Sample goniometer | ±20°, enforced on both arcs (`sgl` about x, `sgu` about z) on the A3 turntable | ILL |
 | L1, L2 | 1.800 m each — the monochromator centre 1.8 m after the guide end, the sample the same 1.8 m beyond, the Rowland condition the assembly was built for | 2016, stated outright |
 | L4 | 0.720 m | ILL; 72 cm in Takin |
 | Monochromator array | PG(002), 11 × 11 over 200 mm wide × 160 mm high, mosaic 24′ (0.4° FWHM), crystals 2.0 ± 0.1 mm thick | 2016 + ILL; the 20 × 16 cm orientation independently confirmed by Takin's `mono_w`/`mono_h` |

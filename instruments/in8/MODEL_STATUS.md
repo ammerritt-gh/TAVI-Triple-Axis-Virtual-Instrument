@@ -96,6 +96,12 @@ decision, §20.3); if vTAS-identical resolution ever matters, that's a
 |---|---|---|
 | Detector model | ideal `Monitor`, 42×89 mm | real single 3He tube efficiency/pressure if absolute rates matter (PUMA has the same idealization) |
 
+### Sample goniometer
+
+| Item | Current | Needed |
+|---|---|---|
+| Arc travel | turntable A3 carrying a lower arc `sgl` (about x) and an upper arc `sgu` (about z); arc travel **undocumented**, enforced as unlimited. No document in `references/` gives it (the 2023 paper mentions a reorientation cradle for the dry cryostat, without travel); the ILL instrument page was not checked in this pass | the standard goniometer's travel. *needs IS* |
+
 ### Diagnostic monitors
 
 Six monitors (source E/PSD, sample PSD/DSD/E, detector PSD) at arbitrary

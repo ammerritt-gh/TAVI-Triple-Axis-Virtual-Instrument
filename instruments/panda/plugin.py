@@ -48,6 +48,7 @@ from instruments.descriptor import (
     Sense,
     SlitSpec,
     SourceType,
+    tas_goniometer,
 )
 from tavi.sample_library import default_sample_library
 
@@ -303,6 +304,9 @@ def panda_descriptor() -> InstrumentDescriptor:
             "A2": AxisLimits(5.0, 120.180, 125.0),
             "A4": AxisLimits(-130.0, -74.332, 100.0),
         },
+        # Sample goniometer about +/-15 deg: MLZ teaching notes, via the
+        # 2026-07-18 research dossier (MODEL_STATUS.md).
+        goniometer=tas_goniometer(15.0),
     )
 
 
