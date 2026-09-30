@@ -64,17 +64,17 @@ def mccode_euler_from_matrix(matrix: np.ndarray) -> tuple[float, float, float]:
     if r.shape != (3, 3):
         raise ValueError("Rotation matrix must be 3x3.")
 
-    sy = float(np.clip(r[2, 0], -1.0, 1.0))
-    ry = math.asin(sy)
-    cy = math.cos(ry)
-
-    if abs(cy) > EPS:
-        rx = math.atan2(-r[2, 1], r[2, 2])
-        rz = math.atan2(-r[1, 0], r[0, 0])
-    else:
-        # Gimbal lock: choose rz=0 and keep a stable combined x rotation.
-        rz = 0.0
-        rx = math.atan2(r[0, 1], r[1, 1])
+    # The matrix is Z(rz) @ Y(ry) @ X(rx) with each factor
+    # mccode_rotation_matrix of one angle. ry from atan2 stays accurate at
+    # +/-90 deg, where asin loses half the digits.
+    cy = math.hypot(r[0, 0], r[1, 0])
+    ry = math.atan2(r[2, 0], cy)
+    # At the gimbal (cy = 0) only rx +/- rz is determined: take rz = 0.
+    rz = math.atan2(-r[1, 0], r[0, 0]) if cy > EPS else 0.0
+    # rx from what Z and Y leave behind: exact for any rz, so a poorly
+    # conditioned rz near the gimbal cannot leak into the rebuilt matrix.
+    x_part = mccode_rotation_matrix(0.0, math.degrees(ry), math.degrees(rz)).T @ r
+    rx = math.atan2(x_part[1, 2], x_part[1, 1])
 
     return math.degrees(rx), math.degrees(ry), math.degrees(rz)
 
