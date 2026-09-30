@@ -188,6 +188,7 @@ def main():
         print(f"  {'A3':>9s} {'N':>9s} {'sqrt(N)':>8s} {'I':>11s} {'I_err':>11s} {'s':>6s}")
         counts = []
         folder = root / label.replace(" ", "_")
+        folder.mkdir(parents=True, exist_ok=True)   # McStasScript needs the parent to exist
         for index, a3_value in enumerate(a3_points):
             snapshot = plugin.compute_snapshot(
                 ([mtt, stt, float(a3_value), att, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], index),
