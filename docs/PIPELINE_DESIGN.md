@@ -84,12 +84,13 @@ Split into two functions in `instruments/puma/model.py`:
 - If diagnostic settings include "Show Instrument Diagram", the caller emits `instrument_diagram_requested` with the instrument object once after this function returns.
 - Called **once** at scan start, before any simulation.
 
-**`InstrumentPlugin.run_point(instrument, snapshot, output_folder, number_neutrons, execution_state, mpi_count=30)`**
+**`InstrumentPlugin.run_point(instrument, snapshot, output_folder, number_neutrons, execution_state, mpi_count=DEFAULT_MPI_COUNT)`**
 
 - Takes the reusable instrument object, a `PointSnapshot`, the output folder path, and the neutron count.
 - This is the active per-point execution seam, called from `TAVIController.run_simulation()`.
 - The live code also passes a scan-local `RunExecutionState` that tracks whether direct execution is armed, the resolved binary path/cwd, and the resolved MPI launcher argv.
-- Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=30, force_compile=not execution_state.first_backengine_succeeded, increment_folder_name=False)`.
+- The controller passes `mpi_count`, the configured count (`config/settings.json`, Config menu, default 4) frozen when the scan is launched.
+- Calls `instrument.settings(output_path=output_folder, ncount=number_neutrons, mpi=mpi_count, force_compile=not execution_state.first_backengine_succeeded, increment_folder_name=False)`.
     - The first point that reaches `backengine()` in a scan therefore forces compilation/materialization so build-time settings are refreshed before later points reuse the materialized binary/direct path.
     - **Critical**: `increment_folder_name=False` is required because `ManagedMcrun` defaults to `True`, which would silently create `scan_0000_0` instead of `scan_0000` if the folder already exists, resulting in postprocessing reading from the wrong folder.
 - Calls `instrument.set_parameters(**snapshot.params)`.

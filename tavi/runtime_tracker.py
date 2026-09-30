@@ -568,7 +568,12 @@ class RuntimeTracker:
         records = [r for r in (self.records.get(instrument_name, []) or [])
                    if getattr(r, "engine", "mcstas") == engine
                    and (source is None
-                        or getattr(r, "source", "organic") == source)]
+                        or getattr(r, "source", "organic") == source)
+                   # Same-count history only. Ceiling: records with no count
+                   # (pre-dating count recording) match any count until the
+                   # per-instrument record cap ages them out.
+                   and (mpi_count is None
+                        or getattr(r, "mpi_count", None) in (mpi_count, None))]
         samples = len(records)
         confidence = self._confidence_from_samples(samples)
 
@@ -580,16 +585,6 @@ class RuntimeTracker:
         pairs, basis = self._select_pool(records)
         confidence = self._cap_confidence(confidence, basis)
         machine_samples = len(pairs)
-
-        # MPI prefer-match: keep records whose worker count matches the request
-        # (or is unknown). If none match, fall back to the full pool at low
-        # confidence rather than blanking the estimate.
-        preferred = [(r, s) for (r, s) in pairs
-                     if getattr(r, "mpi_count", None) in (mpi_count, None)]
-        if preferred:
-            pairs = preferred
-        else:
-            confidence = self._cap_to(confidence, "low")
 
         model = self._per_point_model(pairs, num_neutrons, engine)
         per_point = model["per_point"]

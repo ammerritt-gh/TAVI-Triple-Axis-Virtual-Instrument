@@ -109,6 +109,7 @@ from tavi.tas_geometry import (
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info)
 from tavi.runtime_tracker import RuntimeTracker
+from tavi.settings import load_mpi_count, save_mpi_count
 from tavi.machine_profile import machine_fingerprint
 from tavi.scan_jobs import (
     BudgetLimits, JobRegistry, JobState, ScanJob, ScanResult, compute_budget_usage,
@@ -465,7 +466,8 @@ class TaviApiBackend:
         instrument_name = self._instrument_id()
         engine = launch.get("engine") or "mcstas"
         return self._controller.runtime_tracker.estimate_scan_seconds(
-            instrument_name, points, ncount, needs_compile, engine=engine
+            instrument_name, points, ncount, needs_compile, engine=engine,
+            mpi_count=launch.get("mpi_count"),
         )
 
     def estimate_queue_drain_seconds(self):
@@ -664,7 +666,7 @@ class TaviApiBackend:
         try:
             eta = controller.runtime_tracker.estimate_scan_seconds(
                 self._instrument_id(), run_points, int(neutrons), True,
-                engine=engine,
+                engine=engine, mpi_count=(launch_state or {}).get("mpi_count"),
             )
         except Exception:
             eta = {"estimated_seconds": None, "confidence": "none", "samples": 0}
@@ -1153,6 +1155,8 @@ class TAVIController(QObject):
         # run_benchmark, drained by _on_job_state_changed when all are terminal).
         self._benchmark_job_ids = []
         self._benchmark_plan = None
+        # MPI count the in-flight benchmark started with (set by run_benchmark).
+        self._benchmark_mpi_count = None
         # Adaptive rate-sweep bookkeeping (see _advance_benchmark).
         self._benchmark_adaptive_ncounts = set()
         self._benchmark_finalized = False
@@ -1182,7 +1186,9 @@ class TAVIController(QObject):
         
         # Initialize runtime tracker for scan time estimation
         self.runtime_tracker = RuntimeTracker()
-        
+        # MPI processes per McStas point (Config menu); frozen into each launch state.
+        self.mpi_count = load_mpi_count()
+
         # Debounce timer for scan command validation and time estimates
         self._scan_update_timer = QTimer()
         self._scan_update_timer.setSingleShot(True)
@@ -2957,6 +2963,7 @@ class TAVIController(QObject):
             'relative_mode_1': False,
             'relative_mode_2': False,
             'compact_save_enabled': False,
+            'mpi_count': self.mpi_count,
         }
 
     def _collect_simulation_launch_state(self):
@@ -3003,6 +3010,7 @@ class TAVIController(QObject):
             # per-scan override is an API-only channel.
             'background': copy.deepcopy(self.background_profile),
             'background_source': 'config_default',
+            'mpi_count': self.mpi_count,
         }
 
     def _enrich_launch_parameters(self, vals, sample_key):
@@ -4591,6 +4599,19 @@ class TAVIController(QObject):
         except Exception:
             return True
 
+    def set_mpi_count(self, n):
+        """Persist and apply the MPI process count (Config menu).
+
+        Saves first, so a failed write (``OSError``, propagated to the caller)
+        leaves the in-memory count unchanged. Applies from the next scan.
+        """
+        save_mpi_count(n)
+        self.mpi_count = int(n)
+        self.print_to_message_center(
+            f"MPI processes set to {n}; applies from the next scan."
+        )
+        self.runtime_data_updated.emit()
+
     def _estimate_total_and_compile(self, instrument_name, num_points,
                                     num_neutrons, needs_compile,
                                     engine="mcstas"):
@@ -4608,13 +4629,14 @@ class TAVIController(QObject):
         est = self.runtime_tracker.estimate_scan_seconds(
             instrument_name, num_points, num_neutrons,
             needs_compile=needs_compile, engine=engine,
+            mpi_count=self.mpi_count,
         )
         total = est.get("estimated_seconds")
         compile_seconds = None
         if total is not None and needs_compile:
             compile_seconds = self.runtime_tracker.estimate_scan_seconds(
                 instrument_name, 0, num_neutrons,
-                needs_compile=True, engine=engine,
+                needs_compile=True, engine=engine, mpi_count=self.mpi_count,
             ).get("estimated_seconds")
         return total, compile_seconds
 
@@ -4662,6 +4684,7 @@ class TAVIController(QObject):
         # Update time per point estimate (affine per-point cost for the engine).
         run_time_per_point = self.runtime_tracker.estimate_scan_seconds(
             instrument_name, 1, num_neutrons, needs_compile=False, engine=engine,
+            mpi_count=self.mpi_count,
         ).get("per_point_seconds")
         if engine == "deterministic":
             # Analytic cost is ~independent of ncount and sub-second; never show
@@ -6430,6 +6453,7 @@ class TAVIController(QObject):
             est = self.runtime_tracker.estimate_scan_seconds(
                 self.instrument.id, stage["points"], stage["ncount"],
                 needs_compile=stage["force_rebuild"], engine=stage["engine"],
+                mpi_count=self.mpi_count,
             )
             stage["predicted_seconds"] = est.get("estimated_seconds")
         return plan
@@ -6492,6 +6516,7 @@ class TAVIController(QObject):
 
         self.save_parameters()
         self._benchmark_plan = list(plan)
+        self._benchmark_mpi_count = self.mpi_count
         self._benchmark_job_ids = []
         # Adaptive-phase bookkeeping: ncounts already submitted (loop guard) and
         # the finalize latch (cleared here so a fresh run re-arms it).
@@ -6536,6 +6561,7 @@ class TAVIController(QObject):
         launch_state["engine"] = stage["engine"]
         launch_state["benchmark"] = True
         launch_state["force_rebuild"] = bool(stage["force_rebuild"])
+        launch_state["mpi_count"] = self._benchmark_mpi_count
         launch_state["relative_mode_1"] = False
         launch_state["relative_mode_2"] = False
         launch_state["save_folder_input"] = os.path.join(
@@ -6577,13 +6603,20 @@ class TAVIController(QObject):
                     return False
         return True
 
-    def _benchmark_records(self):
-        """This machine's benchmark records for the active instrument."""
+    def _benchmark_records(self, mpi_count=None):
+        """This machine's benchmark records for the active instrument.
+
+        Only records at ``mpi_count`` (default: the configured count) or with
+        no recorded count, so runs at another count never mix into a fit.
+        """
+        if mpi_count is None:
+            mpi_count = self.mpi_count
         machine_id = machine_fingerprint()["machine_id"]
         return [
             r for r in self.runtime_tracker.records.get(self.instrument.id, [])
             if getattr(r, "machine_id", None) == machine_id
             and getattr(r, "source", "organic") == "benchmark"
+            and getattr(r, "mpi_count", None) in (mpi_count, None)
         ]
 
     def _benchmark_adaptive_inputs(self):
@@ -6602,7 +6635,7 @@ class TAVIController(QObject):
                     else rec.first_scan_time)
 
         recs = [
-            r for r in self._benchmark_records()
+            r for r in self._benchmark_records(self._benchmark_mpi_count)
             if getattr(r, "engine", "mcstas") == "mcstas"
             and getattr(r, "num_neutrons", 0)
             and spp(r) and spp(r) > 0
@@ -6669,7 +6702,10 @@ class TAVIController(QObject):
         self._benchmark_finalized = True
         fp = machine_fingerprint()
         machine_id = fp["machine_id"]
-        model = machine_time_model(self._benchmark_records())
+        # Ceiling: one stored profile per machine, not per MPI count; after a
+        # count change it keeps this fit until the benchmark is re-run. It only
+        # anchors cross-machine scaling; same-count local history wins.
+        model = machine_time_model(self._benchmark_records(self._benchmark_mpi_count))
         overhead = model["overhead"] if model else None
         rate = model["rate"] if model else None
         try:
@@ -6715,12 +6751,9 @@ class TAVIController(QObject):
         if plan is None:
             plan = self._benchmark_plan or self.build_benchmark_plan()
 
-        machine_id = machine_fingerprint()["machine_id"]
-        recs = [
-            r for r in self.runtime_tracker.records.get(self.instrument.id, [])
-            if getattr(r, "machine_id", None) == machine_id
-            and getattr(r, "source", "organic") == "benchmark"
-        ]
+        # The last benchmark's own count, even if the setting changed since.
+        mpi_count = self._benchmark_mpi_count or self.mpi_count
+        recs = self._benchmark_records(mpi_count)
 
         stage_results = []
         for stage in plan:
@@ -6728,7 +6761,7 @@ class TAVIController(QObject):
             predicted = self.runtime_tracker.estimate_scan_seconds(
                 self.instrument.id, stage["points"], stage["ncount"],
                 needs_compile=stage["force_rebuild"], engine=stage["engine"],
-                source="organic",
+                source="organic", mpi_count=mpi_count,
             ).get("estimated_seconds")
             stage_results.append({
                 "label": stage["label"],
@@ -8991,9 +9024,11 @@ class TAVIController(QObject):
         # Show pre-scan estimate based on historical data (machine-aware,
         # mcstas engine; compile time included only when a rebuild is pending).
         instrument_name = self.instrument.id
+        # Frozen at launch; never re-read from settings or self mid-scan.
+        mpi_count = int(launch_state.get('mpi_count', DEFAULT_MPI_COUNT))
         estimate = self.runtime_tracker.estimate_scan_seconds(
             instrument_name, estimated_runtime_points, number_neutrons,
-            needs_compile=not reuse_binary, engine="mcstas",
+            needs_compile=not reuse_binary, engine="mcstas", mpi_count=mpi_count,
         )
         total_est = estimate.get("estimated_seconds")
         if total_est is not None:
@@ -9151,6 +9186,7 @@ class TAVIController(QObject):
                         scan_folder,
                         number_neutrons,
                         execution_state,
+                        mpi_count=mpi_count,
                     )
                     simulation_duration = time.perf_counter() - simulation_stage_start
                     simulated_point = True
@@ -9482,7 +9518,7 @@ class TAVIController(QObject):
                     # records never poison the McStas per-point estimate.
                     hist = self.runtime_tracker.estimate_scan_seconds(
                         instrument_name, 1, number_neutrons,
-                        needs_compile=False, engine="mcstas",
+                        needs_compile=False, engine="mcstas", mpi_count=mpi_count,
                     )
                     run_time_per_point = hist.get("estimated_seconds")
                     if run_time_per_point is not None and remaining_runtime_points > 0:
@@ -9645,7 +9681,7 @@ class TAVIController(QObject):
                 binary_reused=reuse_binary,
                 build_fp_hash=build_fp_hash,
                 source=record_source,
-                mpi_count=DEFAULT_MPI_COUNT,
+                mpi_count=mpi_count,
             )
             self.message_printed.emit(
                 f"Timing data recorded: {len(executed_scan_times)} simulated points in {RuntimeTracker.format_time(total_time)}"
