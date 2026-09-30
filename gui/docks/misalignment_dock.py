@@ -139,11 +139,11 @@ class MisalignmentDock(BaseDockWidget):
         teacher_layout.addWidget(self.mis_omega_edit, 0, 1)
         teacher_layout.addWidget(QLabel("°"), 0, 2)
         
-        teacher_layout.addWidget(QLabel("χ mis:"), 0, 3)
+        teacher_layout.addWidget(QLabel("sgl mis:"), 0, 3)
         self.mis_chi_edit = QLineEdit()
         self.mis_chi_edit.setMaximumWidth(60)
         self.mis_chi_edit.setPlaceholderText("0.0")
-        self.mis_chi_edit.setToolTip("Out-of-plane misalignment (corrected by κ)")
+        self.mis_chi_edit.setToolTip("Out-of-plane misalignment of the lower arc sgl (corrected by κ)")
         teacher_layout.addWidget(self.mis_chi_edit, 0, 4)
         teacher_layout.addWidget(QLabel("°"), 0, 5)
         
@@ -206,7 +206,7 @@ class MisalignmentDock(BaseDockWidget):
         self.in_plane_feedback_label = QLabel("In-plane (ψ → ω): ---")
         check_layout.addWidget(self.in_plane_feedback_label)
         
-        self.out_of_plane_feedback_label = QLabel("Out-of-plane (κ → χ): ---")
+        self.out_of_plane_feedback_label = QLabel("Out-of-plane (κ → sgl): ---")
         check_layout.addWidget(self.out_of_plane_feedback_label)
         
         self.overall_feedback_label = QLabel("Overall: ---")
@@ -281,7 +281,7 @@ class MisalignmentDock(BaseDockWidget):
         """Reset alignment feedback labels."""
         self.in_plane_feedback_label.setText("In-plane (ψ → ω): ---")
         self.in_plane_feedback_label.setStyleSheet("")
-        self.out_of_plane_feedback_label.setText("Out-of-plane (κ → χ): ---")
+        self.out_of_plane_feedback_label.setText("Out-of-plane (κ → sgl): ---")
         self.out_of_plane_feedback_label.setStyleSheet("")
         self.overall_feedback_label.setText("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
@@ -316,7 +316,7 @@ class MisalignmentDock(BaseDockWidget):
         # Update out-of-plane feedback (kappa corrects chi misalignment)
         out_of_plane_status = result["out_of_plane"]
         out_of_plane_hint = result["out_of_plane_hint"]
-        self.out_of_plane_feedback_label.setText(f"Out-of-plane (κ → χ): {out_of_plane_hint}")
+        self.out_of_plane_feedback_label.setText(f"Out-of-plane (κ → sgl): {out_of_plane_hint}")
         self.out_of_plane_feedback_label.setStyleSheet(self._status_style(out_of_plane_status))
         
         # Update overall feedback

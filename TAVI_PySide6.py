@@ -1517,7 +1517,7 @@ class TAVIController(QObject):
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
         
         # Sample orientation controls - connected later in signal setup
-        # (omega/chi are actual angles, psi/kappa are alignment offsets)
+        # (omega/sgl/sgu are stage readouts, psi/kappa are their corrections)
         
         # Misalignment training dock
         self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
@@ -1634,7 +1634,8 @@ class TAVIController(QObject):
         self.window.instrument_dock.att_edit.editingFinished.connect(self.on_att_changed)
         self.window.instrument_dock.stt_edit.editingFinished.connect(self.on_stt_changed)
         self.window.instrument_dock.omega_edit.editingFinished.connect(self.on_omega_changed)
-        self.window.instrument_dock.chi_edit.editingFinished.connect(self.on_chi_changed)
+        self.window.instrument_dock.sgl_edit.editingFinished.connect(self.on_arc_changed)
+        self.window.instrument_dock.sgu_edit.editingFinished.connect(self.on_arc_changed)
         
         # Energies - update related energies and angles
         self.window.instrument_dock.Ki_edit.editingFinished.connect(self.on_Ki_changed)
@@ -2045,8 +2046,8 @@ class TAVIController(QObject):
             field.setStyleSheet(style)
         for field in (
             self.window.instrument_dock.mtt_edit, self.window.instrument_dock.stt_edit,
-            self.window.instrument_dock.omega_edit, self.window.instrument_dock.chi_edit,
-            self.window.instrument_dock.att_edit,
+            self.window.instrument_dock.omega_edit, self.window.instrument_dock.sgl_edit,
+            self.window.instrument_dock.sgu_edit, self.window.instrument_dock.att_edit,
         ):
             field.setStyleSheet(style)
 
@@ -2083,7 +2084,8 @@ class TAVIController(QObject):
                 self.window.instrument_dock.mtt_edit,
                 self.window.instrument_dock.stt_edit,
                 self.window.instrument_dock.omega_edit,
-                self.window.instrument_dock.chi_edit,
+                self.window.instrument_dock.sgl_edit,
+                self.window.instrument_dock.sgu_edit,
                 self.window.instrument_dock.att_edit,
             )
         }
@@ -2355,7 +2357,8 @@ class TAVIController(QObject):
                 'mtt': mtt,
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
-                'chi': float(self.window.instrument_dock.chi_edit.text() or 0),
+                'sgl': float(self.window.instrument_dock.sgl_edit.text() or 0),
+                'sgu': float(self.window.instrument_dock.sgu_edit.text() or 0),
                 'att': att,
                 'Ki': float(self.window.instrument_dock.Ki_edit.text() or 0),
                 'Ei': float(self.window.instrument_dock.Ei_edit.text() or 0),
@@ -2531,7 +2534,7 @@ class TAVIController(QObject):
         # them), recompute AUTOFOCUS axes at THIS point's own two-theta, keep
         # a HELD axis's operator value, and let set_crystal_bending itself
         # pin a fixed axis to its declared radius.
-        mtt, stt, sth, saz, att = angles
+        mtt, stt, sth, _sgl, att = angles
         from instruments.tas_runtime import is_forward_scattering
         if is_forward_scattering(stt):
             # Forward scattering: Cooper-Nathans divides by sin(stt) and has
@@ -2730,7 +2733,7 @@ class TAVIController(QObject):
                 continue
             spec = field_map.get(name)
             if spec is None:
-                errors[name] = "unknown field"
+                errors[name] = self._API_REMOVED_FIELDS.get(name, "unknown field")
                 continue
             try:
                 parsed[name] = spec[0](value)
@@ -3574,7 +3577,8 @@ class TAVIController(QObject):
         defaults = {
             "rhm_var": 0, "rvm_var": 0, "rha_var": 0, "rva_var": 0,
             "mtt_var": mtt, "stt_var": stt, "omega_var": omega,
-            "chi_var": 0, "att_var": att, "Ki_var": 2.6634, "Kf_var": 2.6634,
+            "sgl_var": 0, "sgu_var": 0, "chi_var": 0,  # chi_var: legacy save, read as sgl
+            "att_var": att, "Ki_var": 2.6634, "Kf_var": 2.6634,
             "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
             "qx_var": 3.1028, "qy_var": 0, "qz_var": 0, "H_var": 2, "K_var": 0,
             "L_var": 0, "deltaE_var": 0, "kappa_var": 0, "psi_offset_var": 0,
@@ -3878,12 +3882,13 @@ class TAVIController(QObject):
             stt = float(self.window.instrument_dock.stt_edit.text() or 0)
             sth = float(self.window.instrument_dock.omega_edit.text() or 0)
             att = float(self.window.instrument_dock.att_edit.text() or 0)
-            saz = float(self.window.instrument_dock.chi_edit.text() or 0)
+            sgl = float(self.window.instrument_dock.sgl_edit.text() or 0)
+            sgu = float(self.window.instrument_dock.sgu_edit.text() or 0)
 
             q_vals, error_flags = self.instrument_state.calculate_q_and_deltaE(
-                mtt, stt, sth, saz, att,
+                mtt, stt, sth, sgl, att,
                 vals['fixed_E'], vals['K_fixed'],
-                vals['monocris'], vals['anacris']
+                vals['monocris'], vals['anacris'], sgu=sgu,
             )
             if not error_flags:
                 qx, qy, qz, deltaE = q_vals
@@ -4035,21 +4040,23 @@ class TAVIController(QObject):
             return
         try:
             self.updating = True
-            angles_array, error_flags = self.instrument_state.calculate_angles(
+            angles_array, error_flags = self.instrument_state.calculate_stage_angles(
                 vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
                 vals['fixed_E'], vals['K_fixed'],
                 vals['monocris'], vals['anacris']
             )
             if not error_flags:
-                mtt, stt, sth, saz, att = angles_array
+                mtt, stt, sth, sgl, att, sgu = angles_array
                 self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
                 self.window.instrument_dock.stt_edit.setText(format_editable_number(stt))
                 self.window.instrument_dock.omega_edit.setText(format_editable_number(sth))
-                self.window.instrument_dock.chi_edit.setText(format_editable_number(saz))
+                self.window.instrument_dock.sgl_edit.setText(format_editable_number(sgl))
+                self.window.instrument_dock.sgu_edit.setText(format_editable_number(sgu))
                 self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
                 # Update tracked values for angles since we just set them
                 self._update_tracked_value('omega', sth)
-                self._update_tracked_value('chi', saz)
+                self._update_tracked_value('sgl', sgl)
+                self._update_tracked_value('sgu', sgu)
                 self._update_tracked_value('stt', stt)
         except Exception as exc:
             self.print_to_message_center(f"Angle update from Q failed: {exc}")
@@ -4073,7 +4080,7 @@ class TAVIController(QObject):
         self.update_all_variables()
     
     def on_alignment_offset_changed(self):
-        """Handle changes to alignment offsets (kappa=chi offset, psi=omega offset)."""
+        """Handle changes to the corrections (kappa: lower arc sgl, psi: turntable A3)."""
         if self.updating:
             return
         try:
@@ -4081,7 +4088,7 @@ class TAVIController(QObject):
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
             self.instrument_state.kappa = kappa
             self.instrument_state.psi = psi
-            self.print_to_message_center(f"Alignment offsets updated: κ={kappa}° (chi offset), ψ={psi}° (omega offset)")
+            self.print_to_message_center(f"Alignment offsets updated: κ={kappa}° (lower arc), ψ={psi}° (turntable)")
         except ValueError:
             self.print_to_message_center("Invalid alignment offset value")
     
@@ -4983,22 +4990,24 @@ class TAVIController(QObject):
         except ValueError:
             self.print_to_message_center("Invalid omega value")
     
-    def on_chi_changed(self):
-        """Handle chi (χ) change - sample out-of-plane tilt."""
+    def on_arc_changed(self):
+        """Handle an arc readout (sgl / sgu) edit: the arcs move Q out of the
+        plane, so Q is read back from the angles."""
         if self.updating:
             return
         try:
-            chi = float(self.window.instrument_dock.chi_edit.text() or 0)
-            # Only update if value actually changed (avoid spurious editingFinished signals)
-            if not self._field_value_changed('chi', chi):
+            sgl = float(self.window.instrument_dock.sgl_edit.text() or 0)
+            sgu = float(self.window.instrument_dock.sgu_edit.text() or 0)
+            # Evaluate both: an unchanged pair is a spurious editingFinished.
+            changed = [self._field_value_changed('sgl', sgl),
+                       self._field_value_changed('sgu', sgu)]
+            if not any(changed):
                 return
-            # The chi control is the lower-arc (sgl) readout.
-            self.instrument_state.sgl = chi
-            self.print_to_message_center(f"Sample χ updated: {chi}° (out-of-plane)")
-            # The lower arc moves Q out of the plane - trigger recalculation
+            self.instrument_state.sgl, self.instrument_state.sgu = sgl, sgu
+            self.print_to_message_center(f"Sample arcs updated: sgl = {sgl}°, sgu = {sgu}°")
             self.on_angles_changed()
         except ValueError:
-            self.print_to_message_center("Invalid chi value")
+            self.print_to_message_center("Invalid arc (sgl/sgu) value")
     
     def on_load_misalignment_hash(self):
         """Handle loading misalignment from hash - apply hidden values to instrument."""
@@ -5149,12 +5158,12 @@ class TAVIController(QObject):
         pw = self.window.ub_matrix_dock.get_peak_widget(peak_index)
         if pw:
             pw.set_angles_from_position(
-                vals['omega'], vals['chi'], vals['stt'],
+                vals['omega'], vals['sgl'], vals['stt'],
                 vals['Ki'], vals['Kf'],
             )
             self.print_to_message_center(
                 f"Peak {peak_index + 1}: position taken "
-                f"(ω={vals['omega']:.2f}°, χ={vals['chi']:.2f}°, 2θ={vals['stt']:.2f}°, "
+                f"(ω={vals['omega']:.2f}°, sgl={vals['sgl']:.2f}°, 2θ={vals['stt']:.2f}°, "
                 f"ki={vals['Ki']:.4f}, kf={vals['Kf']:.4f})"
             )
 
@@ -5483,7 +5492,8 @@ class TAVIController(QObject):
             "mtt_var": self.window.instrument_dock.mtt_edit.text(),
             "stt_var": self.window.instrument_dock.stt_edit.text(),
             "omega_var": self.window.instrument_dock.omega_edit.text(),
-            "chi_var": self.window.instrument_dock.chi_edit.text(),
+            "sgl_var": self.window.instrument_dock.sgl_edit.text(),
+            "sgu_var": self.window.instrument_dock.sgu_edit.text(),
             "att_var": self.window.instrument_dock.att_edit.text(),
             "Ki_var": self.window.instrument_dock.Ki_edit.text(),
             "Kf_var": self.window.instrument_dock.Kf_edit.text(),
@@ -5761,7 +5771,10 @@ class TAVIController(QObject):
                 )
                 self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", stt)))
                 self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", omega)))
-                self.window.instrument_dock.chi_edit.setText(format_editable_number(parameters.get("chi_var", 0)))
+                # A save from before the arcs carries the lower arc as chi_var.
+                self.window.instrument_dock.sgl_edit.setText(format_editable_number(
+                    parameters.get("sgl_var", parameters.get("chi_var", 0))))
+                self.window.instrument_dock.sgu_edit.setText(format_editable_number(parameters.get("sgu_var", 0)))
                 self._set_tracked_angle_text(
                     'att', self.window.instrument_dock.att_edit,
                     parameters.get("att_var", att),
@@ -6056,7 +6069,7 @@ class TAVIController(QObject):
                 "reference angle solve failed for %s (mono=%s, ana=%s): %s",
                 self.descriptor.id, monocris, anacris, error_flags,
             )
-        mtt, stt, sth, saz, att = angles
+        mtt, stt, sth, _sgl, att = angles
         return mtt, stt, sth, att
 
     def _default_parameter_values(self):
@@ -6089,7 +6102,7 @@ class TAVIController(QObject):
             d.mono_crystals[0].id, d.ana_crystals[0].id,
         )
         vals = {
-            'mtt': mtt, 'stt': stt, 'omega': omega, 'chi': 0.0,
+            'mtt': mtt, 'stt': stt, 'omega': omega, 'sgl': 0.0, 'sgu': 0.0,
             'att': att,
             'Ki': 2.6634, 'Ei': 14.7, 'Kf': 2.6634, 'Ef': 14.7,
             'K_fixed': "Kf Fixed", 'fixed_E': 14.7,
@@ -6166,7 +6179,8 @@ class TAVIController(QObject):
         self._set_tracked_angle_text('mtt', self.window.instrument_dock.mtt_edit, mtt)
         self.window.instrument_dock.stt_edit.setText(format_editable_number(stt))
         self.window.instrument_dock.omega_edit.setText(format_editable_number(omega))
-        self.window.instrument_dock.chi_edit.setText("0")
+        self.window.instrument_dock.sgl_edit.setText("0")
+        self.window.instrument_dock.sgu_edit.setText("0")
         self._set_tracked_angle_text('att', self.window.instrument_dock.att_edit, att)
         self.window.instrument_dock.Ki_edit.setText("2.6634")
         self.window.instrument_dock.Kf_edit.setText("2.6634")
@@ -7176,7 +7190,8 @@ class TAVIController(QObject):
             'mtt': (p_float, set_text(idock.mtt_edit), self.on_mtt_changed),
             'stt': (p_float, set_text(idock.stt_edit), self.on_stt_changed),
             'omega': (p_float, set_text(idock.omega_edit), self.on_omega_changed),
-            'chi': (p_float, set_text(idock.chi_edit), self.on_chi_changed),
+            'sgl': (p_float, set_text(idock.sgl_edit), self.on_arc_changed),
+            'sgu': (p_float, set_text(idock.sgu_edit), self.on_arc_changed),
             'att': (p_float, set_text(idock.att_edit), self.on_att_changed),
             # energies
             'Ki': (p_float, set_text(idock.Ki_edit), self.on_Ki_changed),
@@ -7252,8 +7267,16 @@ class TAVIController(QObject):
         'lattice_alpha', 'lattice_beta', 'lattice_gamma',
         'K_fixed', 'fixed_E', 'Ki', 'Ei', 'Kf', 'Ef',
         'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
-        'mtt', 'stt', 'omega', 'chi', 'att',
+        'mtt', 'stt', 'omega', 'sgl', 'sgu', 'att',
     )
+
+    # Fields the API once accepted and now refuses with a reason (D6): the
+    # old chi was a beam-fixed tilt under the turntable, so aliasing it to an
+    # arc would give different physics under the old name.
+    _API_REMOVED_FIELDS = {
+        'chi': "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper); "
+               "'kappa' is the lower-arc correction",
+    }
 
     def _scan_busy(self):
         """True when any scan job is queued or running.
@@ -7386,7 +7409,7 @@ class TAVIController(QObject):
                 continue
             spec = field_map.get(name)
             if spec is None:
-                errors[name] = "unknown field"
+                errors[name] = self._API_REMOVED_FIELDS.get(name, "unknown field")
                 continue
             parse_fn = spec[0]
             try:
@@ -7705,8 +7728,8 @@ class TAVIController(QObject):
         # gets an entry, unknowns default to number/None.
         meta = {
             'mtt': ('number', 'degrees'), 'stt': ('number', 'degrees'),
-            'omega': ('number', 'degrees'), 'chi': ('number', 'degrees'),
-            'att': ('number', 'degrees'),
+            'omega': ('number', 'degrees'), 'sgl': ('number', 'degrees'),
+            'sgu': ('number', 'degrees'), 'att': ('number', 'degrees'),
             'Ki': ('number', 'angstrom^-1'), 'Ei': ('number', 'meV'),
             'Kf': ('number', 'angstrom^-1'), 'Ef': ('number', 'meV'),
             'K_fixed': ('string', None), 'fixed_E': ('number', 'meV'),

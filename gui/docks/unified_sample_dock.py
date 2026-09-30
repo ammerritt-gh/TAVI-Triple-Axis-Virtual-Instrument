@@ -259,18 +259,18 @@ class UnifiedSampleDock(BaseDockWidget):
         orientation_layout.setSpacing(5)
         orientation_group.setLayout(orientation_layout)
         
-        # Row 0: psi (ψ) - offset for omega, kappa (κ) - offset for chi
+        # Row 0: psi (ψ) corrects the turntable A3, kappa (κ) the lower arc sgl
         orientation_layout.addWidget(QLabel("ψ:"), 0, 0)
         self.psi_edit = QLineEdit()
         self.psi_edit.setMaximumWidth(70)
-        self.psi_edit.setToolTip("Alignment offset for ω (omega) - in-plane")
+        self.psi_edit.setToolTip("Correction of the turntable A3 (ω) - in-plane")
         orientation_layout.addWidget(self.psi_edit, 0, 1)
         orientation_layout.addWidget(QLabel("°"), 0, 2)
-        
+
         orientation_layout.addWidget(QLabel("κ:"), 0, 3)
         self.kappa_edit = QLineEdit()
         self.kappa_edit.setMaximumWidth(70)
-        self.kappa_edit.setToolTip("Alignment offset for χ (chi) - out-of-plane")
+        self.kappa_edit.setToolTip("Correction of the lower arc sgl - out-of-plane")
         orientation_layout.addWidget(self.kappa_edit, 0, 4)
         orientation_layout.addWidget(QLabel("°"), 0, 5)
         

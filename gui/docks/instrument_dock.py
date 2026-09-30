@@ -11,6 +11,8 @@ groups:
   from descriptor lists and reached through the accessor methods below; the
   controller no longer touches them by attribute name.
 """
+import math
+
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QCheckBox, QGroupBox, QFormLayout, QGridLayout,
                                 QPushButton, QWidget)
@@ -75,18 +77,31 @@ class InstrumentDock(BaseDockWidget):
         self.stt_edit.setMaximumWidth(70)
         angles_layout.addWidget(self.stt_edit, 0, 3)
 
-        # Row 1: Sample omega (ω), Sample chi (χ)
+        # Row 1: Sample omega (ω, the A3 turntable readout), lower arc sgl
         angles_layout.addWidget(QLabel("ω:"), 1, 0)
         self.omega_edit = QLineEdit()
         self.omega_edit.setMaximumWidth(70)
-        self.omega_edit.setToolTip("Sample rotation angle (in-plane)")
+        self.omega_edit.setToolTip("Sample turntable readout A3 (in-plane)")
         angles_layout.addWidget(self.omega_edit, 1, 1)
 
-        angles_layout.addWidget(QLabel("χ:"), 1, 2)
-        self.chi_edit = QLineEdit()
-        self.chi_edit.setMaximumWidth(70)
-        self.chi_edit.setToolTip("Sample tilt angle (out-of-plane)")
-        angles_layout.addWidget(self.chi_edit, 1, 3)
+        # The goniometer arcs (descriptor goniometer): solved from Q/HKL,
+        # operator-set for angle-mode scans. Travel from the descriptor.
+        travel = {ax.name: ax for ax in self.descriptor.goniometer}
+        self.sgl_edit = QLineEdit()
+        self.sgu_edit = QLineEdit()
+        for row, name, edit, text in (
+            (1, "sgl", self.sgl_edit, "Lower goniometer arc sgl (tilt about the beam axis, rides on A3)"),
+            (2, "sgu", self.sgu_edit, "Upper goniometer arc sgu (rides on sgl)"),
+        ):
+            ax = travel.get(name)
+            if ax is None or math.isinf(ax.lower):
+                limits = "travel undocumented (unlimited)"
+            else:
+                limits = f"travel {ax.lower:g}° to {ax.upper:g}°"
+            edit.setMaximumWidth(70)
+            edit.setToolTip(f"{text}. Solved from Q/HKL; set it here for angle-mode scans; {limits}.")
+            angles_layout.addWidget(QLabel(f"{name}:"), row, 2)
+            angles_layout.addWidget(edit, row, 3)
 
         # Row 2: Analyzer 2theta
         angles_layout.addWidget(QLabel("Ana 2θ:"), 2, 0)
@@ -410,7 +425,7 @@ class InstrumentDock(BaseDockWidget):
     def line_edits_for_feedback(self):
         """All value-bearing QLineEdits, for the controller's visual feedback."""
         edits = [
-            self.mtt_edit, self.stt_edit, self.omega_edit, self.chi_edit,
+            self.mtt_edit, self.stt_edit, self.omega_edit, self.sgl_edit, self.sgu_edit,
             self.att_edit, self.Ki_edit, self.Ei_edit, self.Kf_edit, self.Ef_edit,
             self.rhm_edit, self.rvm_edit, self.rha_edit, self.rva_edit,
         ]
