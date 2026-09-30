@@ -70,3 +70,13 @@ def test_restoring_a_misalignment_hash_applies_both_angles(controller, messages)
     assert controller.instrument_state.mis_omega == pytest.approx(1.5)
     assert controller.instrument_state.mis_chi == pytest.approx(-0.75)
     assert controller.window.misalignment_dock.get_loaded_misalignment() == pytest.approx((1.5, -0.75))
+
+
+def test_plane_refresh_failure_reaches_the_message_center(controller, messages, monkeypatch):
+    def broken():
+        raise RuntimeError("plane probe")
+
+    monkeypatch.setattr(controller.ub_matrix, "get_plane_info", broken)
+    controller._update_ub_display()
+
+    assert any("plane probe" in m for m in messages)
