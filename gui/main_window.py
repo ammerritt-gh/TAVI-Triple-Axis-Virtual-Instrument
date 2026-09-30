@@ -3,12 +3,14 @@ import sys
 import os
 import json
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                                QScrollArea, QMenuBar, QMenu, QMessageBox)
+                                QScrollArea, QMenuBar, QMenu, QMessageBox,
+                                QInputDialog)
 from PySide6.QtCore import Qt, QByteArray, QTimer
 from PySide6.QtGui import QAction, QActionGroup
 
 import tavi
 from tavi.local_state import config_path as local_config_path
+from tavi.settings import MPI_COUNT_MAX
 from gui.docks.instrument_dock import InstrumentDock
 from gui.docks.unified_scattering_dock import UnifiedScatteringDock
 from gui.docks.unified_sample_dock import UnifiedSampleDock
@@ -365,6 +367,14 @@ class TAVIMainWindow(QMainWindow):
         benchmark_action.triggered.connect(self._open_benchmark_dialog)
         utilities_menu.addAction(benchmark_action)
 
+        # ===== Config Menu =====
+        # Machine-level preferences, stored in config/settings.json.
+        config_menu = menubar.addMenu("&Config")
+
+        mpi_action = QAction("&MPI processes…", self)
+        mpi_action.triggered.connect(self._open_mpi_dialog)
+        config_menu.addAction(mpi_action)
+
         # ===== Help Menu =====
         help_menu = menubar.addMenu("&Help")
 
@@ -451,6 +461,31 @@ class TAVIMainWindow(QMainWindow):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _open_mpi_dialog(self):
+        """Ask for the MPI process count; the controller persists it."""
+        controller = getattr(self, "controller", None)
+        if controller is None:
+            QMessageBox.warning(self, "MPI processes", "Controller not ready yet.")
+            return
+        cores = os.cpu_count() or "an unknown number of"
+        label = (
+            "MPI processes per simulated point.\n"
+            f"This computer has {cores} logical processors. On Linux and macOS, "
+            "Open MPI allows at most one process per physical core, often half "
+            "that number; Windows allows more.\n"
+            "Applies from the next scan."
+        )
+        value, ok = QInputDialog.getInt(
+            self, "MPI processes", label, controller.mpi_count, 1, MPI_COUNT_MAX
+        )
+        if not ok or value == controller.mpi_count:
+            return
+        try:
+            controller.set_mpi_count(value)
+        except OSError as exc:
+            QMessageBox.warning(self, "MPI processes",
+                                f"Could not save the setting: {exc}")
 
     def _store_default_state(self):
         """Store the default window state for reset functionality."""

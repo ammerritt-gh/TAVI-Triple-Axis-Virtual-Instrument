@@ -38,10 +38,13 @@ if TYPE_CHECKING:  # avoid importing heavy modules just for type hints
 # (monocris/anacris/K_fixed/fixed_E/sample_mount/omega/...) on it directly.
 InstrumentState = Any
 
-# Default MPI worker count for a McStas point run. There is no GUI knob for this
-# today; the fan-out width is fixed here and referenced by the run-point sites
-# (and recorded on mcstas scan records for future-proofing).
-DEFAULT_MPI_COUNT = 30
+# Default MPI worker count for a McStas point run, used when config/settings.json
+# has no mpi_count (a new install). The operator changes it from
+# Config -> MPI processes...; the controller reads it once per scan.
+# Ceiling: a flat 4 can still fail on a 2-core Linux host (Open MPI refuses to
+# oversubscribe); that user lowers it through the menu. Upgrade path: a
+# core-count-aware default.
+DEFAULT_MPI_COUNT = 4
 
 
 class CurvatureMode(str, Enum):

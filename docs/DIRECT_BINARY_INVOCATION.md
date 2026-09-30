@@ -26,7 +26,7 @@ McStasScript subprocess.run(shell=True)
         → McStas.runMPI()
           → subprocess.run(shell=True)
             → cmd.exe
-              → <resolved MPI launcher> -np 30 PUMA_McScript.exe ...
+              → <resolved MPI launcher> -np <mpi_count> PUMA_McScript.exe ...
 ```
 
 Two Python interpreters, two cmd.exe shells, full module import chain — all repeated every point. On Windows this is 300-700ms of overhead per point, which is ~10-15% of wall time for short simulations.
@@ -50,7 +50,7 @@ Keep `InstrumentPlugin.run_point()` as the controller-facing execution seam. PUM
 Confirmed from `mccode.sim` output and `mccode.py` source:
 
 ```
-<mpi-launcher> -np 30 PUMA_McScript.exe --ncount=1000000 --dir=C:\path\to\scan_0001 A1_param=45.0 A2_param=-30.0 saz_param=0.0 ...
+<mpi-launcher> -np <mpi_count> PUMA_McScript.exe --ncount=1000000 --dir=C:\path\to\scan_0001 A1_param=45.0 A2_param=-30.0 saz_param=0.0 ...
 ```
 
 The params snapshot dict already carries the exact McStas runtime parameter names needed for CLI `name=value` arguments. The `--dir` flag specifies the output directory for detector files. McStas creates the directory if it doesn't exist.

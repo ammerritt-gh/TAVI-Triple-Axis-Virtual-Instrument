@@ -242,6 +242,12 @@ The benchmark writes its output to folders prefixed `benchmark_` so they are eas
 
 Computes the theoretical instrument resolution (FWHMs and projection ellipses) for the current setup at a chosen (H, K, L, ΔE). It reads the live main-window configuration but changes nothing.
 
+## Config
+
+The **Config** menu holds machine-level preferences. They are stored in `config/settings.json` on this computer, so setup scripts do not overwrite them.
+
+**Config → MPI processes…** sets how many MPI processes each simulated point uses. New installs start at 4. The dialog shows this computer's number of logical processors; on Linux and macOS, Open MPI allows at most one process per physical core (often half the logical count), while Windows allows more. The change applies from the next scan. Time estimates use history recorded at the same count (plus older runs from before the count was recorded), so after switching to a count with no history the first scan may show no estimate.
+
 ### Updates
 
 This user guide was last updated Jul. 28, 2026.

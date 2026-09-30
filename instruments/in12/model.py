@@ -361,7 +361,6 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
         instrument.settings(
             output_path="./output",
             ncount=number_neutrons,
-            mpi=30,
             force_compile=True,
             increment_folder_name=False,
             openacc=False,
