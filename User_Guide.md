@@ -51,6 +51,9 @@ The sample sits on a turntable (A3, the ω field) carrying two crossed arcs, a l
 
 A saved session whose UB matrix is not the default simulates a different crystal orientation than before this change. Until now the McStas sample received the inverse of the rotation the UB described, so a crystal oriented 23° one way was simulated 23° the other way; it now sits where the UB puts it. In such a session, re-check peak positions or refit the UB.
 
+### UB matrix peaks
+Each observed peak in the UB Matrix dock shows one angle per goniometer axis (A3, `sgl`, `sgu`), then 2θ, ki and kf. **Take Position** records the whole stage as it is at that moment: every arc readout, the ψ and κ corrections in force, ki, kf and the scattering sense. Calculate UB reads every recorded peak at the dial position it was really taken at, so changing ψ or κ afterwards does not move a peak that is already recorded. The fit is exact when the new corrections cancel the sample's misalignment, or when the peaks lie in the plane. Otherwise it is the best fit: a correction is not the same as turning the crystal once the arcs move. Peaks saved before the goniometer, and peaks from other tools, have no stage record. They are marked **legacy**, keep their old (ω, χ, 2θ) meaning and still fit as before; press Take Position again to record one on the stage.
+
 ### Misalignment Training Dock
 By default, the sample is perfectly aligned in the beam. It is possible to create an obfuscated misalignment in the sample that can then be corrected, for example when training a student in aligning a sample. To generate and correct a misalignment, follow these steps:
 1. Enter the desired misalignment of the turntable (ω mis, in-plane) and of the lower arc (sgl mis, out-of-plane). Click "generate hash" and delete these entries if the student will be using the computer later.
@@ -227,6 +230,8 @@ You can load data folders here as well, and they will be displayed in the displa
 ## Remote API
 
 TAVI can be driven remotely by an external program (a script, a notebook, `curl`, or an LLM agent) through a local HTTP API, in addition to the interactive GUI. Remote clients can read the instrument state, change parameters, submit scans, stream live results, and download scan data; everything they do is mirrored back into the GUI so you can watch. The **Remote API** dock shows the listening address, lets you set the access mode (Allow control / Read-only / Off), and displays the job queue, budget, and an activity log. The server listens on `127.0.0.1:8642` by default and is off-limits to other machines unless you change that. For the full reference — endpoints, parameters, scan-command syntax, and worked examples — see `docs/API_USER_GUIDE.md`.
+
+The API follows the goniometer: the arc readouts `sgl` and `sgu` are writable parameters and angle-mode scan variables. The old `chi` is refused, both as a parameter write (HTTP 400) and as a scan variable, with a message naming `sgl` and `sgu`. A client that still sends `chi` must switch to the arcs.
 
 ## Utilities
 

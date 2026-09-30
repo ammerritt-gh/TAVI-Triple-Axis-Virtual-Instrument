@@ -25,6 +25,7 @@ from tavi.orientation import (
     gonio_from_record,
     q_mount_from_legacy_angles,
     q_mount_from_stage,
+    record_angles,
 )
 from tavi.sample_mount import reciprocal_basis_tas
 
@@ -83,11 +84,13 @@ class ObservedPeak:
         kf: Scattered wavevector at observation (inverse Angstroms).
         locked: Whether this peak entry is locked from editing.
         sense_sample: Sample scattering sense (+1/-1) the peak was taken on.
-            None (a legacy save, a TAS_MCP peak) resolves to the sign of stt.
-        stage: Optional stage record (``tavi.orientation.stage_record``:
-            the axes and their angles in the frame the UB lives in). When
-            present, Q is read through the full stage and only ``stt`` of
-            ``angles`` is used; None reads the legacy triple's meaning.
+            None resolves to the stage record's sense, else (a legacy save,
+            a TAS_MCP peak) to the sign of stt.
+        stage: Optional stage record (``tavi.orientation.stage_record``: the
+            axes, their readouts, and from Take Position the corrections in
+            force, ki, kf and the sense). When present, Q is read through the
+            full stage and only ``stt`` of ``angles`` is used; None (a
+            "legacy" peak) reads the legacy triple's meaning.
     """
     hkl: tuple = (0.0, 0.0, 0.0)
     angles: tuple = (0.0, 0.0, 0.0)  # (sth, saz, stt)
@@ -98,19 +101,39 @@ class ObservedPeak:
     stage: Optional[dict] = None
 
     def __post_init__(self):
+        if self.sense_sample is None and self.stage is not None:
+            self.sense_sample = self.stage.get("sense")
         if self.sense_sample is None:
             self.sense_sample = 1 if self.angles[2] > 0 else -1
 
     @property
-    def q_lab(self) -> np.ndarray:
-        """U @ B @ hkl in the mounted sample frame, from the stored setting."""
+    def is_legacy(self) -> bool:
+        """No stage record: the angles are the legacy (sth, saz, stt) triple."""
+        return self.stage is None
+
+    def q_mount(self, corrections=None) -> np.ndarray:
+        """U @ B @ hkl measured at this peak, in the readout frame of
+        ``corrections`` (the corrections in force now, {axis: degrees}).
+
+        A stage peak enters at readout + (correction at record time -
+        correction now), so a correction changed after Take Position does not
+        move it; ``corrections`` None reads it as recorded. Hidden zero errors
+        are never part of a record. A legacy peak ignores ``corrections``.
+        """
         sth, saz, stt = self.angles
         if self.ki <= 0 or self.kf <= 0:
             return np.array([0.0, 0.0, 0.0])
         if self.stage is not None:
-            return q_mount_from_stage(gonio_from_record(self.stage), self.stage["angles"],
+            return q_mount_from_stage(gonio_from_record(self.stage),
+                                      record_angles(self.stage, corrections),
                                       stt, self.ki, self.kf, self.sense_sample)
         return q_mount_from_legacy_angles(sth, saz, stt, self.ki, self.kf, self.sense_sample)
+
+    @property
+    def q_lab(self) -> np.ndarray:
+        """U @ B @ hkl in the mounted sample frame, from the stored setting
+        (``q_mount`` as recorded)."""
+        return self.q_mount()
 
     @property
     def is_valid(self) -> bool:
@@ -150,7 +173,7 @@ class ObservedPeak:
 
 
 def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
-                          B: np.ndarray) -> np.ndarray:
+                          B: np.ndarray, corrections=None) -> np.ndarray:
     """Calculate the U orientation matrix from two observed Bragg peaks.
 
     Uses the Busing-Levy (1967) method:
@@ -162,6 +185,8 @@ def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
         peak1: First observed Bragg peak.
         peak2: Second observed Bragg peak.
         B: 3x3 B matrix.
+        corrections: The corrections in force now ({axis: degrees}); the fit
+            is in their readout frame (``ObservedPeak.q_mount``).
 
     Returns:
         np.ndarray: 3x3 U matrix (orthogonal, det ~ +1).
@@ -174,8 +199,8 @@ def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
     q2_c = B @ np.array(peak2.hkl)
 
     # Lab-frame Q vectors
-    q1_l = peak1.q_lab
-    q2_l = peak2.q_lab
+    q1_l = peak1.q_mount(corrections)
+    q2_l = peak2.q_mount(corrections)
 
     # Validate
     for label, v in [("peak1 crystal", q1_c), ("peak2 crystal", q2_c),
@@ -208,7 +233,7 @@ def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
     return U
 
 
-def refine_U_matrix(peaks: list, B: np.ndarray) -> np.ndarray:
+def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:
     """Calculate U from multiple peaks using SVD-based Procrustes solution.
 
     Minimizes sum_i ||q_lab_i - U @ B @ hkl_i||^2 subject to U being orthogonal.
@@ -218,6 +243,7 @@ def refine_U_matrix(peaks: list, B: np.ndarray) -> np.ndarray:
     Args:
         peaks: List of ObservedPeak instances.
         B: 3x3 B matrix.
+        corrections: The corrections in force now (see calculate_U_two_peaks).
 
     Returns:
         np.ndarray: 3x3 U matrix (orthogonal, det ~ +1).
@@ -226,7 +252,7 @@ def refine_U_matrix(peaks: list, B: np.ndarray) -> np.ndarray:
     if len(valid_peaks) < 2:
         raise ValueError(f"Need at least 2 valid peaks, got {len(valid_peaks)}.")
     if len(valid_peaks) == 2:
-        return calculate_U_two_peaks(valid_peaks[0], valid_peaks[1], B)
+        return calculate_U_two_peaks(valid_peaks[0], valid_peaks[1], B, corrections)
 
     # Build paired point sets: q_crystal (P) and q_lab (Q)
     # We want U such that Q ~ U @ P
@@ -235,7 +261,7 @@ def refine_U_matrix(peaks: list, B: np.ndarray) -> np.ndarray:
 
     for i, peak in enumerate(valid_peaks):
         P[:, i] = B @ np.array(peak.hkl)
-        Q[:, i] = peak.q_lab
+        Q[:, i] = peak.q_mount(corrections)
 
     # Cross-covariance matrix
     H_mat = P @ Q.T  # Note: we want U s.t. Q = U @ P, so H = P @ Q^T
@@ -514,8 +540,12 @@ class UBMatrix:
         q = np.array([float(qx), float(qy), float(qz)])
         hkl = np.linalg.solve(self._UB, q)
         return float(hkl[0]), float(hkl[1]), float(hkl[2])
-    def calculate_U_from_peaks(self) -> np.ndarray:
+    def calculate_U_from_peaks(self, corrections=None) -> np.ndarray:
         """Calculate U from stored peaks and apply it.
+
+        ``corrections`` are the corrections in force now ({axis: degrees});
+        the fitted UB lives in their readout frame. None reads every peak as
+        recorded.
 
         Returns:
             np.ndarray: The calculated U matrix.
@@ -525,9 +555,9 @@ class UBMatrix:
             raise ValueError(f"Need at least 2 valid peaks, have {len(valid)}.")
 
         if len(valid) == 2:
-            U = calculate_U_two_peaks(valid[0], valid[1], self._B)
+            U = calculate_U_two_peaks(valid[0], valid[1], self._B, corrections)
         else:
-            U = refine_U_matrix(valid, self._B)
+            U = refine_U_matrix(valid, self._B, corrections)
 
         self.set_U(U)
         return U

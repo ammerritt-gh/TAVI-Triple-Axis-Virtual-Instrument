@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt, Signal
 
 from gui.docks.base_dock import BaseDockWidget
+from instruments.descriptor import tas_goniometer
+from tavi.orientation import stage_record
 
 
 class LatticeRefinementDialog(QDialog):
@@ -88,17 +90,30 @@ class LatticeRefinementDialog(QDialog):
 
 
 class PeakEntryWidget(QFrame):
-    """Widget for a single observed Bragg peak entry."""
+    """Widget for a single observed Bragg peak entry.
+
+    The angle columns follow the goniometer description: one readout per
+    stage axis, then the sample two-theta. A peak taken with Take Position
+    carries a stage record (``tavi.orientation.stage_record``: readouts,
+    corrections in force, ki, kf, sense). A peak without one (a save from
+    before the goniometer, a TAS_MCP peak) keeps the legacy (omega, chi, 2theta)
+    triple and its meaning, and is marked "legacy" -- derived from the missing
+    record, never stored.
+    """
 
     # Signals
     take_position_requested = Signal(int)  # peak index
     remove_requested = Signal(int)  # peak index
     peak_data_changed = Signal(int)  # peak index
 
-    def __init__(self, index: int, parent=None):
+    def __init__(self, index: int, gonio, parent=None):
         super().__init__(parent)
         self.index = index
         self._locked = False
+        self._gonio = tuple(gonio)
+        self._stage = None      # the stage record, or None when legacy
+        self._legacy = False
+        self._sense = None      # sense_sample as loaded (legacy peaks)
 
         self.setFrameShape(QFrame.StyledPanel)
         self.setFrameShadow(QFrame.Raised)
@@ -107,14 +122,23 @@ class PeakEntryWidget(QFrame):
         main_layout.setContentsMargins(4, 4, 4, 4)
         main_layout.setSpacing(3)
 
-        # Header row: Peak label + lock + remove
+        # Header row: Peak label + legacy mark + lock + remove
         header_layout = QHBoxLayout()
         header_layout.setSpacing(4)
         self.peak_label = QLabel(f"<b>Peak {index + 1}</b>")
         header_layout.addWidget(self.peak_label)
+        self.legacy_label = QLabel("legacy")
+        self.legacy_label.setStyleSheet("color: #8a6d00; font-style: italic;")
+        self.legacy_label.setToolTip(
+            "Recorded before the sample goniometer: its angles are the old "
+            "(ω, χ, 2θ) triple and are read with that meaning. "
+            "Take Position again to record it on the stage."
+        )
+        self.legacy_label.setVisible(False)
+        header_layout.addWidget(self.legacy_label)
         header_layout.addStretch()
 
-        self.valid_indicator = QLabel("\u26a0")  # warning by default
+        self.valid_indicator = QLabel("⚠")  # warning by default
         self.valid_indicator.setToolTip("Peak incomplete")
         header_layout.addWidget(self.valid_indicator)
 
@@ -122,7 +146,7 @@ class PeakEntryWidget(QFrame):
         self.lock_check.toggled.connect(self._on_lock_toggled)
         header_layout.addWidget(self.lock_check)
 
-        self.remove_button = QPushButton("\u2717")
+        self.remove_button = QPushButton("✗")
         self.remove_button.setMaximumWidth(25)
         self.remove_button.setToolTip("Remove this peak")
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.index))
@@ -148,46 +172,76 @@ class PeakEntryWidget(QFrame):
         self.l_edit = QLineEdit("0")
         fields_grid.addWidget(self.l_edit, 0, 5)
 
-        # Row 1: Angles
-        fields_grid.addWidget(QLabel("\u03c9:"), 1, 0)
-        self.omega_edit = QLineEdit("0")
-        self.omega_edit.setToolTip("Sample theta (sth)")
-        fields_grid.addWidget(self.omega_edit, 1, 1)
-        fields_grid.addWidget(QLabel("\u03c7:"), 1, 2)
-        self.chi_edit = QLineEdit("0")
-        self.chi_edit.setToolTip("Sample azimuthal (saz)")
-        fields_grid.addWidget(self.chi_edit, 1, 3)
-        fields_grid.addWidget(QLabel("2\u03b8:"), 1, 4)
+        # Row 1: one readout per goniometer axis (at most three: the
+        # validator's ceiling), labelled by the description.
+        self.axis_labels = []
+        self.axis_edits = []
+        for column, ax in enumerate(self._gonio):
+            label = QLabel(f"{ax.name}:")
+            edit = QLineEdit("0")
+            edit.setToolTip(f"Stage readout {ax.name} when the peak was taken")
+            fields_grid.addWidget(label, 1, 2 * column)
+            fields_grid.addWidget(edit, 1, 2 * column + 1)
+            self.axis_labels.append(label)
+            self.axis_edits.append(edit)
+
+        # Row 2: 2theta, ki, kf
+        fields_grid.addWidget(QLabel("2θ:"), 2, 0)
         self.stt_edit = QLineEdit("0")
         self.stt_edit.setToolTip("Sample two-theta")
-        fields_grid.addWidget(self.stt_edit, 1, 5)
-
-        # Row 2: ki/kf + Take Position button
-        fields_grid.addWidget(QLabel("ki:"), 2, 0)
+        fields_grid.addWidget(self.stt_edit, 2, 1)
+        fields_grid.addWidget(QLabel("ki:"), 2, 2)
         self.ki_edit = QLineEdit("0")
-        fields_grid.addWidget(self.ki_edit, 2, 1)
-        fields_grid.addWidget(QLabel("kf:"), 2, 2)
+        fields_grid.addWidget(self.ki_edit, 2, 3)
+        fields_grid.addWidget(QLabel("kf:"), 2, 4)
         self.kf_edit = QLineEdit("0")
-        fields_grid.addWidget(self.kf_edit, 2, 3)
+        fields_grid.addWidget(self.kf_edit, 2, 5)
+
+        # Row 3: Take Position
         self.take_position_button = QPushButton("\U0001f4cd Take Position")
-        self.take_position_button.setToolTip("Fill angles from current instrument position")
+        self.take_position_button.setToolTip(
+            "Record the current stage readouts, the corrections in force, ki, kf "
+            "and the scattering sense"
+        )
         self.take_position_button.clicked.connect(lambda: self.take_position_requested.emit(self.index))
-        fields_grid.addWidget(self.take_position_button, 2, 4, 1, 2)
+        fields_grid.addWidget(self.take_position_button, 3, 4, 1, 2)
 
         main_layout.addLayout(fields_grid)
 
         # Connect field changes to validation
-        for field in [self.h_edit, self.k_edit, self.l_edit,
-                      self.omega_edit, self.chi_edit, self.stt_edit,
-                      self.ki_edit, self.kf_edit]:
+        for field in self._fields():
             field.textChanged.connect(lambda _: self.peak_data_changed.emit(self.index))
         self.peak_data_changed.connect(lambda _: self._validate_self())
 
+    def _fields(self):
+        return [self.h_edit, self.k_edit, self.l_edit, *self.axis_edits,
+                self.stt_edit, self.ki_edit, self.kf_edit]
+
+    @staticmethod
+    def _fmt(value):
+        return f"{value:.4f}".rstrip('0').rstrip('.')
+
+    @property
+    def is_legacy(self) -> bool:
+        return self._legacy
+
+    def _set_legacy(self, legacy: bool):
+        """Show the legacy triple (omega, chi in the first two columns) or the
+        stage readouts."""
+        self._legacy = legacy
+        self.legacy_label.setVisible(legacy)
+        names = ("ω", "χ")
+        for column, (label, edit) in enumerate(zip(self.axis_labels, self.axis_edits)):
+            if legacy:
+                label.setText(f"{names[column]}:" if column < 2 else "")
+                edit.setVisible(column < 2)
+            else:
+                label.setText(f"{self._gonio[column].name}:")
+                edit.setVisible(True)
+
     def _on_lock_toggled(self, locked):
         self._locked = locked
-        for field in [self.h_edit, self.k_edit, self.l_edit,
-                      self.omega_edit, self.chi_edit, self.stt_edit,
-                      self.ki_edit, self.kf_edit]:
+        for field in self._fields():
             field.setReadOnly(locked)
             if locked:
                 field.setStyleSheet("background-color: #f0f0f0; color: #666;")
@@ -209,54 +263,79 @@ class PeakEntryWidget(QFrame):
         )
 
     def get_peak_data(self) -> dict:
-        """Return peak data from UI fields."""
+        """Return peak data from UI fields (``ObservedPeak.to_dict`` shape).
+
+        A stage peak's record takes the readouts from the axis fields; a peak
+        typed in by hand gets a record without corrections, read in the frame
+        of the moment. A legacy peak keeps its triple and no record.
+        """
         try:
-            return {
+            values = [float(edit.text() or 0) for edit in self.axis_edits]
+            stt = float(self.stt_edit.text() or 0)
+            data = {
                 'hkl': (float(self.h_edit.text() or 0),
                         float(self.k_edit.text() or 0),
                         float(self.l_edit.text() or 0)),
-                'angles': (float(self.omega_edit.text() or 0),
-                           float(self.chi_edit.text() or 0),
-                           float(self.stt_edit.text() or 0)),
                 'ki': float(self.ki_edit.text() or 0),
                 'kf': float(self.kf_edit.text() or 0),
                 'locked': self._locked,
             }
         except ValueError:
             return None
+        if self._legacy:
+            data.update(angles=(values[0], values[1], stt), stage=None,
+                        sense_sample=self._sense)
+            return data
+        readouts = {ax.name: value for ax, value in zip(self._gonio, values)}
+        stage = dict(self._stage) if self._stage else stage_record(self._gonio, readouts)
+        stage["angles"] = {**stage["angles"], **readouts}
+        data.update(angles=(readouts.get(self._gonio[0].name, 0.0), 0.0, stt),
+                    stage=stage, sense_sample=stage.get("sense"))
+        return data
 
-    def set_peak_data(self, hkl, angles, ki, kf, locked=False):
-        """Set peak data in UI fields."""
+    def set_peak_data(self, hkl, angles, ki, kf, locked=False, stage=None,
+                      sense_sample=None):
+        """Set peak data in UI fields; no ``stage`` record means a legacy peak."""
         h, k, l = hkl
-        omega, chi, stt = angles
-        self.h_edit.setText(f"{h:.4f}".rstrip('0').rstrip('.'))
-        self.k_edit.setText(f"{k:.4f}".rstrip('0').rstrip('.'))
-        self.l_edit.setText(f"{l:.4f}".rstrip('0').rstrip('.'))
-        self.omega_edit.setText(f"{omega:.4f}".rstrip('0').rstrip('.'))
-        self.chi_edit.setText(f"{chi:.4f}".rstrip('0').rstrip('.'))
-        self.stt_edit.setText(f"{stt:.4f}".rstrip('0').rstrip('.'))
-        self.ki_edit.setText(f"{ki:.4f}".rstrip('0').rstrip('.'))
-        self.kf_edit.setText(f"{kf:.4f}".rstrip('0').rstrip('.'))
+        self._stage = dict(stage) if stage else None
+        self._sense = sense_sample
+        self._set_legacy(stage is None)
+        self.h_edit.setText(self._fmt(h))
+        self.k_edit.setText(self._fmt(k))
+        self.l_edit.setText(self._fmt(l))
+        if stage is None:
+            omega, chi, _stt = angles
+            for edit, value in zip(self.axis_edits, (omega, chi, 0.0)):
+                edit.setText(self._fmt(value))
+        else:
+            for ax, edit in zip(self._gonio, self.axis_edits):
+                edit.setText(self._fmt(stage["angles"].get(ax.name, 0.0)))
+        self.stt_edit.setText(self._fmt(angles[2]))
+        self.ki_edit.setText(self._fmt(ki))
+        self.kf_edit.setText(self._fmt(kf))
         self.lock_check.setChecked(locked)
 
-    def set_angles_from_position(self, omega, chi, stt, ki, kf):
-        """Fill angle fields from current instrument position."""
+    def set_angles_from_position(self, record, stt, ki, kf):
+        """Take Position: store the stage record and fill the fields."""
         if self._locked:
             return
-        self.omega_edit.setText(f"{omega:.4f}".rstrip('0').rstrip('.'))
-        self.chi_edit.setText(f"{chi:.4f}".rstrip('0').rstrip('.'))
-        self.stt_edit.setText(f"{stt:.4f}".rstrip('0').rstrip('.'))
-        self.ki_edit.setText(f"{ki:.4f}".rstrip('0').rstrip('.'))
-        self.kf_edit.setText(f"{kf:.4f}".rstrip('0').rstrip('.'))
+        self._stage = dict(record)
+        self._sense = record.get("sense")
+        self._set_legacy(False)
+        for ax, edit in zip(self._gonio, self.axis_edits):
+            edit.setText(self._fmt(record["angles"].get(ax.name, 0.0)))
+        self.stt_edit.setText(self._fmt(stt))
+        self.ki_edit.setText(self._fmt(ki))
+        self.kf_edit.setText(self._fmt(kf))
 
     def update_valid_indicator(self, is_valid: bool):
         """Update the validity indicator."""
         if is_valid:
-            self.valid_indicator.setText("\u2713")
+            self.valid_indicator.setText("✓")
             self.valid_indicator.setStyleSheet("color: green; font-weight: bold;")
             self.valid_indicator.setToolTip("Peak valid")
         else:
-            self.valid_indicator.setText("\u26a0")
+            self.valid_indicator.setText("⚠")
             self.valid_indicator.setStyleSheet("color: orange;")
             self.valid_indicator.setToolTip("Peak incomplete")
 
@@ -270,10 +349,12 @@ class UBMatrixDock(BaseDockWidget):
     training_changed = Signal(bool)  # True if training loaded
     misalignment_from_training = Signal(float, float)  # (mis_omega, mis_chi)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, descriptor=None):
         super().__init__("UB Matrix", parent, use_scroll_area=True)
         self.setObjectName("UBMatrixDock")
 
+        # The peak angle columns follow the active instrument's goniometer.
+        self._gonio = tuple(descriptor.goniometer) if descriptor is not None else tas_goniometer()
         self._ub_locked = True
         self._saved_ub_values = {}
         self._loaded_training = None  # (U, mis_omega, mis_chi)
@@ -630,7 +711,7 @@ class UBMatrixDock(BaseDockWidget):
     def add_peak_entry(self):
         """Add a new peak entry widget."""
         index = len(self._peak_widgets)
-        peak_widget = PeakEntryWidget(index, self)
+        peak_widget = PeakEntryWidget(index, self._gonio, self)
         # Insert before the stretch
         self.peaks_layout.insertWidget(self.peaks_layout.count() - 1, peak_widget)
         self._peak_widgets.append(peak_widget)
@@ -675,6 +756,8 @@ class UBMatrixDock(BaseDockWidget):
                 data.get('ki', 0),
                 data.get('kf', 0),
                 data.get('locked', False),
+                stage=data.get('stage'),
+                sense_sample=data.get('sense_sample'),
             )
 
         # Ensure minimum 2

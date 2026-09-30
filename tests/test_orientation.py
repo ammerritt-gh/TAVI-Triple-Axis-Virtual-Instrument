@@ -168,6 +168,77 @@ def test_peak_sense_and_stage_round_trip_through_dict():
     assert back.stage == {"A3": 10.0}
 
 
+# --- 1.7: Take Position records the stage; the fit rule (A1) -------------------
+
+def _miss_deg(a, b):
+    return math.degrees(math.acos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1, 1)))
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("name", list(INSTRUMENTS))
+def test_correction_changed_after_take_position_keeps_the_crystal_in_place(models, name, sense):
+    """Peaks taken under psi = 1, psi then set to 2, refit, drive to a new HKL:
+    the emitted physical angles put the per-sense -/+ U_true B hkl on Q_lab.
+
+    Hidden zero errors are on throughout and are never part of a record. The
+    new psi (and kappa) cancel them, the one case where the operator's model
+    (readout frame, no zero errors) is exact for a tilted crystal: a turntable
+    or lower-arc offset is not a mount rotation once the arcs move, so any
+    other case can only be fitted in the least-squares sense."""
+    from instruments.tas_runtime import stage_corrections
+
+    model = copy.deepcopy(models[name])
+    model.sense_sample = sense
+    u_true = _rot((1, 0, 0), 3.0) @ U_IN_PLANE
+    model.sample_mount = SampleMount(CUBIC_B, u_true)
+    model.mis_omega, model.mis_chi, model.kappa = -2.0, -0.3, 0.3
+    gonio = model.goniometer
+
+    def solve(q_mount):
+        qx, qy, qz = component_q_to_instrument_q(q_mount)
+        angles, flags = model.calculate_stage_angles(
+            qx, qy, qz, 0.0, E_K, "Kf Fixed", "pg002", "pg002")
+        assert flags == []
+        return angles
+
+    # Take Position under psi = 1 at the setting where the TRUE crystal reflects.
+    model.psi = 1.0
+    peaks = []
+    for hkl in [(1, 0, 0), (0, 1, 0), (1, 1, 0)]:
+        _mtt, stt, a3, sgl, _att, sgu = solve(u_true @ CUBIC_B @ np.array(hkl, float))
+        readouts = {"A3": a3 - model.psi - model.mis_omega,     # physical -> readout
+                    "sgl": sgl - model.kappa - model.mis_chi, "sgu": sgu}
+        record = stage_record(gonio, readouts, stage_corrections(model.psi, model.kappa),
+                              ki=K, kf=K, sense=sense)
+        assert set(record) == {"axes", "angles", "corrections", "ki", "kf", "sense"}
+        peaks.append(ObservedPeak(hkl=hkl, angles=(readouts["A3"], 0.0, stt), ki=K, kf=K,
+                                  stage=record))
+    assert all(p.sense_sample == sense for p in peaks)
+
+    model.psi = 2.0
+    target = np.array((1, -1, 0), dtype=float)
+
+    def drive_and_emit(corrections):
+        ub = UBMatrix(*LATTICE)
+        ub.peaks = peaks
+        ub.calculate_U_from_peaks(corrections)
+        _mtt, stt, a3, sgl, _att, sgu = solve(ub.UB @ target)
+        model.A3, model.sgl, model.sgu = a3, sgl, sgu
+        params = model.build_point_params(0.0)
+        arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
+                                     params["sample_rz_param"])      # (R_stage U_true)^T
+        lab = arm.T @ (CUBIC_B @ target)
+        return (-lab if sense > 0 else lab), lab_q_from_stt(K, K, stt)
+
+    placed, q_lab = drive_and_emit(stage_corrections(model.psi, model.kappa))
+    assert np.allclose(placed, q_lab, rtol=0.0, atol=1e-9)
+
+    # Reading the peaks as recorded (the correction change ignored) misses by
+    # the 1 deg psi moved: the rule is what brings the crystal back.
+    placed, q_lab = drive_and_emit(None)
+    assert _miss_deg(placed, q_lab) > 0.5
+
+
 @pytest.mark.parametrize("hkls", [
     [(1, 0, 0), (2, 0, 0)],
     [(1, 0, 0), (2, 0, 0), (-1, 0, 0)],

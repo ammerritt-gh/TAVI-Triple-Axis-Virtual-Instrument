@@ -231,3 +231,127 @@ def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path
                                  params["sample_rz_param"])
     assert np.allclose(arm, (stage @ config.sample_mount.R_mount).T, rtol=0.0, atol=1e-12)
     assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (3.0, -2.0)
+
+
+# --- 1.7: peaks and Take Position on the stage ------------------------------------
+
+def _take_peaks(controller, hkls):
+    """Drive to each HKL through the scattering dock, press Take Position on
+    peak i, type its HKL; return each peak's data right after it was taken
+    beside the dock's readouts at that moment."""
+    dock = controller.window.ub_matrix_dock
+    while len(dock._peak_widgets) > len(hkls):
+        dock.remove_peak_entry(len(dock._peak_widgets) - 1)
+    while len(dock._peak_widgets) < len(hkls):
+        dock.add_peak_entry()
+    controller._reconnect_peak_signals()
+    sdock, idock = controller.window.scattering_dock, controller.window.instrument_dock
+    sdock.deltaE_edit.setText("0")
+    taken = []
+    for index, hkl in enumerate(hkls):
+        for edit, value in zip((sdock.H_edit, sdock.K_edit, sdock.L_edit), hkl):
+            edit.setText(repr(float(value)))
+        controller.on_HKL_changed()
+        controller.on_take_peak_position(index)
+        pw = dock.get_peak_widget(index)
+        for edit, value in zip((pw.h_edit, pw.k_edit, pw.l_edit), hkl):
+            edit.setText(repr(float(value)))
+        shown = {name: _field(edit) for name, edit in
+                 (("A3", idock.omega_edit), ("sgl", idock.sgl_edit), ("sgu", idock.sgu_edit))}
+        taken.append((pw, pw.get_peak_data(), shown))
+    return taken
+
+
+def _set_corrections(controller, psi, kappa):
+    sam = controller.window.sample_dock
+    sam.psi_edit.setText(repr(psi))
+    sam.kappa_edit.setText(repr(kappa))
+
+
+def test_take_position_records_the_stage_and_zero_errors_never_enter(controller):
+    """Take Position records every stage readout, the corrections, ki, kf and
+    the sense; changing only the hidden zero errors leaves the fitted UB
+    unchanged; a saved peak reloads with its record."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+
+    gonio = controller.instrument_state.goniometer
+    _set_corrections(controller, 1.0, 0.5)
+    fits = []
+    for mis in ((0.7, -0.4), (-2.0, 1.5)):
+        controller.instrument_state.set_misalignment(*mis)
+        # The same tilted belief both times, so the peaks need both arcs.
+        controller.ub_matrix.set_U(mccode_rotation_matrix(2.0, 10.0, -1.5))
+        taken = _take_peaks(controller, [(2, 0, 0), (0, 2, 0)])
+        assert all(abs(shown["sgl"]) + abs(shown["sgu"]) > 0.5 for _, _, shown in taken)
+        for pw, data, shown in taken:
+            assert [label.text() for label in pw.axis_labels] == [f"{ax.name}:" for ax in gonio]
+            assert not pw.is_legacy and pw.legacy_label.isHidden()
+            record = data["stage"]
+            assert record["angles"] == pytest.approx(shown)
+            assert record["corrections"] == {"A3": 1.0, "sgl": 0.5, "sgu": 0.0}
+            assert record["sense"] == controller.instrument_state.sense_sample
+            assert (record["ki"], record["kf"]) == pytest.approx((data["ki"], data["kf"]), abs=1e-4)
+            assert set(record) == {"axes", "angles", "corrections", "ki", "kf", "sense"}
+        controller.on_calculate_ub()
+        fits.append(controller.ub_matrix.U)
+    assert np.array_equal(fits[0], fits[1])
+
+    saved = [p.to_dict() for p in controller.ub_matrix.peaks]
+    dock = controller.window.ub_matrix_dock
+    dock.set_peak_entries(saved)
+    for pw, peak in zip(dock._peak_widgets, saved):
+        assert not pw.is_legacy
+        assert pw.get_peak_data()["stage"] == peak["stage"]
+
+
+def test_refit_after_a_psi_change_turns_the_ub_by_that_change(controller):
+    """In the plane (no arcs) a correction change is exactly a turn of the UB
+    about the vertical: peaks taken under psi = 1 and refit under psi = 2 give
+    a UB turned by 1 degree, so the same peaks stay at the same dial."""
+    controller.instrument_state.set_misalignment(0.0, 0.0)
+    controller.ub_matrix.reset_U()
+    _set_corrections(controller, 1.0, 0.0)
+    _take_peaks(controller, [(2, 0, 0), (0, 2, 0)])
+    controller.on_calculate_ub()
+    u_at_1 = controller.ub_matrix.U
+    _set_corrections(controller, 2.0, 0.0)
+    controller.on_calculate_ub()
+    turn = controller.ub_matrix.U @ u_at_1.T
+    assert math.degrees(math.acos((np.trace(turn) - 1) / 2)) == pytest.approx(1.0, abs=1e-9)
+    assert abs(turn[1, 1]) == pytest.approx(1.0, abs=1e-12)     # about the mount vertical
+
+
+def test_legacy_peaks_load_marked_and_fit_as_before(controller):
+    """Peaks without a stage record keep the (omega, chi, 2theta) triple's
+    meaning, are marked legacy (derived, not stored) and fit as before."""
+    from tavi.tas_geometry import solve_instrument_angles
+    from tavi.ub_matrix import ObservedPeak, UBMatrix
+
+    vals = controller.get_gui_values()
+    lattice = [vals[f"lattice_{p}"] for p in ("a", "b", "c", "alpha", "beta", "gamma")]
+    ub = UBMatrix(*lattice)
+    u = np.array([[0.9254165783983234, 0.2146101771427565, -0.3123245560187264],
+                  [-0.33682408883346515, 0.843493268656316, -0.41841204441673263],
+                  [0.17364817766693036, 0.49240387650610407, 0.8528685319524433]])
+    k = vals["Kf"]
+    saved = []
+    for hkl in [(2, 0, 0), (0, 2, 0), (1, 1, 1)]:
+        q = component_q_to_instrument_q(u @ ub.B @ np.array(hkl, dtype=float))
+        a = solve_instrument_angles(q, k, k)
+        saved.append({"hkl": list(hkl), "angles": [a.sth, a.saz, a.stt], "ki": k, "kf": k,
+                      "locked": False})
+    dock = controller.window.ub_matrix_dock
+    dock.set_peak_entries(saved)
+    for pw, peak in zip(dock._peak_widgets, saved):
+        data = pw.get_peak_data()
+        assert pw.is_legacy and not pw.legacy_label.isHidden()
+        assert data["stage"] is None and "legacy" not in data
+        assert data["angles"] == pytest.approx(tuple(peak["angles"]), abs=1e-4)
+
+    _set_corrections(controller, 1.5, -0.5)          # a legacy peak ignores them
+    controller.on_calculate_ub()
+    expected = UBMatrix.from_dict({"lattice": lattice,
+                                   "peaks": [ObservedPeak.from_dict(d).to_dict() for d in saved]})
+    expected.calculate_U_from_peaks()
+    assert np.allclose(controller.ub_matrix.U, expected.U, rtol=0.0, atol=1e-4)
+    assert np.allclose(controller.ub_matrix.U, u, rtol=0.0, atol=1e-4)
