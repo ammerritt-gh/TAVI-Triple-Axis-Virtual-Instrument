@@ -210,29 +210,48 @@ def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
         if np.linalg.norm(v) < 1e-8:
             raise ValueError(f"Zero-length Q vector for {label}.")
 
-    # Build orthonormal triad in crystal frame
-    t1_c = q1_c / np.linalg.norm(q1_c)
-    cross_c = np.cross(q1_c, q2_c)
-    if np.linalg.norm(cross_c) < 1e-8:
-        raise ValueError("Peaks are collinear in crystal frame — cannot determine U.")
-    t2_c = cross_c / np.linalg.norm(cross_c)
-    t3_c = np.cross(t1_c, t2_c)
-    T_crystal = np.column_stack([t1_c, t2_c, t3_c])
-
-    # Build orthonormal triad in lab frame
-    t1_l = q1_l / np.linalg.norm(q1_l)
-    cross_l = np.cross(q1_l, q2_l)
-    if np.linalg.norm(cross_l) < 1e-8:
-        raise ValueError("Peaks are collinear in lab frame — cannot determine U.")
-    t2_l = cross_l / np.linalg.norm(cross_l)
-    t3_l = np.cross(t1_l, t2_l)
-    T_lab = np.column_stack([t1_l, t2_l, t3_l])
+    T_crystal = _busing_levy_triad(q1_c, q2_c, "crystal")
+    T_lab = _busing_levy_triad(q1_l, q2_l, "lab")
 
     # U = T_lab @ T_crystal^(-1)
     # Since T_crystal is orthonormal, T_crystal^(-1) = T_crystal^T
     U = T_lab @ T_crystal.T
 
     return U
+
+
+def _busing_levy_triad(v1, v2, frame):
+    """Orthonormal columns (v1, v1 x v2, v1 x (v1 x v2)), all normalised: the
+    Busing-Levy triad of two non-parallel vectors in ``frame``."""
+    t1 = v1 / np.linalg.norm(v1)
+    cross = np.cross(v1, v2)
+    if np.linalg.norm(cross) < 1e-8:
+        raise ValueError(f"Peaks are collinear in {frame} frame — cannot determine U.")
+    t2 = cross / np.linalg.norm(cross)
+    t3 = np.cross(t1, t2)
+    return np.column_stack([t1, t2, t3])
+
+
+def u_from_plane(B: np.ndarray, hkl_u, hkl_v) -> np.ndarray:
+    """The mount U of a crystal mounted with ``hkl_u`` along the mount x axis
+    and ``hkl_v`` in the horizontal plane (mount xz, y up), on the +z side.
+
+    ``B`` is the crystal's own B (the remount passes the sample's true B, never
+    the lattice fields). Raises ValueError naming the problem for a zero or a
+    parallel pair."""
+    def shown(hkl):
+        return "(" + " ".join(f"{float(x):g}" for x in hkl) + ")"
+
+    q_u = B @ np.asarray(hkl_u, dtype=float)
+    q_v = B @ np.asarray(hkl_v, dtype=float)
+    for name, hkl, q in (("along x", hkl_u, q_u), ("in plane", hkl_v, q_v)):
+        if np.linalg.norm(q) < 1e-8:
+            raise ValueError(f"the vector {name}, {shown(hkl)}, is zero")
+    if np.linalg.norm(np.cross(q_u, q_v)) < 1e-8 * np.linalg.norm(q_u) * np.linalg.norm(q_v):
+        raise ValueError(f"{shown(hkl_u)} and {shown(hkl_v)} are parallel, so they span no plane")
+    T_crystal = _busing_levy_triad(q_u, q_v, "crystal")
+    T_mount = _busing_levy_triad(np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]), "mount")
+    return T_mount @ T_crystal.T
 
 
 def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:

@@ -798,3 +798,103 @@ def test_one_exercise_at_a_time(controller, messages, kind):
     assert refusals[0].startswith("Cannot load") and refusals[1].startswith("Cannot clear")
     _assert_truth_unchanged(controller, before)
     assert controller._exercise == (kind, EXERCISE_HASHES[kind])
+
+
+# --- Unit 2 (C2): the mounting plane -----------------------------------------------
+
+def _apply_plane(controller, u_text, v_text):
+    dock = controller.window.sample_dock
+    dock.mount_u_edit.setText(u_text)
+    dock.mount_v_edit.setText(v_text)
+    controller.on_apply_mount_plane()
+
+
+def test_remount_is_built_on_the_sample_lattice_not_the_fields(controller, messages):
+    """A (1 1 0) / (0 0 1) remount with the lattice fields deliberately wrong
+    (b = 4.3, so (1 1 0) points elsewhere in the fields' lattice) gives the
+    mount of the sample's own lattice; the UB starts at it, R_hidden kept."""
+    from tavi.sample_mount import reciprocal_basis_tas
+    from tavi.ub_matrix import u_from_plane
+
+    controller.set_default_parameters()                  # Al_bragg, a = b = c = 4.05
+    _load_exercise(controller, "training")
+    rotation = controller.R_hidden
+    controller.window.sample_dock.lattice_b_edit.setText("4.3")
+    controller.on_lattice_changed()
+    messages.clear()
+
+    _apply_plane(controller, "1 1 0", "0, 0, 1")
+
+    expected = u_from_plane(reciprocal_basis_tas(4.05, 4.05, 4.05, 90, 90, 90),
+                            (1, 1, 0), (0, 0, 1))
+    from_fields = u_from_plane(controller.ub_matrix.B, (1, 1, 0), (0, 0, 1))
+    assert not np.allclose(from_fields, expected, rtol=0.0, atol=1e-3)
+    assert np.array_equal(controller.U_described, expected)
+    assert controller.mount_plane == ((1.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    assert np.array_equal(controller.R_hidden, rotation)
+    assert np.array_equal(controller.instrument_state.U_true, rotation @ expected)
+    assert np.array_equal(controller.ub_matrix.U, expected)
+    assert any("Sample remounted with (1 1 0) along x" in m for m in messages), messages
+    params = controller.get_gui_values()
+    assert (params["mount_plane_u"], params["mount_plane_v"]) == ([1.0, 1.0, 0.0],
+                                                                   [0.0, 0.0, 1.0])
+
+
+def test_remount_with_no_sample_or_a_parallel_pair_is_refused(controller, messages):
+    controller.set_default_parameters()
+    before = _truth(controller)
+    _apply_plane(controller, "1 0 0", "2 0 0")
+    assert controller.window.sample_dock.set_sample_by_key(None)
+    _apply_plane(controller, "1 0 0", "0 0 1")
+
+    refusals = [m for m in messages if m.startswith("Mounting plane refused")]
+    assert len(refusals) == 2, messages
+    assert "parallel" in refusals[0] and "no sample is selected" in refusals[1]
+    _assert_truth_unchanged(controller, before)
+    assert controller.mount_plane is None
+    assert controller.window.sample_dock.mount_u_edit.text() == ""
+
+
+@pytest.mark.parametrize("field", ["mount_plane_u", "mount_plane_v"])
+def test_api_write_of_the_mounting_plane_is_refused_and_moves_nothing(controller, field):
+    controller.set_default_parameters()
+    _apply_plane(controller, "1 0 0", "0 0 1")
+    before = _truth(controller) + (controller.ub_matrix.U, controller.mount_plane)
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+
+    with pytest.raises(ApiError) as patched:
+        backend.patch_parameters({field: "0 1 0"}, force=True)
+    assert patched.value.status == 400
+    assert patched.value.details["errors"][field] == "read-only field"
+    with pytest.raises(ApiError) as launched:
+        controller.build_api_launch_state({field: "0 1 0"})
+    assert launched.value.details["errors"][field] == "read-only field"
+
+    after = _truth(controller) + (controller.ub_matrix.U, controller.mount_plane)
+    assert all(np.array_equal(a, b) for a, b in zip(before[:-1], after[:-1]))
+    assert before[-1] == after[-1]
+    entry = next(f for f in controller.build_api_schema()["fields"] if f["name"] == field)
+    assert entry["readOnly"] is True
+
+
+def test_sample_swap_keeps_the_mount_and_clears_only_the_plane(controller, messages):
+    """I5: a different sample keeps U_described (as a matrix), R_hidden, the
+    zero errors and U_true; the plane description goes, with one line.
+    Re-selecting the same sample clears nothing and says nothing."""
+    controller.set_default_parameters()
+    _load_exercise(controller, "training")
+    _apply_plane(controller, "1 1 0", "0 0 1")
+    before = _truth(controller)
+    sam = controller.window.sample_dock
+    messages.clear()
+
+    controller.on_sample_changed(sam.sample_combo.currentText())   # the same sample again
+    assert controller.mount_plane is not None
+    assert sam.set_sample_by_key("Pb_phonon_DFT")         # a different lattice
+
+    _assert_truth_unchanged(controller, before)
+    assert controller.mount_plane is None
+    cleared = [m for m in messages if m.startswith("Mounting-plane description cleared")]
+    assert len(cleared) == 1, messages
+    assert sam.mount_status_label.text() == "Mount kept; no plane described"
+    assert controller.get_gui_values()["mount_plane_u"] is None

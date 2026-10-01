@@ -120,7 +120,37 @@ class UnifiedSampleDock(BaseDockWidget):
         sample_select_layout.addWidget(self.config_sample_button)
         
         main_layout.addWidget(sample_select_group)
-        
+
+        # ===== Mounting Plane Section (optional) =====
+        # How the crystal is mounted: (h k l) along the mount x axis and a
+        # second (h k l) in the horizontal plane. Empty = the standard setting.
+        mount_group = QGroupBox("Mounting Plane (optional)")
+        mount_layout = QGridLayout()
+        mount_layout.setSpacing(5)
+        mount_group.setLayout(mount_layout)
+        mount_layout.addWidget(QLabel("Mounted with"), 0, 0)
+        self.mount_u_edit = QLineEdit()
+        self.mount_u_edit.setPlaceholderText("h k l")
+        self.mount_u_edit.setToolTip("Reflection along the mount x axis, e.g. 1 0 0")
+        mount_layout.addWidget(self.mount_u_edit, 0, 1)
+        mount_layout.addWidget(QLabel("along x and"), 0, 2)
+        self.mount_v_edit = QLineEdit()
+        self.mount_v_edit.setPlaceholderText("h k l")
+        self.mount_v_edit.setToolTip("A second reflection in the horizontal plane, e.g. 0 0 1")
+        mount_layout.addWidget(self.mount_v_edit, 0, 3)
+        mount_layout.addWidget(QLabel("in plane"), 0, 4)
+        self.mount_apply_button = QPushButton("Apply")
+        self.mount_apply_button.setToolTip(
+            "Remount the sample with this plane horizontal; the UB starts at the new mount")
+        mount_layout.addWidget(self.mount_apply_button, 1, 3)
+        self.mount_clear_button = QPushButton("Clear")
+        self.mount_clear_button.setToolTip("Back to the standard setting")
+        mount_layout.addWidget(self.mount_clear_button, 1, 4)
+        self.mount_status_label = QLabel("Standard setting")
+        self.mount_status_label.setStyleSheet("color: gray; font-size: 10px;")
+        mount_layout.addWidget(self.mount_status_label, 1, 0, 1, 3)
+        main_layout.addWidget(mount_group)
+
         # ===== Space Group Section =====
         spacegroup_group = QGroupBox("Space Group")
         spacegroup_layout = QVBoxLayout()
@@ -363,6 +393,23 @@ class UnifiedSampleDock(BaseDockWidget):
                 return True
         return False
     
+    def show_mount_plane(self, plane, standard=True):
+        """Show the controller's mounting plane: ((h k l), (h k l)), or None
+        with ``standard`` saying whether the mount is the standard setting."""
+        def shown(hkl):
+            return " ".join(f"{x:g}" for x in hkl)
+
+        if plane is None:
+            self.mount_u_edit.setText("")
+            self.mount_v_edit.setText("")
+            self.mount_status_label.setText(
+                "Standard setting" if standard else "Mount kept; no plane described")
+        else:
+            self.mount_u_edit.setText(shown(plane[0]))
+            self.mount_v_edit.setText(shown(plane[1]))
+            self.mount_status_label.setText(
+                f"Mounted: ({shown(plane[0])}) along x, ({shown(plane[1])}) in plane")
+
     def _on_open_misalignment_dock(self):
         """Handle button click to open misalignment dock."""
         self.open_misalignment_dock_requested.emit()

@@ -103,7 +103,9 @@ lattice fields and the UB. Every HKL ↔ Q conversion, the stage solver,
 feasibility, the displays and the API read it (it reaches the runtime as the
 instrument state's `sample_mount`). The **truth** is the crystal on the stage:
 `U_true = R_hidden · U_described`, where `U_described` is the sample as
-described (identity, TAVI's standard setting) and `R_hidden` the rotation of a
+described (identity, TAVI's standard setting, or the optional mounting plane:
+`tavi/ub_matrix.py` `u_from_plane` built on the selected sample's own lattice,
+never the lattice fields) and `R_hidden` the rotation of a
 loaded UB training exercise (identity otherwise), together with the hidden
 zero errors. Only the McStas sample arm reads the truth. The controller writes
 `U_true` through one setter (`TAVIController._set_true_mount`); Calculate UB, a
