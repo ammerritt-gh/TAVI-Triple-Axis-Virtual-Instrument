@@ -1347,6 +1347,17 @@ def test_zone_axis_tolerance_is_an_angle_between_cartesian_vectors():
     assert small_integer_indices(_rot(turn_axis, 0.12) @ target, direct) != (1, 0, -1)
 
 
+def test_zone_axis_of_a_monoclinic_mount_is_read_in_the_direct_basis():
+    """c = 5a, beta = 100 deg, (0 1 0) and (1 0 1) in the plane: the zone axis
+    is their cross product [1 0 -1], a direction of the direct basis
+    2 pi (UB)^-T; read against UB itself it would be a reciprocal vector."""
+    from tavi.ub_matrix import get_scattering_plane_info, u_from_plane
+
+    b = reciprocal_basis_tas(3.0, 4.0, 15.0, 90, 100, 90)
+    zone = get_scattering_plane_info(u_from_plane(b, (0, 1, 0), (1, 0, 1)), b)["zone_axis_uvw"]
+    assert zone in ((1, 0, -1), (-1, 0, 1)), zone
+
+
 def test_an_irrational_plane_normal_has_no_zone_axis():
     from tavi.ub_matrix import get_scattering_plane_info
 
