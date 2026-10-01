@@ -531,7 +531,14 @@ class UnifiedSampleDock(BaseDockWidget):
         self._lattice_locked = True
         self._apply_lattice_lock_state()
         self._saved_lattice_values = {}
-    
+
+    def end_lattice_edit(self):
+        """Re-lock keeping the fields as they stand: the controller has
+        committed them, so a Discard has nothing left to restore."""
+        self._saved_lattice_values = {}
+        self._lattice_locked = True
+        self._apply_lattice_lock_state()
+
     def is_lattice_locked(self) -> bool:
         """Return current lattice lock state."""
         return self._lattice_locked

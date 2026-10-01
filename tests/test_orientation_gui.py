@@ -1790,6 +1790,29 @@ def test_a_sample_swap_moves_the_belief_to_the_new_samples_lattice(controller):
     controller.set_default_parameters()
 
 
+def test_a_sample_swap_ends_an_open_lattice_edit(controller):
+    """Unlocked mid-edit, a sample swap commits the new sample's lattice: the
+    editor is locked again and a Discard leaves the fields on the new sample,
+    equal to the operator's UB lattice."""
+    controller.set_default_parameters()
+    sam = controller.window.sample_dock
+    try:
+        sam.lattice_lock_button.click()
+        assert not sam.is_lattice_locked()
+        sam.lattice_a_edit.setText("4.2")                   # unsaved
+
+        assert sam.set_sample_by_key("Pb_phonon_DFT")
+
+        assert sam.is_lattice_locked()
+        sam.lattice_discard_button.click()
+        assert [float(t) for t in _lattice_fields(controller)] == pytest.approx(
+            controller.ub_matrix.lattice, rel=0.0, abs=1e-12)
+    finally:
+        if not sam.is_lattice_locked():
+            sam.lattice_discard_button.click()
+        controller.set_default_parameters()
+
+
 STANDARD_GRADING = [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
 
 

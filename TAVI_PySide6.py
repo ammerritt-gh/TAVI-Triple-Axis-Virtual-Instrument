@@ -4071,6 +4071,9 @@ class TAVIController(QObject):
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma']
             )
+            # The fields are now the UB's lattice: an open edit (a sample swap,
+            # Refine Lattice or the API mid-edit) must not Discard back past it.
+            self.window.sample_dock.end_lattice_edit()
             H, K, L = self._sample_q_to_hkl(qx, qy, qz, vals)
             self.window.scattering_dock.H_edit.setText(format_editable_number(H))
             self.window.scattering_dock.K_edit.setText(format_editable_number(K))
