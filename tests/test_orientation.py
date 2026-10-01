@@ -1312,3 +1312,11 @@ def test_too_few_reachable_reflections_or_no_sample_cannot_be_assessed(models):
     grade = grade_alignment(gonio, 1, K, K, CUBIC_B, {}, np.eye(3), None, {},
                             STANDARD_REFLECTIONS)
     assert grade["status"] == "cannot_assess" and "no sample" in grade["summary"]
+
+
+# --- Unit 3 (C1): one (h k l) wording -----------------------------------------------
+
+def test_hkl_text_is_the_one_parenthesised_wording():
+    from tavi.orientation import hkl_text
+
+    assert hkl_text((1, 0, -2.5)) == "(1 0 -2.5)"

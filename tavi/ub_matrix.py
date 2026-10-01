@@ -23,6 +23,7 @@ from typing import Optional
 
 from tavi.orientation import (
     gonio_from_record,
+    hkl_text,
     q_mount_from_legacy_angles,
     q_mount_from_stage,
     record_angles,
@@ -242,16 +243,13 @@ def u_from_plane(B: np.ndarray, hkl_u, hkl_v) -> np.ndarray:
     ``B`` is the crystal's own B (the remount passes the sample's true B, never
     the lattice fields). Raises ValueError naming the problem for a zero or a
     parallel pair."""
-    def shown(hkl):
-        return "(" + " ".join(f"{float(x):g}" for x in hkl) + ")"
-
     q_u = B @ np.asarray(hkl_u, dtype=float)
     q_v = B @ np.asarray(hkl_v, dtype=float)
     for name, hkl, q in (("along x", hkl_u, q_u), ("in plane", hkl_v, q_v)):
         if np.linalg.norm(q) < 1e-8:
-            raise ValueError(f"the vector {name}, {shown(hkl)}, is zero")
+            raise ValueError(f"the vector {name}, {hkl_text(hkl)}, is zero")
     if np.linalg.norm(np.cross(q_u, q_v)) < 1e-8 * np.linalg.norm(q_u) * np.linalg.norm(q_v):
-        raise ValueError(f"{shown(hkl_u)} and {shown(hkl_v)} are parallel, so they span no plane")
+        raise ValueError(f"{hkl_text(hkl_u)} and {hkl_text(hkl_v)} are parallel, so they span no plane")
     T_crystal = _busing_levy_triad(q_u, q_v, "crystal")
     T_mount = _busing_levy_triad(np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0]), "mount")
     return T_mount @ T_crystal.T
@@ -740,9 +738,6 @@ def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_
     reachable. The summary names the worst miss and its HKL only, so it shows
     nothing of the hidden truth but how far the belief is from it.
     """
-    def shown(hkl):
-        return "(" + " ".join(f"{float(x):g}" for x in hkl) + ")"
-
     def cannot(reason, skipped=()):
         return {"status": "cannot_assess", "summary": f"Cannot assess: {reason}",
                 "worst_miss": None, "worst_hkl": None, "skipped": list(skipped)}
@@ -760,7 +755,7 @@ def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_
             q_lab = lab_q_from_stt(ki, kf, stt)
             readouts = solve_stage(gonio, flip * q_belief, q_lab, locked=locked)
         except ValueError as exc:               # StageUnreachable included
-            skipped.append(f"{shown(hkl)}: {exc}")
+            skipped.append(f"{hkl_text(hkl)}: {exc}")
             continue
         physical = {ax.name: readouts[ax.name] + corrections.get(ax.name, 0.0)
                     + zero_errors.get(ax.name, 0.0) for ax in gonio}
@@ -781,7 +776,7 @@ def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_
         return cannot("fewer than two non-parallel reflections are reachable", skipped)
     worst_hkl, worst = max(misses, key=lambda item: item[1])
     status = "aligned" if worst <= tol_good else "close" if worst <= tol_close else "way_off"
-    summary = (f"{shown(worst_hkl)} closes no scattering triangle at this ki, kf"
-               if math.isinf(worst) else f"Worst miss {worst:.2f}° at {shown(worst_hkl)}")
+    summary = (f"{hkl_text(worst_hkl)} closes no scattering triangle at this ki, kf"
+               if math.isinf(worst) else f"Worst miss {worst:.2f}° at {hkl_text(worst_hkl)}")
     return {"status": status, "summary": summary, "worst_miss": worst,
             "worst_hkl": worst_hkl, "skipped": skipped}

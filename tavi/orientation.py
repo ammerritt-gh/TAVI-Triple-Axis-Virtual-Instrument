@@ -227,9 +227,14 @@ def _travel_refusal(ax, angle, purpose=""):
     return f"{ax.name} needs {angle:.4g}°{purpose} but its travel is {_travel_text(ax)}"
 
 
+def hkl_text(hkl):
+    """'(1 0 -2.5)': the one parenthesised, space-separated (h k l) wording."""
+    return "(" + " ".join(f"{float(x):g}" for x in hkl) + ")"
+
+
 def plane_text(plane):
     """'(1 0 0)/(0 1 0)' for a plane given by two (h k l) vectors."""
-    return "/".join("(" + " ".join(f"{float(x):g}" for x in hkl) + ")" for hkl in plane)
+    return "/".join(hkl_text(hkl) for hkl in plane)
 
 
 def locked_plane_text(tilts, plane=None):
