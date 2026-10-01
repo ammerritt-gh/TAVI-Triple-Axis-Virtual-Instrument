@@ -4906,16 +4906,7 @@ class TAVIController(QObject):
         scan_mode = self._determine_scan_mode(cmd1, cmd2)
         scan_point_template = self._build_scan_point_template(scan_mode, vals)
         variable_to_index = self._SCAN_VARIABLE_TO_INDEX
-
-        # Create a throwaway instrument state for validation - use GUI values, not
-        # the live state (it may not be updated until run_simulation is called)
-        check_state = self.instrument.default_state()
-        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
-        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
-        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-        check_state.fixed_E = vals.get('fixed_E', 14.7)
-        check_state.sample_mount = self._build_sample_mount(vals)
-        check_state.plane_lock = self.instrument_state.plane_lock
+        check_state = self._validation_state(vals)
 
         valid_count = 0
         invalid_count = 0
@@ -4962,7 +4953,20 @@ class TAVIController(QObject):
             return (0, 0)
         
         return (valid_count, invalid_count)
-    
+
+    def _validation_state(self, vals):
+        """A throwaway instrument state for the GUI point count, from the GUI
+        values (the live state may not be updated until run_simulation), with
+        the mount and the plane lock the run uses."""
+        check_state = self.instrument.default_state()
+        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
+        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
+        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
+        check_state.fixed_E = vals.get('fixed_E', 14.7)
+        check_state.sample_mount = self._build_sample_mount(vals)
+        check_state.plane_lock = self.instrument_state.plane_lock
+        return check_state
+
     def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, check_state) -> bool:
         """True when the run would execute this point: the one validity rule
         of the GUI point count, the time estimate and the run's 1D/2D valid
@@ -5017,8 +5021,10 @@ class TAVIController(QObject):
             return "rlu"
     
     def _check_current_point_validity(self) -> tuple:
-        """Check if the current single point (no scan) is valid.
-        
+        """Check if the current single point (no scan) is valid: the point
+        the run builds with no scan commands, judged as the scan count judges
+        its points (``_validate_scan_point``, mount and lock included).
+
         Returns:
             tuple: (is_valid, error_message)
         """
@@ -5026,21 +5032,13 @@ class TAVIController(QObject):
             vals = self.get_gui_values()
             if not vals:
                 return (False, "Could not get GUI values")
-            
-            # Use GUI values directly, not the live state (may not be updated)
-            check_state = self.instrument.default_state()
-            check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
-            check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
-            check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-            check_state.fixed_E = vals.get('fixed_E', 14.7)
-            
-            _, error_flags = check_state.calculate_angles(
-                vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
-                check_state.fixed_E, check_state.K_fixed,
-                check_state.monocris, check_state.anacris
-            )
-            return (not error_flags, error_flags if error_flags else "")
+            scan_mode = self._determine_scan_mode("", "")
+            point = self._build_scan_point_template(scan_mode, vals)
+            feasible, reason = check_point_feasibility(
+                self._validation_state(vals), scan_mode, point, vals)
+            return (feasible, reason or "")
         except Exception as e:
+            log.warning("Current point could not be checked: %s", e)
             return (False, str(e))
 
     def on_omega_changed(self):

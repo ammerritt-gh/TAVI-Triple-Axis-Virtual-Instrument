@@ -1209,10 +1209,12 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
 
         readouts = [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)]
         lock = json.dumps(state.plane_lock)
+        assert controller._check_current_point_validity()[0]    # no-scan count
         _set_hkl(controller, 1, 0, 0)
         assert [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)] == readouts
         assert json.dumps(state.plane_lock) == lock
         assert "out of the locked scattering plane" in controller._angles_stale
+        assert not controller._check_current_point_validity()[0]
     finally:
         sim.scan_command_1_edit.setText("")
         controller.set_default_parameters()
