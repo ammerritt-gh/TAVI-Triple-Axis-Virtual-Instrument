@@ -8595,6 +8595,10 @@ class TAVIController(QObject):
                 self.print_to_message_center(
                     "Mounting-plane description cleared: it named reflections of the "
                     "previous sample. The mount itself is unchanged.")
+            if swapped:
+                # D11: the residuals were of the previous sample's peaks, even
+                # when its lattice (so the UB) is the same.
+                self.window.ub_matrix_dock.clear_residuals()
             self._adopt_sample_lattice(key)
             # Allowed under a lock (amendment 7); the stale mark reports it.
             self._show_plane_lock()
