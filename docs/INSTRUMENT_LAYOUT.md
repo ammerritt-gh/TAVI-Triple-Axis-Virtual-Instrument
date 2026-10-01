@@ -51,9 +51,9 @@ the same three axes:
 
 | Axis | Rotation axis (stage at zero) | Description |
 |------|-------------------------------|-------------|
-| **A3** | vertical (Y) | Turntable; the omega field shows it (ω = A3 = sth) |
-| **sgl** | horizontal (X) | Lower arc, riding on the turntable |
-| **sgu** | horizontal (Z) | Upper arc, riding on the lower arc |
+| **A3** | vertical (Y) | Turntable; the A3 field shows it (`omega` in the API and saved files; ω = A3 = sth) |
+| **sgl** | horizontal (X) | Lower tilt arc, riding on the turntable; perpendicular to the beam at A3 = 0 |
+| **sgu** | horizontal (Z) | Upper tilt arc, riding on the lower arc; along the beam at A3 = 0 |
 
 A mount-frame vector goes to the lab as `v_lab = R_A3 · R_sgl · R_sgu · v_mount`
 (right-handed rotations). Arc travel comes from a cited source (IN12 ±20°,
@@ -65,7 +65,7 @@ smallest total arc tilt inside travel and turns it onto the scattering vector
 with A3; a Q the arcs cannot level is refused, naming the arc, the angle it
 would need and its travel. An in-plane Q needs no tilt and gets today's A3.
 The sign convention is vTAS's: sense +1 puts `−U·B·hkl` on Q_lab, sense −1
-`+U·B·hkl`. The instrument dock shows the readouts A3 (the ω field), `sgl`
+`+U·B·hkl`. The instrument dock shows the readouts A3, `sgl`
 and `sgu`; editing any of them reads Q back through the full stage.
 
 ### Corrections and physical angles
