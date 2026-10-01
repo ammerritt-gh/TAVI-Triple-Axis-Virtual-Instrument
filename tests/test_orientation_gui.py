@@ -33,9 +33,19 @@ class _SyncBridge:
 
 @pytest.fixture(scope="module")
 def controller():
+    yield from _controller_for(available_instruments()[0].id)
+
+
+@pytest.fixture(scope="module")
+def in12():
+    """IN12: the arcs have documented travel (+/-20 deg)."""
+    yield from _controller_for("in12")
+
+
+def _controller_for(instrument_id):
     app = QApplication.instance() or QApplication([sys.argv[0]])
     infos = available_instruments()
-    instrument = get_instrument(infos[0].id)
+    instrument = get_instrument(instrument_id)
     window = cm.TAVIMainWindow(
         instrument.descriptor(), instrument_infos=infos,
         current_instrument_id=instrument.id, save_selection=lambda _id: None,
@@ -60,6 +70,16 @@ def messages(controller):
         yield seen
     finally:
         controller.message_printed.disconnect(seen.append)
+
+
+@pytest.fixture
+def in12_messages(in12):
+    seen = []
+    in12.message_printed.connect(seen.append)
+    try:
+        yield seen
+    finally:
+        in12.message_printed.disconnect(seen.append)
 
 
 def _reload_with(controller, edit):
@@ -372,3 +392,25 @@ def test_legacy_peaks_load_marked_and_fit_as_before(controller):
     expected.calculate_U_from_peaks()
     assert np.allclose(controller.ub_matrix.U, expected.U, rtol=0.0, atol=1e-4)
     assert np.allclose(controller.ub_matrix.U, u, rtol=0.0, atol=1e-4)
+
+
+# --- arc travel reaches the operator (IN12, +/-20 deg) ------------------------------
+
+def test_q_edit_past_arc_travel_reports_the_solver_reason(in12, in12_messages):
+    """45 deg of elevation cannot be levelled on +/-20 deg arcs: the Q edit
+    leaves the angles alone and says why, in the solver's words."""
+    from instruments.tas_runtime import describe_scan_error_flags
+
+    idock = in12.window.instrument_dock
+    before = [idock.omega_edit.text(), idock.sgl_edit.text(), idock.sgu_edit.text()]
+    # Instrument convention: qz is vertical.
+    _set_q(in12, 2.5 * math.cos(math.radians(45)), 0.0, 2.5 * math.sin(math.radians(45)))
+
+    vals = in12.get_gui_values()
+    _angles, flags = in12.instrument_state.calculate_stage_angles(
+        vals["qx"], vals["qy"], vals["qz"], vals["deltaE"], vals["fixed_E"],
+        vals["K_fixed"], vals["monocris"], vals["anacris"])
+    reason = describe_scan_error_flags(flags)
+    assert "travel is [-20, 20]°" in reason
+    assert any(reason in m for m in in12_messages), in12_messages
+    assert [idock.omega_edit.text(), idock.sgl_edit.text(), idock.sgu_edit.text()] == before

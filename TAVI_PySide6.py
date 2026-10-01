@@ -31,6 +31,8 @@ from instruments.tas_runtime import (
     SLOT_PSI,
     SLOT_SGL,
     SLOT_SGU,
+    STAGE_FLAG_PREFIX,
+    describe_scan_error_flags,
     stage_corrections,
 )
 
@@ -4067,6 +4069,13 @@ class TAVIController(QObject):
                 self._update_tracked_value('sgl', sgl)
                 self._update_tracked_value('sgu', sgu)
                 self._update_tracked_value('stt', stt)
+            else:
+                # A stage refusal is new with the arcs' travel: say why the
+                # angles were left as they were, in the solver's words.
+                stage = [f for f in error_flags if f.startswith(STAGE_FLAG_PREFIX)]
+                if stage:
+                    self.print_to_message_center(
+                        f"Angles not updated: {describe_scan_error_flags(stage)}")
         except Exception as exc:
             self.print_to_message_center(f"Angle update from Q failed: {exc}")
         finally:
