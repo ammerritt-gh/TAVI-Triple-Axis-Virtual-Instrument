@@ -352,6 +352,7 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
     sign = -1.0 if sense > 0 else 1.0          # D2: +1 puts -U B hkl on Q_lab
     B = reciprocal_basis_tas(*LATTICES[lattice])
     rng = np.random.default_rng(SEEDS[name] + 7 * sense + len(lattice))
+    arcs_used = []
     for _mount in range(2):
         U = _random_mount(rng)
         model.sample_mount = SampleMount(B, U)
@@ -397,6 +398,7 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
             peaks.append(ObservedPeak(
                 hkl=tuple(hkl), angles=(sth, sgl, stt), ki=K_RT, kf=K_RT,
                 stage=stage_record(model.goniometer, readouts)))
+            arcs_used.append((abs(sgl), abs(sgu)))
             if len(peaks) == 5:
                 break
         assert len(peaks) >= 3, "too few reachable reflections to test"
@@ -404,6 +406,8 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
         ub.peaks = peaks
         ub.calculate_U_from_peaks()
         assert np.allclose(ub.U, U, rtol=0.0, atol=1e-9)
+    # The accepted points drove both arcs, so the arc chain was exercised.
+    assert min(np.max(arcs_used, axis=0)) > 0.5, arcs_used
 
 
 # --- in plane: today's numbers and today's McStas rotation -------------------------
