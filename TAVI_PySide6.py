@@ -8579,7 +8579,9 @@ class TAVIController(QObject):
         McStas components bake them in -- driving e.g. Phonon_DFT (a=4.03893)
         with a mismatched GUI lattice misses its Bragg condition entirely.
         The parameter-restore path re-applies saved lattice values afterwards,
-        so hand-edited lattices survive a reload.
+        so hand-edited lattices survive a reload. Ends through
+        ``on_lattice_changed``, as the lattice Save does, so the operator's UB
+        moves to the new sample's lattice.
         """
         spec = next((s for s in self.descriptor.samples if s.id == sample_key), None)
         if spec is None or spec.lattice is None:
@@ -8594,7 +8596,8 @@ class TAVIController(QObject):
             f"Lattice set from sample '{spec.display_name}': "
             f"a={a:g}, b={b:g}, c={c:g}"
         )
-    
+        self.on_lattice_changed()
+
     def stop_simulation(self):
         """Stop the running simulation.
 

@@ -1546,7 +1546,7 @@ def _restored(controller, _monkeypatch):
 @pytest.mark.parametrize("change", [
     _path_manual_ub, _path_reset, _path_lattice_edit, _path_refine_lattice, _path_api_patch,
     _restored, _exercise_loaded, _defaults,
-    _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
+    _path_sample_selection, _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
 ], ids=lambda f: f.__name__.lstrip("_"))
 def test_the_residual_table_describes_only_the_last_calculate_ub(controller, monkeypatch,
                                                                 change):
@@ -1686,3 +1686,37 @@ def test_a_locked_point_runs_at_the_locks_exact_kappa(controller, tmp_path):
     finally:
         sim.scan_command_1_edit.setText("")
         controller.set_default_parameters()
+
+
+# --- Unit 3 (C6): the belief follows a sample swap; grading follows the mount ------
+
+def test_a_sample_swap_moves_the_belief_to_the_new_samples_lattice(controller):
+    """The swap ends where the lattice Save ends: the operator's UB on the new
+    sample's lattice, the truth untouched, the lock kept and its stale mark
+    read on the new lattice; a restore still ends on a hand-edited lattice."""
+    from tavi.ub_matrix import compute_B_matrix
+
+    controller.set_default_parameters()
+    sam, dock = controller.window.sample_dock, controller.window.ub_matrix_dock
+    pb = next(s.lattice for s in controller.descriptor.samples if s.id == "Pb_phonon_DFT")
+    _lock(controller, PLANE_H0H)
+    sam.lattice_c_edit.setText("4.3")                       # stale on Al's fields
+    controller.on_lattice_changed()
+    assert "STALE" in dock.lock_status_label.text()
+    before = _truth(controller)
+
+    assert sam.set_sample_by_key("Pb_phonon_DFT")
+
+    assert controller.ub_matrix.lattice == pytest.approx(pb, rel=0.0, abs=1e-12)
+    assert np.allclose(controller.ub_matrix.B, compute_B_matrix(*pb), rtol=0.0, atol=1e-12)
+    _assert_truth_unchanged(controller, before)
+    assert controller.instrument_state.plane_lock is not None
+    assert "STALE" not in dock.lock_status_label.text()
+    controller.on_release_plane()
+
+    sam.lattice_a_edit.setText("4.1")                       # hand-edited, then saved
+    controller.on_lattice_changed()
+    _reload_with(controller, lambda block: controller.set_default_parameters())
+    assert controller.window.sample_dock.get_selected_sample_key() == "Pb_phonon_DFT"
+    assert float(sam.lattice_a_edit.text()) == 4.1 and controller.ub_matrix.lattice[0] == 4.1
+    controller.set_default_parameters()
