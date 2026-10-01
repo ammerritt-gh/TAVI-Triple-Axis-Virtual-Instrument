@@ -447,6 +447,34 @@ class UBMatrixDock(BaseDockWidget):
         self.omega_offset_label = QLabel("--")
         plane_layout.addWidget(self.omega_offset_label, 2, 1)
 
+        # Lock plane (2.3): hold the arcs for an experiment. The controller
+        # owns the lock; this row shows it.
+        plane_layout.addWidget(QLabel("Lock plane:"), 3, 0)
+        lock_row = QHBoxLayout()
+        lock_row.setSpacing(4)
+        self.lock_u_edit = QLineEdit()
+        self.lock_v_edit = QLineEdit()
+        for edit in (self.lock_u_edit, self.lock_v_edit):
+            edit.setPlaceholderText("h k l")
+            edit.setMaximumWidth(70)
+            edit.setToolTip("Two (h k l) spanning the plane to lock. Empty: the mounting "
+                            "plane, else the first two peaks, else (1 0 0)/(0 1 0).")
+            lock_row.addWidget(edit)
+        self.lock_plane_button = QPushButton("Lock")
+        self.lock_plane_button.setToolTip(
+            "Put the arcs where the UB levels this plane and keep them (and kappa) there")
+        self.release_plane_button = QPushButton("Release")
+        self.release_plane_button.setToolTip("Back to free mode: the arcs follow each Q")
+        self.release_plane_button.setEnabled(False)
+        lock_row.addWidget(self.lock_plane_button)
+        lock_row.addWidget(self.release_plane_button)
+        lock_row.addStretch()
+        plane_layout.addLayout(lock_row, 3, 1)
+        self.lock_status_label = QLabel("Free: the arcs follow each Q")
+        self.lock_status_label.setWordWrap(True)
+        self.lock_status_label.setStyleSheet("color: gray; font-size: 10px;")
+        plane_layout.addWidget(self.lock_status_label, 4, 0, 1, 2)
+
         main_layout.addWidget(plane_group)
 
         # ===== Observed Bragg Peaks Section =====
@@ -704,6 +732,23 @@ class UBMatrixDock(BaseDockWidget):
         )
         self.chi_mis_label.setText(f"{chi_mis:.2f}\u00b0")
         self.omega_offset_label.setText(f"{omega_off:.2f}\u00b0")
+
+    def show_plane_lock(self, plane, status, stale=False):
+        """Show the controller's lock: ``plane`` its two (h k l) (None: free),
+        ``status`` the status line, ``stale`` the stale mark. Holds no lock
+        state of its own."""
+        locked = plane is not None
+        if locked:
+            for edit, hkl in zip((self.lock_u_edit, self.lock_v_edit), plane):
+                edit.setText(" ".join(f"{float(x):g}" for x in hkl))
+        for edit in (self.lock_u_edit, self.lock_v_edit):
+            edit.setReadOnly(locked)
+        self.lock_plane_button.setEnabled(not locked)
+        self.release_plane_button.setEnabled(locked)
+        self.lock_status_label.setText(status)
+        self.lock_status_label.setStyleSheet(
+            "color: #c62828; font-weight: bold; font-size: 10px;" if stale
+            else "color: gray; font-size: 10px;")
 
     # ===== Peak Management =====
 

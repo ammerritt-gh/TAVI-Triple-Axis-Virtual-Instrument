@@ -764,9 +764,17 @@ def test_defaults_clear_either_exercise_and_the_described_mount(controller, kind
     _load_exercise(controller, kind)
     assert controller._exercise == (kind, EXERCISE_HASHES[kind])
     controller.ub_matrix.set_U(mccode_rotation_matrix(1.0, 2.0, 3.0))
+    if kind == "training":
+        # Defaults from a locked start: the one exception to the lock's
+        # refusals releases the lock, then clears (amend6 item 3).
+        controller.window.ub_matrix_dock.lock_u_edit.setText("1 0 1")
+        controller.window.ub_matrix_dock.lock_v_edit.setText("0 1 0")
+        controller.on_lock_plane()
+        assert controller.instrument_state.plane_lock is not None
 
     controller.set_default_parameters()
 
+    assert controller.instrument_state.plane_lock is None
     assert controller._exercise is None and controller.mount_plane is None
     state = controller.instrument_state
     for matrix in (controller.U_described, controller.R_hidden, state.U_true,
@@ -1134,18 +1142,18 @@ PLANE_H0H = ((1, 0, 1), (0, 1, 0))          # h = l: the arcs tilt to hold it
 
 
 def _lock(controller, plane):
-    """Lock ``plane`` where the operator's UB levels it; return the tilts."""
+    """Press the UB dock's Lock on ``plane``; return the lock's tilts, which
+    are where the operator's UB levels the plane."""
     from tavi.orientation import lock_plane
 
+    dock = controller.window.ub_matrix_dock
+    dock.lock_u_edit.setText(" ".join(str(x) for x in plane[0]))
+    dock.lock_v_edit.setText(" ".join(str(x) for x in plane[1]))
+    controller.on_lock_plane()
     state = controller.instrument_state
     mounted = controller._build_sample_mount(controller.get_gui_values()).mounted_basis
-    tilts = lock_plane(state.goniometer, mounted, *plane)
-    state.plane_lock = {"hkl_u": list(plane[0]), "hkl_v": list(plane[1]), "tilts": tilts,
-                        "kappa": 0.0}
-    idock = controller.window.instrument_dock
-    idock.sgl_edit.setText(cm.format_editable_number(tilts["sgl"]))
-    idock.sgu_edit.setText(cm.format_editable_number(tilts["sgu"]))
-    return tilts
+    assert state.plane_lock["tilts"] == lock_plane(state.goniometer, mounted, *plane)
+    return state.plane_lock["tilts"]
 
 
 def _set_hkl(controller, h, k, l):
@@ -1206,6 +1214,207 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
         assert json.dumps(state.plane_lock) == lock
         assert "out of the locked scattering plane" in controller._angles_stale
     finally:
-        state.plane_lock = None
         sim.scan_command_1_edit.setText("")
+        controller.set_default_parameters()
+
+
+# --- Unit 2 (C7): the lock in the GUI, the API and saved state ---------------------
+
+def _arcs(controller):
+    """The arc fields' text, the arc readouts and the physical arcs."""
+    idock, state = controller.window.instrument_dock, controller.instrument_state
+    physical = state.physical_stage_angles()
+    return ((idock.sgl_edit.text(), idock.sgu_edit.text()), (state.sgl, state.sgu),
+            (physical["sgl"], physical["sgu"]))
+
+
+def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controller, messages):
+    """Under a lock: a UB change and a lattice change leave the arcs (fields,
+    readouts, physical) where they are and set the stale mark; kappa is
+    read-only and an API kappa write is refused; loading or clearing either
+    exercise and a remount are refused naming the lock; a sample swap stays
+    allowed; Release returns to free mode."""
+    controller.set_default_parameters()
+    idock, sam, dock = (controller.window.instrument_dock, controller.window.sample_dock,
+                        controller.window.ub_matrix_dock)
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    tilts = _lock(controller, PLANE_H0H)
+    _set_hkl(controller, 1, 0, 1)
+    held = _arcs(controller)
+    assert held[1] == (tilts["sgl"], tilts["sgu"])
+    for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
+        assert edit.isReadOnly() and "locked scattering plane (1 0 1)/(0 1 0)" in edit.toolTip()
+    params = controller.get_gui_values()
+    assert (params["orientation_mode"], params["lock_plane"], params["lock_stale"]) == (
+        "locked", {"u": [1.0, 0.0, 1.0], "v": [0.0, 1.0, 0.0]}, False)
+    before = _truth(controller)
+
+    _path_manual_ub(controller, None)                      # a UB change
+    assert _arcs(controller) == held and controller.get_gui_values()["lock_stale"] is True
+    assert "STALE" in dock.lock_status_label.text()
+    controller.on_reset_ub()
+    assert "STALE" not in dock.lock_status_label.text()
+    sam.lattice_c_edit.setText("4.3")                      # a lattice change
+    controller.on_lattice_changed()
+    assert _arcs(controller) == held and "STALE" in dock.lock_status_label.text()
+
+    with pytest.raises(ApiError) as kappa:
+        backend.patch_parameters({"kappa": 0.5}, force=True)
+    assert "holds kappa" in kappa.value.details["errors"]["kappa"]
+    messages.clear()
+    for kind in ("training", "misalignment"):
+        _load_exercise(controller, kind)
+    controller.on_clear_training()
+    controller.on_clear_misalignment()
+    _apply_plane(controller, "1 1 0", "0 0 1")
+    controller.on_clear_mount_plane()
+    refusals = [m for m in messages if "it would move the locked scattering plane" in m]
+    assert len(refusals) == 6, messages
+    assert controller._exercise is None and controller.mount_plane is None
+    _assert_truth_unchanged(controller, before)
+    assert _arcs(controller) == held
+
+    assert sam.set_sample_by_key("Pb_phonon_DFT")          # allowed; stale reports it
+    assert controller.get_gui_values()["lock_stale"] is False
+    assert _arcs(controller) == held
+
+    controller.on_release_plane()
+    assert controller.instrument_state.plane_lock is None
+    assert controller.get_gui_values()["orientation_mode"] == "free"
+    for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
+        assert not edit.isReadOnly() and "locked" not in edit.toolTip()
+    assert dock.lock_plane_button.isEnabled() and not dock.release_plane_button.isEnabled()
+    controller.set_default_parameters()
+
+
+def _orientation_snapshot(ctrl):
+    """The whole orientation and lock state: readouts, corrections, UB,
+    U_true, zero errors, plane_lock."""
+    state, idock, sam = ctrl.instrument_state, ctrl.window.instrument_dock, ctrl.window.sample_dock
+    return json.dumps({
+        "readouts": [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)],
+        "state": [state.A3, state.sgl, state.sgu, state.psi, state.kappa],
+        "corrections": [sam.psi_edit.text(), sam.kappa_edit.text()],
+        "ub": ctrl.ub_matrix.UB.tolist(), "U_true": state.U_true.tolist(),
+        "zero_errors": [state.mis_omega, state.mis_chi], "plane_lock": state.plane_lock,
+    })
+
+
+def test_every_refused_lock_patch_moves_nothing(controller, in12):
+    """Each refused PATCH (sgl, kappa, a lock combined with sgl/sgu/kappa
+    whichever way it switches, a second lock, a lock past travel) is a 400
+    and the whole orientation and lock state is identical before and after;
+    a scan body cannot set the orientation mode."""
+    controller.set_default_parameters()
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    h0h = {"u": [1, 0, 1], "v": [0, 1, 0]}
+
+    def refused(ctrl, api, body, field, words):
+        before = _orientation_snapshot(ctrl)
+        with pytest.raises(ApiError) as err:
+            api.patch_parameters(body, force=True)
+        assert err.value.status == 400 and err.value.details["applied"] == []
+        assert words in err.value.details["errors"][field], err.value.details
+        assert _orientation_snapshot(ctrl) == before, body
+
+    refused(controller, backend, {"orientation_mode": "locked", "sgu": 1.0}, "sgu", "send two")
+    assert backend.patch_parameters({"orientation_mode": "locked", "lock_plane": h0h},
+                                    force=True)["applied"] == ["orientation_mode", "lock_plane"]
+    assert controller.instrument_state.plane_lock["hkl_u"] == [1.0, 0.0, 1.0]
+    for body, field, words in (
+            ({"sgl": 1.0}, "sgl", "holds sgl"),
+            ({"kappa": 0.5, "H": 1.1}, "kappa", "holds kappa"),
+            ({"orientation_mode": "free", "sgl": 1.0}, "orientation_mode", "send two"),
+            ({"lock_plane": {"u": [1, 0, 0], "v": [0, 1, 0]}, "H": 1.1}, "lock_plane",
+             "is in force; release it first")):
+        refused(controller, backend, body, field, words)
+    with pytest.raises(ApiError) as scan:
+        controller.build_api_launch_state({"orientation_mode": "free", "scan_command1": "H 1 1 1"})
+    assert "PATCH /parameters" in scan.value.details["errors"]["orientation_mode"]
+    assert backend.patch_parameters({"orientation_mode": "free"}, force=True)["applied"]
+    assert controller.instrument_state.plane_lock is None
+
+    in12.set_default_parameters()                          # +/-20 deg arcs
+    refused(in12, cm.TaviApiBackend(in12, _SyncBridge()),
+            {"orientation_mode": "locked", "lock_plane": h0h, "H": 1.5}, "lock_plane",
+            "but its travel is [-20, 20]°")
+    controller.set_default_parameters()
+
+
+@pytest.mark.parametrize("kind", ["training", "misalignment"])
+def test_a_locked_session_with_an_exercise_round_trips_exactly(controller, kind):
+    """Save and restore of a locked session with either exercise loaded
+    brings back the lock, U_true and the zero errors exactly."""
+    controller.set_default_parameters()
+    _load_exercise(controller, kind)
+    _lock(controller, PLANE_H0H)
+    state = controller.instrument_state
+    saved = (json.dumps(state.plane_lock), state.U_true.copy(), state.mis_omega, state.mis_chi,
+             controller._exercise)
+
+    def scramble(block):
+        assert block["plane_lock"] == json.loads(saved[0])
+        controller.set_default_parameters()                # nothing carried over
+
+    _reload_with(controller, scramble)
+
+    assert json.dumps(state.plane_lock) == saved[0]
+    assert np.array_equal(state.U_true, saved[1])
+    assert (state.mis_omega, state.mis_chi, controller._exercise) == saved[2:]
+    assert controller.window.instrument_dock.sgl_edit.isReadOnly()
+    controller.set_default_parameters()
+
+
+def test_a_saved_lock_past_travel_is_released_on_restore(in12, in12_messages):
+    in12.set_default_parameters()
+
+    def past_travel(block):
+        block["plane_lock"] = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0],
+                               "tilts": {"sgl": 25.0, "sgu": 0.0}, "kappa": 0.0}
+
+    _reload_with(in12, past_travel)
+    assert in12.instrument_state.plane_lock is None
+    assert ("Saved plane lock released: sgl needs 25° for the locked scattering plane but "
+            "its travel is [-20, 20]°") in in12_messages
+
+
+def test_the_confirmed_switch_drops_only_the_lock(controller, monkeypatch):
+    """I4: the confirmed branch of the instrument switch (restart stubbed)
+    releases the lock and rewrites only the lock key of the outgoing block;
+    with no lock saved it writes nothing."""
+    from PySide6.QtWidgets import QMessageBox
+
+    window = controller.window
+    monkeypatch.setattr(window, "controller", controller, raising=False)
+    monkeypatch.setattr(window, "close", lambda: True)
+    monkeypatch.setattr(window, "_restart_instrument_id", None, raising=False)
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    path = config_path("parameters.json")
+    original = open(path, "rb").read() if os.path.exists(path) else None
+    controller.set_default_parameters()
+    try:
+        _lock(controller, PLANE_H0H)
+        controller.save_parameters()
+        with open(path, "r", encoding="utf-8") as fh:
+            before = json.load(fh)
+        assert before["in8"]["plane_lock"] is not None
+
+        window._on_instrument_selected("in12")
+
+        with open(path, "r", encoding="utf-8") as fh:
+            after = json.load(fh)
+        before["in8"]["plane_lock"] = None
+        assert after == before
+        assert controller.instrument_state.plane_lock is None
+        written = open(path, "rb").read()
+        _lock(controller, PLANE_H0H)
+        window._on_instrument_selected("in12")
+        assert open(path, "rb").read() == written
+    finally:
+        if original is None:
+            os.remove(path)
+        else:
+            with open(path, "wb") as fh:
+                fh.write(original)
         controller.set_default_parameters()

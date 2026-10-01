@@ -113,7 +113,8 @@ from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import (parse_scan_steps, incremented_path_writing,
                             normalize_scan_commands)
 from tavi.sample_mount import SampleMount
-from tavi.orientation import locked_plane_text, stage_record
+from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
+                              stage_record, stage_rotation)
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
     instrument_q_to_component_q,
@@ -1557,6 +1558,8 @@ class TAVIController(QObject):
         self.window.ub_matrix_dock.calculate_ub_button.clicked.connect(self.on_calculate_ub)
         self.window.ub_matrix_dock.refine_lattice_button.clicked.connect(self.on_refine_lattice)
         self.window.ub_matrix_dock.reset_ub_button.clicked.connect(self.on_reset_ub)
+        self.window.ub_matrix_dock.lock_plane_button.clicked.connect(self.on_lock_plane)
+        self.window.ub_matrix_dock.release_plane_button.clicked.connect(self.on_release_plane)
         self.window.ub_matrix_dock.ub_matrix_changed.connect(self.on_ub_matrix_edited)
         self.window.ub_matrix_dock.generate_training_button.clicked.connect(self.on_generate_training)
         self.window.ub_matrix_dock.load_training_button.clicked.connect(self.on_load_training)
@@ -2382,7 +2385,7 @@ class TAVIController(QObject):
             monocris = self.window.instrument_dock.selected_mono_id()
             anacris = self.window.instrument_dock.selected_ana_id()
             modules = self.window.instrument_dock.module_values()
-            return {
+            vals = {
                 'mtt': mtt,
                 'stt': float(self.window.instrument_dock.stt_edit.text() or 0),
                 'omega': float(self.window.instrument_dock.omega_edit.text() or 0),
@@ -2452,6 +2455,10 @@ class TAVIController(QObject):
             }
         except ValueError:
             return None
+        # The plane lock (orientation_mode, lock_plane; lock_stale read-only),
+        # judged on these lattice fields.
+        vals.update(self._lock_fields(vals))
+        return vals
 
     def _build_sample_mount(self, vals):
         """Build the current component-agnostic sample mount from GUI lattice + UB."""
@@ -2762,6 +2769,10 @@ class TAVIController(QObject):
                 # unrecognized one -- see _api_field_map's docstring.
                 errors[name] = "read-only field"
                 continue
+            if name in self._LOCK_FIELDS:
+                errors[name] = ("a scan runs in the session's orientation mode; "
+                                "set it with PATCH /parameters")
+                continue
             spec = field_map.get(name)
             if spec is None:
                 errors[name] = self._API_REMOVED_FIELDS.get(name, "unknown field")
@@ -2770,6 +2781,8 @@ class TAVIController(QObject):
                 parsed[name] = spec[0](value)
             except (ValueError, TypeError) as exc:
                 errors[name] = "invalid value: %s" % exc
+        errors.update(self._lock_refusals(
+            [n for n in patch if n in self._LOCK_HELD_FIELDS]))
         if errors:
             raise ApiError(
                 400, "invalid_parameters", "One or more fields failed",
@@ -4065,6 +4078,9 @@ class TAVIController(QObject):
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
+        # The lattice is belief too: the UB display and the lock's stale mark
+        # follow it.
+        self._update_ub_display()
 
     def update_angles_from_q(self):
         """Update instrument/sample angles based on current Q and deltaE."""
@@ -5127,7 +5143,11 @@ class TAVIController(QObject):
 
     def _exercise_refusal(self, kind, action):
         """Why ``action`` ("load"/"clear") of a ``kind`` exercise is refused,
-        or None. The zero errors have one owner: one exercise at a time."""
+        or None. The zero errors have one owner: one exercise at a time. A
+        locked plane's physical tilt never moves: release it first."""
+        if self._lock_text():
+            return (f"Cannot {action} the {self._EXERCISE_NAMES[kind]}: it would move "
+                    f"{self._lock_text()}. Release the lock first.")
         if self._exercise is not None and self._exercise[0] != kind:
             return (f"Cannot {action} the {self._EXERCISE_NAMES[kind]}: the "
                     f"{self._EXERCISE_NAMES[self._exercise[0]]} is loaded. Clear it first.")
@@ -5153,7 +5173,10 @@ class TAVIController(QObject):
         """I2: a description change, not a UB write. ``plane`` is
         ((h k l) along x, (h k l) in plane), or None for the standard setting.
         Sets U_described (R_hidden kept), resets the operator's UB to it,
-        peaks kept. Raises ValueError, changing nothing, when refused."""
+        peaks kept. Raises ValueError, changing nothing, when refused --
+        under a lock too (amendment 7): a remount moves the locked plane."""
+        if self._lock_text():
+            raise ValueError(f"it would move {self._lock_text()}; release the lock first")
         if plane is None:
             described = np.eye(3)
         else:
@@ -5189,7 +5212,12 @@ class TAVIController(QObject):
 
     def on_clear_mount_plane(self):
         """Back to the standard setting; the UB starts at it (peaks kept)."""
-        self._remount(None)
+        try:
+            self._remount(None)
+        except ValueError as e:
+            self.print_to_message_center(f"Mounting plane refused: {e}")
+            self._show_mount_plane()
+            return
         self.print_to_message_center(
             "Sample remounted in the standard setting; the UB starts at it (peaks kept)")
 
@@ -5219,6 +5247,172 @@ class TAVIController(QObject):
         if lock is None:
             return None
         return locked_plane_text(lock["tilts"], (lock["hkl_u"], lock["hkl_v"]))
+
+    # ===== Lock plane (2.3): the tilts held for an experiment =====
+    # The lock is operator state on instrument_state.plane_lock (C6 reads it
+    # per point); _set_plane_lock is its one writer.
+
+    # The programme's lock convention: the lock is stale once the operator's
+    # UB no longer levels the locked plane at the locked tilts within this.
+    LOCK_STALE_DEG = 0.05
+
+    def _default_lock_plane(self):
+        """The plane a Lock with empty fields takes: the mounting plane, else
+        the first two peaks with an (h k l), else (1 0 0)/(0 1 0)."""
+        if self.mount_plane is not None:
+            return self.mount_plane
+        hkls = [tuple(float(x) for x in p.hkl) for p in self._peaks_from_dock() if any(p.hkl)]
+        return tuple(hkls[:2]) if len(hkls) >= 2 else ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+
+    def _lock_for(self, plane, vals=None):
+        """A plane_lock holding ``plane`` where the operator's UB levels it
+        (``lock_plane``, inside travel), kappa frozen at its value. Raises
+        ValueError (StageUnreachable included) with the reason."""
+        vals = vals or self.get_gui_values()
+        if not vals:
+            raise ValueError("a field does not read as a number")
+        tilts = lock_plane(self.instrument_state.goniometer,
+                           self._build_sample_mount(vals).mounted_basis, *plane)
+        return {"hkl_u": [float(x) for x in plane[0]], "hkl_v": [float(x) for x in plane[1]],
+                "tilts": tilts, "kappa": float(vals['kappa'])}
+
+    def _set_plane_lock(self, lock):
+        """The one writer of the lock (None releases). Locking puts the arc
+        readouts at the lock's tilts; while locked the arc fields and kappa
+        are read-only with a tooltip naming the lock. The caller re-solves the
+        angles (``_update_ub_display``)."""
+        state = self.instrument_state
+        state.plane_lock = lock
+        idock, sam = self.window.instrument_dock, self.window.sample_dock
+        if lock is not None:
+            state.sgl, state.sgu = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
+            idock.sgl_edit.setText(format_editable_number(state.sgl))
+            idock.sgu_edit.setText(format_editable_number(state.sgu))
+        held = f"Held by {self._lock_text()}; release the lock to change it." if lock else None
+        for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
+            if edit.property("free_tooltip") is None:
+                edit.setProperty("free_tooltip", edit.toolTip())
+            edit.setReadOnly(lock is not None)
+            edit.setToolTip(held or edit.property("free_tooltip"))
+        self._show_plane_lock()
+
+    def lock_stale(self, vals=None):
+        """The one stale function (the UB dock and /state read it): True when
+        the operator's UB no longer levels the locked plane at the locked
+        tilts within LOCK_STALE_DEG, None when free or the fields do not read."""
+        lock = self.instrument_state.plane_lock
+        if lock is None:
+            return None
+        vals = vals or self.get_gui_values()
+        if not vals:
+            return None
+        gonio = self.instrument_state.goniometer
+        basis = self._build_sample_mount(vals).mounted_basis
+        normal = stage_rotation(gonio[1:], lock["tilts"]) @ np.cross(
+            basis @ np.asarray(lock["hkl_u"], dtype=float),
+            basis @ np.asarray(lock["hkl_v"], dtype=float))
+        up = np.asarray(gonio[0].axis, dtype=float)
+        tilt = math.degrees(math.atan2(np.linalg.norm(np.cross(normal, up)), abs(normal @ up)))
+        return bool(tilt > self.LOCK_STALE_DEG)
+
+    def _lock_fields(self, vals):
+        """API view of the lock: orientation_mode, lock_plane, lock_stale."""
+        lock = self.instrument_state.plane_lock
+        return {
+            'orientation_mode': "locked" if lock else "free",
+            'lock_plane': {'u': list(lock["hkl_u"]), 'v': list(lock["hkl_v"])} if lock else None,
+            'lock_stale': self.lock_stale(vals) if lock else None,
+        }
+
+    def _show_plane_lock(self, refusal=None):
+        """The UB dock shows the controller's lock: plane, tilts, stale mark."""
+        lock = self.instrument_state.plane_lock
+        dock = self.window.ub_matrix_dock
+        if lock is None:
+            dock.show_plane_lock(None, f"Lock refused: {refusal}" if refusal
+                                 else "Free: the arcs follow each Q")
+            return
+        plane = (lock["hkl_u"], lock["hkl_v"])
+        tilts = ", ".join(f"{name} = {value:.4g}°" for name, value in lock["tilts"].items())
+        stale = bool((self.get_gui_values() or {}).get('lock_stale'))
+        status = f"Locked on {plane_text(plane)}: {tilts}"
+        if stale:
+            status += (f". STALE: the UB no longer levels this plane within "
+                       f"{self.LOCK_STALE_DEG}°; release and lock again")
+        dock.show_plane_lock(plane, status, stale)
+
+    def on_lock_plane(self):
+        """UB dock Lock: hold the plane of its two (h k l) fields (empty: the
+        default plane) where the operator's UB levels it."""
+        if self.instrument_state.plane_lock is not None:
+            self.print_to_message_center(f"{self._lock_text()} is in force; release it first")
+            return
+        dock = self.window.ub_matrix_dock
+        texts = (dock.lock_u_edit.text().strip(), dock.lock_v_edit.text().strip())
+        try:
+            plane = (tuple(self._parse_hkl_triple(text) for text in texts) if any(texts)
+                     else self._default_lock_plane())
+            lock = self._lock_for(plane)
+        except ValueError as e:
+            self.print_to_message_center(f"Lock refused: {e}")
+            self._show_plane_lock(refusal=str(e))
+            return
+        self._set_plane_lock(lock)
+        self._update_ub_display()
+        self.print_to_message_center(
+            f"Scattering plane locked: {self._lock_text()}; the tilts and kappa stay put")
+
+    def on_release_plane(self):
+        """UB dock Release: back to free mode, the arcs solved per Q."""
+        if self.instrument_state.plane_lock is None:
+            self.print_to_message_center("No scattering plane is locked")
+            return
+        self._set_plane_lock(None)
+        self._update_ub_display()
+        self.print_to_message_center("Scattering plane released: the arcs follow each Q again")
+
+    def _restore_plane_lock(self, parameters):
+        """Restore a saved lock after the hidden truth (an absent one means
+        free). No interactive refusal runs; its tilts are re-checked against
+        this stage's axes and travel (the solver's guard), and a lock that
+        fails is released with a message."""
+        raw = parameters.get("plane_lock")
+        if raw is None:
+            return
+        try:
+            lock = {"hkl_u": [float(x) for x in raw["hkl_u"]],
+                    "hkl_v": [float(x) for x in raw["hkl_v"]],
+                    "tilts": {str(name): float(v) for name, v in raw["tilts"].items()},
+                    "kappa": float(raw.get("kappa", 0.0))}
+            if len(lock["hkl_u"]) != 3 or len(lock["hkl_v"]) != 3:
+                raise ValueError("the plane needs two (h k l) vectors")
+            inner = self.instrument_state.goniometer[1:]
+            missing = [ax.name for ax in inner if ax.name not in lock["tilts"]]
+            if missing:
+                raise ValueError(f"the lock does not set {', '.join(missing)}")
+            check_travel(inner, lock["tilts"], " for the locked scattering plane")
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            self.print_to_message_center(f"Saved plane lock released: {e}")
+            return
+        self._set_plane_lock(lock)
+        self._update_ub_display()
+        self.print_to_message_center(f"Plane lock restored: {self._lock_text()}")
+
+    def release_lock_for_switch(self):
+        """I4: the confirmed instrument switch releases the lock and rewrites
+        only the outgoing block's lock key (no full save, so the switch's
+        "unsaved changes are lost" holds). Nothing is written when that
+        block is absent or carries no lock."""
+        self._set_plane_lock(None)
+
+        def drop_lock(document):
+            block = document.get(self.instrument.id)
+            if not isinstance(block, dict) or block.get("plane_lock") is None:
+                return False
+            block["plane_lock"] = None
+            return True
+
+        self._edit_parameters_file(drop_lock)
 
     def _load_exercise(self, kind, hash_str):
         """Interactive load (I3): refused while the other exercise is loaded;
@@ -5300,10 +5494,9 @@ class TAVIController(QObject):
                 stage_corrections(gonio, vals), state.U_true, b_true,
                 {ax.name: getattr(state, ax.zero_error) for ax in gonio if ax.zero_error},
                 hkls,
-                # Free solve for now. When a plane is locked (Unit 2, C7) the
-                # lock's tilts go here, {inner axis: degrees}, as the solver's
-                # ``locked`` argument.
-                locked=None,
+                # Commanded as the operator would drive: at the lock's tilts
+                # when a plane is locked, else the free solve.
+                locked=(state.plane_lock or {}).get("tilts"),
             )
         except Exception as e:
             self.print_to_message_center(f"Alignment check failed: {e}")
@@ -5463,8 +5656,10 @@ class TAVIController(QObject):
         # Update sample dock indicator
         if hasattr(self.window, 'sample_dock'):
             self.window.sample_dock.update_ub_indicator(not self.ub_matrix.is_identity)
-        # Refresh angles from Q since UB affects the mapping
+        # Refresh angles from Q since UB affects the mapping (at the lock's
+        # tilts when a plane is locked), and the lock's stale mark.
         self.update_angles_from_q()
+        self._show_plane_lock()
         self.request_reciprocal_snapshot()
 
     # ===== UB Training Methods =====
@@ -5783,6 +5978,8 @@ class TAVIController(QObject):
             # one exercise at a time, so at most one of the two is set.
             "misalignment_hash_var": self._exercise_hash("misalignment"),
             "ub_training_hash": self._exercise_hash("training"),
+            # The locked scattering plane (null = free).
+            "plane_lock": copy.deepcopy(self.instrument_state.plane_lock),
         }
         # Namespace by instrument id with a schema version (design record §9,
         # §16.8): {"<instrument_id>": {"_schema": 1, ...}}.
@@ -5978,8 +6175,8 @@ class TAVIController(QObject):
     def _restore_hidden_truth(self, parameters):
         """Restore is a full replace of the hidden truth, in this order:
         the described mount, then the one exercise (absent hashes mean
-        R_hidden = I and zero errors 0); a saved plane lock, once there is
-        one, goes after both, on the truth it was locked on. No interactive
+        R_hidden = I and zero errors 0); the saved plane lock goes after
+        both (``_restore_plane_lock``). No interactive
         refusal runs, the operator's UB is not touched, and no file is
         written."""
         true_mount = parameters.get("true_mount")
@@ -6037,10 +6234,14 @@ class TAVIController(QObject):
                     )
                     return
 
+                # Restore replaces the lock too: free until the saved one (if
+                # any) goes back on after the hidden truth, below.
+                self._set_plane_lock(None)
+
                 # Block signals during loading to prevent premature validation
                 self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
                 self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
-                
+
                 # Set GUI values from parameters (saved crystal values may be
                 # legacy display labels or CrystalSpec ids; both resolve)
                 self.window.instrument_dock.set_mono_id(self._saved_crystal_id(
@@ -6189,6 +6390,8 @@ class TAVIController(QObject):
                 # The hidden truth, after the sample and the UB: the operator's
                 # UB stays as saved above.
                 self._restore_hidden_truth(parameters)
+                # Then the saved lock, on the truth it was locked on.
+                self._restore_plane_lock(parameters)
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
@@ -6436,10 +6639,20 @@ class TAVIController(QObject):
             for axis in ('rhm', 'rvm', 'rha', 'rva'):
                 if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
                     vals[axis] = ideal[axis]
+        # The session's plane lock rides on instrument_state into every launch
+        # and holds the arcs and kappa, so a launch starts from them.
+        lock = self.instrument_state.plane_lock
+        if lock is not None:
+            vals['sgl'], vals['sgu'] = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
+            vals['kappa'] = lock["kappa"]
+        vals.update(self._lock_fields(vals))
         return vals
 
     def set_default_parameters(self):
         """Set default parameters."""
+        # Defaults is the one exception to the lock's refusals: it releases
+        # the lock itself, then clears the rest (amend6 item 3).
+        self._set_plane_lock(None)
         # Block signals during loading to prevent premature validation
         self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
         self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
@@ -6508,8 +6721,8 @@ class TAVIController(QObject):
         self.current_sample_settings = {}
         # The truth back to defaults (I3): no exercise (R_hidden = I, zero
         # errors 0, both hashes), the standard setting, no mounting plane, and
-        # the operator's UB equal to it. Never refused: Defaults is the way
-        # out of any exercise state.
+        # the operator's UB equal to it. Never refused (the lock was released
+        # above): Defaults is the way out of any exercise state.
         self._clear_exercise()
         self.mount_plane = None
         self._set_true_mount(U_described=np.eye(3))
@@ -7473,7 +7686,25 @@ class TAVIController(QObject):
                 return value
             return parse
 
+        # --- lock plane: {"u": [h, k, l], "v": [h, k, l]} ---
+        def p_lock_plane(v):
+            if not isinstance(v, dict) or set(v) != {"u", "v"}:
+                raise ValueError('must be an object {"u": [h, k, l], "v": [h, k, l]}')
+            plane = []
+            for key in ("u", "v"):
+                hkl = v[key]
+                if (not isinstance(hkl, list) or len(hkl) != 3
+                        or not all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                                   and math.isfinite(x) for x in hkl)):
+                    raise ValueError(f"{key} must be three finite numbers [h, k, l]")
+                plane.append(tuple(float(x) for x in hkl))
+            return tuple(plane)
+
         return {
+            # the scattering-plane lock: applied by apply_parameters itself,
+            # which validates the whole body first (_lock_refusals/_lock_action)
+            'orientation_mode': (p_choice(["free", "locked"], "orientation_mode"), None, None),
+            'lock_plane': (p_lock_plane, None, None),
             # angles
             'mtt': (p_float, set_text(idock.mtt_edit), self.on_mtt_changed),
             'stt': (p_float, set_text(idock.stt_edit), self.on_stt_changed),
@@ -7567,9 +7798,45 @@ class TAVIController(QObject):
     }
 
     # Keys get_gui_values() returns that no write may set (declared readOnly
-    # in build_api_schema): derived curvature policy, and the mounting plane,
-    # which only the Sample dock's Apply/Clear remounts.
-    _API_READ_ONLY_FIELDS = ('curvature_modes', 'mount_plane_u', 'mount_plane_v')
+    # in build_api_schema): derived curvature policy, the mounting plane,
+    # which only the Sample dock's Apply/Clear remounts, and the lock's stale
+    # mark (``lock_stale``).
+    _API_READ_ONLY_FIELDS = ('curvature_modes', 'mount_plane_u', 'mount_plane_v', 'lock_stale')
+
+    # The lock's request fields, and the fields a locked plane holds.
+    _LOCK_FIELDS = ('orientation_mode', 'lock_plane')
+    _LOCK_HELD_FIELDS = ('sgl', 'sgu', 'kappa')
+
+    def _lock_refusals(self, names):
+        """{field: reason} for the fields of one request a lock refuses: sgl,
+        sgu or kappa beside orientation_mode/lock_plane (whichever way it
+        switches: two requests instead), and sgl, sgu or kappa while locked."""
+        held = [n for n in names if n in self._LOCK_HELD_FIELDS]
+        mode = [n for n in names if n in self._LOCK_FIELDS]
+        if held and mode:
+            reason = ("orientation_mode/lock_plane cannot be combined with sgl, sgu or "
+                      "kappa in one request; send two")
+            return {n: reason for n in held + mode}
+        if held and self._lock_text():
+            return {n: f"{self._lock_text()} holds {n}; release it first "
+                       f"(orientation_mode \"free\")" for n in held}
+        return {}
+
+    def _lock_action(self, mode, plane):
+        """What a valid lock request does: ("release", None), ("keep", lock)
+        or ("lock", new lock). ``mode`` "locked", or a ``plane`` alone, asks
+        for a lock (the default plane when none is given). ValueError with the
+        reason when refused (a lock past travel included)."""
+        lock = self.instrument_state.plane_lock
+        if mode == "free":
+            if plane is not None:
+                raise ValueError('lock_plane needs orientation_mode "locked"')
+            return ("release", None)
+        if lock is not None:
+            if plane is None or [list(plane[0]), list(plane[1])] == [lock["hkl_u"], lock["hkl_v"]]:
+                return ("keep", lock)
+            raise ValueError(f"{self._lock_text()} is in force; release it first")
+        return ("lock", self._lock_for(plane or self._default_lock_plane()))
 
     def _scan_busy(self):
         """True when any scan job is queued or running.
@@ -7679,7 +7946,9 @@ class TAVIController(QObject):
 
         Steps (docs/API_SERVER_DESIGN.md sec 8):
           a) parse/validate every field first, collecting per-field errors;
-          b) apply valid fields in dependency order (lattice -> energy mode ->
+             the plane lock is judged on the whole body, and a refused lock
+             request or a field the lock holds applies nothing at all;
+          b) apply the lock request, then valid fields in dependency order (lattice -> energy mode ->
              Q/HKL -> angles -> the rest in patch order);
           c) fire each field's after-handler once (deduped, order preserved);
           d) log a summary to the message center;
@@ -7710,11 +7979,38 @@ class TAVIController(QObject):
             except (ValueError, TypeError) as exc:
                 errors[name] = "invalid value: %s" % exc
 
+        # (a') The lock is validated over the whole body; a refused lock
+        # request, or a field the lock holds, applies nothing at all.
+        lock_errors = self._lock_refusals(patch)
+        errors.update(lock_errors)
+        lock_request = any(n in patch for n in self._LOCK_FIELDS)
+        lock_action = None
+        if lock_request and not errors:
+            try:
+                lock_action = self._lock_action(parsed.get('orientation_mode'),
+                                                parsed.get('lock_plane'))
+            except ValueError as exc:
+                field = 'lock_plane' if 'lock_plane' in parsed else 'orientation_mode'
+                errors[field] = "refused: %s" % exc
+        if lock_errors or (lock_request and errors):
+            return applied, errors
+
+        after_handlers = []  # deduped-by-identity, order preserved
+        if lock_action is not None:
+            # Before the other fields, so their handlers solve at the lock.
+            action, lock = lock_action
+            if action != "keep":
+                self._set_plane_lock(lock)
+            for name in self._LOCK_FIELDS:
+                if name in parsed:
+                    applied[name] = patch[name]
+                    parsed.pop(name)
+            after_handlers.append(self._update_ub_display)
+
         # (b) Apply valid fields in dependency order, then leftover patch order.
         ordered = [n for n in self._API_APPLY_ORDER if n in parsed]
         ordered += [n for n in patch.keys() if n in parsed and n not in ordered]
 
-        after_handlers = []  # deduped-by-identity, order preserved
         for name in ordered:
             _parse_fn, setter_fn, after = field_map[name]
             value = parsed[name]
@@ -8023,6 +8319,7 @@ class TAVIController(QObject):
         # Static type/units metadata (the only hand-kept part); every live field
         # gets an entry, unknowns default to number/None.
         meta = {
+            'orientation_mode': ('string', None), 'lock_plane': ('object', 'r.l.u.'),
             'mtt': ('number', 'degrees'), 'stt': ('number', 'degrees'),
             'omega': ('number', 'degrees'), 'sgl': ('number', 'degrees'),
             'sgu': ('number', 'degrees'), 'att': ('number', 'degrees'),
@@ -8053,6 +8350,7 @@ class TAVIController(QObject):
 
         # Allowed values pulled live from the descriptor / static choice maps.
         allowed = {
+            'orientation_mode': ["free", "locked"],
             'K_fixed': ["Ki Fixed", "Kf Fixed"],
             # Sample ids from the shared sample library (includes "none"); the
             # same set apply_parameters validates a 'sample' write against.
@@ -8103,6 +8401,16 @@ class TAVIController(QObject):
                     "mount is not from a plane. Read-only."
                 ),
             })
+        fields.append({
+            "name": "lock_stale",
+            "type": "boolean",
+            "readOnly": True,
+            "description": (
+                "True when the operator's UB no longer levels the locked plane "
+                "at the locked tilts within %g degrees; null when free. "
+                "Read-only." % self.LOCK_STALE_DEG
+            ),
+        })
 
         limits = getattr(self, "_api_limits", None)
 
@@ -8207,6 +8515,8 @@ class TAVIController(QObject):
                     "Mounting-plane description cleared: it named reflections of the "
                     "previous sample. The mount itself is unchanged.")
             self._adopt_sample_lattice(key)
+            # Allowed under a lock (amendment 7); the stale mark reports it.
+            self._show_plane_lock()
             self.request_reciprocal_snapshot()
         except Exception as e:
             self.print_to_message_center(f"Sample selection change failed: {e}")

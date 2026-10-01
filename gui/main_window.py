@@ -415,6 +415,11 @@ class TAVIMainWindow(QMainWindow):
 
         # Confirmed: persist the new choice FIRST, then trigger the restart via
         # the normal close path (closeEvent -> controller.shutdown() + layout save).
+        # A locked plane does not survive a switch: the controller releases it
+        # and drops it from this instrument's saved block (nothing else saved).
+        controller = getattr(self, "controller", None)
+        if controller is not None:
+            controller.release_lock_for_switch()
         if self._save_selection is not None:
             self._save_selection(instrument_id)
         self._restart_instrument_id = instrument_id

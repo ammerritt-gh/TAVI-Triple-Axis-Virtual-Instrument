@@ -627,6 +627,7 @@ def test_known_api_field_map_keys_are_unchanged():
     *and* re-check ``SCAN_VARIABLE_TO_FIELD`` in ``tavi/scan_fits.py``.
     """
     known = {
+        'orientation_mode', 'lock_plane',
         'mtt', 'stt', 'omega', 'sgl', 'sgu', 'att',
         'Ki', 'Ei', 'Kf', 'Ef', 'K_fixed', 'fixed_E',
         'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
