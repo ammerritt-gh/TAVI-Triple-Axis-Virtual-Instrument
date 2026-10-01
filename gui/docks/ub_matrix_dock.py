@@ -389,7 +389,7 @@ class UBMatrixDock(BaseDockWidget):
         self.ub_lock_button.clicked.connect(self._on_ub_lock_toggled)
         lock_layout.addWidget(self.ub_lock_button)
 
-        self.ub_status_label = QLabel("\u26aa UB = Identity (no orientation)")
+        self.ub_status_label = QLabel("\u26aa UB = identity (standard setting)")
         self.ub_status_label.setStyleSheet("color: gray; font-size: 10px;")
         lock_layout.addWidget(self.ub_status_label)
         lock_layout.addStretch()
@@ -717,7 +717,7 @@ class UBMatrixDock(BaseDockWidget):
             for j in range(3):
                 self.ub_edits[i][j].setText(f"{UB[i, j]:.4f}")
         if is_identity:
-            self.ub_status_label.setText("\u26aa UB = Identity (no orientation)")
+            self.ub_status_label.setText("\u26aa UB = identity (standard setting)")
             self.ub_status_label.setStyleSheet("color: gray; font-size: 10px;")
         else:
             self.ub_status_label.setText("\U0001f7e2 UB matrix active")
