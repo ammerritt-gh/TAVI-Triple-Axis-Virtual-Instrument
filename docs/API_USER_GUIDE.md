@@ -1118,8 +1118,8 @@ user presses Enter, so dependent fields update automatically.
 | `mtt` | number | degrees | Monochromator take-off angle (scan variable `A1`). Recomputes energies/Q. |
 | `stt` | number | degrees | Sample scattering angle (scan variable `A2`). |
 | `omega` | number | degrees | Sample rotation (scan variable `A3`; same physical angle as sample θ). |
-| `sgl` | number | degrees | Lower goniometer arc readout (tilt about the beam axis, rides on the turntable). Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. A value outside the arc's travel (IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words an angle-mode point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
-| `sgu` | number | degrees | Upper goniometer arc readout (rides on `sgl`). Same rules as `sgl`. |
+| `sgl` | number | degrees | Lower sample tilt arc readout: turns about the horizontal axis perpendicular to the beam at A3 = 0 (stage x), riding on the turntable. Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. A value outside the arc's travel (IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words an angle-mode point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
+| `sgu` | number | degrees | Upper sample tilt arc readout: turns about the beam axis at A3 = 0 (stage z), riding on `sgl`. Same rules as `sgl`. |
 | `att` | number | degrees | Analyzer take-off angle (scan variable `A4`). |
 | `Ki` | number | Å⁻¹ | Incident wavevector. Linked: `Ki` ↔ `Ei`. |
 | `Ei` | number | meV | Incident energy. Linked: `Ei` ↔ `Ki`. |

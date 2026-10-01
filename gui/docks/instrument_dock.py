@@ -77,37 +77,49 @@ class InstrumentDock(BaseDockWidget):
         self.stt_edit.setMaximumWidth(70)
         angles_layout.addWidget(self.stt_edit, 0, 3)
 
-        # Row 1: Sample omega (ω, the A3 turntable readout), lower arc sgl
-        angles_layout.addWidget(QLabel("ω:"), 1, 0)
+        # Row 1: the sample turntable A3 (the API's and saved files' omega),
+        # Analyzer 2theta
+        a3_tip = ("Sample turntable A3: in-plane rotation about the vertical. "
+                  "Called omega in the API, saved files and scan commands.")
+        a3_label = QLabel("A3:")
+        a3_label.setToolTip(a3_tip)
+        angles_layout.addWidget(a3_label, 1, 0)
         self.omega_edit = QLineEdit()
         self.omega_edit.setMaximumWidth(70)
-        self.omega_edit.setToolTip("Sample turntable readout A3 (in-plane)")
+        self.omega_edit.setToolTip(a3_tip)
         angles_layout.addWidget(self.omega_edit, 1, 1)
 
-        # The goniometer arcs (descriptor goniometer): solved from Q/HKL,
-        # operator-set for angle-mode scans. Travel from the descriptor.
+        angles_layout.addWidget(QLabel("Ana 2θ:"), 1, 2)
+        self.att_edit = QLineEdit()
+        self.att_edit.setMaximumWidth(70)
+        angles_layout.addWidget(self.att_edit, 1, 3)
+
+        # Row 2: the sample tilt arcs (descriptor goniometer), side by side:
+        # solved from Q/HKL, operator-set for angle-mode scans. Travel from
+        # the descriptor.
         travel = {ax.name: ax for ax in self.descriptor.goniometer}
         self.sgl_edit = QLineEdit()
         self.sgu_edit = QLineEdit()
-        for row, name, edit, text in (
-            (1, "sgl", self.sgl_edit, "Lower goniometer arc sgl (tilt about the beam axis, rides on A3)"),
-            (2, "sgu", self.sgu_edit, "Upper goniometer arc sgu (rides on sgl)"),
+        for column, name, edit, text in (
+            (0, "sgl", self.sgl_edit,
+             "Lower sample tilt arc sgl: turns about the horizontal axis "
+             "perpendicular to the beam at A3 = 0 (stage x); rides on A3"),
+            (2, "sgu", self.sgu_edit,
+             "Upper sample tilt arc sgu: turns about the beam axis at A3 = 0 "
+             "(stage z); rides on sgl"),
         ):
             ax = travel.get(name)
             if ax is None or math.isinf(ax.lower):
                 limits = "travel undocumented (unlimited)"
             else:
                 limits = f"travel {ax.lower:g}° to {ax.upper:g}°"
+            tip = f"{text}. Solved from Q/HKL; set it here for angle-mode scans; {limits}."
+            label = QLabel(f"Tilt {name}:")
+            label.setToolTip(tip)
             edit.setMaximumWidth(70)
-            edit.setToolTip(f"{text}. Solved from Q/HKL; set it here for angle-mode scans; {limits}.")
-            angles_layout.addWidget(QLabel(f"{name}:"), row, 2)
-            angles_layout.addWidget(edit, row, 3)
-
-        # Row 2: Analyzer 2theta
-        angles_layout.addWidget(QLabel("Ana 2θ:"), 2, 0)
-        self.att_edit = QLineEdit()
-        self.att_edit.setMaximumWidth(70)
-        angles_layout.addWidget(self.att_edit, 2, 1)
+            edit.setToolTip(tip)
+            angles_layout.addWidget(label, 2, column)
+            angles_layout.addWidget(edit, 2, column + 1)
 
         main_layout.addWidget(angles_group)
 
