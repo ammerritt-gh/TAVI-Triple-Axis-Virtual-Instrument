@@ -574,33 +574,40 @@ def _in12_vals(**overrides):
     return vals
 
 
-def _in12_config(vals):
+def _plugin_config(vals, name="in12"):
     pytest.importorskip("mcstasscript")
-    from instruments.in12.plugin import IN12Plugin
-
-    plugin = IN12Plugin()
+    cls = {"in12": "IN12Plugin", "panda": "PANDAPlugin"}[name]
+    plugin = getattr(importlib.import_module(f"instruments.{name}.plugin"), cls)()
     state = plugin.default_state()
     return plugin, plugin.scan_config(state, vals, None, {}, state.sample_mount)
 
 
-def test_unreachable_elevation_is_refused_identically_everywhere(tmp_path):
-    """45 deg of elevation cannot be levelled on +/-20 deg arcs: the arcs'
-    rotation angle is at most |sgl| + |sgu| <= 40 deg, and no rotation moves a
-    vector's elevation by more than its own angle. Established analytically,
-    not by a grid sharing the solver's search."""
+@pytest.mark.parametrize(("name", "travel", "slits_mm"), [
+    ("in12", 20, {"sbl": (30.0, 60.0), "dbl_hgap": 50.0}),
+    ("panda", 15, {"ms1": 40.0, "ss1": (40.0, 80.0), "ss2": (40.0, 80.0)}),
+], ids=["in12", "panda"])
+def test_unreachable_elevation_is_refused_identically_everywhere(tmp_path, name, travel,
+                                                                 slits_mm):
+    """45 deg of elevation cannot be levelled on IN12's +/-20 deg or PANDA's
+    +/-15 deg arcs: the arcs' rotation angle is at most |sgl| + |sgu|, and no
+    rotation moves a vector's elevation by more than its own angle; the
+    closed form ``_arcs_can_level`` agrees. Established analytically, not by
+    a grid sharing the solver's search."""
     from instruments.tas_runtime import describe_scan_error_flags
 
-    vals = _in12_vals()
-    plugin, config = _in12_config(vals)
+    vals = _in12_vals(slits_mm=slits_mm)
+    plugin, config = _plugin_config(vals, name)
     q = 2.5 * np.array([math.cos(math.radians(45)), 0.0, math.sin(math.radians(45))])
     scan_point = [*q, 0.0, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0, 0.0]
+    assert 45 > 2 * travel
+    assert not _arcs_can_level(config.goniometer, instrument_q_to_component_q(q))
 
     _angles, flags = copy.deepcopy(config).calculate_stage_angles(
         *q, 0.0, IN12_E, "Kf Fixed", "pg002", "pg002")
     assert len(flags) == 1 and flags[0].startswith("stage: ")
     reason = describe_scan_error_flags(flags)
     assert reason.split()[0] in ("sgl", "sgu")
-    assert "travel is [-20, 20]°" in reason
+    assert f"travel is [-{travel}, {travel}]°" in reason
 
     feasible, feasibility_reason = plugin.check_point_feasibility(
         config, "momentum", scan_point, vals)
@@ -615,7 +622,7 @@ def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
     from instruments import tas_runtime
     from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
 
-    plugin, config = _in12_config(_in12_vals())
+    plugin, config = _plugin_config(_in12_vals())
     angles, flags = copy.deepcopy(config).calculate_stage_angles(
         2.0, 0.0, 0.0, 0.0, IN12_E, "Kf Fixed", "pg002", "pg002")
     assert flags == []
