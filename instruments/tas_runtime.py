@@ -216,7 +216,7 @@ class TAS_Instrument:
         # The truth: the crystal's real mount, U_true = R_hidden @ U_described
         # (docs/INSTRUMENT_LAYOUT.md "Truth and belief"). Hidden like the zero
         # errors; written only by the controller's one setter, read only by
-        # the McStas sample arm.
+        # the McStas sample arm and the analytic engine.
         self.U_true = np.eye(3)
         # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
         # point by _solve_point_geometry on its private copy of the state, so
@@ -288,7 +288,7 @@ class TAS_Instrument:
         correction + hidden zero error, each from the field the axis's
         description names (the readout is the state attribute named after the
         axis; validation guarantees A3/sgl/sgu). Read only by the McStas
-        sample arm."""
+        sample arm and the analytic engine (``true_point_hkl``)."""
         fields = vars(self)
         corrections = stage_corrections(self.goniometer, fields)
         return {
@@ -1328,6 +1328,27 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         },
         log_message=log_message,
     )
+
+
+def true_point_hkl(state, metadata, B_true):
+    """The (H, K, L) the crystal really presents at one solved scan point.
+
+    The point's readouts and corrections (``metadata`` of
+    ``compute_scan_snapshot``) plus the hidden zero errors on ``state`` give
+    the physical stage angles; with the point's stt, Ki, Kf and the sample
+    sense they give the mount-frame Q (``q_mount_from_stage``), read through
+    the true mount: ``(U_true @ B_true)^-1``. ``B_true`` is the selected
+    sample's own lattice, never the lattice fields. Read only by the analytic
+    engine for its model evaluation; the result is never written into point
+    metadata or a scan result (it would show the hidden truth).
+    """
+    point = copy.copy(state)
+    point.A3, point.sgl, point.sgu = metadata["sth"], metadata["sgl"], metadata["sgu"]
+    point.psi, point.kappa = metadata["psi"], metadata["kappa"]
+    q_mount = q_mount_from_stage(point.goniometer, point.physical_stage_angles(),
+                                 metadata["stt"], metadata["Ki"], metadata["Kf"],
+                                 point.sense_sample)
+    return tuple(float(v) for v in np.linalg.solve(point.U_true @ B_true, q_mount))
 
 
 def _resolve_materialized_binary_path(instrument):

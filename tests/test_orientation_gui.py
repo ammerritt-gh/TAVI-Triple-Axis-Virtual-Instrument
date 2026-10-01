@@ -981,3 +981,33 @@ def test_restore_replaces_the_hidden_truth_in_full(controller, kind):
     assert np.array_equal(controller.R_hidden, np.eye(3))
     assert np.array_equal(state.U_true, controller.U_described)
     assert (state.mis_omega, state.mis_chi) == (0.0, 0.0)
+
+
+# --- Unit 2 (C4): the analytic engine on the truth ----------------------------------
+
+def _one_point_scan(controller, job_id, seed=None):
+    """A one-point deterministic rlu scan at (2 0 0) through the API launch
+    path; noiseless unless a seed is given."""
+    from tavi.scan_jobs import ScanJob
+
+    launch = controller.build_api_launch_state(
+        {"scan_command1": "H 2 2 1", "K": 0.0, "L": 0.0, "deltaE": 0.0})
+    launch.update(engine="deterministic", noiseless=seed is None, seed=seed)
+    job = ScanJob(job_id=job_id, source="api", launch_state=launch)
+    controller.run_simulation(launch, job=job)
+    return job.result
+
+
+def test_deterministic_counts_drop_when_the_ub_misses_the_crystal(controller, tmp_path):
+    """WIP Entry 14 end to end: a (2 0 0) point counts with the operator's UB
+    on the crystal and drops with the UB 3 deg off, since the engine
+    evaluates where the crystal really is, not at the requested HKL."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+
+    controller.set_default_parameters()
+    controller.output_directory = str(tmp_path)
+    counts = []
+    for u in (np.eye(3), mccode_rotation_matrix(0.0, 3.0, 0.0)):
+        controller.ub_matrix.set_U(u)
+        counts.append(_one_point_scan(controller, f"t-entry14-{len(counts)}").counts[0])
+    assert counts[0] > 0 and counts[1] < 0.1 * counts[0], counts
