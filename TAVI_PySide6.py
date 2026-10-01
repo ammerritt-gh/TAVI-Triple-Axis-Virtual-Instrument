@@ -2541,7 +2541,7 @@ class TAVIController(QObject):
         q0 = math.sqrt(qx ** 2 + qy ** 2 + qz ** 2)
 
         # Feasibility gate: the same per-point angle solve run_simulation applies
-        # (throwaway check_state, calculate_angles error flags). Infeasible ->
+        # (throwaway check_state, calculate_stage_angles error flags). Infeasible ->
         # {"ok": false, "reason": ...} with the /validate refusal vocabulary.
         #
         # Built through scan_config -- the same mapping compute_scan_snapshot's
@@ -2554,10 +2554,13 @@ class TAVIController(QObject):
             self.instrument.default_state(), vals, vals.get('sample_key'),
             self.diagnostic_settings, self._build_sample_mount(vals),
         )
-        angles, error_flags = check_state.calculate_angles(
+        # A locked plane refuses an out-of-plane point here as in a scan.
+        check_state.plane_lock = self.instrument_state.plane_lock
+        angles, error_flags = check_state.calculate_stage_angles(
             qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
-            check_state.monocris, check_state.anacris,
+            check_state.monocris, check_state.anacris, locked=check_state.plane_lock,
         )
+        angles = angles[:5]
         if error_flags:
             from instruments.tas_runtime import describe_scan_error_flags
             reason = describe_scan_error_flags(error_flags) or (

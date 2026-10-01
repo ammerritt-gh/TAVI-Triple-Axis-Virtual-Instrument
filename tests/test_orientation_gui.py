@@ -1215,6 +1215,9 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
         assert json.dumps(state.plane_lock) == lock
         assert "out of the locked scattering plane" in controller._angles_stale
         assert not controller._check_current_point_validity()[0]
+        resolution = controller.compute_resolution(1, 0, 0)     # GET /resolution
+        assert resolution.get("ok") is False, resolution
+        assert "out of the locked scattering plane (1 0 1)/(0 1 0)" in resolution["reason"]
     finally:
         sim.scan_command_1_edit.setText("")
         controller.set_default_parameters()
