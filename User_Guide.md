@@ -91,6 +91,23 @@ While a plane is locked:
 
 Release returns to free mode, where the arcs follow each Q again. A save keeps the lock, and loading it restores the lock after the sample and any exercise; a saved lock whose tilts are past this instrument's travel is released with a message. Switching instrument releases the lock and removes it from the outgoing instrument's saved parameters (nothing else is saved). Training is graded at the locked tilts while a plane is locked.
 
+### Aligning from cold: a walkthrough
+The whole path from a fresh start to a scan in an aligned plane, mouse and keyboard only:
+1. Start clean. Uncheck **Lock** on any peak entry in the UB Matrix dock, remove extra entries with ✗ (two always remain) and clear the two that are left, then press **Load Defaults** in the Simulation dock. The UB is now the sample as described.
+2. For a training exercise, paste its hash into the UB Matrix dock's **Student: Load Exercise** field and press **Load**.
+3. In the Simulation dock choose **Engine: Deterministic (analytic)** for quick scans (McStas works too, more slowly).
+4. Type the (h k l) of a strong reflection, for example 2 0 0, into the Scattering dock. The instrument goes where your UB says the reflection is, which for a misaligned crystal is not quite where it is.
+5. Rock the sample: press **Relative** beside the first scan command, enter `A3 -3 3 0.1` and press **Run Simulation**.
+6. In the Fitting dock press **Fit**, then **Go to CEN**: A3 moves to the fitted centre of the peak.
+7. In the UB Matrix dock press **Take Position** on Peak 1 and type its (h k l).
+8. Repeat steps 4 to 7 for a second reflection that is not parallel to the first, for example 0 2 0, into Peak 2.
+9. Press **Calculate UB** and read the residuals table. A row marked ⚠ means a peak is likely mis-indexed, or that your lattice fields are off: correct the (h k l), or try Refine Lattice, and press Calculate UB again until no row is marked.
+10. Read the **Scattering Plane (from your UB)** box: the plane normal [u v w] is the direction your UB now puts vertical.
+11. Type the two reflections that span the plane you want into the **Lock plane** fields (or leave both empty to use the first two peaks) and press **Lock**.
+12. Press **Relative** again to turn it off, enter your scan, for example `H 1.9 2.1 0.1`, check that the point count under the scan commands says every point is valid, and press **Run Simulation**. Every point runs at the locked tilts and κ.
+
+In a training exercise, **Check My Alignment** then grades how well your setup finds the true reflections.
+
 ### Misalignment Training Dock
 By default, the sample is perfectly aligned in the beam. It is possible to create an obfuscated misalignment in the sample that can then be corrected, for example when training a student in aligning a sample. To generate and correct a misalignment, follow these steps:
 1. Enter the desired misalignment of the turntable (ω mis, in-plane) and of the lower arc (sgl mis, out-of-plane). Click "generate hash" and delete these entries if the student will be using the computer later.
