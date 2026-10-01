@@ -4934,8 +4934,9 @@ class TAVIController(QObject):
                 )
                 return not error_flags
             else:
-                # Angle mode - always valid
-                return True
+                # Angle mode: only the operator-set arcs' travel can refuse.
+                return not check_state.arc_travel_flags(
+                    {"sgl": scan_point[SLOT_SGL], "sgu": scan_point[SLOT_SGU]})
         except Exception:
             return False
     
@@ -5031,6 +5032,11 @@ class TAVIController(QObject):
                 return
             self.instrument_state.sgl, self.instrument_state.sgu = sgl, sgu
             self.print_to_message_center(f"Sample arcs updated: sgl = {sgl}°, sgu = {sgu}°")
+            # The field keeps the value; an angle-mode run refuses it.
+            past = self.instrument_state.arc_travel_flags({"sgl": sgl, "sgu": sgu})
+            if past:
+                self.print_to_message_center(
+                    f"Arc outside travel: {describe_scan_error_flags(past)}")
             self.on_angles_changed()
         except ValueError:
             self.print_to_message_center("Invalid arc (sgl/sgu) value")
@@ -7202,13 +7208,24 @@ class TAVIController(QObject):
                 raise ValueError("must be a finite number")
             return value
 
+        # --- arc parser: a readout outside the arc's travel is refused with
+        # the words an angle-mode point past travel gets.
+        def p_arc(name):
+            def parse(v):
+                value = p_float(v)
+                past = self.instrument_state.arc_travel_flags({name: value})
+                if past:
+                    raise ValueError(describe_scan_error_flags(past))
+                return value
+            return parse
+
         return {
             # angles
             'mtt': (p_float, set_text(idock.mtt_edit), self.on_mtt_changed),
             'stt': (p_float, set_text(idock.stt_edit), self.on_stt_changed),
             'omega': (p_float, set_text(idock.omega_edit), self.on_omega_changed),
-            'sgl': (p_float, set_text(idock.sgl_edit), self.on_arc_changed),
-            'sgu': (p_float, set_text(idock.sgu_edit), self.on_arc_changed),
+            'sgl': (p_arc('sgl'), set_text(idock.sgl_edit), self.on_arc_changed),
+            'sgu': (p_arc('sgu'), set_text(idock.sgu_edit), self.on_arc_changed),
             'att': (p_float, set_text(idock.att_edit), self.on_att_changed),
             # energies
             'Ki': (p_float, set_text(idock.Ki_edit), self.on_Ki_changed),
@@ -8741,7 +8758,8 @@ class TAVIController(QObject):
                         scan_config.K_fixed, scan_config.monocris, scan_config.anacris
                     )
                 else:
-                    error_flags = []
+                    error_flags = check_state.arc_travel_flags(
+                        {"sgl": scan_point[SLOT_SGL], "sgu": scan_point[SLOT_SGU]})
 
                 valid_mask_1d[idx] = not error_flags
             
@@ -8826,7 +8844,8 @@ class TAVIController(QObject):
                             scan_config.K_fixed, scan_config.monocris, scan_config.anacris
                         )
                     else:
-                        error_flags = []
+                        error_flags = check_state.arc_travel_flags(
+                            {"sgl": scan_point[SLOT_SGL], "sgu": scan_point[SLOT_SGU]})
 
                     valid_mask_2d[idx_y][idx_x] = not error_flags
             
