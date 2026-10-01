@@ -134,6 +134,34 @@ def test_flash_timers_die_with_their_field(controller):
     QTest.qWait(600)                 # past every pending flash timer
 
 
+STALE_UB = "saved before the sample-sense fix"
+
+
+@pytest.mark.parametrize("with_sense", [False, True])
+def test_old_ub_on_a_positive_sense_instrument_asks_for_a_refit(controller, messages,
+                                                                with_sense):
+    """IN8 is a sense +1 instrument: a saved UB whose peaks carry no sense was
+    fitted under the sign bug. Loading it says so once and does not refit."""
+    old_peaks = [{"hkl": [2, 0, 0], "angles": [30.0, 0.0, 60.0], "ki": 2.66, "kf": 2.66},
+                 {"hkl": [0, 2, 0], "angles": [120.0, 0.0, 60.0], "ki": 2.66, "kf": 2.66}]
+    if with_sense:
+        for peak in old_peaks:
+            peak["sense_sample"] = 1
+    stale_u = [[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]
+
+    def edit(block):
+        block["ub_matrix_state"]["peaks"] = old_peaks
+        block["ub_matrix_state"]["U"] = stale_u
+        block["ub_training_hash"] = ""
+
+    _reload_with(controller, edit)
+    stale = [m for m in messages if STALE_UB in m]
+    assert len(stale) == (0 if with_sense else 1), messages
+    if stale:
+        assert "Calculate UB" in stale[0]
+    assert np.allclose(controller.ub_matrix.U, stale_u)          # never refitted
+
+
 def test_plane_refresh_failure_reaches_the_message_center(controller, messages, monkeypatch):
     def broken():
         raise RuntimeError("plane probe")
