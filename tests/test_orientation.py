@@ -229,7 +229,7 @@ def test_correction_changed_after_take_position_keeps_the_crystal_in_place(model
         _mtt, stt, a3, sgl, _att, sgu = solve(u_true @ CUBIC_B @ np.array(hkl, float))
         readouts = {"A3": a3 - model.psi - model.mis_omega,     # physical -> readout
                     "sgl": sgl - model.kappa - model.mis_chi, "sgu": sgu}
-        record = stage_record(gonio, readouts, stage_corrections(model.psi, model.kappa),
+        record = stage_record(gonio, readouts, stage_corrections(gonio, vars(model)),
                               ki=K, kf=K, sense=sense)
         assert set(record) == {"axes", "angles", "corrections", "ki", "kf", "sense"}
         peaks.append(ObservedPeak(hkl=hkl, angles=(readouts["A3"], 0.0, stt), ki=K, kf=K,
@@ -251,7 +251,7 @@ def test_correction_changed_after_take_position_keeps_the_crystal_in_place(model
         lab = arm.T @ (CUBIC_B @ target)
         return (-lab if sense > 0 else lab), lab_q_from_stt(K, K, stt)
 
-    placed, q_lab = drive_and_emit(stage_corrections(model.psi, model.kappa))
+    placed, q_lab = drive_and_emit(stage_corrections(gonio, vars(model)))
     assert np.allclose(placed, q_lab, rtol=0.0, atol=1e-9)
 
     # Reading the peaks as recorded (the correction change ignored) misses by
@@ -776,6 +776,49 @@ def test_offset_changes_the_emitted_rotation_by_that_axis_rotation(models, field
                 @ _rot((0, 0, 1), shifted["sgu"]) @ u)
     assert np.allclose(emitted, expected, rtol=0.0, atol=1e-12)
     assert not np.allclose(emitted, before, rtol=0.0, atol=1e-6)
+
+
+def test_corrections_and_zero_errors_follow_the_stage_description(models, monkeypatch):
+    """Which state field corrects an axis, and which hides its zero error, is
+    declared on the axis (TAS: A3 psi / mis_omega, sgl kappa / mis_chi, sgu
+    none). A description that maps them otherwise is read as written."""
+    import dataclasses
+
+    from instruments.tas_runtime import TAS_Instrument, stage_corrections
+
+    model = copy.deepcopy(models["in8"])
+    a3, sgl, sgu = model.goniometer
+    assert [(ax.correction, ax.zero_error) for ax in model.goniometer] == [
+        ("psi", "mis_omega"), ("kappa", "mis_chi"), (None, None)]
+    remapped = (dataclasses.replace(a3, correction="kappa", zero_error=None),
+                dataclasses.replace(sgl, correction=None, zero_error=None),
+                dataclasses.replace(sgu, correction="psi", zero_error="mis_chi"))
+    monkeypatch.setattr(TAS_Instrument, "goniometer", property(lambda self: remapped))
+    model.A3, model.sgl, model.sgu = 30.0, 2.0, -3.0
+    model.psi, model.kappa, model.mis_omega, model.mis_chi = 1.0, 0.5, 0.25, -0.125
+    assert model.physical_stage_angles() == {"A3": 30.5, "sgl": 2.0, "sgu": -2.125}
+    assert stage_corrections(remapped, {"psi": 1.0, "kappa": 0.5}) == {
+        "A3": 0.5, "sgl": 0.0, "sgu": 1.0}
+
+
+@pytest.mark.parametrize(("angles", "named"), [
+    ({"A3": 1.0, "sgl": 2.0}, "sgu"),
+    ({"A3": 1.0, "sgl": 2.0, "sgu": 3.0, "chi": 4.0}, "chi"),
+    ({"omega": 1.0, "chi": 2.0, "phi": 3.0}, "A3"),
+], ids=["missing", "unknown", "other-stage"])
+def test_stage_readers_refuse_angles_that_do_not_match_the_stage(angles, named):
+    """A missing or unknown axis name is an error naming it, never 0 deg."""
+    from instruments.descriptor import tas_goniometer
+
+    gonio = tas_goniometer()
+    for read in (lambda: stage_rotation(gonio, angles),
+                 lambda: sample_arm_euler(gonio, angles, np.eye(3)),
+                 lambda: stage_record(gonio, angles)):
+        with pytest.raises(ValueError, match=named):
+            read()
+    if named == "chi":                                   # check_travel allows a subset
+        with pytest.raises(ValueError, match=named):
+            check_travel(gonio, {"chi": 1.0})
 
 
 # --- the build fingerprint ignores orientation ----------------------------------

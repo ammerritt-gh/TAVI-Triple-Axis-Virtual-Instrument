@@ -1113,8 +1113,14 @@ value.
 optional fields non-None, numerics finite/positive); `mcstas_name` set and a
 valid C identifier; `component_path` exists on disk if set; non-empty libraries
 (≥1 mono crystal, ana crystal, sample, source type, scannable parameter); a
-declared `goniometer` (every TAS uses `tas_goniometer(arc_travel)`: `A3` about
-y carrying `sgl` about x and `sgu` about z).
+declared `goniometer` the TAS runtime can drive (every TAS uses
+`tas_goniometer(arc_travel)`: `A3` about y carrying `sgl` about x and `sgu`
+about z). The runtime drives the stage by name, so a runnable stage must have
+exactly the axes `A3`, `sgl`, `sgu` in that order, and an axis's optional
+`correction` / `zero_error` (the state fields holding its operator correction
+and hidden zero error: `A3` psi / mis_omega, `sgl` kappa / mis_chi, `sgu`
+none) must name one of `psi`, `kappa` / `mis_omega`, `mis_chi`. Any other stage
+(an Eulerian cradle) is legal as data and refused here, not per point.
 
 Expected results: fixed `puma_descriptor()` → `[]` at `runnable=True`;
 `in8_descriptor()` → `[]` at `runnable=False`, and at `runnable=True` errors

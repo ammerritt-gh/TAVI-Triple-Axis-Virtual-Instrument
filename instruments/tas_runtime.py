@@ -51,10 +51,13 @@ SLOT_SGL, SLOT_KAPPA, SLOT_PSI, SLOT_SGU = 8, 9, 10, 11
 SCAN_POINT_LENGTH = 12
 
 
-def stage_corrections(psi, kappa):
-    """The operator corrections per goniometer axis: psi turns the turntable,
-    kappa the lower arc; the upper arc has none."""
-    return {"A3": float(psi), "sgl": float(kappa)}
+def stage_corrections(gonio, values):
+    """The operator correction per goniometer axis, {axis name: degrees}:
+    ``values[ax.correction]`` for an axis that declares a correction field
+    (TAS: psi on A3, kappa on sgl), 0 for one that declares none. ``values``
+    maps field names to degrees (the GUI values, or ``vars(state)``)."""
+    return {ax.name: float(values[ax.correction]) if ax.correction else 0.0
+            for ax in gonio}
 
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):
@@ -279,12 +282,16 @@ class TAS_Instrument:
 
     def physical_stage_angles(self):
         """Stage angles the crystal really sits at: readout + operator
-        correction + hidden zero error. Read only by the McStas sample arm."""
-        corrections = stage_corrections(self.psi, self.kappa)
+        correction + hidden zero error, each from the field the axis's
+        description names (the readout is the state attribute named after the
+        axis; validation guarantees A3/sgl/sgu). Read only by the McStas
+        sample arm."""
+        fields = vars(self)
+        corrections = stage_corrections(self.goniometer, fields)
         return {
-            "A3": self.A3 + corrections["A3"] + self.mis_omega,
-            "sgl": self.sgl + corrections["sgl"] + self.mis_chi,
-            "sgu": self.sgu,
+            ax.name: (fields[ax.name] + corrections[ax.name]
+                      + (fields[ax.zero_error] if ax.zero_error else 0.0))
+            for ax in self.goniometer
         }
 
     def sample_orientation_params(self):

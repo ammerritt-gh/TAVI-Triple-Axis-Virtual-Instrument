@@ -309,7 +309,7 @@ class PeakEntryWidget(QFrame):
                 edit.setText(self._fmt(value))
         else:
             for ax, edit in zip(self._gonio, self.axis_edits):
-                edit.setText(self._fmt(stage["angles"].get(ax.name, 0.0)))
+                edit.setText(self._fmt(stage["angles"][ax.name]))
         self.stt_edit.setText(self._fmt(angles[2]))
         self.ki_edit.setText(self._fmt(ki))
         self.kf_edit.setText(self._fmt(kf))
@@ -323,7 +323,7 @@ class PeakEntryWidget(QFrame):
         self._sense = record.get("sense")
         self._set_legacy(False)
         for ax, edit in zip(self._gonio, self.axis_edits):
-            edit.setText(self._fmt(record["angles"].get(ax.name, 0.0)))
+            edit.setText(self._fmt(record["angles"][ax.name]))
         self.stt_edit.setText(self._fmt(stt))
         self.ki_edit.setText(self._fmt(ki))
         self.kf_edit.setText(self._fmt(kf))
