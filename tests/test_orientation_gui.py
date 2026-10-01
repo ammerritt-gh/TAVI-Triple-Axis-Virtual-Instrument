@@ -1563,10 +1563,17 @@ def _restored(controller, _monkeypatch):
     _reload_with(controller, lambda block: None)
 
 
+def _same_lattice_sample(controller, _monkeypatch):
+    """Al_bragg to Al_rod_phonon: one lattice, so the UB is bit for bit kept."""
+    ub = controller.ub_matrix.UB
+    assert controller.window.sample_dock.set_sample_by_key("Al_rod_phonon")
+    assert np.array_equal(controller.ub_matrix.UB, ub)
+
+
 @pytest.mark.parametrize("change", [
     _path_manual_ub, _path_reset, _path_lattice_edit, _path_refine_lattice, _path_api_patch,
     _restored, _exercise_loaded, _defaults,
-    _path_sample_selection, _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
+    _path_sample_selection, _same_lattice_sample, _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
     _peak_retaken_after_a_correction,
 ], ids=lambda f: f.__name__.lstrip("_"))
 def test_the_residual_table_describes_only_the_last_calculate_ub(controller, monkeypatch,
