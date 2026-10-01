@@ -677,7 +677,7 @@ def _in12_vals(**overrides):
 
 def _plugin_config(vals, name="in12"):
     pytest.importorskip("mcstasscript")
-    cls = {"in12": "IN12Plugin", "panda": "PANDAPlugin"}[name]
+    cls = {"in8": "IN8Plugin", "in12": "IN12Plugin", "panda": "PANDAPlugin"}[name]
     plugin = getattr(importlib.import_module(f"instruments.{name}.plugin"), cls)()
     state = plugin.default_state()
     return plugin, plugin.scan_config(state, vals, None, {}, state.sample_mount)
@@ -973,3 +973,103 @@ def test_a_plane_that_spans_nothing_is_refused_with_the_reason(hkl_u, hkl_v, rea
     with pytest.raises(ValueError) as err:
         u_from_plane(CUBIC_B, hkl_u, hkl_v)
     assert str(err.value) == reason
+
+
+# --- Unit 2 (C4): the analytic engine reads the true mount --------------------------
+
+Q_200 = component_q_to_instrument_q(CUBIC_B @ np.array([2.0, 0.0, 0.0]))
+
+
+def _engine_point(config, mode, coords, tmp_path, sgl=0.0, sgu=0.0, kappa=0.0, psi=0.0):
+    """One IN8 scan point through the shared snapshot, and the engine's HKL."""
+    from instruments.tas_runtime import (SLOT_KAPPA, SLOT_PSI, SLOT_SGL, SLOT_SGU,
+                                         true_point_hkl)
+
+    point = [*coords, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0, 0.0, 0.0]
+    point[SLOT_SGL], point[SLOT_SGU], point[SLOT_KAPPA], point[SLOT_PSI] = sgl, sgu, kappa, psi
+    plugin, _ = _plugin_config(_in12_vals(), "in8")
+    snapshot = plugin.compute_snapshot((point, 0), 0, mode, config, _in12_vals(), str(tmp_path))
+    assert snapshot.error_flags == []
+    return snapshot, np.array(true_point_hkl(config, snapshot.metadata, CUBIC_B))
+
+
+def _in8_config(sense, u_true=np.eye(3), u_operator=np.eye(3)):
+    _, config = _plugin_config(_in12_vals(), "in8")
+    config.sense_sample = sense
+    config.U_true = u_true
+    config.sample_mount = SampleMount(CUBIC_B, u_operator)
+    return config
+
+
+def _angle_coords(snapshot):
+    """The angle-mode point that drives the stage where ``snapshot`` stood."""
+    md = snapshot.metadata
+    return (md["mtt"], md["stt"], md["sth"], md["att"]), md["sgl"], md["sgu"]
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+def test_engine_hkl_through_a_wrong_ub_misses_the_reflection(tmp_path, sense):
+    """An rlu point at (2 0 0) with the operator's UB on the truth evaluates
+    on the reflection; with the UB 3 deg off about the vertical the crystal
+    presents (2 0 0) turned by 3 deg."""
+    _, on = _engine_point(_in8_config(sense), "rlu", (2, 0, 0, 0), tmp_path)
+    assert on == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
+
+    wrong = _in8_config(sense, u_operator=_rot((0, 1, 0), 3.0))
+    _, off = _engine_point(wrong, "rlu", (2, 0, 0, 0), tmp_path)
+    assert np.linalg.norm(off) == pytest.approx(2.0, abs=1e-9)
+    assert _miss_deg(off, np.array([2.0, 0.0, 0.0])) == pytest.approx(3.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("mode", ["rlu", "momentum", "orientation", "angle"])
+def test_hidden_turntable_zero_error_reaches_the_engine_in_every_mode(tmp_path, mode):
+    """WIP Entry 14: a hidden 3 deg turntable zero error with psi = 0 takes
+    the crystal off (2 0 0) in every mode; psi = -3 puts it back."""
+    coords = (2, 0, 0, 0) if mode == "rlu" else (*Q_200, 0.0)
+    sgl = sgu = 0.0
+    if mode == "angle":
+        reference, _ = _engine_point(_in8_config(-1), "rlu", (2, 0, 0, 0), tmp_path)
+        coords, sgl, sgu = _angle_coords(reference)
+    hkls = {}
+    for mis, psi in ((0.0, 0.0), (3.0, 0.0), (3.0, -3.0)):
+        config = _in8_config(-1)
+        config.mis_omega = mis
+        _, hkls[(mis, psi)] = _engine_point(config, mode, coords, tmp_path,
+                                            sgl=sgl, sgu=sgu, psi=psi)
+    assert hkls[(0.0, 0.0)] == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
+    assert np.linalg.norm(hkls[(3.0, 0.0)] - [2.0, 0.0, 0.0]) > 0.05
+    assert hkls[(3.0, -3.0)] == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("mode", ["rlu", "momentum", "orientation", "angle"])
+def test_engine_hkl_is_the_emitted_arm_on_lab_q_and_ignores_the_ub(tmp_path, mode, sense):
+    """At tilted arcs, with zero errors and corrections in force, B_true @ hkl
+    is the emitted sample arm's rotation applied to the lab Q (signed per
+    sense): the engine sees the crystal McStas builds. In the Q and angle
+    modes the operator's UB does not move it."""
+    u_true = _rot((1, 2, 0), 6.0) @ U_IN_PLANE
+    coords = {"rlu": (2, 1, 0.5, 0.0), "momentum": (2.4, 0.6, 0.5, 0.0),
+              "orientation": (2.4, 0.6, 0.5, 0.0)}.get(mode)
+    sgl = sgu = 0.0
+    if mode == "angle":
+        reference, _ = _engine_point(_in8_config(sense, u_true, _rot((1, 0, 0), 5.0)),
+                                     "rlu", (2, 1, 0.5, 0.0), tmp_path)
+        coords, _sgl, _sgu = _angle_coords(reference)
+        sgl, sgu = 4.0, -6.0
+    found = []
+    for u_operator in (_rot((1, 0, 0), 5.0), _rot((0, 1, 1), 9.0)):
+        config = _in8_config(sense, u_true, u_operator)
+        config.mis_omega, config.mis_chi = 0.7, -0.4
+        snapshot, hkl = _engine_point(config, mode, coords, tmp_path,
+                                      sgl=sgl, sgu=sgu, kappa=-0.2, psi=0.3)
+        md, params = snapshot.metadata, snapshot.params
+        assert abs(md["sgl"]) + abs(md["sgu"]) > 1.0                 # the arcs are tilted
+        arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
+                                     params["sample_rz_param"])
+        lab_q = lab_q_from_stt(md["Ki"], md["Kf"], md["stt"])
+        signed = -1.0 if sense > 0 else 1.0
+        assert np.allclose(CUBIC_B @ hkl, signed * arm @ lab_q, rtol=0.0, atol=1e-9)
+        found.append(hkl)
+    if mode != "rlu":
+        assert np.array_equal(found[0], found[1])

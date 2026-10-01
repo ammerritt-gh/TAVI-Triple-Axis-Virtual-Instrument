@@ -8433,6 +8433,11 @@ class TAVIController(QObject):
             % (getattr(sqw, 'sample_id', '?'), seed,
                ", noiseless" if noiseless else "")
         )
+        # The model sees the crystal as it really sits: the sample's own
+        # lattice (true B) through the true mount and zero errors on the
+        # frozen scan_config. "No sample" has no crystal, so no HKL.
+        from instruments.tas_runtime import true_point_hkl
+        B_true = compute_B_matrix(*spec.lattice) if spec.lattice is not None else None
 
         # -- background: planted truth resolved once for the whole scan. A
         #    per-scan override replaces the controller configuration wholesale
@@ -8632,16 +8637,12 @@ class TAVIController(QObject):
                                 "axes": list(md['transmission']),
                             })
                 else:
-                    # (H,K,L) for the ground-truth model: rlu mode carries it
-                    # directly; momentum/orientation give Q -> derive hkl via the
-                    # sample mount; angle mode has no Q -> origin.
-                    qx, qy, qz = md.get('qx'), md.get('qy'), md.get('qz')
-                    if md.get('H') is not None:
-                        hkl = (md['H'], md['K'], md['L'])
-                    elif qx is not None:
-                        hkl = tuple(self._sample_q_to_hkl(qx, qy, qz, vals))
-                    else:
-                        hkl = (0.0, 0.0, 0.0)
+                    # (H,K,L) for the ground-truth model, in every mode: where
+                    # this point's physical angles put the true crystal, not
+                    # the requested HKL or the operator's UB. Feeds the model
+                    # evaluation only -- never md or the result (hidden truth).
+                    hkl = (true_point_hkl(scan_config, md, B_true)
+                           if B_true is not None else None)
                     q0 = _background_q_magnitude(md)
 
                     # Resolution kernel for this point (cheap: one config + solve).
