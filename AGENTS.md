@@ -19,13 +19,15 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 - **External runtime dependency:** McStas 3.4+ and a C compiler. The installer's `tavi` env carries conda-forge GCC (`gcc_win-64`) with McStas's config pointed at it; the `tavi-dev` env still uses MSVC.
 - **Dependencies to change carefully:** `mcstasscript`, `PySide6`, `matplotlib`, and McStas path handling all affect launch and simulation behavior.
 - **TAVI is a dependency hub — sweep consumers before moving or renaming anything they touch.**
-  Three external consumers break silently: sibling repo **ISAR** vendors `geometry/` (Qt-free
-  copy in `ISAR/isar/geometry/`), drives the REST/SSE API at `127.0.0.1:8642` in its `live`
-  tests and the closed loop, and falls back to the `tavi-dev` env for its GUI;
-  **MCPs\TAS_MCP** imports the `tavi` package (path fallback resolves `Science\TAVI`;
-  `TAVI_ROOT` overrides). Moving/renaming this repo, the `tavi` package, `geometry/`, or the
-  API surface requires sweeping all three. The closed-loop design is
-  `docs/CLOSED_LOOP_DESIGN.md`.
+  Three external consumers break silently: sibling repo **ISAR** vendors four `tavi/` modules
+  into `ISAR/isar/geometry/` (Qt-free, adapted copies, each with a provenance header):
+  `tavi/reciprocal_space.py`, `tavi/sample_mount.py`, `tavi/tas_geometry.py` and
+  `tavi/ub_matrix.py`, under the same names (its other geometry modules come from TAS_MCP).
+  It also drives the REST/SSE API at `127.0.0.1:8642` in its `live` tests and the closed
+  loop, and falls back to the `tavi-dev` env for its GUI. **MCPs\TAS_MCP** imports the `tavi`
+  package (path fallback resolves `Science\TAVI`; `TAVI_ROOT` overrides). Moving/renaming
+  this repo, the `tavi` package, those four modules, or the API surface requires sweeping
+  all three. The closed-loop design is `docs/CLOSED_LOOP_DESIGN.md`.
 
 ---
 

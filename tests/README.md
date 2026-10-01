@@ -62,10 +62,40 @@ Notes:
   `pytest.importorskip("mcstasscript")` so the suite passes in environments
   without McStasScript.
 
+## Suite size and timing
+
+Measured 2026-10-01 on the 9950X3D with the command above, one run at a time:
+1588 passed and 1 skipped (`test_documentation.py`, when the shared doc
+checker is absent) in 156 s. No single test takes more than about 2.3 s.
+`test_orientation_gui.py` alone, 79 offscreen tests, takes about 16 s with
+its two controllers' construction; its operator acceptance test takes about
+1.5 s of that. Pass `--durations=15` to see the slowest tests.
+
 ## Current contents
 
 - `test_tas_geometry.py` — golden tests for the general TAS geometry solvers
   (`tavi/tas_geometry.py`) and UB-matrix math (`tavi/ub_matrix.py`).
+
+Crystal orientation (truth and belief, the sample goniometer, the plane lock,
+legible alignment):
+
+- `test_orientation.py` — numpy checks: the stage solver and its travel,
+  peaks as stage records, the UB fit, the true mount and grading, the plane
+  lock, the zone axis (`small_integer_indices`), the per-peak and peak-pair
+  residuals (`alignment_residuals`) on cubic and monoclinic cells in both
+  senses, and Refine Lattice for every crystal system, refusals included.
+- `test_orientation_gui.py` — offscreen Qt on two module-scoped controllers,
+  IN8 (unlimited arcs) and IN12 (±20° arcs), so no test builds a window of its
+  own: hidden truth untouched by every belief write, saved state, the lock in
+  the GUI, the API and the runtime (a locked point runs at the lock's exact
+  kappa), the plane panel's labels, the residual table and its lifetime,
+  Refine Lattice through its button, a sample swap moving the UB onto the new
+  lattice, and grading reflections following the described mount. Two tests
+  are the operator's done-test for alignment: the cold path driven through
+  the real widgets (rocking scans on the deterministic engine, goto CEN, a
+  mis-index flagged and corrected, a lock and a locked three-point run,
+  checked point by point), and the post-fit leak check (two hidden truths,
+  the same actions and a wrong fit, identical widget texts and `/state`).
 
 Contract tests for the configurable-instruments Phase 1
 (`docs/CONFIGURABLE_INSTRUMENTS.md` §17.7 — "PUMA is not special"):
