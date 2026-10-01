@@ -57,7 +57,7 @@ the same three axes:
 
 A mount-frame vector goes to the lab as `v_lab = R_A3 · R_sgl · R_sgu · v_mount`
 (right-handed rotations). Arc travel comes from a cited source (IN12 ±20°,
-PANDA ±15°) or is "undocumented" and unlimited (PUMA, IN8); each instrument's
+PANDA ±15°, PUMA ±20°) or is "undocumented" and unlimited (IN8); each instrument's
 `MODEL_STATUS.md` says which.
 
 For a Q or HKL target, `tavi/orientation.py` `solve_stage` levels Q with the

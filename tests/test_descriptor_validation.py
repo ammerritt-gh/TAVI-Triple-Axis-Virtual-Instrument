@@ -256,7 +256,7 @@ def test_fixed_curvature_reports_declared_fixed_axes():
 # --- Goniometer (sample stage as data) -----------------------------------------
 
 @pytest.mark.parametrize(("factory", "travel"), [
-    (puma_descriptor, math.inf),     # undocumented
+    (puma_descriptor, 20.0),         # MLZ PUMA page, 2026-10-01
     (in8_descriptor, math.inf),      # undocumented
     (in12_descriptor, 20.0),         # ILL characteristics
     (panda_descriptor, 15.0),        # MLZ teaching notes via the dossier

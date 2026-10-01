@@ -411,7 +411,7 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
             angles, flags = model.calculate_stage_angles(
                 qx, qy, qz, 0.0, E_RT, "Kf Fixed", "pg002", "pg002")
             # A refusal only where the arcs provably cannot level Q (never on
-            # PUMA or IN8, whose travel is unlimited), and then only the stage's.
+            # IN8, whose travel is unlimited), and then only the stage's.
             reachable = _arcs_can_level(model.goniometer, U @ B @ hkl)
             assert bool(flags) == (not reachable), (hkl, flags)
             if flags:
@@ -727,7 +727,7 @@ def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
 @pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan], ids=["inf", "-inf", "nan"])
 @pytest.mark.parametrize("name", list(INSTRUMENTS))
 def test_non_finite_arc_is_refused_on_every_instrument(models, name, bad):
-    """Unlimited travel (PUMA, IN8) contains inf, and nan fails every
+    """Unlimited travel (IN8) contains inf, and nan fails every
     comparison: finiteness is refused first, in plain words."""
     model = models[name]
     reason = f"sgu must be a finite angle, not {bad}"
