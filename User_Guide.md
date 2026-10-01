@@ -93,7 +93,7 @@ Release returns to free mode, where the arcs follow each Q again. A save keeps t
 
 ### Aligning from cold: a walkthrough
 The whole path from a fresh start to a scan in an aligned plane, mouse and keyboard only:
-1. Start clean. Uncheck **Lock** on any peak entry in the UB Matrix dock, remove extra entries with ✗ (two always remain) and clear the two that are left, then press **Load Defaults** in the Simulation dock. The UB is now the sample as described.
+1. Start clean. Open the UB Matrix dock with **Open UB Matrix...** in the Sample dock (or **View → UB Matrix**); it opens as a floating panel. Uncheck **Lock** on any peak entry, remove extra entries with ✗ (two always remain) and clear the two that are left, and clear the two **Lock plane** fields (Defaults leaves their text). Then press **Load Defaults** in the Simulation dock. The UB is now the sample as described, with no mounting plane.
 2. For a training exercise, paste its hash into the UB Matrix dock's **Student: Load Exercise** field and press **Load**.
 3. In the Simulation dock choose **Engine: Deterministic (analytic)** for quick scans (McStas works too, more slowly).
 4. Type the (h k l) of a strong reflection, for example 2 0 0, into the Scattering dock. The instrument goes where your UB says the reflection is, which for a misaligned crystal is not quite where it is.
@@ -103,7 +103,7 @@ The whole path from a fresh start to a scan in an aligned plane, mouse and keybo
 8. Repeat steps 4 to 7 for a second reflection that is not parallel to the first, for example 0 2 0, into Peak 2.
 9. Press **Calculate UB** and read the residuals table. A row marked ⚠ means a peak is likely mis-indexed, or that your lattice fields are off: correct the (h k l), or try Refine Lattice, and press Calculate UB again until no row is marked.
 10. Read the **Scattering Plane (from your UB)** box: the plane normal [u v w] is the direction your UB now puts vertical.
-11. Type the two reflections that span the plane you want into the **Lock plane** fields (or leave both empty to use the first two peaks) and press **Lock**.
+11. Type the two reflections that span the plane you want into the **Lock plane** fields, for example 2 0 0 and 0 2 0, and press **Lock**. With both fields empty, Lock takes the mounting plane if you applied one, else the first two peaks with an (h k l); typing the two is the sure way.
 12. Press **Relative** again to turn it off, enter your scan, for example `H 1.9 2.1 0.1`, check that the point count under the scan commands says every point is valid, and press **Run Simulation**. Every point runs at the locked tilts and κ.
 
 In a training exercise, **Check My Alignment** then grades how well your setup finds the true reflections.

@@ -65,11 +65,11 @@ Notes:
 ## Suite size and timing
 
 Measured 2026-10-01 on the 9950X3D with the command above, one run at a time:
-1588 passed and 1 skipped (`test_documentation.py`, when the shared doc
-checker is absent) in 156 s. No single test takes more than about 2.3 s.
-`test_orientation_gui.py` alone, 79 offscreen tests, takes about 16 s with
-its two controllers' construction; its operator acceptance test takes about
-1.5 s of that. Pass `--durations=15` to see the slowest tests.
+1591 passed and 1 skipped (`test_documentation.py`, when the shared doc
+checker is absent) in 160 s (163 s wall). No single test takes more than
+about 2.3 s. `test_orientation_gui.py` alone, 82 offscreen tests, takes about
+18 s with its two controllers' construction; its operator acceptance test
+takes about 1.6 s of that. Pass `--durations=15` to see the slowest tests.
 
 ## Current contents
 
@@ -92,7 +92,8 @@ legible alignment):
   Refine Lattice through its button, a sample swap moving the UB onto the new
   lattice, and grading reflections following the described mount. Two tests
   are the operator's done-test for alignment: the cold path driven through
-  the real widgets (rocking scans on the deterministic engine, goto CEN, a
+  the real widgets (the UB Matrix dock opened by the Sample dock's button,
+  the Fitting tab selected, rocking scans on the deterministic engine, goto CEN, a
   mis-index flagged and corrected, a lock and a locked three-point run,
   checked point by point), and the post-fit leak check (two hidden truths,
   the same actions and a wrong fit, identical widget texts and `/state`).
