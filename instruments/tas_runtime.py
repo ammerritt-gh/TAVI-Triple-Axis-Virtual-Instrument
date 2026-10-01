@@ -1202,6 +1202,11 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
 
     rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
     kappa_scan, psi_scan = scans[SLOT_KAPPA], scans[SLOT_PSI]
+    if point_state.plane_lock is not None:
+        # A locked point runs at the lock's exact kappa, whichever launch
+        # built it (the GUI field holds it rounded); a kappa scan under a
+        # lock is refused before the run.
+        kappa_scan = point_state.plane_lock["kappa"]
     # The arcs this point runs at: solved (Q modes) or its own slots (angle).
     sgl, sgu = geom["sgl"], geom["sgu"]
 
