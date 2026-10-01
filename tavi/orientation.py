@@ -182,12 +182,19 @@ def _travel_refusal(ax, angle, purpose=""):
 
 def check_travel(gonio, angles, purpose=""):
     """Raise ``StageUnreachable`` for the first axis of ``gonio`` whose angle
-    in ``angles`` ({name: degrees}) lies outside its travel. Axes absent from
-    ``angles`` are not checked. Operator-set arcs (angle mode, an arc edit,
-    an API write) are checked here, in the solver's words."""
+    in ``angles`` ({name: degrees}) is not finite or lies outside its travel.
+    Axes absent from ``angles`` are not checked. Operator-set arcs (angle
+    mode, an arc edit, an API write) are checked here, in the solver's words.
+    Finiteness comes first: unlimited travel contains inf, and nan fails
+    every comparison."""
     for ax in gonio:
-        if ax.name in angles and not _in_travel(ax, float(angles[ax.name])):
-            raise StageUnreachable(_travel_refusal(ax, float(angles[ax.name]), purpose))
+        if ax.name not in angles:
+            continue
+        angle = float(angles[ax.name])
+        if not math.isfinite(angle):
+            raise StageUnreachable(f"{ax.name} must be a finite angle, not {angle}")
+        if not _in_travel(ax, angle):
+            raise StageUnreachable(_travel_refusal(ax, angle, purpose))
 
 
 def _rotate_many(axis, vectors, angles_rad):

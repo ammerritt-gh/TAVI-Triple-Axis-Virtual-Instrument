@@ -19,6 +19,7 @@ from tavi.neutron_conversions import energy2k, k2energy
 from tavi.orientation import (
     StageAxis,
     StageUnreachable,
+    check_travel,
     lock_plane,
     sample_arm_euler,
     solve_stage,
@@ -655,6 +656,18 @@ def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
     assert not feasible
     # The solver's own refusal words (one formatter for every travel refusal).
     assert reason == "sgl needs 25° but its travel is [-20, 20]°"
+
+
+@pytest.mark.parametrize("bad", [math.inf, -math.inf, math.nan], ids=["inf", "-inf", "nan"])
+@pytest.mark.parametrize("name", list(INSTRUMENTS))
+def test_non_finite_arc_is_refused_on_every_instrument(models, name, bad):
+    """Unlimited travel (PUMA, IN8) contains inf, and nan fails every
+    comparison: finiteness is refused first, in plain words."""
+    model = models[name]
+    reason = f"sgu must be a finite angle, not {bad}"
+    assert model.arc_travel_flags({"sgl": 0.0, "sgu": bad}) == ["stage: " + reason]
+    with pytest.raises(StageUnreachable, match=f"^{reason}$"):
+        check_travel(model.goniometer, {"sgu": bad})
 
 
 def test_old_scan_folder_reads_chi_as_sgl(tmp_path):

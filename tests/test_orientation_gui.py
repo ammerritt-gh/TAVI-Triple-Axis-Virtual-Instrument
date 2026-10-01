@@ -33,7 +33,8 @@ class _SyncBridge:
 
 @pytest.fixture(scope="module")
 def controller():
-    yield from _controller_for(available_instruments()[0].id)
+    """IN8: the arcs' travel is undocumented (unlimited)."""
+    yield from _controller_for("in8")
 
 
 @pytest.fixture(scope="module")
@@ -503,6 +504,26 @@ def test_api_arc_write_past_travel_is_refused_with_the_reason(in12):
     assert launched.value.details["errors"]["sgl"] == reason
     assert backend.patch_parameters({"sgl": 20.0}, force=True)["applied"] == ["sgl"]
     backend.patch_parameters({"sgl": 0.0}, force=True)
+
+
+@pytest.mark.parametrize("bad", ["inf", "nan"])
+def test_non_finite_arc_is_refused_with_a_plain_reason(controller, messages, bad):
+    """IN8's arcs have unlimited travel, so finiteness is checked on its own:
+    the API refuses the write, the GUI refuses the edit and restores the field."""
+    reason = f"sgl must be a finite angle, not {bad}"
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    with pytest.raises(ApiError) as patched:
+        backend.patch_parameters({"sgl": bad}, force=True)
+    assert patched.value.status == 400
+    assert patched.value.details["errors"]["sgl"].endswith(reason)
+
+    idock = controller.window.instrument_dock
+    before = controller.instrument_state.sgl
+    idock.sgl_edit.setText(bad)
+    controller.on_arc_changed()
+    assert any(reason in m for m in messages), messages
+    assert controller.instrument_state.sgl == before
+    assert float(idock.sgl_edit.text()) == before
 
 
 def test_gui_arc_edit_past_travel_reports_the_reason(in12, in12_messages):

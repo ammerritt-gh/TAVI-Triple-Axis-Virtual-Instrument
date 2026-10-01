@@ -5009,8 +5009,18 @@ class TAVIController(QObject):
         if self.updating:
             return
         try:
-            sgl = float(self.window.instrument_dock.sgl_edit.text() or 0)
-            sgu = float(self.window.instrument_dock.sgu_edit.text() or 0)
+            idock = self.window.instrument_dock
+            sgl = float(idock.sgl_edit.text() or 0)
+            sgu = float(idock.sgu_edit.text() or 0)
+            if not (math.isfinite(sgl) and math.isfinite(sgu)):
+                # Refused outright (unlike a value past travel): the fields
+                # go back to the arcs the instrument holds.
+                reason = describe_scan_error_flags(
+                    self.instrument_state.arc_travel_flags({"sgl": sgl, "sgu": sgu}))
+                self.print_to_message_center(f"Arc refused: {reason}")
+                self._set_and_confirm_field(idock.sgl_edit, self.instrument_state.sgl, force=True)
+                self._set_and_confirm_field(idock.sgu_edit, self.instrument_state.sgu, force=True)
+                return
             # Evaluate both: an unchanged pair is a spurious editingFinished.
             changed = [self._field_value_changed('sgl', sgl),
                        self._field_value_changed('sgu', sgu)]
