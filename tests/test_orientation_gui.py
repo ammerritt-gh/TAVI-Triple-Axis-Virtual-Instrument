@@ -1704,6 +1704,25 @@ def test_refine_lattice_with_no_space_group_names_the_fields_system(controller, 
     controller.set_default_parameters()
 
 
+def test_refine_lattice_with_an_unreadable_field_is_refused(controller, monkeypatch,
+                                                            messages):
+    """A field that does not read as a number: Refine Lattice refuses in
+    words and moves nothing."""
+    controller.set_default_parameters()
+    _peaks_of(controller, TETRAGONAL, [(2, 0, 0), (0, 2, 0), (0, 0, 2)])
+    controller.window.sample_dock.psi_edit.setText("x")
+    fields, ub = _lattice_fields(controller), controller.ub_matrix.UB
+    messages.clear()
+
+    assert _press_refine(controller, monkeypatch) == []     # no dialog
+
+    assert any(m.startswith("Lattice refinement refused") for m in messages), messages
+    assert not any("NoneType" in m for m in messages), messages
+    assert _lattice_fields(controller) == fields
+    assert np.array_equal(controller.ub_matrix.UB, ub)
+    controller.set_default_parameters()
+
+
 # --- Unit 3 (C5): a locked plane runs at the lock's exact kappa --------------------
 
 def test_a_locked_point_runs_at_the_locks_exact_kappa(controller, tmp_path):
