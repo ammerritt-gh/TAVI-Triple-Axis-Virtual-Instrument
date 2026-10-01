@@ -1656,3 +1656,33 @@ def test_refine_lattice_with_no_space_group_names_the_fields_system(controller, 
     assert [float(t) for t in _lattice_fields(controller)[:3]] == pytest.approx(
         TETRAGONAL[:3], abs=1e-4)
     controller.set_default_parameters()
+
+
+# --- Unit 3 (C5): a locked plane runs at the lock's exact kappa --------------------
+
+def test_a_locked_point_runs_at_the_locks_exact_kappa(controller, tmp_path):
+    """Kappa 0.123456 locked: the field shows it rounded, yet the GUI launch's
+    snapshot runs at the lock's kappa exactly (state and metadata), the same
+    as the API launch's."""
+    controller.set_default_parameters()
+    sam, sim = controller.window.sample_dock, controller.window.simulation_dock
+    sam.kappa_edit.setText("0.123456")
+    try:
+        _lock(controller, PLANE_H0H)
+        kappa = controller.instrument_state.plane_lock["kappa"]
+        assert kappa == 0.123456 and float(sam.kappa_edit.text()) != kappa
+        _set_hkl(controller, 1, 0, 1)
+        api = controller.build_api_launch_state(
+            {"scan_command1": "K -0.1 0.1 0.1", "H": 1.0, "K": 0.0, "L": 1.0})
+        sim.scan_command_1_edit.setText("K -0.1 0.1 0.1")
+        gui = controller._collect_simulation_launch_state()
+        seen = []
+        for launch in (api, gui):
+            point = controller._build_scan_point_template("rlu", launch["vals"])
+            snapshot = controller.instrument.compute_snapshot(
+                (point, 0), 0, "rlu", launch["scan_config"], launch["vals"], str(tmp_path))
+            seen.append((snapshot.metadata["kappa"], snapshot.params["kappa_param"]))
+        assert seen == [(kappa, kappa)] * 2
+    finally:
+        sim.scan_command_1_edit.setText("")
+        controller.set_default_parameters()

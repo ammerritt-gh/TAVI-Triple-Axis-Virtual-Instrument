@@ -85,7 +85,7 @@ For an experiment you usually align once, lock a scattering plane and never move
 
 While a plane is locked:
 - Every Q or HKL point is solved at the locked tilts: only A3 (and 2θ) move. A point whose Q leaves the plane is refused, naming the plane and the angle Q leaves it by, in the angle fields' stale line, the scan point count, a scan's valid points, `/validate` and the run alike.
-- The arc fields `sgl` and `sgu` and the lower-arc correction κ are read-only (their tooltips name the lock); ψ stays free. Scanning `sgl`, `sgu` or `kappa` is refused. An angle-mode scan runs at the lock's tilts, and a point whose arc values differ from them is refused before it runs.
+- The arc fields `sgl` and `sgu` and the lower-arc correction κ are read-only (their tooltips name the lock); ψ stays free. Scanning `sgl`, `sgu` or `kappa` is refused. An angle-mode scan runs at the lock's tilts, and a point whose arc values differ from them is refused before it runs. Every point, from the Run button or the API, runs at the lock's own κ, not the field's rounded display of it.
 - Loading or clearing either exercise (the UB Matrix dock's training exercise or the Misalignment dock's exercise), and applying or clearing a mounting plane, are refused: they would move the crystal under the locked tilts. Release first. Defaults is the exception: it releases the lock itself.
 - Calculate UB, editing the UB, Reset, a lattice edit and selecting a sample are allowed and never move the arcs. When your UB no longer levels the locked plane within 0.05°, the status line says **STALE**: release and lock again to follow the new UB.
 
