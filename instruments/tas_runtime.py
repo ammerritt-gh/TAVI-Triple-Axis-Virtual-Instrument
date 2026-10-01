@@ -199,8 +199,6 @@ class TAS_Instrument:
         self.sense_mono = 1
         self.sense_sample = -1
         self.sense_ana = 1
-        # Sample orientation angles (user-controllable)
-        self.omega = 0  # in-plane sample rotation (about vertical Y axis) - actual instrument angle
         # Operator corrections (visible): turntable and lower arc.
         self.psi = 0    # turntable correction
         self.kappa = 0  # lower-arc correction
@@ -234,8 +232,8 @@ class TAS_Instrument:
             else:
                 print(f"Parameter '{key}' not found.")
 
-    def set_angles(self, A1=None, A2=None, A3=None, A4=None, omega=None, kappa=None, psi=None):
-        """Method to set A1-A4 angles and sample orientation angles."""
+    def set_angles(self, A1=None, A2=None, A3=None, A4=None, kappa=None, psi=None):
+        """Method to set A1-A4 angles and the turntable/lower-arc corrections."""
         if A1 is not None:
             self.A1 = A1
         if A2 is not None:
@@ -244,8 +242,6 @@ class TAS_Instrument:
             self.A3 = A3
         if A4 is not None:
             self.A4 = A4
-        if omega is not None:
-            self.omega = omega
         if kappa is not None:
             self.kappa = kappa
         if psi is not None:
@@ -1226,7 +1222,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
 
     rhm, rvm, rha, rva = radii["rhm"], radii["rvm"], radii["rha"], radii["rva"]
 
-    point_state.omega = omega_scan
     point_state.kappa = kappa_scan
     point_state.psi = psi_scan
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
