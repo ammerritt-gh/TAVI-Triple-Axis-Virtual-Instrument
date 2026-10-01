@@ -1,0 +1,4 @@
+category: major
+notice: The simulated crystal no longer follows the UB matrix, so a wrong UB or an uncorrected zero error now misses its peaks in McStas and in the analytic engine; sessions saved before this release load best-effort, and an old training save does not grade correctly (load its hash again from Defaults).
+
+The simulated crystal now sits where the sample really is, not where your UB matrix says, so a wrong UB misses its peaks as on a real instrument; you can describe how the crystal is mounted with an optional mounting plane in the Sample dock, and training in both the UB Matrix and the Misalignment docks is graded by the worst miss over your reflections, with the Misalignment dock's tolerances now 0.5° and 2°. A new Lock plane in the UB Matrix dock holds the tilt arcs and kappa for an experiment: every point is solved at the locked tilts, a point out of the plane is refused naming the plane, and a STALE mark shows when your UB no longer levels it.
