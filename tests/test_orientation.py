@@ -1354,3 +1354,86 @@ def test_an_irrational_plane_normal_has_no_zone_axis():
     info = get_scattering_plane_info(u, CUBIC_B)
     assert info["zone_axis_uvw"] is None
     assert np.allclose(u @ CUBIC_B @ np.array(info["plane_normal_hkl"]), (0, 1, 0))
+
+
+# --- Unit 3 (C3): residuals and the peak-pair check ---------------------------------
+
+RESIDUAL_HKLS = [(1, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 1)]
+# Corrections now; the hidden zero errors cancel them, so the operator's model
+# (readout frame, no zero errors) is exact even under tilted arcs.
+NOW = {"A3": 0.4, "sgl": -0.25}
+ZERO_ERRORS = {"A3": -0.4, "sgl": 0.25}
+# A correction changed between peaks: each was taken under its own.
+TAKEN_UNDER = [{"A3": 0.0}, {"A3": 0.4, "sgl": -0.25}, {"A3": -1.0, "sgl": 0.5},
+               {"sgl": 0.3}]
+
+
+def _residual_set(models, lattice, sense, seed, hkls=RESIDUAL_HKLS, relabel=None,
+                  fields=None):
+    """Peaks ``hkls`` taken where a seeded true crystal (not U = I)
+    diffracts, each under its own corrections; optionally some relabelled
+    ({index: hkl}); a UB fitted from them on the lattice ``fields`` (default
+    the true one) and the residuals in the frame of the corrections now."""
+    from tavi.ub_matrix import alignment_residuals
+
+    gonio = models["in8"].goniometer
+    b_true = reciprocal_basis_tas(*LATTICES[lattice])
+    u_true = _random_mount(np.random.default_rng(seed))
+    peaks = [_true_peak(gonio, sense, hkl, u_true, b_true, taken, ZERO_ERRORS)
+             for hkl, taken in zip(hkls, TAKEN_UNDER)]
+    for index, hkl in (relabel or {}).items():
+        peaks[index].hkl = hkl
+    ub = UBMatrix(*(fields or LATTICES[lattice]))
+    ub.peaks = peaks
+    ub.calculate_U_from_peaks(NOW)
+    return peaks, alignment_residuals(ub.UB, peaks, NOW)
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("lattice", ["cubic", "monoclinic"])
+def test_a_clean_peak_set_has_no_flag_and_no_residual(models, lattice, sense):
+    """At different arc settings and corrections: every per-peak angle and
+    every pair difference is under 1e-6 deg (a sense applied twice would put
+    a peak 180 deg off)."""
+    peaks, result = _residual_set(models, lattice, sense, seed=31)
+    upper = [p.stage["angles"]["sgu"] for p in peaks]
+    assert max(upper) - min(upper) > 0.5, upper
+    assert result["flags"] == [] and "no flags" in result["summary"]
+    assert len(result["peaks"]) == 4 and len(result["pairs"]) == 6
+    assert max(r["angle_deg"] for r in result["peaks"]) < 1e-6
+    assert max(abs(r["q_mismatch"]) for r in result["peaks"]) < 1e-9
+    assert max(abs(p["difference_deg"]) for p in result["pairs"]) < 1e-6
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("lattice", ["cubic", "monoclinic"])
+def test_a_non_parallel_mis_index_of_the_same_q_is_caught_by_the_pair_check(
+        models, lattice, sense):
+    """(1 1 0) labelled (1 -1 0): the same |Q|, so only a pair angle shows it."""
+    _peaks, result = _residual_set(models, lattice, sense, seed=37, relabel={2: (1, -1, 0)})
+    assert all(abs(r["q_mismatch"]) < 1e-9 for r in result["peaks"])
+    flagged = [p for p in result["pairs"] if p["flag"]]
+    assert flagged and all((1, -1, 0) in (p["hkl1"], p["hkl2"]) for p in flagged), result
+    assert flagged[0]["flag"].endswith("one of them is likely mis-indexed")
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("lattice", ["cubic", "monoclinic"])
+def test_a_200_labelled_100_reads_likely_mis_indexed(models, lattice, sense):
+    """Parallel, so every pair angle is kept: its |Q| shows it."""
+    _peaks, result = _residual_set(models, lattice, sense, seed=41,
+                                   hkls=[(2, 0, 0)] + RESIDUAL_HKLS[1:], relabel={0: (1, 0, 0)})
+    flagged = [r for r in result["peaks"] if r["flag"]]
+    assert [r["hkl"] for r in flagged] == [(1, 0, 0)]
+    assert flagged[0]["flag"] == "|Q| is +100.0 % from its indices: likely mis-indexed"
+    assert "(1 0 0): |Q| is +100.0 %" in result["summary"]
+
+
+@pytest.mark.parametrize("lattice", ["cubic", "monoclinic"])
+def test_lattice_fields_three_percent_off_read_lattice_fields_off(models, lattice):
+    fields = tuple(1.03 * x for x in LATTICES[lattice][:3]) + LATTICES[lattice][3:]
+    _peaks, result = _residual_set(models, lattice, 1, seed=47, fields=fields)
+    assert len(result["flags"]) == 4
+    for row in result["peaks"]:
+        assert row["flag"].endswith("lattice fields off by about 3.0 %; try Refine Lattice")
+    assert not [p for p in result["pairs"] if p["flag"]]

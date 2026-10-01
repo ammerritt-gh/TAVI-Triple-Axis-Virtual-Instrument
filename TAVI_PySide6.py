@@ -122,7 +122,7 @@ from tavi.tas_geometry import (
 )
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
-                            u_from_plane, validate_rotation_matrix)
+                            u_from_plane, validate_rotation_matrix, alignment_residuals)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.settings import load_mpi_count, save_mpi_count
 from tavi.machine_profile import machine_fingerprint
@@ -5545,9 +5545,14 @@ class TAVIController(QObject):
             self.print_to_message_center(
                 f"UB matrix calculated from {len([p for p in self.ub_matrix.peaks if p.is_valid])} peaks"
             )
+            # How the peaks agree with the new UB and with each other (3.1).
+            residuals = alignment_residuals(self.ub_matrix.UB, self.ub_matrix.peaks, corrections)
+            self.window.ub_matrix_dock.show_residuals(residuals, self.ub_matrix.UB)
+            self.print_to_message_center(residuals["summary"])
             # Refresh HKL/angles for current Q
             self.on_Q_changed()
         except Exception as e:
+            self.window.ub_matrix_dock.clear_residuals()
             self.print_to_message_center(f"UB calculation failed: {e}")
 
     def on_refine_lattice(self):

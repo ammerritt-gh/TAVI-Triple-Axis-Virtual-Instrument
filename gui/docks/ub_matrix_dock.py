@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QGridLayout, QMessageBox, QCheckBox,
                                 QScrollArea, QWidget, QDialog,
                                 QDialogButtonBox, QSpinBox, QDoubleSpinBox,
-                                QFrame, QTextEdit)
+                                QFrame, QTextEdit, QTableWidget, QTableWidgetItem,
+                                QAbstractItemView)
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 
 from gui.docks.base_dock import BaseDockWidget
 from instruments.descriptor import tas_goniometer
-from tavi.orientation import legacy_triple, stage_record
+from tavi.orientation import hkl_text, legacy_triple, stage_record
 
 
 class LatticeRefinementDialog(QDialog):
@@ -365,6 +367,7 @@ class UBMatrixDock(BaseDockWidget):
         self._ub_locked = True
         self._saved_ub_values = {}
         self._peak_widgets = []
+        self._residual_ub = None    # the UB the residual table describes
 
         main_layout = self.content_layout
 
@@ -531,6 +534,31 @@ class UBMatrixDock(BaseDockWidget):
         calc_layout.addWidget(self.reset_ub_button)
 
         main_layout.addWidget(calc_group)
+
+        # ===== Residuals of the last Calculate UB (3.1) =====
+        residual_group = QGroupBox("Residuals of the last Calculate UB")
+        residual_layout = QVBoxLayout()
+        residual_group.setLayout(residual_layout)
+        self.residual_table = QTableWidget(0, 5)
+        self.residual_table.setObjectName("ubResidualTable")
+        self.residual_table.setHorizontalHeaderLabels(
+            ["Peak / pair", "Observed", "From indices", "Off", "Angle to UB"])
+        tips = ["A peak's (h k l), or a pair of peaks",
+                "Peak: measured |Q| (Å⁻¹). Pair: angle between the two measured Q (°)",
+                "Peak: |Q| of its (h k l) in your lattice (Å⁻¹). "
+                "Pair: angle between the two (h k l) (°)",
+                "Peak: |Q| mismatch (%). Pair: observed minus indexed angle (°)",
+                "Peak: angle between its measured Q and where your UB puts it (°)"]
+        for column, tip in enumerate(tips):
+            self.residual_table.horizontalHeaderItem(column).setToolTip(tip)
+        self.residual_table.verticalHeader().setVisible(False)
+        self.residual_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.residual_table.setMinimumHeight(130)
+        self.residual_table.setToolTip(
+            "Each peak against your UB, and each pair's angle against its indices. "
+            "Cleared when the UB or a peak changes.")
+        residual_layout.addWidget(self.residual_table)
+        main_layout.addWidget(residual_group)
 
         # ===== Separator =====
         separator = QFrame()
@@ -731,6 +759,38 @@ class UBMatrixDock(BaseDockWidget):
         else:
             self.ub_status_label.setText("\U0001f7e2 UB matrix active")
             self.ub_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 10px;")
+        # The residuals describe one UB: any other clears them (D11).
+        if self._residual_ub is not None and not np.array_equal(UB, self._residual_ub):
+            self.clear_residuals()
+
+    def show_residuals(self, result, ub):
+        """Fill the residual table from ``tavi.ub_matrix.alignment_residuals``
+        (one row per peak, then one per pair) for the UB ``ub``; a flagged row
+        is marked and its tooltip gives the flag's words."""
+        rows = [(hkl_text(p["hkl"]), f"{p['q_obs']:.4f} Å⁻¹",
+                 f"{p['q_calc']:.4f} Å⁻¹", f"{p['q_mismatch'] * 100:+.2f} %",
+                 f"{p['angle_deg']:.3f}°", p["flag"]) for p in result["peaks"]]
+        rows += [(f"{hkl_text(p['hkl1'])} / {hkl_text(p['hkl2'])}", f"{p['observed_deg']:.3f}°",
+                  f"{p['indexed_deg']:.3f}°", f"{p['difference_deg']:+.3f}°", "",
+                  p["flag"]) for p in result["pairs"]]
+        table = self.residual_table
+        table.setRowCount(len(rows))
+        for r, (*cells, flag) in enumerate(rows):
+            if flag:
+                cells[0] = "⚠ " + cells[0]
+            for c, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if flag:
+                    item.setBackground(QColor("#ffe0b2"))
+                    item.setToolTip(flag)
+                table.setItem(r, c, item)
+        table.resizeColumnsToContents()
+        self._residual_ub = np.array(ub, dtype=float)
+
+    def clear_residuals(self):
+        """Empty the residual table: the UB or a peak changed, or the fit failed."""
+        self.residual_table.setRowCount(0)
+        self._residual_ub = None
 
     def update_plane_info(self, plane_info: dict):
         """Update scattering plane display: the zone axis [u v w] along the
@@ -774,9 +834,12 @@ class UBMatrixDock(BaseDockWidget):
         """Add a new peak entry widget."""
         index = len(self._peak_widgets)
         peak_widget = PeakEntryWidget(index, self._gonio, self)
+        # A peak added, re-indexed or re-taken: the residuals no longer apply.
+        peak_widget.peak_data_changed.connect(lambda _: self.clear_residuals())
         # Insert before the stretch
         self.peaks_layout.insertWidget(self.peaks_layout.count() - 1, peak_widget)
         self._peak_widgets.append(peak_widget)
+        self.clear_residuals()
         return peak_widget
 
     def remove_peak_entry(self, index: int):
@@ -784,6 +847,7 @@ class UBMatrixDock(BaseDockWidget):
         if len(self._peak_widgets) <= 2:
             return  # Keep minimum 2 peaks
         if 0 <= index < len(self._peak_widgets):
+            self.clear_residuals()
             widget = self._peak_widgets.pop(index)
             self.peaks_layout.removeWidget(widget)
             widget.deleteLater()

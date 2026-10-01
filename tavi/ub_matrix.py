@@ -302,6 +302,85 @@ def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:
     return U
 
 
+# Residual flags (programme 3.1; D7 and M5 of the Unit 3 plan): a pair whose
+# observed angle differs from its indexed angle by more than PAIR_FLAG_DEG, a
+# peak whose |Q| differs from |B hkl| by more than Q_FLAG_FRACTION. When at
+# least two peaks share one |Q| ratio to within Q_RATIO_SPREAD and that ratio
+# is off by more than Q_FLAG_FRACTION, the lattice fields are named instead
+# of the index.
+PAIR_FLAG_DEG = 0.5
+Q_FLAG_FRACTION = 0.02
+Q_RATIO_SPREAD = 0.005
+
+
+def _angle_deg(a, b):
+    return math.degrees(math.atan2(float(np.linalg.norm(np.cross(a, b))), float(a @ b)))
+
+
+def alignment_residuals(ub, peaks, corrections=None) -> dict:
+    """How the valid ``peaks`` agree with the operator's ``ub`` (U @ B, the
+    lattice fields' B) and with each other, in the readout frame of
+    ``corrections`` (the fit's frame, ``ObservedPeak.q_mount``).
+
+    Per peak: ``q_obs`` = |q|, ``q_calc`` = |UB hkl| (= |B hkl|),
+    ``q_mismatch`` = q_obs / q_calc - 1, ``angle_deg`` between q and UB hkl.
+    Per pair: ``observed_deg`` between the two observed q, ``indexed_deg``
+    between UB hkl_1 and UB hkl_2, ``difference_deg`` (observed - indexed).
+    A flagged row carries its words in ``flag`` (None otherwise). Returns
+    ``{"peaks", "pairs", "flags", "summary"}``; ``flags`` lists every
+    flag's words with its reflection(s), ``summary`` is one line for the
+    message center. Reads only the peaks and the UB, never the true mount.
+    """
+    ub = np.asarray(ub, dtype=float)
+    rows, vectors = [], []
+    for peak in peaks:
+        if not peak.is_valid:
+            continue
+        q = peak.q_mount(corrections)
+        q_ub = ub @ np.asarray(peak.hkl, dtype=float)
+        q_obs, q_calc = float(np.linalg.norm(q)), float(np.linalg.norm(q_ub))
+        rows.append({"hkl": tuple(peak.hkl), "q_obs": q_obs, "q_calc": q_calc,
+                     "q_mismatch": q_obs / q_calc - 1.0, "angle_deg": _angle_deg(q, q_ub),
+                     "flag": None})
+        vectors.append((q, q_ub))
+
+    ratios = [1.0 + row["q_mismatch"] for row in rows]
+    lattice_off = (len(rows) >= 2 and max(ratios) / min(ratios) - 1.0 <= Q_RATIO_SPREAD
+                   and abs(float(np.mean(ratios)) - 1.0) > Q_FLAG_FRACTION)
+    flags = []
+    for row in rows:
+        if abs(row["q_mismatch"]) <= Q_FLAG_FRACTION:
+            continue
+        # |Q| goes as 1/length: the fields' lengths are the true ones times the ratio.
+        cause = (f"lattice fields off by about {abs(float(np.mean(ratios)) - 1.0) * 100:.1f} %; "
+                 "try Refine Lattice" if lattice_off else "likely mis-indexed")
+        row["flag"] = f"|Q| is {row['q_mismatch'] * 100:+.1f} % from its indices: {cause}"
+        flags.append(f"{hkl_text(row['hkl'])}: {row['flag']}")
+
+    pairs = []
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            observed = _angle_deg(vectors[i][0], vectors[j][0])
+            indexed = _angle_deg(vectors[i][1], vectors[j][1])
+            pair = {"hkl1": rows[i]["hkl"], "hkl2": rows[j]["hkl"], "observed_deg": observed,
+                    "indexed_deg": indexed, "difference_deg": observed - indexed, "flag": None}
+            if abs(pair["difference_deg"]) > PAIR_FLAG_DEG:
+                pair["flag"] = (f"the angle between {hkl_text(pair['hkl1'])} and "
+                                f"{hkl_text(pair['hkl2'])} is {observed:.2f}° observed but "
+                                f"{indexed:.2f}° from their indices: one of them is likely "
+                                "mis-indexed")
+                flags.append(pair["flag"])
+            pairs.append(pair)
+
+    summary = f"UB residuals: {len(rows)} peaks"
+    if rows:
+        summary += f", worst {max(r['angle_deg'] for r in rows):.3f}° off the UB"
+    if pairs:
+        summary += f", worst pair {max(abs(p['difference_deg']) for p in pairs):.3f}° off its indices"
+    summary += "; flagged: " + "; ".join(flags) if flags else "; no flags"
+    return {"peaks": rows, "pairs": pairs, "flags": flags, "summary": summary}
+
+
 def refine_lattice_from_peaks(peaks: list, initial_lattice: tuple,
                               crystal_system: str = None) -> dict:
     """Refine lattice parameters from observed peak positions.
