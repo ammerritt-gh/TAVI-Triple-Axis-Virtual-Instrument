@@ -15,7 +15,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox, QTabBar  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -1892,6 +1892,15 @@ def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages
     for name in ("warning", "critical", "question"):
         monkeypatch.setattr(QMessageBox, name, staticmethod(
             lambda *args, _name=name, **kw: dialogs.append((_name, args[2:3])) or QMessageBox.No))
+    # Reached the operator's way. The window is never shown, so the checks
+    # are the dock's own hidden flag and the Fitting tab in a tab bar.
+    dock.hide()                                        # as at launch: a hidden floating panel
+    window.sample_dock.open_ub_matrix_button.click()
+    assert not dock.isHidden()
+    tabs = next(bar for bar in window.findChildren(QTabBar)
+                if fit.windowTitle() in [bar.tabText(i) for i in range(bar.count())])
+    tabs.setCurrentIndex([tabs.tabText(i) for i in range(tabs.count())].index(fit.windowTitle()))
+    assert tabs.tabText(tabs.currentIndex()) == "Fitting"
     _cold_start(controller)
     try:
         _type(window.data_control_dock.save_folder_edit, str(tmp_path / "acceptance"))
