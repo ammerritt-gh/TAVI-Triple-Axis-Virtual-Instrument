@@ -323,7 +323,7 @@ class UnifiedSampleDock(BaseDockWidget):
         ub_layout.addWidget(self.open_ub_matrix_button)
         
         # Status indicator
-        self.ub_indicator_label = QLabel("\u26aa UB not set (identity)")
+        self.ub_indicator_label = QLabel("\u26aa UB = identity (standard setting)")
         self.ub_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
         self.ub_indicator_label.setAlignment(Qt.AlignCenter)
         ub_layout.addWidget(self.ub_indicator_label)
@@ -428,7 +428,7 @@ class UnifiedSampleDock(BaseDockWidget):
             self.ub_indicator_label.setText("\U0001f7e2 UB matrix active")
             self.ub_indicator_label.setStyleSheet("color: green; font-weight: bold; font-size: 11px;")
         else:
-            self.ub_indicator_label.setText("\u26aa UB not set (identity)")
+            self.ub_indicator_label.setText("\u26aa UB = identity (standard setting)")
             self.ub_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
     
     def update_misalignment_indicator(self, has_misalignment: bool):

@@ -503,7 +503,7 @@ class UBMatrix:
 
     @property
     def is_identity(self) -> bool:
-        """True if U is the identity matrix (no orientation set)."""
+        """True if U is the identity matrix (TAVI's standard setting)."""
         return np.allclose(self._U, np.eye(3), atol=1e-6)
 
     def set_lattice(self, a, b, c, alpha, beta, gamma):
