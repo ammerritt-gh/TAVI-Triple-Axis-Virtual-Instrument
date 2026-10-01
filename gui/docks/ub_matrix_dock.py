@@ -816,8 +816,9 @@ class UBMatrixDock(BaseDockWidget):
             self.plane_normal_label.setText(
                 f"({normal[0]:.3f} {normal[1]:.3f} {normal[2]:.3f}): no small [u v w] fits"
             )
-        self.chi_mis_label.setText(f"{chi_mis:.2f}\u00b0")
-        self.omega_offset_label.setText(f"{omega_off:.2f}\u00b0")
+        # + 0.0 turns a rounded -0.0 into 0.0, so the standard setting reads 0.00\u00b0
+        self.chi_mis_label.setText(f"{round(chi_mis, 2) + 0.0:.2f}\u00b0")
+        self.omega_offset_label.setText(f"{round(omega_off, 2) + 0.0:.2f}\u00b0")
 
     def show_plane_lock(self, plane, status, stale=False):
         """Show the controller's lock: ``plane`` its two (h k l) (None: free),
