@@ -5599,9 +5599,11 @@ class TAVIController(QObject):
             if from_group:
                 source = f"{system}, from space group {group.number} {group.short_name}"
             else:
-                source = f"{system}, from the lattice fields (no space group set)"
+                unset = ("no space group set" if group is None
+                         else "space group 1 (P1, the default) taken as unset")
+                source = f"{system}, from the lattice fields; {unset}"
                 self.print_to_message_center(
-                    f"No space group set; refining as {system} from the lattice fields")
+                    f"{unset[0].upper()}{unset[1:]}; refining as {system} from the lattice fields")
 
             # Show refinement dialog
             from gui.docks.ub_matrix_dock import LatticeRefinementDialog
