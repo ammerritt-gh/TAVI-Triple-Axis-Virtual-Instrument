@@ -100,7 +100,7 @@ decision, §20.3); if vTAS-identical resolution ever matters, that's a
 
 | Item | Current | Needed |
 |---|---|---|
-| Arc travel | turntable A3 carrying a lower arc `sgl` (about x) and an upper arc `sgu` (about z); arc travel **undocumented**, enforced as unlimited. No document in `references/` gives it (the 2023 paper mentions a reorientation cradle for the dry cryostat, without travel); the ILL instrument page was not checked in this pass | the standard goniometer's travel. *needs IS* |
+| Arc travel | turntable A3 carrying a lower arc `sgl` (about x) and an upper arc `sgu` (about z); arc travel **undocumented**, enforced as unlimited. No document in `references/` gives it (the 2023 paper mentions a reorientation cradle for the dry cryostat, without travel); the ILL instrument pages checked on 2026-10-01 (https://www.ill.eu/users/instruments/instruments-list/in8/characteristics and .../in8/description/instrument-layout) state no goniometer or cradle travel either, so travel stays undocumented | the standard goniometer's travel. *needs IS* |
 
 ### Diagnostic monitors
 

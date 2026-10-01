@@ -308,9 +308,9 @@ def puma_descriptor() -> InstrumentDescriptor:
             SourceType("Maxwellian", "Maxwellian"),
             SourceType("Mono", "Mono", extra_params=("source_dE",)),
         ),
-        # Sample stage: no source documents PUMA's arc travel, so it is
-        # undocumented (unlimited); MODEL_STATUS.md says so.
-        goniometer=tas_goniometer(),
+        # Sample goniometer +/-20 deg: the MLZ PUMA page's tilt and
+        # translation goniometer, read 2026-10-01 (MODEL_STATUS.md).
+        goniometer=tas_goniometer(20.0),
         # Vertical (out-of-plane) Soller divergences BET1..4 (arcmin, FWHM). The
         # McStas PUMA definition and vTAS carry no per-blade vertical Soller data;
         # 120 arcmin is a documented uniform default (recorded as such in the

@@ -6,7 +6,7 @@
 - Model version: **1.0.1**
 - Model date: **2026-07-18**
 - Runtime status: **runnable**
-- Last evidence review: **2026-07-18**
+- Last evidence review: **2026-10-01** (sample goniometer travel)
 
 Status words mean: **verified** has direct evidence or a locked comparison;
 **provisional** is implemented but needs confirmation; **conflicting** has
@@ -24,7 +24,7 @@ credible disagreement; **missing** is not modeled or lacks usable evidence.
 | Velocity selector | Optional test component | TAVI user guide says it does not exist on PUMA | conflicting | Keep visibly experimental; confirm whether it should remain. |
 | Detector | One ideal 25.4 mm by 1 m Monitor | Live model | provisional | Replace with measured detector geometry/efficiency if needed. |
 | Source spectrum | Mono or simplified Maxwellian source | Live model | provisional | Obtain a measured or facility-approved spectrum. |
-| Sample goniometer | Turntable A3 carrying two crossed arcs, lower `sgl` (about x) and upper `sgu` (about z); arc travel **undocumented**, enforced as unlimited | No source in `references/` or elsewhere in the repository gives PUMA's arc travel | missing | Obtain the goniometer's travel; declare it in `tas_goniometer(...)` in `plugin.py`. |
+| Sample goniometer | Turntable A3 carrying two crossed arcs, lower `sgl` (about x) and upper `sgu` (about z); ±20°, enforced on both arcs | MLZ PUMA instrument page (https://mlz-garching.de/puma, read 2026-10-01): "The orientation of the sample can be checked using a tilt and translation goniometer (+/- 20°, +/- 12 mm). [...] Alternatively, an Euler cradle with higher tilt angles can be provided (+/- 90°)." Its technical data also list "Amagnetic goniometer: ±15°". TAVI takes the standard ±20° goniometer; the amagnetic ±15° goniometer and the ±90° Euler cradle are alternatives it does not model | provisional — a web page, not a specification; it does not say whether ±20° is per arc | Confirm with the instrument scientist that ±20° is each arc's travel. |
 
 The current code, not this table, remains executable truth. Accepted evidence
 must update both the code and this record in the same reviewed change.
