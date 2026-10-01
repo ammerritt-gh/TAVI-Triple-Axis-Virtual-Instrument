@@ -5090,7 +5090,7 @@ class TAVIController(QObject):
                     vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
                 )
                 # The UB lives in the readout frame of the corrections in force.
-                corrections = stage_corrections(vals['psi'], vals['kappa'])
+                corrections = stage_corrections(self.instrument_state.goniometer, vals)
 
             U = self.ub_matrix.calculate_U_from_peaks(corrections)
             self._update_ub_display()
@@ -5169,7 +5169,7 @@ class TAVIController(QObject):
             readouts = {"A3": vals['omega'], "sgl": vals['sgl'], "sgu": vals['sgu']}
             record = stage_record(
                 self.instrument_state.goniometer, readouts,
-                corrections=stage_corrections(vals['psi'], vals['kappa']),
+                corrections=stage_corrections(self.instrument_state.goniometer, vals),
                 ki=vals['Ki'], kf=vals['Kf'], sense=self.instrument_state.sense_sample,
             )
             pw.set_angles_from_position(record, vals['stt'], vals['Ki'], vals['Kf'])

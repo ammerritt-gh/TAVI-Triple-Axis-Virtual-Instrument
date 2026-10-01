@@ -78,7 +78,9 @@ and `sgu`; editing any of them reads Q back through the full stage.
 The solved angles are **readouts**: the operator's UB lives in the readout
 frame at the corrections in force. The crystal sits at the **physical** angles,
 readout + correction + hidden zero error (`mis_omega` on A3, `mis_chi` on sgl),
-and only the McStas sample arm reads those.
+and only the McStas sample arm reads those. Which field corrects an axis and
+which holds its zero error is declared on the axis (`GonioAxis.correction`,
+`GonioAxis.zero_error` in `tas_goniometer`), not in the runtime.
 
 A peak recorded with Take Position carries its stage record: every readout,
 the corrections in force, ki, kf and the sense (`tavi/orientation.py`

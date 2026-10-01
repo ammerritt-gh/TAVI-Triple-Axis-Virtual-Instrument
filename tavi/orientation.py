@@ -89,11 +89,28 @@ def axis_rotation(axis, angle_deg):
     ])
 
 
+def _check_names(gonio, angles, partial=False):
+    """Raise ``ValueError`` when ``angles`` names an axis ``gonio`` lacks or,
+    unless ``partial``, leaves one of its axes out: an angle is never read
+    as 0 deg because its name did not match."""
+    names = [ax.name for ax in gonio]
+    unknown = [name for name in angles if name not in names]
+    if unknown:
+        raise ValueError(f"the angles name {', '.join(unknown)}, which this stage "
+                         f"({', '.join(names)}) lacks")
+    missing = [] if partial else [name for name in names if name not in angles]
+    if missing:
+        raise ValueError(f"the angles do not set {', '.join(missing)} of this stage "
+                         f"({', '.join(names)})")
+
+
 def stage_rotation(gonio, angles):
-    """``R_stage`` for ``angles`` (a mapping name -> degrees; missing = 0)."""
+    """``R_stage`` for ``angles`` (a mapping name -> degrees naming exactly the
+    axes of ``gonio``; anything else raises ``ValueError``)."""
+    _check_names(gonio, angles)
     rotation = np.eye(3)
     for ax in gonio:
-        rotation = rotation @ axis_rotation(ax.axis, angles.get(ax.name, 0.0))
+        rotation = rotation @ axis_rotation(ax.axis, angles[ax.name])
     return rotation
 
 
@@ -118,9 +135,10 @@ def stage_record(gonio, angles, corrections=None, ki=None, kf=None, sense=None):
     A record without ``"corrections"`` is read in the frame of the moment
     (see ``record_angles``).
     """
+    _check_names(gonio, angles)
     record = {
         "axes": [[ax.name, [float(v) for v in ax.axis]] for ax in gonio],
-        "angles": {ax.name: float(angles.get(ax.name, 0.0)) for ax in gonio},
+        "angles": {ax.name: float(angles[ax.name]) for ax in gonio},
     }
     if corrections is not None:
         record["corrections"] = {ax.name: float(corrections.get(ax.name, 0.0))
@@ -193,7 +211,8 @@ def check_travel(gonio, angles, purpose=""):
     Axes absent from ``angles`` are not checked. Operator-set arcs (angle
     mode, an arc edit, an API write) are checked here, in the solver's words.
     Finiteness comes first: unlimited travel contains inf, and nan fails
-    every comparison."""
+    every comparison. A name ``gonio`` lacks raises ``ValueError``."""
+    _check_names(gonio, angles, partial=True)
     for ax in gonio:
         if ax.name not in angles:
             continue
