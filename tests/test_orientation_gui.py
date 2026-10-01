@@ -1813,6 +1813,25 @@ def test_a_sample_swap_ends_an_open_lattice_edit(controller):
         controller.set_default_parameters()
 
 
+def test_a_swap_with_an_unreadable_field_says_the_ub_did_not_move(controller, messages):
+    """psi does not read as a number: the swap cannot move the UB to the new
+    lattice fields, and the message center says so."""
+    controller.set_default_parameters()
+    sam = controller.window.sample_dock
+    try:
+        sam.psi_edit.setText("x")
+        lattice = controller.ub_matrix.lattice
+        messages.clear()
+
+        assert sam.set_sample_by_key("Pb_phonon_DFT")
+
+        assert controller.ub_matrix.lattice == lattice
+        assert any("UB was not moved to the lattice fields" in m for m in messages), messages
+    finally:
+        sam.psi_edit.setText("0")
+        controller.set_default_parameters()
+
+
 STANDARD_GRADING = [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
 
 

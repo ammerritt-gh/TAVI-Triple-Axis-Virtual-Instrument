@@ -4057,6 +4057,9 @@ class TAVIController(QObject):
             return
         vals = self.get_gui_values()
         if not vals:
+            self.print_to_message_center(
+                "Lattice not applied: a GUI field does not read as a number, "
+                "so the UB was not moved to the lattice fields.")
             return
         
         try:
