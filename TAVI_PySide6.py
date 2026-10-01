@@ -1805,7 +1805,7 @@ class TAVIController(QObject):
                 line_edit.setProperty("original_value", current)
                 
                 # After 300ms, return to normal state
-                QTimer.singleShot(300, lambda: line_edit.setStyleSheet(line_edit.property("original_style") or ""))
+                QTimer.singleShot(300, line_edit, lambda: line_edit.setStyleSheet(line_edit.property("original_style") or ""))
             else:
                 # No changes, just return to normal
                 line_edit.setStyleSheet(line_edit.property("original_style") or "")
@@ -1813,7 +1813,7 @@ class TAVIController(QObject):
         # We need to ensure editingFinished fires AFTER the field update handlers
         # So we'll connect with a slight delay
         def delayed_on_editing_finished():
-            QTimer.singleShot(10, on_editing_finished)
+            QTimer.singleShot(10, line_edit, on_editing_finished)
         
         line_edit.editingFinished.connect(delayed_on_editing_finished)
 
@@ -3541,7 +3541,10 @@ class TAVIController(QObject):
         self._set_and_confirm_field(line_edit, value, force=True)
 
     def _flash_field_saved(self, line_edit):
-        """Flash field to indicate programmatic update accepted."""
+        """Flash field to indicate programmatic update accepted.
+
+        Every flash timer is bound to its field (``singleShot`` with the field
+        as context), so a field deleted mid-flash cancels them."""
         original_style = line_edit.property("original_style") or ""
         flash_token = int(line_edit.property("feedback_flash_token") or 0) + 1
         line_edit.setProperty("feedback_flash_token", flash_token)
@@ -3565,9 +3568,9 @@ class TAVIController(QObject):
                 _restore_if_still_committed()
                 return
             line_edit.setStyleSheet("QLineEdit { border: 3px solid #000000; }")
-            QTimer.singleShot(300, _restore_if_still_committed)
+            QTimer.singleShot(300, line_edit, _restore_if_still_committed)
 
-        QTimer.singleShot(150, _bold_then_reset)
+        QTimer.singleShot(150, line_edit, _bold_then_reset)
 
     def _load_bending_parameters(self, parameters):
         """Load absolute bending radii from the saved parameter block."""
