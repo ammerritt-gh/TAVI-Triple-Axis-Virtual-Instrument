@@ -748,15 +748,6 @@ class UBMatrix:
         self.set_U(U)
         return U
 
-    def refine_lattice(self, crystal_system: str = None) -> dict:
-        """Refine lattice parameters from stored peaks by crystal system
-        (``refine_lattice_from_peaks``; None: the system the lattice has).
-
-        Returns:
-            dict with 'lattice', 'residuals', 'rms_error', 'crystal_system'.
-        """
-        return refine_lattice_from_peaks(self.peaks, self._lattice, crystal_system)
-
     def get_plane_info(self) -> dict:
         """Get scattering plane analysis."""
         return get_scattering_plane_info(self._U, self._B)
