@@ -42,6 +42,11 @@ GRID_STEP_DEG = 0.5
 # A locked stage accepts a Q this far out of its plane (float noise and
 # formatted GUI fields); anything more is refused with its angle.
 LOCKED_PLANE_TOLERANCE_DEG = 1e-4
+# An angle this close past a travel end counts as at the end. A root solved
+# at one arc's end node can land ~1e-14 deg past the other arc's end when the
+# levelling curve runs through a travel corner; 1e-9 deg covers that rounding
+# with room and is no real motion.
+TRAVEL_TOLERANCE_DEG = 1e-9
 
 
 class StageAxis(NamedTuple):
@@ -165,7 +170,9 @@ def _wrap(angle_deg):
 
 
 def _in_travel(ax, angle):
-    return ax.lower <= angle <= ax.upper
+    """Within travel to TRAVEL_TOLERANCE_DEG; elementwise on arrays, False for nan."""
+    return ((angle >= ax.lower - TRAVEL_TOLERANCE_DEG)
+            & (angle <= ax.upper + TRAVEL_TOLERANCE_DEG))
 
 
 def _travel_text(ax):
@@ -265,7 +272,7 @@ def _refine(inner, solved, held, start, branch, q_mount, up, target, scale):
         values = np.append(np.linspace(lo, hi, 33), best_value)
         roots = _arc_roots(inner, solved, held, values, q_mount, up, target, scale)[branch]
         with np.errstate(invalid="ignore"):
-            ok = (roots >= solved_axis.lower) & (roots <= solved_axis.upper)
+            ok = _in_travel(solved_axis, roots)
         cost = np.where(ok, values ** 2 + roots ** 2, np.inf)
         index = int(np.argmin(cost))
         if not cost[index] < best[0]:
@@ -334,7 +341,7 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
     Search, for two inner axes: each arc in turn is held on a grid over a full
     turn (GRID_STEP_DEG) plus its own finite travel ends, while the levelling
     equation is solved exactly in the other; the union of the roots is
-    filtered by travel, and the smallest-tilt root is refined along its own
+    filtered by travel (to TRAVEL_TOLERANCE_DEG), and the smallest-tilt root is refined along its own
     branch to the minimum. Levelling is exact whatever the grid. Finding a
     reachable point does not depend on travel lying on the grid: a stretch of
     the levelling curve inside travel that holds no grid node ends on travel
@@ -395,7 +402,7 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
         raise StageUnreachable("no arc setting brings Q into the scattering plane")
     fits = np.isfinite(tilt)
     for i, ax in enumerate(inner):
-        fits &= (rows[:, i] >= ax.lower) & (rows[:, i] <= ax.upper)
+        fits &= _in_travel(ax, rows[:, i])
     if not fits.any():
         nearest = rows[int(np.argmin(tilt))]
         check_travel(inner, {ax.name: angle for ax, angle in zip(inner, nearest)},
