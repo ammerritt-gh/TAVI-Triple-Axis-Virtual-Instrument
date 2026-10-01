@@ -262,13 +262,16 @@ def _level_candidates(inner, q_mount, up, target, scale):
     blocks, meta = [], []
     # Each arc takes its turn as the solved axis (A2): an arc parallel to Q
     # cannot move it, so holding only the other arc on the grid would miss
-    # the narrow band where its roots exist.
+    # the narrow band where its roots exist. The held arc's finite travel
+    # ends are nodes too, whatever the grid step (see solve_stage).
     for solved, held in ((1, 0), (0, 1)):
-        roots = _arc_roots(inner, solved, held, grid, q_mount, up, target, scale)
+        ends = [b for b in (inner[held].lower, inner[held].upper) if math.isfinite(b)]
+        nodes = np.append(grid, ends)
+        roots = _arc_roots(inner, solved, held, nodes, q_mount, up, target, scale)
         for branch, root in enumerate(roots):
-            angles = np.empty((len(grid), 2))
+            angles = np.empty((len(nodes), 2))
             angles[:, solved] = root
-            angles[:, held] = grid
+            angles[:, held] = nodes
             blocks.append(angles)
             meta.append((solved, held, branch))
     return blocks, meta
@@ -303,12 +306,19 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
     a Q they leave out of the horizontal plane is refused with its angle.
 
     Search, for two inner axes: each arc in turn is held on a grid over a full
-    turn (GRID_STEP_DEG) while the levelling equation is solved exactly in the
-    other; the union of the roots is filtered by travel, and the smallest-tilt
-    root is refined along its own branch to the minimum. Levelling is exact
-    whatever the grid; only the minimality is grid-limited.
-    Ceiling: a tilt minimum narrower than one grid step can be missed, and at
-    most two inner axes are supported. Measured per point through
+    turn (GRID_STEP_DEG) plus its own finite travel ends, while the levelling
+    equation is solved exactly in the other; the union of the roots is
+    filtered by travel, and the smallest-tilt root is refined along its own
+    branch to the minimum. Levelling is exact whatever the grid. Finding a
+    reachable point does not depend on travel lying on the grid: a stretch of
+    the levelling curve inside travel that holds no grid node ends on travel
+    limits, and each limit is a node of the pass that holds that arc. For the
+    crossed TAS arcs the curve is a graph over the upper arc, so that holds
+    exactly; a stage whose curve folds back inside one grid step could still
+    miss a stretch narrower than the step.
+    Ceiling: a tilt minimum narrower than one grid step can be missed (the
+    chosen root is reachable but may not be the smallest tilt), and at most
+    two inner axes are supported. Measured per point through
     ``calculate_stage_angles`` (2026-10-01, this machine): median 1.0 ms,
     worst 1.6 ms tilted; 0.06 ms level. Upgrade path: the closed-form
     stationary points of the tilt along the levelling curve.

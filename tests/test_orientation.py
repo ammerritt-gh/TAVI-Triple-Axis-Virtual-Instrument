@@ -513,6 +513,29 @@ def test_near_limit_settings_solve(models, axis, hkl, slot):
     assert abs(angles[slot]) == pytest.approx(19.5, abs=1e-6)
 
 
+def test_off_grid_travel_finds_a_point_reachable_only_in_its_corner():
+    """Travel of +/-17.3 deg is not on the 0.5 deg grid. Q is built so that the
+    levelling curve crosses the travel box only in its corner, between the
+    grid values 17.0 and 17.5 of both arcs: tan(sgl) = A(sgu) / q_z passes
+    (17.25, 17.25) with slope -1. Only the travel ends as nodes find it."""
+    travel = 17.3
+    gonio = (StageAxis("A3", (0.0, 1.0, 0.0)),
+             StageAxis("sgl", (1.0, 0.0, 0.0), -travel, travel),
+             StageAxis("sgu", (0.0, 0.0, 1.0), -travel, travel))
+    s0 = math.radians(17.25)
+    theta = math.atan2(math.tan(s0), -1.0 / math.cos(s0) ** 2)    # u0 + phi
+    r = math.hypot(math.tan(s0), 1.0 / math.cos(s0) ** 2)
+    phi = theta - s0
+    q = np.array([r * math.cos(phi), r * math.sin(phi), 1.0])
+    assert _arcs_can_level(gonio, q)
+    q_lab = np.linalg.norm(q) * np.array([1.0, 0.0, 0.0])
+
+    angles = solve_stage(gonio, q, q_lab)
+    assert all(abs(angles[name]) <= travel for name in ("sgl", "sgu"))
+    assert min(abs(angles["sgl"]), abs(angles["sgu"])) > 17.0       # the corner
+    assert np.allclose(stage_rotation(gonio, angles) @ q, q_lab, rtol=0.0, atol=1e-9)
+
+
 def _in12_vals(**overrides):
     vals = {
         "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2.0,
