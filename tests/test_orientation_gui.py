@@ -54,11 +54,8 @@ def _controller_for(instrument_id):
     try:
         yield ctrl
     finally:
-        # Let the accepted-edit flash timers of API writes finish before the
-        # widgets go, or they fire into the next module's event loop (or the
-        # other controller's wait). The chain is 450 ms of timers; the rest
-        # is slack for slow handlers in a full run (600 ms once fell short).
-        QTest.qWait(1000)
+        # No wait for pending flash timers: they are bound to their fields
+        # and die with the window (test_flash_timers_die_with_their_field).
         ctrl.shutdown()
         window.deleteLater()
         app.processEvents()
@@ -116,6 +113,24 @@ def test_restoring_a_misalignment_hash_applies_both_angles(controller, messages)
     assert controller.instrument_state.mis_omega == pytest.approx(1.5)
     assert controller.instrument_state.mis_chi == pytest.approx(-0.75)
     assert controller.window.misalignment_dock.get_loaded_misalignment() == pytest.approx((1.5, -0.75))
+
+
+def test_flash_timers_die_with_their_field(controller):
+    """A field deleted while its accepted-edit flash is pending takes the
+    flash timers with it (they are bound to the field, not free closures)."""
+    import shiboken6
+    from PySide6.QtWidgets import QLineEdit
+
+    flashed, typed = QLineEdit(), QLineEdit()
+    flashed.setProperty("original_value", "")
+    controller._flash_field_saved(flashed)
+    controller._setup_field_feedback(typed)
+    typed.setText("1")
+    typed.editingFinished.emit()
+    QTest.qWait(30)                  # the 300 ms restore of the typed edit is pending
+    shiboken6.delete(flashed)
+    shiboken6.delete(typed)
+    QTest.qWait(600)                 # past every pending flash timer
 
 
 def test_plane_refresh_failure_reaches_the_message_center(controller, messages, monkeypatch):
