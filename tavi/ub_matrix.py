@@ -381,84 +381,136 @@ def alignment_residuals(ub, peaks, corrections=None) -> dict:
     return {"peaks": rows, "pairs": pairs, "flags": flags, "summary": summary}
 
 
+# Refine Lattice by crystal system (Unit 3, D8/D12/D13). Each system maps its
+# free parameters onto the six components (g11, g22, g33, g12, g13, g23) of
+# the reciprocal metric G* = B^T B, in which |Q|^2 = hkl . G* . hkl is linear.
+_G_STAR = ("g11", "g22", "g33", "g12", "g13", "g23")
+_METRIC_CONSTRAINTS = {
+    "cubic": [{"g11": 1, "g22": 1, "g33": 1}],
+    "tetragonal": [{"g11": 1, "g22": 1}, {"g33": 1}],
+    "orthorhombic": [{"g11": 1}, {"g22": 1}, {"g33": 1}],
+    # gamma = 120 deg makes gamma* = 60 deg: a*.b* = |a*|^2 / 2.
+    "hexagonal": [{"g11": 1, "g22": 1, "g12": 0.5}, {"g33": 1}],
+    "rhombohedral": [{"g11": 1, "g22": 1, "g33": 1}, {"g12": 1, "g13": 1, "g23": 1}],
+    # Monoclinic: the unique axis's two cross terms stay zero.
+    "monoclinic_a": [{"g11": 1}, {"g22": 1}, {"g33": 1}, {"g23": 1}],
+    "monoclinic_b": [{"g11": 1}, {"g22": 1}, {"g33": 1}, {"g13": 1}],
+    "monoclinic_c": [{"g11": 1}, {"g22": 1}, {"g33": 1}, {"g12": 1}],
+    "triclinic": [{name: 1} for name in _G_STAR],
+}
+# D13's order: the highest symmetry first.
+CRYSTAL_SYSTEMS_BY_SYMMETRY = ("cubic", "hexagonal", "trigonal", "tetragonal",
+                               "orthorhombic", "monoclinic", "triclinic")
+
+
+def _metric_setting(system, lattice):
+    """The constraint set ``system`` takes for ``lattice`` (a, b, c, alpha,
+    beta, gamma), or None when the lattice does not have that system's
+    metric (lengths equal to 1e-6 relative, angles to 1e-4 deg)."""
+    a, b, c, alpha, beta, gamma = (float(x) for x in lattice)
+
+    def same(x, y):
+        return abs(x - y) <= 1e-6 * max(abs(x), abs(y))
+
+    def deg(x, y):
+        return abs(x - y) <= 1e-4
+
+    right = [deg(angle, 90.0) for angle in (alpha, beta, gamma)]
+    hexagonal = same(a, b) and right[0] and right[1] and deg(gamma, 120.0)
+    rhombohedral = same(a, b) and same(b, c) and deg(alpha, beta) and deg(beta, gamma)
+    if system == "cubic":
+        return "cubic" if all(right) and same(a, b) and same(b, c) else None
+    if system == "tetragonal":
+        return "tetragonal" if all(right) and same(a, b) else None
+    if system == "orthorhombic":
+        return "orthorhombic" if all(right) else None
+    if system == "hexagonal":
+        return "hexagonal" if hexagonal else None
+    if system == "trigonal":
+        return "hexagonal" if hexagonal else "rhombohedral" if rhombohedral else None
+    if system == "monoclinic":
+        if sum(right) < 2:
+            return None
+        # The unique axis: the one angle not 90 deg, b when none.
+        return "monoclinic_" + ("a" if not right[0] else "c" if not right[2] else "b")
+    if system == "triclinic":
+        return "triclinic"
+    raise ValueError(f"'{system}' is not a crystal system")
+
+
+def lattice_crystal_system(lattice):
+    """D13: the highest-symmetry crystal system whose metric ``lattice`` has."""
+    return next(s for s in CRYSTAL_SYSTEMS_BY_SYMMETRY if _metric_setting(s, lattice))
+
+
 def refine_lattice_from_peaks(peaks: list, initial_lattice: tuple,
                               crystal_system: str = None) -> dict:
-    """Refine lattice parameters from observed peak positions.
+    """Refine the lattice from the valid peaks' |Q|, by crystal system.
 
-    Compares observed d-spacings with calculated ones and adjusts lattice parameters.
-    Uses simple least-squares fitting.
+    Constrained linear least squares of |Q|^2 (A^-2) in the reciprocal metric
+    G* = B^T B: each system refines exactly its own parameters -- triclinic 6,
+    monoclinic 4 (unique axis from ``initial_lattice``: the one angle not 90,
+    b when none), orthorhombic 3, tetragonal 2, hexagonal and trigonal on
+    hexagonal axes 2, trigonal on rhombohedral axes 2, cubic 1. The lattice
+    comes back from the direct metric G = (2 pi)^2 (G*)^-1. ``crystal_system``
+    None takes the highest-symmetry system ``initial_lattice`` satisfies
+    (``lattice_crystal_system``); ``initial_lattice`` otherwise only decides
+    the setting.
 
-    Args:
-        peaks: List of ObservedPeak instances.
-        initial_lattice: (a, b, c, alpha, beta, gamma) initial guess.
-        crystal_system: Optional crystal system name to constrain refinement.
+    Ceiling (D8): |Q|^2 rows only, so no arc zero error leaks into the lattice
+    (they are rotation-invariant); monoclinic needs four reflections and
+    triclinic six with independent quadratic forms. Upgrade path: pair
+    dot-product rows (q_i . q_j = hkl_i . G* . hkl_j), which decide a
+    triclinic cell from three peaks but read the peaks' relative orientation,
+    so arc zero errors leak in. Ceiling (D12): unweighted, since TAVI records
+    no per-peak uncertainty; upgrade path: weights from the peak fits' widths.
+
+    Raises ValueError naming the system, its parameter count and the
+    independent rows the peaks give when they cannot decide it; also for a
+    lattice that does not have the system's metric (a trigonal lattice in
+    neither setting included) and a fitted G* that is not positive definite.
 
     Returns:
-        dict with 'lattice' (refined params), 'residuals' (per-peak), 'rms_error'.
+        dict with 'lattice' (refined params), 'residuals' (per-peak),
+        'rms_error' and 'crystal_system' (the system refined).
     """
-    valid_peaks = [p for p in peaks if p.is_valid]
-    if len(valid_peaks) < 1:
-        raise ValueError("Need at least 1 valid peak for lattice refinement.")
+    system = crystal_system or lattice_crystal_system(initial_lattice)
+    setting = _metric_setting(system, initial_lattice)
+    if setting is None:
+        a, b, c, alpha, beta, gamma = initial_lattice
+        raise ValueError(
+            f"the lattice fields (a={a:g}, b={b:g}, c={c:g}, α={alpha:g}, β={beta:g}, "
+            f"γ={gamma:g}) do not have the {system} metric; correct them or the space group")
+    constraint = np.array([[column.get(name, 0.0) for column in _METRIC_CONSTRAINTS[setting]]
+                           for name in _G_STAR], dtype=float)
+    n_params = constraint.shape[1]
 
-    a0, b0, c0, al0, be0, ga0 = initial_lattice
+    observed = [(tuple(p.hkl), float(np.linalg.norm(p.q_lab))) for p in peaks if p.is_valid]
+    rows = np.array([[h * h, k * k, l * l, 2 * h * k, 2 * h * l, 2 * k * l]
+                     for (h, k, l), _ in observed], dtype=float).reshape(-1, 6) @ constraint
+    rank = int(np.linalg.matrix_rank(rows)) if len(observed) else 0
+    if rank < n_params:
+        raise ValueError(
+            f"{system} refinement fits {n_params} parameter{'s' if n_params > 1 else ''} but "
+            f"the {len(observed)} valid peak{'s' if len(observed) != 1 else ''} give "
+            f"{rank} independent |Q|² row{'s' if rank != 1 else ''}; add reflections "
+            "that decide the rest")
+    params, *_ = np.linalg.lstsq(rows, np.array([q * q for _, q in observed]), rcond=None)
+    g = constraint @ params
+    g_star = np.array([[g[0], g[3], g[4]], [g[3], g[1], g[5]], [g[4], g[5], g[2]]])
+    if not np.all(np.linalg.eigvalsh(g_star) > 0):
+        raise ValueError(f"the {system} fit gives a reciprocal metric that is not positive "
+                         "definite: these peaks describe no lattice")
+    metric = (2 * math.pi) ** 2 * np.linalg.inv(g_star)
+    lengths = np.sqrt(np.diag(metric))
 
-    # Collect observed |Q| for each peak
-    observed = []
-    for peak in valid_peaks:
-        q_obs = np.linalg.norm(peak.q_lab)
-        observed.append((peak.hkl, q_obs))
+    def angle(i, j):
+        cosine = metric[i, j] / (lengths[i] * lengths[j])
+        return math.degrees(math.acos(max(-1.0, min(1.0, float(cosine)))))
 
-    # Simple refinement: scale lattice parameters to match observed d-spacings
-    # For each peak: |Q_calc| = |B @ hkl|, |Q_obs| from angles
-    # Minimize sum of (|Q_calc| - |Q_obs|)^2 by scaling
+    refined = (float(lengths[0]), float(lengths[1]), float(lengths[2]),
+               angle(1, 2), angle(0, 2), angle(0, 1))
 
-    B0 = compute_B_matrix(a0, b0, c0, al0, be0, ga0)
-
-    residuals = []
-    scale_ratios = []
-    for hkl, q_obs in observed:
-        q_calc = np.linalg.norm(B0 @ np.array(hkl))
-        if q_calc > 1e-8:
-            residuals.append(q_obs - q_calc)
-            scale_ratios.append(q_obs / q_calc)
-
-    if not scale_ratios:
-        return {
-            'lattice': initial_lattice,
-            'residuals': [],
-            'rms_error': float('inf'),
-        }
-
-    # Average scale factor
-    avg_scale = np.mean(scale_ratios)
-
-    # Apply constraints based on crystal system.
-    # |Q| ∝ 1/a, so avg_scale = mean(q_obs/q_calc) > 1 means observed |Q| is
-    # larger → real-space lattice constants are smaller → divide by avg_scale.
-    if crystal_system in ("cubic",):
-        a_new = a0 / avg_scale
-        refined = (a_new, a_new, a_new, 90.0, 90.0, 90.0)
-    elif crystal_system in ("tetragonal",):
-        a_new = a0 / avg_scale
-        c_new = c0 / avg_scale
-        refined = (a_new, a_new, c_new, 90.0, 90.0, 90.0)
-    elif crystal_system in ("hexagonal",):
-        a_new = a0 / avg_scale
-        c_new = c0 / avg_scale
-        refined = (a_new, a_new, c_new, 90.0, 90.0, 120.0)
-    elif crystal_system in ("orthorhombic",):
-        a_new = a0 / avg_scale
-        b_new = b0 / avg_scale
-        c_new = c0 / avg_scale
-        refined = (a_new, b_new, c_new, 90.0, 90.0, 90.0)
-    else:
-        # General: uniform scaling of lengths
-        a_new = a0 / avg_scale
-        b_new = b0 / avg_scale
-        c_new = c0 / avg_scale
-        refined = (a_new, b_new, c_new, al0, be0, ga0)
-
-    # Compute residuals with refined lattice
     B_new = compute_B_matrix(*refined)
     final_residuals = []
     for hkl, q_obs in observed:
@@ -478,6 +530,7 @@ def refine_lattice_from_peaks(peaks: list, initial_lattice: tuple,
         'lattice': refined,
         'residuals': final_residuals,
         'rms_error': rms,
+        'crystal_system': system,
     }
 
 
@@ -696,10 +749,11 @@ class UBMatrix:
         return U
 
     def refine_lattice(self, crystal_system: str = None) -> dict:
-        """Refine lattice parameters from stored peaks.
+        """Refine lattice parameters from stored peaks by crystal system
+        (``refine_lattice_from_peaks``; None: the system the lattice has).
 
         Returns:
-            dict with 'lattice', 'residuals', 'rms_error'.
+            dict with 'lattice', 'residuals', 'rms_error', 'crystal_system'.
         """
         return refine_lattice_from_peaks(self.peaks, self._lattice, crystal_system)
 
