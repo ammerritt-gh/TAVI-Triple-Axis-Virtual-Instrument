@@ -1588,6 +1588,32 @@ def test_the_residual_table_describes_only_the_last_calculate_ub(controller, mon
     assert table.rowCount() == 0
 
 
+def test_a_failed_fit_leaves_the_previous_ub_and_an_empty_table(controller, messages):
+    """C3: an unsaved lattice edit and too few valid peaks; Calculate UB
+    fails and the UB, its lattice and the display stay as they were."""
+    controller.set_default_parameters()
+    dock = controller.window.ub_matrix_dock
+    _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
+    _set_corrections(controller, 0.5, 0.0)
+    controller.on_calculate_ub()
+    assert dock.residual_table.rowCount() == 6
+    ub, lattice = controller.ub_matrix.UB, controller.ub_matrix.lattice
+    shown = [[edit.text() for edit in row] for row in dock.ub_edits]
+    controller.window.sample_dock.lattice_a_edit.setText("4.3")          # not saved
+    for index in (1, 2):
+        dock.get_peak_widget(index).h_edit.setText("x")                   # not a peak
+    messages.clear()
+
+    controller.on_calculate_ub()
+
+    assert any(m.startswith("UB calculation failed") for m in messages), messages
+    assert np.array_equal(controller.ub_matrix.UB, ub)
+    assert controller.ub_matrix.lattice == lattice
+    assert [[edit.text() for edit in row] for row in dock.ub_edits] == shown
+    assert dock.residual_table.rowCount() == 0
+    controller.set_default_parameters()
+
+
 # --- Unit 3 (C4): Refine Lattice by crystal system ----------------------------------
 
 TETRAGONAL = (4.0, 4.0, 4.2, 90.0, 90.0, 90.0)
