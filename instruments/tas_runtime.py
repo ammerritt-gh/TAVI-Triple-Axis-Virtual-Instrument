@@ -210,7 +210,14 @@ class TAS_Instrument:
         self.anacris = None # must have some analyzer crystal
         self.fixed_E = 0 # The fixed energy to work with, for the source.
         self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
+        # The operator's belief: lattice fields + UB. Read by HKL <-> Q, the
+        # solver and feasibility, never by the McStas sample arm.
         self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
+        # The truth: the crystal's real mount, U_true = R_hidden @ U_described
+        # (docs/INSTRUMENT_LAYOUT.md "Truth and belief"). Hidden like the zero
+        # errors; written only by the controller's one setter, read only by
+        # the McStas sample arm.
+        self.U_true = np.eye(3)
         # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
         # point by _solve_point_geometry on its private copy of the state, so
         # the recorded energies, the transfer and the source parameter all read
@@ -292,10 +299,11 @@ class TAS_Instrument:
 
     def sample_orientation_params(self):
         """Per-point McStas parameters of the sample: the single sample arm's
-        rotation (``sample_arm_euler`` of the physical angles and the mount),
-        plus the arc readouts, corrections and zero errors as inspection values."""
+        rotation (``sample_arm_euler`` of the physical angles and the true
+        mount ``U_true``, never the operator's UB), plus the arc readouts,
+        corrections and zero errors as inspection values."""
         rx, ry, rz = sample_arm_euler(
-            self.goniometer, self.physical_stage_angles(), self.sample_mount.R_mount
+            self.goniometer, self.physical_stage_angles(), self.U_true
         )
         return {
             "sgl_param": self.sgl,

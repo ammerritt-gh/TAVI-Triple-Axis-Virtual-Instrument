@@ -687,9 +687,12 @@ def decode_training(hash_str: str) -> tuple:
         U = np.array(values[:9]).reshape(3, 3)
         mis_omega = values[9]
         mis_chi = values[10]
-        return U, float(mis_omega), float(mis_chi)
     except Exception as e:
         raise ValueError(f"Invalid training hash: {e}")
+    # The hash stores float32: orthonormalise (the nearest rotation, polar
+    # decomposition) so the hidden mount is an exact rotation.
+    left, _, right = np.linalg.svd(validate_rotation_matrix(U))
+    return left @ right, float(mis_omega), float(mis_chi)
 
 
 def check_training_quality(student_U: np.ndarray, teacher_U: np.ndarray,

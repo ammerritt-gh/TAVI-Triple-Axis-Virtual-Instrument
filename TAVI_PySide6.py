@@ -11,6 +11,7 @@ import copy
 import threading
 import queue
 import math
+import numpy as np
 import mcstasscript as ms
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
@@ -1142,9 +1143,18 @@ class TAVIController(QObject):
         self.descriptor = instrument.descriptor()
         self._mcstas_name = self.descriptor.mcstas_name
 
-        # UB matrix for crystal orientation
+        # UB matrix for crystal orientation: the operator's belief.
         self.ub_matrix = UBMatrix()
-        
+        # The truth apart from it (docs/INSTRUMENT_LAYOUT.md "Truth and
+        # belief"): the sample as described (identity = the standard setting,
+        # or from the mounting plane), the hidden training rotation, and the
+        # one loaded exercise, None or (kind, hash) -- the docks only show it.
+        self.U_described = np.eye(3)
+        self.mount_plane = None
+        self.R_hidden = np.eye(3)
+        self._exercise = None
+        self._set_true_mount()
+
         # Global variables
         self.stop_event = threading.Event()
 
@@ -5053,40 +5063,124 @@ class TAVIController(QObject):
         except ValueError:
             self.print_to_message_center("Invalid arc (sgl/sgu) value")
     
-    def on_load_misalignment_hash(self):
-        """Handle loading misalignment from hash - apply hidden values to instrument."""
-        if self.window.misalignment_dock.has_misalignment():
-            mis_omega, mis_chi = self.window.misalignment_dock.get_loaded_misalignment()
-            self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
-            self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
-    
-    def on_clear_misalignment(self):
-        """Handle clearing misalignment - reset hidden values on instrument."""
-        self.instrument_state.set_misalignment(mis_omega=0, mis_chi=0)
-        self.print_to_message_center("Misalignment cleared")
-        # Also clear any stored hash in the sample dock so it won't be reloaded
+    # ===== The true mount and the one loaded exercise =====
+    # U_true = R_hidden @ U_described and the zero errors are the truth the
+    # McStas sample arm reads; the operator's UB is belief and none of the
+    # paths below write it except to reset it to U_described (I3).
+
+    _EXERCISE_NAMES = {"training": "UB training exercise",
+                       "misalignment": "misalignment exercise"}
+
+    def _set_true_mount(self, U_described=None, R_hidden=None):
+        """The one writer of ``instrument_state.U_true`` (R_hidden @ U_described)."""
+        if U_described is not None:
+            self.U_described = np.array(U_described, dtype=float)
+        if R_hidden is not None:
+            self.R_hidden = np.array(R_hidden, dtype=float)
+        self.instrument_state.U_true = self.R_hidden @ self.U_described
+
+    def _install_exercise(self, kind, hash_str):
+        """Make ``hash_str`` the one loaded exercise: R_hidden (a training
+        exercise's rotation, else identity) and the zero errors, nothing else
+        -- no UB write and no refusal (restore calls this directly). Raises
+        ValueError on a bad hash, before anything changes."""
+        if kind == "training":
+            rotation, mis_omega, mis_chi = decode_training(hash_str)
+        else:
+            from gui.docks.misalignment_dock import decode_misalignment
+            rotation = np.eye(3)
+            mis_omega, mis_chi = decode_misalignment(hash_str)
+        self._set_true_mount(R_hidden=rotation)
+        self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
+        self._exercise = (kind, hash_str)
+        self._show_exercise()
+
+    def _clear_exercise(self):
+        """No exercise: R_hidden = I and zero errors 0."""
+        self._exercise = None
+        self._set_true_mount(R_hidden=np.eye(3))
+        self.instrument_state.set_misalignment(mis_omega=0.0, mis_chi=0.0)
+        self._show_exercise()
+
+    def _show_exercise(self):
+        """Both docks show the controller's exercise state (hash field and
+        status); they hold no hidden value."""
+        kind, hash_str = self._exercise or (None, "")
+        ub_dock = self.window.ub_matrix_dock
+        ub_dock.load_hash_edit.setText(hash_str if kind == "training" else "")
+        ub_dock.update_training_status(kind == "training")
+        self.window.misalignment_dock.show_misalignment(
+            hash_str if kind == "misalignment" else "")
+
+    def _exercise_refusal(self, kind, action):
+        """Why ``action`` ("load"/"clear") of a ``kind`` exercise is refused,
+        or None. The zero errors have one owner: one exercise at a time."""
+        if self._exercise is not None and self._exercise[0] != kind:
+            return (f"Cannot {action} the {self._EXERCISE_NAMES[kind]}: the "
+                    f"{self._EXERCISE_NAMES[self._exercise[0]]} is loaded. Clear it first.")
+        return None
+
+    def _reset_ub_to_described(self):
+        """The operator's UB back to the sample as described, peaks kept."""
+        self.ub_matrix.set_U(self.U_described)
+        self._update_ub_display()
+        self.on_Q_changed()
+
+    def _load_exercise(self, kind, hash_str):
+        """Interactive load (I3): refused while the other exercise is loaded;
+        then the hidden truth, and the operator's UB reset to U_described."""
+        label = self._EXERCISE_NAMES[kind]
+        if not hash_str:
+            self.print_to_message_center(f"No {label} hash entered")
+            return False
+        refusal = self._exercise_refusal(kind, "load")
+        if refusal:
+            self.print_to_message_center(refusal)
+            return False
         try:
-            if hasattr(self.window, 'sample_dock') and hasattr(self.window.sample_dock, 'load_hash_edit'):
-                self.window.sample_dock.load_hash_edit.clear()
-            if hasattr(self.window.sample_dock, '_loaded_misalignment'):
-                self.window.misalignment_dock._loaded_misalignment = None
-            if hasattr(self.window.misalignment_dock, 'misalignment_status_label'):
-                self.window.misalignment_dock.misalignment_status_label.setText("No misalignment loaded")
-                self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: gray;")
-            if hasattr(self.window.misalignment_dock, 'check_alignment_button'):
-                self.window.misalignment_dock.check_alignment_button.setEnabled(False)
-        except Exception:
-            pass
-    
+            self._install_exercise(kind, hash_str)
+        except ValueError as e:
+            self.print_to_message_center(f"Invalid {label} hash: {e}")
+            return False
+        self._reset_ub_to_described()
+        return True
+
+    def _unload_exercise(self, kind):
+        """Interactive clear (I3): refused while the other exercise is loaded."""
+        refusal = self._exercise_refusal(kind, "clear")
+        if refusal:
+            self.print_to_message_center(refusal)
+            return False
+        if self._exercise is None:
+            self.print_to_message_center(f"No {self._EXERCISE_NAMES[kind]} loaded")
+            return False
+        self._clear_exercise()
+        self._reset_ub_to_described()
+        return True
+
+    def on_load_misalignment_hash(self):
+        """Load a misalignment exercise: hidden zero errors on the instrument."""
+        hash_str = self.window.misalignment_dock.load_hash_edit.text().strip()
+        if self._load_exercise("misalignment", hash_str):
+            self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
+
+    def on_clear_misalignment(self):
+        """Clear the misalignment exercise: zero errors back to 0."""
+        if self._unload_exercise("misalignment"):
+            self.print_to_message_center("Misalignment cleared")
+
     def on_check_alignment(self):
         """Check user's alignment against hidden misalignment and update feedback."""
+        if self._exercise is None or self._exercise[0] != "misalignment":
+            self.print_to_message_center("No misalignment exercise loaded")
+            return
         try:
             # psi_edit is the in-plane offset (corrects omega misalignment)
             # kappa_edit is the out-of-plane offset (corrects chi misalignment)
             psi = float(self.window.sample_dock.psi_edit.text() or 0)
             kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
-            # update_alignment_feedback(user_psi, user_kappa)
-            self.window.misalignment_dock.update_alignment_feedback(psi, kappa)
+            self.window.misalignment_dock.update_alignment_feedback(
+                psi, kappa, self.instrument_state.mis_omega, self.instrument_state.mis_chi)
         except ValueError:
             self.print_to_message_center("Invalid sample orientation values for alignment check")
 
@@ -5154,12 +5248,9 @@ class TAVIController(QObject):
             self.print_to_message_center(f"Lattice refinement failed: {e}")
 
     def on_reset_ub(self):
-        """Reset UB matrix to identity (clear orientation)."""
-        self.ub_matrix.reset_U()
-        self._update_ub_display()
-        self.print_to_message_center("UB matrix reset to identity")
-        # Refresh HKL from current Q using direct method
-        self.on_Q_changed()
+        """Reset the UB to the sample as described (identity on the standard setting)."""
+        self._reset_ub_to_described()
+        self.print_to_message_center("UB matrix reset to the sample as described")
 
     def on_ub_matrix_edited(self, is_non_identity: bool):
         """Handle manual editing of UB matrix in the dock."""
@@ -5269,51 +5360,28 @@ class TAVIController(QObject):
             self.print_to_message_center(f"Failed to generate training: {e}")
 
     def on_load_training(self):
-        """Load a training exercise from hash, apply hidden orientation + misalignment."""
-        try:
-            hash_str = self.window.ub_matrix_dock.load_hash_edit.text().strip()
-            if not hash_str:
-                self.print_to_message_center("No training hash entered")
-                return
-
-            U, mis_omega, mis_chi = decode_training(hash_str)
-
-            # Store the training exercise
-            self.window.ub_matrix_dock._loaded_training = (U, mis_omega, mis_chi)
-
-            # Apply hidden orientation to UB matrix
-            self.ub_matrix.set_U(U)
-            # Apply hidden misalignment to instrument
-            self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
-
-            # Update displays
-            self._update_ub_display()
-            self.window.ub_matrix_dock.update_training_status(True)
-
-            self.print_to_message_center("Training exercise loaded - hidden orientation and misalignment applied")
-        except ValueError as e:
-            self.print_to_message_center(f"Invalid training hash: {e}")
-        except Exception as e:
-            self.print_to_message_center(f"Failed to load training: {e}")
+        """Load a training exercise: the hidden mount rotation and zero errors
+        go to the truth; the operator's UB starts at the sample as described."""
+        hash_str = self.window.ub_matrix_dock.load_hash_edit.text().strip()
+        if self._load_exercise("training", hash_str):
+            self.print_to_message_center(
+                "Training exercise loaded - hidden orientation and misalignment applied")
 
     def on_clear_training(self):
-        """Clear training exercise, reset orientation and misalignment."""
-        self.window.ub_matrix_dock._loaded_training = None
-        self.ub_matrix.reset_U()
-        self.instrument_state.set_misalignment(mis_omega=0, mis_chi=0)
-        self._update_ub_display()
-        self.window.ub_matrix_dock.update_training_status(False)
-        self.print_to_message_center("Training exercise cleared")
+        """Clear the training exercise: R_hidden = I, zero errors 0."""
+        if self._unload_exercise("training"):
+            self.print_to_message_center("Training exercise cleared")
 
     def on_check_training(self):
         """Check student alignment against loaded training exercise."""
         try:
-            training = self.window.ub_matrix_dock._loaded_training
-            if training is None:
+            if self._exercise is None or self._exercise[0] != "training":
                 self.print_to_message_center("No training exercise loaded")
                 return
 
-            teacher_U, mis_omega, mis_chi = training
+            teacher_U = self.instrument_state.U_true
+            mis_omega = self.instrument_state.mis_omega
+            mis_chi = self.instrument_state.mis_chi
 
             # Get student's current state
             student_U = self.ub_matrix.U
@@ -5876,21 +5944,10 @@ class TAVIController(QObject):
                 # Misalignment hash - decode and apply without revealing values
                 mis_hash = str(parameters.get("misalignment_hash_var", ""))
                 if mis_hash and mis_hash != "None" and mis_hash != "":
-                    self.window.misalignment_dock.load_hash_edit.setText(mis_hash)
-                    # Decode and apply the misalignment to the instrument
                     try:
-                        from gui.docks.misalignment_dock import decode_misalignment
-                        omega_m, chi_m = decode_misalignment(mis_hash)
-                        self.instrument_state.set_misalignment(mis_omega=omega_m, mis_chi=chi_m)
-                        # Store in dock and update UI to show it's loaded
-                        self.window.misalignment_dock._loaded_misalignment = (omega_m, chi_m)
-                        self.window.misalignment_dock.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
-                        self.window.misalignment_dock.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
-                        self.window.misalignment_dock.check_alignment_button.setEnabled(True)
-                        # Update the indicator in the sample dock
-                        self.window.sample_dock.update_misalignment_indicator(True)
+                        self._install_exercise("misalignment", mis_hash)
                         self.print_to_message_center("Misalignment hash restored from saved parameters")
-                    except Exception as e:
+                    except ValueError as e:
                         self.print_to_message_center(f"Failed to restore misalignment: {e}")
                 # Restore sample selection by persisted sample id (default Al Bragg)
                 try:
@@ -5954,18 +6011,13 @@ class TAVIController(QObject):
                                 "Calculate UB to refit it from its peaks.")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore UB matrix: {e}")
-                # Restore UB training hash
+                # Restore UB training hash: the hidden truth only; the
+                # operator's UB stays as saved above.
                 ub_hash = str(parameters.get("ub_training_hash", ""))
                 if ub_hash and ub_hash != "None" and ub_hash != "":
                     try:
-                        self.window.ub_matrix_dock.load_hash_edit.setText(ub_hash)
-                        U, mis_omega, mis_chi = decode_training(ub_hash)
-                        self.window.ub_matrix_dock._loaded_training = (U, mis_omega, mis_chi)
-                        self.ub_matrix.set_U(U)
-                        self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
-                        self._update_ub_display()
-                        self.window.ub_matrix_dock.update_training_status(True)
-                    except Exception as e:
+                        self._install_exercise("training", ub_hash)
+                    except ValueError as e:
                         self.print_to_message_center(
                             f"Failed to restore UB training hash '{ub_hash[:20]}...': {e}"
                         )
@@ -6283,13 +6335,16 @@ class TAVIController(QObject):
             self.descriptor.monitors
         )
         self.current_sample_settings = {}
-        # Reset UB matrix to identity
+        # The truth back to defaults (I3): no exercise (R_hidden = I, zero
+        # errors 0, both hashes), the standard setting, no mounting plane, and
+        # the operator's UB equal to it. Never refused: Defaults is the way
+        # out of any exercise state.
+        self._clear_exercise()
+        self.mount_plane = None
+        self._set_true_mount(U_described=np.eye(3))
         self.ub_matrix = UBMatrix()
-        if hasattr(self.window, 'ub_matrix_dock'):
-            self._update_ub_display()
-            self.window.ub_matrix_dock._loaded_training = None
-            self.window.ub_matrix_dock.update_training_status(False)
-            self._reconnect_peak_signals()
+        self._update_ub_display()
+        self._reconnect_peak_signals()
         # Default sample to Al: Bragg for easy testing
         try:
             self.window.sample_dock.set_sample_by_key("Al_bragg")

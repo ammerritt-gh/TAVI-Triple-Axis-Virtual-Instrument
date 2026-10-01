@@ -96,11 +96,31 @@ the old meaning, and the UB dock marks it. A stage peak saves that triple too,
 computed from its record (`legacy_triple`: the legacy setting of the same Q),
 so a reader that ignores the record fits the same U.
 
+### Truth and belief
+
+Two orientations exist side by side. The **belief** is the operator's: the
+lattice fields and the UB. Every HKL ↔ Q conversion, the stage solver,
+feasibility, the displays and the API read it (it reaches the runtime as the
+instrument state's `sample_mount`). The **truth** is the crystal on the stage:
+`U_true = R_hidden · U_described`, where `U_described` is the sample as
+described (identity, TAVI's standard setting) and `R_hidden` the rotation of a
+loaded UB training exercise (identity otherwise), together with the hidden
+zero errors. Only the McStas sample arm reads the truth. The controller writes
+`U_true` through one setter (`TAVIController._set_true_mount`); Calculate UB, a
+manual UB edit, Reset, a lattice edit, Refine Lattice, every API write and a
+sample selection never touch it, so a fitted UB moves the readouts commanded
+for an HKL, never the simulated crystal. The operator's UB starts equal to
+`U_described` and is reset to it by Reset, by loading or clearing an exercise,
+and by Defaults. One exercise at a time owns the zero errors: loading or
+clearing either exercise (a UB training hash or a Misalignment-dock hash)
+while the other is loaded is refused, naming it; Defaults clears whichever is
+loaded.
+
 ### The McStas sample chain
 
 One Arm, `sample_mount`, at the sample position relative to `sample_arm` (z
 along ki, y up). Its runtime rotation `sample_rx/ry/rz_param` is
-`(R_stage(physical) · U)^T` as McStas Euler angles
+`(R_stage(physical) · U_true)^T` as McStas Euler angles
 (`tavi/orientation.py` `sample_arm_euler`), because for an Arm
 `R_abs(child) = R_rel · R_abs(parent)` and `v_local = R_abs · v_global`. The
 sample component is emitted relative to it with no rotation of its own.
