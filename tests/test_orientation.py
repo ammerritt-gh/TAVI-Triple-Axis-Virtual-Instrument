@@ -160,6 +160,26 @@ def test_legacy_peak_dict_with_positive_stt_fits_correctly(models):
     assert np.allclose(ub.U, U_IN_PLANE, rtol=0.0, atol=1e-9)
 
 
+def test_tilted_legacy_peaks_on_the_positive_sense_fit_back():
+    """Peaks without a stage record, taken on the +1 branch with a nonzero
+    legacy tilt (saz): the fit reads them through the legacy inverse and
+    recovers the tilted U."""
+    u_true = mccode_rotation_matrix(-30, 10, 20)
+    ub = UBMatrix(*LATTICE)
+    saved = []
+    for hkl in [(1, 0, 0), (0, 1, 0), (1, 1, 1)]:
+        q = component_q_to_instrument_q(u_true @ ub.B @ np.array(hkl, dtype=float))
+        a = solve_instrument_angles(q, K, K, sense_sample=1)
+        saved.append({"hkl": list(hkl), "angles": [a.sth, a.saz, a.stt], "ki": K, "kf": K})
+    assert all(d["angles"][2] > 0 for d in saved)
+    assert max(abs(d["angles"][1]) for d in saved) > 5.0
+
+    ub = UBMatrix.from_dict({"lattice": list(LATTICE), "peaks": saved})
+    assert [(p.sense_sample, p.stage) for p in ub.peaks] == [(1, None)] * 3
+    ub.calculate_U_from_peaks()
+    assert np.allclose(ub.U, u_true, rtol=0.0, atol=1e-9)
+
+
 def test_peak_sense_and_stage_round_trip_through_dict():
     peak = ObservedPeak(hkl=(1, 0, 0), angles=(10.0, 0.0, 40.0), ki=K, kf=K,
                         sense_sample=-1, stage={"A3": 10.0})
