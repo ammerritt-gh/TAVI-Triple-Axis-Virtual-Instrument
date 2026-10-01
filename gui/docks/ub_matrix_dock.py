@@ -515,8 +515,10 @@ class UBMatrixDock(BaseDockWidget):
         self.refine_lattice_button.setToolTip("Refine lattice parameters from peak observations")
         calc_layout.addWidget(self.refine_lattice_button)
 
-        self.reset_ub_button = QPushButton("Reset to Identity")
-        self.reset_ub_button.setToolTip("Clear orientation (set U = I)")
+        self.reset_ub_button = QPushButton("Reset to Sample")
+        self.reset_ub_button.setToolTip(
+            "Return the UB to the sample as described (the standard setting or the "
+            "mounting plane); the crystal does not move")
         calc_layout.addWidget(self.reset_ub_button)
 
         main_layout.addWidget(calc_group)
