@@ -533,7 +533,7 @@ class UBMatrix:
         self._UB = UB.copy()
 
     def reset_U(self):
-        """Reset U to identity (no orientation)."""
+        """Set U to identity, TAVI's standard setting."""
         self._U = np.eye(3)
         self._UB = self._U @ self._B
 
