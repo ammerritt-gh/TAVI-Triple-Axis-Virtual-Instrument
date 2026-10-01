@@ -2000,23 +2000,26 @@ def test_after_a_wrong_fit_two_hidden_truths_look_identical(controller, messages
                 "widgets": _widget_texts(window, skip)}
 
     replays, truths = [], []
-    for hash_str in ACCEPTANCE_HASHES:
-        _cold_start(controller)
-        messages.clear()
-        _load_training_by_hand(controller, hash_str)
-        gonio = [ax.name for ax in controller.instrument_state.goniometer]
-        for index, (hkl, a3) in enumerate((((2, 0, 0), 35.6251), ((2, 2, 0), 125.6251))):
-            peak = dock.get_peak_widget(index)
-            readouts = {"A3": a3, "sgl": 0.0, "sgu": 0.0}
-            for edit, value in zip((peak.h_edit, peak.k_edit, peak.l_edit, *peak.axis_edits,
-                                    peak.stt_edit, peak.ki_edit, peak.kf_edit),
-                                   (*hkl, *(readouts[name] for name in gonio), 71.25, 2.662, 2.662)):
-                _type(edit, str(value))
-        before = observe()
-        dock.calculate_ub_button.click()
-        assert _flagged_rows(dock.residual_table)                  # the wrong fit, flagged
-        replays.append((before, observe(), list(messages)))
-        truths.append(controller.instrument_state.U_true.copy())
-    assert not np.allclose(truths[0], truths[1])
-    assert replays[0] == replays[1]
-    controller.set_default_parameters()
+    try:
+        for hash_str in ACCEPTANCE_HASHES:
+            _cold_start(controller)
+            messages.clear()
+            _load_training_by_hand(controller, hash_str)
+            gonio = [ax.name for ax in controller.instrument_state.goniometer]
+            for index, (hkl, a3) in enumerate((((2, 0, 0), 35.6251), ((2, 2, 0), 125.6251))):
+                peak = dock.get_peak_widget(index)
+                readouts = {"A3": a3, "sgl": 0.0, "sgu": 0.0}
+                for edit, value in zip((peak.h_edit, peak.k_edit, peak.l_edit, *peak.axis_edits,
+                                        peak.stt_edit, peak.ki_edit, peak.kf_edit),
+                                       (*hkl, *(readouts[name] for name in gonio),
+                                        71.25, 2.662, 2.662)):
+                    _type(edit, str(value))
+            before = observe()
+            dock.calculate_ub_button.click()
+            assert _flagged_rows(dock.residual_table)              # the wrong fit, flagged
+            replays.append((before, observe(), list(messages)))
+            truths.append(controller.instrument_state.U_true.copy())
+        assert not np.allclose(truths[0], truths[1])
+        assert replays[0] == replays[1]
+    finally:
+        controller.set_default_parameters()
