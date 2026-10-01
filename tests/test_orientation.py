@@ -1073,3 +1073,131 @@ def test_engine_hkl_is_the_emitted_arm_on_lab_q_and_ignores_the_ub(tmp_path, mod
         found.append(hkl)
     if mode != "rlu":
         assert np.array_equal(found[0], found[1])
+
+
+# --- Unit 2 (C5): training graded on the truth --------------------------------------
+
+STANDARD_REFLECTIONS = [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
+# The same physical geometry on both senses: PUMA is -1, IN8 +1.
+SENSES = [("puma", -1), ("in8", 1)]
+
+
+def _true_peak(gonio, sense, hkl, u_true, b_true, corrections, zero_errors, k=K):
+    """A peak taken where the true crystal diffracts: the physical setting
+    that puts the true reflection on the lab Q, recorded as readouts
+    (physical - correction - zero error) with the corrections in force."""
+    q = u_true @ b_true @ np.array(hkl, dtype=float)
+    stt = stt_from_q_norm(float(np.linalg.norm(q)), k, k, sense)
+    physical = solve_stage(gonio, -q if sense > 0 else q, lab_q_from_stt(k, k, stt))
+    readouts = {name: angle - corrections.get(name, 0.0) - zero_errors.get(name, 0.0)
+                for name, angle in physical.items()}
+    record = stage_record(gonio, readouts, corrections=corrections, ki=k, kf=k, sense=sense)
+    return ObservedPeak(hkl=tuple(hkl), angles=(readouts["A3"], readouts["sgl"], stt),
+                        ki=k, kf=k, stage=record)
+
+
+def _fit_and_grade(gonio, sense, u_true, zero_errors, corrections, peak_hkls,
+                   turn_ub=np.eye(3)):
+    """The operator fits a UB from peaks taken on the true crystal (lattice
+    fields right), optionally turns it, and is graded on those peaks plus the
+    standard-setting reflections."""
+    from tavi.ub_matrix import grade_alignment
+
+    ub = UBMatrix(*LATTICE)
+    ub.peaks = [_true_peak(gonio, sense, hkl, u_true, CUBIC_B, corrections, zero_errors)
+                for hkl in peak_hkls]
+    ub.calculate_U_from_peaks(corrections)
+    return grade_alignment(gonio, sense, K, K, turn_ub @ ub.UB, corrections, u_true, CUBIC_B,
+                           zero_errors, list(peak_hkls) + STANDARD_REFLECTIONS)
+
+
+@pytest.mark.parametrize("psi", [0.0, -3.0], ids=["fit-absorbs", "psi-corrects"])
+@pytest.mark.parametrize(("name", "sense"), SENSES, ids=[n for n, _ in SENSES])
+def test_a_fit_on_the_true_crystal_grades_aligned(models, name, sense, psi):
+    """A hidden 3 deg turntable zero error: a fit with psi = 0 absorbs it,
+    psi = -3 corrects it; both command the true reflections (aligned). The
+    grade compares settings, not U with U or psi with the zero error."""
+    grade = _fit_and_grade(models[name].goniometer, sense, U_IN_PLANE, {"A3": 3.0},
+                           {"A3": psi}, PEAKS_2)
+    assert grade["status"] == "aligned", grade
+    assert grade["worst_miss"] < 1e-6
+
+
+@pytest.mark.parametrize(("name", "sense"), SENSES, ids=[n for n, _ in SENSES])
+def test_a_ub_five_degrees_off_grades_way_off(models, name, sense):
+    grade = _fit_and_grade(models[name].goniometer, sense, U_IN_PLANE, {"A3": 3.0},
+                           {"A3": 0.0}, PEAKS_2, turn_ub=_rot((0, 1, 0), 5.0))
+    assert grade["status"] == "way_off", grade
+    assert grade["worst_miss"] == pytest.approx(5.0, abs=1e-6)
+
+
+def test_an_exact_u_on_lattice_fields_two_percent_off_grades_by_its_two_theta_miss(models):
+    from tavi.ub_matrix import grade_alignment
+
+    gonio = models["in8"].goniometer
+    b_fields = reciprocal_basis_tas(*(1.02 * x for x in LATTICE[:3]), *LATTICE[3:])
+    grade = grade_alignment(gonio, 1, K, K, U_IN_PLANE @ b_fields, {}, U_IN_PLANE, CUBIC_B,
+                            {}, STANDARD_REFLECTIONS)
+
+    def stt(b, hkl):
+        return stt_from_q_norm(float(np.linalg.norm(b @ np.array(hkl, dtype=float))), K, K, 1)
+
+    assert grade["worst_hkl"] == (1, 1, 0)
+    assert grade["worst_miss"] == pytest.approx(
+        abs(stt(CUBIC_B, (1, 1, 0)) - stt(b_fields, (1, 1, 0))), abs=1e-9)
+    assert grade["status"] == "close" and 0.5 < grade["worst_miss"] <= 2.0, grade
+
+
+def test_a_reflection_whose_true_q_closes_no_triangle_grades_way_off(models):
+    """The lattice fields (a = 4.6) reach (2 2 0) at k = 2; the true crystal's
+    (2 2 0), |Q| = 4.39, closes no triangle there (|Q| <= 2k = 4)."""
+    from tavi.ub_matrix import grade_alignment
+
+    b_fields = reciprocal_basis_tas(4.6, 4.6, 4.6, 90.0, 90.0, 90.0)
+    grade = grade_alignment(models["in8"].goniometer, 1, K, K, b_fields, {}, np.eye(3),
+                            CUBIC_B, {}, STANDARD_REFLECTIONS + [(2, 2, 0)])
+    assert grade["status"] == "way_off" and grade["worst_hkl"] == (2, 2, 0), grade
+    assert grade["worst_miss"] == math.inf
+    assert "(2 2 0) closes no scattering triangle" in grade["summary"]
+
+
+@pytest.mark.parametrize("cancelling", [True, False], ids=["cancelling", "residual"])
+def test_tilted_truth_grades_by_what_the_fit_leaves(models, cancelling):
+    """Under tilted arcs a correction is absorbed exactly only when it cancels
+    the zero error (amendment 3c): then aligned; otherwise the grade is the
+    least-squares fit's residual miss, smaller than the offsets themselves."""
+    gonio = models["in8"].goniometer
+    u_true = _rot((2, 0, -1), 8.0) @ U_IN_PLANE
+    zero_errors = {"A3": 3.0, "sgl": 2.0}
+    corrections = {"A3": -3.0, "sgl": -2.0} if cancelling else {}
+    peaks = [(1, 0, 0), (0, 1, 0), (1, 1, 0), (2, 1, 0)]
+    for hkl in peaks:                                # the peaks need the arcs
+        q = u_true @ CUBIC_B @ np.array(hkl, dtype=float)
+        assert abs(q[1]) / np.linalg.norm(q) > math.sin(math.radians(1.0))
+    grade = _fit_and_grade(gonio, 1, u_true, zero_errors, corrections, peaks)
+    if cancelling:
+        assert grade["status"] == "aligned" and grade["worst_miss"] < 1e-6, grade
+    else:
+        assert 0.05 < grade["worst_miss"] < math.hypot(3.0, 2.0), grade
+        band = "aligned" if grade["worst_miss"] <= 0.5 else (
+            "close" if grade["worst_miss"] <= 2.0 else "way_off")
+        assert grade["status"] == band
+
+
+def test_too_few_reachable_reflections_or_no_sample_cannot_be_assessed(models):
+    """At k = 1 (|Q| <= 2) a belief with a = 3, b = 5 reaches only (0 1 0) of
+    the standard reflections: one direction grades nothing. No sample: no
+    crystal to grade against."""
+    from tavi.ub_matrix import grade_alignment
+
+    gonio = models["in8"].goniometer
+    b_fields = reciprocal_basis_tas(3.0, 5.0, 4.05, 90.0, 90.0, 90.0)
+    grade = grade_alignment(gonio, 1, 1.0, 1.0, b_fields, {}, np.eye(3), CUBIC_B, {},
+                            STANDARD_REFLECTIONS)
+    assert grade["status"] == "cannot_assess", grade
+    assert "fewer than two" in grade["summary"]
+    assert [s.split(":")[0] for s in grade["skipped"]] == ["(1 0 0)", "(1 1 0)"]
+
+    grade = grade_alignment(gonio, 1, K, K, CUBIC_B, {}, np.eye(3), None, {},
+                            STANDARD_REFLECTIONS)
+    assert grade["status"] == "cannot_assess" and "no sample" in grade["summary"]

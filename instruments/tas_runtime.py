@@ -216,7 +216,7 @@ class TAS_Instrument:
         # The truth: the crystal's real mount, U_true = R_hidden @ U_described
         # (docs/INSTRUMENT_LAYOUT.md "Truth and belief"). Hidden like the zero
         # errors; written only by the controller's one setter, read only by
-        # the McStas sample arm and the analytic engine.
+        # the McStas sample arm, the analytic engine and training grading.
         self.U_true = np.eye(3)
         # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
         # point by _solve_point_geometry on its private copy of the state, so

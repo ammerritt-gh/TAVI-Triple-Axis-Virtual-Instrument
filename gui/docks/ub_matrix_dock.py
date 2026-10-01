@@ -583,17 +583,10 @@ class UBMatrixDock(BaseDockWidget):
         self.check_training_button.setEnabled(False)
         training_layout.addWidget(self.check_training_button)
 
-        self.check_orientation_label = QLabel("Orientation: --")
-        self.check_orientation_label.setStyleSheet("font-size: 11px;")
-        training_layout.addWidget(self.check_orientation_label)
-
-        self.check_in_plane_label = QLabel("In-plane (\u03c8\u2192\u03c9): --")
-        self.check_in_plane_label.setStyleSheet("font-size: 11px;")
-        training_layout.addWidget(self.check_in_plane_label)
-
-        self.check_out_of_plane_label = QLabel("Out-of-plane (\u03ba\u2192sgl): --")
-        self.check_out_of_plane_label.setStyleSheet("font-size: 11px;")
-        training_layout.addWidget(self.check_out_of_plane_label)
+        self.check_miss_label = QLabel("Worst miss: --")
+        self.check_miss_label.setStyleSheet("font-size: 11px;")
+        self.check_miss_label.setWordWrap(True)
+        training_layout.addWidget(self.check_miss_label)
 
         self.check_overall_label = QLabel("Overall: --")
         self.check_overall_label.setStyleSheet("font-weight: bold; font-size: 12px;")
@@ -795,48 +788,29 @@ class UBMatrixDock(BaseDockWidget):
             self.training_status_label.setStyleSheet("color: gray; font-size: 11px;")
             self.check_training_button.setEnabled(False)
             # Clear check results
-            self.check_orientation_label.setText("Orientation: --")
-            self.check_in_plane_label.setText("In-plane (\u03c8\u2192\u03c9): --")
-            self.check_out_of_plane_label.setText("Out-of-plane (\u03ba\u2192sgl): --")
+            self.check_miss_label.setText("Worst miss: --")
+            self.check_miss_label.setStyleSheet("font-size: 11px;")
             self.check_overall_label.setText("Overall: --")
 
     def update_check_results(self, results: dict):
-        """Update alignment check result labels."""
+        """Show a grade from ``tavi.ub_matrix.grade_alignment``: the worst
+        miss and its HKL, and the overall status."""
         status_colors = {
             'aligned': 'green',
             'close': '#FF8C00',
             'way_off': 'red',
         }
 
-        ori = results.get('orientation', 'way_off')
-        self.check_orientation_label.setText(
-            f"Orientation: {results.get('orientation_hint', '--')}"
+        overall = results.get('status', 'way_off')
+        self.check_miss_label.setText(results.get('summary', '--'))
+        self.check_miss_label.setStyleSheet(
+            f"color: {status_colors.get(overall, 'gray')}; font-size: 11px;"
         )
-        self.check_orientation_label.setStyleSheet(
-            f"color: {status_colors.get(ori, 'gray')}; font-size: 11px;"
-        )
-
-        inp = results.get('in_plane', 'way_off')
-        self.check_in_plane_label.setText(
-            f"In-plane (\u03c8\u2192\u03c9): {results.get('in_plane_hint', '--')}"
-        )
-        self.check_in_plane_label.setStyleSheet(
-            f"color: {status_colors.get(inp, 'gray')}; font-size: 11px;"
-        )
-
-        oop = results.get('out_of_plane', 'way_off')
-        self.check_out_of_plane_label.setText(
-            f"Out-of-plane (\u03ba\u2192sgl): {results.get('out_of_plane_hint', '--')}"
-        )
-        self.check_out_of_plane_label.setStyleSheet(
-            f"color: {status_colors.get(oop, 'gray')}; font-size: 11px;"
-        )
-
-        overall = results.get('overall', 'way_off')
         overall_text = {
             'aligned': '\u2705 Fully Aligned!',
             'close': '\U0001f7e1 Getting Close...',
             'way_off': '\u274c Not Yet Aligned',
+            'cannot_assess': 'Cannot assess',
         }
         self.check_overall_label.setText(f"Overall: {overall_text.get(overall, '--')}")
         self.check_overall_label.setStyleSheet(

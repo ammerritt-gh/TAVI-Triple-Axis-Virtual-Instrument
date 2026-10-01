@@ -107,8 +107,9 @@ described (identity, TAVI's standard setting, or the optional mounting plane:
 `tavi/ub_matrix.py` `u_from_plane` built on the selected sample's own lattice,
 never the lattice fields) and `R_hidden` the rotation of a
 loaded UB training exercise (identity otherwise), together with the hidden
-zero errors. Only the McStas sample arm and the analytic engine's per-point
-HKL (`docs/ANALYTIC_ENGINE.md` *Where the crystal is*) read the truth. The controller writes
+zero errors. Only the McStas sample arm, the analytic engine's per-point
+HKL (`docs/ANALYTIC_ENGINE.md` *Where the crystal is*) and training grading
+(`tavi/ub_matrix.py` `grade_alignment`) read the truth. The controller writes
 `U_true` through one setter (`TAVIController._set_true_mount`); Calculate UB, a
 manual UB edit, Reset, a lattice edit, Refine Lattice, every API write and a
 sample selection never touch it, so a fitted UB moves the readouts commanded
