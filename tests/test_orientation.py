@@ -21,6 +21,7 @@ from tavi.orientation import (
     StageUnreachable,
     check_travel,
     lock_plane,
+    q_mount_from_stage,
     sample_arm_euler,
     solve_stage,
     stage_record,
@@ -492,21 +493,41 @@ EULER = (StageAxis("omega", (0.0, 1.0, 0.0)), StageAxis("chi", (0.0, 0.0, 1.0)),
          StageAxis("phi", (0.0, 1.0, 0.0)))
 
 
-@pytest.mark.parametrize("q", [
-    (0.0, 3.0, 0.0),                    # vertical: needs chi = +/-90 deg
-    (0.0, -2.2, 0.0),
-    (1.0, 2.0, -0.5),
-    (-1.3, -0.4, 2.1),
-], ids=["up", "down", "tilted-a", "tilted-b"])
-def test_eulerian_cradle_description_round_trips(q):
-    q = np.array(q)
-    stt = stt_from_q_norm(float(np.linalg.norm(q)), K_RT, K_RT, -1)
-    q_lab = lab_q_from_stt(K_RT, K_RT, stt)
-    angles = solve_stage(EULER, q, q_lab)
-    v_lab = _mcstas_lab_vector(_stage_chain(EULER, angles, np.eye(3)), q)
-    assert np.linalg.norm(v_lab - q_lab) < 1e-9 * np.linalg.norm(q_lab)
-    if q[0] == q[2] == 0.0:
-        assert abs(angles["chi"]) == pytest.approx(90.0, abs=1e-9)
+@pytest.mark.parametrize("sense", [-1, 1])
+def test_eulerian_cradle_description_round_trips(sense):
+    """The TAS round trip on a cradle description: a non-identity U, both
+    senses, the independent McStas composition and the emitted single arm
+    (``sample_arm_euler``), the readback, and the fit back to U. Two of the
+    reflections are made vertical in the mount frame (U B hkl along +/-y), so
+    they need chi = +/-90 deg and reach the Euler emission there."""
+    sign = -1.0 if sense > 0 else 1.0          # D2: +1 puts -U B hkl on Q_lab
+    U = _rot((1, 2, 3), 17.0)
+    B = CUBIC_B
+    vertical = [np.linalg.solve(B, U.T @ np.array([0.0, s, 0.0])) for s in (3.0, -2.2)]
+    hkls = [np.array(h, dtype=float) for h in ((1, 0, 0), (0, 1, 1), (1, -1, 2))] + vertical
+    peaks = []
+    for index, hkl in enumerate(hkls):
+        q_mount = U @ B @ hkl
+        stt = stt_from_q_norm(float(np.linalg.norm(q_mount)), K_RT, K_RT, sense)
+        q_lab = lab_q_from_stt(K_RT, K_RT, stt)
+        angles = solve_stage(EULER, sign * q_mount, q_lab)
+        if index >= 3:
+            assert abs(angles["chi"]) == pytest.approx(90.0, abs=1e-9)
+
+        v_lab = _mcstas_lab_vector(_stage_chain(EULER, angles, U), B @ hkl)
+        assert np.linalg.norm(v_lab - sign * q_lab) < 1e-9 * np.linalg.norm(q_lab)
+        arm = mccode_rotation_matrix(*sample_arm_euler(EULER, angles, U))
+        v_emit = _mcstas_lab_vector([arm], B @ hkl)
+        assert np.linalg.norm(v_emit - sign * q_lab) < 1e-9 * np.linalg.norm(q_lab)
+        assert np.allclose(q_mount_from_stage(EULER, angles, stt, K_RT, K_RT, sense),
+                           q_mount, rtol=0.0, atol=1e-9)
+
+        peaks.append(ObservedPeak(hkl=tuple(hkl), angles=(0.0, 0.0, stt), ki=K_RT, kf=K_RT,
+                                  stage=stage_record(EULER, angles, sense=sense)))
+    ub = UBMatrix(*LATTICE)
+    ub.peaks = peaks
+    ub.calculate_U_from_peaks()
+    assert np.allclose(ub.U, U, rtol=0.0, atol=1e-9)
 
 
 # --- McStas Euler emission at the gimbal ------------------------------------------
