@@ -220,6 +220,21 @@ def _travel_refusal(ax, angle, purpose=""):
     return f"{ax.name} needs {angle:.4g}°{purpose} but its travel is {_travel_text(ax)}"
 
 
+def plane_text(plane):
+    """'(1 0 0)/(0 1 0)' for a plane given by two (h k l) vectors."""
+    return "/".join("(" + " ".join(f"{float(x):g}" for x in hkl) + ")" for hkl in plane)
+
+
+def locked_plane_text(tilts, plane=None):
+    """The one wording of a locked scattering plane, for every refusal that
+    names it: 'the locked scattering plane (1 0 0)/(0 1 0) (sgl = 1.2°,
+    sgu = 0°)'. ``tilts`` is {inner axis: degrees}; ``plane`` the two (h k l)
+    vectors, when known."""
+    fixed = ", ".join(f"{name} = {float(value):.4g}°" for name, value in tilts.items())
+    named = f" {plane_text(plane)}" if plane is not None else ""
+    return f"the locked scattering plane{named} ({fixed})"
+
+
 def check_travel(gonio, angles, purpose=""):
     """Raise ``StageUnreachable`` for the first axis of ``gonio`` whose angle
     in ``angles`` ({name: degrees}) is not finite or lies outside its travel.
@@ -357,7 +372,7 @@ def _turntable(turntable, q_level, q_lab):
     raise StageUnreachable(_travel_refusal(turntable, angle))
 
 
-def solve_stage(gonio, q_mount, q_lab, locked=None):
+def solve_stage(gonio, q_mount, q_lab, locked=None, plane=None):
     """Readouts that carry ``q_mount`` onto ``q_lab``: ``R_stage @ q_mount = q_lab``.
 
     ``q_mount`` is the already-signed mount-frame vector (module docstring),
@@ -368,7 +383,8 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
     tilt (sum of squared inner-axis angles) inside travel, then the turntable
     turns it onto ``q_lab``. The choice is a function of the point alone.
     Locked mode (``locked`` = {inner name: degrees}): the tilts never move;
-    a Q they leave out of the horizontal plane is refused with its angle. A
+    a Q they leave out of the horizontal plane is refused with its angle and
+    the plane (``plane``, its two (h k l) vectors, named when given). A
     lock that misses an inner axis, names one the stage lacks, or sets a
     tilt past travel is refused too.
 
@@ -412,10 +428,8 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
         q_level = stage_rotation(inner, tilts) @ q_mount
         out = math.degrees(math.asin(max(-1.0, min(1.0, (up @ q_level - target) / scale))))
         if abs(out) > LOCKED_PLANE_TOLERANCE_DEG:
-            fixed = ", ".join(f"{name} = {value:.4g}°" for name, value in tilts.items())
             raise StageUnreachable(
-                f"Q is {out:+.4g}° out of the locked scattering plane ({fixed})"
-            )
+                f"Q is {out:+.4g}° out of {locked_plane_text(tilts, plane)}")
         return {turntable.name: _turntable(turntable, q_level, q_lab), **tilts}
 
     if abs(up @ q_mount - target) <= 1e-12 * scale and all(

@@ -845,6 +845,100 @@ def test_lock_plane_past_travel_is_refused_in_the_shared_words():
         "sgl needs -30° to bring the plane horizontal but its travel is [-20, 20]°")
 
 
+# --- Unit 2 (C6): a locked plane in the runtime ---------------------------------------
+
+PLANE_001 = ((1, 0, 0), (0, 1, 0))
+
+
+def _locked_in12(u):
+    """An IN12 scan config whose operator UB has U = ``u`` and whose
+    ``plane_lock`` holds (1 0 0)/(0 1 0) where that UB levels it."""
+    plugin, config = _plugin_config(_in12_vals())
+    config.sample_mount = SampleMount.from_lattice_tas(*LATTICE, R_mount=u)
+    tilts = lock_plane(config.goniometer, config.sample_mount.mounted_basis, *PLANE_001)
+    config.plane_lock = {"hkl_u": list(PLANE_001[0]), "hkl_v": list(PLANE_001[1]),
+                         "tilts": tilts, "kappa": 0.0}
+    return plugin, config
+
+
+def _rlu_point(hkl):
+    return [*hkl, 0.0, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0, 0.0, 0.0]
+
+
+def test_a_lock_refuses_an_out_of_plane_point_naming_the_plane_and_the_angle(tmp_path):
+    """Feasibility (the path the GUI count, the masks, the API preflight and
+    the run share) refuses (1 0 1) under a (1 0 0)/(0 1 0) lock with the
+    plane and the angle Q leaves it by; an in-plane point runs at the lock."""
+    from instruments.tas_runtime import check_point_feasibility
+    from tavi.orientation import locked_plane_text
+
+    plugin, config = _locked_in12(_rot((1, 0, 0), 3.0) @ _rot((0, 0, 1), -2.0))
+    tilts = config.plane_lock["tilts"]
+    assert max(abs(v) for v in tilts.values()) > 1.0
+
+    q = config.sample_mount.mounted_basis @ np.array([1.0, 0.0, 1.0])
+    signed = -q if config.sense_sample > 0 else q
+    up = np.asarray(config.goniometer[0].axis, dtype=float)
+    out = math.degrees(math.asin(up @ stage_rotation(config.goniometer[1:], tilts) @ signed
+                                 / np.linalg.norm(q)))
+    feasible, reason = check_point_feasibility(config, "rlu", _rlu_point((1, 0, 1)), _in12_vals())
+    assert not feasible
+    assert reason == f"Q is {out:+.4g}° out of " + locked_plane_text(tilts, PLANE_001)
+
+    snapshot = plugin.compute_snapshot((_rlu_point((2, 1, 0)), 0), 0, "rlu", config,
+                                       _in12_vals(), str(tmp_path))
+    assert snapshot.error_flags == []
+    assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (tilts["sgl"], tilts["sgu"])
+
+
+def test_an_in_plane_scan_in_locked_mode_matches_free_mode(tmp_path):
+    """With the UB level, free mode needs no tilt for an in-plane point, and
+    locked mode, holding the same zero tilts, gives the same A1-A4."""
+    plugin, config = _locked_in12(np.eye(3))
+    assert config.plane_lock["tilts"] == pytest.approx({"sgl": 0.0, "sgu": 0.0}, abs=1e-12)
+    free = copy.deepcopy(config)
+    free.plane_lock = None
+    for hkl in ((2, 0, 0), (1, 1, 0), (1, 2, 0)):
+        locked_md, free_md = (
+            plugin.compute_snapshot((_rlu_point(hkl), 0), 0, "rlu", state, _in12_vals(),
+                                    str(tmp_path)).metadata for state in (config, free))
+        for key in ("mtt", "stt", "sth", "att", "sgl", "sgu"):
+            assert locked_md[key] == pytest.approx(free_md[key], abs=1e-9), (hkl, key)
+
+
+def test_an_angle_mode_point_runs_at_the_lock_or_is_refused(tmp_path):
+    """Angle mode under a lock: arc slots that match the lock (to the GUI
+    fields' four-decimal rounding) run at the lock's exact tilts; a slot that
+    differs is refused by feasibility, before anything runs."""
+    from instruments import tas_runtime
+    from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
+    from tavi.orientation import locked_plane_text
+
+    plugin, config = _locked_in12(_rot((1, 0, 0), 3.0) @ _rot((0, 0, 1), -2.0))
+    tilts = config.plane_lock["tilts"]
+    angles, flags = copy.deepcopy(config).calculate_stage_angles(
+        2.0, 0.0, 0.0, 0.0, IN12_E, "Kf Fixed", "pg002", "pg002")
+    assert flags == []
+
+    def point(sgl, sgu):
+        scan_point = [0.0] * SCAN_POINT_LENGTH
+        scan_point[:8] = [angles[0], angles[1], angles[2], angles[4], 3.84, 0.84, 1.98, 1.40]
+        scan_point[SLOT_SGL], scan_point[SLOT_SGU] = sgl, sgu
+        return scan_point
+
+    shown = (round(tilts["sgl"], 4), round(tilts["sgu"], 4))
+    snapshot = plugin.compute_snapshot((point(*shown), 0), 0, "angle", config,
+                                       _in12_vals(), str(tmp_path))
+    assert snapshot.error_flags == []
+    assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (tilts["sgl"], tilts["sgu"])
+
+    feasible, reason = tas_runtime.check_point_feasibility(
+        config, "angle", point(shown[0] + 0.5, shown[1]), _in12_vals())
+    assert not feasible
+    assert reason == (f"sgl = {shown[0] + 0.5:.4g}° is not a tilt of "
+                      + locked_plane_text(tilts, PLANE_001))
+
+
 # --- corrections and zero errors reach McStas as axis rotations -------------------
 
 @pytest.mark.parametrize(("field", "axis_name"), [

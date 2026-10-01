@@ -1126,3 +1126,86 @@ def test_two_hidden_truths_leave_the_gui_and_the_api_identical(controller, messa
                                    sort_keys=True, default=str))
     assert metadata[0] == metadata[1]
     controller.on_clear_training()
+
+
+# --- Unit 2 (C6): a locked plane in the runtime -------------------------------------
+
+PLANE_H0H = ((1, 0, 1), (0, 1, 0))          # h = l: the arcs tilt to hold it
+
+
+def _lock(controller, plane):
+    """Lock ``plane`` where the operator's UB levels it; return the tilts."""
+    from tavi.orientation import lock_plane
+
+    state = controller.instrument_state
+    mounted = controller._build_sample_mount(controller.get_gui_values()).mounted_basis
+    tilts = lock_plane(state.goniometer, mounted, *plane)
+    state.plane_lock = {"hkl_u": list(plane[0]), "hkl_v": list(plane[1]), "tilts": tilts,
+                        "kappa": 0.0}
+    idock = controller.window.instrument_dock
+    idock.sgl_edit.setText(cm.format_editable_number(tilts["sgl"]))
+    idock.sgu_edit.setText(cm.format_editable_number(tilts["sgu"]))
+    return tilts
+
+
+def _set_hkl(controller, h, k, l):
+    sdock = controller.window.scattering_dock
+    for edit, value in zip((sdock.H_edit, sdock.K_edit, sdock.L_edit), (h, k, l)):
+        edit.setText(repr(float(value)))
+    controller.on_HKL_changed()
+
+
+def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tmp_path):
+    """Under a (1 0 1)/(0 1 0) lock: /validate refuses the out-of-plane points
+    naming the plane and the angle, the GUI count agrees; a three-point
+    in-plane rlu scan built through the API path and through the GUI Run
+    path runs every point at the lock's tilts; sgl and kappa scans are
+    refused naming the lock; an out-of-plane HKL edit moves no readout and
+    leaves the lock as it was."""
+    controller.set_default_parameters()
+    state, idock = controller.instrument_state, controller.window.instrument_dock
+    sim = controller.window.simulation_dock
+    try:
+        tilts = _lock(controller, PLANE_H0H)
+        assert abs(tilts["sgl"]) + abs(tilts["sgu"]) > 10.0
+        _set_hkl(controller, 1, 0, 1)
+        backend = cm.TaviApiBackend(controller, _SyncBridge())
+
+        result = backend.submit_validate({"parameters": {
+            "scan_command1": "H 0.9 1.1 0.1", "K": 0.0, "L": 1.0}})
+        assert [e["index"] for e in result["infeasible"]] == [0, 2], result["infeasible"]
+        for entry in result["infeasible"]:
+            assert "° out of the locked scattering plane (1 0 1)/(0 1 0) (sgl = " in entry["reason"]
+        assert controller._count_valid_scan_points("H 0.9 1.1 0.1", "") == (1, 2)
+
+        api = controller.build_api_launch_state(
+            {"scan_command1": "K -0.1 0.1 0.1", "H": 1.0, "K": 0.0, "L": 1.0})
+        sim.scan_command_1_edit.setText("K -0.1 0.1 0.1")
+        gui = controller._collect_simulation_launch_state()
+        arcs = []
+        for launch in (api, gui):
+            template = controller._build_scan_point_template("rlu", launch["vals"])
+            for index, k in enumerate((-0.1, 0.0, 0.1)):
+                point = template[:]
+                point[controller._SCAN_VARIABLE_TO_INDEX["K"]] = k
+                metadata = controller.instrument.compute_snapshot(
+                    (point, index), index, "rlu", launch["scan_config"], launch["vals"],
+                    str(tmp_path)).metadata
+                arcs.append((metadata["sgl"], metadata["sgu"]))
+        assert arcs == [(tilts["sgl"], tilts["sgu"])] * 6
+        assert controller._count_valid_scan_points("K -0.1 0.1 0.1", "") == (3, 0)
+
+        for variable in ("sgl", "kappa"):
+            hard, _soft = controller._scan_command_issues(f"{variable} 0 1 1", "")
+            assert len(hard) == 1 and "locked scattering plane (1 0 1)/(0 1 0)" in hard[0], hard
+
+        readouts = [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)]
+        lock = json.dumps(state.plane_lock)
+        _set_hkl(controller, 1, 0, 0)
+        assert [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)] == readouts
+        assert json.dumps(state.plane_lock) == lock
+        assert "out of the locked scattering plane" in controller._angles_stale
+    finally:
+        state.plane_lock = None
+        sim.scan_command_1_edit.setText("")
+        controller.set_default_parameters()

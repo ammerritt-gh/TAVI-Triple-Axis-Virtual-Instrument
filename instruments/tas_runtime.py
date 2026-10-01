@@ -25,8 +25,10 @@ from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.orientation import (
+    LOCKED_PLANE_TOLERANCE_DEG,
     StageUnreachable,
     check_travel,
+    locked_plane_text,
     q_mount_from_stage,
     sample_arm_euler,
     solve_stage,
@@ -218,6 +220,12 @@ class TAS_Instrument:
         # errors; written only by the controller's one setter, read only by
         # the McStas sample arm, the analytic engine and training grading.
         self.U_true = np.eye(3)
+        # The locked scattering plane (operator state; rides the deep copy into
+        # every scan config): None in free mode, else {"hkl_u": [h, k, l],
+        # "hkl_v": [h, k, l], "tilts": {inner axis: degrees}, "kappa": deg},
+        # the tilts being readouts that never move while locked and kappa the
+        # lower-arc correction frozen with them.
+        self.plane_lock = None
         # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
         # point by _solve_point_geometry on its private copy of the state, so
         # the recorded energies, the transfer and the source parameter all read
@@ -819,13 +827,15 @@ class TAS_Instrument:
             qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris)
         return angles[:5], error_flags
 
-    def calculate_stage_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris):
+    def calculate_stage_angles(self, qx, qy, qz, deltaE, fixed_E, K_fixed, monocris, anacris,
+                               locked=None):
         """``[mtt, stt, A3, sgl, att, sgu]`` and error flags for a mount-frame Q
         (instrument convention) and energy transfer.
 
         The sample stage is solved by ``tavi.orientation.solve_stage`` on this
         instrument's goniometer: readouts that put the per-sense ``-/+ U B hkl``
-        on the lab scattering vector with the smallest arc tilt inside travel.
+        on the lab scattering vector with the smallest arc tilt inside travel,
+        or, given ``locked`` (a ``plane_lock``), at the lock's tilts.
         A stage that cannot reach the point adds a ``"stage: <reason>"`` flag,
         so every refusal path reports the solver's own words.
         """
@@ -911,7 +921,10 @@ class TAS_Instrument:
             # vTAS Friedel convention: the +1 branch aligns -U B hkl with Q_lab.
             signed = -q_mount if self.sense_sample > 0 else q_mount
             try:
-                stage = solve_stage(self.goniometer, signed, lab_q_from_stt(ki, kf, stt))
+                stage = solve_stage(
+                    self.goniometer, signed, lab_q_from_stt(ki, kf, stt),
+                    locked=None if locked is None else locked["tilts"],
+                    plane=None if locked is None else (locked["hkl_u"], locked["hkl_v"]))
             except StageUnreachable as exc:
                 print(f"\nSample stage cannot reach this Q: {exc}")
                 error_flags.append(STAGE_FLAG_PREFIX + str(exc))
@@ -1057,9 +1070,11 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
             qx, qy, qz = component_q_to_instrument_q(np.array(q_component, dtype=float))
         else:
             qx, qy, qz, deltaE = scans[:4]
+        # A locked plane holds the tilts: one refusal path for feasibility,
+        # the GUI count and masks, the API preflight and the run.
         angles_array, error_flags = point_state.calculate_stage_angles(
             qx, qy, qz, deltaE, point_state.fixed_E, point_state.K_fixed,
-            point_state.monocris, point_state.anacris
+            point_state.monocris, point_state.anacris, locked=point_state.plane_lock,
         )
         if not error_flags:
             mtt, stt, sth, sgl, att, sgu = angles_array
@@ -1079,6 +1094,18 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         # The operator sets the arcs here, through their scan slots.
         sgl = float(scans[SLOT_SGL])
         sgu = float(scans[SLOT_SGU]) if len(scans) > SLOT_SGU else 0.0
+        lock = point_state.plane_lock
+        if lock is not None:
+            # Under a lock the slots must be the lock's tilts (to the GUI
+            # fields' rounding), and the point runs at the lock's exact tilts.
+            differ = [f"{name} = {value:.4g}°" for name, value in (("sgl", sgl), ("sgu", sgu))
+                      if abs(value - lock["tilts"][name]) > LOCKED_PLANE_TOLERANCE_DEG]
+            if differ:
+                error_flags.append(STAGE_FLAG_PREFIX + f"{', '.join(differ)} is not a tilt of "
+                                   + locked_plane_text(lock["tilts"],
+                                                       (lock["hkl_u"], lock["hkl_v"])))
+            else:
+                sgl, sgu = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
         point_state.sgl, point_state.sgu = sgl, sgu
         error_flags.extend(point_state.arc_travel_flags({"sgl": sgl, "sgu": sgu}))
 
