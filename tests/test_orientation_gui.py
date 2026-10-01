@@ -121,19 +121,36 @@ def _field(edit):
     return float(edit.text())
 
 
-def test_saved_chi_var_loads_into_sgl(controller, monkeypatch):
-    def edit(block):
+def test_saved_arcs_reload_by_the_omega_rule(controller):
+    """The real load path: a saved arc value (a pre-arc save's chi_var reads
+    as sgl) survives exactly where the saved omega does. A save carrying a UB
+    state (every save writes one) re-solves all the angles from the saved Q."""
+    idock = controller.window.instrument_dock
+    _set_q(controller, 2.0, 0.4, 0.3)          # out of the plane: needs the arcs
+
+    def pre_arc(block):
         block.pop("sgl_var", None)
         block.pop("sgu_var", None)
         block["chi_var"] = 3.5
+        block["omega_var"] = 12.5
 
-    # Restoring the UB re-solves every angle from the saved Q afterwards (as
-    # it always re-solved the old chi field); hold that off to see the loader.
-    monkeypatch.setattr(controller, "update_angles_from_q", lambda: None)
-    _reload_with(controller, edit)
+    _reload_with(controller, pre_arc)
+    vals = controller.get_gui_values()
+    angles, flags = controller.instrument_state.calculate_stage_angles(
+        vals["qx"], vals["qy"], vals["qz"], vals["deltaE"], vals["fixed_E"],
+        vals["K_fixed"], vals["monocris"], vals["anacris"])
+    assert flags == [] and max(abs(angles[3]), abs(angles[5])) > 0.5
+    shown = [_field(e) for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)]
+    assert shown == pytest.approx([angles[2], angles[3], angles[5]], abs=1e-3)
 
-    assert _field(controller.window.instrument_dock.sgl_edit) == pytest.approx(3.5)
-    assert _field(controller.window.instrument_dock.sgu_edit) == pytest.approx(0.0)
+    def pre_arc_without_ub(block):
+        pre_arc(block)
+        block.pop("ub_matrix_state")
+        block["ub_training_hash"] = ""
+
+    _reload_with(controller, pre_arc_without_ub)
+    shown = [_field(e) for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)]
+    assert shown == pytest.approx([12.5, 3.5, 0.0])
 
 
 def test_q_edit_solves_both_arcs_and_reads_back_through_them(controller):
