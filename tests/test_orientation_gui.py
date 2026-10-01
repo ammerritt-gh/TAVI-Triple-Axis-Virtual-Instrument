@@ -1534,6 +1534,22 @@ def _peak_retaken(controller, _monkeypatch):
     controller.window.ub_matrix_dock.get_peak_widget(0).take_position_button.click()
 
 
+def _peak_retaken_after_a_correction(controller, _monkeypatch):
+    """psi changed, then Take Position at the peak's own displayed readouts:
+    no field text changes, but the record (corrections, so measured Q) does."""
+    idock = controller.window.instrument_dock
+    pw = controller.window.ub_matrix_dock.get_peak_widget(0)
+    for src, dst in zip((*pw.axis_edits, pw.stt_edit, pw.ki_edit, pw.kf_edit),
+                        (idock.omega_edit, idock.sgl_edit, idock.sgu_edit, idock.stt_edit,
+                         idock.Ki_edit, idock.Kf_edit)):
+        dst.setText(src.text())
+    shown, before = [e.text() for e in pw._fields()], pw.get_peak_data()["stage"]
+    controller.window.sample_dock.psi_edit.setText("0.9")
+    pw.take_position_button.click()
+    assert [e.text() for e in pw._fields()] == shown
+    assert pw.get_peak_data()["stage"]["corrections"] != before["corrections"]
+
+
 def _defaults(controller, _monkeypatch):
     controller.set_default_parameters()
 
@@ -1550,6 +1566,7 @@ def _restored(controller, _monkeypatch):
     _path_manual_ub, _path_reset, _path_lattice_edit, _path_refine_lattice, _path_api_patch,
     _restored, _exercise_loaded, _defaults,
     _path_sample_selection, _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
+    _peak_retaken_after_a_correction,
 ], ids=lambda f: f.__name__.lstrip("_"))
 def test_the_residual_table_describes_only_the_last_calculate_ub(controller, monkeypatch,
                                                                 change):
