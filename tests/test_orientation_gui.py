@@ -455,6 +455,26 @@ def test_angle_mode_point_past_travel_is_invalid_before_the_run(in12, tmp_path):
     assert job.result.valid_mask_2d == [[True, True, False]] * 2
 
 
+def test_orientation_scan_is_judged_by_the_solved_arcs(in12, tmp_path):
+    """A psi scan solves the arcs from Q per point, so an sgl field past
+    travel does not make its points invalid: the GUI count and the run's
+    mask agree."""
+    from tavi.scan_jobs import ScanJob
+
+    in12.output_directory = str(tmp_path)
+    _set_q(in12, 2.0, 0.5, 0.0)
+    in12.window.instrument_dock.sgl_edit.setText("25")
+    try:
+        assert in12._count_valid_scan_points("psi -2 2 1", "") == (5, 0)
+        launch = in12.build_api_launch_state({"scan_command1": "psi -2 2 1"})
+        launch["engine"] = "deterministic"
+        job = ScanJob(job_id="t-psi-arcs", source="api", launch_state=launch)
+        in12.run_simulation(launch, job=job)
+        assert job.result.valid_mask_1 == [True] * 5
+    finally:
+        in12.window.instrument_dock.sgl_edit.setText("0")
+
+
 def test_api_arc_write_past_travel_is_refused_with_the_reason(in12):
     backend = cm.TaviApiBackend(in12, _SyncBridge())
     with pytest.raises(ApiError) as patched:

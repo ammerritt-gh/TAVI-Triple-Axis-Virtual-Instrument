@@ -32,6 +32,7 @@ from instruments.tas_runtime import (
     SLOT_SGL,
     SLOT_SGU,
     STAGE_FLAG_PREFIX,
+    check_point_feasibility,
     describe_scan_error_flags,
     stage_corrections,
 )
@@ -4904,41 +4905,23 @@ class TAVIController(QObject):
         return (valid_count, invalid_count)
     
     def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, check_state) -> bool:
-        """Validate a single scan point.
-        
-        Args:
-            scan_point: List of scan parameters
-            scan_mode: One of 'momentum', 'rlu', 'angle', 'orientation'
-            vals: GUI values dictionary
-            check_state: throwaway instrument state (configured with GUI values)
-            
-        Returns:
-            True if point is valid, False otherwise
+        """True when the run would execute this point: the one validity rule
+        of the GUI point count, the time estimate and the run's 1D/2D valid
+        masks. It is the shared feasibility path
+        (``tas_runtime.check_point_feasibility``, the run's own per-point
+        solve on a private copy of ``check_state``), so every mode is judged
+        as the run judges it: Q and orientation modes by the arcs solved from
+        Q, angle mode by the arc slots. No axis limits are applied, as the
+        GUI Run applies none (the API validation adds them).
         """
         try:
-            if scan_mode == "momentum":
-                qx, qy, qz, deltaE = scan_point[:4]
-                _, error_flags = check_state.calculate_angles(
-                    qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
-                    check_state.monocris, check_state.anacris
-                )
-                return not error_flags
-            elif scan_mode == "rlu":
-                H, K, L, deltaE = scan_point[:4]
-                qx, qy, qz = component_q_to_instrument_q(
-                    check_state.sample_mount.hkl_to_q(H, K, L)
-                )
-                _, error_flags = check_state.calculate_angles(
-                    qx, qy, qz, deltaE, check_state.fixed_E, check_state.K_fixed,
-                    check_state.monocris, check_state.anacris
-                )
-                return not error_flags
-            else:
-                # Angle mode: only the operator-set arcs' travel can refuse.
-                return not check_state.arc_travel_flags(
-                    {"sgl": scan_point[SLOT_SGL], "sgu": scan_point[SLOT_SGU]})
-        except Exception:
+            feasible, _reason = check_point_feasibility(
+                check_state, scan_mode, scan_point, vals)
+        except Exception as exc:
+            log.warning("Scan point %s (%s) could not be checked: %s",
+                        scan_point[:4], scan_mode, exc)
             return False
+        return feasible
     
     def _determine_scan_mode(self, cmd1: str, cmd2: str) -> str:
         """Determine the scan mode based on scan command variables.
@@ -8718,12 +8701,7 @@ class TAVIController(QObject):
         valid_mask_2d = None
         array_values1 = []
         array_values2 = []
-        check_state = self.instrument.default_state()
-        check_state.monocris = scan_config.monocris
-        check_state.anacris = scan_config.anacris
-        check_state.K_fixed = scan_config.K_fixed
-        check_state.fixed_E = scan_config.fixed_E
-        
+
         # Single scan command
         if scan_command1 and not scan_command2:
             variable_name1, array_values1 = parse_scan_steps(scan_command1)
@@ -8741,27 +8719,8 @@ class TAVIController(QObject):
                 scan_point = scan_point_template[:]
                 scan_point[variable_to_index[variable_name1]] = value1
                 scan_parameter_input.append((scan_point, idx))
-
-                if scan_mode in ("momentum", "orientation"):
-                    _, error_flags = check_state.calculate_angles(
-                        *scan_point[:4], scan_config.fixed_E, scan_config.K_fixed,
-                        scan_config.monocris, scan_config.anacris
-                    )
-                elif scan_mode == "rlu":
-                    qx, qy, qz = component_q_to_instrument_q(
-                        scan_config.sample_mount.hkl_to_q(
-                            scan_point[0], scan_point[1], scan_point[2]
-                        )
-                    )
-                    _, error_flags = check_state.calculate_angles(
-                        qx, qy, qz, scan_point[3], scan_config.fixed_E,
-                        scan_config.K_fixed, scan_config.monocris, scan_config.anacris
-                    )
-                else:
-                    error_flags = check_state.arc_travel_flags(
-                        {"sgl": scan_point[SLOT_SGL], "sgu": scan_point[SLOT_SGU]})
-
-                valid_mask_1d[idx] = not error_flags
+                valid_mask_1d[idx] = self._validate_scan_point(
+                    scan_point, scan_mode, vals, scan_config)
             
             # Initialize display dock for 1D scan
             self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d,
@@ -8827,27 +8786,8 @@ class TAVIController(QObject):
                     scan_point[variable_to_index[variable_name1]] = value1
                     scan_point[variable_to_index[variable_name2]] = value2
                     scan_parameter_input.append((scan_point, idx_x, idx_y))
-
-                    if scan_mode in ("momentum", "orientation"):
-                        _, error_flags = check_state.calculate_angles(
-                            *scan_point[:4], scan_config.fixed_E, scan_config.K_fixed,
-                            scan_config.monocris, scan_config.anacris
-                        )
-                    elif scan_mode == "rlu":
-                        qx, qy, qz = component_q_to_instrument_q(
-                            scan_config.sample_mount.hkl_to_q(
-                                scan_point[0], scan_point[1], scan_point[2]
-                            )
-                        )
-                        _, error_flags = check_state.calculate_angles(
-                            qx, qy, qz, scan_point[3], scan_config.fixed_E,
-                            scan_config.K_fixed, scan_config.monocris, scan_config.anacris
-                        )
-                    else:
-                        error_flags = check_state.arc_travel_flags(
-                            {"sgl": scan_point[SLOT_SGL], "sgu": scan_point[SLOT_SGU]})
-
-                    valid_mask_2d[idx_y][idx_x] = not error_flags
+                    valid_mask_2d[idx_y][idx_x] = self._validate_scan_point(
+                        scan_point, scan_mode, vals, scan_config)
             
             # Initialize display dock for 2D scan
             self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
