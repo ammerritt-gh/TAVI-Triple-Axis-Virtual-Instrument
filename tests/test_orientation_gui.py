@@ -1307,22 +1307,28 @@ def _orientation_snapshot(ctrl):
 
 def test_every_refused_lock_patch_moves_nothing(controller, in12):
     """Each refused PATCH (sgl, kappa, a lock combined with sgl/sgu/kappa
-    whichever way it switches, a second lock, a lock past travel) is a 400
-    and the whole orientation and lock state is identical before and after;
-    a scan body cannot set the orientation mode."""
+    whichever way it switches, a lock request with any other field, a second
+    lock, a lock past travel) is a 400 and the whole orientation and lock
+    state is identical before and after; a scan body cannot set the
+    orientation mode."""
     controller.set_default_parameters()
     backend = cm.TaviApiBackend(controller, _SyncBridge())
     h0h = {"u": [1, 0, 1], "v": [0, 1, 0]}
 
     def refused(ctrl, api, body, field, words):
         before = _orientation_snapshot(ctrl)
+        lattice_c = ctrl.window.sample_dock.lattice_c_edit.text()
         with pytest.raises(ApiError) as err:
             api.patch_parameters(body, force=True)
         assert err.value.status == 400 and err.value.details["applied"] == []
         assert words in err.value.details["errors"][field], err.value.details
         assert _orientation_snapshot(ctrl) == before, body
+        assert ctrl.window.sample_dock.lattice_c_edit.text() == lattice_c
 
     refused(controller, backend, {"orientation_mode": "locked", "sgu": 1.0}, "sgu", "send two")
+    for body in ({"orientation_mode": "locked", "lattice_c": 4.3},
+                 {"lock_plane": h0h, "lattice_c": 4.3}):
+        refused(controller, backend, body, "lattice_c", "send two PATCHes instead")
     assert backend.patch_parameters({"orientation_mode": "locked", "lock_plane": h0h},
                                     force=True)["applied"] == ["orientation_mode", "lock_plane"]
     assert controller.instrument_state.plane_lock["hkl_u"] == [1.0, 0.0, 1.0]
@@ -1330,7 +1336,7 @@ def test_every_refused_lock_patch_moves_nothing(controller, in12):
             ({"sgl": 1.0}, "sgl", "holds sgl"),
             ({"kappa": 0.5, "H": 1.1}, "kappa", "holds kappa"),
             ({"orientation_mode": "free", "sgl": 1.0}, "orientation_mode", "send two"),
-            ({"lock_plane": {"u": [1, 0, 0], "v": [0, 1, 0]}, "H": 1.1}, "lock_plane",
+            ({"lock_plane": {"u": [1, 0, 0], "v": [0, 1, 0]}}, "lock_plane",
              "is in force; release it first")):
         refused(controller, backend, body, field, words)
     with pytest.raises(ApiError) as scan:
@@ -1341,7 +1347,7 @@ def test_every_refused_lock_patch_moves_nothing(controller, in12):
 
     in12.set_default_parameters()                          # +/-20 deg arcs
     refused(in12, cm.TaviApiBackend(in12, _SyncBridge()),
-            {"orientation_mode": "locked", "lock_plane": h0h, "H": 1.5}, "lock_plane",
+            {"orientation_mode": "locked", "lock_plane": h0h}, "lock_plane",
             "but its travel is [-20, 20]°")
     controller.set_default_parameters()
 

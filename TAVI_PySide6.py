@@ -2785,7 +2785,7 @@ class TAVIController(QObject):
             except (ValueError, TypeError) as exc:
                 errors[name] = "invalid value: %s" % exc
         errors.update(self._lock_refusals(
-            [n for n in patch if n in self._LOCK_HELD_FIELDS]))
+            {n: v for n, v in patch.items() if n in self._LOCK_HELD_FIELDS}))
         if errors:
             raise ApiError(
                 400, "invalid_parameters", "One or more fields failed",
@@ -7808,16 +7808,24 @@ class TAVIController(QObject):
     _LOCK_FIELDS = ('orientation_mode', 'lock_plane')
     _LOCK_HELD_FIELDS = ('sgl', 'sgu', 'kappa')
 
-    def _lock_refusals(self, names):
-        """{field: reason} for the fields of one request a lock refuses: sgl,
-        sgu or kappa beside orientation_mode/lock_plane (whichever way it
-        switches: two requests instead), and sgl, sgu or kappa while locked."""
-        held = [n for n in names if n in self._LOCK_HELD_FIELDS]
-        mode = [n for n in names if n in self._LOCK_FIELDS]
+    def _lock_refusals(self, body):
+        """{field: reason} for the fields of one request body a lock refuses:
+        sgl, sgu or kappa beside orientation_mode/lock_plane (whichever way it
+        switches: two requests instead); any other field beside a lock request
+        (orientation_mode "locked" or lock_plane), so the lock is computed on
+        the state as it stands, never on a lattice or UB the same body
+        changes; and sgl, sgu or kappa while locked."""
+        held = [n for n in body if n in self._LOCK_HELD_FIELDS]
+        mode = [n for n in body if n in self._LOCK_FIELDS]
         if held and mode:
             reason = ("orientation_mode/lock_plane cannot be combined with sgl, sgu or "
                       "kappa in one request; send two")
             return {n: reason for n in held + mode}
+        other = [n for n in body if n not in self._LOCK_FIELDS]
+        if other and (body.get('orientation_mode') == "locked" or 'lock_plane' in body):
+            reason = ('a lock request (orientation_mode "locked" or lock_plane) must stand '
+                      "alone; send two PATCHes instead")
+            return {n: reason for n in mode + other}
         if held and self._lock_text():
             return {n: f"{self._lock_text()} holds {n}; release it first "
                        f"(orientation_mode \"free\")" for n in held}
