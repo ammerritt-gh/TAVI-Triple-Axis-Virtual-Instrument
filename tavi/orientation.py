@@ -522,8 +522,5 @@ def lock_plane(gonio, ub, hkl_u, hkl_v):
             return {ax.name: angle for ax, angle in zip(inner, s)}
     for ax, angle in zip(inner, solutions[0]):
         if not _in_travel(ax, angle):
-            raise StageUnreachable(
-                f"{ax.name} needs {angle:.4g}° to bring the plane horizontal "
-                f"but its travel is {_travel_text(ax)}"
-            )
+            raise StageUnreachable(_travel_refusal(ax, angle, " to bring the plane horizontal"))
     raise StageUnreachable("no arc setting within travel brings this plane horizontal")

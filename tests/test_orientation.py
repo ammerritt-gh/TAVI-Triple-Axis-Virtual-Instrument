@@ -778,6 +778,18 @@ def test_locked_mode_refuses_a_lock_this_stage_cannot_hold(lock, reason):
     assert str(err.value) == reason
 
 
+def test_lock_plane_past_travel_is_refused_in_the_shared_words():
+    """A plane 30 deg off horizontal on IN12's +/-20 deg arcs: the refusal
+    is the one travel wording (``_travel_refusal``)."""
+    from instruments.in12.plugin import in12_descriptor
+
+    gonio = in12_descriptor().goniometer
+    with pytest.raises(StageUnreachable) as err:
+        lock_plane(gonio, _rot((1, 0, 0), 30.0) @ CUBIC_B, (1, 0, 0), (0, 1, 0))
+    assert str(err.value) == (
+        "sgl needs -30° to bring the plane horizontal but its travel is [-20, 20]°")
+
+
 # --- corrections and zero errors reach McStas as axis rotations -------------------
 
 @pytest.mark.parametrize(("field", "axis_name"), [
