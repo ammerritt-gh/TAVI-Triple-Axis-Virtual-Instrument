@@ -5920,6 +5920,16 @@ class TAVIController(QObject):
                             self.window.ub_matrix_dock.set_peak_entries(peaks_data)
                         self._reconnect_peak_signals()
                         self.print_to_message_center("UB matrix state restored")
+                        # Peaks without a sense predate the sample-sense fix:
+                        # on a +1 instrument that UB was fitted turned 180 deg
+                        # about the vertical. Say so; never refit silently.
+                        if self.instrument_state.sense_sample > 0 and any(
+                                p.get("sense_sample") is None
+                                for p in ub_state.get("peaks", [])):
+                            self.print_to_message_center(
+                                "This UB was saved before the sample-sense fix and may be "
+                                "turned 180° about the vertical on this instrument: press "
+                                "Calculate UB to refit it from its peaks.")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore UB matrix: {e}")
                 # Restore UB training hash
