@@ -135,15 +135,22 @@ sample component is emitted relative to it with no rotation of its own.
 
 ## Hidden Misalignment Angles (Training Mode)
 
-For training exercises, hidden misalignment angles can be applied:
+For training exercises, hidden zero errors can be applied:
 
 | Angle | Description |
 |-------|-------------|
-| mis_omega | Hidden in-plane misalignment |
-| mis_chi | Hidden out-of-plane misalignment |
-| mis_psi | Additional hidden in-plane misalignment |
+| mis_omega | Hidden turntable (A3) zero error, in-plane |
+| mis_chi | Hidden lower-arc (`sgl`) zero error, out-of-plane |
 
-These are encoded in a hash and can only be revealed by correctly adjusting the ψ and κ offsets to compensate.
+They are encoded in a hash: the Misalignment dock's exercise carries the zero
+errors only, a UB training exercise carries them with `R_hidden` (see *Truth and
+belief*). Both are graded by one check (`tavi/ub_matrix.py` `grade_alignment`),
+which never compares ψ and κ with the hidden offsets: it measures how far the
+true reflections are from where the UB, lattice fields and ψ/κ corrections
+drive. Correcting the offsets with ψ and κ is one way to pass; a UB fitted from
+peaks found on the misaligned crystal is another, since the fit absorbs the
+offset (exactly in the plane, approximately with tilted arcs) and grades aligned
+with ψ = 0.
 
 ## Energy and Wave Vectors
 
