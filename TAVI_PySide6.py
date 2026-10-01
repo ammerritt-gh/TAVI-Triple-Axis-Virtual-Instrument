@@ -113,7 +113,7 @@ from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import (parse_scan_steps, incremented_path_writing,
                             normalize_scan_commands)
 from tavi.sample_mount import SampleMount
-from tavi.orientation import stage_record
+from tavi.orientation import locked_plane_text, stage_record
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
     instrument_q_to_component_q,
@@ -4078,7 +4078,8 @@ class TAVIController(QObject):
             angles_array, error_flags = self.instrument_state.calculate_stage_angles(
                 vals['qx'], vals['qy'], vals['qz'], vals['deltaE'],
                 vals['fixed_E'], vals['K_fixed'],
-                vals['monocris'], vals['anacris']
+                vals['monocris'], vals['anacris'],
+                locked=self.instrument_state.plane_lock,
             )
             if not error_flags:
                 mtt, stt, sth, sgl, att, sgu = angles_array
@@ -4435,6 +4436,11 @@ class TAVIController(QObject):
             else:
                 return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, sgl, sgu, etc.")
         
+        # A locked plane holds the arcs and the lower-arc correction.
+        if var_lower in ("sgl", "sgu", "kappa") and self._lock_text():
+            return (None, f"'{var_name}' cannot be scanned: {self._lock_text()} holds "
+                          "it. Release the lock first.")
+
         # A curvature axis the SELECTED crystal holds fixed is not scannable.
         # Refusing is the point: scan_config pins it, but compute_scan_snapshot
         # reads scans[4:8] and would otherwise let the scan override the pin,
@@ -4893,7 +4899,8 @@ class TAVIController(QObject):
         check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
         check_state.fixed_E = vals.get('fixed_E', 14.7)
         check_state.sample_mount = self._build_sample_mount(vals)
-        
+        check_state.plane_lock = self.instrument_state.plane_lock
+
         valid_count = 0
         invalid_count = 0
         
@@ -5204,6 +5211,14 @@ class TAVIController(QObject):
         u, v = self.mount_plane or (None, None)
         return {'mount_plane_u': list(u) if u is not None else None,
                 'mount_plane_v': list(v) if v is not None else None}
+
+    def _lock_text(self):
+        """The locked plane in the solver's words ('the locked scattering
+        plane (1 0 0)/(0 1 0) (sgl = 0°, sgu = 0°)'), or None when free."""
+        lock = self.instrument_state.plane_lock
+        if lock is None:
+            return None
+        return locked_plane_text(lock["tilts"], (lock["hkl_u"], lock["hkl_v"]))
 
     def _load_exercise(self, kind, hash_str):
         """Interactive load (I3): refused while the other exercise is loaded;
