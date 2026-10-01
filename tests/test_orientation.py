@@ -929,3 +929,47 @@ def test_build_fingerprint_is_unchanged_by_orientation(name, cls):
     config.sample_mount = SampleMount(CUBIC_B, _rot((1, 1, 0), 8.0))
     config.U_true = _rot((1, -1, 0), 5.0)
     assert plugin.build_fingerprint(config) == before
+
+
+# --- Unit 2 (C2): the mounting plane -----------------------------------------------
+
+def test_h0l_mount_puts_101_in_the_plane_with_the_arcs_at_zero(models):
+    """Mounted with (1 0 0) along x and (0 0 1) in plane, (1 0 1) solves on
+    IN8 with both arcs at 0, and (1 0 0) lies along the mount x axis."""
+    from tavi.ub_matrix import u_from_plane
+
+    model = copy.deepcopy(models["in8"])
+    u = u_from_plane(CUBIC_B, (1, 0, 0), (0, 0, 1))
+    assert np.allclose(u @ CUBIC_B @ np.array([1.0, 0.0, 0.0]),
+                       [np.linalg.norm(CUBIC_B[:, 0]), 0.0, 0.0], rtol=0.0, atol=1e-12)
+    for hkl in ((1, 0, 1), (2, 0, -1), (0, 0, 2)):
+        q = u @ CUBIC_B @ np.array(hkl, dtype=float)
+        angles, flags = model.calculate_stage_angles(
+            *component_q_to_instrument_q(q), 0.0, E_K, "Kf Fixed", "pg002", "pg002")
+        assert flags == []
+        assert (angles[3], angles[5]) == pytest.approx((0.0, 0.0), abs=1e-9), hkl
+
+
+def test_a_non_orthogonal_plane_mount_puts_both_vectors_horizontal():
+    from tavi.ub_matrix import u_from_plane
+
+    B = reciprocal_basis_tas(5.1, 6.3, 7.2, 80.0, 103.5, 110.0)
+    hkl_u, hkl_v = np.array([1.0, 1.0, 0.0]), np.array([0.0, 1.0, 2.0])
+    u = u_from_plane(B, hkl_u, hkl_v)
+    assert np.allclose(u.T @ u, np.eye(3), rtol=0.0, atol=1e-12)
+    assert np.linalg.det(u) == pytest.approx(1.0, abs=1e-12)
+    q_u, q_v = u @ B @ hkl_u, u @ B @ hkl_v
+    assert abs(q_u[1]) < 1e-12 and abs(q_u[2]) < 1e-12 and q_u[0] > 0     # along +x
+    assert abs(q_v[1]) < 1e-12 and q_v[2] > 0                               # in plane, +z side
+
+
+@pytest.mark.parametrize(("hkl_u", "hkl_v", "reason"), [
+    ((1, 0, 0), (2, 0, 0), "(1 0 0) and (2 0 0) are parallel, so they span no plane"),
+    ((0, 0, 0), (0, 0, 1), "the vector along x, (0 0 0), is zero"),
+], ids=["parallel", "zero"])
+def test_a_plane_that_spans_nothing_is_refused_with_the_reason(hkl_u, hkl_v, reason):
+    from tavi.ub_matrix import u_from_plane
+
+    with pytest.raises(ValueError) as err:
+        u_from_plane(CUBIC_B, hkl_u, hkl_v)
+    assert str(err.value) == reason

@@ -119,8 +119,9 @@ from tavi.tas_geometry import (
     instrument_q_to_component_q,
     lab_q_from_stt,
 )
-from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality,
-                            decode_training, generate_training_exercise, encode_training, get_scattering_plane_info)
+from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality, compute_B_matrix,
+                            decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
+                            u_from_plane)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.settings import load_mpi_count, save_mpi_count
 from tavi.machine_profile import machine_fingerprint
@@ -1540,7 +1541,10 @@ class TAVIController(QObject):
         
         # Sample configuration button
         self.window.sample_dock.config_sample_button.clicked.connect(self.configure_sample)
-        
+        # Optional mounting plane (the sample as described)
+        self.window.sample_dock.mount_apply_button.clicked.connect(self.on_apply_mount_plane)
+        self.window.sample_dock.mount_clear_button.clicked.connect(self.on_clear_mount_plane)
+
         # Sample orientation controls - connected later in signal setup
         # (omega/sgl/sgu are stage readouts, psi/kappa are their corrections)
         
@@ -2410,6 +2414,8 @@ class TAVIController(QObject):
                 # to key None internally but surfaces to the API as "none" so it
                 # round-trips through apply_parameters/isolation restore.
                 'sample': self.window.sample_dock.get_selected_sample_key() or "none",
+                # Read-only: the described mount's plane (null = not from a plane).
+                **self._mount_plane_fields(),
                 'monocris': monocris,
                 'anacris': anacris,
                 'rhm': float(self.window.instrument_dock.rhm_edit.text() or 0),
@@ -2751,7 +2757,7 @@ class TAVIController(QObject):
         parsed = {}
         errors = {}
         for name, value in patch.items():
-            if name == 'curvature_modes':
+            if name in self._API_READ_ONLY_FIELDS:
                 # Known field (declared read-only in build_api_schema), not an
                 # unrecognized one -- see _api_field_map's docstring.
                 errors[name] = "read-only field"
@@ -5126,6 +5132,79 @@ class TAVIController(QObject):
         self._update_ub_display()
         self.on_Q_changed()
 
+    def _true_B(self):
+        """The selected sample's own B (its baked ``SampleSpec.lattice``, the
+        one McStas diffracts from), never the lattice fields. ValueError with
+        the reason when no crystal is selected."""
+        key = self.window.sample_dock.get_selected_sample_key()
+        spec = next((s for s in self.descriptor.samples if s.id == key), None)
+        if spec is None or spec.lattice is None:
+            raise ValueError("no sample is selected, so there is no crystal to mount")
+        return compute_B_matrix(*spec.lattice)
+
+    def _remount(self, plane):
+        """I2: a description change, not a UB write. ``plane`` is
+        ((h k l) along x, (h k l) in plane), or None for the standard setting.
+        Sets U_described (R_hidden kept), resets the operator's UB to it,
+        peaks kept. Raises ValueError, changing nothing, when refused."""
+        if plane is None:
+            described = np.eye(3)
+        else:
+            described = u_from_plane(self._true_B(), *plane)
+        self.mount_plane = plane
+        self._set_true_mount(U_described=described)
+        self._show_mount_plane()
+        self._reset_ub_to_described()
+
+    def _show_mount_plane(self):
+        """The sample dock shows the controller's described mount."""
+        self.window.sample_dock.show_mount_plane(
+            self.mount_plane, standard=np.array_equal(self.U_described, np.eye(3)))
+
+    def on_apply_mount_plane(self):
+        """Apply the sample dock's mounting plane (both fields empty = Clear)."""
+        dock = self.window.sample_dock
+        texts = (dock.mount_u_edit.text().strip(), dock.mount_v_edit.text().strip())
+        if not any(texts):
+            self.on_clear_mount_plane()
+            return
+        try:
+            plane = tuple(self._parse_hkl_triple(text) for text in texts)
+            self._remount(plane)
+        except ValueError as e:
+            self.print_to_message_center(f"Mounting plane refused: {e}")
+            self._show_mount_plane()
+            return
+        u_text, v_text = (" ".join(f"{x:g}" for x in hkl) for hkl in plane)
+        self.print_to_message_center(
+            f"Sample remounted with ({u_text}) along x and ({v_text}) in the horizontal "
+            "plane; the UB starts at the new mount (peaks kept)")
+
+    def on_clear_mount_plane(self):
+        """Back to the standard setting; the UB starts at it (peaks kept)."""
+        self._remount(None)
+        self.print_to_message_center(
+            "Sample remounted in the standard setting; the UB starts at it (peaks kept)")
+
+    @staticmethod
+    def _parse_hkl_triple(text):
+        """'1 0 0' or '1, 0, 0' -> (1.0, 0.0, 0.0); ValueError otherwise."""
+        parts = text.replace(",", " ").split()
+        try:
+            values = tuple(float(p) for p in parts)
+        except ValueError:
+            values = ()
+        if len(values) != 3 or not all(math.isfinite(v) for v in values):
+            raise ValueError(f"'{text}' is not three numbers h k l")
+        return values
+
+    def _mount_plane_fields(self):
+        """Read-only API view of the described mount: the plane's two HKL
+        vectors, or null when the mount is not from a plane."""
+        u, v = self.mount_plane or (None, None)
+        return {'mount_plane_u': list(u) if u is not None else None,
+                'mount_plane_v': list(v) if v is not None else None}
+
     def _load_exercise(self, kind, hash_str):
         """Interactive load (I3): refused while the other exercise is loaded;
         then the hidden truth, and the operator's UB reset to U_described."""
@@ -6214,6 +6293,9 @@ class TAVIController(QObject):
             'lattice_alpha': 90.0, 'lattice_beta': 90.0, 'lattice_gamma': 90.0,
             'kappa': 0.0, 'psi': 0.0,
             'sample': "Al_bragg" if "Al_bragg" in sample_ids else "none",
+            # Read-only description of the session's mount, which every launch
+            # uses (the true mount rides on instrument_state, never on vals).
+            **self._mount_plane_fields(),
             'monocris': d.mono_crystals[0].id,
             'anacris': d.ana_crystals[0].id,
             'rhm': 0.0, 'rvm': 0.0, 'rha': 0.0, 'rva': 0.0,
@@ -6342,6 +6424,7 @@ class TAVIController(QObject):
         self._clear_exercise()
         self.mount_plane = None
         self._set_true_mount(U_described=np.eye(3))
+        self._show_mount_plane()
         self.ub_matrix = UBMatrix()
         self._update_ub_display()
         self._reconnect_peak_signals()
@@ -7394,6 +7477,11 @@ class TAVIController(QObject):
                "'kappa' is the lower-arc correction",
     }
 
+    # Keys get_gui_values() returns that no write may set (declared readOnly
+    # in build_api_schema): derived curvature policy, and the mounting plane,
+    # which only the Sample dock's Apply/Clear remounts.
+    _API_READ_ONLY_FIELDS = ('curvature_modes', 'mount_plane_u', 'mount_plane_v')
+
     def _scan_busy(self):
         """True when any scan job is queued or running.
 
@@ -7518,7 +7606,7 @@ class TAVIController(QObject):
         # (a) Parse/validate everything first; never partially apply a field.
         parsed = {}
         for name, value in patch.items():
-            if name == 'curvature_modes':
+            if name in self._API_READ_ONLY_FIELDS:
                 # Known field (declared read-only in build_api_schema), not an
                 # unrecognized one -- see _api_field_map's docstring.
                 errors[name] = "read-only field"
@@ -7913,6 +8001,19 @@ class TAVIController(QObject):
                 )
             ),
         })
+        for name, role in (("mount_plane_u", "along the mount x axis"),
+                           ("mount_plane_v", "in the horizontal plane")):
+            fields.append({
+                "name": name,
+                "type": "array",
+                "units": "r.l.u.",
+                "readOnly": True,
+                "description": (
+                    f"The (h k l) the sample is mounted with {role}, as the "
+                    "operator described it in the Sample dock; null when the "
+                    "mount is not from a plane. Read-only."
+                ),
+            })
 
         limits = getattr(self, "_api_limits", None)
 
@@ -8003,9 +8104,19 @@ class TAVIController(QObject):
         """Handle sample selection changes from the GUI."""
         try:
             key = self.window.sample_dock.get_selected_sample_key()
+            swapped = key != getattr(self.instrument_state, "sample_key", None)
             self.instrument_state.sample_key = key
             self.current_sample_settings = {"sample_label": label, "sample_key": key}
             self.print_to_message_center(f"Sample selection changed: {label} ({key})")
+            # I5: a physical sample swap keeps the mount (U_described as a
+            # matrix), the exercise and the peaks; only the plane's
+            # description, which named the previous sample's HKLs, goes.
+            if swapped and self.mount_plane is not None:
+                self.mount_plane = None
+                self._show_mount_plane()
+                self.print_to_message_center(
+                    "Mounting-plane description cleared: it named reflections of the "
+                    "previous sample. The mount itself is unchanged.")
             self._adopt_sample_lattice(key)
             self.request_reciprocal_snapshot()
         except Exception as e:

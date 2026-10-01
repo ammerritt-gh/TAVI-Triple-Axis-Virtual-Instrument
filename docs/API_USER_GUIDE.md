@@ -46,7 +46,7 @@ BASE URL: http://127.0.0.1:8642/api/v1   (JSON in, JSON out; add header
 
 KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
-  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...44 keys returned, 43 writable...}, budget}
+  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...46 keys returned, 43 writable...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
   POST /validate  body {"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
   POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
@@ -215,7 +215,7 @@ Liveness probe. No auth required, even when a token is set.
 
 ### GET /state
 Full snapshot: instrument id, access mode, busy flag, the currently running job
-id (or `null`), the list of queued job ids, the complete parameter dict (44
+id (or `null`), the list of queued job ids, the complete parameter dict (46
 keys returned, 43 writable — see §6), the configured limits (if any), current budget usage, and the
 session's background configuration (the same object `GET /background` returns).
 ```json
@@ -1109,7 +1109,7 @@ Server-Sent Events stream. See §8.
 
 ## 6. Parameter field reference
 
-All 44 keys returned by `GET /parameters`; 43 are writable via `PATCH /parameters`, `curvature_modes` is read-only.
+All 46 keys returned by `GET /parameters`; 43 are writable via `PATCH /parameters`; `curvature_modes`, `mount_plane_u` and `mount_plane_v` are read-only.
 Many are **linked**: writing one triggers the same recompute the GUI does when a
 user presses Enter, so dependent fields update automatically.
 
@@ -1143,6 +1143,8 @@ user presses Enter, so dependent fields update automatically.
 | `kappa` | number | degrees | Correction κ of the lower arc `sgl`. |
 | `psi` | number | degrees | Correction ψ of the turntable (A3). |
 | `sample` | string | — | Sample id from the shared sample library; the allowed values are the `sample` field's `allowed` list in `GET /schema`. Writable. |
+| `mount_plane_u` | array or null | r.l.u. | **Read-only.** The (h k l) the sample is mounted with along the mount x axis, as described in the Sample dock's optional mounting plane; `null` when the mount is not from a plane (the standard setting, or after a sample change cleared the description). A write returns `400 invalid_parameters` with `"read-only field"`. |
+| `mount_plane_v` | array or null | r.l.u. | **Read-only.** The (h k l) described in the horizontal plane with `mount_plane_u`; `null` with it. |
 | `monocris` | string | — | Monochromator crystal id. PUMA: `"pg002"` or `"pg002_test"`. |
 | `anacris` | string | — | Analyzer crystal id. PUMA: `"pg002"`. |
 | `rhm` | number | m | Monochromator horizontal bending radius, magnitude. `0` = flat. See §5 *Crystal curvature* below. |
