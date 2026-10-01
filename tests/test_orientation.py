@@ -318,6 +318,31 @@ def _random_mount(rng):
     return _rot(rng.normal(size=3), rng.uniform(0.5, 10.0))
 
 
+def _arcs_can_level(gonio, q):
+    """Whether a TAS stage (turntable about y, lower arc ``sgl`` about x, upper
+    arc ``sgu`` about z, symmetric travel) can bring mount-frame ``q`` into the
+    horizontal plane, decided in closed form rather than by a search.
+
+    Level means ``(R_x(sgl) R_z(sgu) q)_y = 0``, i.e. ``tan(sgl) = A(sgu) / q_z``
+    with ``A(u) = q_x sin u + q_y cos u = r sin(u + phi)``. So the smallest
+    lower-arc angle over the upper arc's travel is ``atan(min |A| / |q_z|)``,
+    and ``|r sin|`` over an interval is zero if the interval holds a multiple
+    of 180 deg, else smallest at an end (it is concave between its zeros)."""
+    _turntable, sgl, sgu = gonio
+    assert np.allclose(sgl.axis, (1, 0, 0)) and np.allclose(sgu.axis, (0, 0, 1))
+    assert sgl.lower == -sgl.upper and sgu.lower == -sgu.upper
+    if sgl.upper >= 90.0:
+        return True
+    r, phi = math.hypot(q[0], q[1]), math.atan2(q[1], q[0])
+    half = math.radians(min(sgu.upper, 180.0))
+    lo, hi = phi - half, phi + half
+    if math.floor(hi / math.pi) >= math.ceil(lo / math.pi):
+        a_min = 0.0
+    else:
+        a_min = min(abs(r * math.sin(lo)), abs(r * math.sin(hi)))
+    return a_min <= abs(q[2]) * math.tan(math.radians(sgl.upper))
+
+
 @pytest.mark.parametrize("lattice", list(LATTICES))
 @pytest.mark.parametrize("sense", [-1, 1])
 @pytest.mark.parametrize("name", list(INSTRUMENTS))
@@ -338,8 +363,11 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
             qx, qy, qz = component_q_to_instrument_q(U @ B @ hkl)
             angles, flags = model.calculate_stage_angles(
                 qx, qy, qz, 0.0, E_RT, "Kf Fixed", "pg002", "pg002")
+            # A refusal only where the arcs provably cannot level Q (never on
+            # PUMA or IN8, whose travel is unlimited), and then only the stage's.
+            reachable = _arcs_can_level(model.goniometer, U @ B @ hkl)
+            assert bool(flags) == (not reachable), (hkl, flags)
             if flags:
-                # Only the arcs' travel may refuse a point here.
                 assert all(f.startswith("stage: ") for f in flags), flags
                 continue
             mtt, stt, sth, sgl, att, sgu = angles
