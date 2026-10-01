@@ -430,20 +430,29 @@ class UBMatrixDock(BaseDockWidget):
         main_layout.addWidget(ub_group)
 
         # ===== Scattering Plane Section =====
-        plane_group = QGroupBox("Scattering Plane")
+        # Computed from the operator's UB: not the crystal's true mount, not
+        # the locked tilts.
+        plane_group = QGroupBox("Scattering Plane (from your UB)")
+        plane_group.setToolTip("Computed from your UB and lattice fields, not from the "
+                               "crystal itself or the locked arc tilts")
         plane_layout = QGridLayout()
         plane_layout.setSpacing(3)
         plane_group.setLayout(plane_layout)
 
-        plane_layout.addWidget(QLabel("Plane normal (HKL):"), 0, 0)
+        self.plane_normal_name_label = QLabel("Plane normal [u v w]:")
+        plane_layout.addWidget(self.plane_normal_name_label, 0, 0)
         self.plane_normal_label = QLabel("--")
         plane_layout.addWidget(self.plane_normal_label, 0, 1)
 
-        plane_layout.addWidget(QLabel("\u03c7 tilt:"), 1, 0)
+        c_star_name = QLabel("c* elevation:")
+        c_star_name.setToolTip("Angle of c* above the horizontal scattering plane")
+        plane_layout.addWidget(c_star_name, 1, 0)
         self.chi_mis_label = QLabel("--")
         plane_layout.addWidget(self.chi_mis_label, 1, 1)
 
-        plane_layout.addWidget(QLabel("\u03c9 offset:"), 2, 0)
+        a_star_name = QLabel("a* azimuth:")
+        a_star_name.setToolTip("Azimuth of a* from the mount x axis, in the horizontal plane")
+        plane_layout.addWidget(a_star_name, 2, 0)
         self.omega_offset_label = QLabel("--")
         plane_layout.addWidget(self.omega_offset_label, 2, 1)
 
@@ -724,14 +733,21 @@ class UBMatrixDock(BaseDockWidget):
             self.ub_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 10px;")
 
     def update_plane_info(self, plane_info: dict):
-        """Update scattering plane display."""
+        """Update scattering plane display: the zone axis [u v w] along the
+        vertical, or the raw reciprocal vector when no small one fits."""
+        zone = plane_info.get('zone_axis_uvw')
         normal = plane_info.get('plane_normal_hkl', (0, 0, 0))
         chi_mis = plane_info.get('chi_misalignment_deg', 0)
         omega_off = plane_info.get('omega_offset_deg', 0)
 
-        self.plane_normal_label.setText(
-            f"[{normal[0]:.2f}, {normal[1]:.2f}, {normal[2]:.2f}]"
-        )
+        if zone is not None:
+            self.plane_normal_name_label.setText("Plane normal [u v w]:")
+            self.plane_normal_label.setText("[" + " ".join(str(n) for n in zone) + "]")
+        else:
+            self.plane_normal_name_label.setText("Plane normal, raw (h k l):")
+            self.plane_normal_label.setText(
+                f"({normal[0]:.3f} {normal[1]:.3f} {normal[2]:.3f}): no small [u v w] fits"
+            )
         self.chi_mis_label.setText(f"{chi_mis:.2f}\u00b0")
         self.omega_offset_label.setText(f"{omega_off:.2f}\u00b0")
 

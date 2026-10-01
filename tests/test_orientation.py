@@ -1320,3 +1320,37 @@ def test_hkl_text_is_the_one_parenthesised_wording():
     from tavi.orientation import hkl_text
 
     assert hkl_text((1, 0, -2.5)) == "(1 0 -2.5)"
+
+
+# --- Unit 3 (C2): the plane normal as a zone axis -----------------------------------
+
+def test_zone_axis_of_a_cubic_110_001_mount_and_a_hexagonal_standard_mount():
+    from tavi.ub_matrix import get_scattering_plane_info, small_integer_indices, u_from_plane
+
+    u = u_from_plane(CUBIC_B, (1, 1, 0), (0, 0, 1))
+    assert get_scattering_plane_info(u, CUBIC_B)["zone_axis_uvw"] == (1, -1, 0)
+    hexagonal = reciprocal_basis_tas(*LATTICES["hexagonal"])
+    assert get_scattering_plane_info(np.eye(3), hexagonal)["zone_axis_uvw"] == (0, 0, 1)
+    # Either sign, and the smallest of the parallel triples.
+    assert small_integer_indices(CUBIC_B @ np.array([-2.0, 2.0, 0.0]), CUBIC_B) == (1, -1, 0)
+
+
+def test_zone_axis_tolerance_is_an_angle_between_cartesian_vectors():
+    """c = 5a, beta = 100 deg: the 0.1 deg tolerance is measured between the
+    Cartesian vectors, not between index coefficients."""
+    from tavi.ub_matrix import small_integer_indices
+
+    direct = 2 * math.pi * np.linalg.inv(reciprocal_basis_tas(3.0, 4.0, 15.0, 90, 100, 90)).T
+    target = direct @ np.array([1.0, 0.0, -1.0])
+    turn_axis = np.cross(target, direct[:, 1])
+    assert small_integer_indices(_rot(turn_axis, 0.08) @ target, direct) == (1, 0, -1)
+    assert small_integer_indices(_rot(turn_axis, 0.12) @ target, direct) != (1, 0, -1)
+
+
+def test_an_irrational_plane_normal_has_no_zone_axis():
+    from tavi.ub_matrix import get_scattering_plane_info
+
+    u = mccode_rotation_matrix(7.3, 0.0, 11.9)
+    info = get_scattering_plane_info(u, CUBIC_B)
+    assert info["zone_axis_uvw"] is None
+    assert np.allclose(u @ CUBIC_B @ np.array(info["plane_normal_hkl"]), (0, 1, 0))
