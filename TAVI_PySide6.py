@@ -5540,6 +5540,9 @@ class TAVIController(QObject):
 
     def on_calculate_ub(self):
         """Calculate UB matrix from observed peaks in the UB dock."""
+        # The lattice sync runs before the fit: a failed fit puts the
+        # operator's UB and lattice back as they were (C3).
+        belief = copy.deepcopy(self.ub_matrix)
         try:
             self.ub_matrix.peaks = self._peaks_from_dock()
 
@@ -5555,6 +5558,7 @@ class TAVIController(QObject):
                 corrections = stage_corrections(self.instrument_state.goniometer, vals)
 
             U = self.ub_matrix.calculate_U_from_peaks(corrections)
+            belief = None
             self._update_ub_display()
             self.print_to_message_center(
                 f"UB matrix calculated from {len([p for p in self.ub_matrix.peaks if p.is_valid])} peaks"
@@ -5566,6 +5570,9 @@ class TAVIController(QObject):
             # Refresh HKL/angles for current Q
             self.on_Q_changed()
         except Exception as e:
+            if belief is not None:
+                belief.peaks = self.ub_matrix.peaks
+                self.ub_matrix = belief
             self.window.ub_matrix_dock.clear_residuals()
             self.print_to_message_center(f"UB calculation failed: {e}")
 
