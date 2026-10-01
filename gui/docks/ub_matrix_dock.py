@@ -341,6 +341,8 @@ class PeakEntryWidget(QFrame):
         self.stt_edit.setText(self._fmt(stt))
         self.ki_edit.setText(self._fmt(ki))
         self.kf_edit.setText(self._fmt(kf))
+        # The record changed even when no field text did (a correction only).
+        self.peak_data_changed.emit(self.index)
 
     def update_valid_indicator(self, is_valid: bool):
         """Update the validity indicator."""
