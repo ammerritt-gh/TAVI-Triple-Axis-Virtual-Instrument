@@ -5585,6 +5585,8 @@ class TAVIController(QObject):
         try:
             self.ub_matrix.peaks = self._peaks_from_dock()
             vals = self.get_gui_values()
+            if not vals:
+                raise ValueError("a field does not read as a number")
             current = (
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
