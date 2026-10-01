@@ -26,8 +26,11 @@ from tavi.orientation import (
     q_mount_from_legacy_angles,
     q_mount_from_stage,
     record_angles,
+    solve_stage,
+    stage_rotation,
 )
 from tavi.sample_mount import reciprocal_basis_tas
+from tavi.tas_geometry import lab_q_from_stt, stt_from_q_norm
 
 
 # Obfuscation key for training hash encoding (not cryptographic security)
@@ -714,73 +717,71 @@ def decode_training(hash_str: str) -> tuple:
     return left @ right, float(mis_omega), float(mis_chi)
 
 
-def check_training_quality(student_U: np.ndarray, teacher_U: np.ndarray,
-                           student_psi: float, student_kappa: float,
-                           mis_omega: float, mis_chi: float,
-                           tol_good: float = 0.5, tol_close: float = 2.0) -> dict:
-    """Check student's alignment against teacher's hidden exercise.
+def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_errors,
+                    hkls, locked=None, tol_good=0.5, tol_close=2.0) -> dict:
+    """Grade the operator's alignment against the truth by its worst miss.
 
-    Args:
-        student_U: Student's calculated U matrix.
-        teacher_U: Teacher's hidden U matrix.
-        student_psi: Student's psi offset (corrects omega misalignment).
-        student_kappa: Student's kappa offset (corrects chi misalignment).
-        mis_omega: Hidden omega misalignment.
-        mis_chi: Hidden chi misalignment.
-        tol_good: Tolerance for "aligned" (degrees).
-        tol_close: Tolerance for "close" (degrees).
+    For each reflection in ``hkls``: the readouts the operator's belief
+    commands -- ``ub`` (U @ B from the UB and the lattice fields) through
+    ``solve_stage`` on ``gonio``, free, or on the plane lock's tilts
+    ``locked`` ({inner axis: degrees}) when one is set -- plus ``corrections``
+    and the hidden ``zero_errors`` ({axis: degrees}) are the physical angles.
+    The miss is the larger of the angle between the true reflection in the
+    lab, ``R_stage(physical) @ u_true @ b_true @ hkl`` (signed per ``sense``),
+    and the commanded lab Q, and the 2theta difference between the commanded
+    and the true |Q| at the same ``ki``, ``kf``. A true |Q| that closes no
+    scattering triangle there is a miss of inf, named. A reflection the
+    belief cannot reach is skipped and named in ``skipped``.
 
-    Returns:
-        dict with per-component feedback and overall status.
+    Returns ``{"status", "summary", "worst_miss", "worst_hkl", "skipped"}``.
+    The worst miss decides: "aligned" (<= ``tol_good`` degrees), "close"
+    (<= ``tol_close``), else "way_off"; "cannot_assess" when ``b_true`` is
+    None (no sample) or fewer than two non-parallel reflections are
+    reachable. The summary names the worst miss and its HKL only, so it shows
+    nothing of the hidden truth but how far the belief is from it.
     """
-    # Misalignment check (same as existing misalignment dock)
-    in_plane_error = abs(student_psi - (-mis_omega))
-    out_of_plane_error = abs(student_kappa - (-mis_chi))
+    def shown(hkl):
+        return "(" + " ".join(f"{float(x):g}" for x in hkl) + ")"
 
-    def status_for_error(err):
-        if err <= tol_good:
-            return "aligned"
-        elif err <= tol_close:
-            return "close"
-        else:
-            return "way_off"
+    def cannot(reason, skipped=()):
+        return {"status": "cannot_assess", "summary": f"Cannot assess: {reason}",
+                "worst_miss": None, "worst_hkl": None, "skipped": list(skipped)}
 
-    in_plane_status = status_for_error(in_plane_error)
-    out_of_plane_status = status_for_error(out_of_plane_error)
+    if b_true is None:
+        return cannot("no sample is selected, so there is no crystal to grade against")
+    ub = np.asarray(ub, dtype=float)
+    flip = -1.0 if sense > 0 else 1.0           # +1 branch: -U B hkl on the lab Q
+    misses, skipped = [], []
+    for hkl in hkls:
+        h = np.asarray(hkl, dtype=float)
+        q_belief = ub @ h
+        try:
+            stt = stt_from_q_norm(float(np.linalg.norm(q_belief)), ki, kf, sense)
+            q_lab = lab_q_from_stt(ki, kf, stt)
+            readouts = solve_stage(gonio, flip * q_belief, q_lab, locked=locked)
+        except ValueError as exc:               # StageUnreachable included
+            skipped.append(f"{shown(hkl)}: {exc}")
+            continue
+        physical = {ax.name: readouts[ax.name] + corrections.get(ax.name, 0.0)
+                    + zero_errors.get(ax.name, 0.0) for ax in gonio}
+        q_true = u_true @ b_true @ h
+        true_lab = stage_rotation(gonio, physical) @ (flip * q_true)
+        miss = math.degrees(math.atan2(float(np.linalg.norm(np.cross(true_lab, q_lab))),
+                                       float(true_lab @ q_lab)))
+        try:
+            stt_true = stt_from_q_norm(float(np.linalg.norm(q_true)), ki, kf, sense)
+            miss = max(miss, abs(stt_true - stt))
+        except ValueError:
+            miss = math.inf                     # the true |Q| closes no triangle here
+        misses.append((tuple(hkl), miss))
 
-    # Orientation check: angle between student and teacher U matrices
-    # Rotation difference: R_diff = student_U @ teacher_U^T
-    # Angle = arccos((trace(R_diff) - 1) / 2)
-    R_diff = student_U @ teacher_U.T
-    trace = np.clip(np.trace(R_diff), -1, 3)
-    ori_angle = math.degrees(math.acos(np.clip((trace - 1) / 2, -1, 1)))
-
-    ori_status = status_for_error(ori_angle)
-
-    def hint_for_error(err, status):
-        if status == "aligned":
-            return "Well aligned!"
-        elif status == "close":
-            return f"Close (~{err:.1f}\u00b0 off)"
-        elif err <= 5.0:
-            return f"Getting there (~{err:.1f}\u00b0 off)"
-        else:
-            return f"Way off (>{err:.0f}\u00b0)"
-
-    # Overall: worst of all three
-    status_priority = {"aligned": 0, "close": 1, "way_off": 2}
-    all_statuses = [in_plane_status, out_of_plane_status, ori_status]
-    overall = max(all_statuses, key=lambda s: status_priority[s])
-
-    return {
-        'in_plane': in_plane_status,
-        'in_plane_error': in_plane_error,
-        'in_plane_hint': hint_for_error(in_plane_error, in_plane_status),
-        'out_of_plane': out_of_plane_status,
-        'out_of_plane_error': out_of_plane_error,
-        'out_of_plane_hint': hint_for_error(out_of_plane_error, out_of_plane_status),
-        'orientation': ori_status,
-        'orientation_error': ori_angle,
-        'orientation_hint': hint_for_error(ori_angle, ori_status),
-        'overall': overall,
-    }
+    reached = [np.asarray(hkl, dtype=float) for hkl, _ in misses]
+    if not any(np.linalg.norm(np.cross(a, b)) > 1e-9
+               for i, a in enumerate(reached) for b in reached[i + 1:]):
+        return cannot("fewer than two non-parallel reflections are reachable", skipped)
+    worst_hkl, worst = max(misses, key=lambda item: item[1])
+    status = "aligned" if worst <= tol_good else "close" if worst <= tol_close else "way_off"
+    summary = (f"{shown(worst_hkl)} closes no scattering triangle at this ki, kf"
+               if math.isinf(worst) else f"Worst miss {worst:.2f}° at {shown(worst_hkl)}")
+    return {"status": status, "summary": summary, "worst_miss": worst,
+            "worst_hkl": worst_hkl, "skipped": skipped}

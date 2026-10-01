@@ -50,58 +50,6 @@ def decode_misalignment(hash_str: str) -> tuple:
         raise ValueError(f"Invalid misalignment hash: {e}")
 
 
-def check_alignment_quality(user_psi: float, user_kappa: float,
-                            mis_omega: float, mis_chi: float,
-                            tolerance_good: float = 0.2, tolerance_close: float = 1.0) -> dict:
-    """Check how well the user has aligned the sample.
-    
-    Args:
-        user_psi: User's in-plane offset (ψ) to correct omega misalignment
-        user_kappa: User's out-of-plane offset (κ) to correct chi misalignment
-        mis_omega: Hidden in-plane misalignment angle
-        mis_chi: Hidden out-of-plane misalignment angle
-        tolerance_good: Tolerance for "aligned" status (degrees)
-        tolerance_close: Tolerance for "close" status (degrees)
-    """
-    # To correct misalignment, user offset should be negative of misalignment
-    in_plane_error = abs(user_psi - (-mis_omega))
-    out_of_plane_error = abs(user_kappa - (-mis_chi))
-    
-    def status_for_error(err):
-        if err <= tolerance_good:
-            return "aligned"
-        elif err <= tolerance_close:
-            return "close"
-        else:
-            return "way_off"
-    
-    in_plane_status = status_for_error(in_plane_error)
-    out_of_plane_status = status_for_error(out_of_plane_error)
-    
-    status_priority = {"aligned": 0, "close": 1, "way_off": 2}
-    overall = max([in_plane_status, out_of_plane_status], key=lambda s: status_priority[s])
-    
-    return {
-        "in_plane": in_plane_status,
-        "in_plane_hint": _get_hint(in_plane_error, tolerance_good, tolerance_close),
-        "out_of_plane": out_of_plane_status,
-        "out_of_plane_hint": _get_hint(out_of_plane_error, tolerance_good, tolerance_close),
-        "overall": overall
-    }
-
-
-def _get_hint(error: float, tol_good: float, tol_close: float) -> str:
-    """Generate a hint based on error magnitude."""
-    if error <= tol_good:
-        return "Well aligned!"
-    elif error <= tol_close:
-        return f"Close (~{error:.1f}° off)"
-    elif error <= 5.0:
-        return f"Getting there (~{error:.1f}° off)"
-    else:
-        return f"Way off (>{error:.0f}°)"
-
-
 class MisalignmentDock(BaseDockWidget):
     """Dock widget for misalignment training operations."""
     
@@ -200,12 +148,10 @@ class MisalignmentDock(BaseDockWidget):
         check_layout.addWidget(self.check_alignment_button)
         
         # Alignment feedback labels
-        self.in_plane_feedback_label = QLabel("In-plane (ψ → ω): ---")
-        check_layout.addWidget(self.in_plane_feedback_label)
-        
-        self.out_of_plane_feedback_label = QLabel("Out-of-plane (κ → sgl): ---")
-        check_layout.addWidget(self.out_of_plane_feedback_label)
-        
+        self.miss_feedback_label = QLabel("Worst miss: ---")
+        self.miss_feedback_label.setWordWrap(True)
+        check_layout.addWidget(self.miss_feedback_label)
+
         self.overall_feedback_label = QLabel("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
         check_layout.addWidget(self.overall_feedback_label)
@@ -257,39 +203,19 @@ class MisalignmentDock(BaseDockWidget):
     
     def _reset_feedback(self):
         """Reset alignment feedback labels."""
-        self.in_plane_feedback_label.setText("In-plane (ψ → ω): ---")
-        self.in_plane_feedback_label.setStyleSheet("")
-        self.out_of_plane_feedback_label.setText("Out-of-plane (κ → sgl): ---")
-        self.out_of_plane_feedback_label.setStyleSheet("")
+        self.miss_feedback_label.setText("Worst miss: ---")
+        self.miss_feedback_label.setStyleSheet("")
         self.overall_feedback_label.setText("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
-    
-    def update_alignment_feedback(self, user_psi: float, user_kappa: float,
-                                  mis_omega: float, mis_chi: float):
-        """Update the alignment feedback display based on current user offsets.
 
-        Args:
-            user_psi: User's in-plane offset (ψ) to correct omega misalignment
-            user_kappa: User's out-of-plane offset (κ) to correct chi misalignment
-            mis_omega, mis_chi: the controller's hidden zero errors
-        """
-        result = check_alignment_quality(user_psi, user_kappa, mis_omega, mis_chi)
-        
-        # Update in-plane feedback (psi corrects omega misalignment)
-        in_plane_status = result["in_plane"]
-        in_plane_hint = result["in_plane_hint"]
-        self.in_plane_feedback_label.setText(f"In-plane (ψ → ω): {in_plane_hint}")
-        self.in_plane_feedback_label.setStyleSheet(self._status_style(in_plane_status))
-        
-        # Update out-of-plane feedback (kappa corrects chi misalignment)
-        out_of_plane_status = result["out_of_plane"]
-        out_of_plane_hint = result["out_of_plane_hint"]
-        self.out_of_plane_feedback_label.setText(f"Out-of-plane (κ → sgl): {out_of_plane_hint}")
-        self.out_of_plane_feedback_label.setStyleSheet(self._status_style(out_of_plane_status))
-        
-        # Update overall feedback
-        overall = result["overall"]
-        overall_text = {"aligned": "✓ Well Aligned!", "close": "◐ Getting Close", "way_off": "✗ Keep Trying"}
+    def update_alignment_feedback(self, grade: dict):
+        """Show a grade from ``tavi.ub_matrix.grade_alignment`` (the one
+        grader both docks use): the worst miss and its HKL, and the status."""
+        overall = grade["status"]
+        self.miss_feedback_label.setText(grade["summary"])
+        self.miss_feedback_label.setStyleSheet(self._status_style(overall))
+        overall_text = {"aligned": "✓ Well Aligned!", "close": "◐ Getting Close",
+                        "way_off": "✗ Keep Trying", "cannot_assess": "Cannot assess"}
         self.overall_feedback_label.setText(f"Overall: {overall_text[overall]}")
         self.overall_feedback_label.setStyleSheet(f"font-weight: bold; {self._status_style(overall)}")
     
@@ -299,5 +225,6 @@ class MisalignmentDock(BaseDockWidget):
             return "color: green;"
         elif status == "close":
             return "color: orange;"
-        else:
+        elif status == "way_off":
             return "color: red;"
+        return "color: gray;"

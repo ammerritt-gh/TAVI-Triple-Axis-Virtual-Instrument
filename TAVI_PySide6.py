@@ -119,7 +119,7 @@ from tavi.tas_geometry import (
     instrument_q_to_component_q,
     lab_q_from_stt,
 )
-from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality, compute_B_matrix,
+from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
                             u_from_plane, validate_rotation_matrix)
 from tavi.runtime_tracker import RuntimeTracker
@@ -5249,19 +5249,54 @@ class TAVIController(QObject):
             self.print_to_message_center("Misalignment cleared")
 
     def on_check_alignment(self):
-        """Check user's alignment against hidden misalignment and update feedback."""
+        """Grade the alignment against the misalignment exercise (the one grader)."""
         if self._exercise is None or self._exercise[0] != "misalignment":
             self.print_to_message_center("No misalignment exercise loaded")
             return
+        grade = self._grade_alignment()
+        if grade is not None:
+            self.window.misalignment_dock.update_alignment_feedback(grade)
+
+    def _grade_alignment(self):
+        """The one grader both docks call (``tavi.ub_matrix.grade_alignment``):
+        the operator's peaks' HKLs plus three reflections of the mounting
+        plane (u, v, u+v; with no plane described, (1 0 0), (0 1 0),
+        (1 1 0)), commanded by the operator's UB, lattice fields and
+        corrections, against the truth (U_true, the sample's own B, the zero
+        errors). Names the skipped reflections and the result in the message
+        center; returns the grade, or None when it could not run."""
         try:
-            # psi_edit is the in-plane offset (corrects omega misalignment)
-            # kappa_edit is the out-of-plane offset (corrects chi misalignment)
-            psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
-            self.window.misalignment_dock.update_alignment_feedback(
-                psi, kappa, self.instrument_state.mis_omega, self.instrument_state.mis_chi)
-        except ValueError:
-            self.print_to_message_center("Invalid sample orientation values for alignment check")
+            vals = self.get_gui_values()
+            state = self.instrument_state
+            gonio = state.goniometer
+            try:
+                b_true = self._true_B()
+            except ValueError:
+                b_true = None           # graded "cannot assess", naming no sample
+            hkls = [p.hkl for p in self._peaks_from_dock() if any(p.hkl)]
+            if self.mount_plane is not None:
+                u, v = (np.asarray(hkl, dtype=float) for hkl in self.mount_plane)
+                hkls += [tuple(u), tuple(v), tuple(u + v)]
+            else:
+                hkls += [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
+            grade = grade_alignment(
+                gonio, state.sense_sample, vals['Ki'], vals['Kf'],
+                self._build_sample_mount(vals).mounted_basis,
+                stage_corrections(gonio, vals), state.U_true, b_true,
+                {ax.name: getattr(state, ax.zero_error) for ax in gonio if ax.zero_error},
+                hkls,
+                # Free solve for now. When a plane is locked (Unit 2, C7) the
+                # lock's tilts go here, {inner axis: degrees}, as the solver's
+                # ``locked`` argument.
+                locked=None,
+            )
+        except Exception as e:
+            self.print_to_message_center(f"Alignment check failed: {e}")
+            return None
+        for skipped in grade["skipped"]:
+            self.print_to_message_center(f"Alignment check skipped {skipped}")
+        self.print_to_message_center(f"Alignment check: {grade['summary']}")
+        return grade
 
     # ===== UB Matrix Controller Methods =====
 
@@ -5452,34 +5487,13 @@ class TAVIController(QObject):
             self.print_to_message_center("Training exercise cleared")
 
     def on_check_training(self):
-        """Check student alignment against loaded training exercise."""
-        try:
-            if self._exercise is None or self._exercise[0] != "training":
-                self.print_to_message_center("No training exercise loaded")
-                return
-
-            teacher_U = self.instrument_state.U_true
-            mis_omega = self.instrument_state.mis_omega
-            mis_chi = self.instrument_state.mis_chi
-
-            # Get student's current state
-            student_U = self.ub_matrix.U
-            vals = self.get_gui_values()
-            student_psi = vals.get('psi', 0) if vals else 0
-            student_kappa = vals.get('kappa', 0) if vals else 0
-
-            results = check_training_quality(
-                student_U, teacher_U,
-                student_psi, student_kappa,
-                mis_omega, mis_chi,
-            )
-            self.window.ub_matrix_dock.update_check_results(results)
-            self.print_to_message_center(
-                f"Alignment check: orientation {results['orientation']}, "
-                f"in-plane {results['in_plane']}, out-of-plane {results['out_of_plane']}"
-            )
-        except Exception as e:
-            self.print_to_message_center(f"Training check failed: {e}")
+        """Grade the alignment against the training exercise (the one grader)."""
+        if self._exercise is None or self._exercise[0] != "training":
+            self.print_to_message_center("No training exercise loaded")
+            return
+        grade = self._grade_alignment()
+        if grade is not None:
+            self.window.ub_matrix_dock.update_check_results(grade)
 
     def configure_diagnostics(self):
         """Open diagnostics configuration window."""

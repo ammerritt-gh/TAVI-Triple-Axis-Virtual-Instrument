@@ -1011,3 +1011,118 @@ def test_deterministic_counts_drop_when_the_ub_misses_the_crystal(controller, tm
         controller.ub_matrix.set_U(u)
         counts.append(_one_point_scan(controller, f"t-entry14-{len(counts)}").counts[0])
     assert counts[0] > 0 and counts[1] < 0.1 * counts[0], counts
+
+
+# --- Unit 2 (C5): training on the truth ---------------------------------------------
+
+@pytest.mark.parametrize("kind", ["training", "misalignment"])
+def test_both_docks_grade_a_fit_that_absorbs_a_turntable_offset_aligned(controller, messages,
+                                                                        kind):
+    """A hidden 3 deg turntable zero error, psi = 0, and a UB fitted from
+    peaks taken on the true crystal: the fit absorbs the offset, so the
+    reflections it commands are the true ones and either dock grades it
+    aligned (the old U-vs-U and psi-vs-zero-error checks said way off)."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+    from tavi.ub_matrix import encode_training
+    from test_orientation import _true_peak
+
+    controller.set_default_parameters()
+    training = kind == "training"
+    dock = controller.window.ub_matrix_dock if training else controller.window.misalignment_dock
+    dock.load_hash_edit.setText(
+        encode_training(mccode_rotation_matrix(0.0, 10.0, 0.0), 3.0, 0.0) if training
+        else encode_misalignment(3.0, 0.0))
+    (controller.on_load_training if training else controller.on_load_misalignment_hash)()
+    state, vals = controller.instrument_state, controller.get_gui_values()
+    assert vals["deltaE"] == 0.0
+    peaks = [_true_peak(state.goniometer, state.sense_sample, hkl, state.U_true,
+                        controller._true_B(), {"A3": 0.0, "sgl": 0.0, "sgu": 0.0},
+                        {"A3": 3.0}, k=vals["Kf"]).to_dict()
+             for hkl in ((2, 0, 0), (0, 2, 0))]
+    controller.window.ub_matrix_dock.set_peak_entries(peaks)
+    controller.on_calculate_ub()
+    messages.clear()
+
+    (controller.on_check_training if training else controller.on_check_alignment)()
+
+    overall = dock.check_overall_label if training else dock.overall_feedback_label
+    expected = "Fully Aligned" if training else "Well Aligned"
+    assert expected in overall.text(), (overall.text(), messages)
+    assert any(m.startswith("Alignment check: Worst miss 0.00° at") for m in messages), messages
+
+
+def _widget_texts(window, skip):
+    """The text of every line edit, label, table and text box in the window,
+    except the widgets in ``skip`` (C++ pointers)."""
+    import shiboken6
+    from PySide6.QtWidgets import QLabel, QLineEdit, QPlainTextEdit, QTableWidget, QTextEdit
+
+    texts = []
+    for cls in (QLineEdit, QLabel, QTableWidget, QPlainTextEdit, QTextEdit):
+        for widget in window.findChildren(cls):
+            if shiboken6.getCppPointer(widget)[0] in skip:
+                continue
+            if isinstance(widget, QTableWidget):
+                text = [[widget.item(r, c).text() if widget.item(r, c) else ""
+                         for c in range(widget.columnCount())] for r in range(widget.rowCount())]
+            elif isinstance(widget, (QPlainTextEdit, QTextEdit)):
+                text = widget.toPlainText()
+            else:
+                text = widget.text()
+            texts.append((cls.__name__, widget.objectName(), text))
+    return texts
+
+
+def test_two_hidden_truths_leave_the_gui_and_the_api_identical(controller, messages, tmp_path):
+    """Leak differential (GUI and API only, by ruling): two training exercises
+    with different hidden truths, loaded in turn with nothing else changed,
+    give identical /state, /schema, /journal entries, message-center lines,
+    widget texts (the pasted hash aside) and scan metadata under one seed."""
+    import shiboken6
+    from tavi.tas_geometry import mccode_rotation_matrix
+    from tavi.ub_matrix import encode_training
+
+    hashes = [EXERCISE_HASHES["training"],
+              encode_training(mccode_rotation_matrix(-4.0, 11.0, 6.0), -2.0, 1.5)]
+    window = controller.window
+    skip = {shiboken6.getCppPointer(w)[0] for w in (
+        window.api_dock.activity_log, window.api_dock.job_table,
+        window.output_dock.message_text,               # compared by the lines each load adds
+        window.ub_matrix_dock.load_hash_edit)}         # the hash the operator pasted
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    controller.set_default_parameters()
+    controller.output_directory = str(tmp_path)
+
+    def load(hash_str):
+        controller.on_clear_training()
+        messages.clear()
+        journal_before = controller._journal.read(0)["total_recorded"]
+        window.ub_matrix_dock.load_hash_edit.setText(hash_str)
+        controller.on_load_training()
+        return journal_before
+
+    seen, truths = [], []
+    for hash_str in hashes:
+        journal_before = load(hash_str)
+        journal = backend.get_journal(500)
+        added = journal["total_recorded"] - journal_before
+        seen.append({
+            "state": json.dumps(backend.get_state(), sort_keys=True, default=str),
+            "schema": json.dumps(controller.build_api_schema(), sort_keys=True, default=str),
+            "journal": [(e["kind"], e["text"]) for e in journal["entries"][-added:]] if added else [],
+            "messages": list(messages),
+            "widgets": _widget_texts(window, skip),
+        })
+        truths.append(controller.instrument_state.U_true.copy())
+    assert not np.allclose(truths[0], truths[1])
+    for key in seen[0]:
+        assert seen[0][key] == seen[1][key], key
+
+    metadata = []
+    for index, hash_str in enumerate(hashes):
+        load(hash_str)
+        result = _one_point_scan(controller, f"t-leak-{index}", seed=7)
+        metadata.append(json.dumps(result.to_dict(include_data=True)["metadata"],
+                                   sort_keys=True, default=str))
+    assert metadata[0] == metadata[1]
+    controller.on_clear_training()

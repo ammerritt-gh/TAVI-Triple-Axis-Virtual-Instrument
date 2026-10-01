@@ -59,8 +59,17 @@ Each observed peak in the UB Matrix dock shows one angle per goniometer axis (A3
 By default, the sample is perfectly aligned in the beam. It is possible to create an obfuscated misalignment in the sample that can then be corrected, for example when training a student in aligning a sample. To generate and correct a misalignment, follow these steps:
 1. Enter the desired misalignment of the turntable (ω mis, in-plane) and of the lower arc (sgl mis, out-of-plane). Click "generate hash" and delete these entries if the student will be using the computer later.
 2. Enter the misalignment hash in the box and load it, either within the same run or shared with a student, to add a hidden misalignment to the sample. One exercise is loaded at a time: while a UB training exercise is loaded, loading or clearing a misalignment is refused (and the other way round); clear the other exercise first, or press Defaults. Loading or clearing an exercise puts the UB back to the sample as described.
-3. In the sample dock, the student may enter offsets to correct the misalignment. Note that misalignment + correction = 0 ideally.
-4. A student may check the alignment (roughly) in the dock with the provided button.
+3. In the sample dock, the student may enter offsets to correct the misalignment, or find the peaks and fit a UB that absorbs it.
+4. A student may check the alignment in the dock with the provided button; it is graded as described below.
+
+### Training: how alignment is graded
+The UB Matrix dock's training exercise (a hidden mount rotation plus hidden zero errors) and the Misalignment dock's exercise (hidden zero errors only) are graded by one check, with the same tolerances. It does not compare your UB with the hidden rotation, or ψ and κ with the hidden offsets. It asks whether your setup puts the instrument on the reflections: for each reflection it takes the angles your UB, lattice fields and ψ/κ corrections command, and measures how far the true reflection is from where they drive. The miss is the larger of the angle between the true and the commanded scattering vector, and the 2θ difference between the commanded and the true |Q| at the current ki and kf. The reflections are your peaks' HKLs plus three of the mounting plane (u, v and u+v); with no plane described, they are (1 0 0), (0 1 0) and (1 1 0). The worst miss decides: within 0.5° is aligned, within 2° close, more is not yet aligned. Only the worst miss and its HKL are shown. A true |Q| that closes no scattering triangle at the current ki and kf counts as way off, naming the reflection.
+
+A reflection your UB cannot reach (too large a |Q|, or past the arcs' travel) is skipped, and the message center names it. If fewer than two non-parallel reflections remain, or no sample is selected, the check answers "cannot assess" and says why. After you select a different sample in a plane-mounted session, the plane's description is gone, so grading uses your peaks plus whichever of (1 0 0), (0 1 0) and (1 1 0) can be reached.
+
+A UB fitted from peaks found on the misaligned crystal passes even with ψ = 0. In the plane, a turntable offset is a turn of the whole crystal about the vertical, and the fit absorbs it exactly, so the fitted UB drives to the true reflections. With tilted arcs, a correction offset is absorbed only approximately (see *UB matrix peaks*): the fit is exact only when the corrections cancel the zero errors, and otherwise the grade is the residual miss the fit leaves.
+
+The exercise is hidden from the GUI and the remote API: no field, label, scan result or API response shows the hidden rotation or offsets, and a save keeps them only inside the obfuscated hash. It is not hidden from McStas's own output files, which record the sample arm's parameters, zero errors included.
 
 ## Simulation Dock
 The simulation dock is the main center for ruinning an experiment.
