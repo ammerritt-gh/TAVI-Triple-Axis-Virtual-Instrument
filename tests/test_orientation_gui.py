@@ -55,8 +55,10 @@ def _controller_for(instrument_id):
         yield ctrl
     finally:
         # Let the accepted-edit flash timers of API writes finish before the
-        # widgets go, or they fire into the next module's event loop.
-        QTest.qWait(600)
+        # widgets go, or they fire into the next module's event loop (or the
+        # other controller's wait). The chain is 450 ms of timers; the rest
+        # is slack for slow handlers in a full run (600 ms once fell short).
+        QTest.qWait(1000)
         ctrl.shutdown()
         window.deleteLater()
         app.processEvents()
