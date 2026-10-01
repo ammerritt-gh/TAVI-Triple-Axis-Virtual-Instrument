@@ -123,7 +123,7 @@ from tavi.tas_geometry import (
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
                             u_from_plane, validate_rotation_matrix, alignment_residuals,
-                            refine_lattice_from_peaks)
+                            refine_lattice_from_peaks, small_integer_indices)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.settings import load_mpi_count, save_mpi_count
 from tavi.machine_profile import machine_fingerprint
@@ -5486,7 +5486,8 @@ class TAVIController(QObject):
     def _grade_alignment(self):
         """The one grader both docks call (``tavi.ub_matrix.grade_alignment``):
         the operator's peaks' HKLs plus three reflections of the mounting
-        plane (u, v, u+v; with no plane described, (1 0 0), (0 1 0),
+        plane (u, v, u+v; with no plane described, the described mount's x
+        and z as small (h k l) and their sum, else (1 0 0), (0 1 0),
         (1 1 0)), commanded by the operator's UB, lattice fields and
         corrections, against the truth (U_true, the sample's own B, the zero
         errors). Names the skipped reflections and the result in the message
@@ -5504,7 +5505,19 @@ class TAVIController(QObject):
                 u, v = (np.asarray(hkl, dtype=float) for hkl in self.mount_plane)
                 hkls += [tuple(u), tuple(v), tuple(u + v)]
             else:
-                hkls += [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
+                # The described mount's horizontal x and z as small (h k l),
+                # and their sum; the standard set when either has none.
+                n1, n2 = ((small_integer_indices(axis, self.U_described @ b_true)
+                           for axis in (np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])))
+                          if b_true is not None else (None, None))
+                if n1 is not None and n2 is not None:
+                    hkls += [n1, n2, tuple(a + b for a, b in zip(n1, n2))]
+                else:
+                    hkls += [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
+                    if b_true is not None:
+                        self.print_to_message_center(
+                            "Alignment check grades (1 0 0), (0 1 0), (1 1 0): the described "
+                            "mount's horizontal axes have no small (h k l)")
             grade = grade_alignment(
                 gonio, state.sense_sample, vals['Ki'], vals['Kf'],
                 self._build_sample_mount(vals).mounted_basis,

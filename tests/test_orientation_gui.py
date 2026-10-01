@@ -1720,3 +1720,41 @@ def test_a_sample_swap_moves_the_belief_to_the_new_samples_lattice(controller):
     assert controller.window.sample_dock.get_selected_sample_key() == "Pb_phonon_DFT"
     assert float(sam.lattice_a_edit.text()) == 4.1 and controller.ub_matrix.lattice[0] == 4.1
     controller.set_default_parameters()
+
+
+STANDARD_GRADING = [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
+
+
+@pytest.mark.parametrize("mount, graded", [
+    ((0.0, 0.0, 0.0), STANDARD_GRADING),                    # the standard setting
+    ((90.0, 0.0, 0.0), [(1, 0, 0), (0, 0, 1), (1, 0, 1)]),  # 90 deg about x
+    ((7.3, 0.0, 11.9), STANDARD_GRADING),                   # no small (h k l) fits
+], ids=["standard", "about_x_90", "irrational"])
+def test_grading_reflections_follow_the_described_mount(in12, in12_messages, monkeypatch,
+                                                        mount, graded):
+    """With no plane described, grading takes the described mount's horizontal
+    x and z as small (h k l), and their sum: at the standard setting the
+    reflections it always took; on a mount turned 90 deg about x, ones the
+    +/-20 deg arcs reach, none skipped; the standard set, said in the
+    message center, when an axis has no small (h k l)."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+
+    seen, grade_alignment = [], cm.grade_alignment
+    monkeypatch.setattr(cm, "grade_alignment",
+                        lambda *a, **k: seen.append(list(a[9])) or grade_alignment(*a, **k))
+    in12.set_default_parameters()
+    in12.window.ub_matrix_dock.set_peak_entries([])
+    in12_messages.clear()
+    try:
+        in12._set_true_mount(U_described=mccode_rotation_matrix(*mount))
+        in12._reset_ub_to_described()
+        grade = in12._grade_alignment()
+    finally:
+        in12.set_default_parameters()
+
+    assert [tuple(int(x) for x in hkl) for hkl in seen[0]] == graded
+    fallback = [m for m in in12_messages if "no small (h k l)" in m]
+    if mount[2]:
+        assert len(fallback) == 1 and "(1 0 0), (0 1 0), (1 1 0)" in fallback[0], in12_messages
+    else:
+        assert fallback == [] and grade["skipped"] == [] and grade["status"] == "aligned"
