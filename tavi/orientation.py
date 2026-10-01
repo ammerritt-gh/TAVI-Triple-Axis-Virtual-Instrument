@@ -317,7 +317,9 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
     tilt (sum of squared inner-axis angles) inside travel, then the turntable
     turns it onto ``q_lab``. The choice is a function of the point alone.
     Locked mode (``locked`` = {inner name: degrees}): the tilts never move;
-    a Q they leave out of the horizontal plane is refused with its angle.
+    a Q they leave out of the horizontal plane is refused with its angle. A
+    lock that misses an inner axis, names one the stage lacks, or sets a
+    tilt past travel is refused too.
 
     Search, for two inner axes: each arc in turn is held on a grid over a full
     turn (GRID_STEP_DEG) plus its own finite travel ends, while the levelling
@@ -345,7 +347,17 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
     target = float(up @ q_lab)
 
     if locked is not None:
-        tilts = {ax.name: float(locked.get(ax.name, 0.0)) for ax in inner}
+        # A lock carried from a saved session or another instrument must fit
+        # this stage: every inner axis set, no other name, inside travel.
+        names = [ax.name for ax in inner]
+        for name in locked:
+            if name not in names:
+                raise StageUnreachable(f"the lock names {name}, which this stage lacks")
+        for name in names:
+            if name not in locked:
+                raise StageUnreachable(f"the lock does not set {name}")
+        tilts = {name: float(locked[name]) for name in names}
+        check_travel(inner, tilts, " for the locked scattering plane")
         q_level = stage_rotation(inner, tilts) @ q_mount
         out = math.degrees(math.asin(max(-1.0, min(1.0, (up @ q_level - target) / scale))))
         if abs(out) > LOCKED_PLANE_TOLERANCE_DEG:
