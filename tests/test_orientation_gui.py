@@ -1389,10 +1389,11 @@ def test_a_saved_lock_past_travel_is_released_on_restore(in12, in12_messages):
             "its travel is [-20, 20]°") in in12_messages
 
 
-def test_the_confirmed_switch_drops_only_the_lock(controller, monkeypatch):
+def test_the_confirmed_switch_drops_only_the_lock(controller, monkeypatch, messages):
     """I4: the confirmed branch of the instrument switch (restart stubbed)
     releases the lock and rewrites only the lock key of the outgoing block;
-    with no lock saved it writes nothing."""
+    with no lock saved it writes nothing; a failed write is reported and the
+    switch completes."""
     from PySide6.QtWidgets import QMessageBox
 
     window = controller.window
@@ -1422,6 +1423,17 @@ def test_the_confirmed_switch_drops_only_the_lock(controller, monkeypatch):
         _lock(controller, PLANE_H0H)
         window._on_instrument_selected("in12")
         assert open(path, "rb").read() == written
+
+        def unwritable(_edit):                             # the write fails: still switch
+            raise OSError("disk full")
+
+        _lock(controller, PLANE_H0H)
+        monkeypatch.setattr(controller, "_edit_parameters_file", unwritable)
+        window._restart_instrument_id = None
+        window._on_instrument_selected("in12")
+        assert window._restart_instrument_id == "in12"
+        assert controller.instrument_state.plane_lock is None
+        assert any("disk full" in m for m in messages), messages
     finally:
         if original is None:
             os.remove(path)

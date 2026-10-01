@@ -5403,7 +5403,8 @@ class TAVIController(QObject):
         """I4: the confirmed instrument switch releases the lock and rewrites
         only the outgoing block's lock key (no full save, so the switch's
         "unsaved changes are lost" holds). Nothing is written when that
-        block is absent or carries no lock."""
+        block is absent or carries no lock. A failed write is reported and
+        the switch goes ahead."""
         self._set_plane_lock(None)
 
         def drop_lock(document):
@@ -5413,7 +5414,12 @@ class TAVIController(QObject):
             block["plane_lock"] = None
             return True
 
-        self._edit_parameters_file(drop_lock)
+        try:
+            self._edit_parameters_file(drop_lock)
+        except OSError as exc:
+            self.print_to_message_center(
+                f"Could not drop the plane lock from parameters.json ({exc}); "
+                "it may be restored on the next start of this instrument")
 
     def _load_exercise(self, kind, hash_str):
         """Interactive load (I3): refused while the other exercise is loaded;
