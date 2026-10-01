@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sys
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -12,8 +13,9 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -21,7 +23,8 @@ from gui.docks.misalignment_dock import encode_misalignment  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi.api_server import ApiError  # noqa: E402
 from tavi.local_state import config_path  # noqa: E402
-from tavi.tas_geometry import component_q_to_instrument_q  # noqa: E402
+from tavi.tas_geometry import component_q_to_instrument_q, mccode_rotation_matrix  # noqa: E402
+from tavi.ub_matrix import encode_training  # noqa: E402
 
 
 class _SyncBridge:
@@ -1758,3 +1761,188 @@ def test_grading_reflections_follow_the_described_mount(in12, in12_messages, mon
         assert len(fallback) == 1 and "(1 0 0), (0 1 0), (1 1 0)" in fallback[0], in12_messages
     else:
         assert fallback == [] and grade["skipped"] == [] and grade["status"] == "aligned"
+
+
+# --- Unit 3 (C7): the operator acceptance, cold and mouse-only --------------------
+
+ACCEPTANCE_HASHES = (encode_training(mccode_rotation_matrix(0.0, 2.0, 0.0), 1.0, 0.0),
+                     encode_training(mccode_rotation_matrix(0.0, -3.0, 0.0), -0.5, 0.0))
+
+
+def _type(edit, text):
+    """Type into a line edit as an operator does: replace the text, Enter."""
+    edit.selectAll()
+    QTest.keyClicks(edit, text)
+    QTest.keyClick(edit, Qt.Key_Return)
+
+
+def _settle(done, timeout=30.0):
+    """Let Qt run until ``done()`` holds (a finished scan, a debounced count)."""
+    app = QApplication.instance()
+    deadline = time.monotonic() + timeout
+    while not done():
+        assert time.monotonic() < deadline, "the GUI did not settle"
+        app.processEvents()
+        time.sleep(0.002)
+    app.processEvents()
+
+
+def _cold_start(controller):
+    """M4: unlock every peak entry, remove entries down to the dock's two,
+    clear the rest, press Defaults: no valid peak, the UB the described mount."""
+    dock = controller.window.ub_matrix_dock
+    for index in range(len(dock._peak_widgets)):
+        if dock.get_peak_widget(index).lock_check.isChecked():
+            dock.get_peak_widget(index).lock_check.click()
+    while len(dock._peak_widgets) > 2:
+        dock.get_peak_widget(len(dock._peak_widgets) - 1).remove_button.click()
+    for index in range(2):
+        for edit in dock.get_peak_widget(index)._fields():
+            edit.clear()
+    controller.window.simulation_dock.defaults_button.click()
+    assert not [p for p in controller._peaks_from_dock() if p.is_valid]
+    assert np.array_equal(controller.ub_matrix.U, controller.U_described)
+
+
+def _load_training_by_hand(controller, hash_str):
+    dock = controller.window.ub_matrix_dock
+    _type(dock.load_hash_edit, hash_str)
+    dock.load_training_button.click()
+
+
+def _flagged_rows(table):
+    return [r for r in range(table.rowCount()) if table.item(r, 0).text().startswith("⚠")]
+
+
+def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages, monkeypatch,
+                                                            tmp_path):
+    """Programme 3.4 on the real widgets: from a cold start with a training
+    exercise loaded (a hidden 2 deg turn about the vertical and a 1 deg
+    turntable zero error), the operator finds (2 0 0) and (0 2 0) with A3
+    rocking scans on the deterministic engine, goes to each fitted centre,
+    takes the positions, mis-indexes the second as (2 2 0), sees it flagged,
+    corrects it, reads a clean fit and the plane, locks it and runs a
+    three-point scan whose every point runs at the lock's tilts and kappa."""
+    window, dock = controller.window, controller.window.ub_matrix_dock
+    sim, fit, scat = window.simulation_dock, window.fitting_dock, window.scattering_dock
+    table = dock.residual_table
+    dialogs = []
+    for name in ("warning", "critical", "question"):
+        monkeypatch.setattr(QMessageBox, name, staticmethod(
+            lambda *args, _name=name, **kw: dialogs.append((_name, args[2:3])) or QMessageBox.No))
+    _cold_start(controller)
+    try:
+        _type(window.data_control_dock.save_folder_edit, str(tmp_path / "acceptance"))
+        _type(window.sample_dock.kappa_edit, "0.123456")   # kappa from an earlier alignment
+        _type(sim.neutron_exponent_edit, "8")
+        sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("deterministic"))
+        _load_training_by_hand(controller, ACCEPTANCE_HASHES[0])
+        assert controller._exercise == ("training", ACCEPTANCE_HASHES[0])
+        assert not sim.relative_1_button.isChecked()
+        sim.relative_1_button.click()
+
+        for index, (hkl, typed) in enumerate((((2, 0, 0), (2, 0, 0)),
+                                              ((0, 2, 0), (2, 2, 0)))):  # mis-indexed
+            for edit, value in zip((scat.H_edit, scat.K_edit, scat.L_edit), hkl):
+                _type(edit, str(value))
+            commanded = float(window.instrument_dock.omega_edit.text())
+            _type(sim.scan_command_1_edit, "A3 -3 3 0.1")
+            sim.run_button.click()
+            _settle(lambda: not controller._scan_busy())
+            assert max(window.display_dock.scan_snapshot()["counts"]) > 100
+            fit.fit_button.click()
+            assert fit.goto_cen_button.isEnabled(), fit.status_label.text()
+            fit.goto_cen_button.click()
+            centre = float(window.instrument_dock.omega_edit.text())
+            assert fit.status_label.text().startswith("goto CEN"), fit.status_label.text()
+            assert 0.5 < abs(centre - commanded) < 3.0          # the hidden offset, found
+            peak = dock.get_peak_widget(index)
+            peak.take_position_button.click()
+            for edit, value in zip((peak.h_edit, peak.k_edit, peak.l_edit), typed):
+                _type(edit, str(value))
+        assert dialogs == []
+
+        dock.calculate_ub_button.click()
+        flagged = _flagged_rows(table)
+        assert flagged and all("(2 2 0)" in table.item(r, 0).text() for r in flagged)
+        words = [table.item(r, 0).toolTip() for r in flagged]
+        assert all("likely mis-indexed" in w and "lattice fields off" not in w for w in words)
+        assert any(w.endswith("one of them is likely mis-indexed") for w in words), words
+
+        _type(dock.get_peak_widget(1).h_edit, "0")                 # (0 2 0), corrected
+        dock.calculate_ub_button.click()
+        assert table.rowCount() == 3 and _flagged_rows(table) == []
+        assert any(m.startswith("UB residuals:") and m.endswith("; no flags") for m in messages)
+        assert dock.plane_normal_label.text() == "[0 0 1]"
+
+        _type(dock.lock_u_edit, "2 0 0")
+        _type(dock.lock_v_edit, "0 2 0")
+        dock.lock_plane_button.click()
+        lock = controller.instrument_state.plane_lock
+        assert (lock["hkl_u"], lock["hkl_v"]) == ([2.0, 0.0, 0.0], [0.0, 2.0, 0.0])
+        assert lock["kappa"] == 0.123456
+        sim.relative_1_button.click()
+        for edit, value in zip((scat.H_edit, scat.K_edit, scat.L_edit), (2, 0, 0)):
+            _type(edit, str(value))
+        _type(sim.scan_command_1_edit, "H 1.9 2.1 0.1")
+        _settle(lambda: sim.point_count_label.text() == "3 points (3 valid / 0 invalid)")
+
+        snapshots, compute = [], controller.instrument.compute_snapshot
+        monkeypatch.setattr(controller.instrument, "compute_snapshot",
+                            lambda *a, **k: snapshots.append(compute(*a, **k)) or snapshots[-1])
+        sim.run_button.click()
+        _settle(lambda: not controller._scan_busy())
+        assert dialogs == []
+        assert [(s.metadata["sgl"], s.metadata["sgu"], s.metadata["kappa"]) for s in snapshots] \
+            == [(lock["tilts"]["sgl"], lock["tilts"]["sgu"], lock["kappa"])] * 3
+        assert window.display_dock.scan_snapshot()["counts"][1] > 100   # on the crystal
+    finally:
+        if sim.relative_1_button.isChecked():
+            sim.relative_1_button.click()
+        sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("mcstas"))
+        controller.set_default_parameters()
+
+
+def test_after_a_wrong_fit_two_hidden_truths_look_identical(controller, messages):
+    """Post-fit leak rule (programme 3.4): the same widget actions, no scans,
+    typed peak positions with the second mis-indexed so the fit is wrong and
+    flagged, under two hidden truths: every text in the window and /state are
+    identical, before the first Calculate UB and after the wrong fit, the
+    pasted hash aside. Check My Alignment is not pressed: its grade is
+    truth-dependent feedback by design."""
+    import shiboken6
+
+    window, dock = controller.window, controller.window.ub_matrix_dock
+    skip = {shiboken6.getCppPointer(w)[0] for w in (
+        window.api_dock.activity_log, window.api_dock.job_table,
+        window.output_dock.message_text,               # compared by the lines each replay adds
+        dock.load_hash_edit)}                          # the hash the operator pasted
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+
+    def observe():
+        state = backend.get_state()
+        state["parameters"] = {k: v for k, v in state["parameters"].items() if "hash" not in k}
+        return {"state": json.dumps(state, sort_keys=True, default=str),
+                "widgets": _widget_texts(window, skip)}
+
+    replays, truths = [], []
+    for hash_str in ACCEPTANCE_HASHES:
+        _cold_start(controller)
+        messages.clear()
+        _load_training_by_hand(controller, hash_str)
+        gonio = [ax.name for ax in controller.instrument_state.goniometer]
+        for index, (hkl, a3) in enumerate((((2, 0, 0), 35.6251), ((2, 2, 0), 125.6251))):
+            peak = dock.get_peak_widget(index)
+            readouts = {"A3": a3, "sgl": 0.0, "sgu": 0.0}
+            for edit, value in zip((peak.h_edit, peak.k_edit, peak.l_edit, *peak.axis_edits,
+                                    peak.stt_edit, peak.ki_edit, peak.kf_edit),
+                                   (*hkl, *(readouts[name] for name in gonio), 71.25, 2.662, 2.662)):
+                _type(edit, str(value))
+        before = observe()
+        dock.calculate_ub_button.click()
+        assert _flagged_rows(dock.residual_table)                  # the wrong fit, flagged
+        replays.append((before, observe(), list(messages)))
+        truths.append(controller.instrument_state.U_true.copy())
+    assert not np.allclose(truths[0], truths[1])
+    assert replays[0] == replays[1]
+    controller.set_default_parameters()
