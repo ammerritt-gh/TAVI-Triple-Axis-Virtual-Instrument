@@ -124,6 +124,17 @@ replaces the hidden truth in full (no hash: `R_hidden` = I, zero errors 0)
 without touching the saved UB. A block from before schema 3 loads best effort
 with its saved UB taken as `U_described`.
 
+The UB dock's scattering-plane panel is belief too (`get_scattering_plane_info`
+on the operator's U and lattice fields). Its plane normal is the zone axis
+`zone_axis_uvw`: the vertical as an integer direct-lattice direction [u v w]
+against the direct basis 2π (UB)⁻ᵀ, found by `small_integer_indices` (indices up
+to 6, within 0.1° measured between Cartesian vectors), else the raw reciprocal
+vector `plane_normal_hkl`. A vertical reciprocal vector has no integer (h k l)
+on a non-orthogonal lattice, which is why the panel names the direct
+direction. "c* elevation" (`chi_misalignment_deg`) is c*'s angle above the
+horizontal; "a* azimuth" (`omega_offset_deg`) is a*'s angle from mount x in
+the horizontal plane, a property of the UB, not the turntable correction ψ.
+
 ### The McStas sample chain
 
 One Arm, `sample_mount`, at the sample position relative to `sample_arm` (z

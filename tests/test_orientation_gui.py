@@ -1449,3 +1449,21 @@ def test_the_confirmed_switch_drops_only_the_lock(controller, monkeypatch, messa
             with open(path, "wb") as fh:
                 fh.write(original)
         controller.set_default_parameters()
+
+
+# --- Unit 3 (C2): the labels say what the numbers are -----------------------------
+
+def test_the_plane_panel_names_what_its_numbers_are(controller):
+    """At Defaults (the standard setting) the panel, titled as your UB's,
+    shows the zone axis [0 0 1] and names the c* elevation and the a*
+    azimuth; no label still says chi tilt or omega offset."""
+    from PySide6.QtWidgets import QGroupBox, QLabel
+
+    controller.set_default_parameters()
+    dock = controller.window.ub_matrix_dock
+    texts = [label.text() for label in dock.findChildren(QLabel)]
+    assert {"Plane normal [u v w]:", "c* elevation:", "a* azimuth:"} <= set(texts)
+    assert dock.plane_normal_label.text() == "[0 0 1]"
+    assert any("from your UB" in box.title() for box in dock.findChildren(QGroupBox))
+    old = ("chi tilt", "omega offset", "χ tilt", "ω offset")
+    assert not [t for t in texts if any(word in t.lower() for word in old)], texts

@@ -402,6 +402,29 @@ def refine_lattice_from_peaks(peaks: list, initial_lattice: tuple,
     }
 
 
+def small_integer_indices(vec, basis, max_index=6, tol_deg=0.1):
+    """The smallest integer triple n (each |n_i| <= ``max_index``) whose
+    Cartesian ``basis @ n`` lies along the Cartesian ``vec`` (either sign)
+    within ``tol_deg``, or None. The angle is measured between Cartesian
+    vectors, so the lattice metric is honoured. Smallest: the least max |n_i|,
+    then the least sum |n_i|, then lexicographic; the first non-zero
+    component is positive. Deterministic: one exhaustive pass, no tie."""
+    vec = np.asarray(vec, dtype=float)
+    if not np.linalg.norm(vec) > 0:
+        return None
+    span = np.arange(-max_index, max_index + 1)
+    n = np.array(np.meshgrid(span, span, span, indexing="ij")).reshape(3, -1).T
+    lead = np.where(n[:, 0] != 0, n[:, 0], np.where(n[:, 1] != 0, n[:, 1], n[:, 2]))
+    n = n[lead > 0]
+    cart = n @ np.asarray(basis, dtype=float).T
+    angle = np.degrees(np.arctan2(np.linalg.norm(np.cross(cart, vec), axis=1),
+                                  np.abs(cart @ vec)))
+    matches = [tuple(int(x) for x in t) for t in n[angle <= tol_deg]]
+    if not matches:
+        return None
+    return min(matches, key=lambda t: (max(map(abs, t)), sum(map(abs, t)), t))
+
+
 def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
     """Analyze the scattering plane defined by the current UB matrix.
 
@@ -413,7 +436,12 @@ def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
         B: 3x3 B matrix.
 
     Returns:
-        dict with scattering plane analysis.
+        dict with scattering plane analysis: ``plane_normal_hkl`` (the
+        vertical as a raw reciprocal vector), ``in_plane_vector1_hkl`` and
+        ``in_plane_vector2_hkl`` (mount x and z, Miller coefficients),
+        ``chi_misalignment_deg`` (the c* elevation above the horizontal),
+        ``omega_offset_deg`` (the a* azimuth from mount x) and
+        ``zone_axis_uvw`` (the vertical as integer [u v w], or None).
     """
     UB = U @ B
 
@@ -427,6 +455,7 @@ def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
             'in_plane_vector2_hkl': (0, 0, 0),
             'chi_misalignment_deg': 0.0,
             'omega_offset_deg': 0.0,
+            'zone_axis_uvw': None,
         }
 
     y_sample = np.array([0.0, 1.0, 0.0])
@@ -458,6 +487,9 @@ def get_scattering_plane_info(U: np.ndarray, B: np.ndarray) -> dict:
         'in_plane_vector2_hkl': tuple(in_plane_v2),
         'chi_misalignment_deg': chi_mis,
         'omega_offset_deg': omega_offset,
+        # The zone axis [u v w]: the direct-lattice direction along the
+        # vertical, against the direct basis 2 pi (UB)^-T (None: no small one).
+        'zone_axis_uvw': small_integer_indices(y_sample, 2 * math.pi * UB_inv.T),
     }
 
 
