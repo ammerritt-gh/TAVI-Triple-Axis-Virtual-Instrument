@@ -181,6 +181,30 @@ def test_tilted_legacy_peaks_on_the_positive_sense_fit_back():
     assert np.allclose(ub.U, u_true, rtol=0.0, atol=1e-9)
 
 
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("name", list(INSTRUMENTS))
+def test_legacy_triple_of_a_tilted_stage_peak_fits_the_same_u(models, name, sense):
+    """The triple saved beside a stage record, read without the record (and
+    without its sense, as an older reader does), fits the same tilted U."""
+    from tavi.orientation import legacy_triple
+
+    model = copy.deepcopy(models[name])
+    model.sense_sample = sense
+    u_true = _rot((1, 0, 0), 6.0) @ _rot((0, 0, 1), -4.0) @ U_IN_PLANE
+    B = UBMatrix(*LATTICE).B
+    legacy = []
+    for hkl in PEAKS_3:
+        peak = _peak(model, B, hkl, u_true)
+        stt = peak.angles[2]
+        legacy.append({"hkl": list(hkl), "angles": list(legacy_triple(peak.stage, stt, K, K, sense)),
+                       "ki": K, "kf": K})
+    assert max(abs(d["angles"][1]) for d in legacy) > 1.0       # tilted: saz is used
+    ub = UBMatrix.from_dict({"lattice": list(LATTICE), "peaks": legacy})
+    assert all(p.is_legacy and p.sense_sample == sense for p in ub.peaks)
+    ub.calculate_U_from_peaks()
+    assert np.allclose(ub.U, u_true, rtol=0.0, atol=1e-9)
+
+
 def test_peak_sense_and_stage_round_trip_through_dict():
     peak = ObservedPeak(hkl=(1, 0, 0), angles=(10.0, 0.0, 40.0), ki=K, kf=K,
                         sense_sample=-1, stage={"A3": 10.0})

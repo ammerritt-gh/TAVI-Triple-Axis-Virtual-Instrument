@@ -359,6 +359,31 @@ def test_take_position_records_the_stage_and_zero_errors_never_enter(controller)
         assert pw.get_peak_data()["stage"] == peak["stage"]
 
 
+def test_a_stage_peak_saves_a_legacy_triple_with_its_legacy_meaning(controller):
+    """A reader that ignores the stage record (an older TAVI, ISAR's vendored
+    ObservedPeak, TAS_MCP) reads the saved (sth, saz, stt) triple and fits
+    the same U from tilted stage peaks."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+    from tavi.ub_matrix import UBMatrix
+
+    controller.instrument_state.set_misalignment(0.0, 0.0)
+    _set_corrections(controller, 0.0, 0.0)
+    controller.ub_matrix.set_U(mccode_rotation_matrix(4.0, 15.0, -6.0))
+    taken = _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
+    assert max(abs(shown["sgl"]) + abs(shown["sgu"]) for _, _, shown in taken) > 5.0
+    controller.on_calculate_ub()
+    fitted = controller.ub_matrix.U
+
+    state = controller.ub_matrix.to_dict()
+    for peak in state["peaks"]:
+        peak.pop("stage")
+        peak.pop("sense_sample")
+    legacy = UBMatrix.from_dict(state)
+    assert all(p.is_legacy for p in legacy.peaks)
+    legacy.calculate_U_from_peaks()
+    assert np.allclose(legacy.U, fitted, rtol=0.0, atol=1e-6)
+
+
 def test_refit_after_a_psi_change_turns_the_ub_by_that_change(controller):
     """In the plane (no arcs) a correction change is exactly a turn of the UB
     about the vertical: peaks taken under psi = 1 and refit under psi = 2 give

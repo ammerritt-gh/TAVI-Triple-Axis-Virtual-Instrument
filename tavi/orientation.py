@@ -31,10 +31,12 @@ from typing import NamedTuple
 import numpy as np
 
 from tavi.tas_geometry import (
+    component_q_to_instrument_q,
     instrument_q_to_component_q,
     lab_q_from_stt,
     mccode_euler_from_matrix,
     q_instrument_from_angles,
+    solve_instrument_angles,
 )
 
 # Free-mode search grid over the held arc, degrees; see solve_stage.
@@ -168,6 +170,19 @@ def record_angles(record, corrections=None):
 def gonio_from_record(record):
     """The ``StageAxis`` tuple a ``stage_record`` describes."""
     return tuple(StageAxis(name, tuple(axis)) for name, axis in record["axes"])
+
+
+def legacy_triple(record, stt, ki, kf, sense_sample):
+    """The legacy (sth, saz, stt) a stage peak saves beside its record: the
+    setting whose ``q_mount_from_legacy_angles`` is the record's Q as
+    recorded, so a reader that ignores the record (an older TAVI, ISAR's
+    vendored ObservedPeak, TAS_MCP) still fits the same U. ``ki``, ``kf``
+    must be positive and ``stt`` nonzero."""
+    q_mount = q_mount_from_stage(gonio_from_record(record), record_angles(record),
+                                 stt, ki, kf, sense_sample)
+    legacy = solve_instrument_angles(component_q_to_instrument_q(q_mount), ki, kf,
+                                     sense_sample=sense_sample)
+    return (legacy.sth, legacy.saz, stt)
 
 
 def sample_arm_euler(gonio, physical_angles, u_true):

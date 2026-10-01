@@ -89,8 +89,10 @@ class ObservedPeak:
         stage: Optional stage record (``tavi.orientation.stage_record``: the
             axes, their readouts, and from Take Position the corrections in
             force, ki, kf and the sense). When present, Q is read through the
-            full stage and only ``stt`` of ``angles`` is used; None (a
-            "legacy" peak) reads the legacy triple's meaning.
+            full stage and only ``stt`` of ``angles`` is used (the UB dock
+            still writes the legacy triple of the same Q,
+            ``tavi.orientation.legacy_triple``, for readers that ignore the
+            record); None (a "legacy" peak) reads the legacy triple's meaning.
     """
     hkl: tuple = (0.0, 0.0, 0.0)
     angles: tuple = (0.0, 0.0, 0.0)  # (sth, saz, stt)
