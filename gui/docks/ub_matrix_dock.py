@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal
 
 from gui.docks.base_dock import BaseDockWidget
 from instruments.descriptor import tas_goniometer
-from tavi.orientation import stage_record
+from tavi.orientation import legacy_triple, stage_record
 
 
 class LatticeRefinementDialog(QDialog):
@@ -289,8 +289,15 @@ class PeakEntryWidget(QFrame):
         readouts = {ax.name: value for ax, value in zip(self._gonio, values)}
         stage = dict(self._stage) if self._stage else stage_record(self._gonio, readouts)
         stage["angles"] = {**stage["angles"], **readouts}
-        data.update(angles=(readouts.get(self._gonio[0].name, 0.0), 0.0, stt),
-                    stage=stage, sense_sample=stage.get("sense"))
+        # The saved triple keeps its legacy meaning for readers that ignore
+        # the record; an incomplete entry (no ki/kf or 2theta, so not
+        # fittable) has no Q and keeps the turntable readout.
+        if data['ki'] > 0 and data['kf'] > 0 and stt != 0:
+            sense = stage.get("sense") or (1 if stt > 0 else -1)
+            angles = legacy_triple(stage, stt, data['ki'], data['kf'], sense)
+        else:
+            angles = (readouts[self._gonio[0].name], 0.0, stt)
+        data.update(angles=angles, stage=stage, sense_sample=stage.get("sense"))
         return data
 
     def set_peak_data(self, hkl, angles, ki, kf, locked=False, stage=None,

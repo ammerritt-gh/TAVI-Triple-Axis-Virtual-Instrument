@@ -92,7 +92,9 @@ move, so a fit across a correction change is exact only where the new
 corrections cancel the zero errors (or the peaks are in the plane); elsewhere
 it is the least-squares U. A peak without a record (a save from before the
 goniometer, a TAS_MCP peak) is a **legacy** peak: its (ω, χ, 2θ) triple keeps
-the old meaning, and the UB dock marks it.
+the old meaning, and the UB dock marks it. A stage peak saves that triple too,
+computed from its record (`legacy_triple`: the legacy setting of the same Q),
+so a reader that ignores the record fits the same U.
 
 ### The McStas sample chain
 
