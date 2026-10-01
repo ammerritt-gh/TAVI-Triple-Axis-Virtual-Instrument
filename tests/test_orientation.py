@@ -561,6 +561,27 @@ def test_off_grid_travel_finds_a_point_reachable_only_in_its_corner():
     assert np.allclose(stage_rotation(gonio, angles) @ q, q_lab, rtol=0.0, atol=1e-9)
 
 
+@pytest.mark.parametrize("azimuth", [77.0, 182.0, 224.0])
+def test_a_point_exactly_at_the_travel_corner_solves(azimuth):
+    """Q levelled by exactly (sgl, sgu) = (-17.3, 17.3), the corner of +/-17.3
+    deg travel (and nowhere else inside it, for these azimuths): the root solved
+    at one arc's end node lands ~1e-14 deg past the other's limit, which
+    TRAVEL_TOLERANCE_DEG absorbs."""
+    travel = 17.3
+    gonio = (StageAxis("A3", (0.0, 1.0, 0.0)),
+             StageAxis("sgl", (1.0, 0.0, 0.0), -travel, travel),
+             StageAxis("sgu", (0.0, 0.0, 1.0), -travel, travel))
+    a = math.radians(azimuth)
+    q_lab = 2.0 * np.array([math.cos(a), 0.0, math.sin(a)])
+    q = (_rot((1, 0, 0), -travel) @ _rot((0, 0, 1), travel)).T @ q_lab
+
+    angles = solve_stage(gonio, q, q_lab)
+    assert (angles["sgl"], angles["sgu"]) == pytest.approx((-travel, travel), abs=1e-9)
+    from tavi.orientation import TRAVEL_TOLERANCE_DEG
+    assert all(abs(angles[name]) <= travel + TRAVEL_TOLERANCE_DEG for name in ("sgl", "sgu"))
+    assert np.allclose(stage_rotation(gonio, angles) @ q, q_lab, rtol=0.0, atol=1e-9)
+
+
 def _in12_vals(**overrides):
     vals = {
         "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2.0,
