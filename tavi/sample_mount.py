@@ -6,8 +6,6 @@ import math
 
 import numpy as np
 
-from tavi.tas_geometry import mccode_euler_from_matrix
-
 
 def reciprocal_basis_tas(a, b, c, alpha, beta, gamma) -> np.ndarray:
     """Return reciprocal basis columns in TAVI's TAS sample coordinates.
@@ -75,11 +73,6 @@ class SampleMount:
     def mounted_basis(self) -> np.ndarray:
         """Return columns mapping HKL directly into mounted sample coordinates."""
         return self.R_mount @ self.B_component
-
-    @property
-    def mount_euler_deg(self) -> tuple[float, float, float]:
-        """Return McStas ROTATED=[x,y,z] angles for the static mount arm."""
-        return mccode_euler_from_matrix(self.R_mount)
 
     def hkl_to_q(self, H, K, L) -> tuple[float, float, float]:
         q = self.mounted_basis @ np.array([float(H), float(K), float(L)], dtype=float)
