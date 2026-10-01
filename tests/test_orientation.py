@@ -891,6 +891,23 @@ def test_a_lock_refuses_an_out_of_plane_point_naming_the_plane_and_the_angle(tmp
     assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (tilts["sgl"], tilts["sgu"])
 
 
+@pytest.mark.parametrize("hkl", [(1, 0.5, 0), (2, -1.3, 0), (0.1, 0.05, 0)])
+def test_a_lock_accepts_an_in_plane_q_rounded_like_the_gui_fields(hkl):
+    """The GUI solves from Q fields rounded to four decimals (1/A): under a
+    tilted lock that rounding leaves an in-plane Q a hair out of the plane,
+    which must still solve, at the lock's exact tilts."""
+    from tavi.tas_geometry import component_q_to_instrument_q
+
+    _plugin, config = _locked_in12(_rot((1, 0, 0), 3.0) @ _rot((0, 0, 1), -2.0))
+    tilts = config.plane_lock["tilts"]
+    q = component_q_to_instrument_q(np.array(config.sample_mount.hkl_to_q(*hkl), dtype=float))
+    qx, qy, qz = (round(float(c), 4) for c in q)
+    angles, flags = config.calculate_stage_angles(
+        qx, qy, qz, 0.0, IN12_E, "Kf Fixed", "pg002", "pg002", locked=config.plane_lock)
+    assert flags == []
+    assert (angles[3], angles[5]) == (tilts["sgl"], tilts["sgu"])
+
+
 def test_an_in_plane_scan_in_locked_mode_matches_free_mode(tmp_path):
     """With the UB level, free mode needs no tilt for an in-plane point, and
     locked mode, holding the same zero tilts, gives the same A1-A4."""
