@@ -1467,3 +1467,100 @@ def test_the_plane_panel_names_what_its_numbers_are(controller):
     assert any("from your UB" in box.title() for box in dock.findChildren(QGroupBox))
     old = ("chi tilt", "omega offset", "χ tilt", "ω offset")
     assert not [t for t in texts if any(word in t.lower() for word in old)], texts
+
+
+# --- Unit 3 (C3): residuals and the peak-pair check -------------------------------
+
+def _residual_cells(table, row):
+    return [table.item(row, c).text() for c in range(table.columnCount())]
+
+
+def test_calculate_ub_shows_the_residuals_of_its_peaks(controller, messages):
+    """After Calculate UB the table holds one row per peak, then one per
+    pair, at the display precision of ``alignment_residuals``'s values, and
+    the message center gets its summary; a re-indexed peak of the same |Q|
+    is marked by the pair check, its words in the tooltip."""
+    from instruments.tas_runtime import stage_corrections
+    from tavi.ub_matrix import alignment_residuals
+
+    controller.set_default_parameters()
+    table = controller.window.ub_matrix_dock.residual_table
+    _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
+    messages.clear()
+    controller.on_calculate_ub()
+
+    corrections = stage_corrections(controller.instrument_state.goniometer,
+                                    controller.get_gui_values())
+    expected = alignment_residuals(controller.ub_matrix.UB, controller.ub_matrix.peaks,
+                                   corrections)
+    assert [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())] == [
+        "Peak / pair", "Observed", "From indices", "Off", "Angle to UB"]
+    assert table.rowCount() == 6 and expected["flags"] == []
+    peak, pair = expected["peaks"][1], expected["pairs"][2]
+    assert _residual_cells(table, 1) == [
+        "(0 2 0)", f"{peak['q_obs']:.4f} Å⁻¹", f"{peak['q_calc']:.4f} Å⁻¹",
+        f"{peak['q_mismatch'] * 100:+.2f} %", f"{peak['angle_deg']:.3f}°"]
+    assert _residual_cells(table, 5) == [
+        "(0 2 0) / (1 1 1)", f"{pair['observed_deg']:.3f}°", f"{pair['indexed_deg']:.3f}°",
+        f"{pair['difference_deg']:+.3f}°", ""]
+    assert expected["summary"] in messages
+
+    controller.window.ub_matrix_dock.get_peak_widget(2).h_edit.setText("-1")   # (-1 1 1)
+    controller.on_calculate_ub()
+    flagged = [r for r in range(table.rowCount()) if table.item(r, 0).text().startswith("⚠")]
+    assert flagged and all("(-1 1 1)" in table.item(r, 0).text() for r in flagged)
+    assert table.item(flagged[0], 3).toolTip().endswith("one of them is likely mis-indexed")
+
+
+def _peak_added(controller, _monkeypatch):
+    controller.window.ub_matrix_dock.add_peak_button.click()
+
+
+def _peak_removed(controller, _monkeypatch):
+    controller.window.ub_matrix_dock.get_peak_widget(2).remove_button.click()
+
+
+def _peak_reindexed(controller, _monkeypatch):
+    controller.window.ub_matrix_dock.get_peak_widget(0).k_edit.setText("1")
+
+
+def _peak_retaken(controller, _monkeypatch):
+    _set_hkl(controller, 1, 1, 1)
+    controller.window.ub_matrix_dock.get_peak_widget(0).take_position_button.click()
+
+
+def _defaults(controller, _monkeypatch):
+    controller.set_default_parameters()
+
+
+def _exercise_loaded(controller, _monkeypatch):
+    _load_exercise(controller, "training")
+
+
+def _restored(controller, _monkeypatch):
+    _reload_with(controller, lambda block: None)
+
+
+@pytest.mark.parametrize("change", [
+    _path_manual_ub, _path_reset, _path_lattice_edit, _path_refine_lattice, _path_api_patch,
+    _restored, _exercise_loaded, _defaults,
+    _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
+], ids=lambda f: f.__name__.lstrip("_"))
+def test_the_residual_table_describes_only_the_last_calculate_ub(controller, monkeypatch,
+                                                                change):
+    """D11: any other change to the UB, and any peak added, removed,
+    re-indexed or re-taken, clears the table; a lock and release (no UB
+    change) keeps it."""
+    _with_hidden_truth(controller)
+    table = controller.window.ub_matrix_dock.residual_table
+    _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
+    _set_corrections(controller, 0.5, 0.0)        # the fit is not the described mount
+    controller.on_calculate_ub()
+    assert table.rowCount() == 6
+    _lock(controller, PLANE_H0H)
+    controller.on_release_plane()
+    assert table.rowCount() == 6
+
+    change(controller, monkeypatch)
+
+    assert table.rowCount() == 0
