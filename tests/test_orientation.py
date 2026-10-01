@@ -694,6 +694,25 @@ def test_locked_mode_never_moves_a_tilt_and_refuses_out_of_plane():
     assert f"{out:+.4g}°" in str(err.value)
 
 
+@pytest.mark.parametrize(("lock", "reason"), [
+    ({"sgl": 25.0, "sgu": 0.0},
+     "sgl needs 25° for the locked scattering plane but its travel is [-20, 20]°"),
+    ({"sgl": 1.0}, "the lock does not set sgu"),
+    ({"sgl": 1.0, "sgu": 0.0, "chi": 2.0}, "the lock names chi, which this stage lacks"),
+], ids=["past-travel", "missing-axis", "unknown-axis"])
+def test_locked_mode_refuses_a_lock_this_stage_cannot_hold(lock, reason):
+    """A lock carried from a saved session or another instrument: tilts past
+    this stage's travel, or axis names it does not have, are refused, never
+    read as reachable or as 0 deg."""
+    from instruments.in12.plugin import in12_descriptor
+
+    gonio = in12_descriptor().goniometer
+    q = np.array([2.0, 0.0, 0.0])
+    with pytest.raises(StageUnreachable) as err:
+        solve_stage(gonio, q, np.array([0.0, 0.0, 2.0]), locked=lock)
+    assert str(err.value) == reason
+
+
 # --- corrections and zero errors reach McStas as axis rotations -------------------
 
 @pytest.mark.parametrize(("field", "axis_name"), [
