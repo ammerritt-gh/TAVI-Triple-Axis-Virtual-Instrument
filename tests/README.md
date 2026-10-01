@@ -65,10 +65,10 @@ Notes:
 ## Suite size and timing
 
 Measured 2026-10-01 on the 9950X3D with the command above, one run at a time:
-1591 passed and 1 skipped (`test_documentation.py`, when the shared doc
-checker is absent) in 160 s (163 s wall). No single test takes more than
-about 2.3 s. `test_orientation_gui.py` alone, 82 offscreen tests, takes about
-18 s with its two controllers' construction; its operator acceptance test
+1595 passed and 1 skipped (`test_documentation.py`, when the shared doc
+checker is absent) in 157 s (159 s wall). No single test takes more than
+about 2.3 s. `test_orientation_gui.py` alone, 85 offscreen tests, takes about
+16 s with its two controllers' construction; its operator acceptance test
 takes about 1.6 s of that. Pass `--durations=15` to see the slowest tests.
 
 ## Current contents
