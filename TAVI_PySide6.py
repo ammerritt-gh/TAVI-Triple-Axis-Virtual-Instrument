@@ -5279,9 +5279,10 @@ class TAVIController(QObject):
 
     def _set_plane_lock(self, lock):
         """The one writer of the lock (None releases). Locking puts the arc
-        readouts at the lock's tilts; while locked the arc fields and kappa
-        are read-only with a tooltip naming the lock. The caller re-solves the
-        angles (``_update_ub_display``)."""
+        readouts at the lock's tilts and kappa at the lock's (one source for
+        GUI and API launches, a restore included); while locked the arc fields
+        and kappa are read-only with a tooltip naming the lock. The caller
+        re-solves the angles (``_update_ub_display``)."""
         state = self.instrument_state
         state.plane_lock = lock
         idock, sam = self.window.instrument_dock, self.window.sample_dock
@@ -5289,6 +5290,8 @@ class TAVIController(QObject):
             state.sgl, state.sgu = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
             idock.sgl_edit.setText(format_editable_number(state.sgl))
             idock.sgu_edit.setText(format_editable_number(state.sgu))
+            state.kappa = lock["kappa"]
+            sam.kappa_edit.setText(format_editable_number(state.kappa))
         held = f"Held by {self._lock_text()}; release the lock to change it." if lock else None
         for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
             if edit.property("free_tooltip") is None:

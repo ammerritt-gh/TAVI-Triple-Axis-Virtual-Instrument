@@ -1365,11 +1365,14 @@ def test_a_locked_session_with_an_exercise_round_trips_exactly(controller, kind)
 
     def scramble(block):
         assert block["plane_lock"] == json.loads(saved[0])
+        block["kappa_var"] = "1.5"                         # the lock's kappa wins
         controller.set_default_parameters()                # nothing carried over
 
     _reload_with(controller, scramble)
 
     assert json.dumps(state.plane_lock) == saved[0]
+    kappa = state.plane_lock["kappa"]
+    assert (float(controller.window.sample_dock.kappa_edit.text()), state.kappa) == (kappa, kappa)
     assert np.array_equal(state.U_true, saved[1])
     assert (state.mis_omega, state.mis_chi, controller._exercise) == saved[2:]
     assert controller.window.instrument_dock.sgl_edit.isReadOnly()
