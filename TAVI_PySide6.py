@@ -1192,7 +1192,10 @@ class TAVIController(QObject):
         
         # Flag to prevent recursive updates
         self.updating = False
-        
+        # The stage's refusal while the angle fields do not match Q/HKL, else
+        # None (_set_angles_stale).
+        self._angles_stale = None
+
         # Track previous field values to detect actual changes (vs spurious editingFinished signals)
         self._previous_values = {}
         
@@ -3907,6 +3910,7 @@ class TAVIController(QObject):
             )
             if not error_flags:
                 qx, qy, qz, deltaE = q_vals
+                self._set_angles_stale(None)     # Q now follows the angles
                 self.window.scattering_dock.qx_edit.setText(format_editable_number(qx))
                 self.window.scattering_dock.qy_edit.setText(format_editable_number(qy))
                 self.window.scattering_dock.qz_edit.setText(format_editable_number(qz))
@@ -4073,13 +4077,16 @@ class TAVIController(QObject):
                 self._update_tracked_value('sgl', sgl)
                 self._update_tracked_value('sgu', sgu)
                 self._update_tracked_value('stt', stt)
+                self._set_angles_stale(None)
             else:
                 # A stage refusal is new with the arcs' travel: say why the
-                # angles were left as they were, in the solver's words.
+                # angles were left as they were, in the solver's words, and
+                # mark them stale until a solve succeeds or an angle is edited.
                 stage = [f for f in error_flags if f.startswith(STAGE_FLAG_PREFIX)]
                 if stage:
-                    self.print_to_message_center(
-                        f"Angles not updated: {describe_scan_error_flags(stage)}")
+                    reason = describe_scan_error_flags(stage)
+                    self.print_to_message_center(f"Angles not updated: {reason}")
+                    self._set_angles_stale(reason)
         except Exception as exc:
             self.print_to_message_center(f"Angle update from Q failed: {exc}")
         finally:
@@ -4087,6 +4094,16 @@ class TAVIController(QObject):
             self.updating = False
             self.update_ideal_bending_buttons()
     
+    def _set_angles_stale(self, reason):
+        """Mark the angle fields as not matching Q/HKL (``reason``, the
+        stage's refusal) or clear the mark (None). Take Position refuses
+        while they are stale."""
+        self._angles_stale = reason
+        label = self.window.instrument_dock.angles_stale_label
+        if reason:
+            label.setText(f"Angles above are stale (they do not match Q/HKL): {reason}")
+        label.setVisible(bool(reason))
+
     def update_monocris_info(self):
         """Update monochromator crystal information."""
         monocris = self.window.instrument_dock.selected_mono_id()
@@ -5160,6 +5177,11 @@ class TAVIController(QObject):
         the corrections in force, ki, kf and the sense into the peak's stage
         record. The readouts are the dock fields (A3 is the ω field); hidden
         zero errors are never read."""
+        if self._angles_stale:
+            self.print_to_message_center(
+                f"Take Position refused for peak {peak_index + 1}: the angles do not match "
+                f"Q/HKL ({self._angles_stale}). Choose a reachable Q/HKL or edit an angle.")
+            return
         vals = self.get_gui_values()
         if not vals:
             return

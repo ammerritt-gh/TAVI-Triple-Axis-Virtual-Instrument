@@ -487,6 +487,42 @@ def test_q_edit_past_arc_travel_reports_the_solver_reason(in12, in12_messages):
     assert [idock.omega_edit.text(), idock.sgl_edit.text(), idock.sgu_edit.text()] == before
 
 
+def test_angles_left_by_a_refusal_are_marked_stale_and_not_taken(in12, in12_messages):
+    """After a stage refusal the angle fields still show the last solvable
+    point: they are marked stale and Take Position refuses them, until the
+    next successful solve or an angle edit."""
+    idock = in12.window.instrument_dock
+    dock = in12.window.ub_matrix_dock
+    while len(dock._peak_widgets) < 1:
+        dock.add_peak_entry()
+    in12._reconnect_peak_signals()
+    pw = dock.get_peak_widget(0)
+    pw.set_peak_data((1, 0, 0), (0.0, 0.0, 0.0), 0.0, 0.0)
+    _set_q(in12, 2.0, 0.3, 0.0)
+    assert idock.angles_stale_label.isHidden()
+
+    _set_q(in12, 2.5 * math.cos(math.radians(45)), 0.0, 2.5 * math.sin(math.radians(45)))
+    assert not idock.angles_stale_label.isHidden()
+    assert "travel is [-20, 20]°" in idock.angles_stale_label.text()
+    in12_messages.clear()
+    in12.on_take_peak_position(0)
+    assert any("Take Position refused" in m for m in in12_messages), in12_messages
+    assert float(pw.stt_edit.text() or 0) == 0.0     # nothing recorded
+
+    _set_q(in12, 2.0, 0.3, 0.0)                     # solvable: the mark clears
+    assert idock.angles_stale_label.isHidden()
+
+    _set_q(in12, 2.5 * math.cos(math.radians(45)), 0.0, 2.5 * math.sin(math.radians(45)))
+    assert not idock.angles_stale_label.isHidden()
+    idock.omega_edit.setText(repr(_field(idock.omega_edit) + 1.0))   # an angle edit
+    in12.on_omega_changed()
+    assert idock.angles_stale_label.isHidden()
+    in12_messages.clear()
+    in12.on_take_peak_position(0)
+    assert not any("Take Position refused" in m for m in in12_messages)
+    assert float(pw.stt_edit.text()) != 0.0
+
+
 # The one arc-travel refusal, worded as the solver's own (instruments.tas_runtime).
 SGL_PAST_TRAVEL = "sgl needs {:g}° but its travel is [-20, 20]°"
 
