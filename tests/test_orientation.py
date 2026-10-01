@@ -646,7 +646,8 @@ def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
     feasible, reason = tas_runtime.check_point_feasibility(
         config, "angle", point(25.0, 0.0), _in12_vals())
     assert not feasible
-    assert reason == "sgl 25° is outside its travel [-20, 20]°"
+    # The solver's own refusal words (one formatter for every travel refusal).
+    assert reason == "sgl needs 25° but its travel is [-20, 20]°"
 
 
 def test_old_scan_folder_reads_chi_as_sgl(tmp_path):

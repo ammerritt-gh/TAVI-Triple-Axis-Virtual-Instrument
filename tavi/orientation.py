@@ -174,6 +174,22 @@ def _travel_text(ax):
     return f"[{ax.lower:.4g}, {ax.upper:.4g}]°"
 
 
+def _travel_refusal(ax, angle, purpose=""):
+    """The one wording of every travel refusal: the axis, the angle it needs
+    (``purpose`` says what for) and its travel."""
+    return f"{ax.name} needs {angle:.4g}°{purpose} but its travel is {_travel_text(ax)}"
+
+
+def check_travel(gonio, angles, purpose=""):
+    """Raise ``StageUnreachable`` for the first axis of ``gonio`` whose angle
+    in ``angles`` ({name: degrees}) lies outside its travel. Axes absent from
+    ``angles`` are not checked. Operator-set arcs (angle mode, an arc edit,
+    an API write) are checked here, in the solver's words."""
+    for ax in gonio:
+        if ax.name in angles and not _in_travel(ax, float(angles[ax.name])):
+            raise StageUnreachable(_travel_refusal(ax, float(angles[ax.name]), purpose))
+
+
 def _rotate_many(axis, vectors, angles_rad):
     """Rodrigues rotation of ``vectors`` (n, 3) by ``angles_rad`` (n,) about ``axis``."""
     a = np.asarray(axis, dtype=float)
@@ -287,9 +303,7 @@ def _turntable(turntable, q_level, q_lab):
     for candidate in (angle, angle - 360.0, angle + 360.0):
         if _in_travel(turntable, candidate):
             return candidate
-    raise StageUnreachable(
-        f"{turntable.name} needs {angle:.4g}° but its travel is {_travel_text(turntable)}"
-    )
+    raise StageUnreachable(_travel_refusal(turntable, angle))
 
 
 def solve_stage(gonio, q_mount, q_lab, locked=None):
@@ -361,12 +375,9 @@ def solve_stage(gonio, q_mount, q_lab, locked=None):
     for i, ax in enumerate(inner):
         fits &= (rows[:, i] >= ax.lower) & (rows[:, i] <= ax.upper)
     if not fits.any():
-        for ax, angle in zip(inner, rows[int(np.argmin(tilt))]):
-            if not _in_travel(ax, angle):
-                raise StageUnreachable(
-                    f"{ax.name} needs {angle:.4g}° to bring Q into the scattering "
-                    f"plane but its travel is {_travel_text(ax)}"
-                )
+        nearest = rows[int(np.argmin(tilt))]
+        check_travel(inner, {ax.name: angle for ax, angle in zip(inner, nearest)},
+                     " to bring Q into the scattering plane")
 
     # The chosen root: smallest tilt in travel over the union, refined along
     # its own branch (first minimum wins a tie, so the choice is repeatable).

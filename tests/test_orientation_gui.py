@@ -414,3 +414,66 @@ def test_q_edit_past_arc_travel_reports_the_solver_reason(in12, in12_messages):
     assert "travel is [-20, 20]°" in reason
     assert any(reason in m for m in in12_messages), in12_messages
     assert [idock.omega_edit.text(), idock.sgl_edit.text(), idock.sgu_edit.text()] == before
+
+
+# The one arc-travel refusal, worded as the solver's own (instruments.tas_runtime).
+SGL_PAST_TRAVEL = "sgl needs {:g}° but its travel is [-20, 20]°"
+
+
+def test_angle_mode_point_past_travel_is_invalid_before_the_run(in12, tmp_path):
+    """An IN12 'sgl 18 22 2' scan: 22 deg is past travel in the GUI point
+    count, the API validation, and the run's valid mask (ScanResult and the
+    scan_initialized signal the display and SSE read), not only mid-run."""
+    from tavi.scan_jobs import ScanJob
+
+    in12.output_directory = str(tmp_path)
+    in12.window.instrument_dock.sgl_edit.setText("0")
+    in12.window.instrument_dock.sgu_edit.setText("0")
+    assert in12._count_valid_scan_points("sgl 18 22 2", "") == (2, 1)
+
+    launch = in12.build_api_launch_state({"scan_command1": "sgl 18 22 2"})
+    infeasible = in12.validate_scan_launch_state(launch)["infeasible"]
+    assert [(p["index"], p["reason"]) for p in infeasible] == [(2, SGL_PAST_TRAVEL.format(22))]
+
+    shown = []
+    in12.scan_initialized.connect(lambda *args: shown.append(args[2]))
+    launch["engine"] = "deterministic"
+    job = ScanJob(job_id="t-arc-travel", source="api", launch_state=launch)
+    in12.run_simulation(launch, job=job)
+    assert job.result.valid_mask_1 == [True, True, False]
+    assert shown == [[True, True, False]]
+
+    # The 2D mask, beside a turntable scan.
+    assert in12._count_valid_scan_points("sgl 18 22 2", "A3 30 31 1") == (4, 2)
+    launch = in12.build_api_launch_state(
+        {"scan_command1": "sgl 18 22 2", "scan_command2": "A3 30 31 1"})
+    launch["engine"] = "deterministic"
+    job = ScanJob(job_id="t-arc-travel-2d", source="api", launch_state=launch)
+    in12.run_simulation(launch, job=job)
+    assert job.result.valid_mask_2d == [[True, True, False]] * 2
+
+
+def test_api_arc_write_past_travel_is_refused_with_the_reason(in12):
+    backend = cm.TaviApiBackend(in12, _SyncBridge())
+    with pytest.raises(ApiError) as patched:
+        backend.patch_parameters({"sgl": 25.0}, force=True)
+    assert patched.value.status == 400
+    reason = patched.value.details["errors"]["sgl"]
+    assert reason.endswith(SGL_PAST_TRAVEL.format(25)), reason
+    with pytest.raises(ApiError) as launched:
+        in12.build_api_launch_state({"sgl": 25.0})
+    assert launched.value.status == 400
+    assert launched.value.details["errors"]["sgl"] == reason
+    assert backend.patch_parameters({"sgl": 20.0}, force=True)["applied"] == ["sgl"]
+    backend.patch_parameters({"sgl": 0.0}, force=True)
+
+
+def test_gui_arc_edit_past_travel_reports_the_reason(in12, in12_messages):
+    """The field keeps what was typed (an angle-mode run refuses it later)."""
+    idock = in12.window.instrument_dock
+    idock.sgl_edit.setText("25")
+    in12.on_arc_changed()
+    assert any(SGL_PAST_TRAVEL.format(25) in m for m in in12_messages), in12_messages
+    assert idock.sgl_edit.text() == "25" and in12.instrument_state.sgl == 25.0
+    idock.sgl_edit.setText("0")
+    in12.on_arc_changed()

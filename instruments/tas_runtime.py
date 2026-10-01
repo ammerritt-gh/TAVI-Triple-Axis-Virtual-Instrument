@@ -26,6 +26,7 @@ from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.orientation import (
     StageUnreachable,
+    check_travel,
     q_mount_from_stage,
     sample_arm_euler,
     solve_stage,
@@ -263,6 +264,18 @@ class TAS_Instrument:
     def goniometer(self):
         """The sample stage (descriptor goniometer): A3, sgl, sgu."""
         return self.descriptor().goniometer
+
+    def arc_travel_flags(self, arcs):
+        """``["stage: <reason>"]`` when an operator-set arc readout in ``arcs``
+        ({"sgl": deg, "sgu": deg}, either may be absent) lies outside its
+        travel, else ``[]``. The one arc-travel check: angle-mode points (the
+        run, its valid mask, the GUI count, feasibility), arc edits and API
+        writes all use it, worded as the solver's own refusal."""
+        try:
+            check_travel(self.goniometer[1:], arcs)
+        except StageUnreachable as exc:
+            return [STAGE_FLAG_PREFIX + str(exc)]
+        return []
 
     def physical_stage_angles(self):
         """Stage angles the crystal really sits at: readout + operator
@@ -1056,13 +1069,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
         sgl = float(scans[SLOT_SGL])
         sgu = float(scans[SLOT_SGU]) if len(scans) > SLOT_SGU else 0.0
         point_state.sgl, point_state.sgu = sgl, sgu
-        for ax in point_state.goniometer[1:]:
-            value = {"sgl": sgl, "sgu": sgu}.get(ax.name, 0.0)
-            if not ax.lower <= value <= ax.upper:
-                error_flags.append(
-                    f"{STAGE_FLAG_PREFIX}{ax.name} {value:.4g}° is outside its "
-                    f"travel [{ax.lower:.4g}, {ax.upper:.4g}]°"
-                )
+        error_flags.extend(point_state.arc_travel_flags({"sgl": sgl, "sgu": sgu}))
 
     # A transmitting crystal (mono or ana selects nothing) or forward
     # scattering (the solved sample two-theta is exactly 0, in any mode) is
