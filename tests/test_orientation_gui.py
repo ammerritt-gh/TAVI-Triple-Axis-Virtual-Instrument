@@ -1250,12 +1250,17 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
     for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
         assert edit.isReadOnly() and "locked scattering plane (1 0 1)/(0 1 0)" in edit.toolTip()
     params = controller.get_gui_values()
-    assert (params["orientation_mode"], params["lock_plane"], params["lock_stale"]) == (
-        "locked", {"u": [1.0, 0.0, 1.0], "v": [0.0, 1.0, 0.0]}, False)
+    assert (params["orientation_mode"], params["lock_plane"]) == (
+        "locked", {"u": [1.0, 0.0, 1.0], "v": [0.0, 1.0, 0.0]})
+    # The stale mark is /state's and the dock's only: no GUI value and no
+    # launch value, so never in a scan result's parameters.
+    assert "lock_stale" not in params
+    assert "lock_stale" not in controller._default_parameter_values()
+    assert backend.get_state()["parameters"]["lock_stale"] is False
     before = _truth(controller)
 
     _path_manual_ub(controller, None)                      # a UB change
-    assert _arcs(controller) == held and controller.get_gui_values()["lock_stale"] is True
+    assert _arcs(controller) == held and backend.get_state()["parameters"]["lock_stale"] is True
     assert "STALE" in dock.lock_status_label.text()
     controller.on_reset_ub()
     assert "STALE" not in dock.lock_status_label.text()
@@ -1280,7 +1285,7 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
     assert _arcs(controller) == held
 
     assert sam.set_sample_by_key("Pb_phonon_DFT")          # allowed; stale reports it
-    assert controller.get_gui_values()["lock_stale"] is False
+    assert backend.get_state()["parameters"]["lock_stale"] is False
     assert _arcs(controller) == held
 
     controller.on_release_plane()

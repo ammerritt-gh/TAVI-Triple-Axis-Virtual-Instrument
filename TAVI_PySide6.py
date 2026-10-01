@@ -321,7 +321,14 @@ class TaviApiBackend:
         return self._bridge.call_on_gui(self._controller.get_gui_values)
 
     def get_state(self):
-        params = self._bridge.call_on_gui(self._controller.get_gui_values)
+        def read():
+            # lock_stale is not a GUI value (so never a launch value or scan
+            # metadata); /state adds it, read from the one stale function.
+            vals = self._controller.get_gui_values()
+            if vals is not None:
+                vals['lock_stale'] = self._controller.lock_stale(vals)
+            return vals
+        params = self._bridge.call_on_gui(read)
         registry = self._controller._job_registry
         active = self._controller._active_job
         current_job = active.job_id if active is not None else None
@@ -2455,9 +2462,9 @@ class TAVIController(QObject):
             }
         except ValueError:
             return None
-        # The plane lock (orientation_mode, lock_plane; lock_stale read-only),
-        # judged on these lattice fields.
-        vals.update(self._lock_fields(vals))
+        # The plane lock (orientation_mode, lock_plane). Its stale mark is not
+        # a GUI value: only /state and the UB dock read lock_stale().
+        vals.update(self._lock_fields())
         return vals
 
     def _build_sample_mount(self, vals):
@@ -5319,13 +5326,12 @@ class TAVIController(QObject):
         tilt = math.degrees(math.atan2(np.linalg.norm(np.cross(normal, up)), abs(normal @ up)))
         return bool(tilt > self.LOCK_STALE_DEG)
 
-    def _lock_fields(self, vals):
-        """API view of the lock: orientation_mode, lock_plane, lock_stale."""
+    def _lock_fields(self):
+        """API view of the lock: orientation_mode, lock_plane."""
         lock = self.instrument_state.plane_lock
         return {
             'orientation_mode': "locked" if lock else "free",
             'lock_plane': {'u': list(lock["hkl_u"]), 'v': list(lock["hkl_v"])} if lock else None,
-            'lock_stale': self.lock_stale(vals) if lock else None,
         }
 
     def _show_plane_lock(self, refusal=None):
@@ -5338,7 +5344,7 @@ class TAVIController(QObject):
             return
         plane = (lock["hkl_u"], lock["hkl_v"])
         tilts = ", ".join(f"{name} = {value:.4g}°" for name, value in lock["tilts"].items())
-        stale = bool((self.get_gui_values() or {}).get('lock_stale'))
+        stale = bool(self.lock_stale())
         status = f"Locked on {plane_text(plane)}: {tilts}"
         if stale:
             status += (f". STALE: the UB no longer levels this plane within "
@@ -6655,7 +6661,7 @@ class TAVIController(QObject):
         if lock is not None:
             vals['sgl'], vals['sgu'] = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
             vals['kappa'] = lock["kappa"]
-        vals.update(self._lock_fields(vals))
+        vals.update(self._lock_fields())
         return vals
 
     def set_default_parameters(self):
@@ -7807,10 +7813,10 @@ class TAVIController(QObject):
                "'kappa' is the lower-arc correction",
     }
 
-    # Keys get_gui_values() returns that no write may set (declared readOnly
-    # in build_api_schema): derived curvature policy, the mounting plane,
-    # which only the Sample dock's Apply/Clear remounts, and the lock's stale
-    # mark (``lock_stale``).
+    # Keys the API reports that no write may set (declared readOnly in
+    # build_api_schema): derived curvature policy, the mounting plane, which
+    # only the Sample dock's Apply/Clear remounts, and the lock's stale mark
+    # (``lock_stale``, in /state only).
     _API_READ_ONLY_FIELDS = ('curvature_modes', 'mount_plane_u', 'mount_plane_v', 'lock_stale')
 
     # The lock's request fields, and the fields a locked plane holds.

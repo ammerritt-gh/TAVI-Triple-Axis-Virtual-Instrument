@@ -1109,7 +1109,7 @@ Server-Sent Events stream. See §8.
 
 ## 6. Parameter field reference
 
-All 49 keys returned by `GET /parameters`; 45 are writable via `PATCH /parameters`; `curvature_modes`, `mount_plane_u`, `mount_plane_v` and `lock_stale` are read-only.
+All 49 keys of `GET /state`'s `parameters` (`GET /parameters` returns the same 48 without `lock_stale`); 45 are writable via `PATCH /parameters`; `curvature_modes`, `mount_plane_u`, `mount_plane_v` and `lock_stale` are read-only.
 Many are **linked**: writing one triggers the same recompute the GUI does when a
 user presses Enter, so dependent fields update automatically.
 
@@ -1122,7 +1122,7 @@ user presses Enter, so dependent fields update automatically.
 | `sgu` | number | degrees | Upper sample tilt arc readout: turns about the beam axis at A3 = 0 (stage z), riding on `sgl`. Same rules as `sgl`. |
 | `orientation_mode` | string | — | `"free"` (the arcs are solved per Q) or `"locked"` (a scattering plane is locked: the arcs and `kappa` stay put and every Q is solved at the locked tilts; a Q out of the plane is refused naming the plane and the angle). Writing `"locked"` locks `lock_plane` from the same request, or the default plane (the mounting plane, else the first two UB peaks, else (1 0 0)/(0 1 0)), where the current UB levels it; a plane the arcs cannot level within travel is refused with the reason. Writing `"free"` releases. While locked, a write of `sgl`, `sgu` or `kappa` is refused, in `PATCH` and in a scan's `parameters` alike (`400`, naming the lock: release first), and a scan starts from the locked arcs and `kappa`; a request combining `orientation_mode` or `lock_plane` with `sgl`, `sgu` or `kappa` is refused whichever way it switches (send two). A lock request (`orientation_mode: "locked"` or `lock_plane`) must stand alone: with any other field (a lattice parameter, say, which would change the UB the lock is computed from) it is a `400` and nothing applies; send two PATCHes instead. Releasing (`"free"`) may carry other fields, except `sgl`, `sgu` and `kappa`; a refused release applies none of them. Not settable in a scan's `parameters`: a scan runs in the session's mode. See the User Guide's *Lock plane*. |
 | `lock_plane` | object or null | r.l.u. | The locked plane's two vectors, `{"u": [h, k, l], "v": [h, k, l]}`; `null` when free. Writing it alone locks that plane (as `orientation_mode: "locked"` with it); while a different plane is locked it is refused (release first). |
-| `lock_stale` | boolean or null | — | **Read-only.** `true` when the current UB (U and lattice fields) no longer levels the locked plane at the locked tilts within 0.05°; `null` when free. The UB dock's STALE mark reads the same function. |
+| `lock_stale` | boolean or null | — | **Read-only, in `GET /state` only** (not `GET /parameters`, not a scan result's `parameters`). `true` when the current UB (U and lattice fields) no longer levels the locked plane at the locked tilts within 0.05°; `null` when free. The UB dock's STALE mark reads the same function. |
 | `att` | number | degrees | Analyzer take-off angle (scan variable `A4`). |
 | `Ki` | number | Å⁻¹ | Incident wavevector. Linked: `Ki` ↔ `Ei`. |
 | `Ei` | number | meV | Incident energy. Linked: `Ei` ↔ `Ki`. |
