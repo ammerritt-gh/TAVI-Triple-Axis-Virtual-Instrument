@@ -121,7 +121,7 @@ from tavi.tas_geometry import (
 )
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, check_training_quality, compute_B_matrix,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
-                            u_from_plane)
+                            u_from_plane, validate_rotation_matrix)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.settings import load_mpi_count, save_mpi_count
 from tavi.machine_profile import machine_fingerprint
@@ -5727,8 +5727,6 @@ class TAVIController(QObject):
             # Sample alignment offsets (kappa and psi)
             "kappa_var": self.window.sample_dock.kappa_edit.text(),
             "psi_offset_var": self.window.sample_dock.psi_edit.text(),
-            # Misalignment hash only (keeps values hidden from students)
-            "misalignment_hash_var": self.window.misalignment_dock.load_hash_edit.text(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
@@ -5743,14 +5741,40 @@ class TAVIController(QObject):
                 getattr(self.window.sample_dock, "use_sample_reflection_table_check", None)
                 and self.window.sample_dock.use_sample_reflection_table_check.isChecked()
             ),
-            # UB matrix state
+            # UB matrix state (the operator's belief)
             "ub_matrix_state": self.ub_matrix.to_dict(),
-            "ub_training_hash": self.window.ub_matrix_dock.load_hash_edit.text() if hasattr(self.window, 'ub_matrix_dock') else "",
+            # The sample as described. R_hidden is never saved in clear: the
+            # training hash below is its only record.
+            "true_mount": {
+                "U_described": self.U_described.tolist(),
+                "mount_plane": ([list(hkl) for hkl in self.mount_plane]
+                                if self.mount_plane is not None else None),
+            },
+            # The one loaded exercise, by its hash only (values stay hidden);
+            # one exercise at a time, so at most one of the two is set.
+            "misalignment_hash_var": self._exercise_hash("misalignment"),
+            "ub_training_hash": self._exercise_hash("training"),
         }
         # Namespace by instrument id with a schema version (design record §9,
-        # §16.8): {"<instrument_id>": {"_schema": 1, ...}}. Other instruments'
-        # blocks in the file are preserved; anything else is discarded.
+        # §16.8): {"<instrument_id>": {"_schema": 1, ...}}.
         parameters["_schema"] = self.PARAMETERS_SCHEMA_VERSION
+
+        def put_block(document):
+            document[self.instrument.id] = parameters
+            return True
+
+        self._edit_parameters_file(put_block)
+        self.print_to_message_center("Parameters saved successfully")
+
+    def _exercise_hash(self, kind):
+        """The loaded exercise's hash when it is a ``kind`` exercise, else ""."""
+        return self._exercise[1] if self._exercise and self._exercise[0] == kind else ""
+
+    def _edit_parameters_file(self, edit):
+        """The one writer of parameters.json. Reads the document (only the
+        per-instrument ``{"_schema": N, ...}`` blocks survive; anything else is
+        discarded), lets ``edit(document)`` change it in place, and writes it
+        back when ``edit`` returns True. Other instruments' blocks are kept."""
         document = {}
         parameters_path = local_config_path("parameters.json")
         if os.path.exists(parameters_path):
@@ -5762,18 +5786,22 @@ class TAVIController(QObject):
                         block_id: block for block_id, block in existing.items()
                         if isinstance(block, dict) and "_schema" in block
                     }
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as exc:
+                self.print_to_message_center(
+                    f"parameters.json was unreadable ({exc}); writing a fresh one")
                 document = {}
-        document[self.instrument.id] = parameters
-        with open(parameters_path, "w", encoding="utf-8") as file:
-            json.dump(document, file)
-        self.print_to_message_center("Parameters saved successfully")
+        if edit(document):
+            with open(parameters_path, "w", encoding="utf-8", newline="\n") as file:
+                json.dump(document, file)
 
     # v2 (this branch): rva joined rhm/rvm/rha as a real GUI field with its
     # own saved radius and Ideal lock. _parameters_block does not itself
     # reject an older version -- see _saved_curvature_state, which detects
     # and resets an incomplete (pre-rva) curvature block instead.
-    PARAMETERS_SCHEMA_VERSION = 2
+    # v3: the true mount apart from the operator's UB -- "true_mount"
+    # {U_described, mount_plane}; an older block loads best-effort through
+    # _restore_hidden_truth.
+    PARAMETERS_SCHEMA_VERSION = 3
 
     def _parameters_block(self, document):
         """This instrument's block from ``{"<id>": {"_schema": N, ...}}``.
@@ -5918,6 +5946,50 @@ class TAVIController(QObject):
             )
             return default
 
+    def _restore_hidden_truth(self, parameters):
+        """Restore is a full replace of the hidden truth, in this order:
+        the described mount, then the one exercise (absent hashes mean
+        R_hidden = I and zero errors 0); a saved plane lock, once there is
+        one, goes after both, on the truth it was locked on. No interactive
+        refusal runs, the operator's UB is not touched, and no file is
+        written."""
+        true_mount = parameters.get("true_mount")
+        if isinstance(true_mount, dict):
+            described = true_mount.get("U_described")
+            plane = true_mount.get("mount_plane")
+        else:
+            # Pre-schema-3 block, best effort (legacy saves are not carried):
+            # its UB is taken as the mount, so it diffracts where its UB says.
+            described, plane = (parameters.get("ub_matrix_state") or {}).get("U"), None
+        try:
+            described = validate_rotation_matrix(np.eye(3) if described is None else described)
+            if plane is not None:
+                plane = tuple(tuple(float(x) for x in hkl) for hkl in plane)
+                if len(plane) != 2 or any(len(hkl) != 3 for hkl in plane):
+                    raise ValueError("the mounting plane needs two (h k l) vectors")
+        except (ValueError, TypeError) as e:
+            self.print_to_message_center(
+                f"Saved sample mount unreadable ({e}); the standard setting is used")
+            described, plane = np.eye(3), None
+        self.mount_plane = plane
+        self._set_true_mount(U_described=described)
+        self._show_mount_plane()
+
+        self._clear_exercise()
+        for kind, key in (("misalignment", "misalignment_hash_var"),
+                          ("training", "ub_training_hash")):
+            hash_str = str(parameters.get(key) or "")
+            if not hash_str or hash_str == "None":
+                continue
+            try:
+                self._install_exercise(kind, hash_str)
+            except ValueError as e:
+                self.print_to_message_center(
+                    f"Failed to restore {self._EXERCISE_NAMES[kind]} from its hash: {e}")
+                continue
+            self.print_to_message_center(
+                f"{self._EXERCISE_NAMES[kind].capitalize()} restored from saved parameters")
+
     def load_parameters(self):
         """Load parameters from JSON file."""
         parameters_path = local_config_path("parameters.json")
@@ -6020,15 +6092,10 @@ class TAVIController(QObject):
                 # Sample alignment offsets (kappa and psi)
                 self.window.sample_dock.kappa_edit.setText(format_editable_number(parameters.get("kappa_var", 0)))
                 self.window.sample_dock.psi_edit.setText(format_editable_number(parameters.get("psi_offset_var", 0)))
-                # Misalignment hash - decode and apply without revealing values
-                mis_hash = str(parameters.get("misalignment_hash_var", ""))
-                if mis_hash and mis_hash != "None" and mis_hash != "":
-                    try:
-                        self._install_exercise("misalignment", mis_hash)
-                        self.print_to_message_center("Misalignment hash restored from saved parameters")
-                    except ValueError as e:
-                        self.print_to_message_center(f"Failed to restore misalignment: {e}")
-                # Restore sample selection by persisted sample id (default Al Bragg)
+                # Restore sample selection by persisted sample id (default Al
+                # Bragg). The mounting plane is replaced from the block below,
+                # so the sample swap's plane clear (I5) has nothing to clear.
+                self.mount_plane = None
                 try:
                     saved_sample = parameters.get("current_sample_settings", {})
                     if not self.window.sample_dock.set_sample_by_key(
@@ -6090,16 +6157,9 @@ class TAVIController(QObject):
                                 "Calculate UB to refit it from its peaks.")
                     except Exception as e:
                         self.print_to_message_center(f"Failed to restore UB matrix: {e}")
-                # Restore UB training hash: the hidden truth only; the
-                # operator's UB stays as saved above.
-                ub_hash = str(parameters.get("ub_training_hash", ""))
-                if ub_hash and ub_hash != "None" and ub_hash != "":
-                    try:
-                        self._install_exercise("training", ub_hash)
-                    except ValueError as e:
-                        self.print_to_message_center(
-                            f"Failed to restore UB training hash '{ub_hash[:20]}...': {e}"
-                        )
+                # The hidden truth, after the sample and the UB: the operator's
+                # UB stays as saved above.
+                self._restore_hidden_truth(parameters)
                 # Set display and folder fields (use sensible defaults if missing)
                 folder_suggestion = os.path.join(self.output_directory, "initial_testing")
                 self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))

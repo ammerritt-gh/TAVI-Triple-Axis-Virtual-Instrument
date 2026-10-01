@@ -116,7 +116,11 @@ for an HKL, never the simulated crystal. The operator's UB starts equal to
 and by Defaults. One exercise at a time owns the zero errors: loading or
 clearing either exercise (a UB training hash or a Misalignment-dock hash)
 while the other is loaded is refused, naming it; Defaults clears whichever is
-loaded.
+loaded. A save (`parameters.json` schema 3) keeps `U_described` and the plane
+under `true_mount` and `R_hidden` only inside the training hash; restore
+replaces the hidden truth in full (no hash: `R_hidden` = I, zero errors 0)
+without touching the saved UB. A block from before schema 3 loads best effort
+with its saved UB taken as `U_described`.
 
 ### The McStas sample chain
 
