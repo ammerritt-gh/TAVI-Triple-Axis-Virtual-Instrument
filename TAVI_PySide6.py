@@ -6018,6 +6018,7 @@ class TAVIController(QObject):
         discarded), lets ``edit(document)`` change it in place, and writes it
         back when ``edit`` returns True. Other instruments' blocks are kept."""
         document = {}
+        unreadable = None
         parameters_path = local_config_path("parameters.json")
         if os.path.exists(parameters_path):
             try:
@@ -6029,10 +6030,13 @@ class TAVIController(QObject):
                         if isinstance(block, dict) and "_schema" in block
                     }
             except (json.JSONDecodeError, OSError) as exc:
-                self.print_to_message_center(
-                    f"parameters.json was unreadable ({exc}); writing a fresh one")
+                unreadable = f"parameters.json was unreadable ({exc})"
                 document = {}
-        if edit(document):
+        write = edit(document)
+        if unreadable:
+            self.print_to_message_center(
+                unreadable + ("; writing a fresh one" if write else "; left as it is"))
+        if write:
             with open(parameters_path, "w", encoding="utf-8", newline="\n") as file:
                 json.dump(document, file)
 
