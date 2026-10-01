@@ -4996,7 +4996,6 @@ class TAVIController(QObject):
             # Only update if value actually changed (avoid spurious editingFinished signals)
             if not self._field_value_changed('omega', omega):
                 return
-            self.instrument_state.omega = omega
             self.print_to_message_center(f"Sample ω updated: {omega}°")
             # Trigger angle-based updates
             self.on_angles_changed()
