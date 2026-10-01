@@ -359,9 +359,11 @@ point refuses it with the solver's own words (an error flag
 validation, the GUI run and the real scan alike. The mount and the stage reach
 McStas as one `sample_mount` Arm: `build_point_params` fills
 `sample_rx/ry/rz_param` from `TAS_Instrument.sample_orientation_params`, i.e.
-`sample_arm_euler(goniometer, physical angles, sample_mount.R_mount)`, so the
-`sample_mount` argument above decides the simulated crystal and no plugin
-builds sample rotations of its own.
+`sample_arm_euler(goniometer, physical angles, U_true)`. The `sample_mount`
+argument above is the operator's belief (rlu HKL to Q for the solver); the
+simulated crystal is the state's hidden `U_true`, which the deep copy carries
+like the zero errors (`docs/INSTRUMENT_LAYOUT.md`, "Truth and belief"). No
+plugin builds sample rotations of its own.
 
 The shared queue deep-copies the complete launch state once more before
 registry insertion. A plugin that returns an object graph which cannot be

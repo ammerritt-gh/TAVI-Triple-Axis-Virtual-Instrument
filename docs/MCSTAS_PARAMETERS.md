@@ -135,10 +135,14 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 The whole sample orientation is one Arm. `sample_rx/ry/rz_param` are the McStas
 Euler angles of `(R_stage · U)^T`, where `R_stage` is the goniometer (A3, `sgl`,
 `sgu`) at its **physical** angles (readout + correction + hidden zero error)
-and `U` is the crystal mount (`tavi/orientation.py` `sample_arm_euler`, filled
-per point by `TAS_Instrument.sample_orientation_params`). They are runtime
-parameters: a new A3, arc setting, correction or UB never recompiles, and
-`build_fingerprint` does not see them. Every instrument shares this set.
+and `U` is the true crystal mount `U_true` (`tavi/orientation.py`
+`sample_arm_euler`, filled per point by
+`TAS_Instrument.sample_orientation_params`). The arm never reads the
+operator's UB: fitting or editing the UB changes the readouts commanded for an
+HKL, not the simulated crystal (`docs/INSTRUMENT_LAYOUT.md`, "Truth and
+belief"). They are runtime parameters: a new A3, arc setting, correction, UB or
+true mount never recompiles, and `build_fingerprint` does not see them. Every
+instrument shares this set.
 
 A `Single_crystal` sample takes its lattice from its reflection file and lays
 it out in the component's own frame. Cubic Al cannot tell the frames apart; a

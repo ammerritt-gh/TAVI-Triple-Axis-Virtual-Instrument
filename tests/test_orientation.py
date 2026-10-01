@@ -236,7 +236,7 @@ def test_correction_changed_after_take_position_keeps_the_crystal_in_place(model
     model = copy.deepcopy(models[name])
     model.sense_sample = sense
     u_true = _rot((1, 0, 0), 3.0) @ U_IN_PLANE
-    model.sample_mount = SampleMount(CUBIC_B, u_true)
+    model.U_true = u_true                  # the arm reads the true mount
     model.mis_omega, model.mis_chi, model.kappa = -2.0, -0.3, 0.3
     gonio = model.goniometer
 
@@ -401,7 +401,7 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
     arcs_used = []
     for _mount in range(2):
         U = _random_mount(rng)
-        model.sample_mount = SampleMount(B, U)
+        model.U_true = U                   # the arm reads the true mount
         peaks = []
         for index in rng.permutation(len(HKL_POOL)):
             hkl = np.array(HKL_POOL[index], dtype=float)
@@ -454,6 +454,40 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
         assert np.allclose(ub.U, U, rtol=0.0, atol=1e-9)
     # The accepted points drove both arcs, so the arc chain was exercised.
     assert min(np.max(arcs_used, axis=0)) > 0.5, arcs_used
+
+
+@pytest.mark.parametrize("sense", [-1, 1])
+@pytest.mark.parametrize("name", list(INSTRUMENTS))
+def test_calculate_ub_moves_the_readouts_never_the_crystal(models, name, sense):
+    """Truth apart from belief: a UB fitted from peaks of a different
+    orientation changes the readouts commanded for an HKL (the rlu path reads
+    the operator's mount) while the emitted sample arm for the same physical
+    angles stays bit-identical (it reads U_true only)."""
+    model = copy.deepcopy(models[name])
+    model.sense_sample = sense
+    model.U_true = _rot((1, 2, 0), 4.0) @ U_IN_PLANE
+    ub = UBMatrix(*LATTICE)                      # the operator's UB: the standard setting
+
+    def arm_and_readouts():
+        model.sample_mount = SampleMount(ub.B, ub.U)      # as each plugin's scan_config sets it
+        qx, qy, qz = component_q_to_instrument_q(model.sample_mount.hkl_to_q(1, 1, 0))
+        angles, flags = model.calculate_stage_angles(
+            qx, qy, qz, 0.0, E_K, "Kf Fixed", "pg002", "pg002")
+        assert flags == []
+        model.A3, model.sgl, model.sgu = 30.0, 1.5, -2.0     # the same physical angles
+        params = model.build_point_params(0.0)
+        arm = tuple(params[f"sample_r{axis}_param"] for axis in "xyz")
+        return arm, _stage_readouts(angles)
+
+    arm_before, readouts_before = arm_and_readouts()
+    u_other = _rot((1, 0, 0), 2.0) @ _rot((0, 1, 0), 17.0)
+    ub.peaks = [_peak(model, ub.B, hkl, u_other) for hkl in PEAKS_2]
+    ub.calculate_U_from_peaks()
+    assert np.allclose(ub.U, u_other, rtol=0.0, atol=1e-9)
+    arm_after, readouts_after = arm_and_readouts()
+
+    assert arm_after == arm_before
+    assert abs(readouts_after["A3"] - readouts_before["A3"]) > 5.0
 
 
 # --- in plane: today's numbers and today's McStas rotation -------------------------
@@ -819,7 +853,7 @@ def test_lock_plane_past_travel_is_refused_in_the_shared_words():
 def test_offset_changes_the_emitted_rotation_by_that_axis_rotation(models, field, axis_name):
     model = copy.deepcopy(models["in8"])
     u = _rot((2, -1, 1), 6.0)
-    model.sample_mount = SampleMount(CUBIC_B, u)
+    model.U_true = u                       # the arm reads the true mount
     model.A3, model.sgl, model.sgu = 37.0, 4.0, -6.0
     before = mccode_rotation_matrix(*sample_arm_euler(
         model.goniometer, model.physical_stage_angles(), u)).T
@@ -893,4 +927,5 @@ def test_build_fingerprint_is_unchanged_by_orientation(name, cls):
                          ("kappa", -1.0), ("mis_omega", 0.5), ("mis_chi", 0.25)):
         setattr(config, field, value)
     config.sample_mount = SampleMount(CUBIC_B, _rot((1, 1, 0), 8.0))
+    config.U_true = _rot((1, -1, 0), 5.0)
     assert plugin.build_fingerprint(config) == before

@@ -111,10 +111,7 @@ class MisalignmentDock(BaseDockWidget):
     def __init__(self, parent=None):
         super().__init__("Misalignment Training", parent, use_scroll_area=True)
         self.setObjectName("MisalignmentDock")
-        
-        # Store loaded misalignment (hidden from user)
-        self._loaded_misalignment = None
-        
+
         # Get the content layout from base class
         main_layout = self.content_layout
         # Prefer a larger default size so contents are visible when opened
@@ -221,9 +218,9 @@ class MisalignmentDock(BaseDockWidget):
         # Connect internal signals
         self.generate_hash_button.clicked.connect(self._on_generate_hash)
         self.copy_hash_button.clicked.connect(self._on_copy_hash)
-        self.load_hash_button.clicked.connect(self._on_load_hash)
-        self.clear_misalignment_button.clicked.connect(self._on_clear_misalignment)
-    
+        # Load / Clear are the controller's (it holds the one loaded exercise
+        # and refuses while the other exercise is loaded); this dock shows it.
+
     def _on_generate_hash(self):
         """Generate hash from teacher's misalignment inputs."""
         try:
@@ -243,39 +240,20 @@ class MisalignmentDock(BaseDockWidget):
         if hash_text:
             QApplication.clipboard().setText(hash_text)
     
-    def _on_load_hash(self):
-        """Load misalignment from hash (without revealing values)."""
-        hash_str = self.load_hash_edit.text().strip()
-        if not hash_str:
-            QMessageBox.warning(self, "No Hash", "Please enter a misalignment hash.")
-            return
-        
-        try:
-            omega, chi = decode_misalignment(hash_str)
-            self._loaded_misalignment = (omega, chi)
+    def show_misalignment(self, hash_str: str):
+        """Show the controller's misalignment exercise: its hash, or "" for
+        none. The values stay hidden (the controller holds them)."""
+        loaded = bool(hash_str)
+        self.load_hash_edit.setText(hash_str)
+        if loaded:
             self.misalignment_status_label.setText("✓ Misalignment loaded (hidden)")
             self.misalignment_status_label.setStyleSheet("color: green; font-weight: bold;")
-            self.check_alignment_button.setEnabled(True)
-            self._reset_feedback()
-            # Emit signal that misalignment was loaded
-            self.misalignment_changed.emit(True)
-        except ValueError as e:
-            QMessageBox.warning(self, "Invalid Hash", str(e))
-    
-    def _on_clear_misalignment(self):
-        """Clear loaded misalignment."""
-        self._loaded_misalignment = None
-        # Clear any pasted hash so it isn't saved back to parameters
-        try:
-            self.load_hash_edit.clear()
-        except Exception:
-            pass
-        self.misalignment_status_label.setText("No misalignment loaded")
-        self.misalignment_status_label.setStyleSheet("color: gray;")
-        self.check_alignment_button.setEnabled(False)
+        else:
+            self.misalignment_status_label.setText("No misalignment loaded")
+            self.misalignment_status_label.setStyleSheet("color: gray;")
+        self.check_alignment_button.setEnabled(loaded)
         self._reset_feedback()
-        # Emit signal that misalignment was cleared
-        self.misalignment_changed.emit(False)
+        self.misalignment_changed.emit(loaded)
     
     def _reset_feedback(self):
         """Reset alignment feedback labels."""
@@ -286,25 +264,15 @@ class MisalignmentDock(BaseDockWidget):
         self.overall_feedback_label.setText("Overall: ---")
         self.overall_feedback_label.setStyleSheet("font-weight: bold;")
     
-    def get_loaded_misalignment(self) -> tuple:
-        """Return loaded misalignment angles (omega, chi), or (0, 0) if none loaded."""
-        return self._loaded_misalignment if self._loaded_misalignment else (0, 0)
-    
-    def has_misalignment(self) -> bool:
-        """Return True if a misalignment is currently loaded."""
-        return self._loaded_misalignment is not None
-    
-    def update_alignment_feedback(self, user_psi: float, user_kappa: float):
+    def update_alignment_feedback(self, user_psi: float, user_kappa: float,
+                                  mis_omega: float, mis_chi: float):
         """Update the alignment feedback display based on current user offsets.
-        
+
         Args:
             user_psi: User's in-plane offset (ψ) to correct omega misalignment
             user_kappa: User's out-of-plane offset (κ) to correct chi misalignment
+            mis_omega, mis_chi: the controller's hidden zero errors
         """
-        if not self._loaded_misalignment:
-            return
-        
-        mis_omega, mis_chi = self._loaded_misalignment
         result = check_alignment_quality(user_psi, user_kappa, mis_omega, mis_chi)
         
         # Update in-plane feedback (psi corrects omega misalignment)

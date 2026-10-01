@@ -364,7 +364,6 @@ class UBMatrixDock(BaseDockWidget):
         self._gonio = tuple(descriptor.goniometer) if descriptor is not None else tas_goniometer()
         self._ub_locked = True
         self._saved_ub_values = {}
-        self._loaded_training = None  # (U, mis_omega, mis_chi)
         self._peak_widgets = []
 
         main_layout = self.content_layout
