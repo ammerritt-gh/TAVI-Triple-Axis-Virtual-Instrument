@@ -1697,8 +1697,10 @@ def test_refine_lattice_with_no_space_group_names_the_fields_system(controller, 
 
     shown = _press_refine(controller, monkeypatch)
 
-    assert "No space group set; refining as tetragonal from the lattice fields" in messages
-    assert any("tetragonal, from the lattice fields" in text for text in shown), shown
+    assert ("Space group 1 (P1, the default) taken as unset; refining as tetragonal "
+            "from the lattice fields") in messages
+    assert any("tetragonal, from the lattice fields; space group 1 (P1, the default) "
+               "taken as unset" in text for text in shown), shown
     assert [float(t) for t in _lattice_fields(controller)[:3]] == pytest.approx(
         TETRAGONAL[:3], abs=1e-4)
     controller.set_default_parameters()
