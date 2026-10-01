@@ -22,13 +22,18 @@ from tavi.orientation import hkl_text, legacy_triple, stage_record
 class LatticeRefinementDialog(QDialog):
     """Dialog showing lattice refinement results with option to apply."""
 
-    def __init__(self, current_lattice, refined_lattice, residuals, rms_error, parent=None):
+    def __init__(self, current_lattice, refined_lattice, residuals, rms_error, parent=None,
+                 system=None):
         super().__init__(parent)
         self.setWindowTitle("Lattice Refinement Results")
         self.setMinimumSize(450, 350)
         self.accepted_lattice = None
 
         layout = QVBoxLayout(self)
+
+        # The crystal system refined, and where it came from.
+        if system:
+            layout.addWidget(QLabel(f"<b>Refined as:</b> {system}"))
 
         # Comparison table
         layout.addWidget(QLabel("<b>Lattice Parameter Comparison:</b>"))
@@ -524,7 +529,9 @@ class UBMatrixDock(BaseDockWidget):
         calc_layout.addWidget(self.calculate_ub_button)
 
         self.refine_lattice_button = QPushButton("Refine Lattice")
-        self.refine_lattice_button.setToolTip("Refine lattice parameters from peak observations")
+        self.refine_lattice_button.setToolTip(
+            "Refine the lattice from the peaks' |Q|: exactly the parameters of the space "
+            "group's crystal system (no group set: the lattice fields' own)")
         calc_layout.addWidget(self.refine_lattice_button)
 
         self.reset_ub_button = QPushButton("Reset to Sample")

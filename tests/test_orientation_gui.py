@@ -710,7 +710,9 @@ def _path_refine_lattice(controller, monkeypatch):
 
     monkeypatch.setattr(LatticeRefinementDialog, "exec", lambda self: 1)
     _take_peaks(controller, [(2, 0, 0), (0, 2, 0)])         # taken on a = 4.05
-    controller.window.sample_dock.lattice_a_edit.setText("4.1")
+    sam = controller.window.sample_dock
+    for edit in (sam.lattice_a_edit, sam.lattice_b_edit, sam.lattice_c_edit):
+        edit.setText("4.1")                                 # a cubic metric (D13)
     controller.on_lattice_changed()
     controller.on_refine_lattice()
     assert controller.ub_matrix.lattice[0] != 4.1               # the refined lattice applied
@@ -1564,3 +1566,93 @@ def test_the_residual_table_describes_only_the_last_calculate_ub(controller, mon
     change(controller, monkeypatch)
 
     assert table.rowCount() == 0
+
+
+# --- Unit 3 (C4): Refine Lattice by crystal system ----------------------------------
+
+TETRAGONAL = (4.0, 4.0, 4.2, 90.0, 90.0, 90.0)
+
+
+def _peaks_of(controller, lattice, hkls):
+    """Enter peaks taken on a crystal of ``lattice`` (at U = I) in the dock."""
+    from tavi.sample_mount import reciprocal_basis_tas
+    from test_orientation import _true_peak
+
+    state, vals = controller.instrument_state, controller.get_gui_values()
+    controller.window.ub_matrix_dock.set_peak_entries([
+        _true_peak(state.goniometer, state.sense_sample, hkl, np.eye(3),
+                   reciprocal_basis_tas(*lattice), {}, {}, k=vals["Kf"]).to_dict()
+        for hkl in hkls])
+
+
+def _lattice_fields(controller):
+    sam = controller.window.sample_dock
+    return [sam.lattice_a_edit.text(), sam.lattice_b_edit.text(), sam.lattice_c_edit.text(),
+            sam.lattice_alpha_edit.text(), sam.lattice_beta_edit.text(),
+            sam.lattice_gamma_edit.text()]
+
+
+def _press_refine(controller, monkeypatch):
+    """Press Refine Lattice, accepting the dialog; return its label texts."""
+    from PySide6.QtWidgets import QLabel
+    from gui.docks.ub_matrix_dock import LatticeRefinementDialog
+
+    shown = []
+
+    def accept(dialog):
+        shown.extend(label.text() for label in dialog.findChildren(QLabel))
+        return 1
+
+    monkeypatch.setattr(LatticeRefinementDialog, "exec", accept)
+    controller.window.ub_matrix_dock.refine_lattice_button.click()
+    return shown
+
+
+def test_refine_lattice_refines_the_space_groups_system(controller, monkeypatch, messages):
+    """A tetragonal space group: the button applies a = b != c and the dialog
+    names tetragonal; (h k 0) peaks cannot decide c, so the next press is
+    refused and leaves the lattice fields and the UB as they were."""
+    sam = controller.window.sample_dock
+    controller.set_default_parameters()                      # Al: a = b = c = 4.05
+    try:
+        sam.set_space_group(123)                             # P4/mmm
+        _peaks_of(controller, TETRAGONAL, [(2, 0, 0), (0, 2, 0), (0, 0, 2), (1, 1, 1)])
+        shown = _press_refine(controller, monkeypatch)
+        assert any("tetragonal, from space group 123" in text for text in shown), shown
+        a, b, c = (float(text) for text in _lattice_fields(controller)[:3])
+        # The peak entries hold their angles to four decimals.
+        assert (a, b, c) == pytest.approx(TETRAGONAL[:3], abs=1e-4) and a == b
+
+        _peaks_of(controller, TETRAGONAL, [(2, 0, 0), (0, 2, 0), (1, 1, 0)])
+        fields, ub = _lattice_fields(controller), controller.ub_matrix.UB
+        messages.clear()
+        assert _press_refine(controller, monkeypatch) == []  # no dialog
+        assert _lattice_fields(controller) == fields
+        assert np.array_equal(controller.ub_matrix.UB, ub)
+        assert any(m.startswith("Lattice refinement refused: tetragonal refinement fits 2 "
+                                "parameters but the 3 valid peaks give 1 independent")
+                   for m in messages), messages
+    finally:
+        sam.set_space_group(1)
+        controller.set_default_parameters()
+
+
+def test_refine_lattice_with_no_space_group_names_the_fields_system(controller, monkeypatch,
+                                                                    messages):
+    """The default group #1 counts as unset: the highest-symmetry system the
+    lattice fields have is refined and named (D13)."""
+    controller.set_default_parameters()
+    assert controller.window.sample_dock.get_selected_space_group().number == 1
+    sam = controller.window.sample_dock
+    sam.lattice_c_edit.setText("4.3")                        # a = b != c: tetragonal
+    controller.on_lattice_changed()
+    _peaks_of(controller, TETRAGONAL, [(2, 0, 0), (0, 2, 0), (0, 0, 2)])
+    messages.clear()
+
+    shown = _press_refine(controller, monkeypatch)
+
+    assert "No space group set; refining as tetragonal from the lattice fields" in messages
+    assert any("tetragonal, from the lattice fields" in text for text in shown), shown
+    assert [float(t) for t in _lattice_fields(controller)[:3]] == pytest.approx(
+        TETRAGONAL[:3], abs=1e-4)
+    controller.set_default_parameters()

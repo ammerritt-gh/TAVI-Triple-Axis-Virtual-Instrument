@@ -1437,3 +1437,87 @@ def test_lattice_fields_three_percent_off_read_lattice_fields_off(models, lattic
     for row in result["peaks"]:
         assert row["flag"].endswith("lattice fields off by about 3.0 %; try Refine Lattice")
     assert not [p for p in result["pairs"] if p["flag"]]
+
+
+# --- Unit 3 (C4): Refine Lattice by crystal system ----------------------------------
+
+# (system, the lattice refined from, its free parameters perturbed 1 % each).
+REFINE_CASES = {
+    "cubic": ("cubic", (4.05, 4.05, 4.05, 90, 90, 90), (4.0905, 4.0905, 4.0905, 90, 90, 90)),
+    "tetragonal": ("tetragonal", (4.0, 4.0, 6.0, 90, 90, 90), (4.04, 4.04, 5.94, 90, 90, 90)),
+    "orthorhombic": ("orthorhombic", (4.0, 5.0, 6.0, 90, 90, 90),
+                     (4.04, 4.95, 6.06, 90, 90, 90)),
+    "hexagonal": ("hexagonal", (3.21, 3.21, 5.21, 90, 90, 120),
+                  (3.2421, 3.2421, 5.1579, 90, 90, 120)),
+    "trigonal-hexagonal-axes": ("trigonal", (3.21, 3.21, 5.21, 90, 90, 120),
+                                (3.1779, 3.1779, 5.2621, 90, 90, 120)),
+    "trigonal-rhombohedral-axes": ("trigonal", (5.0, 5.0, 5.0, 80, 80, 80),
+                                   (5.05, 5.05, 5.05, 80.8, 80.8, 80.8)),
+    "monoclinic-b": ("monoclinic", (5.1, 6.3, 7.2, 90, 103.5, 90),
+                     (5.151, 6.237, 7.272, 90, 104.535, 90)),
+    "monoclinic-a": ("monoclinic", (5.1, 6.3, 7.2, 98, 90, 90),
+                     (5.049, 6.363, 7.128, 98.98, 90, 90)),
+    "monoclinic-c": ("monoclinic", (5.1, 6.3, 7.2, 90, 90, 112),
+                     (5.151, 6.363, 7.128, 90, 90, 110.88)),
+    "triclinic": ("triclinic", (5.1, 6.3, 7.2, 85, 95, 100),
+                  (5.151, 6.237, 7.272, 85.85, 94.05, 101.0)),
+}
+REFINE_HKLS = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0), (1, 0, 1), (0, 1, 1), (1, -1, 1)]
+
+
+def _refine_peaks(models, lattice, hkls, seed=53):
+    """Peaks of ``lattice`` taken under a seeded mount (k = 4, |Q| up to 8)."""
+    gonio = models["in8"].goniometer
+    u_true = _random_mount(np.random.default_rng(seed))
+    b_true = reciprocal_basis_tas(*lattice)
+    return [_true_peak(gonio, 1, hkl, u_true, b_true, {}, {}, k=4.0) for hkl in hkls]
+
+
+@pytest.mark.parametrize("case", list(REFINE_CASES))
+def test_refine_lattice_recovers_every_crystal_system(models, case):
+    """Refined from the unperturbed lattice, peaks of the perturbed one give
+    it back to 1e-6: the constraint per system and the (2 pi)^2 factor from
+    G* to the direct metric (the round trip through compute_B_matrix)."""
+    from tavi.ub_matrix import refine_lattice_from_peaks
+
+    system, start, perturbed = REFINE_CASES[case]
+    result = refine_lattice_from_peaks(_refine_peaks(models, perturbed, REFINE_HKLS), start, system)
+    assert result["crystal_system"] == system
+    assert np.allclose(result["lattice"], perturbed, rtol=0.0, atol=1e-6), result["lattice"]
+    assert result["rms_error"] < 1e-9 and "method" not in result
+
+
+@pytest.mark.parametrize(("system", "start", "hkls", "words"), [
+    ("tetragonal", (4.0, 4.0, 6.0, 90, 90, 90), [(1, 0, 0), (0, 1, 0), (1, 1, 0), (2, 1, 0)],
+     "tetragonal refinement fits 2 parameters but the 4 valid peaks give 1 independent"),
+    ("monoclinic", (5.1, 6.3, 7.2, 90, 103.5, 90), [(1, 0, 0), (0, 1, 0), (0, 0, 1)],
+     "monoclinic refinement fits 4 parameters but the 3 valid peaks give 3 independent"),
+    ("cubic", (4.0, 4.0, 5.0, 90, 90, 90), [(1, 0, 0), (0, 0, 1)],
+     "do not have the cubic metric"),
+    ("trigonal", (5.0, 5.0, 6.0, 80, 80, 80), [(1, 0, 0), (0, 0, 1)],
+     "do not have the trigonal metric"),
+])
+def test_refine_lattice_refuses_what_the_peaks_or_fields_cannot_decide(models, system, start,
+                                                                      hkls, words):
+    from tavi.ub_matrix import refine_lattice_from_peaks
+
+    with pytest.raises(ValueError, match=words):
+        refine_lattice_from_peaks(_refine_peaks(models, start, hkls), start, system)
+
+
+def test_with_no_system_the_fields_highest_symmetry_is_refined(models):
+    """D13: hexagonal axes read as hexagonal (the same metric as trigonal on
+    them), rhombohedral axes as trigonal."""
+    from tavi.ub_matrix import lattice_crystal_system, refine_lattice_from_peaks
+
+    named = {name: lattice_crystal_system(start) for name, (_, start, _) in REFINE_CASES.items()}
+    assert named == {"cubic": "cubic", "tetragonal": "tetragonal",
+                     "orthorhombic": "orthorhombic", "hexagonal": "hexagonal",
+                     "trigonal-hexagonal-axes": "hexagonal",
+                     "trigonal-rhombohedral-axes": "trigonal", "monoclinic-b": "monoclinic",
+                     "monoclinic-a": "monoclinic", "monoclinic-c": "monoclinic",
+                     "triclinic": "triclinic"}
+    _, start, perturbed = REFINE_CASES["tetragonal"]
+    result = refine_lattice_from_peaks(_refine_peaks(models, perturbed, REFINE_HKLS), start)
+    assert result["crystal_system"] == "tetragonal"
+    assert np.allclose(result["lattice"], perturbed, rtol=0.0, atol=1e-6)

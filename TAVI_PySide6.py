@@ -122,7 +122,8 @@ from tavi.tas_geometry import (
 )
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
                             decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
-                            u_from_plane, validate_rotation_matrix, alignment_residuals)
+                            u_from_plane, validate_rotation_matrix, alignment_residuals,
+                            refine_lattice_from_peaks)
 from tavi.runtime_tracker import RuntimeTracker
 from tavi.settings import load_mpi_count, save_mpi_count
 from tavi.machine_profile import machine_fingerprint
@@ -5556,21 +5557,34 @@ class TAVIController(QObject):
             self.print_to_message_center(f"UB calculation failed: {e}")
 
     def on_refine_lattice(self):
-        """Refine lattice parameters from observed peaks."""
+        """Refine the lattice fields from the observed peaks, by the crystal
+        system of the sample dock's space group; the default group #1 (P1)
+        counts as unset, and then the system the lattice fields have is
+        refined (D13), named in the dialog and the message center. A set of
+        peaks that cannot decide the system's parameters is refused."""
         try:
             self.ub_matrix.peaks = self._peaks_from_dock()
-
-            result = self.ub_matrix.refine_lattice()
-            refined = result['lattice']
-
-            # Show refinement dialog
-            from gui.docks.ub_matrix_dock import LatticeRefinementDialog
             vals = self.get_gui_values()
             current = (
                 vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                 vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
             )
-            dlg = LatticeRefinementDialog(current, refined, result['residuals'], result['rms_error'], self.window)
+            group = self.window.sample_dock.get_selected_space_group()
+            from_group = group is not None and group.number != 1
+            result = refine_lattice_from_peaks(
+                self.ub_matrix.peaks, current, group.crystal_system if from_group else None)
+            refined, system = result['lattice'], result['crystal_system']
+            if from_group:
+                source = f"{system}, from space group {group.number} {group.short_name}"
+            else:
+                source = f"{system}, from the lattice fields (no space group set)"
+                self.print_to_message_center(
+                    f"No space group set; refining as {system} from the lattice fields")
+
+            # Show refinement dialog
+            from gui.docks.ub_matrix_dock import LatticeRefinementDialog
+            dlg = LatticeRefinementDialog(current, refined, result['residuals'],
+                                          result['rms_error'], self.window, system=source)
             if dlg.exec():
                 # Apply refined lattice to sample dock
                 a, b, c, alpha, beta, gamma = refined
@@ -5587,6 +5601,8 @@ class TAVIController(QObject):
                 )
             else:
                 self.print_to_message_center("Lattice refinement not applied")
+        except ValueError as e:
+            self.print_to_message_center(f"Lattice refinement refused: {e}")
         except Exception as e:
             self.print_to_message_center(f"Lattice refinement failed: {e}")
 

@@ -62,6 +62,21 @@ After a successful Calculate UB the **Residuals of the last Calculate UB** table
 
 The table describes the last Calculate UB and its peaks only. A failed fit leaves the previous UB and an empty table. Any other change to the UB (a manual edit, Reset, a lattice edit, Refine Lattice, loading a session, loading an exercise, Defaults) and any peak added, removed, re-indexed or re-taken empties it; press Calculate UB again to see the residuals of what you have now. Locking or releasing a plane does not change the UB and keeps the table. The residuals read only your peaks and your UB, never the hidden crystal.
 
+### Refine Lattice
+**Refine Lattice** fits the lattice to your peaks' measured |Q| and refines exactly the parameters your crystal system has. The system comes from the Sample dock's space group. The default group, #1 P1, counts as no space group set: the lattice fields' own symmetry is then used (the highest system they satisfy, for example a = b ≠ c with all angles 90° is tetragonal), and the message center and the dialog say so. A space group whose system the lattice fields do not have (a cubic group with a ≠ c, say) is refused: correct the fields or the group first. The dialog shows the system it refined, the current and refined parameters and each peak's |Q| before you apply them.
+
+| System | Parameters refined | Peaks it needs |
+|---|---|---|
+| Cubic | a | 1 |
+| Tetragonal | a, c | 2, at least one with l ≠ 0 and one with h or k ≠ 0 |
+| Hexagonal, or trigonal on hexagonal axes | a, c | 2, likewise |
+| Trigonal on rhombohedral axes | a, α | 2 |
+| Orthorhombic | a, b, c | 3 |
+| Monoclinic | a, b, c and the one angle not 90° (β when all are 90°) | 4 |
+| Triclinic | a, b, c, α, β, γ | 6 |
+
+The peaks must decide every parameter. A refinement whose peaks cannot is refused, and the message center names the system, how many parameters it fits and how many independent peaks you gave it; for example, only (h k 0) peaks for a tetragonal crystal cannot decide c. A refused refinement changes nothing. Only |Q| is used, never the angles between peaks, so a zero error in the arcs cannot leak into the lattice. That is why a monoclinic crystal needs four peaks and a triclinic one six, with different combinations of h, k and l. Every peak counts equally.
+
 ### Scattering plane (from your UB)
 The UB Matrix dock's **Scattering Plane (from your UB)** box describes the plane your UB and lattice fields put horizontal. It is computed from your belief, not from the crystal itself and not from the locked arc tilts. **Plane normal [u v w]** is the zone axis: the direct-lattice direction that points straight up, so every reflection (h k l) with hu + kv + lw = 0 lies in the plane. In TAVI's standard setting it reads [0 0 1]; a (1 1 0)/(0 0 1) mount of a cubic crystal reads [1 -1 0]. When no direction with indices up to 6 lies within 0.1° of the vertical, the row says so and shows the raw reciprocal (h k l) of the vertical instead. **c\* elevation** is the angle of c\* above the horizontal plane (90° in the standard setting). **a\* azimuth** is the angle of a\* from the mount's x axis in the horizontal plane. It describes your UB's orientation about the vertical; the turntable correction is ψ.
 
