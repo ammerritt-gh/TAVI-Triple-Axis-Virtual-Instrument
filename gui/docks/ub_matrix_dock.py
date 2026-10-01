@@ -70,9 +70,8 @@ class LatticeRefinementDialog(QDialog):
             res_text.setMaximumHeight(120)
             lines = []
             for r in residuals:
-                h, k, l = r['hkl']
                 lines.append(
-                    f"({h:.0f} {k:.0f} {l:.0f}): "
+                    f"{hkl_text(r['hkl'])}: "
                     f"|Q|_obs={r['q_obs']:.4f}, |Q|_calc={r['q_calc']:.4f}, "
                     f"\u0394Q={r['delta_q']:+.4f}"
                 )
