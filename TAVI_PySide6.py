@@ -7972,8 +7972,9 @@ class TAVIController(QObject):
           a) parse/validate every field first, collecting per-field errors;
              the plane lock is judged on the whole body, and a refused lock
              request or a field the lock holds applies nothing at all;
-          b) apply the lock request, then valid fields in dependency order (lattice -> energy mode ->
-             Q/HKL -> angles -> the rest in patch order);
+          b) apply the lock request (only a release can share a body, as a
+             lock request stands alone), then valid fields in dependency order
+             (lattice -> energy mode -> Q/HKL -> angles -> the rest in patch order);
           c) fire each field's after-handler once (deduped, order preserved);
           d) log a summary to the message center;
           e) return (applied, errors).
@@ -8021,7 +8022,8 @@ class TAVIController(QObject):
 
         after_handlers = []  # deduped-by-identity, order preserved
         if lock_action is not None:
-            # Before the other fields, so their handlers solve at the lock.
+            # A lock request stands alone (_lock_refusals), so only a release
+            # shares a body: released first, the other fields solve free.
             action, lock = lock_action
             if action != "keep":
                 self._set_plane_lock(lock)
