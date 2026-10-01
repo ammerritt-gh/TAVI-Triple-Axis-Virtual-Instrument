@@ -41,8 +41,15 @@ from tavi.tas_geometry import (
 
 # Free-mode search grid over the held arc, degrees; see solve_stage.
 GRID_STEP_DEG = 0.5
-# A locked stage accepts a Q this far out of its plane (float noise and
-# formatted GUI fields); anything more is refused with its angle.
+# A locked stage accepts a Q whose component out of its plane is at most
+# this, 1/A: the GUI's Q fields hold four decimals, so a typed in-plane Q can
+# sit up to sqrt(3) * 5e-5 1/A off the plane (HKL fields at four decimals:
+# that times |b*|, under 3 1/A per r.l.u. for any cell over 2 A). Absolute,
+# since that rounding does not shrink with |Q|; anything more is refused with
+# its angle.
+LOCKED_PLANE_TOLERANCE_Q = 5e-4
+# Angle-mode arc slots under a lock match its tilts to this, degrees (the
+# angle fields' four-decimal rounding).
 LOCKED_PLANE_TOLERANCE_DEG = 1e-4
 # An angle this close past a travel end counts as at the end. A root solved
 # at one arc's end node can land ~1e-14 deg past the other arc's end when the
@@ -426,10 +433,14 @@ def solve_stage(gonio, q_mount, q_lab, locked=None, plane=None):
         tilts = {name: float(locked[name]) for name in names}
         check_travel(inner, tilts, " for the locked scattering plane")
         q_level = stage_rotation(inner, tilts) @ q_mount
-        out = math.degrees(math.asin(max(-1.0, min(1.0, (up @ q_level - target) / scale))))
-        if abs(out) > LOCKED_PLANE_TOLERANCE_DEG:
+        off = float(up @ q_level - target)
+        if abs(off) > LOCKED_PLANE_TOLERANCE_Q:
+            out = math.degrees(math.asin(max(-1.0, min(1.0, off / scale))))
             raise StageUnreachable(
                 f"Q is {out:+.4g}° out of {locked_plane_text(tilts, plane)}")
+        # In tolerance, Q is solved as its projection into the plane: the
+        # tilts are the lock's exactly, and the turntable reads only Q's
+        # horizontal components.
         return {turntable.name: _turntable(turntable, q_level, q_lab), **tilts}
 
     if abs(up @ q_mount - target) <= 1e-12 * scale and all(
