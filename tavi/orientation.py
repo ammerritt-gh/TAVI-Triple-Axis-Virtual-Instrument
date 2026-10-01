@@ -295,7 +295,10 @@ def _level_candidates(inner, q_mount, up, target, scale):
 
 def _turntable(turntable, q_level, q_lab):
     """Turntable angle carrying the levelled ``q_level`` onto ``q_lab``: the
-    azimuth difference, computed as the legacy solver does (not wrapped)."""
+    azimuth difference, computed as the legacy solver does (not wrapped).
+    Ceiling: travel is tried for the chosen arc root only, so a finite
+    turntable travel could refuse a point another arc root reaches; latent
+    while no instrument limits A3 (upgrade: filter roots by turntable travel)."""
     sign = 1.0 if turntable.axis[1] > 0 else -1.0
     angle = sign * math.degrees(
         math.atan2(q_level[2], q_level[0]) - math.atan2(q_lab[2], q_lab[0])
