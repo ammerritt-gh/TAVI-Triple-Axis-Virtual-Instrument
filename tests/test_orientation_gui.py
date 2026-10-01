@@ -94,8 +94,10 @@ def _reload_with(controller, edit):
         edit(document[controller.instrument.id])
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(document, fh)
+        written = open(path, "rb").read()
 
         controller.load_parameters()
+        assert open(path, "rb").read() == written            # restore writes no file
     finally:
         if original is None:
             os.remove(path)
@@ -898,3 +900,84 @@ def test_sample_swap_keeps_the_mount_and_clears_only_the_plane(controller, messa
     assert len(cleared) == 1, messages
     assert sam.mount_status_label.text() == "Mount kept; no plane described"
     assert controller.get_gui_values()["mount_plane_u"] is None
+
+
+# --- Unit 2 (C3): saved state, schema 3 -------------------------------------------
+
+def test_training_session_round_trips_the_ub_and_the_truth_exactly(controller, messages):
+    """A schema-3 save with a training exercise and a fitted UB unlike both
+    U_described and U_true restores that UB, U_true and the zero errors
+    exactly; the block carries R_hidden only inside the hash, and a hash
+    typed into the other dock but never loaded is not saved."""
+    from tavi.tas_geometry import mccode_rotation_matrix
+
+    controller.set_default_parameters()
+    _apply_plane(controller, "1 1 0", "0 0 1")
+    _load_exercise(controller, "training")
+    fitted = mccode_rotation_matrix(1.5, 30.0, -2.5)
+    controller.ub_matrix.set_U(fitted)
+    controller.window.misalignment_dock.load_hash_edit.setText(EXERCISE_HASHES["misalignment"])
+    state = controller.instrument_state
+    saved = (controller.ub_matrix.U, state.U_true.copy(), state.mis_omega, state.mis_chi)
+    assert not np.allclose(fitted, controller.U_described) and not np.allclose(fitted, saved[1])
+    blocks = []
+
+    def scramble(block):
+        blocks.append(json.loads(json.dumps(block)))
+        controller.set_default_parameters()                # nothing carried over
+
+    _reload_with(controller, scramble)
+
+    block = blocks[0]
+    assert block["_schema"] == 3
+    assert set(block["true_mount"]) == {"U_described", "mount_plane"}
+    assert block["ub_training_hash"] == EXERCISE_HASHES["training"]
+    assert block["misalignment_hash_var"] == ""
+    assert "R_hidden" not in json.dumps(block)
+    assert np.array_equal(controller.ub_matrix.U, saved[0])
+    assert np.array_equal(state.U_true, saved[1])
+    assert (state.mis_omega, state.mis_chi) == (saved[2], saved[3])
+    assert controller._exercise == ("training", EXERCISE_HASHES["training"])
+
+
+def test_plane_mount_round_trips_on_a_non_default_sample(controller, messages):
+    """U_described and the plane come back exactly with their sample, and the
+    restore's own sample selection never runs the swap's plane clear, even
+    over a session that has a plane on another sample."""
+    controller.set_default_parameters()
+    assert controller.window.sample_dock.set_sample_by_key("Pb_phonon_DFT")
+    _apply_plane(controller, "1 1 0", "0 0 1")
+    described, plane = controller.U_described.copy(), controller.mount_plane
+
+    def scramble(block):
+        controller.set_default_parameters()                # back on Al_bragg
+        _apply_plane(controller, "1 0 0", "0 1 0")         # a plane on another sample
+        messages.clear()
+
+    _reload_with(controller, scramble)
+
+    assert controller.window.sample_dock.get_selected_sample_key() == "Pb_phonon_DFT"
+    assert np.array_equal(controller.U_described, described)
+    assert controller.mount_plane == plane
+    assert not [m for m in messages if "Mounting-plane description cleared" in m], messages
+    assert controller.window.sample_dock.mount_u_edit.text() == "1 1 0"
+
+
+@pytest.mark.parametrize("kind", ["training", "misalignment"])
+def test_restore_replaces_the_hidden_truth_in_full(controller, kind):
+    """A saved block without an exercise clears the session's: R_hidden = I,
+    zero errors 0, no exercise."""
+    controller.set_default_parameters()
+    _load_exercise(controller, kind)
+
+    def no_exercise(block):
+        block["ub_training_hash"] = ""
+        block["misalignment_hash_var"] = ""
+
+    _reload_with(controller, no_exercise)
+
+    state = controller.instrument_state
+    assert controller._exercise is None
+    assert np.array_equal(controller.R_hidden, np.eye(3))
+    assert np.array_equal(state.U_true, controller.U_described)
+    assert (state.mis_omega, state.mis_chi) == (0.0, 0.0)
