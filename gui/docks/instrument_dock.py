@@ -121,6 +121,14 @@ class InstrumentDock(BaseDockWidget):
             angles_layout.addWidget(label, 2, column)
             angles_layout.addWidget(edit, 2, column + 1)
 
+        # Row 3: shown while the angle fields do not match Q/HKL (the stage
+        # refused the last Q/HKL edit); the controller sets and clears it.
+        self.angles_stale_label = QLabel()
+        self.angles_stale_label.setWordWrap(True)
+        self.angles_stale_label.setStyleSheet("color: #c1121f;")
+        self.angles_stale_label.hide()
+        angles_layout.addWidget(self.angles_stale_label, 3, 0, 1, 4)
+
         main_layout.addWidget(angles_group)
 
         # Energies section
