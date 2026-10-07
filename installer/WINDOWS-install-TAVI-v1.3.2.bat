@@ -1,7 +1,7 @@
 @echo off
 setlocal DisableDelayedExpansion
 
-:: TAVI Windows installer - release-pinned v1.3.1
+:: TAVI Windows installer - release-pinned v1.3.2
 :: (build 1, 2026-09-17: one chosen install folder, environment selected by
 ::  prefix, launchers shipped instead of generated, uninstall from the menu)
 :: Derived from WINDOWS-install-TAVI-v1.3.0.bat build 4 per the release recipe
@@ -10,8 +10,8 @@ setlocal DisableDelayedExpansion
 :: no delayed expansion, and no nested cmd AutoRun dependency except where
 :: unavoidable.
 
-set "TAVI_VERSION=v1.3.1"
-set "INSTALLER_VERSION=v1.3.1-1"
+set "TAVI_VERSION=v1.3.2"
+set "INSTALLER_VERSION=v1.3.2-1"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "MAMBA_VERSION=2.5.0-1"
@@ -220,15 +220,15 @@ goto retry_base
 
 :base_has_legacy
 echo.
-echo [INFO] There is a TAVI installation from before version 1.3.1 in:
+echo [INFO] There is a TAVI installation from before version 1.3.2 in:
 echo            %TAVI_BASE%
-echo        Version 1.3.1 keeps the program in an "app" folder inside it, so
+echo        Version 1.3.2 keeps the program in an "app" folder inside it, so
 echo        the old installation has to be removed first.
 call :confirm_wipe "%TAVI_BASE%" "%TAVI_BASE%"
 if not "%WIPE_OK%"=="yes" goto retry_base
 rd /s /q "%TAVI_BASE%" 2>nul
 if exist "%TAVI_BASE%" goto wipe_failed
-:: An installation from before 1.3.1 also put a shortcut on the desktop; it
+:: An installation from before 1.3.2 also put a shortcut on the desktop; it
 :: would dangle now that the launcher lives in the install folder.
 if exist "%USERPROFILE%\Desktop\TAVI Launcher.lnk" del /f /q "%USERPROFILE%\Desktop\TAVI Launcher.lnk" >nul 2>nul
 goto base_ready
@@ -355,7 +355,7 @@ if errorlevel 1 goto install_dir_failed
 if errorlevel 1 goto clone_failed
 if not exist "%INSTALL_DIR%\TAVI_PySide6.py" goto source_incomplete
 if not exist "%INSTALL_DIR%\tavi\mcstas_config.py" goto source_incomplete
-:: The launchers come from the checkout, so a release older than 1.3.1 cannot
+:: The launchers come from the checkout, so a release older than 1.3.2 cannot
 :: produce a layout-2 installation. Say so rather than half-building one.
 if not exist "%INSTALL_DIR%\installer\launchers\LAYOUT" goto launchers_missing
 findstr /x /c:"LAYOUT=%LAYOUT%" "%INSTALL_DIR%\installer\launchers\LAYOUT" >nul
@@ -615,7 +615,7 @@ pause
 exit /b 1
 
 :launchers_missing
-echo [ERROR] This installer builds the version 1.3.1 folder layout, but the
+echo [ERROR] This installer builds the version 1.3.2 folder layout, but the
 echo         release it downloaded (%TAVI_VERSION%) does not carry the matching
 echo         launchers.
 echo [INFO] Use the installer published with that release instead.

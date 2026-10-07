@@ -3,7 +3,7 @@ setlocal DisableDelayedExpansion
 title TAVI - record the Monte Carlo failure
 set "SUPPORT_DIR=%~dp0"
 
-:: layout 2 (1.3.1+): the base folder is user-chosen at install time and
+:: layout 2 (1.3.2+): the base folder is user-chosen at install time and
 :: cannot be computed by rule, so the installer leaves a locator behind.
 :: Same resolution order as installer/TAVI-Doctor.bat and
 :: installer/launchers/uninstall-tavi.bat -- keep these in step.
@@ -21,7 +21,7 @@ echo [INFO] Installation found from the install record: %TAVI_BASE%
 goto paths_ready
 
 :default_base
-:: Pre-1.3.1 layout: fixed locations under the profile (or the space-safe
+:: Pre-1.3.2 layout: fixed locations under the profile (or the space-safe
 :: relocation when the profile path itself contains a space).
 set "TAVI_BASE=%USERPROFILE%"
 set "INSTALL_DIR=%USERPROFILE%\TAVI"

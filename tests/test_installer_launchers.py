@@ -1,6 +1,6 @@
-"""Windows installer/launcher batch scripts added for the 1.3.1 release.
+"""Windows installer/launcher batch scripts added for the 1.3.2 release.
 
-The defect being repaired: pre-1.3.1 launchers picked the TAVI environment by
+The defect being repaired: pre-1.3.2 launchers picked the TAVI environment by
 NAME ("micromamba run -n tavi"), which resolves against whatever root
 micromamba happens to inherit. A relocated install could then load its
 program files from one place and its Python/mcrun from a stale same-named
@@ -29,7 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALLER_DIR = os.path.join(ROOT, "installer")
 LAUNCHERS_DIR = os.path.join(INSTALLER_DIR, "launchers")
 
-INSTALL_1_3_1 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.3.1.bat")
+INSTALL_1_3_2 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.3.2.bat")
 UNINSTALL_STANDALONE = os.path.join(INSTALLER_DIR, "WINDOWS-uninstall-TAVI.bat")
 REPAIR_LAUNCHERS = os.path.join(INSTALLER_DIR, "TAVI-Repair-Launchers.bat")
 RUN_TAVI = os.path.join(LAUNCHERS_DIR, "run-tavi.bat")
@@ -43,18 +43,18 @@ UNINSTALL_TAVI = os.path.join(LAUNCHERS_DIR, "uninstall-tavi.bat")
 # legitimately still says "run -n"/"create -n". test_old_v1_3_0_still_uses_
 # named_selection (below) proves that file trips the same check this module
 # asserts is clean everywhere else -- i.e. the check can fail.
-NAMED_SELECTION_FILES = [INSTALL_1_3_1, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
+NAMED_SELECTION_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                           RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
 INSTALL_1_3_0 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.3.0.bat")
 
 # The four files that each carry their own standalone copy of :validate_base
-# (installer/WINDOWS-install-TAVI-v1.3.1.bat's own comment names these same
+# (installer/WINDOWS-install-TAVI-v1.3.2.bat's own comment names these same
 # four -- installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md
 # section 22 is why it can't be a shared include: each has to keep working
 # when the others are missing or stale).
-VALIDATE_BASE_COPIES = [INSTALL_1_3_1, UNINSTALL_TAVI, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS]
+VALIDATE_BASE_COPIES = [INSTALL_1_3_2, UNINSTALL_TAVI, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS]
 
-LABEL_FILES = [INSTALL_1_3_1, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
+LABEL_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
 
 
@@ -268,7 +268,7 @@ def test_validate_base_is_byte_identical_across_its_four_copies():
 # 3. Path validation, table-driven, through the real /validate-only switch.
 # ===========================================================================
 
-VALIDATE_ONLY_FILES = [INSTALL_1_3_1, UNINSTALL_TAVI]
+VALIDATE_ONLY_FILES = [INSTALL_1_3_2, UNINSTALL_TAVI]
 
 ACCEPT_CASES = [
     "C:\\TAVI",
@@ -369,10 +369,10 @@ def test_naive_quoting_loses_ampersand_where_ours_does_not():
     helper (used everywhere else in this module) avoids.
     """
     naive = subprocess.run(
-        [INSTALL_1_3_1, "/validate-only", "C:\\TAVI&rem"],
+        [INSTALL_1_3_2, "/validate-only", "C:\\TAVI&rem"],
         capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL,
     )
-    correct = run_validate_only(INSTALL_1_3_1, "C:\\TAVI&rem")
+    correct = run_validate_only(INSTALL_1_3_2, "C:\\TAVI&rem")
     assert naive.stdout.strip() == "ACCEPT", (
         "expected the naively-quoted call to be fooled by the truncation; "
         f"got {naive.stdout!r} instead -- if this changed, the gotcha this "
@@ -459,7 +459,7 @@ def _make_layout2_base(tmp_path, name, stub_exe, with_python=True):
     (base / "mamba").mkdir()
 
     (base / "INSTALL_INFO.txt").write_text(
-        "TAVI_VERSION=v1.3.1\nLAYOUT=2\nINSTALL_ID=test-id\n", encoding="utf-8", newline="\n")
+        "TAVI_VERSION=v1.3.2\nLAYOUT=2\nINSTALL_ID=test-id\n", encoding="utf-8", newline="\n")
 
     for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat"):
         shutil.copy2(os.path.join(LAUNCHERS_DIR, launcher), base / launcher)
@@ -624,7 +624,7 @@ def _install_id_files(base, install_id="test-id", info_id=None):
     (base / ".tavi-install-root").write_text(
         f"LAYOUT=2\nINSTALL_ID={install_id}\n", encoding="utf-8", newline="\n")
     (base / "INSTALL_INFO.txt").write_text(
-        f"TAVI_VERSION=v1.3.1\nLAYOUT=2\nINSTALL_ID={info_id or install_id}\n",
+        f"TAVI_VERSION=v1.3.2\nLAYOUT=2\nINSTALL_ID={info_id or install_id}\n",
         encoding="utf-8", newline="\n")
 
 
@@ -754,7 +754,7 @@ def test_no_redirection_follows_a_value_on_an_echo_line(script):
     cmd reads the digit immediately before a redirection operator as the
     stream number, so `echo LAYOUT=2>> "file"` appends *stderr* and writes
     `LAYOUT=` to the console instead. Measured on the first cold install of
-    v1.3.1: INSTALL_INFO.txt and the ownership marker came out with no LAYOUT
+    v1.3.2: INSTALL_INFO.txt and the ownership marker came out with no LAYOUT
     line, and the uninstaller then refused every genuine installation. The
     safe form puts the redirection first, which these files use throughout.
     """
@@ -774,7 +774,7 @@ def test_the_installer_writes_a_layout_line_the_uninstaller_can_read():
     """The ownership gate is keyed on LAYOUT, so it has to reach the file."""
     # newline="" keeps the CRLF that .gitattributes pins for *.bat, so the
     # end-of-line anchor has to allow the \r before it.
-    with open(INSTALL_1_3_1, encoding="utf-8", newline="") as stream:
+    with open(INSTALL_1_3_2, encoding="utf-8", newline="") as stream:
         text = stream.read()
     assert re.search(r'(?m)^>>? "%TAVI_BASE%\\INSTALL_INFO\.txt" echo LAYOUT=%LAYOUT%\r?$', text), \
         "INSTALL_INFO.txt must get a LAYOUT line, written with the redirection first"

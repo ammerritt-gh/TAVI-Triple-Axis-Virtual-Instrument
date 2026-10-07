@@ -188,7 +188,7 @@ echo [ERROR] %TAVI_BASE% does not carry a TAVI ownership marker
 echo         (.tavi-install-root and INSTALL_INFO.txt with a matching
 echo         INSTALL_ID), so this uninstaller will not delete anything in it.
 echo.
-echo [INFO] If this really is a TAVI installation from before version 1.3.1,
+echo [INFO] If this really is a TAVI installation from before version 1.3.2,
 echo        use the WINDOWS-uninstall-TAVI.bat from the releases page, which
 echo        knows the older layout.
 goto refused_end
@@ -265,7 +265,7 @@ exit /b 1
 
 :: ---------------------------------------------------------------------------
 :: Keep :validate_base byte-identical to the copy in
-:: WINDOWS-install-TAVI-v1.3.1.bat and WINDOWS-uninstall-TAVI.bat.
+:: WINDOWS-install-TAVI-v1.3.2.bat and WINDOWS-uninstall-TAVI.bat.
 :: tests/test_installer_launchers.py asserts that the three copies match.
 ::
 :: The character whitelist is fed from "set VBPATH" through a pipe, never from
