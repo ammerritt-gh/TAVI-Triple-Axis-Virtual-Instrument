@@ -777,7 +777,10 @@ Required behavior:
 Required behavior:
 
 1. `git fetch --tags origin`
-2. `git checkout %TAVI_VERSION%` (read from `INSTALL_INFO.txt`)
+2. `git checkout %TAVI_VERSION%` (read from `INSTALL_INFO.txt`); the value
+   must be a release tag `v<digits>.<digits>.<digits>` or `main`, checked
+   through `set NAME |` before any line expands it, and is otherwise refused
+   without being printed (§18).
 3. Check that PySide6 (a `QApplication`) and mcstasscript load; on failure
    say to run the installer again. The script never installs or upgrades
    packages (2026-09-15).
@@ -1348,6 +1351,10 @@ Regression prevention:
   against the grammar the installer writes, four numbers joined by dashes,
   through `set NAME |`; a malformed ID does not check out. `LAYOUT` is
   matched through the same pipe and printed only when it is a number.
+  `TAVI_VERSION` (`update-tavi.bat`, `TAVI-Repair-Launchers.bat`,
+  `TAVI-Launcher.bat`) must be `v<digits>.<digits>.<digits>` or `main`, is
+  refused without printing the value, and shows as `unknown` in the launcher
+  banner; a test asserts that each grammar's copies are identical.
 
 ---
 
