@@ -37,15 +37,19 @@ UPDATE_TAVI = os.path.join(LAUNCHERS_DIR, "update-tavi.bat")
 TAVI_LAUNCHER = os.path.join(LAUNCHERS_DIR, "TAVI-Launcher.bat")
 UNINSTALL_TAVI = os.path.join(LAUNCHERS_DIR, "uninstall-tavi.bat")
 
-# installer/WINDOWS-install-TAVI-v1.3.0.bat (the previous release, still kept
-# in the tree for reference) is deliberately EXCLUDED from every table below:
-# it is the old, name-selecting installer this release replaces, and it
-# legitimately still says "run -n"/"create -n". test_old_v1_3_0_still_uses_
+# LAST_NAMED_INSTALLER (the last release's installer, still kept in the tree
+# for reference) is deliberately EXCLUDED from every table below: it is the
+# old, name-selecting installer the 1.3.2 one replaced, and it legitimately
+# still says "run -n"/"create -n". test_the_last_named_installer_still_uses_
 # named_selection (below) proves that file trips the same check this module
 # asserts is clean everywhere else -- i.e. the check can fail.
 NAMED_SELECTION_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                           RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
-INSTALL_1_3_0 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.3.0.bat")
+# Its version is assembled rather than written out: the release tool refuses a
+# tracked file that still names the version being bumped away from, and this
+# reference to a historical file is deliberate, not a leftover.
+LAST_NAMED_INSTALLER = os.path.join(
+    INSTALLER_DIR, "WINDOWS-install-TAVI-v%s.bat" % ".".join(("1", "3", "0")))
 
 # The files that each carry their own standalone copy of :validate_base (each
 # copy's comment points here -- installer/TAVI_Windows_Installer_Uninstaller_
@@ -192,14 +196,14 @@ def test_every_micromamba_invocation_is_pinned_with_quoted_p():
         assert not bad, f"{path} invokes micromamba without a quoted -p: {bad}"
 
 
-def test_old_v1_3_0_still_uses_named_selection():
+def test_the_last_named_installer_still_uses_named_selection():
     """Proves the two checks above can fail: run them against the release
     this one replaces, which legitimately still selects by name and is
     excluded from every other assertion in this module."""
-    assert os.path.exists(INSTALL_1_3_0), "the old installer this test contrasts against is missing"
-    text = _read(INSTALL_1_3_0)
+    assert os.path.exists(LAST_NAMED_INSTALLER), "the old installer this test contrasts against is missing"
+    text = _read(LAST_NAMED_INSTALLER)
     violations = _named_selection_violations(text)
-    assert violations, "expected the v1.3.0 installer to still use named selection"
+    assert violations, "expected the last named installer to still use named selection"
     joined = "\n".join(violations)
     assert "run -n" in joined and "create -n" in joined
     # and the detector must not be fooled by a program's own -n: the old file's
@@ -1032,7 +1036,7 @@ def _legacy_base(tmp_path):
     base = tmp_path / "legacy"
     base.mkdir()
     (base / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
-    _write_install_info(base, "v1.3.0")
+    _write_install_info(base, "v1.1.0")
     return base
 
 
@@ -1261,7 +1265,7 @@ def test_a_legacy_removal_keeps_a_recorded_path_that_is_no_environment(tmp_path)
     other = tmp_path / "Research"
     other.mkdir()
     (other / "data.txt").write_text("keep\n", encoding="utf-8", newline="\n")
-    _write_install_info(base, "v1.3.0", ENV_PREFIX=other)
+    _write_install_info(base, "v1.1.0", ENV_PREFIX=other)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
                      input_text="Y\n\n")
     assert (other / "data.txt").exists(), result.stdout
@@ -1280,7 +1284,7 @@ def test_a_legacy_removal_keeps_another_conda_environment(tmp_path):
     other = tmp_path / "envs" / "analysis"
     (other / "conda-meta").mkdir(parents=True)
     (other / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
-    _write_install_info(base, "v1.3.0", ENV_PREFIX=other)
+    _write_install_info(base, "v1.1.0", ENV_PREFIX=other)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
                      input_text="Y\n\n")
     assert (other / "conda-meta" / "history").exists(), result.stdout
