@@ -3,15 +3,24 @@ setlocal DisableDelayedExpansion
 title TAVI - record the Monte Carlo failure
 set "SUPPORT_DIR=%~dp0"
 
+:: /resolve-only prints the installation it resolved (LAYOUT, then TAVI_BASE)
+:: and exits before anything else runs; it changes nothing. It exists so that
+:: tests/test_installer_launchers.py can drive the real resolution, as
+:: /validate-only lets it drive :validate_base in the installer and uninstallers.
+set "RESOLVE_ONLY="
+if /i "%~1"=="/resolve-only" set "RESOLVE_ONLY=1"
+
 :: layout 2 (1.3.2+): the base folder is user-chosen at install time and
 :: cannot be computed by rule, so the installer leaves a locator behind.
 :: Same resolution order as installer/TAVI-Doctor.bat and
 :: installer/launchers/uninstall-tavi.bat -- keep these in step.
+set "LAYOUT=1"
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
 set "REC_BASE="
 if exist "%RECORD%" for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "REC_BASE=%%B"
 if not defined REC_BASE goto default_base
 if not exist "%REC_BASE%\.tavi-install-root" goto default_base
+set "LAYOUT=2"
 set "TAVI_BASE=%REC_BASE%"
 set "INSTALL_DIR=%TAVI_BASE%\app"
 set "ENV_PREFIX=%TAVI_BASE%\tavi-env"
@@ -41,6 +50,7 @@ set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\tavi"
 echo [INFO] Installation found at the default location: %INSTALL_DIR%
 
 :paths_ready
+if defined RESOLVE_ONLY goto resolve_only
 set "REPORTS=%SUPPORT_DIR%Reports"
 if not exist "%REPORTS%" mkdir "%REPORTS%"
 set "BOOTSTRAP=%REPORTS%\STARTUP-%RANDOM%-%RANDOM%.txt"
@@ -89,3 +99,10 @@ type "%BOOTSTRAP%"
 echo Copy the Reports folder back, even though TAVI did not open.
 pause
 exit /b 1
+
+:resolve_only
+:: Through "set", never "echo %VAR%": the base may have come from the record.
+echo LAYOUT=%LAYOUT%
+set TAVI_BASE
+endlocal
+exit /b 0
