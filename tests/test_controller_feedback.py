@@ -35,8 +35,16 @@ def controller():
 
 
 def _assert_committed(edit):
-    """Let the accepted-change flash finish, then check its settled state."""
-    QTest.qWait(500)
+    """Let the accepted-change flash finish, then check its settled state.
+
+    The flash is two chained timers (150 ms, then 300 ms). One fixed 500 ms
+    wait left 50 ms of slack, which a loaded full suite overran; poll for up
+    to 2 s instead, so a field that stays pending still fails."""
+    for _ in range(40):
+        QTest.qWait(50)
+        style = edit.styleSheet()
+        if "#FF8C00" not in style and "#000000" not in style:
+            break
     assert edit.property("original_value") == edit.text()
     assert "#FF8C00" not in edit.styleSheet()
 
