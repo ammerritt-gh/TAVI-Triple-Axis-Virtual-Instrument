@@ -78,8 +78,19 @@ if exist "%INFO%" for /f "usebackq tokens=1,* delims==" %%A in ("%INFO%") do if 
 
 if not defined MARK_ID goto no_marker
 if not defined INFO_ID goto no_marker
+:: Both IDs come from text files in that folder. The installer writes
+:: INSTALL_ID as four random numbers joined by dashes; anything else does not
+:: check out, and is refused before the comparison expands it. "set NAME|"
+:: hands the value to findstr without cmd parsing it; digits are listed, not
+:: ranged, because findstr resolves a range through the machine collation.
+set MARK_ID| findstr /r /x /c:"MARK_ID=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
+if errorlevel 1 goto id_mismatch
+set INFO_ID| findstr /r /x /c:"INFO_ID=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
+if errorlevel 1 goto id_mismatch
 if /i not "%MARK_ID%"=="%INFO_ID%" goto id_mismatch
-if not "%LAYOUT%"=="2" goto wrong_layout
+:: LAYOUT comes from INSTALL_INFO.txt too: matched exactly, through the pipe.
+set LAYOUT 2>nul| findstr /x /c:"LAYOUT=2" >nul
+if errorlevel 1 goto wrong_layout
 
 echo ============================================================================
 echo                       TAVI Uninstaller
@@ -199,6 +210,9 @@ echo         INSTALL_INFO.txt. Refusing to delete anything.
 goto refused_end
 
 :wrong_layout
+:: Shown only if it is a number, checked without expanding it.
+set LAYOUT 2>nul| findstr /r /x /c:"LAYOUT=[0123456789][0123456789]*" >nul
+if errorlevel 1 set "LAYOUT=unrecognised"
 echo [ERROR] %TAVI_BASE% was made by a different version of the TAVI
 echo         installer (layout "%LAYOUT%", this uninstaller understands 2).
 echo [INFO]  Use the uninstaller that came with that installation, or download

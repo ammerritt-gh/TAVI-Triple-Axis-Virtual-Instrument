@@ -109,16 +109,33 @@ exit 1
 
 :legacy
 :: No installed uninstaller. Either this predates 1.3.2, or the file is gone.
+:: INSTALL_INFO.txt is ordinary text in a folder the user owns, so nothing read
+:: from it is expanded before it is vetted: LAYOUT as a number (in
+:: :unknown_layout), the environment path through :validate_base_var.
 set "LAYOUT="
 if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="LAYOUT" set "LAYOUT=%%B"
 if defined LAYOUT goto unknown_layout
 if not exist "%TAVI_BASE%\TAVI_PySide6.py" goto not_an_install
 
 set "ENV_PREFIX="
-if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="ENV_PREFIX" set "ENV_PREFIX=%%B"
-set "MICROMAMBA_EXE="
-if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="MICROMAMBA_DIR" set "MICROMAMBA_EXE=%%B\micromamba.exe"
+set "ENV_REFUSED="
+set "VBPATH="
+if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="ENV_PREFIX" set "VBPATH=%%B"
+if not defined VBPATH goto legacy_confirm
+call :validate_base_var
+if defined VB_REASON goto legacy_env_unusable
+:: Belt and braces: never the developer environment, whatever a file says.
+if /i "%VBPATH:~-9%"=="\tavi-dev" set "VB_REASON=it is the developer environment tavi-dev"
+if defined VB_REASON goto legacy_env_unusable
+set "ENV_PREFIX=%VBPATH%"
+goto legacy_confirm
 
+:legacy_env_unusable
+:: Not offered for removal; :legacy_env_refused says why, from VBPATH and
+:: VB_REASON, which nothing between here and there changes.
+set "ENV_REFUSED=yes"
+
+:legacy_confirm
 echo This is a TAVI installation from before version 1.3.2.
 echo.
 echo It removes:
@@ -145,11 +162,8 @@ choice /C YN /N /M "Delete your scan results too? (Y/N): "
 if not "%ERRORLEVEL%"=="1" goto cancelled
 
 :legacy_remove
+if defined ENV_REFUSED goto legacy_env_refused
 if not defined ENV_PREFIX goto legacy_no_env
-call :validate_base "%ENV_PREFIX%"
-if defined VB_REASON goto legacy_env_refused
-:: Belt and braces: never the developer environment, whatever a file says.
-if /i "%VBPATH:~-9%"=="\tavi-dev" goto legacy_env_refused
 echo [INFO] Removing the environment: %ENV_PREFIX%
 rd /s /q "%ENV_PREFIX%" 2>nul
 goto legacy_remove_dir
@@ -202,6 +216,10 @@ echo         uninstaller again. Nothing else was changed.
 goto failed
 
 :unknown_layout
+:: LAYOUT came from INSTALL_INFO.txt: shown only if it is a number, checked
+:: through "set NAME|" so that the check itself never expands it.
+set LAYOUT| findstr /r /x /c:"LAYOUT=[0123456789][0123456789]*" >nul
+if errorlevel 1 set "LAYOUT=unrecognised"
 echo [ERROR] That installation records folder layout "%LAYOUT%", and the
 echo         uninstaller that came with it is missing from both the folder
 echo         itself and its app\installer\launchers\ copy. Removing a layout

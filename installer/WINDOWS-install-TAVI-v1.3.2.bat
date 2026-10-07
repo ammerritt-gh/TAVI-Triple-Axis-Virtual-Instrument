@@ -704,8 +704,19 @@ for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do
 for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="LAYOUT" set "RI_LAYOUT=%%B"
 if not defined RI_MARK goto :eof
 if not defined RI_INFO goto :eof
+:: Both IDs come from text files in that folder. The installer writes
+:: INSTALL_ID as four random numbers joined by dashes; anything else does not
+:: check out, and is refused before the comparison expands it. "set NAME|"
+:: hands the value to findstr without cmd parsing it; digits are listed, not
+:: ranged, because findstr resolves a range through the machine collation.
+set RI_MARK| findstr /r /x /c:"RI_MARK=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
+if errorlevel 1 goto :eof
+set RI_INFO| findstr /r /x /c:"RI_INFO=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
+if errorlevel 1 goto :eof
 if /i not "%RI_MARK%"=="%RI_INFO%" goto :eof
-if not "%RI_LAYOUT%"=="%LAYOUT%" goto :eof
+:: The layout too is read from the file: matched exactly, through the pipe.
+set RI_LAYOUT 2>nul| findstr /x /c:"RI_LAYOUT=%LAYOUT%" >nul
+if errorlevel 1 goto :eof
 set "ID_OK=yes"
 goto :eof
 
