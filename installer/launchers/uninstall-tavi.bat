@@ -53,7 +53,7 @@ call "%SELF_COPY%" "%TAVI_BASE%" %AUTO%
 :: the copy returned without doing so - and then falling through into the
 :: removal below would be the one thing this hand-off exists to prevent, since
 :: this file is inside the folder being deleted.
-exit
+exit 1
 
 :not_in_place
 cd /d "%SystemDrive%\"

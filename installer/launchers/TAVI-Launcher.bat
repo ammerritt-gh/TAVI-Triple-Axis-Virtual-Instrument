@@ -123,7 +123,7 @@ cd /d "%TEMP%"
 call "%UNINST_COPY%" "%TAVI_BASE%" /y
 :: Not reached when the copy runs: it ends the process. Never fall through into
 :: the menu from here - this file may already have been deleted.
-exit
+exit 1
 
 :uninstall_missing
 echo.
