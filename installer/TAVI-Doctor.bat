@@ -16,6 +16,13 @@ set "MCSTAS_VERSION=3.7.1"
 :: internal or external command" -- a property of the shell, not the install.
 set "NoDefaultCurrentDirectoryInExePath="
 
+:: /resolve-only prints the installation it resolved (LAYOUT, then TAVI_BASE)
+:: and exits before anything else runs; it changes nothing. It exists so that
+:: tests/test_installer_launchers.py can drive the real resolution, as
+:: /validate-only lets it drive :validate_base in the installer and uninstallers.
+set "RESOLVE_ONLY="
+if /i "%~1"=="/resolve-only" set "RESOLVE_ONLY=1"
+
 :: layout 2 (1.3.2+): the base folder is user-chosen at install time and
 :: cannot be computed by rule, so the installer leaves a locator behind at
 :: %LOCALAPPDATA%\TAVI\install-record.txt. Same resolution order as
@@ -62,6 +69,7 @@ set "ENV_PREFIX=%MAMBA_ROOT_PREFIX%\envs\%ENV_NAME%"
 echo [INFO] Installation found at the default location: %INSTALL_DIR%
 
 :paths_ready
+if defined RESOLVE_ONLY goto resolve_only
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
 :: Layout 2 keeps INSTALL_INFO.txt beside the launchers in the base; layout 1
 :: kept it inside the program folder. Looking in the wrong one made every
@@ -111,6 +119,13 @@ echo ===========================================================================
 if /i "%~1"=="/quiet" exit /b 0
 start "" notepad "%SUMMARY%"
 pause
+exit /b 0
+
+:resolve_only
+:: Through "set", never "echo %VAR%": the base may have come from the record.
+echo LAYOUT=%LAYOUT%
+set TAVI_BASE
+endlocal
 exit /b 0
 
 
