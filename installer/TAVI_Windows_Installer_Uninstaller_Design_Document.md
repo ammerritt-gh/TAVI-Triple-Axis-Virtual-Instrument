@@ -936,6 +936,17 @@ record, then the old default locations, then by asking) and hands off to
 installation's own layout — falling back to a legacy removal path (by
 `TAVI_PySide6.py` and `INSTALL_INFO.txt`) only when no delegate is found.
 
+**Uninstall is terminal for its interpreter.** Every path out of
+`uninstall-tavi.bat` except `/validate-only`, refusals included, ends with
+`exit`, not `exit /b`: it is usually running from a copy in `%TEMP%` that was
+`call`ed by a batch file inside the folder it has just deleted, and returning
+would hand control back to a file cmd can no longer read. So it ends the whole
+`cmd.exe` process, and with it every batch file that called it. Never `call`
+it from another batch file that has work left to do afterwards. The launcher
+menu's `[6]` and the standalone uninstaller hand over to it as their last
+action for this reason; the line after each hand-off is `exit 1`, reached
+only if the hand-off failed to end the process.
+
 The POSIX uninstaller applies the same must-not-remove list to its own paths; see §25.
 
 ---
