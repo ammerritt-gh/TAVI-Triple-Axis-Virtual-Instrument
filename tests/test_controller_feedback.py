@@ -47,6 +47,7 @@ def _assert_committed(edit):
             break
     assert edit.property("original_value") == edit.text()
     assert "#FF8C00" not in edit.styleSheet()
+    assert "#000000" not in edit.styleSheet()
 
 
 def test_apply_parameters_commits_direct_and_derived_fields(controller):
