@@ -133,6 +133,11 @@ if defined VB_REASON goto legacy_env_unusable
 :: Belt and braces: never the developer environment, whatever a file says.
 if /i "%VBPATH:~-9%"=="\tavi-dev" set "VB_REASON=it is the developer environment tavi-dev"
 if defined VB_REASON goto legacy_env_unusable
+:: A valid path is not yet an environment: a stale or mistaken ENV_PREFIX can
+:: name any folder, and it is about to be deleted whole. Every environment
+:: micromamba creates has conda-meta\history.
+if not exist "%VBPATH%\conda-meta\history" set "VB_REASON=there is no conda environment there"
+if defined VB_REASON goto legacy_env_unusable
 set "ENV_PREFIX=%VBPATH%"
 goto legacy_confirm
 
