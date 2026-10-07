@@ -923,3 +923,124 @@ def test_launcher_banner_refuses_a_malformed_version(tmp_path, micromamba_stub_e
     assert not marker.exists(), (label, "the banner ran part of the value as a command")
     assert result.returncode == 0, (label, result.stdout + result.stderr)
     assert "Release: unknown" in result.stdout, (label, result.stdout)
+
+
+# ===========================================================================
+# 8. A path read from the install record or typed at a prompt reaches
+#    :validate_base_var through VBPATH, never through a quoted argument.
+#
+# %LOCALAPPDATA%\TAVI\install-record.txt is ordinary user-writable text, and
+# "call :validate_base "%VALUE%"" ends the quoted argument at the value's own
+# double quote and runs the rest. Each hostile value creates a marker file if
+# any line expands it; the two shapes defeat a quoted argument and an "if"
+# comparison respectively. LOCALAPPDATA, USERPROFILE and SystemDrive all point
+# into tmp_path, so no real installation can be found or touched.
+# ===========================================================================
+
+HOSTILE_PATHS = [
+    ('C:\\x"&type nul> "{marker}"&rem "', "ampersand after a quote"),
+    ('x"=="y" type nul> "{marker}" & rem "', "completes an if comparison"),
+]
+
+
+def _sandbox_env(tmp_path, record_value=None):
+    env = dict(os.environ)  # Windows: os.environ keys are upper case
+    # TEMP too: the hand-off to an installed uninstaller copies it there.
+    for name in ("LOCALAPPDATA", "USERPROFILE", "SYSTEMDRIVE", "TEMP", "TMP"):
+        folder = tmp_path / name.lower()
+        folder.mkdir()
+        env[name] = str(folder)
+    if record_value is not None:
+        (tmp_path / "localappdata" / "TAVI").mkdir()
+        (tmp_path / "localappdata" / "TAVI" / "install-record.txt").write_text(
+            f"TAVI_BASE={record_value}\nSTATE=complete\n", encoding="utf-8", newline="\r\n")
+    return env
+
+
+ENTRY_SCRIPTS = [UNINSTALL_STANDALONE, REPAIR_LAUNCHERS]
+ENTRY_IDS = [os.path.basename(path) for path in ENTRY_SCRIPTS]
+HOSTILE_IDS = [label for _, label in HOSTILE_PATHS]
+
+
+@pytest.mark.parametrize("script", ENTRY_SCRIPTS, ids=ENTRY_IDS)
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_a_hostile_install_record_is_not_expanded(tmp_path, script, template, label):
+    marker = tmp_path / "marker.txt"
+    env = _sandbox_env(tmp_path, record_value=template.format(marker=marker))
+    # Enter at the folder prompt (nothing found), Enter at the closing pause.
+    result = run_bat(script, env=env, timeout=20, input_text="\n\n")
+    assert not marker.exists(), (label, "a line expanded the record's value", result.stdout)
+    assert "does not hold a usable path" in result.stdout, (label, result.stdout)
+
+
+@pytest.mark.parametrize("script", ENTRY_SCRIPTS, ids=ENTRY_IDS)
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_a_hostile_typed_path_is_not_expanded(tmp_path, script, template, label):
+    marker = tmp_path / "marker.txt"
+    env = _sandbox_env(tmp_path)
+    result = run_bat(script, env=env, timeout=20,
+                     input_text=template.format(marker=marker) + "\n\n")
+    assert not marker.exists(), (label, "a line expanded the typed value", result.stdout)
+    assert result.returncode == 1, (label, result.stdout)
+    assert "[ERROR]" in result.stdout, (label, result.stdout)
+
+
+def _legacy_base(tmp_path):
+    """A pre-1.3.2 program folder with no uninstaller of its own, so the
+    standalone uninstaller removes it itself."""
+    base = tmp_path / "legacy"
+    base.mkdir()
+    (base / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
+    return base
+
+
+@pytest.mark.parametrize("which", ["standalone", "installed"])
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_dropping_the_record_does_not_expand_it(tmp_path, which, template, label):
+    """After a removal, each uninstaller compares the record's TAVI_BASE with
+    the folder it removed, to decide whether to delete the record."""
+    marker = tmp_path / "marker.txt"
+    env = _sandbox_env(tmp_path, record_value=template.format(marker=marker))
+    if which == "standalone":
+        base = _legacy_base(tmp_path)
+        # Y removes the legacy installation; Enter answers the closing pause.
+        result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\n\n")
+    else:
+        base = _uninstallable_base(tmp_path, "installed")
+        result = run_bat(UNINSTALL_TAVI, str(base), "/y", env=env, timeout=30)
+    assert not marker.exists(), (label, "the record's value was expanded", result.stdout)
+    assert result.returncode == 0, (label, result.stdout + result.stderr)
+    assert "has been removed" in result.stdout, (label, result.stdout)
+    assert not base.exists(), label
+    # It names some other folder, so it stays.
+    assert (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), label
+
+
+# The good paths through the same lines: a record naming a real installation
+# still finds it, and is removed with it.
+
+def test_the_standalone_uninstaller_follows_a_good_record(tmp_path):
+    base = _uninstallable_base(tmp_path, "installed")
+    env = _sandbox_env(tmp_path, record_value=str(base))
+    # Y answers the installed uninstaller it hands over to; Enter its pause.
+    result = run_bat(UNINSTALL_STANDALONE, env=env, timeout=30, input_text="Y\n\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    assert not (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), result.stdout
+
+
+def test_a_legacy_removal_drops_a_record_that_names_it(tmp_path):
+    base = _legacy_base(tmp_path)
+    env = _sandbox_env(tmp_path, record_value=str(base))
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\n\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    assert not (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), result.stdout
+
+
+def test_repair_launchers_follows_a_good_record(tmp_path):
+    prog = _repair_target(tmp_path, "v1.3.2")
+    env = _sandbox_env(tmp_path, record_value=str(prog))
+    result = run_bat(REPAIR_LAUNCHERS, env=env, timeout=30, input_text="Y\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (prog / "update-tavi.bat").exists(), result.stdout

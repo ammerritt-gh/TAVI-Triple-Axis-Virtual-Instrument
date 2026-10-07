@@ -33,12 +33,15 @@ if defined TAVI_BASE goto have_base
 
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
 if not exist "%RECORD%" goto try_defaults
-for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "TAVI_BASE=%%B"
-if not defined TAVI_BASE goto try_defaults
 :: The record locates an installation; it never authorises deleting one. It is
-:: an ordinary user-writable file, so its value is validated before anything -
-:: including this message - expands it onto a command line.
-call :validate_base "%TAVI_BASE%"
+:: an ordinary user-writable file, so its value goes straight into VBPATH and
+:: through :validate_base_var before any line - this message included -
+:: expands it: "call :validate_base "%VALUE%"" would end the quoted argument
+:: at a double quote in the value and run the rest as a command.
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
+if not defined VBPATH goto try_defaults
+call :validate_base_var
 if defined VB_REASON goto record_unusable
 set "TAVI_BASE=%VBPATH%"
 if exist "%TAVI_BASE%\" goto have_base
@@ -62,11 +65,17 @@ if defined TAVI_BASE goto have_base
 
 echo [INFO] No TAVI installation was found in the usual places.
 echo.
-set /p "TAVI_BASE=Type the full path of the TAVI folder (or press Enter to stop): "
-if not defined TAVI_BASE goto nothing_to_do
+:: Typed text goes into VBPATH unparsed, like the record's value above.
+set "VBPATH="
+set /p "VBPATH=Type the full path of the TAVI folder (or press Enter to stop): "
+if not defined VBPATH goto nothing_to_do
+call :validate_base_var
+goto base_checked
 
 :have_base
 call :validate_base "%TAVI_BASE%"
+
+:base_checked
 if defined VB_REASON goto refused
 set "TAVI_BASE=%VBPATH%"
 if not exist "%TAVI_BASE%\" goto nothing_to_do
@@ -174,10 +183,13 @@ goto finished
 :: goes only when it names the folder just removed.
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
 if not exist "%RECORD%" goto :eof
-set "DR_BASE="
-for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "DR_BASE=%%B"
-if not defined DR_BASE goto :eof
-if /i not "%DR_BASE%"=="%TAVI_BASE%" goto :eof
+:: Validated before the comparison expands it, as at the top of this file.
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
+if not defined VBPATH goto :eof
+call :validate_base_var
+if defined VB_REASON goto :eof
+if /i not "%VBPATH%"=="%TAVI_BASE%" goto :eof
 del /f /q "%RECORD%" 2>nul
 rd "%LOCALAPPDATA%\TAVI" 2>nul
 goto :eof

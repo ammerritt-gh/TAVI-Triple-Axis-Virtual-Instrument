@@ -243,10 +243,14 @@ exit 0
 :: the machine unfindable by the Doctor, the support recorder and the standalone
 :: uninstaller. So it goes only when it names the folder just removed.
 if not exist "%RECORD%" goto :eof
-set "DR_BASE="
-for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "DR_BASE=%%B"
-if not defined DR_BASE goto :eof
-if /i not "%DR_BASE%"=="%TAVI_BASE%" goto :eof
+:: The record is ordinary user-writable text: its value goes straight into
+:: VBPATH and through :validate_base_var before the comparison expands it.
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
+if not defined VBPATH goto :eof
+call :validate_base_var
+if defined VB_REASON goto :eof
+if /i not "%VBPATH%"=="%TAVI_BASE%" goto :eof
 del /f /q "%RECORD%" 2>nul
 rd "%LOCALAPPDATA%\TAVI" 2>nul
 goto :eof
