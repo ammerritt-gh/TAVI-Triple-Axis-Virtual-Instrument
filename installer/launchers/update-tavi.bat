@@ -27,7 +27,8 @@ if not exist "%INSTALL_DIR%\.git" goto no_repo
 set "TAVI_VERSION="
 for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="TAVI_VERSION" set "TAVI_VERSION=%%B"
 if not defined TAVI_VERSION goto no_version
-:: Keep this check identical to the one in TAVI-Repair-Launchers.bat.
+:: Keep this check identical to the ones in TAVI-Repair-Launchers.bat and
+:: TAVI-Launcher.bat.
 :: TAVI_VERSION comes from a text file and becomes a git argument, so it must
 :: be a release tag (v<digits>.<digits>.<digits>) or main before any line
 :: expands it. "set NAME|" hands the value to findstr without cmd parsing it,

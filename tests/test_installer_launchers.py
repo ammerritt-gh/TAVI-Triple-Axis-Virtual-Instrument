@@ -890,3 +890,36 @@ def test_repair_launchers_refuses_a_malformed_version(tmp_path, version, label):
     # Refused before anything is written, so no launcher is half-repaired.
     for name in ("update-tavi.bat", "run-tavi.bat", "TAVI-Launcher.bat"):
         assert not (prog / name).exists(), (label, f"{name} was written")
+
+
+# The launcher menu prints the same value in its banner. A refused value is
+# shown as "unknown" and the menu keeps working. Each hostile value would
+# create a marker file if its banner line ran it; the second gets there past a
+# pair of double quotes.
+HOSTILE_BANNER_VERSIONS = [
+    ('v1.3.2&type nul> "{marker}"', "ampersand"),
+    ('v1.3.2""&type nul> "{marker}"', "double quote"),
+]
+
+
+def _run_launcher_with_version(tmp_path, stub_exe, version):
+    base, _, _ = _make_layout2_base(tmp_path, "base", stub_exe)
+    _write_install_info(base, version, LAYOUT="2", INSTALL_ID="test-id")
+    # [5] Exit, so the menu never waits on its prompt.
+    return run_bat(str(base / "TAVI-Launcher.bat"), timeout=20, input_text="5\n")
+
+
+def test_launcher_banner_shows_a_well_formed_version(tmp_path, micromamba_stub_exe):
+    result = _run_launcher_with_version(tmp_path, micromamba_stub_exe, "v1.3.2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Release: v1.3.2" in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize("template,label", HOSTILE_BANNER_VERSIONS)
+def test_launcher_banner_refuses_a_malformed_version(tmp_path, micromamba_stub_exe, template, label):
+    marker = tmp_path / "marker.txt"
+    version = template.format(marker=marker)
+    result = _run_launcher_with_version(tmp_path, micromamba_stub_exe, version)
+    assert not marker.exists(), (label, "the banner ran part of the value as a command")
+    assert result.returncode == 0, (label, result.stdout + result.stderr)
+    assert "Release: unknown" in result.stdout, (label, result.stdout)
