@@ -995,10 +995,12 @@ def test_a_hostile_typed_path_is_not_expanded(tmp_path, script, template, label)
 
 def _legacy_base(tmp_path):
     """A pre-1.3.2 program folder with no uninstaller of its own, so the
-    standalone uninstaller removes it itself."""
+    standalone uninstaller removes it itself. Every pinned installer before
+    1.3.2 wrote INSTALL_INFO.txt beside TAVI_PySide6.py."""
     base = tmp_path / "legacy"
     base.mkdir()
     (base / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
+    _write_install_info(base, "v1.3.0")
     return base
 
 
@@ -1217,6 +1219,28 @@ def test_a_legacy_removal_removes_its_recorded_environment(tmp_path):
     assert f"Removing the environment: {env_prefix}" in result.stdout, result.stdout
     assert not env_prefix.exists(), result.stdout
     assert not base.exists(), result.stdout
+
+
+@pytest.mark.parametrize("how", ["by argument", "at the default folder"])
+def test_a_source_checkout_is_not_removed_as_a_legacy_installation(tmp_path, how):
+    """A git clone has TAVI_PySide6.py too, but never INSTALL_INFO.txt."""
+    env = _sandbox_env(tmp_path)
+    checkout = tmp_path / "userprofile" / "TAVI"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
+    args = [str(checkout)] if how == "by argument" else []
+    # Y would confirm a removal. With no argument the folder prompt comes first
+    # and takes the leading Enter; choice skips a key it does not offer.
+    keys = "Y\n\n" if how == "by argument" else "\nY\n\n"
+    result = run_bat(UNINSTALL_STANDALONE, *args, env=env, timeout=30, input_text=keys)
+    assert (checkout / ".git").is_dir(), (how, result.stdout)
+    assert (checkout / "TAVI_PySide6.py").exists(), (how, result.stdout)
+    assert "from before version 1.3.2" not in result.stdout, (how, result.stdout)
+    if how == "by argument":
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "does not look like a TAVI installation" in result.stdout, result.stdout
+    else:  # not taken for an installation, so the search goes on to ask
+        assert "No TAVI installation was found" in result.stdout, result.stdout
 
 
 @pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
