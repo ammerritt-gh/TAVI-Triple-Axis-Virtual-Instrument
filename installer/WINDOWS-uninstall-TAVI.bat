@@ -96,7 +96,7 @@ cd /d "%TEMP%"
 call "%UNINST_COPY%" "%TAVI_BASE%"
 :: Not reached when the copy runs: it ends the process. Never fall through into
 :: the legacy removal below, which assumes no layout-2 uninstaller was found.
-exit
+exit 1
 
 :legacy
 :: No installed uninstaller. Either this predates 1.3.2, or the file is gone.

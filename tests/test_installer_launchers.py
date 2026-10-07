@@ -748,6 +748,21 @@ def test_nothing_in_the_install_path_opens_a_console(script):
 
 
 @pytest.mark.parametrize("script", LABEL_FILES)
+def test_no_bare_exit_line(script):
+    """A bare `exit` keeps the last command's errorlevel, often 0.
+
+    The fall-through `exit` after a hand-off is reached only when the hand-off
+    failed to end the process, so it must say so: `exit 1`.
+    """
+    offenders = [
+        f"{number}: {line.strip()}"
+        for number, line in enumerate(_read(script).splitlines(), 1)
+        if not re.match(r"^\s*(::|rem\b)", line, re.I) and re.match(r"^\s*exit\s*$", line, re.I)
+    ]
+    assert not offenders, f"{os.path.basename(script)} has a bare exit: {offenders}"
+
+
+@pytest.mark.parametrize("script", LABEL_FILES)
 def test_no_redirection_follows_a_value_on_an_echo_line(script):
     """`echo NAME=%VALUE%> "file"` eats a value that ends in a digit.
 
