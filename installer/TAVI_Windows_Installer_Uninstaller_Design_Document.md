@@ -1306,6 +1306,17 @@ Regression prevention:
 - The install prompt reads straight into `VBPATH` with `set /p`, which stores
   what was typed without parsing it, and calls `:validate_base_var` to vet it
   in place.
+- The same holds for every other prompt and for the install record
+  (`%LOCALAPPDATA%\TAVI\install-record.txt`, ordinary user-writable text):
+  the standalone uninstaller, `TAVI-Repair-Launchers.bat`, the Doctor and the
+  support recorder read the record's `TAVI_BASE` with `for /f` straight into
+  `VBPATH` and call `:validate_base_var`, and both uninstallers do the same
+  before comparing the record with the base they just removed. The Doctor and
+  the recorder also require the marker's `INSTALL_ID` to match
+  `INSTALL_INFO.txt`'s before treating the folder as an installation, and
+  otherwise fall back to the layout-1 default with an `[INFO]` line that does
+  not print the value. Found by the external plan review of 1.3.2; the tests
+  plant a value that would create a marker file if any line expanded it.
 
 ---
 
@@ -1475,9 +1486,10 @@ Before publishing a new installer:
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
 - [ ] No environment is selected by name (`-n`) anywhere in the installer or any launcher — every micromamba call passes both `-r` and `-p`.
 - [ ] `:validate_base`'s path-validation table (accept/refuse cases) passes in all
-      four copies (`WINDOWS-install-TAVI-vX.Y.Z.bat`,
+      six copies (`WINDOWS-install-TAVI-vX.Y.Z.bat`,
       `installer/launchers/uninstall-tavi.bat`, `WINDOWS-uninstall-TAVI.bat`,
-      `installer/TAVI-Repair-Launchers.bat`) and the four copies are byte-identical.
+      `installer/TAVI-Repair-Launchers.bat`, `installer/TAVI-Doctor.bat`,
+      `tools/support/Record-TAVI.bat`) and the six copies are byte-identical.
 - [ ] No recursive delete is authorised by a `TAVI_PySide6.py` sentinel alone:
       the installer's migration branches and the uninstaller all require an
       ownership token or an installation-only file the repository never carries.

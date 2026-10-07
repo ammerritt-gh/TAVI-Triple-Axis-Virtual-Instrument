@@ -47,12 +47,14 @@ NAMED_SELECTION_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                           RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
 INSTALL_1_3_0 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.3.0.bat")
 
-# The four files that each carry their own standalone copy of :validate_base
-# (installer/WINDOWS-install-TAVI-v1.3.2.bat's own comment names these same
-# four -- installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md
-# section 22 is why it can't be a shared include: each has to keep working
-# when the others are missing or stale).
-VALIDATE_BASE_COPIES = [INSTALL_1_3_2, UNINSTALL_TAVI, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS]
+# The files that each carry their own standalone copy of :validate_base (each
+# copy's comment points here -- installer/TAVI_Windows_Installer_Uninstaller_
+# Design_Document.md section 22 is why it can't be a shared include: each has
+# to keep working when the others are missing or stale).
+DOCTOR = os.path.join(INSTALLER_DIR, "TAVI-Doctor.bat")
+RECORD_TAVI = os.path.join(ROOT, "tools", "support", "Record-TAVI.bat")
+VALIDATE_BASE_COPIES = [INSTALL_1_3_2, UNINSTALL_TAVI, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
+                        DOCTOR, RECORD_TAVI]
 
 LABEL_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
@@ -210,7 +212,7 @@ def test_old_v1_3_0_still_uses_named_selection():
 
 
 # ===========================================================================
-# 2. :validate_base is byte-identical across its four copies, and every file
+# 2. :validate_base is byte-identical across its copies, and every file
 #    with goto/call targets has a matching label for each one.
 # ===========================================================================
 
@@ -235,7 +237,7 @@ def _labels_and_targets(text):
     return labels, targets
 
 
-@pytest.mark.parametrize("path", LABEL_FILES)
+@pytest.mark.parametrize("path", LABEL_FILES + [DOCTOR, RECORD_TAVI])
 def test_every_goto_and_call_target_has_a_label(path):
     text = _read(path)
     labels, targets = _labels_and_targets(text)
@@ -252,7 +254,7 @@ def _validate_base_body(path):
     return text[match.start():].strip()
 
 
-def test_validate_base_is_byte_identical_across_its_four_copies():
+def test_validate_base_is_byte_identical_across_its_copies():
     reference_path = VALIDATE_BASE_COPIES[0]
     reference = _validate_base_body(reference_path)
     for path in VALIDATE_BASE_COPIES[1:]:
@@ -1044,3 +1046,60 @@ def test_repair_launchers_follows_a_good_record(tmp_path):
     result = run_bat(REPAIR_LAUNCHERS, env=env, timeout=30, input_text="Y\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert (prog / "update-tavi.bat").exists(), result.stdout
+
+
+# ===========================================================================
+# 9. The Doctor and the support recorder trust the install record only as far
+#    as the uninstallers do: a validated path whose marker's INSTALL_ID
+#    matches its INSTALL_INFO.txt's. Anything else falls back to the layout-1
+#    default. Driven through /resolve-only, which prints the resolution and
+#    exits before the Doctor runs a simulation or opens Notepad.
+# ===========================================================================
+
+RESOLVERS = [DOCTOR, RECORD_TAVI]
+RESOLVER_IDS = [os.path.basename(path) for path in RESOLVERS]
+
+
+def _resolve(script, env):
+    result = run_bat(script, "/resolve-only", env=env, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    found = dict(line.split("=", 1) for line in result.stdout.splitlines()
+                 if line.startswith(("LAYOUT=", "TAVI_BASE=")))
+    return result, found
+
+
+def _marked_base(tmp_path, install_id="1-2-3-4", info_id=None):
+    base = tmp_path / "base"
+    base.mkdir()
+    _install_id_files(base, install_id=install_id, info_id=info_id)
+    return base
+
+
+@pytest.mark.parametrize("script", RESOLVERS, ids=RESOLVER_IDS)
+def test_resolver_follows_a_record_to_a_matching_installation(tmp_path, script):
+    base = _marked_base(tmp_path)
+    _, found = _resolve(script, _sandbox_env(tmp_path, record_value=str(base)))
+    assert found == {"LAYOUT": "2", "TAVI_BASE": str(base)}
+
+
+@pytest.mark.parametrize("script", RESOLVERS, ids=RESOLVER_IDS)
+def test_resolver_refuses_a_marker_whose_install_id_does_not_match(tmp_path, script):
+    base = _marked_base(tmp_path, install_id="1-2-3-4", info_id="5-6-7-8")
+    env = _sandbox_env(tmp_path, record_value=str(base))
+    result, found = _resolve(script, env)
+    assert found == {"LAYOUT": "1", "TAVI_BASE": env["USERPROFILE"]}, result.stdout
+    assert "[INFO]" in result.stdout
+
+
+@pytest.mark.parametrize("script", RESOLVERS, ids=RESOLVER_IDS)
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_resolver_does_not_expand_a_hostile_record(tmp_path, script, template, label):
+    marker = tmp_path / "marker.txt"
+    value = template.format(marker=marker)
+    env = _sandbox_env(tmp_path, record_value=value)
+    result = run_bat(script, "/resolve-only", env=env, timeout=20)
+    assert not marker.exists(), (label, "a line expanded the record's value", result.stdout)
+    assert result.returncode == 0, (label, result.stdout + result.stderr)
+    assert "LAYOUT=1" in result.stdout.splitlines(), (label, result.stdout)
+    assert "[INFO]" in result.stdout, (label, result.stdout)
+    assert value not in result.stdout, (label, "the raw value was printed", result.stdout)

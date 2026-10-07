@@ -268,9 +268,9 @@ endlocal
 exit /b 1
 
 :: ---------------------------------------------------------------------------
-:: Keep :validate_base byte-identical to the copy in
-:: WINDOWS-install-TAVI-v1.3.2.bat and WINDOWS-uninstall-TAVI.bat.
-:: tests/test_installer_launchers.py asserts that the three copies match.
+:: Keep :validate_base byte-identical in every file that carries it; the
+:: list is VALIDATE_BASE_COPIES in tests\test_installer_launchers.py, which
+:: asserts that they match.
 ::
 :: The character whitelist is fed from "set VBPATH" through a pipe, never from
 :: "echo %VBPATH%". A value containing & or ^ splits the command line the moment

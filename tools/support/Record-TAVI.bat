@@ -11,23 +11,43 @@ set "RESOLVE_ONLY="
 if /i "%~1"=="/resolve-only" set "RESOLVE_ONLY=1"
 
 :: layout 2 (1.3.2+): the base folder is user-chosen at install time and
-:: cannot be computed by rule, so the installer leaves a locator behind.
-:: Same resolution order as installer/TAVI-Doctor.bat and
-:: installer/launchers/uninstall-tavi.bat -- keep these in step.
+:: cannot be computed by rule, so the installer leaves a locator behind at
+:: %LOCALAPPDATA%\TAVI\install-record.txt. The record is ordinary
+:: user-writable text, so it is trusted only as far as the uninstallers trust
+:: it: its value goes straight into VBPATH and through :validate_base_var
+:: before any line expands it (as in installer\WINDOWS-uninstall-TAVI.bat),
+:: and the folder counts as an installation only when its marker's INSTALL_ID
+:: matches its INSTALL_INFO.txt's (as in installer\launchers\uninstall-tavi.bat).
+:: Anything else falls back to the layout-1 default. The resolution below is
+:: the same in installer\TAVI-Doctor.bat -- keep the two in step.
 set "LAYOUT=1"
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
-set "REC_BASE="
-if exist "%RECORD%" for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "REC_BASE=%%B"
-if not defined REC_BASE goto default_base
-if not exist "%REC_BASE%\.tavi-install-root" goto default_base
+if not exist "%RECORD%" goto default_base
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
+if not defined VBPATH goto default_base
+call :validate_base_var
+if defined VB_REASON goto record_unusable
+set "MARK_ID="
+set "INFO_ID="
+if exist "%VBPATH%\.tavi-install-root" for /f "usebackq tokens=1,* delims==" %%A in ("%VBPATH%\.tavi-install-root") do if /i "%%A"=="INSTALL_ID" set "MARK_ID=%%B"
+if exist "%VBPATH%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%VBPATH%\INSTALL_INFO.txt") do if /i "%%A"=="INSTALL_ID" set "INFO_ID=%%B"
+if not defined MARK_ID goto record_unusable
+if not defined INFO_ID goto record_unusable
+if /i not "%MARK_ID%"=="%INFO_ID%" goto record_unusable
 set "LAYOUT=2"
-set "TAVI_BASE=%REC_BASE%"
+set "TAVI_BASE=%VBPATH%"
 set "INSTALL_DIR=%TAVI_BASE%\app"
 set "ENV_PREFIX=%TAVI_BASE%\tavi-env"
 set "MICROMAMBA_EXE=%TAVI_BASE%\micromamba\micromamba.exe"
 set "MAMBA_ROOT_PREFIX=%TAVI_BASE%\mamba"
 echo [INFO] Installation found from the install record: %TAVI_BASE%
 goto paths_ready
+
+:record_unusable
+:: Never print the value: it may be the one that failed validation.
+echo [INFO] The install record does not name a TAVI installation that checks
+echo        out, so the default location is used instead.
 
 :default_base
 :: Pre-1.3.2 layout: fixed locations under the profile (or the space-safe
@@ -106,3 +126,94 @@ echo LAYOUT=%LAYOUT%
 set TAVI_BASE
 endlocal
 exit /b 0
+
+:: ---------------------------------------------------------------------------
+:: Keep :validate_base byte-identical in every file that carries it; the
+:: list is VALIDATE_BASE_COPIES in tests\test_installer_launchers.py, which
+:: asserts that they match. It is duplicated rather than shared because each
+:: of those files has to work alone:
+:: the Doctor and the support recorder are handed to a user on their own.
+::
+:: The character whitelist is fed from "set VBPATH" through a pipe, never from
+:: "echo %VBPATH%". A value containing & or ^ splits the command line the moment
+:: it is expanded there, so the test meant to catch those characters is the one
+:: they break: C:\TAVI&calc was measured passing an echo-based check. "set NAME"
+:: writes the value to stdout without it ever being parsed as a command, so one
+:: whitelist can reject every character at once, and nothing after it has to
+:: expand an unvetted value.
+:: Ceiling: this guards against a mistyped or stale path, not against a hostile
+:: local user; a single-user install has no trust boundary here.
+:: ---------------------------------------------------------------------------
+:validate_base
+set "VBPATH=%~1"
+
+:validate_base_var
+:: Entry point for a caller that has already put the raw value in VBPATH -
+:: `set /p` does that without parsing it. Everything below is ordered so that
+:: the whitelist, which reads the value through a pipe rather than expanding
+:: it, runs before any line expands %VBPATH% at all.
+set "VB_REASON="
+if not defined VBPATH set "VB_REASON=the path is empty"
+if defined VB_REASON goto :eof
+:: Every allowed character is listed rather than given as a range: findstr
+:: resolves a range like A-Z through the machine's collation order, which
+:: places accented Latin letters inside it. C:\TAVE-with-an-acute was
+:: measured passing the range form, and McStas cannot compile from it.
+:: A double quote is not in this set either, which is what stops a pasted
+:: "C:\..." or a crafted value from ending a quoted region further down.
+set VBPATH| findstr /r /c:"[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:=\\-]" >nul
+if not errorlevel 1 set "VB_REASON=it contains a character McStas cannot handle - use only letters, digits, dot, dash and underscore, with no quotes"
+if defined VB_REASON goto :eof
+if "%VBPATH:~-1%"=="\" set "VBPATH=%VBPATH:~0,-1%"
+if not defined VBPATH set "VB_REASON=the path is empty"
+if defined VB_REASON goto :eof
+if "%VBPATH:~-1%"=="." set "VB_REASON=it ends with a dot"
+if defined VB_REASON goto :eof
+if "%VBPATH:~-1%"==" " set "VB_REASON=it ends with a space"
+if defined VB_REASON goto :eof
+if "%VBPATH:~0,2%"=="\\" set "VB_REASON=network and device paths are not supported"
+if defined VB_REASON goto :eof
+if not "%VBPATH%"=="%VBPATH: =%" set "VB_REASON=it contains a space, and McStas cannot compile from a path with a space in it"
+if defined VB_REASON goto :eof
+if not "%VBPATH%"=="%VBPATH:..=%" set "VB_REASON=it contains .."
+if defined VB_REASON goto :eof
+if not "%VBPATH:~1,1%"==":" set "VB_REASON=it must start with a drive letter, like C:\TAVI"
+if defined VB_REASON goto :eof
+if not "%VBPATH:~2,1%"=="\" set "VB_REASON=it must start with a drive letter, like C:\TAVI"
+if defined VB_REASON goto :eof
+if "%VBPATH:~3%"=="" set "VB_REASON=a whole drive cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+if /i "%VBPATH%"=="%USERPROFILE%" set "VB_REASON=your user folder itself cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+if /i "%VBPATH%"=="%SystemRoot%" set "VB_REASON=the Windows folder cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+if /i "%VBPATH%"=="%LOCALAPPDATA%" set "VB_REASON=that folder cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+if /i "%VBPATH%"=="%APPDATA%" set "VB_REASON=that folder cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+if /i "%VBPATH%"=="%ProgramFiles%" set "VB_REASON=Program Files cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+if /i "%VBPATH%"=="%SystemDrive%\Users" set "VB_REASON=that folder cannot be the TAVI folder"
+if defined VB_REASON goto :eof
+:: Walk every existing component, not just the last one. A junction anywhere
+:: above the base makes the real target different from the path on screen, and
+:: this routine authorises a recursive delete. Checking only the leaf let
+:: C:\SomeJunction\TAVI through, and a base that did not exist yet was not
+:: checked at all.
+set "VB_WALK=%VBPATH%"
+
+:vb_walk
+if not defined VB_WALK goto :eof
+if "%VB_WALK:~3%"=="" goto :eof
+for %%I in ("%VB_WALK%") do set "VB_LEAF=%%~nxI"
+for %%I in ("%VB_WALK%") do set "VB_PARENT=%%~dpI"
+if not exist "%VB_WALK%\" goto vb_walk_up
+dir /a:l /b "%VB_PARENT%" 2>nul | findstr /i /x /c:"%VB_LEAF%" >nul
+if not errorlevel 1 set "VB_REASON=%VB_WALK% is a junction or a symbolic link, which may point somewhere else entirely"
+if defined VB_REASON goto :eof
+
+:vb_walk_up
+if "%VB_PARENT:~-1%"=="\" set "VB_PARENT=%VB_PARENT:~0,-1%"
+if /i "%VB_PARENT%"=="%VB_WALK%" goto :eof
+set "VB_WALK=%VB_PARENT%"
+goto vb_walk
