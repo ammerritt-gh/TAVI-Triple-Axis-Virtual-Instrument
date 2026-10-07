@@ -13,25 +13,17 @@ Done when: the operator has written the body of DESIGN_GOALS.md.
 
 ## Remote Windows Monte Carlo installation failure
 
-**State:** in progress, slice 1 of 1
+**State:** landed untested
 
-**Next session (operator, 2026-09-30: "we'll handle #1 tomorrow"):** finish
-PR #46, then release v1.3.1 carrying both it and the MPI fix (PR #47), so the
-release-pinned Linux installer stops shipping the fixed 30 (see "MPI rank
-default fails on small Linux hosts" below). Options not taken: tagging `main`
-now and moving this repair to a later version; a workaround post only.
-
-The launcher repair is built and on **PR #46** (branch `installer-1.3.1`,
-unmerged). The frontier, the acceptance already run and the seven items left
-open are in [the installer 1.3.1 handoff](docs/HANDOFF-installer-1-3-1.md);
-read its fresh-session brief before anything else. In short: every micromamba
-call now selects the environment by an explicit prefix rather than by a name
-resolved against an inherited root, which is the defect the investigation
-below identified; a cold install of the shipping file, one real Monte Carlo
-point through the installed launcher, and an uninstall through the launcher
-menu all passed on the development machine. The installer must not be uploaded
-as a release asset until the `v1.3.1` tag exists and a cold install has been
-run against that tag.
+The launcher repair shipped in **v1.3.2** (2026-10-07; PR #51, which carried
+PR #46's commits merged with main, plus the review fixes). Version 1.3.1 was
+skipped by operator ruling. Every micromamba call selects the environment by
+an explicit prefix. A cold install from the `v1.3.2` tag passed on the
+development machine: one Monte Carlo point, `mcrun` reading the `_tavi-env`
+per-user config and ignoring a stale `_tavi` one, and an uninstall from the
+launcher menu. The release page carries `TAVI-Repair-Launchers.bat`. The record
+and the items still open are in
+[the installer 1.3.2 handoff](docs/HANDOFF-installer-1-3-1.md).
 
 The evidence and the ruled-out causes stay in
 [the spaced-profile handoff](docs/HANDOFF-spaced-profile-install.md); its
@@ -66,9 +58,8 @@ Installer build-4 and old Doctor edits remain separate uncommitted work.
 Done when: corrected launchers select the intended environment and the affected
 user's ordinary Monte Carlo run succeeds, or evidence establishes and resolves
 another cause. Do not require a new report or request repeated revised probes.
-The first half is built but not landed; PR #46 must merge, and the seven open
-items in the installer handoff must be dispositioned, before the remote check
-is worth asking for.
+Still owed: the affected user's run after `TAVI-Repair-Launchers.bat` from the
+v1.3.2 release page (or a fresh v1.3.2 install).
 
 ## Monte Carlo output folders containing spaces
 
@@ -153,18 +144,34 @@ Done when: the ledger is empty and deleted.
 
 ## MPI rank default fails on small Linux hosts
 
-**State:** pinned
+**State:** landed untested
 
-Open MPI on Linux refuses more ranks than cores, so the old fixed 30 failed at the first point on ordinary laptops (issue #45); MS-MPI on Windows oversubscribes silently. PR #47 (`613d16fd`, 2026-09-30) made the count a setting: default 4 (operator ruling, not core-count-aware), set from Config → MPI processes…, stored in `config/settings.json`, frozen per scan and used by every run, record and estimate. Deferred from that job: saving over a corrupt `settings.json` drops its other keys (matters once a second setting lands); the `estimate_scan_seconds` docstring does not mention the same-count filter.
+Open MPI on Linux refuses more ranks than cores, so the old fixed 30 failed at the first point on ordinary laptops (issue #45); MS-MPI on Windows oversubscribes silently. PR #47 (`613d16fd`, 2026-09-30) made the count a setting: default 4 on every platform (operator ruling, not core-count-aware), set from Config → MPI processes…, stored in `config/settings.json`, frozen per scan and used by every run, record and estimate. Deferred from that job: saving over a corrupt `settings.json` drops its other keys (matters once a second setting lands); the `estimate_scan_seconds` docstring does not mention the same-count filter.
 
-**Not yet reaching users:** both installers are pinned to the `v1.3.0` tag, which still hard-codes 30 with no Config menu, so a fresh Linux install still fails at the first scan. Issue #45 was closed on GitHub before any release carried the fix. The POSIX installer has no MPI check at all (the Windows one runs `mcrun -c --mpi=2`), so it cannot catch this at install time.
+Released in v1.3.2 (2026-10-07). Both installers on the release page are pinned to it, and `POSIX-install-TAVI-v1.3.2.sh` runs a fatal `mcrun -c --mpi=2` compile check. That check has passed `bash -n` and a read only: no Linux or macOS machine (or WSL) was available.
 
-Done when: v1.3.1 is released with PR #47 and both installers point at it, and the POSIX installer runs an MPI compile check (`--mpi=2`) like the Windows one.
+Done when: the POSIX v1.3.2 installer has run on a Linux machine and its MPI check passes there.
 
 ## Dev environment still compiles with MSVC
 
 **State:** pinned
 
-`tavi-dev` (`setup-tavi-dev.bat`, `run-tavi-dev.bat`) still relies on Visual Studio and the `vcvars` hook; the installed `tavi` env uses conda-forge GCC since PR #43. Moving the dev env the same way (add `gcc_win-64=16.2.0 msmpi`, write the five overrides into its own `mccode_config.json` after unlinking) removes the split and the noisy activation. The `-B` sysroot quirk and the NCrystal `.lib` path are the overrides most likely to go stale on a McStas or GCC bump.
+`tavi-dev` (`setup-tavi-dev.bat`, `run-tavi-dev.bat`) still relies on Visual Studio and the `vcvars` hook; the installed `tavi` env uses conda-forge GCC since PR #43. Moving the dev env the same way (add `gcc_win-64=16.2.0 msmpi`, write the five overrides into its own `mccode_config.json` after unlinking) removes the split and the noisy activation. The `-B` sysroot quirk and the NCrystal `.lib` path are the overrides most likely to go stale on a McStas or GCC bump. Seen in the v1.3.2 cold install (2026-10-07): the *installed* env also runs a package activation script on every `micromamba run` that calls this machine's Visual Studio `vcvars64.bat` and sets `CC=cl.exe`; McStas still compiled with GCC, and nothing failed. Not yet known on a machine without Visual Studio.
 
 Done when: `setup-tavi-dev.bat` builds the env with GCC and the suite's McStas-touching tests pass without Visual Studio present.
+
+## Crystal orientation: hands-on proofing
+
+**State:** pinned
+
+The crystal-orientation programme (PRs #48–#50: two-arc sample stage, true mount
+kept apart from the operator's UB, lock plane, per-peak residuals, Refine Lattice
+by crystal system) ships in v1.3.2 on the suite and an offscreen acceptance test
+only. Operator, 2026-10-07: "It's fine for now, but pin that we need to proof it
+and ensure it's working well." Not yet named: what the proofing run covers. ISAR's
+vendored copies of the four geometry modules have not been synced with this work
+(16 TAVI commits since 2026-09-29, none in `ISAR/isar/geometry/`).
+
+Done when: the operator has run a hands-on alignment pass (find peaks, Calculate
+UB, read residuals, lock a plane, a training exercise) on the real GUI and the
+defects it finds are fixed or filed, and ISAR's geometry copy is synced.
