@@ -461,7 +461,7 @@ def _make_layout2_base(tmp_path, name, stub_exe, with_python=True):
     (base / "mamba").mkdir()
 
     (base / "INSTALL_INFO.txt").write_text(
-        "TAVI_VERSION=v1.3.2\nLAYOUT=2\nINSTALL_ID=test-id\n", encoding="utf-8", newline="\n")
+        "TAVI_VERSION=v1.3.2\nLAYOUT=2\nINSTALL_ID=1-2-3-4\n", encoding="utf-8", newline="\n")
 
     for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat"):
         shutil.copy2(os.path.join(LAUNCHERS_DIR, launcher), base / launcher)
@@ -622,15 +622,17 @@ def test_menu_exits_cleanly_on_five():
 # CLI does, so it is used here to prove the same gate refuses an empty path.
 # ===========================================================================
 
-def _install_id_files(base, install_id="test-id", info_id=None):
+def _install_id_files(base, install_id="1-2-3-4", info_id=None, layout="2"):
+    # The installer writes INSTALL_ID as four %RANDOM% numbers joined by dashes.
     (base / ".tavi-install-root").write_text(
         f"LAYOUT=2\nINSTALL_ID={install_id}\n", encoding="utf-8", newline="\n")
     (base / "INSTALL_INFO.txt").write_text(
-        f"TAVI_VERSION=v1.3.2\nLAYOUT=2\nINSTALL_ID={info_id or install_id}\n",
+        f"TAVI_VERSION=v1.3.2\nLAYOUT={layout}\nINSTALL_ID={info_id or install_id}\n",
         encoding="utf-8", newline="\n")
 
 
-def _uninstallable_base(tmp_path, name, install_id="test-id", info_id=None, extra_file=None):
+def _uninstallable_base(tmp_path, name, install_id="1-2-3-4", info_id=None, extra_file=None,
+                        layout="2"):
     base = tmp_path / name
     app = base / "app"
     app.mkdir(parents=True)
@@ -643,7 +645,7 @@ def _uninstallable_base(tmp_path, name, install_id="test-id", info_id=None, extr
     (base / "compile_check" / "PSI_DMC.instr").write_text("x", encoding="utf-8", newline="\n")
     for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat", "uninstall-tavi.bat"):
         shutil.copy2(os.path.join(LAUNCHERS_DIR, launcher), base / launcher)
-    _install_id_files(base, install_id=install_id, info_id=info_id)
+    _install_id_files(base, install_id=install_id, info_id=info_id, layout=layout)
     if extra_file:
         (base / extra_file).write_text("keep me\n", encoding="utf-8", newline="\n")
     return base
@@ -666,7 +668,7 @@ def test_uninstall_refuses_a_base_with_no_marker(tmp_path):
 
 
 def test_uninstall_refuses_on_install_id_mismatch(tmp_path):
-    base = _uninstallable_base(tmp_path, "mismatch", install_id="AAA", info_id="BBB")
+    base = _uninstallable_base(tmp_path, "mismatch", install_id="1-2-3-4", info_id="5-6-7-8")
     result = run_bat(UNINSTALL_TAVI, str(base), "/y", timeout=20)
     assert result.returncode == 1
     assert "does not match" in result.stdout
@@ -828,7 +830,7 @@ def _write_install_info(folder, version, **extra):
 
 def _run_update_with_version(tmp_path, stub_exe, version):
     base, _, _ = _make_layout2_base(tmp_path, "base", stub_exe)
-    _write_install_info(base, version, LAYOUT="2", INSTALL_ID="test-id")
+    _write_install_info(base, version, LAYOUT="2", INSTALL_ID="1-2-3-4")
     log = tmp_path / "stub.log"
     env = dict(os.environ)
     env["MICROMAMBA_STUB_LOG"] = str(log)
@@ -855,10 +857,11 @@ def test_update_tavi_refuses_a_malformed_version(tmp_path, micromamba_stub_exe, 
     assert not [argv for argv in calls if "checkout" in argv], (label, calls)
 
 
-def _repair_target(tmp_path, version):
+def _repair_target(tmp_path, version, **override):
     """A pre-1.3.2 program folder under tmp_path, with everything the repair
     checks for present. The repair is pointed at it by argument, so it never
-    reads the real install record or touches the real profile."""
+    reads the real install record or touches the real profile. ``override``
+    replaces an INSTALL_INFO.txt path field; None leaves it out."""
     prog = tmp_path / "prog"
     prog.mkdir()
     (prog / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
@@ -868,8 +871,11 @@ def _repair_target(tmp_path, version):
     micromamba_dir = tmp_path / "mm"
     micromamba_dir.mkdir()
     (micromamba_dir / "micromamba.exe").write_bytes(b"")
-    _write_install_info(prog, version, ENV_PREFIX=env_prefix,
-                        MAMBA_ROOT_PREFIX=tmp_path / "root", MICROMAMBA_DIR=micromamba_dir)
+    fields = dict(ENV_PREFIX=env_prefix, MAMBA_ROOT_PREFIX=tmp_path / "root",
+                  MICROMAMBA_DIR=micromamba_dir)
+    fields.update(override)
+    _write_install_info(prog, version,
+                        **{key: value for key, value in fields.items() if value is not None})
     return prog
 
 
@@ -906,7 +912,7 @@ HOSTILE_BANNER_VERSIONS = [
 
 def _run_launcher_with_version(tmp_path, stub_exe, version):
     base, _, _ = _make_layout2_base(tmp_path, "base", stub_exe)
-    _write_install_info(base, version, LAYOUT="2", INSTALL_ID="test-id")
+    _write_install_info(base, version, LAYOUT="2", INSTALL_ID="1-2-3-4")
     # [5] Exit, so the menu never waits on its prompt.
     return run_bat(str(base / "TAVI-Launcher.bat"), timeout=20, input_text="5\n")
 
@@ -1144,3 +1150,158 @@ def test_resolver_does_not_expand_a_hostile_record(tmp_path, script, template, l
     assert "LAYOUT=1" in result.stdout.splitlines(), (label, result.stdout)
     assert "[INFO]" in result.stdout, (label, result.stdout)
     assert value not in result.stdout, (label, "the raw value was printed", result.stdout)
+
+
+# ===========================================================================
+# 10. Values read from INSTALL_INFO.txt and the ownership marker are vetted
+#     before any line expands them, as the install record's are (section 8).
+#
+# Both files sit in a folder the user can edit. A path goes into VBPATH and
+# through :validate_base_var; INSTALL_ID must match the grammar the installer
+# writes (four %RANDOM% numbers joined by dashes) and LAYOUT a number, both
+# read through "set NAME|", before a comparison or a message expands them. A
+# value that fails takes the routine's own refusal. Same hostile values and
+# sandbox as section 8.
+# ===========================================================================
+
+REPAIR_PATH_FIELDS = ["ENV_PREFIX", "MAMBA_ROOT_PREFIX", "MICROMAMBA_DIR"]
+
+
+@pytest.mark.parametrize("field", REPAIR_PATH_FIELDS)
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_repair_launchers_does_not_expand_a_hostile_install_info_path(tmp_path, field, template,
+                                                                      label):
+    marker = tmp_path / "marker.txt"
+    env = _sandbox_env(tmp_path)
+    prog = _repair_target(tmp_path, "v1.3.2", **{field: template.format(marker=marker)})
+    # Y would answer the repair prompt, which a refusal never reaches.
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), env=env, timeout=30, input_text="Y\n\n")
+    assert not marker.exists(), (label, "a line expanded the value", result.stdout)
+    assert result.returncode == 1, (label, result.stdout + result.stderr)
+    assert "will not write into" in result.stdout, (label, result.stdout)
+    for name in ("update-tavi.bat", "run-tavi.bat", "TAVI-Launcher.bat"):
+        assert not (prog / name).exists(), (label, f"{name} was written")
+
+
+def test_repair_launchers_derives_a_missing_mamba_root(tmp_path):
+    prog = _repair_target(tmp_path, "v1.3.2", MAMBA_ROOT_PREFIX=None)
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), env=_sandbox_env(tmp_path), timeout=30,
+                     input_text="Y\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    # ENV_PREFIX\..\.. - the root an environment named under <root>\envs has.
+    assert f'-r "{tmp_path.parent}"' in _read(str(prog / "run-tavi.bat"))
+
+
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_a_legacy_removal_does_not_expand_a_hostile_env_prefix(tmp_path, template, label):
+    marker = tmp_path / "marker.txt"
+    base = _legacy_base(tmp_path)
+    _write_install_info(base, "main", ENV_PREFIX=template.format(marker=marker))
+    # Y removes the legacy installation; Enter answers the closing pause.
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
+                     input_text="Y\n\n")
+    assert not marker.exists(), (label, "a line expanded the value", result.stdout)
+    assert result.returncode == 0, (label, result.stdout + result.stderr)
+    assert "Not removing the recorded environment path" in result.stdout, (label, result.stdout)
+    assert not base.exists(), (label, result.stdout)
+
+
+def test_a_legacy_removal_removes_its_recorded_environment(tmp_path):
+    base = _legacy_base(tmp_path)
+    env_prefix = tmp_path / "envs" / "tavi"
+    env_prefix.mkdir(parents=True)
+    _write_install_info(base, "main", ENV_PREFIX=env_prefix)
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
+                     input_text="Y\n\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Removing the environment: {env_prefix}" in result.stdout, result.stdout
+    assert not env_prefix.exists(), result.stdout
+    assert not base.exists(), result.stdout
+
+
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_the_standalone_uninstaller_does_not_expand_a_hostile_layout(tmp_path, template, label):
+    marker = tmp_path / "marker.txt"
+    base = _legacy_base(tmp_path)
+    value = template.format(marker=marker)
+    _write_install_info(base, "main", LAYOUT=value)
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
+                     input_text="\n")
+    assert not marker.exists(), (label, "a line expanded the value", result.stdout)
+    assert result.returncode == 1, (label, result.stdout + result.stderr)
+    assert 'folder layout "unrecognised"' in result.stdout, (label, result.stdout)
+    assert value not in result.stdout, (label, "the raw value was printed", result.stdout)
+    assert (base / "TAVI_PySide6.py").exists(), label
+
+
+# Which file carries the hostile value: each INSTALL_ID is checked on its own,
+# so a check on one cannot cover for a missing check on the other.
+IDENTITY_FIELDS = ["marker INSTALL_ID", "INSTALL_INFO INSTALL_ID", "INSTALL_INFO LAYOUT"]
+
+
+def _identity(field, value):
+    return {
+        "marker INSTALL_ID": dict(install_id=value, info_id="1-2-3-4"),
+        "INSTALL_INFO INSTALL_ID": dict(install_id="1-2-3-4", info_id=value),
+        "INSTALL_INFO LAYOUT": dict(layout=value),
+    }[field]
+
+
+@pytest.mark.parametrize("field", IDENTITY_FIELDS)
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_uninstall_does_not_expand_a_hostile_identity(tmp_path, field, template, label):
+    marker = tmp_path / "marker.txt"
+    value = template.format(marker=marker)
+    base = _uninstallable_base(tmp_path, "installed", **_identity(field, value))
+    result = run_bat(UNINSTALL_TAVI, str(base), "/y", env=_sandbox_env(tmp_path), timeout=20)
+    assert not marker.exists(), (label, "a line expanded the value", result.stdout)
+    assert result.returncode == 1, (label, result.stdout + result.stderr)
+    assert "[ERROR]" in result.stdout, (label, result.stdout)
+    assert value not in result.stdout, (label, "the raw value was printed", result.stdout)
+    assert (base / "app" / "TAVI_PySide6.py").exists(), (label, "it deleted something")
+
+
+# The installer makes the same identity test before it offers to remove an
+# installation already in the chosen folder. /dir at that folder; N declines
+# the removal and /dir then stops, so nothing is deleted either way.
+
+def _install_over_marked_folder(tmp_path, **identity):
+    base = tmp_path / "base"
+    base.mkdir()
+    _install_id_files(base, **identity)
+    result = run_bat(INSTALL_1_3_2, "/dir", str(base), env=_sandbox_env(tmp_path), timeout=20,
+                     input_text="N\n\n")
+    assert (base / ".tavi-install-root").exists(), result.stdout
+    assert (base / "INSTALL_INFO.txt").exists(), result.stdout
+    return result
+
+
+def test_the_installer_recognises_its_own_installation(tmp_path):
+    result = _install_over_marked_folder(tmp_path)
+    assert "There is already a TAVI installation" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout
+
+
+@pytest.mark.parametrize("field", IDENTITY_FIELDS)
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_the_installer_does_not_expand_a_hostile_identity(tmp_path, field, template, label):
+    marker = tmp_path / "marker.txt"
+    result = _install_over_marked_folder(tmp_path,
+                                         **_identity(field, template.format(marker=marker)))
+    assert not marker.exists(), (label, "a line expanded the value", result.stdout)
+    assert result.returncode == 1, (label, result.stdout + result.stderr)
+    assert "identity does not check" in result.stdout, (label, result.stdout)
+
+
+@pytest.mark.parametrize("script", RESOLVERS, ids=RESOLVER_IDS)
+@pytest.mark.parametrize("field", IDENTITY_FIELDS[:2])
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_resolver_does_not_expand_a_hostile_install_id(tmp_path, script, field, template, label):
+    marker = tmp_path / "marker.txt"
+    base = _marked_base(tmp_path, **_identity(field, template.format(marker=marker)))
+    result = run_bat(script, "/resolve-only", env=_sandbox_env(tmp_path, record_value=str(base)),
+                     timeout=20)
+    assert not marker.exists(), (label, "a line expanded the value", result.stdout)
+    assert result.returncode == 0, (label, result.stdout + result.stderr)
+    assert "LAYOUT=1" in result.stdout.splitlines(), (label, result.stdout)
+    assert "[INFO]" in result.stdout, (label, result.stdout)

@@ -74,26 +74,35 @@ if not exist "%INSTALL_DIR%\INSTALL_INFO.txt" goto no_info
 set "ENV_PREFIX="
 set "MAMBA_ROOT="
 set "MICROMAMBA_EXE="
-for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="ENV_PREFIX" set "ENV_PREFIX=%%B"
-for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="MAMBA_ROOT_PREFIX" set "MAMBA_ROOT=%%B"
-for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="MICROMAMBA_DIR" set "MICROMAMBA_EXE=%%B\micromamba.exe"
-
-if not defined ENV_PREFIX goto no_env_recorded
-if not defined MICROMAMBA_EXE goto no_env_recorded
-
 :: Validated before ANY later line expands them - including the error messages
 :: below, which would otherwise be the one place an unchecked path reaches a
 :: command line. INSTALL_INFO.txt is ordinary text on disk, and these values are
-:: also written verbatim into new batch files further down.
-call :validate_base "%ENV_PREFIX%"
+:: also written verbatim into new batch files further down. So each goes from
+:: the file straight into VBPATH and through :validate_base_var, and only the
+:: vetted VBPATH is kept: "call :validate_base "%VALUE%"" would end the quoted
+:: argument at a double quote in the value and run the rest as a command.
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="ENV_PREFIX" set "VBPATH=%%B"
+if not defined VBPATH goto no_env_recorded
+call :validate_base_var
 if defined VB_REASON goto value_refused
-call :validate_base "%MICROMAMBA_EXE%"
+set "ENV_PREFIX=%VBPATH%"
+
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="MICROMAMBA_DIR" set "VBPATH=%%B\micromamba.exe"
+if not defined VBPATH goto no_env_recorded
+call :validate_base_var
 if defined VB_REASON goto value_refused
-:: %%~fI collapses the .. before validation rather than writing one into a
-:: generated launcher.
-if not defined MAMBA_ROOT for %%I in ("%ENV_PREFIX%\..\..") do set "MAMBA_ROOT=%%~fI"
-call :validate_base "%MAMBA_ROOT%"
+set "MICROMAMBA_EXE=%VBPATH%"
+
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="MAMBA_ROOT_PREFIX" set "VBPATH=%%B"
+:: Derived only from the ENV_PREFIX vetted above. %%~fI collapses the ..
+:: before validation rather than writing one into a generated launcher.
+if not defined VBPATH for %%I in ("%ENV_PREFIX%\..\..") do set "VBPATH=%%~fI"
+call :validate_base_var
 if defined VB_REASON goto value_refused
+set "MAMBA_ROOT=%VBPATH%"
 
 :: Read and checked here, before anything is written, so a bad value cannot
 :: leave a half-repaired set of launchers. No TAVI_VERSION skips update-tavi.bat.

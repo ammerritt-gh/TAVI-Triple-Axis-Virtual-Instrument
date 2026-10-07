@@ -47,6 +47,15 @@ if exist "%VBPATH%\.tavi-install-root" for /f "usebackq tokens=1,* delims==" %%A
 if exist "%VBPATH%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%VBPATH%\INSTALL_INFO.txt") do if /i "%%A"=="INSTALL_ID" set "INFO_ID=%%B"
 if not defined MARK_ID goto record_unusable
 if not defined INFO_ID goto record_unusable
+:: Both IDs come from text files in that folder. The installer writes
+:: INSTALL_ID as four random numbers joined by dashes; anything else does not
+:: check out, and is refused before the comparison expands it. "set NAME|"
+:: hands the value to findstr without cmd parsing it; digits are listed, not
+:: ranged, because findstr resolves a range through the machine collation.
+set MARK_ID| findstr /r /x /c:"MARK_ID=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
+if errorlevel 1 goto record_unusable
+set INFO_ID| findstr /r /x /c:"INFO_ID=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
+if errorlevel 1 goto record_unusable
 if /i not "%MARK_ID%"=="%INFO_ID%" goto record_unusable
 set "LAYOUT=2"
 set "TAVI_BASE=%VBPATH%"

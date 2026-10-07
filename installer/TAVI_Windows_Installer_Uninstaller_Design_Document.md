@@ -1330,6 +1330,15 @@ Regression prevention:
   otherwise fall back to the layout-1 default with an `[INFO]` line that does
   not print the value. Found by the external plan review of 1.3.2; the tests
   plant a value that would create a marker file if any line expanded it.
+- Values read from `INSTALL_INFO.txt` and the ownership marker, files in a
+  folder the user owns, are vetted the same way. `TAVI-Repair-Launchers.bat`
+  and the standalone uninstaller's legacy removal read each recorded path
+  (`ENV_PREFIX`, `MICROMAMBA_DIR`, `MAMBA_ROOT_PREFIX`) into `VBPATH` and call
+  `:validate_base_var`. Every `INSTALL_ID` comparison (the installer,
+  `uninstall-tavi.bat`, the Doctor, the recorder) first checks both IDs
+  against the grammar the installer writes, four numbers joined by dashes,
+  through `set NAME |`; a malformed ID does not check out. `LAYOUT` is
+  matched through the same pipe and printed only when it is a number.
 
 ---
 
