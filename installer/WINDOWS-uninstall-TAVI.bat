@@ -54,11 +54,12 @@ echo [INFO] The install record does not hold a usable path; ignoring it.
 set "TAVI_BASE="
 
 :try_defaults
-if exist "%USERPROFILE%\TAVI\TAVI_PySide6.py" set "TAVI_BASE=%USERPROFILE%\TAVI"
+:: TAVI_PySide6.py alone would also find a developer's clone; see :legacy.
+if exist "%USERPROFILE%\TAVI\TAVI_PySide6.py" if exist "%USERPROFILE%\TAVI\INSTALL_INFO.txt" set "TAVI_BASE=%USERPROFILE%\TAVI"
 if defined TAVI_BASE goto have_base
 if exist "%USERPROFILE%\TAVI\.tavi-install-root" set "TAVI_BASE=%USERPROFILE%\TAVI"
 if defined TAVI_BASE goto have_base
-if exist "%SystemDrive%\TAVI-Data\TAVI\TAVI_PySide6.py" set "TAVI_BASE=%SystemDrive%\TAVI-Data\TAVI"
+if exist "%SystemDrive%\TAVI-Data\TAVI\TAVI_PySide6.py" if exist "%SystemDrive%\TAVI-Data\TAVI\INSTALL_INFO.txt" set "TAVI_BASE=%SystemDrive%\TAVI-Data\TAVI"
 if defined TAVI_BASE goto have_base
 if exist "%SystemDrive%\TAVI-Data\.tavi-install-root" set "TAVI_BASE=%SystemDrive%\TAVI-Data"
 if defined TAVI_BASE goto have_base
@@ -115,12 +116,17 @@ exit 1
 set "LAYOUT="
 if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="LAYOUT" set "LAYOUT=%%B"
 if defined LAYOUT goto unknown_layout
+:: TAVI_PySide6.py alone proves nothing: every checkout of the project has one,
+:: and the removal below deletes the whole folder. Every pinned installer
+:: before 1.3.2 also wrote INSTALL_INFO.txt, which the repository never holds.
+:: (The unversioned first installer did not; such a folder is removed by hand.)
 if not exist "%TAVI_BASE%\TAVI_PySide6.py" goto not_an_install
+if not exist "%TAVI_BASE%\INSTALL_INFO.txt" goto not_an_install
 
 set "ENV_PREFIX="
 set "ENV_REFUSED="
 set "VBPATH="
-if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="ENV_PREFIX" set "VBPATH=%%B"
+for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="ENV_PREFIX" set "VBPATH=%%B"
 if not defined VBPATH goto legacy_confirm
 call :validate_base_var
 if defined VB_REASON goto legacy_env_unusable
@@ -230,9 +236,12 @@ echo         or download the uninstaller from its page on GitHub.
 goto failed
 
 :not_an_install
-echo [ERROR] %TAVI_BASE% does not look like a TAVI installation: it has no
-echo         uninstaller, no TAVI_PySide6.py and no install information.
-echo         Refusing to delete anything in it.
+echo [ERROR] %TAVI_BASE% does not look like a TAVI installation, so nothing in
+echo         it has been touched. It has no uninstaller of its own, and not both
+echo         of the files an installation from before 1.3.2 carries:
+echo         TAVI_PySide6.py and INSTALL_INFO.txt. A copy of TAVI's source
+echo         code, such as a git clone, looks like this.
+echo [INFO]  If it really is an old TAVI installation, delete the folder by hand.
 goto failed
 
 :refused
