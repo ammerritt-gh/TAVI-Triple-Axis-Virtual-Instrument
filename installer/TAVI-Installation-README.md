@@ -216,10 +216,13 @@ Everything lives under the one folder you chose during install (`<base>` below â
 
 ## macOS and Linux (provisional, never executed)
 
-`POSIX-install-TAVI-v1.3.0.sh` and `POSIX-uninstall-TAVI.sh` are attached to the
-v1.3.0 release. They were written on 2026-09-14 by mirroring the Windows installer
-step by step and have **never been run on macOS or Linux** by the maintainer, who
-has neither machine. Treat them as a first attempt:
+`POSIX-install-TAVI-v1.3.2.sh` and `POSIX-uninstall-TAVI.sh` are attached to the
+v1.3.2 release. They were written on 2026-09-14 (for v1.3.0) by mirroring the
+Windows installer step by step and have **never been run on macOS or Linux** by
+the maintainer, who has neither machine. v1.3.2 adds one check after the McStas
+step: it compiles and runs a McStas example under MPI with two processes, as
+TAVI runs every simulation, and stops the install if that fails. That check has
+never been run either. Treat them as a first attempt:
 
 - If the script fails, stop at the first failure. Do not debug it. Paste the whole
   terminal output into an issue at
@@ -248,8 +251,13 @@ refused before anything is downloaded.
 ### Running it
 
 ```bash
-bash POSIX-install-TAVI-v1.3.0.sh
+bash POSIX-install-TAVI-v1.3.2.sh
 ```
+
+If it stops at the compile check, the message names the log it kept. The likely
+causes are no working C compiler, no MPI in the environment, fewer than two CPU
+cores (Open MPI refuses to start more processes than there are cores), or
+running the installer as root.
 
 A downloaded script is not executable, so run it through `bash` rather than
 double-clicking it. It explains what it will do and asks before changing anything.
@@ -286,13 +294,17 @@ $MM create -n tavi python=3.11 mcstas=3.7.1 mcstas-core=3.7.1 mcstas-data=3.7.1 
   pyside6 mcstasscript -c conda-forge -c nodefaults -y
 
 # 3. source, pinned to the release tag
-$MM run -n tavi git clone --branch v1.3.0 --depth 1 --single-branch \
+$MM run -n tavi git clone --branch v1.3.2 --depth 1 --single-branch \
   https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git ~/TAVI
 
 # 4. McStasScript paths (PREFIX is ~/micromamba/envs/tavi)
 $MM run -n tavi python -c "import mcstasscript as ms; c = ms.Configurator(); \
   c.set_mcrun_path('$MAMBA_ROOT_PREFIX/envs/tavi/bin'); \
   c.set_mcstas_path('$MAMBA_ROOT_PREFIX/envs/tavi/share/mcstas/resources')"
+
+# 4b. compile check: a McStas example under MPI, two processes
+D=$(mktemp -d) && cp $MAMBA_ROOT_PREFIX/envs/tavi/share/mcstas/resources/examples/PSI/PSI_DMC/PSI_DMC.instr $D/ \
+  && (cd $D && $MM run -n tavi mcrun -c --mpi=2 PSI_DMC.instr -n 1000 -d mpi lambda=2.5666)
 
 # 5. lead-sample dispersion map (150 MB, a few minutes, optional)
 cd ~/TAVI && $MM run -n tavi python tools/make_pb_assets.py

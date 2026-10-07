@@ -1608,11 +1608,13 @@ written after the tag exists.
     DisableDelayedExpansion parse-time trap: `%VSINSTALLDIR%` inside the
     block was always empty, so no v1.2.0 launcher carried `vcvars64.bat`).
 
-(d) macOS and Linux: `POSIX-install-TAVI-v1.3.0.sh` and
+(d) macOS and Linux: `POSIX-install-TAVI-v1.3.2.sh` and
     `POSIX-uninstall-TAVI.sh`, a bash pair pinned to the same tag and
     uploaded the same way, provisional and never executed on either
     platform (§25). A later release copies and re-stamps them like the
-    Windows file.
+    Windows file; `POSIX-install-TAVI-v1.3.0.sh` stays as history. The
+    v1.3.2 copy adds an MPI compile check after the McStas step, which
+    exists but has never been run.
 
 (e) `WINDOWS-install-TAVI.bat`, the unversioned copy that tracks `main`, is
     unmaintained: it lacks the 1.3 changes and each release derives from the
@@ -1725,8 +1727,10 @@ Do not optimize away the checks. They are now part of the installer contract.
 ## 25. POSIX variant (macOS and Linux), provisional
 
 Written 2026-09-14 as `installer/POSIX-install-TAVI-v1.3.0.sh` and
-`installer/POSIX-uninstall-TAVI.sh`; never executed on macOS or Linux by the
-maintainer, who has neither machine. The scripts say so in their headers and
+`installer/POSIX-uninstall-TAVI.sh`, and copied for v1.3.2 as
+`installer/POSIX-install-TAVI-v1.3.2.sh` with one addition, the MPI compile
+check below; never executed on macOS or Linux by the maintainer, who has
+neither machine, the check included. The scripts say so in their headers and
 at run time, and tell the user to stop at the first failure and open an issue
 labelled `platform-installer` with the full output.
 
@@ -1761,6 +1765,16 @@ Rules that differ from or extend the Windows script:
 - `INSTALL_INFO.txt` adds `MICROMAMBA_EXE`, `MAMBA_ROOT_PREFIX`, `ENV_PREFIX`,
   `PB_MAP` and `PLATFORM`; the uninstaller reads the binary and root prefix
   from it rather than recomputing, and never lets it rename the env it removes.
+- Compile check (v1.3.2): after the McStas paths are configured, the
+  `PSI_DMC` example from `$mcstas_resources/examples` is copied into a fresh
+  `mktemp -d` folder and run with `mcrun -c --mpi=2 PSI_DMC.instr -n 1000
+  -d mpi lambda=2.5666`, its output in `mpi.log` there. A failure is fatal and
+  names the log, which is kept; on success the folder is removed. The failure
+  message names the likely causes: no working C compiler, no MPI in the
+  environment, fewer than two cores (Open MPI refuses to oversubscribe), or
+  running as root. Only the MPI run of the Windows gate is mirrored, as the
+  v1.3.2 design approved: TAVI runs every point under MPI. Like the rest of
+  the script, it has never been run.
 
 Must-not-remove list for the POSIX uninstaller (§17's counterpart): micromamba
 itself, `MAMBA_ROOT_PREFIX`, any environment other than `tavi`, the Xcode

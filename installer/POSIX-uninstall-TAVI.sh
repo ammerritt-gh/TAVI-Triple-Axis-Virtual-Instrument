@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# TAVI POSIX uninstaller - release-pinned v1.3.0
+# TAVI POSIX uninstaller - release-pinned v1.3.2 (a v1.3.0 installation has
+# the same layout, so this removes one too)
 #
 # PROVISIONAL: written 2026-09-14 and never executed on macOS or Linux by the
 # maintainer. This mirrors installer/WINDOWS-uninstall-TAVI.bat but has no
