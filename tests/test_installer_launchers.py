@@ -266,6 +266,38 @@ def test_validate_base_is_byte_identical_across_its_copies():
             pytest.fail(f":validate_base differs between {reference_path} and {path}:\n{diff}")
 
 
+# Each value grammar is a "set NAME| findstr /r /x" line copied into every file
+# that reads the value; the variable name differs per copy, the patterns after
+# "NAME=" must not.
+GRAMMAR_COPIES = {
+    "TAVI_VERSION": [(UPDATE_TAVI, "TAVI_VERSION"), (REPAIR_LAUNCHERS, "TAVI_VERSION"),
+                     (TAVI_LAUNCHER, "TAVI_VERSION")],
+    "INSTALL_ID": [(INSTALL_1_3_2, "RI_MARK"), (INSTALL_1_3_2, "RI_INFO"),
+                   (UNINSTALL_TAVI, "MARK_ID"), (UNINSTALL_TAVI, "INFO_ID"),
+                   (DOCTOR, "MARK_ID"), (DOCTOR, "INFO_ID"),
+                   (RECORD_TAVI, "MARK_ID"), (RECORD_TAVI, "INFO_ID")],
+}
+
+
+def _findstr_grammar(path, name):
+    """The /c: patterns of the one "set NAME| findstr /r /x" line, less "NAME="."""
+    lines = re.findall(rf"(?m)^set {name}\| findstr /r /x (.*) >nul\r?$", _read(path))
+    assert len(lines) == 1, f"{path}: expected one findstr grammar line for {name}, found {len(lines)}"
+    patterns = re.findall(r'/c:"([^"]*)"', lines[0])
+    assert patterns and all(p.startswith(f"{name}=") for p in patterns), f"{path}: {lines[0]}"
+    return [p[len(name) + 1:] for p in patterns]
+
+
+@pytest.mark.parametrize("grammar", sorted(GRAMMAR_COPIES))
+def test_value_grammar_is_identical_across_its_copies(grammar):
+    copies = GRAMMAR_COPIES[grammar]
+    ref_path, ref_name = copies[0]
+    reference = _findstr_grammar(ref_path, ref_name)
+    for path, name in copies[1:]:
+        assert _findstr_grammar(path, name) == reference, (
+            f"{grammar} grammar differs: {path} ({name}) vs {ref_path} ({ref_name})")
+
+
 # ===========================================================================
 # 3. Path validation, table-driven, through the real /validate-only switch.
 # ===========================================================================
