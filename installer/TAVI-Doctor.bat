@@ -130,7 +130,7 @@ call :diagnostics > "%LOG%" 2>&1
 > "%SUMMARY%" echo TAVI DOCTOR SUMMARY - %DATE% %TIME%
 >> "%SUMMARY%" echo Full log: %LOG%
 >> "%SUMMARY%" echo.
-findstr /c:"[OK]" /c:"[PROBLEM]" /c:"detect_mcstas" /c:"resolve_mpi_launcher" /c:"which('mpiexec')" /c:"DEFAULT_MPI_COUNT" /c:"INSTALLER_VERSION" /c:"LAYOUT" /c:"RELOCATED" /c:"ENV_PREFIX" "%LOG%" >> "%SUMMARY%"
+findstr /c:"[OK]" /c:"[PROBLEM]" /c:"detect_mcstas" /c:"resolve_mpi_launcher" /c:"which('mpiexec')" /c:"DEFAULT_MPI_COUNT" /c:"mpi_count" /c:"INSTALLER_VERSION" /c:"LAYOUT" /c:"RELOCATED" /c:"ENV_PREFIX" "%LOG%" >> "%SUMMARY%"
 >> "%SUMMARY%" echo.
 >> "%SUMMARY%" echo (Visual Studio "cannot find the path" lines in the full log are expected
 >> "%SUMMARY%" echo  and harmless; McStas compiles with GCC, not Visual Studio.)
@@ -273,6 +273,14 @@ echo MCSTAS = %MCSTAS%
 >> "%WORK_DIR%\probe.py" echo print("   mcstasscript config      =", m._get_mcstasscript_config_path())
 >> "%WORK_DIR%\probe.py" echo from instruments.contract import DEFAULT_MPI_COUNT
 >> "%WORK_DIR%\probe.py" echo print("   DEFAULT_MPI_COUNT        =", DEFAULT_MPI_COUNT)
+:: What TAVI actually runs per point (1.3.2+): the Config-menu setting, read
+:: from this installation's config\settings.json, as the program reads it.
+>> "%WORK_DIR%\probe.py" echo try:
+>> "%WORK_DIR%\probe.py" echo     from tavi.settings import load_mpi_count
+>> "%WORK_DIR%\probe.py" echo except ImportError:
+>> "%WORK_DIR%\probe.py" echo     print("   configured mpi_count     = none: TAVI 1.3.0 and earlier run a fixed 30 ranks")
+>> "%WORK_DIR%\probe.py" echo else:
+>> "%WORK_DIR%\probe.py" echo     print("   configured mpi_count     =", load_mpi_count())
 "%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" python "%WORK_DIR%\probe.py" "%INSTALL_DIR%"
 echo.
 
@@ -300,19 +308,22 @@ echo --- 7b: MPI with 2 ranks (what the installer checks) ---
 if errorlevel 1 (echo [PROBLEM] 2-rank MPI run FAILED) else (echo [OK] 2-rank MPI run passed)
 
 echo.
-echo --- 7c: MPI with 30 ranks (what TAVI actually uses for every scan point) ---
+:: 30 ranks is a stress test: the fixed count of TAVI 1.3.0 and earlier. 1.3.2+
+:: runs the configured count printed in [6], 4 unless changed in the Config menu.
+echo --- 7c: MPI with 30 ranks (stress test: the fixed count of TAVI 1.3.0 and earlier) ---
+echo     TAVI 1.3.2 and later run the configured count shown in [6] instead.
 "%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" mcrun -c --mpi=30 PSI_DMC.instr -n 1000 -d mpi30 lambda=2.5666
-if errorlevel 1 (echo [PROBLEM] 30-rank MPI run FAILED -- this is the rank count TAVI uses) else (echo [OK] 30-rank MPI run passed)
+if errorlevel 1 (echo [PROBLEM] 30-rank MPI run FAILED -- fatal for TAVI 1.3.0 and earlier, 1.3.2+ needs only the configured count) else (echo [OK] 30-rank MPI run passed)
 
 echo.
-echo --- 7d: direct launch, exactly as TAVI runs every point after the first ---
+echo --- 7d: direct launch at 30 ranks, the way TAVI runs every point after the first ---
 :: Mirrors _run_point_direct in instruments/tas_runtime.py: the MPI launcher is
 :: invoked on the compiled binary directly, bypassing mcrun entirely.
 set "MPIEXEC=%ENV_PREFIX%\Library\bin\mpiexec.exe"
 if not exist "%MPIEXEC%" set "MPIEXEC=mpiexec"
 echo Launcher: %MPIEXEC%
 "%MICROMAMBA_EXE%" run -r "%MAMBA_ROOT_PREFIX%" -p "%ENV_PREFIX%" "%MPIEXEC%" -np 30 PSI_DMC.exe --ncount=1000 --dir=direct30 lambda=2.5666
-if errorlevel 1 (echo [PROBLEM] direct 30-rank launch FAILED -- this is TAVI's own run path) else (echo [OK] direct 30-rank launch passed)
+if errorlevel 1 (echo [PROBLEM] direct 30-rank launch FAILED -- TAVI's own run path, at the count of 1.3.0 and earlier) else (echo [OK] direct 30-rank launch passed)
 
 echo.
 echo Output folders created:
