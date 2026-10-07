@@ -31,11 +31,8 @@ TAVI writes an instrument file at runtime through McStasScript, then calls McSta
 ## Installation
 
 ### Batch file Installation
-1. **Install C++ compiler**
 
-Follow the instructions at [https://github.com/mccode-dev/McCode/blob/main/INSTALL-McStas/Windows/README.md](https://github.com/mccode-dev/McCode/blob/main/INSTALL-McStas/Windows/README.md) to install the C++ compiler through Visual Studio. Visual Studio 2026 is fine, but you must add the "Desktop development with C++", with "C++/CLI support (latest MSVC)" and MSVC v143 plus MSVC v142.
-
-2. **Batch file install**
+The installer brings its own C compiler; Visual Studio is not needed.
 
 Download `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself) and run it. 
 
