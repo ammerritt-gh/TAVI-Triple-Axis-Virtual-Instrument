@@ -15,6 +15,15 @@ set "MICROMAMBA_EXE=%TAVI_BASE%\micromamba\micromamba.exe"
 
 set "TAVI_VERSION=unknown"
 if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="TAVI_VERSION" set "TAVI_VERSION=%%B"
+:: Keep this check identical to the ones in update-tavi.bat and
+:: TAVI-Repair-Launchers.bat. TAVI_VERSION comes from a text file and the
+:: banner below expands it, so it must be a release tag
+:: (v<digits>.<digits>.<digits>) or main first. "set NAME|" hands the value
+:: to findstr without cmd parsing it, where "echo %NAME%" would run whatever
+:: follows an & in it. Digits are listed, not ranged: findstr resolves a
+:: range through the machine collation. A refused value shows as unknown.
+set TAVI_VERSION| findstr /r /x /c:"TAVI_VERSION=v[0123456789][0123456789]*\.[0123456789][0123456789]*\.[0123456789][0123456789]*" /c:"TAVI_VERSION=main" >nul
+if errorlevel 1 set "TAVI_VERSION=unknown"
 
 title TAVI Launcher
 
