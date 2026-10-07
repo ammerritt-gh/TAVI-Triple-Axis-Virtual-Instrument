@@ -7,7 +7,7 @@ setlocal DisableDelayedExpansion
 ::
 :: The normal way to remove TAVI is the launcher's "Uninstall TAVI" option.
 :: This file exists for the case where that is not available: a damaged
-:: installation, a deleted launcher, or an installation made before 1.3.1.
+:: installation, a deleted launcher, or an installation made before 1.3.2.
 ::
 :: It locates the installation - from the argument, then the install record,
 :: then the folders older installers used, then by asking - and hands over to
@@ -74,7 +74,7 @@ if not exist "%TAVI_BASE%\" goto nothing_to_do
 echo [INFO] TAVI installation: %TAVI_BASE%
 echo.
 
-:: An installation from 1.3.1 onwards carries its own uninstaller, which knows
+:: An installation from 1.3.2 onwards carries its own uninstaller, which knows
 :: the layout that installer built. Prefer it: this file ships with whatever
 :: release the user happened to download, which need not be the one installed.
 set "DELEGATE=%TAVI_BASE%\uninstall-tavi.bat"
@@ -99,7 +99,7 @@ call "%UNINST_COPY%" "%TAVI_BASE%"
 exit
 
 :legacy
-:: No installed uninstaller. Either this predates 1.3.1, or the file is gone.
+:: No installed uninstaller. Either this predates 1.3.2, or the file is gone.
 set "LAYOUT="
 if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="LAYOUT" set "LAYOUT=%%B"
 if defined LAYOUT goto unknown_layout
@@ -110,7 +110,7 @@ if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%
 set "MICROMAMBA_EXE="
 if exist "%TAVI_BASE%\INSTALL_INFO.txt" for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="MICROMAMBA_DIR" set "MICROMAMBA_EXE=%%B\micromamba.exe"
 
-echo This is a TAVI installation from before version 1.3.1.
+echo This is a TAVI installation from before version 1.3.2.
 echo.
 echo It removes:
 echo     %TAVI_BASE%
@@ -255,7 +255,7 @@ exit /b 1
 
 :: ---------------------------------------------------------------------------
 :: Keep :validate_base byte-identical to the copies in
-:: WINDOWS-install-TAVI-v1.3.1.bat and installer\launchers\uninstall-tavi.bat.
+:: WINDOWS-install-TAVI-v1.3.2.bat and installer\launchers\uninstall-tavi.bat.
 :: tests\test_installer_launchers.py asserts that the three copies match. It is
 :: duplicated rather than shared because each of those files has to work alone:
 :: this one before anything is downloaded, and the uninstaller from a copy of

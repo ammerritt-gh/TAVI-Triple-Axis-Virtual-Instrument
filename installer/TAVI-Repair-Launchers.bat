@@ -1,7 +1,7 @@
 @echo off
 setlocal DisableDelayedExpansion
 
-:: TAVI launcher repair - for an installation made before version 1.3.1.
+:: TAVI launcher repair - for an installation made before version 1.3.2.
 ::
 :: Those installations start TAVI with "micromamba run -n tavi", which selects
 :: the environment by NAME against whatever root micromamba happens to inherit.
@@ -16,7 +16,7 @@ setlocal DisableDelayedExpansion
 :: the environment, not the program, not any setting. The originals are kept
 :: beside them as .bak-<number> files.
 ::
-:: Installing version 1.3.1 or later fixes this properly; this is for a machine
+:: Installing version 1.3.2 or later fixes this properly; this is for a machine
 :: that should not have to reinstall 3 GB to get a working launcher.
 
 title TAVI Launcher Repair

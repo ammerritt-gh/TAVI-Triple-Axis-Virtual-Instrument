@@ -121,9 +121,9 @@ The installer already compile-checks the compiler before it finishes, so a first
 
 Look at `<base>\compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed), where `<base>` is the install folder you chose, for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI.
 
-### Monte Carlo simulations fail but the deterministic engine still works (installation from before 1.3.1)
+### Monte Carlo simulations fail but the deterministic engine still works (installation from before 1.3.2)
 
-An installation made before version 1.3.1 starts TAVI by selecting its environment by *name*, which can load the wrong environment's Python and `mcrun` if a second one with the same name exists on the machine — for example because an earlier install had to relocate off a profile path with a space in it. The symptom is that ordinary scan setup and the deterministic engine work fine, but any run that needs a real McStas simulation fails. Download `TAVI-Repair-Launchers.bat` from the releases page and run it: it rewrites your three launcher scripts to always use your exact installed environment, without reinstalling anything or changing any package. Your previous launchers are kept beside the new ones, named `.bak-<number>`. Installing version 1.3.1 or later fixes this permanently.
+An installation made before version 1.3.2 starts TAVI by selecting its environment by *name*, which can load the wrong environment's Python and `mcrun` if a second one with the same name exists on the machine — for example because an earlier install had to relocate off a profile path with a space in it. The symptom is that ordinary scan setup and the deterministic engine work fine, but any run that needs a real McStas simulation fails. Download `TAVI-Repair-Launchers.bat` from the releases page and run it: it rewrites your three launcher scripts to always use your exact installed environment, without reinstalling anything or changing any package. Your previous launchers are kept beside the new ones, named `.bak-<number>`. Installing version 1.3.2 or later fixes this permanently.
 
 ### "Failed to download micromamba"
 
@@ -169,7 +169,7 @@ The normal way is the **TAVI Launcher**'s **[6] Uninstall TAVI** option. It asks
 
 Anything else you have put in the install folder is left alone and reported at the end. Reinstalling later downloads about 1.5 GB of packages again.
 
-If the launcher itself is missing or damaged, run `<your install folder>\uninstall-tavi.bat` directly, or download `WINDOWS-uninstall-TAVI.bat` from the releases page — a standalone fallback that finds your installation (by argument, by its own saved location record, in the usual default folders, or by asking) and hands off to the uninstaller that came with it. It also knows how to remove an installation from before version 1.3.1.
+If the launcher itself is missing or damaged, run `<your install folder>\uninstall-tavi.bat` directly, or download `WINDOWS-uninstall-TAVI.bat` from the releases page — a standalone fallback that finds your installation (by argument, by its own saved location record, in the usual default folders, or by asking) and hands off to the uninstaller that came with it. It also knows how to remove an installation from before version 1.3.2.
 
 It removes the micromamba and the package cache that live inside the TAVI folder, because they belong to that installation. It never touches a micromamba installed anywhere else, and never any other environment you may have (`tavi-dev` included). On macOS and Linux, `POSIX-uninstall-TAVI.sh` follows the same rules.
 
@@ -319,4 +319,4 @@ itself, the root prefix or any other environment.
 
 ---
 
-*Last updated: 2026-09-17 (v1.3.1: one chosen install folder, environment selected by prefix, shipped launchers, uninstall from the launcher menu; provisional macOS/Linux script)*
+*Last updated: 2026-09-17 (v1.3.2: one chosen install folder, environment selected by prefix, shipped launchers, uninstall from the launcher menu; provisional macOS/Linux script)*

@@ -16,7 +16,7 @@ set "MCSTAS_VERSION=3.7.1"
 :: internal or external command" -- a property of the shell, not the install.
 set "NoDefaultCurrentDirectoryInExePath="
 
-:: layout 2 (1.3.1+): the base folder is user-chosen at install time and
+:: layout 2 (1.3.2+): the base folder is user-chosen at install time and
 :: cannot be computed by rule, so the installer leaves a locator behind at
 :: %LOCALAPPDATA%\TAVI\install-record.txt. Same resolution order as
 :: tools/support/Record-TAVI.bat and installer/launchers/uninstall-tavi.bat --
@@ -39,7 +39,7 @@ echo [INFO] Installation found from the install record: %TAVI_BASE%
 goto paths_ready
 
 :default_base
-:: Pre-1.3.1 layout: same space-safe base resolution as that installer
+:: Pre-1.3.2 layout: same space-safe base resolution as that installer
 :: (build 4). Keep these in step.
 set "TAVI_BASE=%USERPROFILE%"
 set "INSTALL_DIR=%USERPROFILE%\TAVI"
@@ -65,7 +65,7 @@ echo [INFO] Installation found at the default location: %INSTALL_DIR%
 set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
 :: Layout 2 keeps INSTALL_INFO.txt beside the launchers in the base; layout 1
 :: kept it inside the program folder. Looking in the wrong one made every
-:: healthy 1.3.1 installation report "[PROBLEM] No INSTALL_INFO.txt".
+:: healthy 1.3.2 installation report "[PROBLEM] No INSTALL_INFO.txt".
 set "INFO_FILE=%INSTALL_DIR%\INSTALL_INFO.txt"
 if exist "%TAVI_BASE%\.tavi-install-root" set "INFO_FILE=%TAVI_BASE%\INSTALL_INFO.txt"
 :: A folder of the operator's that happens to be called tavi_doctor is not
