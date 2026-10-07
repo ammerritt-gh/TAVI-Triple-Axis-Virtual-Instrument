@@ -31,11 +31,21 @@ if defined INSTALL_DIR goto have_dir
 
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
 if not exist "%RECORD%" goto try_defaults
-for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "INSTALL_DIR=%%B"
-if not defined INSTALL_DIR goto try_defaults
-if exist "%INSTALL_DIR%\app\TAVI_PySide6.py" set "INSTALL_DIR=%INSTALL_DIR%\app"
-if exist "%INSTALL_DIR%\TAVI_PySide6.py" goto have_dir
-set "INSTALL_DIR="
+:: The record is ordinary user-writable text: its value goes straight into
+:: VBPATH and through :validate_base_var before any line expands it.
+set "VBPATH="
+for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
+if not defined VBPATH goto try_defaults
+call :validate_base_var
+if defined VB_REASON goto record_unusable
+if exist "%VBPATH%\app\TAVI_PySide6.py" set "INSTALL_DIR=%VBPATH%\app"
+if defined INSTALL_DIR goto have_dir
+if exist "%VBPATH%\TAVI_PySide6.py" set "INSTALL_DIR=%VBPATH%"
+if defined INSTALL_DIR goto have_dir
+goto try_defaults
+
+:record_unusable
+echo [INFO] The install record does not hold a usable path; ignoring it.
 
 :try_defaults
 if exist "%USERPROFILE%\TAVI\TAVI_PySide6.py" set "INSTALL_DIR=%USERPROFILE%\TAVI"
@@ -44,12 +54,18 @@ if exist "%SystemDrive%\TAVI-Data\TAVI\TAVI_PySide6.py" set "INSTALL_DIR=%System
 if defined INSTALL_DIR goto have_dir
 echo [INFO] No TAVI installation was found in the usual places.
 echo.
-set /p "INSTALL_DIR=Type the full path of the TAVI program folder: "
-if not defined INSTALL_DIR goto no_install
+set "VBPATH="
+set /p "VBPATH=Type the full path of the TAVI program folder: "
+if not defined VBPATH goto no_install
+:: Typed text goes into VBPATH unparsed and is validated there.
+call :validate_base_var
+goto dir_checked
 
 :have_dir
-:: Validate before anything - including a message - expands what was typed.
+:: Validate before anything - including a message - expands the argument.
 call :validate_base "%INSTALL_DIR%"
+
+:dir_checked
 if defined VB_REASON goto typed_refused
 set "INSTALL_DIR=%VBPATH%"
 if not exist "%INSTALL_DIR%\TAVI_PySide6.py" goto no_install
