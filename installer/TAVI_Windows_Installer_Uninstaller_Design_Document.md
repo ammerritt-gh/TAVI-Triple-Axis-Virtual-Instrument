@@ -939,6 +939,10 @@ Both files are required, by the default-location search too: a source
 checkout has `TAVI_PySide6.py` but never `INSTALL_INFO.txt`, and is refused
 with a message to remove the folder by hand if it really is an old
 installation (the unversioned first installer wrote no `INSTALL_INFO.txt`).
+The recorded `ENV_PREFIX` is listed and removed only when it passes
+`:validate_base`, is not `tavi-dev` and holds `conda-meta\history`; any
+other value is reported and left alone. That is decided before the
+confirmation, so the prompt never lists a folder that will not be removed.
 
 **Uninstall is terminal for its interpreter.** Every path out of
 `uninstall-tavi.bat` except `/validate-only`, refusals included, ends with

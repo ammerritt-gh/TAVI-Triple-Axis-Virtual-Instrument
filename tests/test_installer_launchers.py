@@ -1211,7 +1211,8 @@ def test_a_legacy_removal_does_not_expand_a_hostile_env_prefix(tmp_path, templat
 def test_a_legacy_removal_removes_its_recorded_environment(tmp_path):
     base = _legacy_base(tmp_path)
     env_prefix = tmp_path / "envs" / "tavi"
-    env_prefix.mkdir(parents=True)
+    (env_prefix / "conda-meta").mkdir(parents=True)
+    (env_prefix / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
     _write_install_info(base, "main", ENV_PREFIX=env_prefix)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
                      input_text="Y\n\n")
@@ -1219,6 +1220,25 @@ def test_a_legacy_removal_removes_its_recorded_environment(tmp_path):
     assert f"Removing the environment: {env_prefix}" in result.stdout, result.stdout
     assert not env_prefix.exists(), result.stdout
     assert not base.exists(), result.stdout
+
+
+def test_a_legacy_removal_keeps_a_recorded_path_that_is_no_environment(tmp_path):
+    """ENV_PREFIX is editable text: a stale or mistaken value naming some other
+    folder must be neither offered for removal nor removed."""
+    base = _legacy_base(tmp_path)
+    other = tmp_path / "Research"
+    other.mkdir()
+    (other / "data.txt").write_text("keep\n", encoding="utf-8", newline="\n")
+    _write_install_info(base, "v1.3.0", ENV_PREFIX=other)
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
+                     input_text="Y\n\n")
+    assert (other / "data.txt").exists(), result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    listing = result.stdout.split("Remove this TAVI installation?")[0]
+    assert str(other) not in listing, ("offered for removal", result.stdout)
+    assert "Not removing the recorded environment path" in result.stdout, result.stdout
+    assert "no conda environment there" in result.stdout, result.stdout
 
 
 @pytest.mark.parametrize("how", ["by argument", "at the default folder"])
