@@ -319,10 +319,10 @@ echo [INFO]  Run the TAVI installer again instead.
 goto failed
 
 :: ---------------------------------------------------------------------------
-:: Keep :validate_base byte-identical to the copies in
-:: installer\launchers\uninstall-tavi.bat and WINDOWS-uninstall-TAVI.bat.
-:: tests\test_installer_launchers.py asserts that the three copies match. It is
-:: duplicated rather than shared because each of those files has to work alone:
+:: Keep :validate_base byte-identical in every file that carries it; the
+:: list is VALIDATE_BASE_COPIES in tests\test_installer_launchers.py, which
+:: asserts that they match. It is duplicated rather than shared because each
+:: of those files has to work alone:
 :: this one before anything is downloaded, and the uninstaller from a copy of
 :: itself in %TEMP%.
 ::
