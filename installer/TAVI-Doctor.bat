@@ -2,7 +2,7 @@
 setlocal DisableDelayedExpansion
 
 :: TAVI Doctor - collects one diagnostic report for a failing McStas install.
-:: Double-click it. It changes nothing; it only reads, and runs three short test
+:: Double-click it. It changes nothing; it only reads, and runs four short test
 :: simulations. It writes one log file and opens it in Notepad so it can be sent on.
 ::
 :: It exists because remote diagnosis by screenshot costs a day per round trip.
