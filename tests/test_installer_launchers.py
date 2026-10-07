@@ -1241,6 +1241,24 @@ def test_a_legacy_removal_keeps_a_recorded_path_that_is_no_environment(tmp_path)
     assert "no conda environment there" in result.stdout, result.stdout
 
 
+def test_a_legacy_removal_keeps_another_conda_environment(tmp_path):
+    """Every installer before 1.3.2 put its environment at <root>\\envs\\tavi. A
+    recorded path to any other environment is not TAVI's and stays."""
+    base = _legacy_base(tmp_path)
+    other = tmp_path / "envs" / "analysis"
+    (other / "conda-meta").mkdir(parents=True)
+    (other / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
+    _write_install_info(base, "v1.3.0", ENV_PREFIX=other)
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
+                     input_text="Y\n\n")
+    assert (other / "conda-meta" / "history").exists(), result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    listing = result.stdout.split("Remove this TAVI installation?")[0]
+    assert str(other) not in listing, ("offered for removal", result.stdout)
+    assert "not the environment a TAVI installer created" in result.stdout, result.stdout
+
+
 @pytest.mark.parametrize("how", ["by argument", "at the default folder"])
 def test_a_source_checkout_is_not_removed_as_a_legacy_installation(tmp_path, how):
     """A git clone has TAVI_PySide6.py too, but never INSTALL_INFO.txt."""

@@ -138,6 +138,10 @@ if defined VB_REASON goto legacy_env_unusable
 :: micromamba creates has conda-meta\history.
 if not exist "%VBPATH%\conda-meta\history" set "VB_REASON=there is no conda environment there"
 if defined VB_REASON goto legacy_env_unusable
+:: A real environment is not yet TAVI's: every installer before 1.3.2 named its
+:: environment tavi, under <root>\envs. Any other one belongs to someone else.
+if /i not "%VBPATH:~-10%"=="\envs\tavi" set "VB_REASON=it is not the environment a TAVI installer created"
+if defined VB_REASON goto legacy_env_unusable
 set "ENV_PREFIX=%VBPATH%"
 goto legacy_confirm
 
