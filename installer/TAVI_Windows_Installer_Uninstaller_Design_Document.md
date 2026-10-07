@@ -1354,22 +1354,41 @@ A normal user should need only:
 
 1. Windows 10/11.
 2. Internet access.
-3. Permission to write under their own user profile.
+3. Permission to write to the folder they choose and to their own profile.
 4. ~~Visual Studio C++ Build Tools installed for full McStas compilation capability.~~
 5. ~~Microsoft MPI SDK recommended/required for MPI workflows.~~
 
    > **Superseded 2026-09-15 (build 3):** nothing beyond Windows 10/11 and
    > disk/network. See "McStas compiler (build 3)" below.
 
-The installer should install within user-writable locations:
+The installer installs into one folder the user chooses (layout 2, v1.3.2+;
+"One chosen folder (v1.3.2)" under §5), plus two small per-user files:
 
 ```text
-%USERPROFILE%\TAVI
-%USERPROFILE%\AppData\Local\micromamba
-%USERPROFILE%\AppData\Roaming\mamba\envs\tavi
+<base>                                     the chosen folder; everything below
+<base>\app                                 the checkout, with output\ and config\
+<base>\tavi-env                            the environment
+<base>\micromamba\micromamba.exe           micromamba, owned by this installation
+<base>\mamba                               package cache / root prefix
+%LOCALAPPDATA%\TAVI\install-record.txt     locator for the Doctor, recorder, uninstaller
+%USERPROFILE%\AppData\mcstas\3.7.1_tavi-env\   McStas's per-user config
 ```
 
+The default `<base>` is `%USERPROFILE%\TAVI`, or `%SystemDrive%\TAVI-Data`
+when that fails `:validate_base` (a profile path with a space or a non-ASCII
+character in it, for instance). Whatever is chosen must pass `:validate_base`: letters, digits, dot, dash
+and underscore only, no space, no junction anywhere above it.
+
 It should not require Administrator privileges for the core install.
+
+Layout 1 (releases through 1.3.0), still found on older installations, which
+the Doctor, the support recorder and the standalone uninstaller fall back to:
+
+```text
+%USERPROFILE%\TAVI                              (or %SystemDrive%\TAVI-Data\TAVI)
+%USERPROFILE%\AppData\Local\micromamba          (or %SystemDrive%\TAVI-Data\micromamba)
+%USERPROFILE%\AppData\Roaming\mamba\envs\tavi   (or %SystemDrive%\TAVI-Data\mamba\envs\tavi)
+```
 
 ~~If Visual Studio or MSMPI are missing, warn clearly rather than corrupting the install. Only fail hard when TAVI cannot run in the intended mode.~~ Superseded 2026-09-15 (build 3): the compile gate fails hard on a serial or an MPI compile failure, since TAVI runs every point under MPI. See "McStas compiler (build 3)" below.
 
@@ -1377,40 +1396,58 @@ It should not require Administrator privileges for the core install.
 
 ## 20. Expected successful install output
 
-A successful install should end with something equivalent to:
+A successful install ends with (v1.3.2, `<base>` the chosen folder):
 
 ```text
 Installation complete.
-Installed to: C:\Users\<USER>\TAVI
-Environment : tavi
-McStas      : 3.7.1
 
-Run:
-  C:\Users\<USER>\TAVI\TAVI-Launcher.bat
+Installed in : <base>
+Program      : <base>\app
+Environment  : <base>\tavi-env
+TAVI version : v1.3.2
+Installer    : v1.3.2-1
+McStas       : 3.7.1
+Compiler     : GCC (conda-forge)
 ```
+
+followed by a pointer to the "TAVI Launcher" shortcut in `<base>`, which
+Explorer opens unless the run was unattended (`/dir`).
 
 Expected files:
 
 ```text
-%USERPROFILE%\TAVI\TAVI_PySide6.py
-%USERPROFILE%\TAVI\tavi\mcstas_config.py
-%USERPROFILE%\TAVI\run-tavi.bat
-%USERPROFILE%\TAVI\update-tavi.bat
-%USERPROFILE%\TAVI\TAVI-Launcher.bat
-%USERPROFILE%\Desktop\TAVI Launcher.lnk
+<base>\app\TAVI_PySide6.py
+<base>\app\tavi\mcstas_config.py
+<base>\run-tavi.bat
+<base>\update-tavi.bat
+<base>\TAVI-Launcher.bat
+<base>\uninstall-tavi.bat
+<base>\TAVI Launcher.lnk
+<base>\INSTALL_INFO.txt          LAYOUT=2, INSTALL_ID, TAVI_VERSION, paths
+<base>\.tavi-install-root        the ownership marker, same INSTALL_ID
+<base>\compile_check\            the compile gate's logs
+%LOCALAPPDATA%\TAVI\install-record.txt
 ```
 
 Expected environment:
 
 ```text
-%USERPROFILE%\AppData\Roaming\mamba\envs\tavi
+<base>\tavi-env
 ```
 
 Expected McStas resources:
 
 ```text
-%USERPROFILE%\AppData\Roaming\mamba\envs\tavi\share\mcstas\resources
+<base>\tavi-env\share\mcstas\resources
 ```
+
+(`<base>\tavi-env\Library\share\mcstas\resources` is accepted too; the
+installer and the launchers look in both.)
+
+Layout 1 (through 1.3.0) put the program at `%USERPROFILE%\TAVI`, the
+environment at `%USERPROFILE%\AppData\Roaming\mamba\envs\tavi` and the
+shortcut on the desktop; the v1.3.2 installer removes such a desktop shortcut
+when it replaces that installation.
 
 Expected required component:
 
@@ -1424,49 +1461,78 @@ somewhere under the McStas resources tree, unless TAVI is changed to stop requir
 
 ## 21. Manual diagnostic commands
 
+`installer\TAVI-Doctor.bat` runs all of these and more, and writes one report;
+start there. By hand, in `cmd.exe`, with `B` set to the installation's folder
+(`TAVI_BASE` in `INSTALL_INFO.txt`, or in `%LOCALAPPDATA%\TAVI\install-record.txt`).
+Every micromamba call names the root and the environment by path, as the
+launchers do, never `-n tavi`:
+
+```bat
+set "B=C:\Users\<USER>\TAVI"
+set "MM="%B%\micromamba\micromamba.exe" -r "%B%\mamba""
+```
+
 ### List relevant packages
 
-```powershell
-C:\Users\AMM\AppData\Local\micromamba\micromamba.exe list -n tavi | findstr /i "mcstas mccode mcstasscript pyside"
+```bat
+%MM% list -p "%B%\tavi-env" | findstr /i "mcstas mccode mcstasscript pyside"
 ```
 
 ### Check McStas resource tree
 
-```powershell
-dir C:\Users\AMM\AppData\Roaming\mamba\envs\tavi\share\mcstas
-dir C:\Users\AMM\AppData\Roaming\mamba\envs\tavi\share\mcstas\resources
+```bat
+dir "%B%\tavi-env\share\mcstas"
+dir "%B%\tavi-env\share\mcstas\resources"
 ```
 
 ### Check required component
 
-```powershell
-Get-ChildItem C:\Users\AMM\AppData\Roaming\mamba\envs\tavi\share\mcstas\resources -Recurse -Filter Progress_bar.comp
+```bat
+dir /s /b "%B%\tavi-env\share\mcstas\resources\Progress_bar.comp"
 ```
 
 ### Check TAVI import
 
-```powershell
-C:\Users\AMM\AppData\Local\micromamba\micromamba.exe run -n tavi python -c "import tavi.mcstas_config as c; print(c.detect_mcstas())"
+```bat
+cd /d "%B%\app"
+%MM% run -p "%B%\tavi-env" python -c "import tavi.mcstas_config as c; print(c.detect_mcstas())"
 ```
 
 ### Check installed source
 
-```powershell
-Test-Path C:\Users\AMM\TAVI\TAVI_PySide6.py
-Test-Path C:\Users\AMM\TAVI\tavi\mcstas_config.py
+```bat
+if exist "%B%\app\TAVI_PySide6.py" echo found TAVI_PySide6.py
+if exist "%B%\app\tavi\mcstas_config.py" echo found mcstas_config.py
 ```
+
+### Check the ownership marker
+
+```bat
+type "%B%\.tavi-install-root"
+findstr /b "INSTALL_ID= LAYOUT=" "%B%\INSTALL_INFO.txt"
+```
+
+The two `INSTALL_ID` lines must match, and `LAYOUT` must be `2`, or the
+uninstaller refuses the folder.
 
 ### Check broken AutoRun
 
-```powershell
+```bat
 reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun
 ```
 
 If it contains stale `mamba`/`micromamba` text:
 
-```powershell
+```bat
 reg delete "HKCU\Software\Microsoft\Command Processor" /v AutoRun /f
 ```
+
+Layout 1 (through 1.3.0): the same commands with micromamba at
+`%USERPROFILE%\AppData\Local\micromamba\micromamba.exe`, the root
+`%USERPROFILE%\AppData\Roaming\mamba`, the environment
+`%USERPROFILE%\AppData\Roaming\mamba\envs\tavi` and the program at
+`%USERPROFILE%\TAVI` (under `%SystemDrive%\TAVI-Data` instead for a relocated
+installation). There is no marker to check.
 
 ---
 
@@ -1599,11 +1665,16 @@ written after the tag exists.
    {
      "python": "3.11",
      "mcstas": "3.7.1",
-     "env": "tavi",
-     "install_dir": "%USERPROFILE%\\TAVI"
+     "layout": 2,
+     "env_prefix": "<base>\\tavi-env",
+     "default_base": "%USERPROFILE%\\TAVI"
    }
    ```
+   (`INSTALL_INFO.txt` already records these per installation, as `KEY=value`
+   lines; the manifest would be the release-side statement of them.)
 3. Add `--diagnose` mode that prints paths, package versions, and component availability without modifying anything.
+   Partly done: `installer\TAVI-Doctor.bat` does this as a separate file,
+   though it also runs short test simulations.
 4. Add a TAVI startup self-check panel/dialog for:
    - McStas resource path,
    - `mcrun`,
@@ -1612,7 +1683,8 @@ written after the tag exists.
    - MPI availability.
 5. Add fallback in TAVI from `Progress_bar` to `Arm` if `Progress_bar.comp` is not available.
 6. Consider pinning `pyside6` and `mcstasscript` conda versions after testing known-good ones.
-7. Store installer version in the installed TAVI directory for support/debugging.
+7. ~~Store installer version in the installed TAVI directory for support/debugging.~~
+   Done: `INSTALL_INFO.txt` carries `INSTALLER_VERSION`.
 
 ---
 
@@ -1627,14 +1699,24 @@ The main regressions came from:
 - assuming `mcstasscript` implied valid McStas resources,
 - assuming local dev files were committed,
 - unsafe uninstaller scope,
-- and insufficient early validation.
+- insufficient early validation,
+- selecting the environment by name, so an inherited root could swap in a
+  stale environment of the same name (1.3.0 and earlier),
+- and expanding a value read from a file or a prompt before validating it.
 
 Future changes should preserve the successful pattern:
 
 ```text
-explain -> confirm -> create/update env safely -> install source safely ->
-detect known paths explicitly -> validate required resources -> generate launchers safely
+explain -> choose and validate one folder -> confirm -> create/update env by
+its path -> install source safely -> detect known paths explicitly ->
+validate required resources -> compile-check serial and MPI ->
+copy the shipped launchers -> mark ownership
 ```
+
+Up to 1.3.0 the last step was "generate launchers safely": the launchers were
+written by the installer and lived in `%USERPROFILE%\TAVI`. They are now
+ordinary files in `installer/launchers/`, copied into the base folder, so
+there is no generated batch text left to get wrong (§5, "One chosen folder").
 
 Do not optimize away the checks. They are now part of the installer contract.
 
