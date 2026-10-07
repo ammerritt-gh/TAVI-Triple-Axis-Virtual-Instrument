@@ -772,9 +772,11 @@ def test_no_redirection_follows_a_value_on_an_echo_line(script):
 
 def test_the_installer_writes_a_layout_line_the_uninstaller_can_read():
     """The ownership gate is keyed on LAYOUT, so it has to reach the file."""
+    # newline="" keeps the CRLF that .gitattributes pins for *.bat, so the
+    # end-of-line anchor has to allow the \r before it.
     with open(INSTALL_1_3_1, encoding="utf-8", newline="") as stream:
         text = stream.read()
-    assert re.search(r'(?m)^>>? "%TAVI_BASE%\\INSTALL_INFO\.txt" echo LAYOUT=%LAYOUT%$', text), \
+    assert re.search(r'(?m)^>>? "%TAVI_BASE%\\INSTALL_INFO\.txt" echo LAYOUT=%LAYOUT%\r?$', text), \
         "INSTALL_INFO.txt must get a LAYOUT line, written with the redirection first"
-    assert re.search(r'(?m)^>>? "%MARKER%" echo LAYOUT=%LAYOUT%$', text), \
+    assert re.search(r'(?m)^>>? "%MARKER%" echo LAYOUT=%LAYOUT%\r?$', text), \
         "the ownership marker must get a LAYOUT line, written with the redirection first"
