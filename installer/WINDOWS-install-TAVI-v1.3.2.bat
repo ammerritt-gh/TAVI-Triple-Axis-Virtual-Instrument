@@ -714,14 +714,20 @@ goto :eof
 :: names this same folder and says an install was still in progress. The record
 :: only ever locates; the decision it feeds is "offer to clear", never "delete".
 set "REC_PARTIAL=no"
-set "REC_BASE="
+set "VBPATH="
 set "REC_STATE="
 if not exist "%LOCALAPPDATA%\TAVI\install-record.txt" goto :eof
-for /f "usebackq tokens=1,* delims==" %%A in ("%LOCALAPPDATA%\TAVI\install-record.txt") do if /i "%%A"=="TAVI_BASE" set "REC_BASE=%%B"
+:: The record is a file the user can edit, so neither value is expanded raw:
+:: the base goes straight into VBPATH and is vetted by :validate_base_var, and
+:: the state is read through a pipe. %1 was validated before it got here, so a
+:: record value that does not validate cannot name this folder.
+for /f "usebackq tokens=1,* delims==" %%A in ("%LOCALAPPDATA%\TAVI\install-record.txt") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
 for /f "usebackq tokens=1,* delims==" %%A in ("%LOCALAPPDATA%\TAVI\install-record.txt") do if /i "%%A"=="STATE" set "REC_STATE=%%B"
-if not defined REC_BASE goto :eof
-if /i not "%REC_BASE%"=="%~1" goto :eof
-if not "%REC_STATE%"=="installing" goto :eof
+call :validate_base_var
+if defined VB_REASON goto :eof
+if /i not "%VBPATH%"=="%~1" goto :eof
+set REC_STATE 2>nul| findstr /x /c:"REC_STATE=installing" >nul
+if errorlevel 1 goto :eof
 set "REC_PARTIAL=yes"
 goto :eof
 

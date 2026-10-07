@@ -945,7 +945,7 @@ HOSTILE_PATHS = [
 ]
 
 
-def _sandbox_env(tmp_path, record_value=None):
+def _sandbox_env(tmp_path, record_value=None, state="complete"):
     env = dict(os.environ)  # Windows: os.environ keys are upper case
     # TEMP too: the hand-off to an installed uninstaller copies it there.
     for name in ("LOCALAPPDATA", "USERPROFILE", "SYSTEMDRIVE", "TEMP", "TMP"):
@@ -955,7 +955,7 @@ def _sandbox_env(tmp_path, record_value=None):
     if record_value is not None:
         (tmp_path / "localappdata" / "TAVI").mkdir()
         (tmp_path / "localappdata" / "TAVI" / "install-record.txt").write_text(
-            f"TAVI_BASE={record_value}\nSTATE=complete\n", encoding="utf-8", newline="\r\n")
+            f"TAVI_BASE={record_value}\nSTATE={state}\n", encoding="utf-8", newline="\r\n")
     return env
 
 
@@ -1046,6 +1046,47 @@ def test_repair_launchers_follows_a_good_record(tmp_path):
     result = run_bat(REPAIR_LAUNCHERS, env=env, timeout=30, input_text="Y\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert (prog / "update-tavi.bat").exists(), result.stdout
+
+
+# The installer reads the same record in :read_record_state, to tell a folder
+# an install died in (offer to clear it) from some other folder (refuse it).
+# Driven through /dir at a folder holding a stray file and no marker, which is
+# where that routine runs; N declines the clearing and /dir then stops rather
+# than ask again, so nothing is deleted or installed either way.
+
+PARTIAL_NOTICE = "An earlier installation into this folder did not finish"
+
+
+def _install_into_occupied_folder(tmp_path, record_base=None, state="installing"):
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "stray.txt").write_text("x\n", encoding="utf-8", newline="\n")
+    record = str(base) if record_base is None else record_base
+    env = _sandbox_env(tmp_path, record_value=record, state=state)
+    result = run_bat(INSTALL_1_3_2, "/dir", str(base), env=env, timeout=20, input_text="N\n\n")
+    assert (base / "stray.txt").exists(), result.stdout
+    return result
+
+
+def test_the_installer_recognises_a_partial_install_the_record_names(tmp_path):
+    result = _install_into_occupied_folder(tmp_path)
+    assert PARTIAL_NOTICE in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout
+
+
+@pytest.mark.parametrize("field", ["TAVI_BASE", "STATE"])
+@pytest.mark.parametrize("template,label", HOSTILE_PATHS, ids=HOSTILE_IDS)
+def test_the_installer_does_not_expand_a_hostile_record(tmp_path, field, template, label):
+    marker = tmp_path / "marker.txt"
+    value = template.format(marker=marker)
+    if field == "TAVI_BASE":
+        result = _install_into_occupied_folder(tmp_path, record_base=value)
+    else:  # names this very folder, so the STATE comparison is reached
+        result = _install_into_occupied_folder(tmp_path, state=value)
+    assert not marker.exists(), (label, "a line expanded the record's value", result.stdout)
+    assert result.returncode == 1, (label, result.stdout + result.stderr)
+    assert "already contains other files" in result.stdout, (label, result.stdout)
+    assert PARTIAL_NOTICE not in result.stdout, (label, result.stdout)
 
 
 # ===========================================================================
