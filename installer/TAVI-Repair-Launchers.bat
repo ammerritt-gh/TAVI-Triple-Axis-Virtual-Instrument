@@ -79,6 +79,21 @@ if not defined MAMBA_ROOT for %%I in ("%ENV_PREFIX%\..\..") do set "MAMBA_ROOT=%
 call :validate_base "%MAMBA_ROOT%"
 if defined VB_REASON goto value_refused
 
+:: Read and checked here, before anything is written, so a bad value cannot
+:: leave a half-repaired set of launchers. No TAVI_VERSION skips update-tavi.bat.
+set "TAVI_VERSION="
+for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="TAVI_VERSION" set "TAVI_VERSION=%%B"
+if not defined TAVI_VERSION goto version_checked
+:: Keep this check identical to the one in launchers\update-tavi.bat.
+:: TAVI_VERSION comes from a text file and becomes a git argument, so it must
+:: be a release tag (v<digits>.<digits>.<digits>) or main before any line
+:: expands it. "set NAME|" hands the value to findstr without cmd parsing it,
+:: where "echo %NAME%" would run whatever follows an & in it. Digits are
+:: listed, not ranged: findstr resolves a range through the machine collation.
+set TAVI_VERSION| findstr /r /x /c:"TAVI_VERSION=v[0123456789][0123456789]*\.[0123456789][0123456789]*\.[0123456789][0123456789]*" /c:"TAVI_VERSION=main" >nul
+if errorlevel 1 goto bad_version
+
+:version_checked
 if not exist "%ENV_PREFIX%\python.exe" goto env_missing
 if not exist "%MICROMAMBA_EXE%" goto micromamba_missing
 
@@ -131,8 +146,7 @@ if exist "%TARGET%" copy /Y "%TARGET%" "%TARGET%.bak-%STAMP%" >nul
 echo [OK] run-tavi.bat repaired.
 
 set "TARGET=%INSTALL_DIR%\update-tavi.bat"
-set "TAVI_VERSION="
-for /f "usebackq tokens=1,* delims==" %%A in ("%INSTALL_DIR%\INSTALL_INFO.txt") do if /i "%%A"=="TAVI_VERSION" set "TAVI_VERSION=%%B"
+:: TAVI_VERSION was read and checked before the prompt.
 if not defined TAVI_VERSION goto skip_update
 if exist "%TARGET%" copy /Y "%TARGET%" "%TARGET%.bak-%STAMP%" >nul
 > "%TARGET%" echo @echo off
@@ -276,6 +290,14 @@ exit /b 1
 :value_refused
 echo [ERROR] INSTALL_INFO.txt holds a path this repair will not write into
 echo         a launcher: %VB_REASON%
+echo [INFO]  Run the TAVI installer again instead.
+goto failed
+
+:bad_version
+:: Never print the value itself: it failed the check.
+echo [ERROR] INSTALL_INFO.txt records a TAVI_VERSION that is not a release tag
+echo         such as vX.Y.Z, or main, so this repair will not write it into a
+echo         launcher.
 echo [INFO]  Run the TAVI installer again instead.
 goto failed
 

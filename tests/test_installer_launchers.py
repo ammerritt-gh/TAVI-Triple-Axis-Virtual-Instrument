@@ -795,3 +795,98 @@ def test_the_installer_writes_a_layout_line_the_uninstaller_can_read():
         "INSTALL_INFO.txt must get a LAYOUT line, written with the redirection first"
     assert re.search(r'(?m)^>>? "%MARKER%" echo LAYOUT=%LAYOUT%\r?$', text), \
         "the ownership marker must get a LAYOUT line, written with the redirection first"
+
+
+# ===========================================================================
+# 7. TAVI_VERSION from INSTALL_INFO.txt is a release tag or main before
+#    update-tavi.bat or TAVI-Repair-Launchers.bat use it.
+#
+# INSTALL_INFO.txt is ordinary text on disk, and the value becomes a git
+# argument and, in the repair, a line of a generated batch file. "&rem" and
+# not "&calc", as in REFUSE_CASES: a regression must not open a window.
+# ===========================================================================
+
+GOOD_VERSIONS = ["v1.3.2", "main"]
+BAD_VERSIONS = [
+    ("v1.3.2&rem x", "ampersand"),
+    ("--orphan", "git option"),
+    ("v1.3", "two parts"),
+    ("v1.3.2 x", "trailing word"),
+    ('v1.3.2"&rem x', "double quote"),
+    ("..\\x", "path"),
+]
+
+
+def _write_install_info(folder, version, **extra):
+    # CRLF, as the installer's own "> file echo" lines write it.
+    lines = [f"TAVI_VERSION={version}"] + [f"{key}={value}" for key, value in extra.items()]
+    (folder / "INSTALL_INFO.txt").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8", newline="\r\n")
+
+
+def _run_update_with_version(tmp_path, stub_exe, version):
+    base, _, _ = _make_layout2_base(tmp_path, "base", stub_exe)
+    _write_install_info(base, version, LAYOUT="2", INSTALL_ID="test-id")
+    log = tmp_path / "stub.log"
+    env = dict(os.environ)
+    env["MICROMAMBA_STUB_LOG"] = str(log)
+    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=30)
+    return result, _read_stub_log(log)
+
+
+@pytest.mark.parametrize("version", GOOD_VERSIONS)
+def test_update_tavi_checks_out_a_well_formed_version(tmp_path, micromamba_stub_exe, version):
+    result, calls = _run_update_with_version(tmp_path, micromamba_stub_exe, version)
+    assert result.returncode == 0, result.stdout + result.stderr
+    checkouts = [argv for argv in calls if "checkout" in argv]
+    assert checkouts, f"update-tavi.bat never reached git checkout: {calls}"
+    argv = checkouts[0]
+    assert argv[argv.index("checkout") + 1] == version
+
+
+@pytest.mark.parametrize("version,label", BAD_VERSIONS)
+def test_update_tavi_refuses_a_malformed_version(tmp_path, micromamba_stub_exe, version, label):
+    result, calls = _run_update_with_version(tmp_path, micromamba_stub_exe, version)
+    assert result.returncode != 0, (label, result.stdout)
+    assert "[ERROR]" in result.stdout, (label, result.stdout)
+    assert version not in result.stdout, (label, "the refusal printed the raw value", result.stdout)
+    assert not [argv for argv in calls if "checkout" in argv], (label, calls)
+
+
+def _repair_target(tmp_path, version):
+    """A pre-1.3.2 program folder under tmp_path, with everything the repair
+    checks for present. The repair is pointed at it by argument, so it never
+    reads the real install record or touches the real profile."""
+    prog = tmp_path / "prog"
+    prog.mkdir()
+    (prog / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
+    env_prefix = tmp_path / "env"
+    (env_prefix / "share" / "mcstas" / "resources").mkdir(parents=True)
+    (env_prefix / "python.exe").write_bytes(b"")
+    micromamba_dir = tmp_path / "mm"
+    micromamba_dir.mkdir()
+    (micromamba_dir / "micromamba.exe").write_bytes(b"")
+    _write_install_info(prog, version, ENV_PREFIX=env_prefix,
+                        MAMBA_ROOT_PREFIX=tmp_path / "root", MICROMAMBA_DIR=micromamba_dir)
+    return prog
+
+
+@pytest.mark.parametrize("version", GOOD_VERSIONS)
+def test_repair_launchers_writes_a_well_formed_version(tmp_path, version):
+    prog = _repair_target(tmp_path, version)
+    # "Y" answers the repair's own confirmation prompt.
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), timeout=30, input_text="Y\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'git checkout "{version}"' in _read(str(prog / "update-tavi.bat"))
+
+
+@pytest.mark.parametrize("version,label", BAD_VERSIONS)
+def test_repair_launchers_refuses_a_malformed_version(tmp_path, version, label):
+    prog = _repair_target(tmp_path, version)
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), timeout=30, input_text="Y\n")
+    assert result.returncode != 0, (label, result.stdout)
+    assert "[ERROR]" in result.stdout, (label, result.stdout)
+    assert version not in result.stdout, (label, "the refusal printed the raw value", result.stdout)
+    # Refused before anything is written, so no launcher is half-repaired.
+    for name in ("update-tavi.bat", "run-tavi.bat", "TAVI-Launcher.bat"):
+        assert not (prog / name).exists(), (label, f"{name} was written")

@@ -27,6 +27,14 @@ if not exist "%INSTALL_DIR%\.git" goto no_repo
 set "TAVI_VERSION="
 for /f "usebackq tokens=1,* delims==" %%A in ("%TAVI_BASE%\INSTALL_INFO.txt") do if /i "%%A"=="TAVI_VERSION" set "TAVI_VERSION=%%B"
 if not defined TAVI_VERSION goto no_version
+:: Keep this check identical to the one in TAVI-Repair-Launchers.bat.
+:: TAVI_VERSION comes from a text file and becomes a git argument, so it must
+:: be a release tag (v<digits>.<digits>.<digits>) or main before any line
+:: expands it. "set NAME|" hands the value to findstr without cmd parsing it,
+:: where "echo %NAME%" would run whatever follows an & in it. Digits are
+:: listed, not ranged: findstr resolves a range through the machine collation.
+set TAVI_VERSION| findstr /r /x /c:"TAVI_VERSION=v[0123456789][0123456789]*\.[0123456789][0123456789]*\.[0123456789][0123456789]*" /c:"TAVI_VERSION=main" >nul
+if errorlevel 1 goto bad_version
 
 set "MAMBA_ROOT_PREFIX=%MAMBA_ROOT%"
 
@@ -99,6 +107,14 @@ goto fail
 :no_version
 echo [ERROR] Could not read TAVI_VERSION from:
 echo         %TAVI_BASE%\INSTALL_INFO.txt
+goto fail
+
+:bad_version
+:: Never print the value itself: it failed the check above.
+echo [ERROR] The TAVI_VERSION recorded in:
+echo         %TAVI_BASE%\INSTALL_INFO.txt
+echo         is not a release tag such as vX.Y.Z, or main, so it is not used.
+echo         Run the TAVI installer again.
 goto fail
 
 :fail
