@@ -1322,7 +1322,9 @@ Regression prevention:
   the standalone uninstaller, `TAVI-Repair-Launchers.bat`, the Doctor and the
   support recorder read the record's `TAVI_BASE` with `for /f` straight into
   `VBPATH` and call `:validate_base_var`, and both uninstallers do the same
-  before comparing the record with the base they just removed. The Doctor and
+  before comparing the record with the base they just removed, as does the
+  installer before it treats a folder as one an install died in (it reads the
+  record's `STATE` through `set NAME |` too). The Doctor and
   the recorder also require the marker's `INSTALL_ID` to match
   `INSTALL_INFO.txt`'s before treating the folder as an installation, and
   otherwise fall back to the layout-1 default with an `[INFO]` line that does
