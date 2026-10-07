@@ -11,8 +11,11 @@ TAVI is a simulation tool for triple-axis spectrometer (TAS) experiments, built 
 
 1. **Download** `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself)
 2. **Double-click** the downloaded `.bat` to run the installer
-3. **Wait** 10–20 minutes for installation to complete
-4. **Run a 2-point scan** to validate the installation (see First-Run Validation below)
+3. **Choose where TAVI goes.** Press Enter to accept the suggested folder, or type a full path such as `D:\TAVI`. Everything — the program, its Python environment, McStas, the compiler and the downloaded packages, about 3 GB — lives inside that one folder. The path can only use letters, digits, dot, dash and underscore, with no spaces, because McStas cannot compile from a path with a space in it.
+4. **Wait** 10–20 minutes for installation to complete
+5. **Run a 2-point scan** to validate the installation (see First-Run Validation below)
+
+The installation cannot be moved afterwards once it exists — the Python environment stores its own location internally. The **TAVI Launcher** shortcut it creates, inside that folder, can be moved anywhere you like (your desktop, for instance).
 
 macOS or Linux: see [macOS and Linux (provisional, never executed)](#macos-and-linux-provisional-never-executed).
 
@@ -26,15 +29,15 @@ Windows 10/11, about 3 GB of disk, internet. No compiler install: the environmen
 
 ## What the Installer Does
 
-The installer performs these steps automatically:
+After you choose (or confirm) the install folder, the installer performs these steps automatically, all inside it:
 
 1. **Installs micromamba** — a lightweight conda package manager (pinned version with checksum verification)
-2. **Creates the `tavi` environment** — with Python 3.11, McStas, GCC (conda-forge) and MS-MPI, and all dependencies, including PySide6 and McStasScript from conda-forge; an existing environment is removed and rebuilt
-3. **Clones TAVI** — from GitHub at the release pinned in the installer
+2. **Creates the environment** — in a `tavi-env` folder inside your chosen install folder, with Python 3.11, McStas, GCC (conda-forge) and MS-MPI, and all dependencies, including PySide6 and McStasScript from conda-forge; an existing environment is removed and rebuilt
+3. **Clones TAVI** — from GitHub at the release pinned in the installer, into an `app` folder inside your chosen install folder
 4. **Configures McStasScript** — so it can find the McStas installation in the conda environment
 5. **Configures and compile-checks the McStas compiler** — points McStas's own config at the environment's GCC (five overrides, written into the environment's copy of `mccode_config.json`), moves aside any stale per-user McStas config that would override it, then compiles and runs the `PSI_DMC` example serially and under MPI. Either failure stops the install: TAVI runs every simulation under MPI
 6. **Builds the lead-sample dispersion map** — `components\Pb_dft_phonons.dat`, about 150 MB, a few minutes with no output. It is optional: if the step fails the installer warns, records `PB_MAP=missing` in `INSTALL_INFO.txt` and continues; the "Pb: Phonon DFT" sample then stays listed but a run with it fails at asset load until you open the TAVI shell and run `python tools\make_pb_assets.py`
-7. **Creates launcher scripts**
+7. **Installs the launcher scripts** — copies the four launchers into your chosen install folder and creates the "TAVI Launcher" shortcut there
 
 ### Installed Components
 
@@ -59,11 +62,11 @@ The installer pins a specific TAVI release via the `TAVI_VERSION` variable near 
 To check which version is installed:
 
 ```batch
-cd %USERPROFILE%\TAVI
+cd <your install folder>\app
 git describe --tags
 ```
 
-To move to a newer release, download that release's installer from the [releases page](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases) and run it. The launcher's **Update TAVI** option repairs the current pinned installation (fetches tags, re-checks out the same tag, checks that the GUI toolkit and McStasScript load) and never changes which release is installed.
+To move to a newer release, download that release's installer from the [releases page](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases) and run it. The launcher's **Repair TAVI** option repairs the current pinned installation (fetches tags, re-checks out the same tag, checks that the GUI toolkit and McStasScript load) and never changes which release is installed.
 
 ---
 
@@ -71,25 +74,27 @@ To move to a newer release, download that release's installer from the [releases
 
 ### TAVI Launcher
 
-After installation, use the **"TAVI Launcher"** shortcut on your desktop:
+After installation, use the **"TAVI Launcher"** shortcut, which lives inside your install folder (move it to your desktop if you like):
 
 | Option | Description |
 |--------|-------------|
 | **[1] Run TAVI** | Start the TAVI application |
-| **[2] Update TAVI** | Repair the current pinned installation (re-fetch and re-check-out the same tag, check that the GUI toolkit and McStasScript load) |
+| **[2] Repair TAVI** | Repair the current pinned installation (re-fetch and re-check-out the same tag, check that the GUI toolkit and McStasScript load) |
 | **[3] Open TAVI folder** | Browse installation files |
-| **[4] Open TAVI shell** | Command prompt inside the `tavi` environment |
+| **[4] Open TAVI shell** | Command prompt inside the TAVI environment |
 | **[5] Exit** | Close the launcher |
+| **[6] Uninstall TAVI** | Remove the installation (see Uninstalling TAVI below) |
 
 ### Direct Scripts
 
-These scripts are installed in `%USERPROFILE%\TAVI`:
+These scripts are installed directly in your chosen install folder (not inside the `app` subfolder):
 
 | Script | Purpose |
 |--------|---------|
 | `TAVI-Launcher.bat` | Menu launcher (recommended entry point) |
 | `run-tavi.bat` | Launch TAVI directly |
-| `update-tavi.bat` | Update to the pinned release |
+| `update-tavi.bat` | Repair the pinned release |
+| `uninstall-tavi.bat` | Remove the installation |
 
 `run-tavi.bat` sets `MCSTAS` to the environment's resources and starts TAVI; the launcher menu's Run option delegates to it. No compiler bootstrap is needed — the environment's McStas config already points at its own GCC.
 
@@ -114,7 +119,11 @@ The installer already compile-checks the compiler before it finishes, so a first
 
 ### Compiler check failed during install
 
-Look at `%TEMP%\tavi_compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed) for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI.
+Look at `<base>\compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed), where `<base>` is the install folder you chose, for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI.
+
+### Monte Carlo simulations fail but the deterministic engine still works (installation from before 1.3.1)
+
+An installation made before version 1.3.1 starts TAVI by selecting its environment by *name*, which can load the wrong environment's Python and `mcrun` if a second one with the same name exists on the machine — for example because an earlier install had to relocate off a profile path with a space in it. The symptom is that ordinary scan setup and the deterministic engine work fine, but any run that needs a real McStas simulation fails. Download `TAVI-Repair-Launchers.bat` from the releases page and run it: it rewrites your three launcher scripts to always use your exact installed environment, without reinstalling anything or changing any package. Your previous launchers are kept beside the new ones, named `.bak-<number>`. Installing version 1.3.1 or later fixes this permanently.
 
 ### "Failed to download micromamba"
 
@@ -126,11 +135,11 @@ Check available disk space (~3 GB needed) and internet connection. Run again wit
 
 ### Import errors on launch (`No module named 'PySide6'`, etc.)
 
-Run the installer again. It removes the `tavi` environment and rebuilds it from the package list; downloads are cached so this is quick. Option **[2] Update TAVI** only reports whether the environment loads; it does not repair it.
+Run the installer again, pointed at the same install folder. It removes the environment and rebuilds it from the package list; downloads are cached so this is quick. The launcher's **[2] Repair TAVI** only reports whether the environment loads; it does not rebuild it.
 
 ### McStas not found / wrong McStas version used
 
-The installer configures McStasScript to use the McStas installation inside the `tavi` conda environment. If a system-wide McStas installation (from the standalone installer) is interfering, the launcher scripts override the `MCSTAS` environment variable. If you see unexpected McStas paths in the TAVI message center, re-run the installer to regenerate the launcher scripts.
+The installer configures McStasScript to use the McStas installation inside the TAVI folder's own environment (`<base>\tavi-env`). If a system-wide McStas installation (from the standalone installer) is interfering, the launcher scripts override the `MCSTAS` environment variable. If you see unexpected McStas paths in the TAVI message center, re-run the installer, which reinstalls the launcher scripts.
 
 ---
 
@@ -138,8 +147,10 @@ The installer configures McStasScript to use the McStas installation inside the 
 
 ### Manual environment activation
 
+The environment is always selected by its exact folder, not by name — replace `<base>` with your install folder:
+
 ```batch
-%USERPROFILE%\AppData\Local\micromamba\micromamba.exe run -n tavi python TAVI_PySide6.py
+"<base>\micromamba\micromamba.exe" -r "<base>\mamba" run -p "<base>\tavi-env" python TAVI_PySide6.py
 ```
 
 ### Updating McStas
@@ -148,13 +159,19 @@ Do not update McStas in place with `micromamba install`: a new McStas package br
 
 ### Uninstalling TAVI
 
-Run `WINDOWS-uninstall-TAVI.bat` from the installer folder. It will:
+The normal way is the **TAVI Launcher**'s **[6] Uninstall TAVI** option. It asks for confirmation (twice, if you have saved scan results), then removes:
 
-1. Remove the `tavi` conda environment
-2. Remove the TAVI code directory (asking first if it does not look like a TAVI install)
-3. Remove the desktop shortcut
+- the program (`app`)
+- your scan results (`app\output`) and saved settings (`app\config`)
+- the Python/McStas environment (`tavi-env`)
+- the downloaded package cache (`mamba`)
+- the four launcher scripts and the shortcut
 
-It never removes micromamba itself or any other micromamba environment you may have (`tavi-dev` included). On macOS and Linux, `POSIX-uninstall-TAVI.sh` follows the same rules.
+Anything else you have put in the install folder is left alone and reported at the end. Reinstalling later downloads about 1.5 GB of packages again.
+
+If the launcher itself is missing or damaged, run `<your install folder>\uninstall-tavi.bat` directly, or download `WINDOWS-uninstall-TAVI.bat` from the releases page — a standalone fallback that finds your installation (by argument, by its own saved location record, in the usual default folders, or by asking) and hands off to the uninstaller that came with it. It also knows how to remove an installation from before version 1.3.1.
+
+It removes the micromamba and the package cache that live inside the TAVI folder, because they belong to that installation. It never touches a micromamba installed anywhere else, and never any other environment you may have (`tavi-dev` included). On macOS and Linux, `POSIX-uninstall-TAVI.sh` follows the same rules.
 
 ---
 
@@ -178,13 +195,22 @@ TAVI stores local McStas path configuration in `config/mcstas_config.json` and p
 
 ### Installation paths
 
+Everything lives under the one folder you chose during install (`<base>` below — by default `%USERPROFILE%\TAVI`, or `%SystemDrive%\TAVI-Data` if your profile path cannot hold McStas, for instance because it contains a space):
+
 | Item | Location |
 |------|----------|
-| micromamba binary | `%USERPROFILE%\AppData\Local\micromamba\micromamba.exe` |
-| tavi conda environment | `%USERPROFILE%\AppData\Roaming\mamba\envs\tavi\` |
-| TAVI code | `%USERPROFILE%\TAVI\` |
-| Launcher scripts | `%USERPROFILE%\TAVI\*.bat` |
-| Simulation output | `%USERPROFILE%\TAVI\output\` |
+| Install folder (chosen at install time) | `<base>` |
+| micromamba binary | `<base>\micromamba\micromamba.exe` |
+| TAVI environment (Python, McStas, GCC, MS-MPI) | `<base>\tavi-env\` |
+| Package cache / root prefix | `<base>\mamba\` |
+| TAVI code | `<base>\app\` |
+| Compile-gate logs | `<base>\compile_check\` |
+| Launcher scripts | `<base>\*.bat` |
+| Simulation output | `<base>\app\output\` |
+| Saved settings | `<base>\app\config\` |
+| Install record (used to locate the installation) | `%LOCALAPPDATA%\TAVI\install-record.txt` |
+
+**The installation cannot be moved.** The environment and its generated McStas configuration store the absolute install path internally; moving or renaming `<base>` breaks it. Only the "TAVI Launcher" shortcut can be moved.
 
 ---
 
@@ -293,4 +319,4 @@ itself, the root prefix or any other environment.
 
 ---
 
-*Last updated: 2026-09-14 (v1.3.0 installers; provisional macOS/Linux script)*
+*Last updated: 2026-09-17 (v1.3.1: one chosen install folder, environment selected by prefix, shipped launchers, uninstall from the launcher menu; provisional macOS/Linux script)*
