@@ -457,6 +457,9 @@ class TAVIMainWindow(QMainWindow):
         live group's and one with none is dead. A one-tab bar (a group whose
         other docks are closed) is Qt's to show or park. Qt does not reuse the
         dead bars: a few small hidden widgets per layout change.
+        The rule needs restoreState to run before show(): restoring over a
+        shown window leaves the replaced groups' bars still holding their
+        tabs, and this would show them.
         """
         for bar in self.findChildren(QTabBar, options=Qt.FindDirectChildrenOnly):
             if bar.count() >= 2:
@@ -862,6 +865,8 @@ class TAVIMainWindow(QMainWindow):
         unreadable file, a geometry or state Qt refuses, or any other error
         falls back to the preset. Each of these says so in the Message Log.
         After a restore, a floating dock no screen shows is brought back.
+        Call it only before show(): restoreState over a shown window leaves
+        stale tab bars that still hold tabs, which _tidy_tab_bars would show.
         """
         config_path = self._get_layout_config_path()
 
