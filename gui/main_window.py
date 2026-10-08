@@ -433,14 +433,9 @@ class TAVIMainWindow(QMainWindow):
             dock.setVisible(True)
         reciprocal.setVisible(reciprocal_shown)
         if columns != 3:
-            if not ub.isFloating():
-                ub.setFloating(True)
-                self._centre_on_screen(ub)
-            ub.setVisible(False)
-        if not misalignment.isFloating():  # docked by the user, or by Restore All Panels
-            misalignment.setFloating(True)
-            self._centre_on_screen(misalignment)
-        misalignment.setVisible(misalignment_shown)
+            self._float_centred(ub, False)
+        # Docked by the user, or by Restore All Panels.
+        self._float_centred(misalignment, misalignment_shown)
         for group in tabs:
             group[0].raise_()
         self._tidy_tab_bars()
@@ -763,6 +758,15 @@ class TAVIMainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Layout reset to the default for this screen: {columns} columns, {width}", 3000)
 
+    def _float_centred(self, dock, shown):
+        """Float a dock the preset has no place for, shown or not; a docked one
+        leaves the dock area and moves to the centre of the main window's screen."""
+        if not dock.isFloating():
+            self.removeDockWidget(dock)
+            dock.setFloating(True)
+            self._centre_on_screen(dock)
+        dock.setVisible(shown)
+
     def _centre_on_screen(self, dock):
         """Move a floating dock to the centre of the main window's screen."""
         dock.move(self.screen().availableGeometry().center() - dock.rect().center())
@@ -864,8 +868,9 @@ class TAVIMainWindow(QMainWindow):
         copied there when it cannot be moved (it is then overwritten on exit). An
         unreadable file, a geometry or state Qt refuses, or any other error
         falls back to the preset. Each of these says so in the Message Log.
-        After a restore, a floating dock no screen shows is brought back.
-        Call it only before show(): restoreState over a shown window leaves
+        After a restore, Misalignment, and UB Matrix outside 3 columns, float
+        at their saved visibility (centred if they came back docked), and a
+        floating dock no screen shows is brought back. Call it only before show(): restoreState over a shown window leaves
         stale tab bars that still hold tabs, which _tidy_tab_bars would show.
         """
         config_path = self._get_layout_config_path()
@@ -926,6 +931,13 @@ class TAVIMainWindow(QMainWindow):
             else:
                 print(f"Warning: columns is {columns!r} in {config_path}; "
                       f"taking {self._columns} for a lost dock's place")
+
+            # Qt 6.11 restores a hidden dock that a preset took out and floated
+            # as docked, with no place: it would open as a full-width row.
+            # These two float wherever the preset gives them no place.
+            for dock in ([self.misalignment_dock]
+                         + ([] if self._columns == 3 else [self.ub_matrix_dock])):
+                self._float_centred(dock, not dock.isHidden())
 
             width = layout_data.get("column_width", NARROW)
             if width not in (NARROW, WIDE):
