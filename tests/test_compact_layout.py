@@ -1065,6 +1065,46 @@ def test_hidden_ub_matrix_opens_in_its_preset_place_after_restart(window, layout
         _close(restarted)
 
 
+@pytest.mark.parametrize("entry", ["saved", "missing"])
+def test_docked_ub_matrix_stays_docked_after_restart(window, layout_file, capsys, entry):
+    """Check 6: UB Matrix docked by hand in 2 columns comes back docked where it was, shown.
+
+    The saved dock_floating map decides: a dock saved docked stays where
+    restoreState put it. With no entry for it the restore floats it, as the
+    2-column preset does, and says so.
+    """
+    ub, simulation = window.ub_matrix_dock, window.simulation_dock
+    try:
+        _resize(window, MONITOR, NARROW, columns=2)
+        window.addDockWidget(Qt.LeftDockWidgetArea, ub)
+        ub.setFloating(False)
+        window.splitDockWidget(simulation, ub, Qt.Vertical)  # by hand, under Simulation
+        ub.show()
+        QApplication.processEvents()
+        assert not ub.isFloating() and ub.x() == simulation.x() and ub.y() > simulation.y()
+        area = window.dockWidgetArea(ub)
+        assert window.save_layout_to_file()
+    finally:
+        _resize(window, MONITOR, NARROW, columns=2)  # floats and hides it again
+    if entry == "missing":
+        layout = json.loads(layout_file.read_text(encoding="utf-8"))
+        del layout["dock_floating"]["UBMatrixDock"]
+        layout_file.write_text(json.dumps(layout), encoding="utf-8")
+    capsys.readouterr()
+    restarted = _restart()
+    try:
+        ub, simulation = restarted.ub_matrix_dock, restarted.simulation_dock
+        assert ub.isVisible()
+        if entry == "saved":
+            assert not ub.isFloating() and restarted.dockWidgetArea(ub) == area
+            assert ub.x() == simulation.x() and ub.y() > simulation.y()
+        else:
+            assert ub.isFloating() and _on_screen(ub)
+            assert "dock_floating['UBMatrixDock']" in capsys.readouterr().out
+    finally:
+        _close(restarted)
+
+
 def test_hidden_misalignment_opens_floating_after_restart(window, layout_file):
     """Check 6: Misalignment docked by the user, floated by a preset and closed opens floating after a restart."""
     misalignment = window.misalignment_dock
