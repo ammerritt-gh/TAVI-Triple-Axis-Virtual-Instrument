@@ -11,6 +11,8 @@ from PySide6.QtGui import QAction, QActionGroup
 import tavi
 from tavi.local_state import config_path as local_config_path
 from tavi.settings import MPI_COUNT_MAX
+from gui import metrics
+from gui.docks.base_dock import NARROW, WIDE
 from gui.docks.instrument_dock import InstrumentDock
 from gui.docks.unified_scattering_dock import UnifiedScatteringDock
 from gui.docks.unified_sample_dock import UnifiedSampleDock
@@ -75,13 +77,20 @@ class TAVIMainWindow(QMainWindow):
         
         # Store default layout state after initial setup
         self._store_default_state()
-        
+
         # Restore a saved layout when present. The default layout keeps the
         # reciprocal-space panel closed until the user opens it from View.
+        self._column_width = NARROW
         self._restore_layout_from_file()
-        
-        # Set geometry after a small delay to avoid Qt geometry warnings
-        QTimer.singleShot(0, lambda: self.setGeometry(100, 100, 1600, 900))
+        self.set_column_width(self._column_width, fit=False)
+
+        # Set geometry after a small delay to avoid Qt geometry warnings, then
+        # fit the form panels to their column width so the plot gets the rest.
+        QTimer.singleShot(0, self._apply_startup_geometry)
+
+    def _apply_startup_geometry(self):
+        self.setGeometry(100, 100, 1600, 900)
+        self._fit_form_docks()
     
     def _create_docks(self):
         """Create all dock widgets."""
@@ -335,7 +344,24 @@ class TAVIMainWindow(QMainWindow):
             view_menu.addAction(dock.toggleViewAction())
         
         view_menu.addSeparator()
-        
+
+        # Column Width: a setting (it stays checked), not an arrangement.
+        width_menu = view_menu.addMenu("Column &Width")
+        width_group = QActionGroup(self)
+        width_group.setExclusive(True)
+        self.column_width_actions = {}
+        for mode, text, tip in (
+                (NARROW, "&Narrow", "Form panels one block wide; the plot gets the rest"),
+                (WIDE, "&Wide", "Form panels two blocks wide where there is room")):
+            action = QAction(text, self, checkable=True)
+            action.setStatusTip(tip)
+            action.triggered.connect(lambda _checked=False, m=mode: self.set_column_width(m))
+            width_group.addAction(action)
+            width_menu.addAction(action)
+            self.column_width_actions[mode] = action
+
+        view_menu.addSeparator()
+
         # Restore All Docks action
         restore_all_action = QAction("&Restore All Panels", self)
         restore_all_action.setShortcut("Ctrl+Shift+R")
@@ -540,7 +566,38 @@ class TAVIMainWindow(QMainWindow):
         if self._default_geometry is not None:
             self.restoreGeometry(self._default_geometry)
         self.statusBar().showMessage("Layout reset to default", 3000)
-    
+
+    def _form_docks(self):
+        return [self.instrument_dock, self.sample_dock,
+                self.scattering_dock, self.simulation_dock]
+
+    def set_column_width(self, mode, fit=True):
+        """View > Column Width: lay each form panel out one (NARROW) or two (WIDE)
+        blocks wide, and with ``fit`` size the docked ones to it."""
+        self._column_width = mode
+        self.column_width_actions[mode].setChecked(True)
+        for dock in self._form_docks():
+            dock.set_column_width(mode)
+        if fit:
+            self._fit_form_docks()
+
+    def _fit_form_docks(self):
+        """Size the docked, visible form panels to the column width; Display takes the rest.
+
+        Wide sizes them two blocks wide only where the window then still
+        leaves the plot ``metrics.WIDE_PLOT_MIN_WIDTH``; otherwise one block,
+        the same fallback each panel makes when it is too narrow for two.
+        """
+        docks = [d for d in self._form_docks() if d.isVisible() and not d.isFloating()]
+        if not docks:
+            return
+        count = 1
+        if self._column_width == WIDE:
+            columns = len({d.x() for d in docks})  # docks stacked in a column share x
+            if columns * docks[0].width_for_blocks(2) + metrics.WIDE_PLOT_MIN_WIDTH <= self.width():
+                count = 2
+        self.resizeDocks(docks, [d.width_for_blocks(count) for d in docks], Qt.Horizontal)
+
     def save_layout_to_file(self):
         """Save the current layout to a JSON config file."""
         config_path = self._get_layout_config_path()
@@ -555,7 +612,8 @@ class TAVIMainWindow(QMainWindow):
                 },
                 "dock_floating": {
                     dock.objectName(): dock.isFloating() for dock in self._all_docks
-                }
+                },
+                "column_width": self._column_width,
             }
             
             with open(config_path, 'w', encoding='utf-8') as f:
@@ -599,6 +657,14 @@ class TAVIMainWindow(QMainWindow):
                     name = dock.objectName()
                     if name in layout_data["dock_visibility"]:
                         dock.setVisible(layout_data["dock_visibility"][name])
+
+            # Missing (a file from before the setting) means Narrow.
+            width = layout_data.get("column_width", NARROW)
+            if width not in (NARROW, WIDE):
+                print(f"Warning: unknown column_width {width!r} in {config_path}; "
+                      f"using {NARROW}")
+                width = NARROW
+            self._column_width = width
             return True
         except Exception as e:
             print(f"Warning: Failed to restore layout: {e}")

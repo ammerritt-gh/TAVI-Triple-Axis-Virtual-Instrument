@@ -12,11 +12,9 @@ class UnifiedScatteringDock(BaseDockWidget):
     """Dock widget for scattering parameters (Q-space, HKL, energy transfer)."""
     
     def __init__(self, parent=None):
-        super().__init__("Scattering", parent, use_scroll_area=True, form_width=True)
+        super().__init__("Scattering", parent, use_scroll_area=True, blocks=True)
         self.setObjectName("ScatteringDock")
         
-        # Get the content layout from base class
-        main_layout = self.content_layout
         
         # Workflow order: the point in relative HKL, its energy transfer and
         # the fixed Ki/Kf energy, then the same point as absolute Q.
@@ -32,12 +30,12 @@ class UnifiedScatteringDock(BaseDockWidget):
         self.L_edit = QLineEdit()
         for column, (name, edit) in enumerate(
                 (("H", self.H_edit), ("K", self.K_edit), ("L", self.L_edit))):
-            edit.setMaximumWidth(80)
+            edit.setMaximumWidth(60)
             hkl_layout.addWidget(QLabel(f"{name}:"), 0, 2 * column)
             hkl_layout.addWidget(edit, 0, 2 * column + 1)
 
         pack_grid(hkl_layout)
-        main_layout.addWidget(hkl_group)
+        self.add_block(hkl_group)
 
         # ===== Energy Section: ΔE, then the fixed mode and its energy =====
         energy_group = QGroupBox("Energy Transfer and Fixed Mode")
@@ -47,7 +45,7 @@ class UnifiedScatteringDock(BaseDockWidget):
 
         energy_layout.addWidget(QLabel("ΔE:"), 0, 0)
         self.deltaE_edit = QLineEdit()
-        self.deltaE_edit.setMaximumWidth(80)
+        self.deltaE_edit.setMaximumWidth(60)
         energy_layout.addWidget(self.deltaE_edit, 0, 1)
         energy_layout.addWidget(QLabel("meV"), 0, 2)
 
@@ -58,12 +56,12 @@ class UnifiedScatteringDock(BaseDockWidget):
         energy_layout.addWidget(self.K_fixed_combo, 1, 1)
         energy_layout.addWidget(QLabel("Fixed E:"), 1, 2)
         self.fixed_E_edit = QLineEdit()
-        self.fixed_E_edit.setMaximumWidth(80)
+        self.fixed_E_edit.setMaximumWidth(60)
         energy_layout.addWidget(self.fixed_E_edit, 1, 3)
         energy_layout.addWidget(QLabel("meV"), 1, 4)
 
         pack_grid(energy_layout)
-        main_layout.addWidget(energy_group)
+        self.add_block(energy_group)
 
         # ===== Absolute Q Space Section: qx [ ] qy [ ] qz [ ] =====
         q_group = QGroupBox("Absolute Q Space (Å⁻¹)")
@@ -76,12 +74,10 @@ class UnifiedScatteringDock(BaseDockWidget):
         self.qz_edit = QLineEdit()
         for column, (name, edit) in enumerate(
                 (("qx", self.qx_edit), ("qy", self.qy_edit), ("qz", self.qz_edit))):
-            edit.setMaximumWidth(80)
+            edit.setMaximumWidth(60)
             q_layout.addWidget(QLabel(f"{name}:"), 0, 2 * column)
             q_layout.addWidget(edit, 0, 2 * column + 1)
 
         pack_grid(q_layout)
-        main_layout.addWidget(q_group)
+        self.add_block(q_group)
         
-        # Add stretch at the end to push everything up
-        main_layout.addStretch()

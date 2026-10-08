@@ -1,7 +1,9 @@
 """Screenshots of the real TAVI window at the laptop and monitor reference sizes.
 
 Builds the real ``TAVIMainWindow`` and ``TAVIController`` offscreen, resizes
-the window to 1108x851 and to 2560x1392, and writes one PNG per size. Run it
+the window to 1108x851 and to 2560x1392, chooses View > Column Width (Narrow,
+Wide, or both), and writes one PNG per size and width, named
+``<instrument>_<w>x<h>_<narrow|wide>.png``. Run it
 from the repository root in the tavi-dev environment (importing Qt directly
 hits the delay-load fault noted in AGENTS.md):
 
@@ -56,7 +58,10 @@ def main():
     parser.add_argument("--instrument", default="puma", help="instrument id (default puma)")
     parser.add_argument("--out", default=str(REPO_ROOT / "output" / "ui_snapshots"),
                         help="output folder (default output/ui_snapshots)")
+    parser.add_argument("--column-width", choices=("narrow", "wide", "both"), default="both",
+                        help="View > Column Width to shoot (default both)")
     args = parser.parse_args()
+    widths = ("narrow", "wide") if args.column_width == "both" else (args.column_width,)
 
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     tmp_config = _isolate_config()
@@ -105,18 +110,22 @@ def main():
         for width, height in SIZES:
             window.resize(width, height)
             app.processEvents()
-            pixmap = window.grab()
-            if pixmap.isNull() or (pixmap.width(), pixmap.height()) != (width, height):
-                print(f"bad grab at {width}x{height}: null={pixmap.isNull()} "
-                      f"size={pixmap.width()}x{pixmap.height()}")
-                failures += 1
-                continue
-            path = out / f"{instrument.id}_{width}x{height}.png"
-            if not pixmap.save(str(path)):
-                print(f"could not write {path}")
-                failures += 1
-                continue
-            print(path)
+            for column_width in widths:
+                window.column_width_actions[column_width].trigger()
+                for _ in range(3):  # the dock resize, then each panel's reflow
+                    app.processEvents()
+                pixmap = window.grab()
+                if pixmap.isNull() or (pixmap.width(), pixmap.height()) != (width, height):
+                    print(f"bad grab at {width}x{height} {column_width}: "
+                          f"null={pixmap.isNull()} size={pixmap.width()}x{pixmap.height()}")
+                    failures += 1
+                    continue
+                path = out / f"{instrument.id}_{width}x{height}_{column_width}.png"
+                if not pixmap.save(str(path)):
+                    print(f"could not write {path}")
+                    failures += 1
+                    continue
+                print(path)
     finally:
         controller.shutdown()
         window.deleteLater()
