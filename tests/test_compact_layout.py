@@ -25,7 +25,7 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import SIGNAL, QPoint, QSize, Qt  # noqa: E402
+from PySide6.QtCore import SIGNAL, QPoint, QRect, QSize, Qt  # noqa: E402
 from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QScreen  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout,  # noqa: E402
@@ -337,20 +337,29 @@ def test_four_columns_refused_on_a_screen_too_narrow(window):
     _assert_preset_placement(window, 4)
 
 
-@pytest.mark.parametrize("reciprocal", [False, True], ids=["plot", "plot+reciprocal"])
+@pytest.mark.parametrize("reciprocal", ["hidden", "tabbed", "floating"])
 @pytest.mark.parametrize("columns", [2, 3, 4])
 def test_width_needed_is_the_presets_minimum(window, columns, reciprocal):
-    """The width View > Layout checks against the screen is the window minimum the preset gives."""
+    """The width View > Layout checks against the screen is the window minimum the preset gives.
+
+    So is the width a restored layout is checked against at startup
+    (``restored``), where a floating Reciprocal Space does not count.
+    """
     dock = window.reciprocal_space_dock
-    if reciprocal:
+    if reciprocal == "tabbed":
         dock.toggleViewAction().trigger()  # View > Reciprocal Space: tabbed behind Display
     try:
         _resize(window, MONITOR, NARROW, columns=columns)
-        assert window._width_needed(columns) == window.minimumSizeHint().width()
-    finally:
-        if reciprocal:
-            dock.toggleViewAction().trigger()
+        if reciprocal == "floating":
+            window._show_reciprocal_window()  # as Restore All Panels opens it
             QApplication.processEvents()
+        else:
+            assert window._width_needed(columns) == window.minimumSizeHint().width()
+        assert window._width_needed(columns, restored=True) == window.minimumSizeHint().width()
+    finally:
+        if reciprocal != "hidden":
+            dock.hide()
+            _resize(window, MONITOR, NARROW, columns=columns)  # docked behind Display again
 
 
 def test_two_columns_keep_the_work_surface_on_screen(window):
@@ -912,21 +921,24 @@ def layout_file(window, tmp_path, monkeypatch):
     return path
 
 
-def _restart(show=True):
+def _restart(show=True, screen=MONITOR):
     """A new window as main() builds it (no controller): the layout file restored, then shown.
 
-    The shared window is never restored into: restoring over a shown window
-    leaves the replaced tab groups' strips behind, which TAVI never does.
+    On a screen of size ``screen``, which the restore checks the saved
+    layout's width against. The shared window is never restored into:
+    restoring over a shown window leaves the replaced tab groups' strips
+    behind, which TAVI never does.
     """
     instrument = get_instrument("puma")
-    win = cm.TAVIMainWindow(
-        instrument.descriptor(), instrument_infos=available_instruments(),
-        current_instrument_id=instrument.id, save_selection=lambda _id: None,
-    )
-    if show:
-        win.show()
-        for _ in range(3):  # the startup timer: fit to the screen, size the preset
-            QApplication.processEvents()
+    with _screen(screen):
+        win = cm.TAVIMainWindow(
+            instrument.descriptor(), instrument_infos=available_instruments(),
+            current_instrument_id=instrument.id, save_selection=lambda _id: None,
+        )
+        if show:
+            win.show()
+            for _ in range(3):  # the startup timer: fit to the screen, size the preset
+                QApplication.processEvents()
     return win
 
 
@@ -974,6 +986,50 @@ def test_saved_layout_wins_on_restart(window, layout_file):
         assert lefts == sorted(lefts) and len(set(lefts)) == 4, lefts
         assert restarted.simulation_dock.x() == restarted.scattering_dock.x()
         _assert_no_stray_tab_strip(restarted, 4)
+    finally:
+        _close(restarted)
+
+
+def test_saved_layout_too_wide_for_the_screen_falls_back(window, layout_file):
+    """Check 6: 4 columns saved on the monitor, restarted on the laptop: the screen's pick, said so.
+
+    The window fits the screen and no dock lies off it; the saved column
+    width and folds still apply, and the file stays as saved. The same file
+    on the monitor's screen restores as 4 columns.
+    """
+    groups = window.instrument_dock.collapsible_groups
+    try:
+        _resize(window, MONITOR, WIDE, columns=4)
+        groups["instrument.source"].set_collapsed(False)
+        assert window.save_layout_to_file()
+    finally:
+        groups["instrument.source"].set_collapsed(True)
+        window.set_column_width(NARROW, fit=False)
+    saved = layout_file.read_text(encoding="utf-8")
+    restarted = _restart(screen=LAPTOP)
+    try:
+        assert restarted._columns == 2 and restarted.frameGeometry().width() <= LAPTOP[0], (
+            restarted._columns, restarted.frameGeometry().width())
+        _assert_picked_preset(restarted)
+        _assert_preset_placement(restarted, 2)
+        screen = QRect(restarted.screen().availableGeometry().topLeft(), QSize(*LAPTOP))
+        off = [dock.objectName() for dock in restarted._all_docks if dock.isVisible()
+               and not dock.visibleRegion().isEmpty()  # a tab behind another is parked off
+               and not screen.contains(QRect(dock.mapToGlobal(QPoint(0, 0)), dock.size()))]
+        assert not off, off
+        said = _log(restarted)
+        assert "saved 4-column layout needs about" in said, said
+        assert f"this screen gives {LAPTOP[0]} px" in said, said
+        assert restarted._column_width == WIDE
+        assert not restarted.instrument_dock.collapsible_groups["instrument.source"].is_collapsed()
+        assert layout_file.read_text(encoding="utf-8") == saved
+    finally:
+        _close(restarted)
+    restarted = _restart(screen=MONITOR)
+    try:
+        assert restarted._layout_restored and restarted._columns == 4
+        assert "needs about" not in _log(restarted)
+        assert restarted._width_needed(4, restored=True) == restarted.minimumSizeHint().width()
     finally:
         _close(restarted)
 
