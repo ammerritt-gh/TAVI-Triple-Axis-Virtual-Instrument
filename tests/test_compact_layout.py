@@ -832,19 +832,22 @@ def test_saved_layout_wins_on_restart(window, layout_file):
         _close(restarted)
 
 
-def test_older_layout_is_set_aside(window, layout_file):
-    """Check 6: a version-2 file is renamed .v2.bak (over an older one), said so, and the preset applies."""
+@pytest.mark.parametrize("version", [2, 4])
+def test_other_version_layout_is_set_aside(window, layout_file, version):
+    """Check 6: an older or newer file is renamed .v<N>.bak (over an older one), said so, and the preset applies."""
     assert window.save_layout_to_file()
     layout = json.loads(layout_file.read_text(encoding="utf-8"))
-    layout["layout_version"] = 2
+    layout["layout_version"] = version
     layout_file.write_text(json.dumps(layout), encoding="utf-8")
-    backup = layout_file.with_name("view_layout.json.v2.bak")
+    backup = layout_file.with_name(f"view_layout.json.v{version}.bak")
     backup.write_text("an older set-aside layout", encoding="utf-8")
     restarted = _restart()
     try:
         assert not layout_file.exists()
         assert json.loads(backup.read_text(encoding="utf-8")) == layout
-        assert "set aside" in _log(restarted) and str(backup) in _log(restarted)
+        log = _log(restarted)
+        assert "set aside" in log and str(backup) in log
+        assert f"another TAVI version (layout version {version};" in log and "older" not in log
         _assert_picked_preset(restarted)
     finally:
         _close(restarted)
