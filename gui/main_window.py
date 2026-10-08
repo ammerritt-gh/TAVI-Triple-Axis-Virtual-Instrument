@@ -931,26 +931,35 @@ class TAVIMainWindow(QMainWindow):
     def _rescue_lost_docks(self):
         """Bring back each floating dock, shown or hidden, that lies on no screen.
 
-        Qt 6.11's restoreState already moves a floating dock it restores onto
-        a screen; this is the net under it. A dock with a place in the current
-        preset (every dock but Misalignment, and UB Matrix outside 3 columns)
-        is docked again by re-applying that preset; the others move to the
-        centre of the main window's screen.
+        Qt usually puts such a window back on a screen itself; this is the
+        net under it. Only the lost docks move: one with a place in the
+        current preset (every dock but Misalignment, and UB Matrix outside
+        3 columns) docks again where it last was, or at the edge of the dock
+        area when Qt kept no place; the others move to the centre of the
+        main window's screen.
         """
-        screens = [screen.availableGeometry() for screen in QGuiApplication.screens()]
-        lost = [dock for dock in self._all_docks if dock.isFloating()
-                and not any(room.intersects(dock.frameGeometry()) for room in screens)]
+        lost = [dock for dock in self._all_docks if self._off_every_screen(dock)]
         if not lost:
             return
         homeless = [self.misalignment_dock] + ([] if self._columns == 3 else [self.ub_matrix_dock])
         for dock in lost:
             if dock in homeless:
                 self._centre_on_screen(dock)
-        if any(dock not in homeless for dock in lost):
-            self._setup_dock_layout(self._columns)
+                continue
+            dock.setFloating(False)  # back where it was docked, if Qt kept the place
+            if dock.isFloating():  # no place kept: Qt refuses to redock it
+                self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+                dock.setFloating(False)
         names = ", ".join(dock.windowTitle() for dock in lost)
         self._layout_note(f"Window layout: {names} had been saved off every screen; "
                           f"brought back.")
+
+    @staticmethod
+    def _off_every_screen(dock):
+        """A floating dock that no screen shows any part of."""
+        return dock.isFloating() and not any(
+            screen.availableGeometry().intersects(dock.frameGeometry())
+            for screen in QGuiApplication.screens())
 
     def _show_reciprocal_window(self):
         """Show the reciprocal-space canvas as a usable floating workspace."""
