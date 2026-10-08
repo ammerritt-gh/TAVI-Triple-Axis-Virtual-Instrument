@@ -966,6 +966,77 @@ def test_lost_docks_are_rescued(window):
             _resize(window, MONITOR, NARROW, columns=4)
 
 
+def _unclamped_restore(monkeypatch, *names):
+    """Restore as a window system that leaves floating docks where they were saved would.
+
+    Qt 6.11's restoreState puts a floating dock back on a screen by itself;
+    this moves the named docks, when floating, back off every screen after it.
+    """
+    restore = cm.TAVIMainWindow.restoreState
+
+    def unclamped(self, state):
+        restored = restore(self, state)
+        for name in names:
+            if getattr(self, name).isFloating():
+                getattr(self, name).move(FAR)
+        return restored
+
+    monkeypatch.setattr(cm.TAVIMainWindow, "restoreState", unclamped)
+
+
+def test_rescue_moves_only_the_lost_dock(window, layout_file, monkeypatch):
+    """A lost Display goes back to its place; a deliberately floated and a hidden dock stay as saved."""
+    fitting, log, display = window.fitting_dock, window.output_dock, window.display_dock
+    try:
+        _resize(window, MONITOR, NARROW, columns=4)
+        fitting.setFloating(True)  # the user's own floating panel, on screen
+        fitting.move(240, 180)
+        log.hide()  # closed by the user
+        display.setFloating(True)  # lost below
+        QApplication.processEvents()
+        assert window.save_layout_to_file()
+    finally:
+        _resize(window, MONITOR, NARROW, columns=4)
+    baseline = _restart()  # the saved layout as Qt restores it, nothing lost
+    try:
+        assert baseline.fitting_dock.isFloating()
+        kept = baseline.fitting_dock.geometry()
+    finally:
+        _close(baseline)
+    _unclamped_restore(monkeypatch, "display_dock")
+    restarted = _restart()
+    try:
+        assert restarted._layout_restored and "brought back" in _log(restarted)
+        display = restarted.display_dock
+        assert not display.isFloating() and not display.visibleRegion().isEmpty()
+        assert restarted.output_dock.isHidden()
+        assert restarted.fitting_dock.isFloating() and restarted.fitting_dock.geometry() == kept
+        lefts = [getattr(restarted, name).x()
+                 for name in ("instrument_dock", "sample_dock", "scattering_dock")]
+        assert lefts == sorted(lefts) and len(set(lefts)) == 3, lefts
+        assert restarted.simulation_dock.x() == restarted.scattering_dock.x()
+    finally:
+        _close(restarted)
+
+
+def test_lost_dock_without_a_place_still_docks(window):
+    """A lost dock Qt kept no place for (UB Matrix in 3 columns, floated out of the layout) docks at the edge."""
+    ub = window.ub_matrix_dock
+    _resize(window, MONITOR, NARROW, columns=3)
+    try:
+        window.removeDockWidget(ub)  # no place kept for it
+        ub.setFloating(True)
+        ub.show()
+        ub.move(FAR)
+        QApplication.processEvents()
+        assert ub.isFloating() and not _on_screen(ub)
+        window._rescue_lost_docks()
+        QApplication.processEvents()
+        assert not ub.isFloating() and ub.isVisible() and not ub.visibleRegion().isEmpty()
+    finally:
+        _resize(window, MONITOR, NARROW, columns=3)
+
+
 def test_reset_picks_for_the_screen_and_refolds(window):
     """Reset to Default Layout: the screen's pick and width, the window fitted, the blocks folded."""
     from gui.main_window import initial_layout_for_width
