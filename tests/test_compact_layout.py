@@ -189,10 +189,10 @@ def test_initial_layout_for_size():
     tall, wide = metrics.LAYOUT_THREE_COLUMNS_MIN_HEIGHT, metrics.LAYOUT_WIDE_FROM
     assert pick(1108, 851) == (2, NARROW)
     assert pick(1536, 826) == (2, NARROW)  # 1920x1080 at 125 %
-    assert pick(1920, 1040) == (2, NARROW)  # 1920x1080 at 100 %: shorter than the threshold
+    assert pick(1920, 1040) == (3, NARROW)  # 1920x1080 at 100 %
     assert pick(1920, 1160) == (3, NARROW)  # 1920x1200
     assert pick(2560, 1392) == (3, WIDE)  # ruling M
-    assert pick(2560, 1040) == (2, WIDE)  # a short wide screen
+    assert pick(2048, 824) == (2, WIDE)  # a short wide screen: 2560x1080 at 125 %
     assert pick(metrics.LAYOUT_TWO_COLUMNS_BELOW - 1, 2000) == (2, NARROW)
     assert pick(metrics.LAYOUT_TWO_COLUMNS_BELOW, tall) == (3, NARROW)
     assert pick(metrics.LAYOUT_TWO_COLUMNS_BELOW, tall - 1) == (2, NARROW)
@@ -214,7 +214,9 @@ def test_three_columns_at_the_smallest_pick_show_the_first_use_path(window):
     """3 columns at the smallest screen picking them: the first-use path is in view, nothing scrolled.
 
     Instrument's Angles and Energies, Scattering's H, K, L and dE, and
-    Simulation's Run, Stop, progress and both scan commands.
+    Simulation's Run, Stop and progress. The scan commands may need a scroll
+    here: the threshold is set by what Instrument needs, so that 1920x1080
+    at 100 % gets 3 columns.
     """
     _resize(window, (metrics.LAYOUT_TWO_COLUMNS_BELOW,
                      metrics.LAYOUT_THREE_COLUMNS_MIN_HEIGHT - TITLE_BAR), NARROW, columns=3)
@@ -225,8 +227,7 @@ def test_three_columns_at_the_smallest_pick_show_the_first_use_path(window):
     hidden = [_title(block) for block in (angles, energies) if not _in_view(instrument, block)]
     hidden += [name for dock, names in (
         (scattering, ["H_edit", "K_edit", "L_edit", "deltaE_edit"]),
-        (simulation, ["run_button", "stop_button", "progress_bar", "scan_command_1_edit",
-                      "scan_command_2_edit"]))
+        (simulation, ["run_button", "stop_button", "progress_bar"]))
         for name in names if not _in_view(dock, getattr(dock, name))]
     assert not hidden, hidden
 
