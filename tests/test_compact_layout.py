@@ -1020,6 +1020,76 @@ def test_docks_saved_off_screen_come_back(window, layout_file, monkeypatch):
         _close(restarted)
 
 
+def _open_from_sample_dock(win, button):
+    """Click the Sample dock's open button, as the user does, and return the dock geometries."""
+    before = {name: getattr(win, name).geometry() for name in PLACED}
+    getattr(win.sample_dock, button).click()
+    QApplication.processEvents()
+    return before
+
+
+@pytest.mark.parametrize("columns", [2, 3, 4])
+def test_hidden_ub_matrix_opens_in_its_preset_place_after_restart(window, layout_file, columns):
+    """Check 6: UB Matrix saved hidden opens from the Sample dock where its preset puts it.
+
+    The session starts in 3 columns, as on a large screen, and switches.
+    With 2 or 4 columns UB Matrix opens floating and on screen, the docks
+    where they were: Qt 6.11 restores the dock the preset took out and
+    floated as docked, so unless the restore floats it again it opens as a
+    full-width row. With 3 it opens docked under Sample.
+    """
+    ub = window.ub_matrix_dock
+    try:
+        _resize(window, MONITOR, NARROW, columns=3)
+        _resize(window, MONITOR, NARROW, columns=columns)
+        ub.hide()  # closed, in 3 columns; already hidden in 2 or 4
+        assert ub.isFloating() == (columns != 3)
+        assert window.save_layout_to_file()
+    finally:
+        _resize(window, MONITOR, NARROW, columns=columns)
+    restarted = _restart()
+    try:
+        ub, sample = restarted.ub_matrix_dock, restarted.sample_dock
+        assert ub.isHidden()
+        before = _open_from_sample_dock(restarted, "open_ub_matrix_button")
+        assert ub.isVisible()
+        if columns == 3:
+            assert not ub.isFloating() and ub.x() == sample.x() and ub.y() > sample.y()
+        else:
+            assert ub.isFloating() and _on_screen(ub)
+            moved = [name for name, rect in before.items()
+                     if getattr(restarted, name).geometry() != rect]
+            assert not moved, moved
+    finally:
+        _close(restarted)
+
+
+def test_hidden_misalignment_opens_floating_after_restart(window, layout_file):
+    """Check 6: Misalignment docked by the user, floated by a preset and closed opens floating after a restart."""
+    misalignment = window.misalignment_dock
+    try:
+        _resize(window, MONITOR, NARROW, columns=4)
+        window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
+        misalignment.setFloating(False)  # docked by the user
+        _resize(window, MONITOR, NARROW, columns=4)  # the preset floats it again
+        misalignment.hide()
+        assert misalignment.isFloating()
+        assert window.save_layout_to_file()
+    finally:
+        misalignment.hide()
+    restarted = _restart()
+    try:
+        misalignment = restarted.misalignment_dock
+        assert misalignment.isHidden()
+        before = _open_from_sample_dock(restarted, "open_misalignment_button")
+        assert misalignment.isVisible() and misalignment.isFloating() and _on_screen(misalignment)
+        moved = [name for name, rect in before.items()
+                 if getattr(restarted, name).geometry() != rect]
+        assert not moved, moved
+    finally:
+        _close(restarted)
+
+
 def test_lost_docks_are_rescued(window):
     """The rescue itself: a homeless dock is centred on the screen, a placed one docked again."""
     misalignment, display = window.misalignment_dock, window.display_dock
