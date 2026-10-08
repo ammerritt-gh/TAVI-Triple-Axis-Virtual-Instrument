@@ -1037,6 +1037,42 @@ def test_lost_dock_without_a_place_still_docks(window):
         _resize(window, MONITOR, NARROW, columns=3)
 
 
+@pytest.mark.parametrize("visibility", [["MisalignmentDock"], {"MisalignmentDock": "yes"}],
+                         ids=["list", "not-bool"])
+def test_fallback_still_rescues_lost_docks(window, layout_file, monkeypatch, visibility):
+    """A v3 file failing after restoreState falls back to the preset and still brings Misalignment back.
+
+    On screen before the window is shown (TAVI's own rescue; the platform
+    may also clamp a window it creates) and once opened.
+    """
+    misalignment = window.misalignment_dock
+    try:
+        # Docked once by the user and floated again: now part of the saved state.
+        window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
+        misalignment.setFloating(True)
+        misalignment.show()
+        misalignment.move(FAR)
+        QApplication.processEvents()
+        assert window.save_layout_to_file()
+    finally:
+        window.removeDockWidget(misalignment)
+        misalignment.setFloating(True)
+        misalignment.hide()
+    layout = json.loads(layout_file.read_text(encoding="utf-8"))
+    layout["dock_visibility"] = visibility
+    layout_file.write_text(json.dumps(layout), encoding="utf-8")
+    _unclamped_restore(monkeypatch, "misalignment_dock")
+    restarted = _restart(show=False)
+    try:
+        assert _on_screen(restarted.misalignment_dock)
+        restarted.show()
+        restarted._on_open_misalignment_dock()
+        QApplication.processEvents()
+        assert _on_screen(restarted.misalignment_dock)
+    finally:
+        _close(restarted)
+
+
 def test_reset_picks_for_the_screen_and_refolds(window):
     """Reset to Default Layout: the screen's pick and width, the window fitted, the blocks folded."""
     from gui.main_window import initial_layout_for_width

@@ -918,11 +918,12 @@ class TAVIMainWindow(QMainWindow):
                     collapsed = True
                 group.set_collapsed(collapsed)
         except Exception as e:
-            if touched:  # Qt may have moved docks before refusing
-                self._setup_dock_layout(self._columns)
             self._layout_note(
                 f"Window layout: could not restore {config_path} ({e!r}). Using the "
                 f"{self._columns}-column layout picked for this screen.")
+            if touched:  # Qt may have moved docks, onto no screen too, before it failed
+                self._setup_dock_layout(self._columns)
+                self._rescue_lost_docks()  # the preset leaves Misalignment where it is
             return False
         self._rescue_lost_docks()
         self._tidy_tab_bars()  # the bars of the preset the state replaced
