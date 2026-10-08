@@ -853,6 +853,40 @@ def test_other_version_layout_is_set_aside(window, layout_file, version):
         _close(restarted)
 
 
+@pytest.mark.parametrize("copy_fails", [False, True], ids=["copied", "neither"])
+def test_set_aside_that_cannot_rename_says_so(window, layout_file, monkeypatch, copy_fails):
+    """A locked file that cannot be renamed is copied aside instead, or the log says it will be overwritten."""
+    import gui.main_window as main_window
+
+    assert window.save_layout_to_file()
+    layout = json.loads(layout_file.read_text(encoding="utf-8"))
+    layout["layout_version"] = 2
+    layout_file.write_text(json.dumps(layout), encoding="utf-8")
+    backup = layout_file.with_name("view_layout.json.v2.bak")
+
+    def locked(*_args):
+        raise PermissionError(13, "The process cannot access the file", str(layout_file))
+
+    monkeypatch.setattr(main_window.os, "replace", locked)
+    if copy_fails:
+        monkeypatch.setattr(main_window.shutil, "copyfile", locked)
+    restarted = _restart()
+    try:
+        log = _log(restarted)
+        assert str(layout_file) in log and "The process cannot access the file" in log
+        assert "could not be moved" in log and "overwritten when TAVI closes" in log
+        assert "could not restore" not in log
+        assert layout_file.exists()  # the rename did not happen
+        if copy_fails:
+            assert not backup.exists() and "copying failed too" in log
+        else:
+            assert json.loads(backup.read_text(encoding="utf-8")) == layout
+            assert f"copied to {backup}" in log
+        _assert_picked_preset(restarted)
+    finally:
+        _close(restarted)
+
+
 @pytest.mark.parametrize("damage", ["window_state", "json"])
 def test_unreadable_layout_falls_back(window, layout_file, damage):
     """Check 6: a state Qt refuses, or broken JSON, gives the preset and a log line; nothing raises."""
