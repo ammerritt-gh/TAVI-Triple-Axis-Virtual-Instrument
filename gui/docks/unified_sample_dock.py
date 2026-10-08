@@ -4,7 +4,7 @@ Combines sample parameters and lattice configuration into a single dockable pane
 """
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QGroupBox, QPushButton,
-                                QGridLayout, QComboBox, QFrame,
+                                QGridLayout, QComboBox, QWidget,
                                 QCompleter, QDialog, QTextEdit, QDialogButtonBox,
                                 QCheckBox)
 from PySide6.QtCore import Qt, Signal
@@ -80,7 +80,7 @@ class UnifiedSampleDock(BaseDockWidget):
     reflection_source_changed = Signal(bool)
     
     def __init__(self, parent=None, descriptor=None):
-        super().__init__("Sample", parent, use_scroll_area=True, form_width=True)
+        super().__init__("Sample", parent, use_scroll_area=True, blocks=True)
         self.setObjectName("SampleDock")
         if descriptor is None:
             raise ValueError("UnifiedSampleDock requires the active InstrumentDescriptor")
@@ -89,8 +89,6 @@ class UnifiedSampleDock(BaseDockWidget):
         # Track lock state (always start locked)
         self._lattice_locked = True
         self._saved_lattice_values = {}  # Store values when unlocking        
-        # Get the content layout from base class
-        main_layout = self.content_layout
         
         # ===== Sample Selection Section =====
         sample_select_group = QGroupBox("Sample Selection")
@@ -119,7 +117,7 @@ class UnifiedSampleDock(BaseDockWidget):
         self.config_sample_button = QPushButton("Sample Configuration")
         sample_select_layout.addWidget(self.config_sample_button)
         
-        main_layout.addWidget(sample_select_group)
+        self.add_block(sample_select_group)
 
         # ===== Mounting Plane Section (optional) =====
         # How the crystal is mounted: (h k l) along the mount x axis and a
@@ -128,29 +126,35 @@ class UnifiedSampleDock(BaseDockWidget):
         mount_layout = QGridLayout()
         mount_layout.setSpacing(5)
         mount_group.setLayout(mount_layout)
-        mount_layout.addWidget(QLabel("Mounted with"), 0, 0)
+        # One block wide: (h k l) along x, then (h k l) in plane, then the
+        # buttons, then the status line.
+        mount_layout.addWidget(QLabel("Along x:"), 0, 0)
         self.mount_u_edit = QLineEdit()
         self.mount_u_edit.setPlaceholderText("h k l")
         self.mount_u_edit.setToolTip("Reflection along the mount x axis, e.g. 1 0 0")
         mount_layout.addWidget(self.mount_u_edit, 0, 1)
-        mount_layout.addWidget(QLabel("along x and"), 0, 2)
+        mount_layout.addWidget(QLabel("In plane:"), 1, 0)
         self.mount_v_edit = QLineEdit()
         self.mount_v_edit.setPlaceholderText("h k l")
         self.mount_v_edit.setToolTip("A second reflection in the horizontal plane, e.g. 0 0 1")
-        mount_layout.addWidget(self.mount_v_edit, 0, 3)
-        mount_layout.addWidget(QLabel("in plane"), 0, 4)
+        mount_layout.addWidget(self.mount_v_edit, 1, 1)
+        mount_buttons = QWidget()
+        mount_buttons_layout = QHBoxLayout(mount_buttons)
+        mount_buttons_layout.setContentsMargins(0, 0, 0, 0)
         self.mount_apply_button = QPushButton("Apply")
         self.mount_apply_button.setToolTip(
             "Remount the sample with this plane horizontal; the UB starts at the new mount")
-        mount_layout.addWidget(self.mount_apply_button, 1, 3)
+        mount_buttons_layout.addWidget(self.mount_apply_button)
         self.mount_clear_button = QPushButton("Clear")
         self.mount_clear_button.setToolTip("Back to the standard setting")
-        mount_layout.addWidget(self.mount_clear_button, 1, 4)
+        mount_buttons_layout.addWidget(self.mount_clear_button)
+        mount_layout.addWidget(mount_buttons, 2, 1)
         self.mount_status_label = QLabel("Standard setting")
         self.mount_status_label.setStyleSheet("color: gray; font-size: 10px;")
-        mount_layout.addWidget(self.mount_status_label, 1, 0, 1, 3)
+        self.mount_status_label.setWordWrap(True)  # "Mounted: (...) along x, (...) in plane"
+        mount_layout.addWidget(self.mount_status_label, 3, 0, 1, 2)
         pack_grid(mount_layout)
-        main_layout.addWidget(mount_group)
+        self.add_block(mount_group)
 
         # ===== Space Group Section =====
         spacegroup_group = QGroupBox("Space Group")
@@ -201,10 +205,10 @@ class UnifiedSampleDock(BaseDockWidget):
         self.view_rules_button.setEnabled(True)
         spacegroup_layout.addWidget(self.view_rules_button)
         
-        main_layout.addWidget(spacegroup_group)
+        self.add_block(spacegroup_group)
         
         # ===== Lattice Parameters Section =====
-        self.lattice_group = QGroupBox("Lattice Parameters")
+        self.lattice_group = QGroupBox("Lattice Parameters (Å, °)")
         lattice_main_layout = QVBoxLayout()
         lattice_main_layout.setSpacing(5)
         self.lattice_group.setLayout(lattice_main_layout)
@@ -224,43 +228,22 @@ class UnifiedSampleDock(BaseDockWidget):
         lattice_layout = QGridLayout()
         lattice_layout.setSpacing(5)
         
-        # Row 0: a, b, c with individual Å symbols
-        lattice_layout.addWidget(QLabel("a:"), 0, 0)
+        # a, b, c over alpha, beta, gamma; the units are in the group title
         self.lattice_a_edit = QLineEdit()
-        self.lattice_a_edit.setMaximumWidth(60)
-        lattice_layout.addWidget(self.lattice_a_edit, 0, 1)
-        lattice_layout.addWidget(QLabel("Å"), 0, 2)
-        
-        lattice_layout.addWidget(QLabel("b:"), 0, 3)
         self.lattice_b_edit = QLineEdit()
-        self.lattice_b_edit.setMaximumWidth(60)
-        lattice_layout.addWidget(self.lattice_b_edit, 0, 4)
-        lattice_layout.addWidget(QLabel("Å"), 0, 5)
-        
-        lattice_layout.addWidget(QLabel("c:"), 0, 6)
         self.lattice_c_edit = QLineEdit()
-        self.lattice_c_edit.setMaximumWidth(60)
-        lattice_layout.addWidget(self.lattice_c_edit, 0, 7)
-        lattice_layout.addWidget(QLabel("Å"), 0, 8)
-        
-        # Row 1: alpha, beta, gamma with individual ° symbols
-        lattice_layout.addWidget(QLabel("α:"), 1, 0)
         self.lattice_alpha_edit = QLineEdit()
-        self.lattice_alpha_edit.setMaximumWidth(60)
-        lattice_layout.addWidget(self.lattice_alpha_edit, 1, 1)
-        lattice_layout.addWidget(QLabel("°"), 1, 2)
-        
-        lattice_layout.addWidget(QLabel("β:"), 1, 3)
         self.lattice_beta_edit = QLineEdit()
-        self.lattice_beta_edit.setMaximumWidth(60)
-        lattice_layout.addWidget(self.lattice_beta_edit, 1, 4)
-        lattice_layout.addWidget(QLabel("°"), 1, 5)
-        
-        lattice_layout.addWidget(QLabel("γ:"), 1, 6)
         self.lattice_gamma_edit = QLineEdit()
-        self.lattice_gamma_edit.setMaximumWidth(60)
-        lattice_layout.addWidget(self.lattice_gamma_edit, 1, 7)
-        lattice_layout.addWidget(QLabel("°"), 1, 8)
+        for row, fields in enumerate((
+                (("a", self.lattice_a_edit), ("b", self.lattice_b_edit),
+                 ("c", self.lattice_c_edit)),
+                (("α", self.lattice_alpha_edit), ("β", self.lattice_beta_edit),
+                 ("γ", self.lattice_gamma_edit)))):
+            for column, (name, edit) in enumerate(fields):
+                edit.setMaximumWidth(60)
+                lattice_layout.addWidget(QLabel(f"{name}:"), row, 2 * column)
+                lattice_layout.addWidget(edit, row, 2 * column + 1)
         
         pack_grid(lattice_layout)
         lattice_main_layout.addLayout(lattice_layout)
@@ -283,7 +266,7 @@ class UnifiedSampleDock(BaseDockWidget):
         self.lattice_buttons_layout.addWidget(self.lattice_discard_button)
         lattice_main_layout.addLayout(self.lattice_buttons_layout)
         
-        main_layout.addWidget(self.lattice_group)
+        self.add_block(self.lattice_group)
         
         # ===== Sample Alignment Offsets Section =====
         orientation_group = QGroupBox("Sample Alignment Offsets")
@@ -312,7 +295,7 @@ class UnifiedSampleDock(BaseDockWidget):
         orientation_layout.addWidget(orientation_info, 1, 0, 1, 6)
         
         pack_grid(orientation_layout)
-        main_layout.addWidget(orientation_group)
+        self.add_block(orientation_group)
         
         # ===== UB Matrix Section =====
         ub_group = QGroupBox("UB Matrix")
@@ -331,14 +314,8 @@ class UnifiedSampleDock(BaseDockWidget):
         self.ub_indicator_label.setAlignment(Qt.AlignCenter)
         ub_layout.addWidget(self.ub_indicator_label)
         
-        main_layout.addWidget(ub_group)
-        
-        # ===== Separator =====
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        main_layout.addWidget(separator)
-        
+        self.add_block(ub_group)
+
         # ===== Misalignment Training Section =====
         misalignment_group = QGroupBox("Misalignment Training")
         misalignment_layout = QVBoxLayout()
@@ -356,10 +333,8 @@ class UnifiedSampleDock(BaseDockWidget):
         self.misalignment_indicator_label.setAlignment(Qt.AlignCenter)
         misalignment_layout.addWidget(self.misalignment_indicator_label)
         
-        main_layout.addWidget(misalignment_group)
+        self.add_block(misalignment_group)
         
-        # Add stretch at the end
-        main_layout.addStretch()
         
         # Connect internal signals
         self.open_misalignment_button.clicked.connect(self._on_open_misalignment_dock)

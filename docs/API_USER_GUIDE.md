@@ -614,7 +614,7 @@ Errors:
   `501 not_implemented`.
 - Any other HTTP method on this path → `405 method_not_allowed`.
 
-The GUI surface is a global checkbox beside the engine selector plus a
+The GUI surface is a global checkbox under the engine selector plus a
 **Background configuration…** button. Its modal dialog groups independent
 enable/scale controls under Environment, Instrument, and Sample. Aluminum's
 single control scales all six synthetic lines; cosmic scale changes incidence,

@@ -8,8 +8,16 @@ here yet (named debt). Retune on sight.
 # Horizontal gap between a form label and its field, in px.
 LABEL_FIELD_GAP = 8
 
-# Content width of the four form docks (Instrument, Sample, Scattering,
-# Simulation), in px. Below the minimum the dock scrolls instead of
-# compressing; above the cap the spare width shows to the right of the form.
-FORM_CONTENT_MIN_WIDTH = 300
-FORM_CONTENT_MAX_WIDTH = 520
+# The four form docks (Instrument, Sample, Scattering, Simulation) lay their
+# group boxes out as fixed-width blocks: one column in Narrow, two in Wide
+# where the dock is wide enough. Every block's content fits BLOCK_WIDTH, and
+# BLOCK_GAP separates blocks both ways. A one-column dock goes two-up only
+# past two blocks plus the hysteresis, so a splitter drag at the boundary
+# does not flicker. All in px.
+BLOCK_WIDTH = 300
+BLOCK_GAP = 8
+BLOCK_REFLOW_HYSTERESIS = 16
+
+# Choosing Wide sizes the form docks two blocks wide only when the window
+# still leaves the plot at least this wide; otherwise they stay one block.
+WIDE_PLOT_MIN_WIDTH = 400

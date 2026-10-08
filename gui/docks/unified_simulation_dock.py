@@ -84,11 +84,9 @@ class UnifiedSimulationDock(BaseDockWidget):
     STYLE_NORMAL = ""
     
     def __init__(self, parent=None):
-        super().__init__("Simulation", parent, use_scroll_area=True, form_width=True)
+        super().__init__("Simulation", parent, use_scroll_area=True, blocks=True)
         self.setObjectName("SimulationDock")
         
-        # Get the content layout from base class
-        main_layout = self.content_layout
         
         # ===== Run and Progress: the control block, first so it is in view =====
         control_group = QGroupBox("Run and Progress")
@@ -138,7 +136,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         counts_row.addStretch()
         control_layout.addLayout(counts_row)
 
-        main_layout.addWidget(control_group)
+        self.add_block(control_group)
 
         # ===== Scan Commands Section =====
         scan_group = QGroupBox("Scan Commands")
@@ -254,11 +252,13 @@ class UnifiedSimulationDock(BaseDockWidget):
         # Point count breakdown label (shows "N × M = Z (valid/invalid)")
         self.point_count_label = QLabel("1 point")
         self.point_count_label.setStyleSheet("font-weight: bold;")
+        self.point_count_label.setWordWrap(True)  # a 2D breakdown can pass a block's width
         scan_layout.addWidget(self.point_count_label)
-        
+
         # Total time estimate label
         self.total_time_estimate_label = QLabel("")
         self.total_time_estimate_label.setStyleSheet("color: #666666; font-size: 10px;")
+        self.total_time_estimate_label.setWordWrap(True)
         scan_layout.addWidget(self.total_time_estimate_label)
 
         # Execution engine selector (docs/CONTROL_FEATURES_DESIGN.md §6.4).
@@ -277,28 +277,31 @@ class UnifiedSimulationDock(BaseDockWidget):
             "Poisson counts (validator; see the API guide)."
         )
         engine_row.addWidget(self.engine_combo)
-        engine_row.addSpacing(12)
+        engine_row.addStretch()
+        scan_layout.addLayout(engine_row)
 
-        # Background is configured globally beside the engine selector.  The
-        # checkbox is the immediate master gate; individual source switches and
-        # scales live in a staged modal dialog opened by the button.
-        engine_row.addWidget(QLabel("Background:"))
+        # Background is configured globally, on the row under the engine
+        # selector (one row would not fit a block).  The checkbox is the
+        # immediate master gate; individual source switches and scales live
+        # in a staged modal dialog opened by the button.
+        background_row = QHBoxLayout()
+        background_row.addWidget(QLabel("Background:"))
         self.background_enable_check = QCheckBox()
         self.background_enable_check.setToolTip(
             "Plant the configured background sources into generated scans.\n"
             "Off: scans contain signal only (identical counts to a "
             "background-free engine)."
         )
-        engine_row.addWidget(self.background_enable_check)
+        background_row.addWidget(self.background_enable_check)
         self.background_config_button = QPushButton("Background configuration…")
         self.background_config_button.setToolTip(
             "Choose and scale the available background sources."
         )
-        engine_row.addWidget(self.background_config_button)
-        engine_row.addStretch()
-        scan_layout.addLayout(engine_row)
+        background_row.addWidget(self.background_config_button)
+        background_row.addStretch()
+        scan_layout.addLayout(background_row)
 
-        main_layout.addWidget(scan_group)
+        self.add_block(scan_group)
         
         # ===== Diagnostic Mode Section: one row =====
         mode_group = QGroupBox("Diagnostic Mode")
@@ -312,10 +315,8 @@ class UnifiedSimulationDock(BaseDockWidget):
         mode_layout.addWidget(self.config_diagnostics_button)
         mode_layout.addStretch()
 
-        main_layout.addWidget(mode_group)
+        self.add_block(mode_group)
         
-        # Add stretch at the end to push everything up
-        main_layout.addStretch()
     
     def set_scan_command_warning(self, command_num: int, message: str):
         """Set or clear a warning for a scan command.

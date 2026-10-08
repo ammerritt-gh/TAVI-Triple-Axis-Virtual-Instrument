@@ -28,14 +28,12 @@ class InstrumentDock(BaseDockWidget):
 
     def __init__(self, parent=None, descriptor=None):
         super().__init__("Instrument Configuration", parent, use_scroll_area=True,
-                         form_width=True)
+                         blocks=True)
         self.setObjectName("InstrumentDock")
         if descriptor is None:
             raise ValueError("InstrumentDock requires the active InstrumentDescriptor")
         self.descriptor = descriptor
 
-        # Get the content layout from base class
-        main_layout = self.content_layout
 
         # Source Control section (types + extra-param rows from descriptor)
         source_group = QGroupBox("Source Control")
@@ -60,7 +58,7 @@ class InstrumentDock(BaseDockWidget):
         self._update_source_extra_visibility()
         self.source_type_combo.currentTextChanged.connect(self._on_source_type_changed)
 
-        main_layout.addWidget(source_group)
+        self.add_block(source_group)
 
         # Angles section
         angles_group = QGroupBox("Instrument Angles")
@@ -132,7 +130,7 @@ class InstrumentDock(BaseDockWidget):
         angles_layout.addWidget(self.angles_stale_label, 3, 0, 1, 4)
 
         pack_grid(angles_layout)
-        main_layout.addWidget(angles_group)
+        self.add_block(angles_group)
 
         # Energies section
         energies_group = QGroupBox("Energies and Wave Vectors")
@@ -161,7 +159,7 @@ class InstrumentDock(BaseDockWidget):
         energies_layout.addWidget(self.Ef_edit, 1, 3)
 
         pack_grid(energies_layout)
-        main_layout.addWidget(energies_group)
+        self.add_block(energies_group)
 
         # Crystals section (items from descriptor; ids stored as item data)
         crystals_group = QGroupBox("Monochromator and Analyzer Crystals")
@@ -180,7 +178,7 @@ class InstrumentDock(BaseDockWidget):
             self.anacris_combo.addItem(crystal.display_name, crystal.id)
         crystals_layout.addRow("Analyzer crystal:", self.anacris_combo)
 
-        main_layout.addWidget(crystals_group)
+        self.add_block(crystals_group)
 
         # Optional modules section (generated from descriptor.modules)
         self.module_widgets = {}
@@ -204,7 +202,7 @@ class InstrumentDock(BaseDockWidget):
                     optics_layout.addRow(check)
                     self.module_widgets[module.id] = check
 
-            main_layout.addWidget(optics_group)
+            self.add_block(optics_group)
 
         # Legacy attribute aliases for controller signal wiring (PUMA-specific
         # couplings guard with getattr, so absence is fine on other instruments).
@@ -227,44 +225,46 @@ class InstrumentDock(BaseDockWidget):
         self.rhm_ideal_button.setToolTip("Set rhm to the calculated ideal value")
         focusing_layout.addWidget(self.rhm_ideal_button, 0, 2)
 
-        focusing_layout.addWidget(QLabel("rvm:"), 0, 3)
+        # One radius per row, its Ideal readout beside it, so the group fits
+        # one block: the monochromator's pair, then the analyser's.
+        focusing_layout.addWidget(QLabel("rvm:"), 1, 0)
         self.rvm_edit = QLineEdit()
         self.rvm_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rvm_edit, 0, 4)
+        focusing_layout.addWidget(self.rvm_edit, 1, 1)
         self.rvm_ideal_button = QPushButton("Ideal: --")
         self.rvm_ideal_button.setCheckable(True)
         self.rvm_ideal_button.setMaximumWidth(140)
         self.rvm_ideal_button.setToolTip("Set rvm to the calculated ideal value")
-        focusing_layout.addWidget(self.rvm_ideal_button, 0, 5)
+        focusing_layout.addWidget(self.rvm_ideal_button, 1, 2)
 
-        focusing_layout.addWidget(QLabel("rha:"), 1, 0)
+        focusing_layout.addWidget(QLabel("rha:"), 2, 0)
         self.rha_edit = QLineEdit()
         self.rha_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rha_edit, 1, 1)
+        focusing_layout.addWidget(self.rha_edit, 2, 1)
         self.rha_ideal_button = QPushButton("Ideal: --")
         self.rha_ideal_button.setCheckable(True)
         self.rha_ideal_button.setMaximumWidth(140)
         self.rha_ideal_button.setToolTip("Set rha to the calculated ideal value")
-        focusing_layout.addWidget(self.rha_ideal_button, 1, 2)
+        focusing_layout.addWidget(self.rha_ideal_button, 2, 2)
 
-        # Beside rha, so the analyser's two axes read as a pair the way the
+        # Under rha, so the analyser's two axes read as a pair the way the
         # monochromator's rhm/rvm do. Enable state (editable/disabled) and
         # whether the Ideal button is offered at all are set per selected
         # analyser by the controller -- rva is the one axis whose declared
         # policy (fixed / no established focusing model / ordinary) actually
         # differs between crystals.
-        focusing_layout.addWidget(QLabel("rva:"), 1, 3)
+        focusing_layout.addWidget(QLabel("rva:"), 3, 0)
         self.rva_edit = QLineEdit()
         self.rva_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rva_edit, 1, 4)
+        focusing_layout.addWidget(self.rva_edit, 3, 1)
         self.rva_ideal_button = QPushButton("Ideal: --")
         self.rva_ideal_button.setCheckable(True)
         self.rva_ideal_button.setMaximumWidth(140)
         self.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
-        focusing_layout.addWidget(self.rva_ideal_button, 1, 5)
+        focusing_layout.addWidget(self.rva_ideal_button, 3, 2)
 
         pack_grid(focusing_layout)
-        main_layout.addWidget(focusing_group)
+        self.add_block(focusing_group)
 
         # Collimations section (rows generated from descriptor.collimation)
         self.collimation_widgets = {}
@@ -316,7 +316,7 @@ class InstrumentDock(BaseDockWidget):
                     self.collimation_widgets[slot.id] = combo
 
             pack_grid(collimations_layout)
-            main_layout.addWidget(collimations_group)
+            self.add_block(collimations_group)
 
         # Slit Apertures section (rows generated from descriptor.slits)
         self.slit_widgets = {}
@@ -357,10 +357,8 @@ class InstrumentDock(BaseDockWidget):
                 self.slit_widgets[slit.id] = widgets
 
             pack_grid(slits_layout)
-            main_layout.addWidget(slits_group)
+            self.add_block(slits_group)
 
-        # Add stretch at the end to push everything up
-        main_layout.addStretch()
 
     # ------------------------------------------------------------- accessors
 

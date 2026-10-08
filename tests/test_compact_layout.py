@@ -2,8 +2,12 @@
 
 Numbered as in the compact-window plan: 4, labels sit beside their fields;
 5, nothing in the four form docks is clipped; 8, the menu routes that
-replaced the Simulation dock's buttons are wired.
+replaced the Simulation dock's buttons are wired. Checks 4 and 5 run in both
+View > Column Width settings, beside the block checks: each form group is
+one block wide, Wide lays a wide dock out two-up in usage order, and the
+setting is saved with the layout.
 """
+import json
 import os
 import sys
 
@@ -14,18 +18,21 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import SIGNAL, QPoint  # noqa: E402
+from PySide6.QtCore import SIGNAL, QPoint, Qt  # noqa: E402
 from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QCheckBox, QGridLayout, QLabel,  # noqa: E402
-                               QMessageBox, QPushButton, QToolButton)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QGridLayout, QGroupBox,  # noqa: E402
+                               QLabel, QMessageBox, QPushButton, QToolButton)
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from gui import metrics  # noqa: E402
+from gui.docks.base_dock import NARROW, WIDE  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 
 FORM_DOCKS = ("instrument_dock", "sample_dock", "scattering_dock", "simulation_dock")
 LAPTOP, MONITOR = (1108, 851), (2560, 1392)
+SIZES = pytest.mark.parametrize("size", [LAPTOP, MONITOR], ids=["1108x851", "2560x1392"])
+MODES = pytest.mark.parametrize("mode", [NARROW, WIDE])
 GAP_TOLERANCE = 2  # px
 
 
@@ -70,10 +77,23 @@ def _use_windows_ui_font(app):
         app.setFont(QFont("Segoe UI", 9))
 
 
-def _resize(win, size):
+def _resize(win, size, mode=None):
     win.resize(*size)
     QApplication.processEvents()
     assert (win.width(), win.height()) == size
+    if mode is not None:
+        win.column_width_actions[mode].trigger()  # as the View menu does
+        for _ in range(3):  # the dock resize, then each panel's reflow
+            QApplication.processEvents()
+
+
+def _blocks(dock):
+    """The dock's group boxes in usage order (the order the dock added them)."""
+    return [block for block in dock._content_widget._blocks if block.isVisible()]
+
+
+def _block_columns(dock):
+    return sorted({block.x() for block in _blocks(dock)})
 
 
 def _label_field_pairs(dock):
@@ -94,9 +114,10 @@ def _label_field_pairs(dock):
                 yield label, field
 
 
-def test_labels_sit_beside_their_fields(window):
+@MODES
+def test_labels_sit_beside_their_fields(window, mode):
     """Check 4: from a label's text to its field is the metrics gap, not the dock's spare width."""
-    _resize(window, MONITOR)
+    _resize(window, MONITOR, mode)
     seen, bad = 0, []
     for name in FORM_DOCKS:
         for label, field in _label_field_pairs(getattr(window, name)):
@@ -115,10 +136,11 @@ def test_labels_sit_beside_their_fields(window):
     assert not bad, f"{len(bad)} of {seen} pairs not beside their label:\n" + "\n".join(bad)
 
 
-@pytest.mark.parametrize("size", [LAPTOP, MONITOR], ids=["1108x851", "2560x1392"])
-def test_nothing_clipped(window, size):
+@SIZES
+@MODES
+def test_nothing_clipped(window, size, mode):
     """Check 5: every visible text control is at least its size hint wide, or elided with a tooltip."""
-    _resize(window, size)
+    _resize(window, size, mode)
     clipped = []
     for name in FORM_DOCKS:
         dock = getattr(window, name)
@@ -151,6 +173,101 @@ def test_menu_routes_are_wired(window, action):
     for removed in ("quit_button", "clear_runtimes_button", "save_button",
                     "load_button", "defaults_button"):
         assert not hasattr(dock, removed), removed
+
+
+@SIZES
+@MODES
+def test_blocks_fit_without_horizontal_scroll(window, size, mode):
+    """No form dock scrolls sideways or cuts a block off; no block is wider than one block."""
+    _resize(window, size, mode)
+    bad = []
+    for name in FORM_DOCKS:
+        dock = getattr(window, name)
+        scroll = dock._scroll_area
+        if scroll.horizontalScrollBar().isVisible():
+            bad.append(f"{name}: horizontal scrollbar")
+        viewport = scroll.viewport()
+        for block in _blocks(dock):
+            right = block.mapTo(viewport, QPoint(block.width(), 0)).x()
+            if block.width() > metrics.BLOCK_WIDTH or right > viewport.width():
+                bad.append(f"{name}: {block.title()!r} {block.width()} px wide, "
+                           f"right edge {right} of {viewport.width()}")
+    assert not bad, "\n".join(bad)
+
+
+def test_wide_lays_blocks_two_up_in_usage_order(window):
+    """Wide at 2560x1392: down the left column, then the right; Narrow: one column."""
+    dock = window.instrument_dock
+    _resize(window, MONITOR, WIDE)
+    columns = _block_columns(dock)
+    assert len(columns) == 2, columns
+    placed = sorted(_blocks(dock), key=lambda block: (block.x(), block.y()))
+    assert placed == _blocks(dock), [block.title() for block in placed]
+    _resize(window, MONITOR, NARROW)
+    assert len(_block_columns(dock)) == 1
+    assert dock.width() == dock.width_for_blocks(1)  # the plot got the rest
+
+
+def test_wide_falls_back_to_one_column_when_narrow(window):
+    """Wide, with the dock dragged narrower than two blocks, gives one column."""
+    dock = window.instrument_dock
+    _resize(window, MONITOR, WIDE)
+    assert len(_block_columns(dock)) == 2
+    narrower = dock.width_for_blocks(2) - 2 * metrics.BLOCK_REFLOW_HYSTERESIS
+    window.resizeDocks([dock, window.scattering_dock], [narrower, narrower], Qt.Horizontal)
+    QApplication.processEvents()
+    assert dock.width() < dock.width_for_blocks(2)
+    assert len(_block_columns(dock)) == 1
+
+
+def test_column_width_saved_with_the_layout(window, tmp_path, monkeypatch):
+    """Save then restore round-trips column_width; missing or unknown reads as Narrow."""
+    path = tmp_path / "view_layout.json"
+    monkeypatch.setattr(window, "_get_layout_config_path", lambda: str(path))
+    try:
+        window.set_column_width(WIDE, fit=False)
+        assert window.save_layout_to_file()
+        assert json.loads(path.read_text(encoding="utf-8"))["column_width"] == WIDE
+        window.set_column_width(NARROW, fit=False)
+        assert window._restore_layout_from_file()
+        assert window._column_width == WIDE
+        for stored in ({}, {"column_width": "huge"}):
+            path.write_text(json.dumps({"layout_version": 2, **stored}), encoding="utf-8")
+            assert window._restore_layout_from_file()
+            assert window._column_width == NARROW, stored
+    finally:
+        window.set_column_width(NARROW, fit=False)
+
+
+@pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12", "panda"])
+def test_every_group_fits_one_block(instrument_id):
+    """Each form-dock group box, as each instrument's descriptor builds it, fits one block."""
+    from gui.docks.instrument_dock import InstrumentDock
+    from gui.docks.unified_sample_dock import UnifiedSampleDock
+    from gui.docks.unified_scattering_dock import UnifiedScatteringDock
+    from gui.docks.unified_simulation_dock import UnifiedSimulationDock
+
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    font = app.font()
+    _use_windows_ui_font(app)
+    descriptor = get_instrument(instrument_id).descriptor()
+    docks = [InstrumentDock(descriptor=descriptor), UnifiedSampleDock(descriptor=descriptor),
+             UnifiedScatteringDock(), UnifiedSimulationDock()]
+    try:
+        wide = []
+        for dock in docks:
+            dock.show()  # sizes settle on a polished widget
+            app.processEvents()
+            for box in dock.findChildren(QGroupBox):
+                if box.isVisible() and box.sizeHint().width() > metrics.BLOCK_WIDTH:
+                    wide.append(f"{type(dock).__name__}: {box.title()!r} "
+                                f"{box.sizeHint().width()} px")
+        assert not wide, f"wider than {metrics.BLOCK_WIDTH} px:\n" + "\n".join(wide)
+    finally:
+        for dock in docks:
+            dock.deleteLater()
+        app.processEvents()
+        app.setFont(font)
 
 
 def test_clear_runtime_data_keeps_other_instruments(window, monkeypatch):
