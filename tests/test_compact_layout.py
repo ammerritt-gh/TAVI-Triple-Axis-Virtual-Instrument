@@ -566,6 +566,36 @@ def test_wide_lays_blocks_two_up_in_usage_order(window):
     assert dock.width() == dock.width_for_blocks(1)  # the plot got the rest
 
 
+SPLIT_TOLERANCE = 4  # px
+
+
+def test_column_width_change_resizes_the_vertical_splits(window):
+    """View > Column Width re-splits the columns, both ways (3 columns, 2560x1392).
+
+    Narrow to Wide: Scattering's blocks go two-up and its dock shrinks to
+    them; Simulation's two-up content needs less than it had too, so the
+    freed height goes to Instrument, the elastic dock. Wide to Narrow:
+    Scattering grows back, H, K, L and dE in view. Neither short dock keeps
+    empty space below its content.
+    """
+    _resize(window, MONITOR, NARROW, columns=3)
+    instrument, scattering, simulation = (window.instrument_dock, window.scattering_dock,
+                                          window.simulation_dock)
+    for mode in (WIDE, NARROW):
+        before = instrument.height()
+        _trigger(window.column_width_actions[mode])
+        content = window._content_height(scattering)
+        assert abs(scattering.height() - content) <= SPLIT_TOLERANCE, (mode, scattering.height(),
+                                                                       content)
+        content = window._content_height(simulation)
+        assert simulation.height() <= content + SPLIT_TOLERANCE, (mode, simulation.height(),
+                                                                  content)
+        assert (instrument.height() > before) == (mode == WIDE), (mode, before,
+                                                                  instrument.height())
+    assert all(_in_view(scattering, getattr(scattering, name))
+               for name in ("H_edit", "K_edit", "L_edit", "deltaE_edit"))
+
+
 def test_wide_falls_back_to_one_column_when_narrow(window):
     """Wide, with the dock dragged narrower than two blocks, gives one column."""
     dock = window.instrument_dock
