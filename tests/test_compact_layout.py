@@ -1,8 +1,9 @@
 """Compact-window checks on the real offscreen window and controller (PUMA).
 
 Numbered as in the compact-window plan: 4, labels sit beside their fields;
-5, nothing in the four form docks is clipped; 8, the menu routes that
-replaced the Simulation dock's buttons are wired. Checks 4 and 5 run in both
+5, nothing in the four form docks is clipped; 7, the Instrument blocks run in
+usage order and the folded ones summarise their fields; 8, the menu routes
+that replaced the Simulation dock's buttons are wired. Checks 4 and 5 run in both
 View > Column Width settings, beside the block checks: each form group is
 one block wide, Wide lays a wide dock out two-up in usage order, and the
 setting is saved with the layout.
@@ -20,8 +21,10 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import SIGNAL, QPoint, Qt  # noqa: E402
 from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QCheckBox, QGridLayout, QGroupBox,  # noqa: E402
-                               QLabel, QMessageBox, QPushButton, QTabBar, QToolButton)
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout,  # noqa: E402
+                               QGroupBox, QLabel, QMessageBox, QPushButton, QTabBar,
+                               QToolButton)
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -34,6 +37,13 @@ LAPTOP, MONITOR = (1108, 851), (2560, 1392)
 SIZES = pytest.mark.parametrize("size", [LAPTOP, MONITOR], ids=["1108x851", "2560x1392"])
 MODES = pytest.mark.parametrize("mode", [NARROW, WIDE])
 GAP_TOLERANCE = 2  # px
+INSTRUMENTS = ["puma", "in8", "in12", "panda"]
+# Plan check 7: the Instrument blocks in usage order. Collimations, Slits and
+# Modules appear only where the descriptor declares them.
+INSTRUMENT_ORDER = ["Instrument Angles", "Energies and Wave Vectors", "Collimations",
+                    "Slit Apertures (mm)", "Monochromator and Analyzer Crystals",
+                    "Crystal Focusing (Absolute Radii, m)", "Experimental Modules",
+                    "Source Control"]
 
 
 @pytest.fixture(scope="module")
@@ -90,6 +100,11 @@ def _resize(win, size, mode=None):
 def _blocks(dock):
     """The dock's group boxes in usage order (the order the dock added them)."""
     return [block for block in dock._content_widget._blocks if block.isVisible()]
+
+
+def _title(block):
+    """A block's title: the group box's own, or a folding block's header title."""
+    return block.title() or getattr(block, "title_text", "")
 
 
 def _block_columns(dock):
@@ -274,6 +289,8 @@ def test_every_group_fits_one_block(instrument_id):
     descriptor = get_instrument(instrument_id).descriptor()
     docks = [InstrumentDock(descriptor=descriptor), UnifiedSampleDock(descriptor=descriptor),
              UnifiedScatteringDock(), UnifiedSimulationDock()]
+    for group in docks[0].collapsible_groups.values():
+        group.set_collapsed(False)  # measure the folding blocks' fields too
     try:
         wide = []
         for dock in docks:
@@ -334,3 +351,144 @@ def test_clear_runtime_data_keeps_other_instruments(window, monkeypatch):
     assert ctrl.instrument.display_name in asked[0]
     assert tracker.get_record_count("puma") == 0
     assert tracker.get_record_count("in8") >= 1
+
+
+def _standalone_instrument_dock(instrument_id):
+    """The Instrument dock alone, shown, in the window's font; no controller."""
+    from gui.docks.instrument_dock import InstrumentDock
+
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    _use_windows_ui_font(app)
+    descriptor = get_instrument(instrument_id).descriptor()
+    dock = InstrumentDock(descriptor=descriptor)
+    dock.show()  # the summary elides to the laid-out block width
+    app.processEvents()
+    return dock, descriptor
+
+
+@pytest.mark.parametrize("instrument_id", INSTRUMENTS)
+def test_instrument_blocks_in_usage_order(instrument_id):
+    """Check 7: the Instrument blocks run in usage order, the optional ones exactly where declared."""
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    font = app.font()
+    dock, descriptor = _standalone_instrument_dock(instrument_id)
+    try:
+        declared = {"Collimations": descriptor.collimation,
+                    "Slit Apertures (mm)": descriptor.slits,
+                    "Experimental Modules": descriptor.modules}
+        expected = [title for title in INSTRUMENT_ORDER if declared.get(title, True)]
+        assert [_title(block) for block in dock._content_widget._blocks] == expected
+    finally:
+        dock.deleteLater()
+        app.processEvents()
+        app.setFont(font)
+
+
+@pytest.mark.parametrize("instrument_id", INSTRUMENTS)
+def test_folded_blocks_summarise_their_fields(instrument_id):
+    """Check 7: folded, a block's summary line follows each of its fields."""
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    font = app.font()
+    dock, descriptor = _standalone_instrument_dock(instrument_id)
+    groups = dock.collapsible_groups
+    try:
+        assert set(groups) == {"instrument.focusing", "instrument.source"} | (
+            {"instrument.modules"} if descriptor.modules else set())
+
+        def summary(key):
+            group = groups[key]
+            assert group.is_collapsed() and not group.body.isVisible()
+            assert group.summary_label.isVisible() and group.header.text() == group.title_text
+            shown, full = group.summary_label.text(), group.summary_label.toolTip()
+            assert shown == full or shown.endswith("…"), (shown, full)  # elided, never cut
+            return shown, full
+
+        changes = [
+            ("instrument.focusing", lambda: dock.rhm_edit.setText("3.25")),
+            ("instrument.focusing", lambda: dock.rva_ideal_button.setChecked(
+                not dock.rva_ideal_button.isChecked())),
+            ("instrument.source", lambda: dock.set_source_id("Mono")),
+            ("instrument.source", lambda: dock.source_dE_edit.setText("0.5")),
+        ]
+        for module in descriptor.modules:
+            widget = dock.module_widgets[module.id]
+            if isinstance(widget, QComboBox):
+                changes.append(("instrument.modules",
+                                lambda w=widget: w.setCurrentIndex(w.count() - 1)))
+            else:
+                changes.append(("instrument.modules",
+                                lambda w=widget: w.setChecked(not w.isChecked())))
+        for key, change in changes:
+            before = summary(key)
+            change()
+            app.processEvents()
+            assert summary(key) != before, (key, before)
+    finally:
+        dock.deleteLater()
+        app.processEvents()
+        app.setFont(font)
+
+
+def test_header_toggles_from_the_keyboard_without_reflow(window):
+    """Space and Enter fold and unfold a block; the blocks keep their columns."""
+    _resize(window, MONITOR, WIDE)
+    dock = window.instrument_dock
+    group = dock.collapsible_groups["instrument.focusing"]
+    columns = {_title(block): block.x() for block in _blocks(dock)}
+    assert len(set(columns.values())) == 2, columns
+    try:
+        assert group.is_collapsed()
+        assert group.header.accessibleName() == group.title_text
+        assert group.header.focusPolicy() & Qt.TabFocus
+        QTest.keyClick(group.header, Qt.Key_Space)
+        QApplication.processEvents()
+        assert not group.is_collapsed() and group.body.isVisible()
+        assert not group.summary_label.isVisible()
+        assert {_title(block): block.x() for block in _blocks(dock)} == columns
+        QTest.keyClick(group.header, Qt.Key_Return)
+        QApplication.processEvents()
+        assert group.is_collapsed() and not group.body.isVisible()
+    finally:
+        group.set_collapsed(True)
+
+
+def test_folded_state_saved_with_the_layout(window, tmp_path, monkeypatch, capsys):
+    """Save then restore round-trips the folds; a missing or non-boolean entry folds, logged."""
+    path = tmp_path / "view_layout.json"
+    monkeypatch.setattr(window, "_get_layout_config_path", lambda: str(path))
+    groups = window.instrument_dock.collapsible_groups
+
+    def state():
+        return {key: group.is_collapsed() for key, group in groups.items()}
+
+    try:
+        groups["instrument.focusing"].set_collapsed(False)
+        assert window.save_layout_to_file()
+        saved = json.loads(path.read_text(encoding="utf-8"))["collapsed_groups"]
+        assert saved == {"instrument.focusing": False, "instrument.modules": True,
+                         "instrument.source": True}
+        groups["instrument.focusing"].set_collapsed(True)
+        groups["instrument.source"].set_collapsed(False)
+        assert window._restore_layout_from_file()
+        assert state() == saved
+
+        cases = [
+            ({}, {key: True for key in groups}),
+            ({"collapsed_groups": ["instrument.source"]}, {key: True for key in groups}),
+            ({"collapsed_groups": {"instrument.focusing": "no", "instrument.source": False}},
+             {"instrument.focusing": True, "instrument.modules": True,
+              "instrument.source": False}),
+        ]
+        for stored, expected in cases:
+            for group in groups.values():
+                group.set_collapsed(False)
+            path.write_text(json.dumps({"layout_version": 2, **stored}), encoding="utf-8")
+            capsys.readouterr()
+            assert window._restore_layout_from_file()
+            assert state() == expected, stored
+            logged = capsys.readouterr().out
+            for key, collapsed in expected.items():  # no case stores a valid True
+                assert (f"collapsed_groups[{key!r}]" in logged) == collapsed, (stored, logged)
+    finally:
+        for group in groups.values():
+            group.set_collapsed(True)

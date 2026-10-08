@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QCheckBox)
 from PySide6.QtCore import Qt, Signal
 
+from gui import metrics
 from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox, pack_grid
 from tavi.space_groups import (SPACE_GROUPS, CRYSTAL_SYSTEMS, EXTINCTION_RULES,
                                 get_space_group, get_extinction_rule_text)
@@ -131,11 +132,13 @@ class UnifiedSampleDock(BaseDockWidget):
         mount_layout.addWidget(QLabel("Along x:"), 0, 0)
         self.mount_u_edit = QLineEdit()
         self.mount_u_edit.setPlaceholderText("h k l")
+        self.mount_u_edit.setMaximumWidth(metrics.HKL_TRIPLE_FIELD_WIDTH)
         self.mount_u_edit.setToolTip("Reflection along the mount x axis, e.g. 1 0 0")
         mount_layout.addWidget(self.mount_u_edit, 0, 1)
         mount_layout.addWidget(QLabel("In plane:"), 1, 0)
         self.mount_v_edit = QLineEdit()
         self.mount_v_edit.setPlaceholderText("h k l")
+        self.mount_v_edit.setMaximumWidth(metrics.HKL_TRIPLE_FIELD_WIDTH)
         self.mount_v_edit.setToolTip("A second reflection in the horizontal plane, e.g. 0 0 1")
         mount_layout.addWidget(self.mount_v_edit, 1, 1)
         mount_buttons = QWidget()

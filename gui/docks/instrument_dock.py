@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QPushButton, QWidget)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import (BaseDockWidget, NoScrollComboBox, pack_grid,
+from gui.docks.base_dock import (BaseDockWidget, CollapsibleGroup, NoScrollComboBox, pack_grid,
                                  COLLIMATION_OPEN_TOOLTIP, collimation_label)
 from instruments.descriptor import ModuleKind
 
@@ -35,30 +35,10 @@ class InstrumentDock(BaseDockWidget):
         self.descriptor = descriptor
 
 
-        # Source Control section (types + extra-param rows from descriptor)
-        source_group = QGroupBox("Source Control")
-        source_layout = QFormLayout()
-        source_group.setLayout(source_layout)
-
-        self.source_type_combo = NoScrollComboBox()
-        self.source_type_combo.setObjectName("source_type_combo")
-        for source_type in descriptor.source_types:
-            self.source_type_combo.addItem(source_type.display_name, source_type.id)
-        self.source_type_combo.setToolTip("Maxwellian: thermal distribution peaking at E0 = 25 meV\nMono: narrow, uniform energy distribution centered on E_i")
-        source_layout.addRow("Source type:", self.source_type_combo)
-
-        # Source dE input (shown for source types declaring the extra param)
-        self.source_dE_label = QLabel("Source dE (meV):")
-        self.source_dE_edit = QLineEdit()
-        self.source_dE_edit.setMaximumWidth(70)
-        self.source_dE_edit.setText("2")
-        self.source_dE_edit.setToolTip("Energy half-spread for Mono source (E0 ± dE)")
-        source_layout.addRow(self.source_dE_label, self.source_dE_edit)
-
-        self._update_source_extra_visibility()
-        self.source_type_combo.currentTextChanged.connect(self._on_source_type_changed)
-
-        self.add_block(source_group)
+        # Usage order: angles and energies, then what one changes (collimation,
+        # slits), the crystals, and last the rarely touched blocks, folded
+        # with a summary of what they hold (keyed for view_layout.json).
+        self.collapsible_groups = {}
 
         # Angles section
         angles_group = QGroupBox("Instrument Angles")
@@ -161,111 +141,6 @@ class InstrumentDock(BaseDockWidget):
         pack_grid(energies_layout)
         self.add_block(energies_group)
 
-        # Crystals section (items from descriptor; ids stored as item data)
-        crystals_group = QGroupBox("Monochromator and Analyzer Crystals")
-        crystals_layout = QFormLayout()
-        crystals_group.setLayout(crystals_layout)
-
-        self.monocris_combo = NoScrollComboBox()
-        self.monocris_combo.setObjectName("monocris_combo")
-        for crystal in descriptor.mono_crystals:
-            self.monocris_combo.addItem(crystal.display_name, crystal.id)
-        crystals_layout.addRow("Monochromator crystal:", self.monocris_combo)
-
-        self.anacris_combo = NoScrollComboBox()
-        self.anacris_combo.setObjectName("anacris_combo")
-        for crystal in descriptor.ana_crystals:
-            self.anacris_combo.addItem(crystal.display_name, crystal.id)
-        crystals_layout.addRow("Analyzer crystal:", self.anacris_combo)
-
-        self.add_block(crystals_group)
-
-        # Optional modules section (generated from descriptor.modules)
-        self.module_widgets = {}
-        if descriptor.modules:
-            optics_group = QGroupBox("Experimental Modules")
-            optics_layout = QFormLayout()
-            optics_group.setLayout(optics_layout)
-
-            for module in descriptor.modules:
-                if module.kind is ModuleKind.CHOICE:
-                    combo = NoScrollComboBox()
-                    combo.setObjectName(f"module_{module.id}")
-                    combo.addItems(list(module.options))
-                    combo.setCurrentText(str(module.default))
-                    optics_layout.addRow(f"{module.display_name}:", combo)
-                    self.module_widgets[module.id] = combo
-                else:  # TOGGLE
-                    check = QCheckBox(module.display_name)
-                    check.setObjectName(f"module_{module.id}")
-                    check.setChecked(bool(module.default))
-                    optics_layout.addRow(check)
-                    self.module_widgets[module.id] = check
-
-            self.add_block(optics_group)
-
-        # Legacy attribute aliases for controller signal wiring (PUMA-specific
-        # couplings guard with getattr, so absence is fine on other instruments).
-        self.nmo_combo = self.module_widgets.get("nmo")
-        self.v_selector_check = self.module_widgets.get("v_selector")
-
-        # Focusing section (bending is generic TAS mono/ana state; stays static)
-        focusing_group = QGroupBox("Crystal Focusing (Absolute Radii, m)")
-        focusing_layout = QGridLayout()
-        focusing_layout.setSpacing(5)
-        focusing_group.setLayout(focusing_layout)
-
-        focusing_layout.addWidget(QLabel("rhm:"), 0, 0)
-        self.rhm_edit = QLineEdit()
-        self.rhm_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rhm_edit, 0, 1)
-        self.rhm_ideal_button = QPushButton("Ideal: --")
-        self.rhm_ideal_button.setCheckable(True)
-        self.rhm_ideal_button.setMaximumWidth(140)
-        self.rhm_ideal_button.setToolTip("Set rhm to the calculated ideal value")
-        focusing_layout.addWidget(self.rhm_ideal_button, 0, 2)
-
-        # One radius per row, its Ideal readout beside it, so the group fits
-        # one block: the monochromator's pair, then the analyser's.
-        focusing_layout.addWidget(QLabel("rvm:"), 1, 0)
-        self.rvm_edit = QLineEdit()
-        self.rvm_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rvm_edit, 1, 1)
-        self.rvm_ideal_button = QPushButton("Ideal: --")
-        self.rvm_ideal_button.setCheckable(True)
-        self.rvm_ideal_button.setMaximumWidth(140)
-        self.rvm_ideal_button.setToolTip("Set rvm to the calculated ideal value")
-        focusing_layout.addWidget(self.rvm_ideal_button, 1, 2)
-
-        focusing_layout.addWidget(QLabel("rha:"), 2, 0)
-        self.rha_edit = QLineEdit()
-        self.rha_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rha_edit, 2, 1)
-        self.rha_ideal_button = QPushButton("Ideal: --")
-        self.rha_ideal_button.setCheckable(True)
-        self.rha_ideal_button.setMaximumWidth(140)
-        self.rha_ideal_button.setToolTip("Set rha to the calculated ideal value")
-        focusing_layout.addWidget(self.rha_ideal_button, 2, 2)
-
-        # Under rha, so the analyser's two axes read as a pair the way the
-        # monochromator's rhm/rvm do. Enable state (editable/disabled) and
-        # whether the Ideal button is offered at all are set per selected
-        # analyser by the controller -- rva is the one axis whose declared
-        # policy (fixed / no established focusing model / ordinary) actually
-        # differs between crystals.
-        focusing_layout.addWidget(QLabel("rva:"), 3, 0)
-        self.rva_edit = QLineEdit()
-        self.rva_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rva_edit, 3, 1)
-        self.rva_ideal_button = QPushButton("Ideal: --")
-        self.rva_ideal_button.setCheckable(True)
-        self.rva_ideal_button.setMaximumWidth(140)
-        self.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
-        focusing_layout.addWidget(self.rva_ideal_button, 3, 2)
-
-        pack_grid(focusing_layout)
-        self.add_block(focusing_group)
-
         # Collimations section (rows generated from descriptor.collimation)
         self.collimation_widgets = {}
         if descriptor.collimation:
@@ -358,6 +233,155 @@ class InstrumentDock(BaseDockWidget):
 
             pack_grid(slits_layout)
             self.add_block(slits_group)
+
+
+        # Crystals section (items from descriptor; ids stored as item data)
+        crystals_group = QGroupBox("Monochromator and Analyzer Crystals")
+        crystals_layout = QFormLayout()
+        crystals_group.setLayout(crystals_layout)
+
+        self.monocris_combo = NoScrollComboBox()
+        self.monocris_combo.setObjectName("monocris_combo")
+        for crystal in descriptor.mono_crystals:
+            self.monocris_combo.addItem(crystal.display_name, crystal.id)
+        crystals_layout.addRow("Monochromator crystal:", self.monocris_combo)
+
+        self.anacris_combo = NoScrollComboBox()
+        self.anacris_combo.setObjectName("anacris_combo")
+        for crystal in descriptor.ana_crystals:
+            self.anacris_combo.addItem(crystal.display_name, crystal.id)
+        crystals_layout.addRow("Analyzer crystal:", self.anacris_combo)
+
+        self.add_block(crystals_group)
+
+        # Focusing section (bending is generic TAS mono/ana state; stays static)
+        focusing_group = CollapsibleGroup("Crystal Focusing (Absolute Radii, m)")
+        focusing_layout = QGridLayout()
+        focusing_layout.setSpacing(5)
+        focusing_group.set_body_layout(focusing_layout)
+
+        focusing_layout.addWidget(QLabel("rhm:"), 0, 0)
+        self.rhm_edit = QLineEdit()
+        self.rhm_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rhm_edit, 0, 1)
+        self.rhm_ideal_button = QPushButton("Ideal: --")
+        self.rhm_ideal_button.setCheckable(True)
+        self.rhm_ideal_button.setMaximumWidth(140)
+        self.rhm_ideal_button.setToolTip("Set rhm to the calculated ideal value")
+        focusing_layout.addWidget(self.rhm_ideal_button, 0, 2)
+
+        # One radius per row, its Ideal readout beside it, so the group fits
+        # one block: the monochromator's pair, then the analyser's.
+        focusing_layout.addWidget(QLabel("rvm:"), 1, 0)
+        self.rvm_edit = QLineEdit()
+        self.rvm_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rvm_edit, 1, 1)
+        self.rvm_ideal_button = QPushButton("Ideal: --")
+        self.rvm_ideal_button.setCheckable(True)
+        self.rvm_ideal_button.setMaximumWidth(140)
+        self.rvm_ideal_button.setToolTip("Set rvm to the calculated ideal value")
+        focusing_layout.addWidget(self.rvm_ideal_button, 1, 2)
+
+        focusing_layout.addWidget(QLabel("rha:"), 2, 0)
+        self.rha_edit = QLineEdit()
+        self.rha_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rha_edit, 2, 1)
+        self.rha_ideal_button = QPushButton("Ideal: --")
+        self.rha_ideal_button.setCheckable(True)
+        self.rha_ideal_button.setMaximumWidth(140)
+        self.rha_ideal_button.setToolTip("Set rha to the calculated ideal value")
+        focusing_layout.addWidget(self.rha_ideal_button, 2, 2)
+
+        # Under rha, so the analyser's two axes read as a pair the way the
+        # monochromator's rhm/rvm do. Enable state (editable/disabled) and
+        # whether the Ideal button is offered at all are set per selected
+        # analyser by the controller -- rva is the one axis whose declared
+        # policy (fixed / no established focusing model / ordinary) actually
+        # differs between crystals.
+        focusing_layout.addWidget(QLabel("rva:"), 3, 0)
+        self.rva_edit = QLineEdit()
+        self.rva_edit.setMaximumWidth(70)
+        focusing_layout.addWidget(self.rva_edit, 3, 1)
+        self.rva_ideal_button = QPushButton("Ideal: --")
+        self.rva_ideal_button.setCheckable(True)
+        self.rva_ideal_button.setMaximumWidth(140)
+        self.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
+        focusing_layout.addWidget(self.rva_ideal_button, 3, 2)
+
+        pack_grid(focusing_layout)
+        self.add_block(focusing_group)
+        self.collapsible_groups["instrument.focusing"] = focusing_group
+
+        # Optional modules section (generated from descriptor.modules)
+        self.module_widgets = {}
+        if descriptor.modules:
+            optics_group = CollapsibleGroup("Experimental Modules")
+            optics_layout = QFormLayout()
+            optics_group.set_body_layout(optics_layout)
+
+            for module in descriptor.modules:
+                if module.kind is ModuleKind.CHOICE:
+                    combo = NoScrollComboBox()
+                    combo.setObjectName(f"module_{module.id}")
+                    combo.addItems(list(module.options))
+                    combo.setCurrentText(str(module.default))
+                    optics_layout.addRow(f"{module.display_name}:", combo)
+                    self.module_widgets[module.id] = combo
+                else:  # TOGGLE
+                    check = QCheckBox(module.display_name)
+                    check.setObjectName(f"module_{module.id}")
+                    check.setChecked(bool(module.default))
+                    optics_layout.addRow(check)
+                    self.module_widgets[module.id] = check
+
+            self.add_block(optics_group)
+            self.collapsible_groups["instrument.modules"] = optics_group
+
+        # Legacy attribute aliases for controller signal wiring (PUMA-specific
+        # couplings guard with getattr, so absence is fine on other instruments).
+        self.nmo_combo = self.module_widgets.get("nmo")
+        self.v_selector_check = self.module_widgets.get("v_selector")
+
+        # Source Control section (types + extra-param rows from descriptor)
+        source_group = CollapsibleGroup("Source Control")
+        source_layout = QFormLayout()
+        source_group.set_body_layout(source_layout)
+
+        self.source_type_combo = NoScrollComboBox()
+        self.source_type_combo.setObjectName("source_type_combo")
+        for source_type in descriptor.source_types:
+            self.source_type_combo.addItem(source_type.display_name, source_type.id)
+        self.source_type_combo.setToolTip("Maxwellian: thermal distribution peaking at E0 = 25 meV\nMono: narrow, uniform energy distribution centered on E_i")
+        source_layout.addRow("Source type:", self.source_type_combo)
+
+        # Source dE input (shown for source types declaring the extra param)
+        self.source_dE_label = QLabel("Source dE (meV):")
+        self.source_dE_edit = QLineEdit()
+        self.source_dE_edit.setMaximumWidth(70)
+        self.source_dE_edit.setText("2")
+        self.source_dE_edit.setToolTip("Energy half-spread for Mono source (E0 ± dE)")
+        source_layout.addRow(self.source_dE_label, self.source_dE_edit)
+
+        self._update_source_extra_visibility()
+        self.source_type_combo.currentTextChanged.connect(self._on_source_type_changed)
+
+        self.add_block(source_group)
+        self.collapsible_groups["instrument.source"] = source_group
+
+        # Each folded block's summary follows its fields.
+        for edit, button in self._focusing_axes().values():
+            edit.textChanged.connect(self._refresh_focusing_summary)
+            button.toggled.connect(self._refresh_focusing_summary)
+        self._refresh_focusing_summary()
+        for widget in self.module_widgets.values():
+            if isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self._refresh_modules_summary)
+            else:
+                widget.toggled.connect(self._refresh_modules_summary)
+        self._refresh_modules_summary()
+        self.source_type_combo.currentIndexChanged.connect(self._refresh_source_summary)
+        self.source_dE_edit.textChanged.connect(self._refresh_source_summary)
+        self._refresh_source_summary()
 
 
     # ------------------------------------------------------------- accessors
@@ -477,17 +501,53 @@ class InstrumentDock(BaseDockWidget):
 
     # ------------------------------------------------------------- internals
 
-    def _update_source_extra_visibility(self):
+    def _source_needs_dE(self):
         source_id = self.source_type_combo.currentData()
-        extra_params = ()
         for source_type in self.descriptor.source_types:
             if source_type.id == source_id:
-                extra_params = source_type.extra_params
-                break
-        needs_dE = "source_dE" in extra_params
+                return "source_dE" in source_type.extra_params
+        return False
+
+    def _update_source_extra_visibility(self):
+        needs_dE = self._source_needs_dE()
         self.source_dE_label.setVisible(needs_dE)
         self.source_dE_edit.setVisible(needs_dE)
 
     def _on_source_type_changed(self, _source_type):
         """Show/hide extra source fields based on the selected source type."""
         self._update_source_extra_visibility()
+
+    def _focusing_axes(self):
+        return {"rhm": (self.rhm_edit, self.rhm_ideal_button),
+                "rvm": (self.rvm_edit, self.rvm_ideal_button),
+                "rha": (self.rha_edit, self.rha_ideal_button),
+                "rva": (self.rva_edit, self.rva_ideal_button)}
+
+    # The folded blocks' summaries: the values the simulation will use, as typed.
+
+    def _refresh_focusing_summary(self, *_):
+        parts = []
+        for name, (edit, ideal_button) in self._focusing_axes().items():
+            locked = " ideal" if ideal_button.isChecked() else ""  # held at the ideal
+            parts.append(f"{name} {edit.text() or 'empty'}{locked}")
+        self.collapsible_groups["instrument.focusing"].set_summary(", ".join(parts))
+
+    def _refresh_modules_summary(self, *_):
+        group = self.collapsible_groups.get("instrument.modules")
+        if group is None:
+            return
+        fitted = []
+        for module in self.descriptor.modules:
+            widget = self.module_widgets[module.id]
+            if isinstance(widget, QComboBox):
+                if widget.currentText().lower() != "none":  # a CHOICE's not-fitted option
+                    fitted.append(f"{module.display_name}: {widget.currentText()}")
+            elif widget.isChecked():
+                fitted.append(module.display_name)
+        group.set_summary(", ".join(fitted) if fitted else "none fitted")
+
+    def _refresh_source_summary(self, *_):
+        text = self.source_type_combo.currentText()
+        if self._source_needs_dE():
+            text += f", dE {self.source_dE_edit.text() or 'empty'} meV"
+        self.collapsible_groups["instrument.source"].set_summary(text)
