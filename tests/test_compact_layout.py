@@ -25,7 +25,7 @@ pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import SIGNAL, QPoint, Qt  # noqa: E402
-from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
+from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout,  # noqa: E402
                                QGroupBox, QLabel, QMessageBox, QPushButton, QTabBar,
@@ -669,6 +669,145 @@ def _restart(show=True):
 def _close(win):
     win.deleteLater()
     QApplication.processEvents()
+
+
+def _log(win):
+    return win.output_dock.message_text.toPlainText()
+
+
+def _assert_picked_preset(win):
+    """The preset first start picks for the window's screen, every placed dock docked and shown."""
+    from gui.main_window import initial_layout_for_width
+
+    assert not win._layout_restored
+    columns, _width = initial_layout_for_width(win.screen().availableGeometry().width())
+    assert win._columns == columns
+    for name in PLACED:
+        dock = getattr(win, name)
+        assert not dock.isFloating() and not dock.isHidden(), name
+    _assert_no_stray_tab_strip(win, columns)
+
+
+def test_saved_layout_wins_on_restart(window, layout_file):
+    """Check 6: the next start restores the arrangement, the column width and the folds."""
+    groups = window.instrument_dock.collapsible_groups
+    try:
+        _resize(window, MONITOR, WIDE, columns=4)
+        groups["instrument.source"].set_collapsed(False)
+        assert window.save_layout_to_file()
+    finally:
+        groups["instrument.source"].set_collapsed(True)
+        window.set_column_width(NARROW, fit=False)
+    restarted = _restart()
+    try:
+        assert restarted._layout_restored
+        assert restarted._columns == 4 and restarted._column_width == WIDE
+        assert restarted.column_width_actions[WIDE].isChecked()
+        assert not restarted.instrument_dock.collapsible_groups["instrument.source"].is_collapsed()
+        lefts = [getattr(restarted, name).x()
+                 for name in ("instrument_dock", "sample_dock", "scattering_dock", "display_dock")]
+        assert lefts == sorted(lefts) and len(set(lefts)) == 4, lefts
+        assert restarted.simulation_dock.x() == restarted.scattering_dock.x()
+        _assert_no_stray_tab_strip(restarted, 4)
+    finally:
+        _close(restarted)
+
+
+def test_older_layout_is_set_aside(window, layout_file):
+    """Check 6: a version-2 file is renamed .v2.bak (over an older one), said so, and the preset applies."""
+    assert window.save_layout_to_file()
+    layout = json.loads(layout_file.read_text(encoding="utf-8"))
+    layout["layout_version"] = 2
+    layout_file.write_text(json.dumps(layout), encoding="utf-8")
+    backup = layout_file.with_name("view_layout.json.v2.bak")
+    backup.write_text("an older set-aside layout", encoding="utf-8")
+    restarted = _restart()
+    try:
+        assert not layout_file.exists()
+        assert json.loads(backup.read_text(encoding="utf-8")) == layout
+        assert "set aside" in _log(restarted) and str(backup) in _log(restarted)
+        _assert_picked_preset(restarted)
+    finally:
+        _close(restarted)
+
+
+@pytest.mark.parametrize("damage", ["window_state", "json"])
+def test_unreadable_layout_falls_back(window, layout_file, damage):
+    """Check 6: a state Qt refuses, or broken JSON, gives the preset and a log line; nothing raises."""
+    assert window.save_layout_to_file()
+    if damage == "window_state":
+        layout = json.loads(layout_file.read_text(encoding="utf-8"))
+        layout["window_state"] = "Z2FyYmFnZQ=="  # base64 of "garbage"
+        layout_file.write_text(json.dumps(layout), encoding="utf-8")
+    else:
+        layout_file.write_text('{"layout_version": 3, "window_state": ', encoding="utf-8")
+    restarted = _restart()
+    try:
+        assert "could not restore" in _log(restarted)
+        _assert_picked_preset(restarted)
+    finally:
+        _close(restarted)
+
+
+FAR = QPoint(-20000, -20000)
+
+
+def _on_screen(dock):
+    return any(screen.availableGeometry().intersects(dock.frameGeometry())
+               for screen in QGuiApplication.screens())
+
+
+def test_docks_saved_off_screen_come_back(window, layout_file):
+    """Check 6: floating docks saved off every screen come back on one after a restart.
+
+    Misalignment, shown, and UB Matrix, hidden (it floats in 4 columns), both
+    saved far off; UB Matrix is checked once opened, as the Sample dock does.
+    """
+    misalignment, ub = window.misalignment_dock, window.ub_matrix_dock
+    try:
+        _resize(window, MONITOR, NARROW, columns=4)
+        misalignment.setFloating(True)
+        misalignment.show()
+        for dock in (misalignment, ub):
+            dock.move(FAR)
+        QApplication.processEvents()
+        assert not _on_screen(misalignment) and not _on_screen(ub)
+        assert window.save_layout_to_file()
+    finally:
+        misalignment.hide()
+    restarted = _restart()
+    try:
+        assert restarted._layout_restored
+        assert restarted.misalignment_dock.isVisible() and _on_screen(restarted.misalignment_dock)
+        assert restarted.ub_matrix_dock.isHidden()
+        restarted._on_open_ub_matrix_dock()
+        QApplication.processEvents()
+        assert _on_screen(restarted.ub_matrix_dock)
+    finally:
+        _close(restarted)
+
+
+def test_lost_docks_are_rescued(window):
+    """The rescue itself: a homeless dock is centred on the screen, a placed one docked again."""
+    misalignment, display = window.misalignment_dock, window.display_dock
+    _resize(window, MONITOR, NARROW, columns=4)
+    try:
+        misalignment.setFloating(True)
+        misalignment.show()
+        display.setFloating(True)
+        for dock in (misalignment, display):
+            dock.move(FAR)
+        QApplication.processEvents()
+        window._rescue_lost_docks()
+        QApplication.processEvents()
+        assert _on_screen(misalignment)
+        assert not display.isFloating() and not display.visibleRegion().isEmpty()
+        assert "brought back" in _log(window)
+        _assert_no_stray_tab_strip(window, 4)
+    finally:
+        misalignment.hide()
+        if display.isFloating():
+            _resize(window, MONITOR, NARROW, columns=4)
 
 
 def test_reset_picks_for_the_screen_and_refolds(window):
