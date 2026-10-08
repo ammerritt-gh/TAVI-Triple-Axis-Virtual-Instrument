@@ -1913,7 +1913,7 @@ def _cold_start(controller):
     for index in range(2):
         for edit in dock.get_peak_widget(index)._fields():
             edit.clear()
-    controller.window.simulation_dock.defaults_button.click()
+    controller.window.load_defaults_action.trigger()
     assert not [p for p in controller._peaks_from_dock() if p.is_valid]
     assert np.array_equal(controller.ub_matrix.U, controller.U_described)
 

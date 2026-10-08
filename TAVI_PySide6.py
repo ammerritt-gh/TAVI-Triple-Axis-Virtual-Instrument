@@ -1501,8 +1501,7 @@ class TAVIController(QObject):
         # Simulation control buttons (moved to right panel)
         self.window.simulation_dock.run_button.clicked.connect(self.run_simulation_thread)
         self.window.simulation_dock.stop_button.clicked.connect(self.stop_simulation)
-        self.window.simulation_dock.quit_button.clicked.connect(self.quit_application)
-        self.window.simulation_dock.clear_runtimes_button.clicked.connect(self.clear_runtime_data)
+        self.window.clear_runtimes_action.triggered.connect(self.clear_runtime_data)
 
         # Job-queue state transitions are emitted from the worker thread; Qt
         # delivers them to this GUI-thread slot as a queued connection.
@@ -1530,10 +1529,10 @@ class TAVIController(QObject):
             fitting_dock.set_controller(self)
             self.job_state_changed.connect(fitting_dock.refresh_gating)
 
-        # Parameter buttons (moved to right panel)
-        self.window.simulation_dock.save_button.clicked.connect(self.save_parameters)
-        self.window.simulation_dock.load_button.clicked.connect(self.load_parameters)
-        self.window.simulation_dock.defaults_button.clicked.connect(self.set_default_parameters)
+        # Parameter actions (File menu)
+        self.window.save_parameters_action.triggered.connect(self.save_parameters)
+        self.window.load_parameters_action.triggered.connect(self.load_parameters)
+        self.window.load_defaults_action.triggered.connect(self.set_default_parameters)
         
         # Diagnostics button
         self.window.simulation_dock.config_diagnostics_button.clicked.connect(self.configure_diagnostics)
@@ -1868,13 +1867,6 @@ class TAVIController(QObject):
                 self._flash_field_saved(line_edit)
             else:
                 line_edit.setStyleSheet(line_edit.property("original_style") or "")
-    
-    def quit_application(self):
-        """Quit the application."""
-        # Stop any running simulation before quitting
-        self.stop_event.set()
-        self.print_to_message_center("Shutting down...")
-        QApplication.quit()
     
     def open_folder_dialog(self, line_edit):
         """Open file dialog to select a folder."""
@@ -5794,17 +5786,18 @@ class TAVIController(QObject):
         self.print_to_message_center("Sample configuration window not yet implemented")
     
     def clear_runtime_data(self):
-        """Clear cached runtime data with confirmation dialog."""
+        """Clear the current instrument's cached runtime data, after confirmation."""
         from PySide6.QtWidgets import QMessageBox
-        
+
         # Get current record count for the message
         record_count = self.runtime_tracker.get_record_count(self.instrument.id)
-        
+        name = self.instrument.display_name
+
         reply = QMessageBox.question(
             self.window,
             "Clear Runtime Data",
-            f"Are you sure you want to clear all cached runtime data?\n\n"
-            f"This will delete {record_count} scan timing records used to estimate\n"
+            f"Are you sure you want to clear the cached runtime data for {name}?\n\n"
+            f"This will delete {record_count} {name} scan timing records used to estimate\n"
             f"scan durations. New estimates will be generated as you run more scans.\n\n"
             f"Use this if time estimates seem incorrect.",
             QMessageBox.Yes | QMessageBox.No,
@@ -5812,8 +5805,8 @@ class TAVIController(QObject):
         )
         
         if reply == QMessageBox.Yes:
-            cleared = self.runtime_tracker.clear_records()
-            self.print_to_message_center(f"Cleared {cleared} runtime records. Time estimates will be recalculated from new scans.")
+            cleared = self.runtime_tracker.clear_records(self.instrument.id)
+            self.print_to_message_center(f"Cleared {cleared} {name} runtime records. Time estimates will be recalculated from new scans.")
             # Clear displayed estimates
             self.window.simulation_dock.update_total_time_estimate("")
         else:

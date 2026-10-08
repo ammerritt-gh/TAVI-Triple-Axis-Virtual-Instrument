@@ -301,7 +301,26 @@ class TAVIMainWindow(QMainWindow):
         
         # ===== File Menu =====
         file_menu = menubar.addMenu("&File")
-        
+
+        # The controller connects these three to its handlers. No ellipsis on
+        # Save/Load: they write and read the fixed file with no chooser.
+        self.save_parameters_action = QAction("&Save Parameters", self)
+        self.save_parameters_action.setStatusTip(
+            "Overwrite config/parameters.json with the current fields")
+        file_menu.addAction(self.save_parameters_action)
+
+        self.load_parameters_action = QAction("&Load Parameters", self)
+        self.load_parameters_action.setStatusTip(
+            "Read every instrument, sample and scan field from config/parameters.json")
+        file_menu.addAction(self.load_parameters_action)
+
+        self.load_defaults_action = QAction("Load &Defaults", self)
+        self.load_defaults_action.setStatusTip(
+            "Set every field back to the instrument defaults")
+        file_menu.addAction(self.load_defaults_action)
+
+        file_menu.addSeparator()
+
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
@@ -374,6 +393,14 @@ class TAVIMainWindow(QMainWindow):
         mpi_action = QAction("&MPI processes…", self)
         mpi_action.triggered.connect(self._open_mpi_dialog)
         config_menu.addAction(mpi_action)
+
+        config_menu.addSeparator()
+
+        # Connected by the controller; it confirms first and names the instrument.
+        self.clear_runtimes_action = QAction("&Clear Runtime Data…", self)
+        self.clear_runtimes_action.setStatusTip(
+            "Delete the scan-time estimate history for the current instrument (asks first)")
+        config_menu.addAction(self.clear_runtimes_action)
 
         # ===== Help Menu =====
         help_menu = menubar.addMenu("&Help")
