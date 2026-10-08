@@ -21,7 +21,8 @@ QApplication gets on this machine (``windows11`` on Windows 11), asked of the
 platform in a child process; if that fails the shots fall back to the
 offscreen default, Fusion, and say so. A preset that cannot fit a size
 (4 columns need about 1140 px) grows the window to its minimum, as on screen;
-the shot is kept, at the grown size, with a printed note. Exit code 0 when
+the shot is kept, at the grown size and named for it, with a printed
+SIZE MISMATCH line. Exit code 0 when
 every PNG was written, 1 when the window did not build or a grab was null or
 of a size the window did not have.
 """
@@ -216,15 +217,18 @@ def main():
                 app.processEvents()
                 trigger(window.column_width_actions[column_width])
                 trigger(window.layout_actions[columns])  # sized at this window size
-                name = f"{instrument.id}_{width}x{height}_{columns}col_{column_width}"
+                # Named by the size grabbed, never the size asked for.
+                name = (f"{instrument.id}_{window.width()}x{window.height()}"
+                        f"_{columns}col_{column_width}")
                 if (window.width(), window.height()) != (width, height):
                     minimum = window.minimumSizeHint()
                     if minimum.width() <= width and minimum.height() <= height:
-                        print(f"bad size for {name}: {window.width()}x{window.height()}")
+                        print(f"bad size for {name}: asked for {width}x{height}")
                         failures += 1
                         continue
-                    print(f"note: {name}: the window cannot be {width}x{height} in {columns} "
-                          f"columns; its minimum makes it {window.width()}x{window.height()}")
+                    print(f"SIZE MISMATCH: asked for {width}x{height} in {columns} columns, "
+                          f"{column_width}; the window's minimum makes it "
+                          f"{window.width()}x{window.height()}, so the shot is {name}.png")
                 pixmap = window.grab()
                 if pixmap.isNull() or (pixmap.width(), pixmap.height()) != (window.width(),
                                                                               window.height()):
