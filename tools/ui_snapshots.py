@@ -11,9 +11,10 @@ hits the delay-load fault noted in AGENTS.md):
 
 It never touches the real ``config/``: ``TAVI_CONFIG_DIR`` points at a
 temporary copy before any ``tavi``/``gui`` import, and the run stops if the
-config path does not resolve there. Text is measured and drawn in Segoe UI
-9 pt, the real window's font on Windows; the offscreen platform has no font
-database of its own. Exit code 0 when every PNG was written, 1 when the window
+config path does not resolve there. The copy leaves out ``view_layout.json``,
+so the shots show the default arrangement, not a locally saved one. Text is
+measured and drawn in Segoe UI 9 pt, the real window's font on Windows; the
+offscreen platform has no font database of its own. Exit code 0 when every PNG was written, 1 when the window
 did not build or a grab was null or the wrong size.
 """
 import argparse
@@ -28,11 +29,12 @@ SIZES = ((1108, 851), (2560, 1392))
 
 
 def _isolate_config():
-    """Point TAVI_CONFIG_DIR at a temp copy of config/ (empty if there is none)."""
+    """Point TAVI_CONFIG_DIR at a temp copy of config/ (empty if there is none), less any saved layout."""
     tmp = Path(tempfile.mkdtemp(prefix="tavi-ui-snapshots-")) / "config"
     real = REPO_ROOT / "config"
     if real.is_dir():
         shutil.copytree(real, tmp)
+        (tmp / "view_layout.json").unlink(missing_ok=True)  # shoot the default arrangement
     else:
         tmp.mkdir(parents=True)
     os.environ["TAVI_CONFIG_DIR"] = str(tmp)

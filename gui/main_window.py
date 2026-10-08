@@ -81,7 +81,7 @@ class TAVIMainWindow(QMainWindow):
         # Restore a saved layout when present. The default layout keeps the
         # reciprocal-space panel closed until the user opens it from View.
         self._column_width = NARROW
-        self._restore_layout_from_file()
+        self._layout_restored = self._restore_layout_from_file()
         self.set_column_width(self._column_width, fit=False)
 
         # Set geometry after a small delay to avoid Qt geometry warnings, then
@@ -91,6 +91,20 @@ class TAVIMainWindow(QMainWindow):
     def _apply_startup_geometry(self):
         self.setGeometry(100, 100, 1600, 900)
         self._fit_form_docks()
+        if not self._layout_restored:  # a saved split wins
+            self._split_display_column()
+
+    def _split_display_column(self):
+        """Give the plot most of its column; the Message Log and the tabs below stay usable.
+
+        Needs the window at its size: before it is shown the dock area ignores
+        the split and hands the height to the tabs. The three docks keep these
+        proportions as the window resizes.
+        """
+        column = self.height()
+        self.resizeDocks([self.display_dock, self.output_dock, self.data_control_dock],
+                         [column * 55 // 100, column * 20 // 100, column * 25 // 100],
+                         Qt.Vertical)
     
     def _create_docks(self):
         """Create all dock widgets."""
@@ -296,12 +310,9 @@ class TAVIMainWindow(QMainWindow):
             [300, 500],
             Qt.Vertical
         )
-        
-        self.resizeDocks(
-            [self.display_dock, self.output_dock, self.data_control_dock],
-            [350, 350, 150],
-            Qt.Vertical
-        )
+
+        # The Display column's split is _split_display_column(), once the
+        # window has its size.
 
     
     def _create_menus(self):
@@ -565,6 +576,7 @@ class TAVIMainWindow(QMainWindow):
             self.restoreState(self._default_state)
         if self._default_geometry is not None:
             self.restoreGeometry(self._default_geometry)
+        self._split_display_column()
         self.statusBar().showMessage("Layout reset to default", 3000)
 
     def _form_docks(self):

@@ -114,6 +114,18 @@ def _label_field_pairs(dock):
                 yield label, field
 
 
+def test_plot_gets_most_of_its_column(window):
+    """The default split gives Display more height than the Log and the tabs together.
+
+    First in the module: a later test restores a saved layout into this window.
+    """
+    _resize(window, LAPTOP, NARROW)
+    heights = [d.height() for d in (window.display_dock, window.output_dock,
+                                    window.data_control_dock)]
+    assert heights[0] > heights[1] + heights[2], heights
+    assert window.display_dock.canvas.height() >= 250
+
+
 @MODES
 def test_labels_sit_beside_their_fields(window, mode):
     """Check 4: from a label's text to its field is the metrics gap, not the dock's spare width."""
