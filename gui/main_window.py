@@ -786,13 +786,18 @@ class TAVIMainWindow(QMainWindow):
 
     def set_column_width(self, mode, fit=True):
         """View > Column Width: lay each form panel out one (NARROW) or two (WIDE)
-        blocks wide, and with ``fit`` size the docked ones to it."""
+        blocks wide, and with ``fit`` size the docked ones to it.
+
+        With ``fit`` the vertical splits follow too, as on a preset switch: the
+        short docks take their reflowed content's height, the elastic ones the
+        rest. Like a preset switch, this resets any splitter the user dragged.
+        """
         self._column_width = mode
         self.column_width_actions[mode].setChecked(True)
         for dock in self._form_docks():
             dock.set_column_width(mode)
         if fit:
-            self._fit_form_docks()
+            self._size_preset()
 
     def _fit_form_docks(self):
         """Size the docked, visible form panels to the column width; Display takes the rest.
