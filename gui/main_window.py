@@ -277,7 +277,11 @@ class TAVIMainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
         self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
 
-        # Remote API tabbed with Data Control (column 3, bottom)
+        # Remote API tabbed with Data Control (column 3, bottom). Lay the dock
+        # area out first: tabifying into the columns rebuilt above, before any
+        # layout pass, leaves Qt a second, orphaned Data Control/Remote API tab
+        # bar that is shown with the window at its stale position.
+        self.layout().activate()
         self.addDockWidget(Qt.RightDockWidgetArea, self.api_dock)
         self.tabifyDockWidget(self.data_control_dock, self.api_dock)
 
