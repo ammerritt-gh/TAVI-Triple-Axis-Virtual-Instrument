@@ -143,10 +143,10 @@ def _tab_strips(win):
                    if bar.isVisible() and win.rect().intersects(bar.geometry()))
 
 
-def _assert_no_stray_tab_strip(win, columns):
-    """Exactly the preset's live tab strips: no stale one from an earlier arrangement, no twin."""
+def _assert_no_stray_tab_strip(win, columns, extra=()):
+    """Exactly the preset's live tab strips (and ``extra``): no stale one from an earlier arrangement, no twin."""
     expected = Counter(frozenset(getattr(win, name).windowTitle() for name in group)
-                       for group in PRESET_TABS[columns])
+                       for group in [*PRESET_TABS[columns], *extra])
     assert _tab_strips(win) == expected
 
 
@@ -203,18 +203,18 @@ def test_plot_gets_most_of_its_column(window):
     assert window.display_dock.canvas.height() >= metrics.DISPLAY_CANVAS_MIN_HEIGHT
 
 
-@pytest.mark.parametrize("columns, size", [(2, LAPTOP), (3, MONITOR), (4, MONITOR), (3, LAPTOP)],
-                         ids=["2-1108x851", "3-2560x1392", "4-2560x1392", "3-1108x851"])
-def test_preset_places_every_dock(window, columns, size):
-    """Check 2: every placed dock docked and shown, in its column or behind its tab; no stray strip."""
-    _resize(window, size, NARROW, columns=columns)
-    assert (window.width(), window.height()) == size  # the preset fits its reference size
+def _assert_preset_placement(win, columns, extra_strips=()):
+    """Check 2's placement: every placed dock docked and shown, in its column or behind its tab.
+
+    UB Matrix docked and shown in 3 columns, floating and hidden otherwise;
+    no tab strip but the preset's and ``extra_strips`` (groups of dock names).
+    """
     for name in PLACED:
-        dock = getattr(window, name)
+        dock = getattr(win, name)
         assert not dock.isFloating() and not dock.isHidden(), name
     lefts = []
     for column in PRESET_COLUMNS[columns]:
-        docks = [getattr(window, name) for name in column]
+        docks = [getattr(win, name) for name in column]
         assert all(not dock.visibleRegion().isEmpty() for dock in docks), column
         assert len({dock.x() for dock in docks}) == 1, column  # one column
         tops = [dock.y() for dock in docks]
@@ -222,13 +222,22 @@ def test_preset_places_every_dock(window, columns, size):
         lefts.append(docks[0].x())
     assert lefts == sorted(lefts) and len(set(lefts)) == len(lefts), lefts
     for primary, *behind in PRESET_TABS[columns]:
-        tabbed = window.tabifiedDockWidgets(getattr(window, primary))
-        assert all(getattr(window, name) in tabbed for name in behind), primary
-        assert not getattr(window, primary).visibleRegion().isEmpty(), primary  # raised
-    ub = window.ub_matrix_dock
+        tabbed = win.tabifiedDockWidgets(getattr(win, primary))
+        assert all(getattr(win, name) in tabbed for name in behind), primary
+        assert not getattr(win, primary).visibleRegion().isEmpty(), primary  # raised
+    ub = win.ub_matrix_dock
     assert (not ub.isFloating() and ub.isVisible()) if columns == 3 else (
         ub.isFloating() and ub.isHidden())
-    _assert_no_stray_tab_strip(window, columns)
+    _assert_no_stray_tab_strip(win, columns, extra_strips)
+
+
+@pytest.mark.parametrize("columns, size", [(2, LAPTOP), (3, MONITOR), (4, MONITOR), (3, LAPTOP)],
+                         ids=["2-1108x851", "3-2560x1392", "4-2560x1392", "3-1108x851"])
+def test_preset_places_every_dock(window, columns, size):
+    """Check 2: every placed dock docked and shown, in its column or behind its tab; no stray strip."""
+    _resize(window, size, NARROW, columns=columns)
+    assert (window.width(), window.height()) == size  # the preset fits its reference size
+    _assert_preset_placement(window, columns)
     reciprocal = window.reciprocal_space_dock
     assert reciprocal.isHidden()  # as at first start
     reciprocal.toggleViewAction().trigger()  # View > Reciprocal Space
@@ -1071,6 +1080,42 @@ def test_fallback_still_rescues_lost_docks(window, layout_file, monkeypatch, vis
         assert _on_screen(restarted.misalignment_dock)
     finally:
         _close(restarted)
+
+
+@pytest.mark.parametrize("columns", [2, 3, 4])
+@pytest.mark.parametrize("docked_once", [True, False], ids=["docked-once", "off-screen"])
+def test_presets_after_restore_all_panels(window, columns, docked_once):
+    """View > Restore All Panels, then a preset: Misalignment floats on screen, the rest as check 2.
+
+    Misalignment was docked once by the user and floated again (Restore All
+    Panels docks it back), or was left floating off every screen.
+    """
+    misalignment, reciprocal = window.misalignment_dock, window.reciprocal_space_dock
+    _resize(window, MONITOR, NARROW, columns=3)
+    try:
+        if docked_once:
+            window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
+            misalignment.setFloating(True)
+        else:
+            misalignment.show()  # a window that has been on screen keeps its place
+            misalignment.move(FAR)
+        misalignment.hide()
+        QApplication.processEvents()
+        window.restore_all_docks()
+        QApplication.processEvents()
+        assert all(_on_screen(dock) for dock in window._all_docks if dock.isFloating())
+        _resize(window, MONITOR, NARROW, columns=columns)
+        assert misalignment.isFloating() and misalignment.isVisible() and _on_screen(misalignment)
+        assert reciprocal.isVisible() and reciprocal in window.tabifiedDockWidgets(
+            window.display_dock)
+        _assert_preset_placement(window, columns, [("display_dock", "reciprocal_space_dock")])
+    finally:
+        if not misalignment.isFloating():
+            window.removeDockWidget(misalignment)
+            misalignment.setFloating(True)
+        misalignment.hide()
+        reciprocal.hide()
+        _resize(window, MONITOR, NARROW, columns=columns)
 
 
 def test_reset_picks_for_the_screen_and_refolds(window):
