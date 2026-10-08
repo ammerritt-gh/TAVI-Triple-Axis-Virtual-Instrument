@@ -6,7 +6,7 @@ import shutil
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                 QScrollArea, QMenuBar, QMenu, QMessageBox,
                                 QInputDialog, QSizePolicy, QStyle, QTabBar)
-from PySide6.QtCore import Qt, QByteArray, QTimer
+from PySide6.QtCore import Qt, QByteArray, QEvent, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
 
 import tavi
@@ -104,8 +104,27 @@ class TAVIMainWindow(QMainWindow):
         """Once shown: fit the window to its screen and size the preset, unless a layout was restored.
 
         A restored window keeps its frame unless the frame is larger than its
-        screen (a layout saved on a big monitor, opened on a laptop).
+        screen (a layout saved on a big monitor, opened on a laptop). A
+        restored layout whose docks need more width than the screen gives
+        (4 columns opened on a laptop) gives way to the screen's pick, said in
+        the Message Log; the column width and folds stay, and the file is
+        rewritten only when TAVI closes. Measured here, not in the restore:
+        before show() every child widget counts as hidden, so the docks'
+        minimum widths come out short.
         """
+        if self._layout_restored:
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)  # the docks' minimums settle
+            need, room = (self._width_needed(self._columns, restored=True),
+                          self.screen().availableSize().width())
+            if need > room:
+                area = self.screen().availableGeometry()
+                picked, _width = initial_layout_for_size(area.width(), area.height())
+                self._layout_note(
+                    f"Window layout: the saved {self._columns}-column layout needs about {need} px; "
+                    f"this screen gives {room} px. Using the {picked}-column layout picked for "
+                    f"this screen; View > Layout changes it.")
+                self._setup_dock_layout(picked)
+                self._layout_restored = False
         if not self._layout_restored:
             self._fit_to_screen()
         else:
@@ -752,31 +771,42 @@ class TAVIMainWindow(QMainWindow):
         self._size_preset()
         self.statusBar().showMessage(f"Panels arranged in {columns} columns", 3000)
 
-    def _width_needed(self, columns):
+    def _width_needed(self, columns, restored=False):
         """The narrowest window the ``columns`` preset fits, in px; narrower, Qt
         grows the window to it.
 
         Each column of the preset (as _setup_dock_layout places it) is as wide
         as the widest minimum of its docks, tabs included; Reciprocal Space
         counts only while shown. Plus the 1 px central widget, and a separator
-        beside each column.
+        beside each column. With ``restored`` (docks as a restoreState left
+        them, which a preset has not re-placed) only the shown, docked ones
+        count. A table: it needs no layout pass, but a window that has been
+        shown; and it cannot see a layout the user rearranged by hand away
+        from its preset.
         """
         instrument, sample, scattering, simulation = (
             self.instrument_dock, self.sample_dock, self.scattering_dock, self.simulation_dock)
         display, log, data, fitting, api = (
             self.display_dock, self.output_dock, self.data_control_dock, self.fitting_dock,
             self.api_dock)
-        plot = [display] + ([] if self.reciprocal_space_dock.isHidden()
-                            else [self.reciprocal_space_dock])
+        reciprocal = self.reciprocal_space_dock
+        plot = [display, reciprocal]
         side_by_side = {
             2: [[instrument, log, data, fitting, api, scattering, sample], plot + [simulation]],
             3: [[instrument, scattering, simulation], [sample, self.ub_matrix_dock],
                 plot + [log, data, api, fitting]],
             4: [[instrument], [sample], [scattering, simulation], plot + [log, data, fitting, api]],
         }[columns]
+
+        def counts(dock):
+            if restored:
+                return not dock.isHidden() and not dock.isFloating()
+            return dock is not reciprocal or not dock.isHidden()
+
+        side_by_side = [[dock for dock in column if counts(dock)] for column in side_by_side]
         separator = self.style().pixelMetric(QStyle.PM_DockWidgetSeparatorExtent, None, self)
         return (sum(max(dock.minimumSizeHint().width() for dock in column) + separator
-                    for column in side_by_side)
+                    for column in side_by_side if column)
                 + self.centralWidget().minimumWidth())
 
     def reset_to_default_layout(self):
@@ -911,6 +941,8 @@ class TAVIMainWindow(QMainWindow):
         copied there when it cannot be moved (it is then overwritten on exit). An
         unreadable file, a geometry or state Qt refuses, or any other error
         falls back to the preset. Each of these says so in the Message Log.
+        (Too wide for its screen, a restored layout gives way once shown:
+        _apply_startup_geometry.)
         After a restore, Misalignment and UB Matrix saved floating float again
         at their saved visibility (centred if they came back docked); saved
         docked, they stay put; with no saved entry, Misalignment floats, and UB
