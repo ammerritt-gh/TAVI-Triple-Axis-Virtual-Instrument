@@ -104,6 +104,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         # Estimated time before scan starts (from historical data)
         self.pre_scan_estimate_label = QLabel("")
         self.pre_scan_estimate_label.setStyleSheet("color: #0066cc; font-size: 10px;")
+        self.pre_scan_estimate_label.hide()  # until there is an estimate, no blank row
         control_layout.addWidget(self.pre_scan_estimate_label)
 
         # Progress bar and label
@@ -114,27 +115,23 @@ class UnifiedSimulationDock(BaseDockWidget):
         progress_row.addWidget(self.progress_label)
         control_layout.addLayout(progress_row)
 
-        # Remaining and elapsed time
-        time_row = QHBoxLayout()
+        # Remaining and elapsed time, a row each: a running scan's
+        # "Estimated Remaining Time: ..." beside the elapsed time passes a block
         self.remaining_time_label = QLabel("Remaining Time: ")
-        time_row.addWidget(self.remaining_time_label)
-        time_row.addSpacing(12)
+        control_layout.addWidget(self.remaining_time_label)
         self.elapsed_time_label = QLabel("Elapsed Time: ")
-        time_row.addWidget(self.elapsed_time_label)
-        time_row.addStretch()
-        control_layout.addLayout(time_row)
+        control_layout.addWidget(self.elapsed_time_label)
 
-        # Counts, both on one row
-        counts_row = QHBoxLayout()
-        counts_row.addWidget(QLabel("Max counts:"))
+        # Counts, a row each (a long scan's totals run to 13 digits)
+        counts_grid = QGridLayout()
+        counts_grid.addWidget(QLabel("Max counts:"), 0, 0)
         self.max_counts_label = QLabel("0")
-        counts_row.addWidget(self.max_counts_label)
-        counts_row.addSpacing(12)
-        counts_row.addWidget(QLabel("Total counts:"))
+        counts_grid.addWidget(self.max_counts_label, 0, 1)
+        counts_grid.addWidget(QLabel("Total counts:"), 1, 0)
         self.total_counts_label = QLabel("0")
-        counts_row.addWidget(self.total_counts_label)
-        counts_row.addStretch()
-        control_layout.addLayout(counts_row)
+        counts_grid.addWidget(self.total_counts_label, 1, 1)
+        pack_grid(counts_grid)
+        control_layout.addLayout(counts_grid)
 
         self.add_block(control_group)
 

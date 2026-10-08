@@ -334,6 +334,125 @@ def test_nothing_clipped(window, size, mode, columns):
     assert not clipped, "\n".join(clipped)
 
 
+HOURS = 123 * 3600 + 59 * 60 + 59  # a scan of five days, as the tracker formats it
+
+
+def _feed_runtime_texts(win):
+    """Each runtime-updated label in the form docks, given its longest realistic text.
+
+    Through the controller's own slots and the docks' own setters where they
+    exist, so the format strings are the real ones. Returns {name: label}.
+    """
+    from tavi.runtime_tracker import RuntimeTracker
+    from gui.docks.unified_simulation_dock import SCAN_CHI_REFUSAL
+
+    ctrl, sim, sample = win.controller, win.simulation_dock, win.sample_dock
+    long_time = RuntimeTracker.format_time(HOURS)  # "123h 59m 59s"
+    ctrl.update_progress(99999, 100000)
+    ctrl.update_remaining_time("123:59:59")  # the worker's {hours:02d}:{minutes:02d}:{seconds:02d}
+    ctrl.update_elapsed_time(long_time)
+    ctrl.update_counts_entry(123456789012.0, 1234567890123.0)
+    sim.update_pre_scan_estimate(long_time)
+    sim.update_time_per_point(f"~{long_time}/point")
+    sim.update_point_count_display(1000, 1000, 999999, 1)
+    sim.update_total_time_estimate(long_time, RuntimeTracker.format_time(3723))
+    sim.set_scan_command_warning(
+        1, "Unknown variable 'xyz'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, "
+           "omega, sgl, sgu, etc.")
+    sim.set_scan_command_warning(2, SCAN_CHI_REFUSAL)
+    sim.set_scan_conflict_warning(
+        "Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, so they cannot be "
+        "scanned in it; scan 'kappa' (the lower-arc correction) instead, or scan the arcs "
+        "in angle mode")
+    sample.show_mount_plane(((-10, 10, -12), (0.333333, -0.666667, 1.25)))
+    sample.spacegroup_combo.setCurrentIndex(sample.spacegroup_combo.findData(146))  # R3
+    sample._update_spacegroup_info()  # the longest constraint text: trigonal
+    sample.lattice_warning_label.setText(
+        "⚠ Trigonal (R) requires a = b = c; Trigonal (R) requires α = β = γ")
+    sample.lattice_warning_label.show()
+    sample.update_ub_indicator(False)
+    sample.update_misalignment_indicator(False)
+    ctrl._set_angles_stale("the analyzer cannot reach this kf: A6 would be 181.3 deg, "
+                           "past its 140 deg limit")
+    for group in win.instrument_dock.collapsible_groups.values():
+        group.set_summary("ρhm 3.25 m (ideal 3.31 m), ρvm 1.75 m, ρha 2.10 m, "
+                          "ρva ideal 0.82 m; source Mono, dE 0.5 meV, Ei 14.7 meV")
+    for _ in range(3):
+        QApplication.processEvents()
+    names = {sim: ["progress_label", "remaining_time_label", "elapsed_time_label",
+                   "max_counts_label", "total_counts_label", "pre_scan_estimate_label",
+                   "time_per_point_label", "point_count_label", "total_time_estimate_label",
+                   "scan_warning_1_label", "scan_warning_2_label", "scan_conflict_label"],
+             sample: ["mount_status_label", "crystal_system_label", "lattice_warning_label",
+                      "ub_indicator_label", "misalignment_indicator_label"],
+             win.instrument_dock: ["angles_stale_label"]}
+    fed = {name: getattr(dock, name) for dock, attrs in names.items() for name in attrs}
+    fed.update({f"{key} summary": group.summary_label
+                for key, group in win.instrument_dock.collapsible_groups.items()})
+    return fed
+
+
+def _label_problem(label, blocks):
+    """Why ``label`` is clipped or outside its block (one of ``blocks``), or None.
+
+    Check 5's rule: at least its size hint wide, or word-wrapped with the
+    height its text needs, or elided with the full text as its tooltip.
+    """
+    block = label.parentWidget()
+    while block not in blocks:
+        block = block.parentWidget()
+    rect = label.rect().translated(label.mapTo(block, QPoint(0, 0)))
+    if not block.rect().contains(rect):
+        return f"outside its block {block.rect()}: {rect}"
+    if block.width() > metrics.BLOCK_WIDTH:
+        return f"its block is {block.width()} px wide"
+    if label.wordWrap():
+        if label.height() < label.heightForWidth(label.width()):
+            return f"wrapped, {label.height()} px tall of {label.heightForWidth(label.width())}"
+        return None
+    if label.width() >= label.sizeHint().width():
+        return None
+    if "…" in label.text() and label.toolTip() and label.toolTip() != label.text():
+        return None
+    return f"{label.width()} < {label.sizeHint().width()} px"
+
+
+@MODES
+def test_running_scan_texts_are_not_clipped(window, mode):
+    """Every runtime-updated form-dock label, at its longest realistic text, fits its block."""
+    _resize(window, MONITOR, mode, columns=4)
+    sim, sample = window.simulation_dock, window.sample_dock
+    groups = window.instrument_dock.collapsible_groups.values()
+    stale = window.instrument_dock.angles_stale_label
+    saved = {label: (label.text(), label.isHidden(), label.toolTip())
+             for label in window.findChildren(QLabel)}
+    summaries = {group: group._summary for group in groups}
+    space_group = sample.spacegroup_combo.currentIndex()
+    mount = (sample.mount_u_edit.text(), sample.mount_v_edit.text())
+    try:
+        fed = _feed_runtime_texts(window)
+        blocks = [block for name in FORM_DOCKS
+                  for block in getattr(window, name)._content_widget._blocks]
+        assert not [name for name, label in fed.items() if label.isHidden()]
+        bad = [f"{name} {label.text()!r}: {problem}" for name, label in fed.items()
+               if (problem := _label_problem(label, blocks))]
+        assert not bad, "\n".join(bad)
+    finally:
+        sim.clear_all_scan_warnings()
+        window.controller._angles_stale = None
+        sample.spacegroup_combo.setCurrentIndex(space_group)
+        sample.mount_u_edit.setText(mount[0])
+        sample.mount_v_edit.setText(mount[1])
+        for group, summary in summaries.items():
+            group.set_summary(summary)
+        for label, (text, hidden, tip) in saved.items():
+            label.setText(text)
+            label.setToolTip(tip)
+            label.setHidden(hidden)
+        stale.setHidden(saved[stale][1])
+        QApplication.processEvents()
+
+
 @pytest.mark.parametrize("action", ["save_parameters_action", "load_parameters_action",
                                     "clear_runtimes_action"])
 def test_menu_routes_are_wired(window, action):
