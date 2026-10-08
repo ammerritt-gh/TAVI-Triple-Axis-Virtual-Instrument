@@ -630,6 +630,10 @@ class TAVIMainWindow(QMainWindow):
                     dock.objectName(): dock.isFloating() for dock in self._all_docks
                 },
                 "column_width": self._column_width,
+                "collapsed_groups": {
+                    key: group.is_collapsed()
+                    for key, group in self.instrument_dock.collapsible_groups.items()
+                },
             }
             
             with open(config_path, 'w', encoding='utf-8') as f:
@@ -681,6 +685,20 @@ class TAVIMainWindow(QMainWindow):
                       f"using {NARROW}")
                 width = NARROW
             self._column_width = width
+
+            # Folded blocks: a missing or non-boolean entry folds (the default).
+            folded = layout_data.get("collapsed_groups", {})
+            if not isinstance(folded, dict):
+                print(f"Warning: collapsed_groups is {folded!r} in {config_path}, "
+                      f"not a mapping")
+                folded = {}
+            for key, group in self.instrument_dock.collapsible_groups.items():
+                collapsed = folded.get(key)  # None when missing
+                if not isinstance(collapsed, bool):
+                    print(f"Warning: collapsed_groups[{key!r}] is {collapsed!r} in "
+                          f"{config_path}; folding it (the default)")
+                    collapsed = True
+                group.set_collapsed(collapsed)
             return True
         except Exception as e:
             print(f"Warning: Failed to restore layout: {e}")

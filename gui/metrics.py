@@ -21,3 +21,6 @@ BLOCK_REFLOW_HYSTERESIS = 16
 # Choosing Wide sizes the form docks two blocks wide only when the window
 # still leaves the plot at least this wide; otherwise they stay one block.
 WIDE_PLOT_MIN_WIDTH = 400
+
+# A field holding an (h k l) triple, such as the Sample dock's mounting plane, in px.
+HKL_TRIPLE_FIELD_WIDTH = 100

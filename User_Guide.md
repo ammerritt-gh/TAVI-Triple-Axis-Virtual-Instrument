@@ -20,6 +20,7 @@ The instrument configuration dock directly sets up the instrument, in the form o
 - Scan commands will override the instrument configuration. As an example, when one scans over ω, the value given in the instrument configuration dock is replaced by the scan value for each point.
 - Angles and the K<sub>i</sub>/K<sub>f</sub>+E<sub>i</sub>/E<sub>f</sub> are all linked; changing one will update others, based on the given scattering geometry and mono/ana configuration. So for example, changing the E<sub>i</sub> will automatically change K<sub>i</sub> and the Mono 2θ angle.
 - TAVI uses ω, sample θ and A3 as different names for the same equivalent angle.
+- The blocks run in the order they are usually set: angles, energies, collimations, slits, crystals, then Crystal Focusing, Experimental Modules and Source Control. Those last three start folded: click the header, or press Space or Enter on it, to show the fields. While folded, the line under the header states what they hold: the four radii ("ideal" beside a radius held at its calculated ideal), the fitted modules ("none fitted" when there are none), or the source type. Whether each block is folded is saved with the layout.
 
 ### Collimations
 Collimations are given here based on what is available for the instrument. For example, on PUMA the α1 collimations are mutually exclusive but the α2 collimations are not. 0 is the "open" configuration, with no collimator at all, which may be unrealistic, but is available for testing.

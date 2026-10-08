@@ -1,6 +1,7 @@
 """Base Dock Widget with custom border painting for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
-                               QFrame, QComboBox, QLabel, QSizePolicy, QStyle)
+                               QFrame, QComboBox, QGroupBox, QLabel, QSizePolicy, QStyle,
+                               QToolButton)
 from PySide6.QtCore import Qt, QSize, QEvent
 from PySide6.QtGui import QPainter, QPen, QColor
 
@@ -155,6 +156,83 @@ class NoScrollComboBox(QComboBox):
             event.ignore()
             return
         super().wheelEvent(event)
+
+
+class CollapsibleGroup(QGroupBox):
+    """A form block whose fields fold away under a header.
+
+    The header is a focusable arrow-and-title button; a click, Space or Enter
+    shows or hides ``body`` (never ``QGroupBox.setCheckable``, which would
+    disable the fields instead). Folded, a line under the header states what
+    the fields hold (``set_summary``), elided to the block with the full text
+    as its tooltip, so a setting that changes the simulation is never hidden
+    without a word. Folding changes only this block's height; it never moves
+    the blocks between columns.
+    """
+
+    def __init__(self, title, collapsed=True, parent=None):
+        super().__init__(parent)
+        self.title_text = title
+        self.header = QToolButton()
+        self.header.setText(title)
+        self.header.setAccessibleName(title)
+        self.header.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        # Not checkable: a checked tool button paints a pressed panel, and the
+        # arrow alone should mark the state.
+        self.header.setAutoRaise(True)
+        self.header.setFocusPolicy(Qt.StrongFocus)
+        self.header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.header.installEventFilter(self)  # Enter toggles too; Space is built in
+        self.summary_label = QLabel()
+        # Elided by hand to the block width, so its full text never widens the block.
+        self.summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.summary_label.setIndent(self.header.iconSize().width() + 4)  # under the title
+        self.body = QWidget()
+        layout = QVBoxLayout(self)
+        layout.setSpacing(2)
+        layout.addWidget(self.header)
+        layout.addWidget(self.summary_label)
+        layout.addWidget(self.body)
+        self._summary = ""
+        self.header.clicked.connect(lambda: self.set_collapsed(not self._collapsed))
+        self.set_collapsed(collapsed)
+
+    def set_body_layout(self, layout):
+        """Lay the fields out on the body, flush with the header."""
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.body.setLayout(layout)
+
+    def is_collapsed(self):
+        return self._collapsed
+
+    def set_collapsed(self, collapsed):
+        self._collapsed = collapsed
+        self.header.setArrowType(Qt.RightArrow if collapsed else Qt.DownArrow)
+        self.header.setToolTip(f"{'Show' if collapsed else 'Hide'} the {self.title_text} fields")
+        self.body.setVisible(not collapsed)
+        self.summary_label.setVisible(collapsed)
+
+    def set_summary(self, text):
+        """What the folded fields hold: one line, key values only."""
+        self._summary = text
+        self._elide_summary()
+
+    def _elide_summary(self):
+        label = self.summary_label
+        room = label.contentsRect().width() - label.indent() - 2  # 2: bounding-box slack
+        label.setText(label.fontMetrics().elidedText(self._summary, Qt.ElideRight, room))
+        label.setToolTip(self._summary)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide_summary()
+
+    def eventFilter(self, watched, event):
+        if (watched is self.header and event.type() == QEvent.KeyPress
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)):
+            self.header.click()
+            return True
+        return False
 
 
 class BorderedFrame(QFrame):
