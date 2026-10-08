@@ -100,7 +100,7 @@ Release returns to free mode, where the arcs follow each Q again. A save keeps t
 
 ### Aligning from cold: a walkthrough
 The whole path from a fresh start to a scan in an aligned plane, mouse and keyboard only:
-1. Start clean. Open the UB Matrix dock with **Open UB Matrix...** in the Sample dock (or **View → UB Matrix**); it opens as a floating panel. Uncheck **Lock** on any peak entry, remove extra entries with ✗ (two always remain) and clear the two that are left, and clear the two **Lock plane** fields (Defaults leaves their text). Then choose **File → Load Defaults**. The UB is now the sample as described, with no mounting plane.
+1. Start clean. Open the UB Matrix dock with **Open UB Matrix...** in the Sample dock (or **View → UB Matrix**); with 3 columns it is already docked under the Sample dock, with 2 or 4 it opens as a floating panel. Uncheck **Lock** on any peak entry, remove extra entries with ✗ (two always remain) and clear the two that are left, and clear the two **Lock plane** fields (Defaults leaves their text). Then choose **File → Load Defaults**. The UB is now the sample as described, with no mounting plane.
 2. For a training exercise, paste its hash into the UB Matrix dock's **Student: Load Exercise** field and press **Load**.
 3. In the Simulation dock choose **Engine: Deterministic (analytic)** for quick scans (McStas works too, more slowly).
 4. Type the (h k l) of a strong reflection, for example 2 0 0, into the Scattering dock. The instrument goes where your UB says the reflection is, which for a misaligned crystal is not quite where it is.
@@ -198,7 +198,8 @@ The display dock shows ongoing data collection as scans finished. If you run a s
 
 ## Fitting Dock
 
-The **Fitting** dock (tabbed with Data Control and Remote API, below the plot)
+The **Fitting** dock (a tab beside Data Control and Remote API: below the plot
+with 3 or 4 columns, behind the Instrument dock with 2)
 fits a peak in the 1D scan currently shown in the Display dock and lets you
 drive the scanned variable straight to it — the same "run a scan, go to the
 peak" move you would make on a real instrument, without reading a number off
