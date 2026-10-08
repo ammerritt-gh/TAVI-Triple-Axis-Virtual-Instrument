@@ -1,15 +1,17 @@
 """Screenshots of the real TAVI window at the laptop and monitor reference sizes.
 
 Builds the real ``TAVIMainWindow`` and ``TAVIController`` offscreen, resizes
-the window to 1108x851 and to 2560x1392, chooses View > Layout (2, 3 or 4
-columns) and View > Column Width (Narrow, Wide), and writes one PNG per size
-and combination, named ``<instrument>_<w>x<h>_<N>col_<narrow|wide>.png``.
+the window to 1108x851 and to 2560x1392 (or to each ``--size WxH`` given
+instead; repeat it for several), chooses View > Layout (2, 3 or 4 columns) and
+View > Column Width (Narrow, Wide), and writes one PNG per size and
+combination, named ``<instrument>_<w>x<h>_<N>col_<narrow|wide>.png``.
 ``--columns auto`` shoots, at each size, what first start would pick for a
-screen that wide, and names the picked combination. Run it from the
+screen of that size, and names the picked combination. Run it from the
 repository root in the tavi-dev environment (importing Qt directly hits the
 delay-load fault noted in AGENTS.md):
 
     micromamba run -n tavi-dev python tools/ui_snapshots.py --instrument puma --columns all
+    micromamba run -n tavi-dev python tools/ui_snapshots.py --size 1536x826 --size 1920x1040
 
 It never touches the real ``config/``: ``TAVI_CONFIG_DIR`` points at a
 temporary copy before any ``tavi``/``gui`` import, and the run stops if the
@@ -136,15 +138,24 @@ def _apply_look(app, style, colors):
     print(f"widget style: {app.style().name()}" + ("" if colors else " (offscreen palette)"))
 
 
-def _combinations(width, columns, column_width):
-    """(columns, column width) pairs to shoot at a window ``width`` px wide."""
-    from gui.main_window import LAYOUT_COLUMNS, initial_layout_for_width
+def _combinations(width, height, columns, column_width):
+    """(columns, column width) pairs to shoot at a ``width`` x ``height`` window."""
+    from gui.main_window import LAYOUT_COLUMNS, initial_layout_for_size
 
     if columns == "auto":
-        return [initial_layout_for_width(width)]
+        return [initial_layout_for_size(width, height)]
     counts = LAYOUT_COLUMNS if columns == "all" else (int(columns),)
     widths = ("narrow", "wide") if column_width == "both" else (column_width,)
     return [(count, mode) for count in counts for mode in widths]
+
+
+def _size(text):
+    """``WxH`` as (W, H) in px."""
+    try:
+        width, height = (int(part) for part in text.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not WxH: {text!r}") from None
+    return width, height
 
 
 def main():
@@ -157,6 +168,8 @@ def main():
                              "(default auto)")
     parser.add_argument("--column-width", choices=("narrow", "wide", "both"), default="both",
                         help="View > Column Width to shoot (default both; auto picks its own)")
+    parser.add_argument("--size", action="append", type=_size, metavar="WxH",
+                        help="window size to shoot, repeatable (default 1108x851 and 2560x1392)")
     args = parser.parse_args()
 
     tmp_config = _isolate_config()
@@ -210,8 +223,9 @@ def main():
     try:
         window.show()
         app.processEvents()  # lets the startup timer fire before any resize
-        for width, height in SIZES:
-            for columns, column_width in _combinations(width, args.columns, args.column_width):
+        for width, height in args.size or SIZES:
+            for columns, column_width in _combinations(width, height, args.columns,
+                                                       args.column_width):
                 trigger(window.layout_actions[columns])  # first: the old preset's minimum goes
                 window.resize(width, height)
                 app.processEvents()

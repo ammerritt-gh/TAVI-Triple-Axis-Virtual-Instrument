@@ -182,16 +182,69 @@ def _label_field_pairs(dock):
                 yield label, field
 
 
-def test_initial_layout_for_width():
-    """Check 1: first start picks 2 columns Narrow on a laptop, 3 on a monitor, Wide from 2000 px."""
-    from gui.main_window import initial_layout_for_width
+def test_initial_layout_for_size():
+    """Check 1: 2 columns on a laptop or a short screen, 3 on a large one, Wide from 2000 px wide."""
+    from gui.main_window import initial_layout_for_size as pick
 
-    assert initial_layout_for_width(1108) == (2, NARROW)
-    assert initial_layout_for_width(1600) == (3, NARROW)
-    assert initial_layout_for_width(2560) == (3, WIDE)
-    assert initial_layout_for_width(metrics.LAYOUT_TWO_COLUMNS_BELOW - 1)[0] == 2
-    assert initial_layout_for_width(metrics.LAYOUT_TWO_COLUMNS_BELOW) == (3, NARROW)
-    assert initial_layout_for_width(metrics.LAYOUT_WIDE_FROM) == (3, WIDE)
+    tall, wide = metrics.LAYOUT_THREE_COLUMNS_MIN_HEIGHT, metrics.LAYOUT_WIDE_FROM
+    assert pick(1108, 851) == (2, NARROW)
+    assert pick(1536, 826) == (2, NARROW)  # 1920x1080 at 125 %
+    assert pick(1920, 1040) == (2, NARROW)  # 1920x1080 at 100 %: shorter than the threshold
+    assert pick(1920, 1160) == (3, NARROW)  # 1920x1200
+    assert pick(2560, 1392) == (3, WIDE)  # ruling M
+    assert pick(2560, 1040) == (2, WIDE)  # a short wide screen
+    assert pick(metrics.LAYOUT_TWO_COLUMNS_BELOW - 1, 2000) == (2, NARROW)
+    assert pick(metrics.LAYOUT_TWO_COLUMNS_BELOW, tall) == (3, NARROW)
+    assert pick(metrics.LAYOUT_TWO_COLUMNS_BELOW, tall - 1) == (2, NARROW)
+    assert pick(wide, tall) == (3, WIDE)
+
+
+def _in_view(dock, widget):
+    """Whether ``widget`` lies wholly inside ``dock``'s scroll viewport, scrolled to the top."""
+    scroll = dock._scroll_area
+    scroll.verticalScrollBar().setValue(0)
+    viewport = scroll.viewport()
+    return viewport.rect().contains(widget.rect().translated(widget.mapTo(viewport, QPoint(0, 0))))
+
+
+TITLE_BAR = 40  # px a maximised window's title bar takes from the screen's available height
+
+
+def test_three_columns_at_the_smallest_pick_show_the_first_use_path(window):
+    """3 columns at the smallest screen picking them: the first-use path is in view, nothing scrolled.
+
+    Instrument's Angles and Energies, Scattering's H, K, L and dE, and
+    Simulation's Run, Stop, progress and both scan commands.
+    """
+    _resize(window, (metrics.LAYOUT_TWO_COLUMNS_BELOW,
+                     metrics.LAYOUT_THREE_COLUMNS_MIN_HEIGHT - TITLE_BAR), NARROW, columns=3)
+    instrument, scattering, simulation = (window.instrument_dock, window.scattering_dock,
+                                          window.simulation_dock)
+    angles, energies = _blocks(instrument)[:2]
+    assert [_title(angles), _title(energies)] == INSTRUMENT_ORDER[:2]
+    hidden = [_title(block) for block in (angles, energies) if not _in_view(instrument, block)]
+    hidden += [name for dock, names in (
+        (scattering, ["H_edit", "K_edit", "L_edit", "deltaE_edit"]),
+        (simulation, ["run_button", "stop_button", "progress_bar", "scan_command_1_edit",
+                      "scan_command_2_edit"]))
+        for name in names if not _in_view(dock, getattr(dock, name))]
+    assert not hidden, hidden
+
+
+@pytest.mark.parametrize("size", [LAPTOP, (1536, 826)], ids=["1108x851", "1536x826"])
+def test_three_columns_keep_the_elastic_share(window, size):
+    """3 columns chosen on a short window: Instrument keeps its share; Simulation scrolls under Run.
+
+    The content-height docks give way, the lower first; Run, Stop and the
+    progress sit at Simulation's top, so they stay in view.
+    """
+    _resize(window, size, NARROW, columns=3)
+    column = window._dock_area_height()
+    assert window.instrument_dock.height() >= metrics.SPLIT_ELASTIC_MIN_SHARE * column - 10, (
+        window.instrument_dock.height(), column)
+    simulation = window.simulation_dock
+    assert all(_in_view(simulation, getattr(simulation, name))
+               for name in ("run_button", "stop_button", "progress_bar"))
 
 
 def test_plot_gets_most_of_its_column(window):
@@ -805,10 +858,11 @@ def _log(win):
 
 def _assert_picked_preset(win):
     """The preset first start picks for the window's screen, every placed dock docked and shown."""
-    from gui.main_window import initial_layout_for_width
+    from gui.main_window import initial_layout_for_size
 
     assert not win._layout_restored
-    columns, _width = initial_layout_for_width(win.screen().availableGeometry().width())
+    room = win.screen().availableGeometry()
+    columns, _width = initial_layout_for_size(room.width(), room.height())
     assert win._columns == columns
     for name in PLACED:
         dock = getattr(win, name)
@@ -1120,7 +1174,7 @@ def test_presets_after_restore_all_panels(window, columns, docked_once):
 
 def test_reset_picks_for_the_screen_and_refolds(window):
     """Reset to Default Layout: the screen's pick and width, the window fitted, the blocks folded."""
-    from gui.main_window import initial_layout_for_width
+    from gui.main_window import initial_layout_for_size
 
     groups = window.instrument_dock.collapsible_groups
     _resize(window, MONITOR, WIDE, columns=4)
@@ -1128,7 +1182,8 @@ def test_reset_picks_for_the_screen_and_refolds(window):
     window.reset_to_default_layout()
     for _ in range(3):
         QApplication.processEvents()
-    columns, width = initial_layout_for_width(window.screen().availableGeometry().width())
+    room = window.screen().availableGeometry()
+    columns, width = initial_layout_for_size(room.width(), room.height())
     assert window._columns == columns and window._column_width == width
     assert window.column_width_actions[width].isChecked()
     assert all(group.is_collapsed() for group in groups.values())

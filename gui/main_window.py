@@ -31,16 +31,17 @@ from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
 LAYOUT_COLUMNS = (2, 3, 4)  # the View > Layout presets
 
 
-def initial_layout_for_width(available_width):
-    """(columns, column width) for a screen ``available_width`` logical px wide.
+def initial_layout_for_size(available_width, available_height):
+    """(columns, column width) for a screen whose available area is this many logical px.
 
-    What first start and Reset to Default Layout pick: 2 columns, Narrow on a
-    laptop; otherwise 3 columns, Wide on a large monitor. 4 columns is only
-    ever the user's choice.
+    What first start and Reset to Default Layout pick: 3 columns on a screen
+    wide and tall enough for them, else 2 (a laptop, or a short screen such as
+    1920x1080 at 125 %); Wide on a wide one, else Narrow. The thresholds are
+    in ``metrics``. 4 columns is only ever the user's choice.
     """
-    if available_width < metrics.LAYOUT_TWO_COLUMNS_BELOW:
-        return 2, NARROW
-    return 3, WIDE if available_width >= metrics.LAYOUT_WIDE_FROM else NARROW
+    tall = available_height >= metrics.LAYOUT_THREE_COLUMNS_MIN_HEIGHT
+    columns = 3 if available_width >= metrics.LAYOUT_TWO_COLUMNS_BELOW and tall else 2
+    return columns, WIDE if available_width >= metrics.LAYOUT_WIDE_FROM else NARROW
 
 
 class TAVIMainWindow(QMainWindow):
@@ -84,8 +85,8 @@ class TAVIMainWindow(QMainWindow):
 
         # The screen-picked preset: what first start shows, and what a saved
         # layout restores over.
-        self._columns, self._column_width = initial_layout_for_width(
-            self.screen().availableGeometry().width())
+        room = self.screen().availableGeometry()
+        self._columns, self._column_width = initial_layout_for_size(room.width(), room.height())
         self._setup_dock_layout(self._columns)
 
         # Create menu bar with View menu
@@ -148,7 +149,10 @@ class TAVIMainWindow(QMainWindow):
 
         In each column below, the first dock is elastic (it scrolls, or is the
         plot) and each of the others gets its content's height, capped at
-        ``metrics.SPLIT_CONTENT_MAX_SHARE`` of the column.
+        ``metrics.SPLIT_CONTENT_MAX_SHARE`` of the column. Together they leave
+        the elastic dock ``metrics.SPLIT_ELASTIC_MIN_SHARE``; past that the
+        lower ones are cut short and scroll (Simulation keeps Run, Stop and the
+        progress at its top).
         """
         columns = {
             2: [(self.instrument_dock, self.scattering_dock),
@@ -161,7 +165,11 @@ class TAVIMainWindow(QMainWindow):
         for elastic, *short in columns:
             column = self._dock_area_height() - len(short) * separator
             cap = int(column * metrics.SPLIT_CONTENT_MAX_SHARE)
-            sizes = [min(self._content_height(dock), cap) for dock in short]
+            room = int(column * (1 - metrics.SPLIT_ELASTIC_MIN_SHARE))
+            sizes = []
+            for dock in short:  # top to bottom: the lower one is cut short first
+                sizes.append(min(self._content_height(dock), cap, room))
+                room -= sizes[-1]
             self.resizeDocks([elastic, *short], [column - sum(sizes), *sizes], Qt.Vertical)
         if self._columns != 2:
             self._split_display_column()
@@ -334,14 +342,14 @@ class TAVIMainWindow(QMainWindow):
     def _setup_dock_layout(self, columns):
         """Place the docks in the View > Layout preset of ``columns`` (2, 3 or 4).
 
-        3 columns (the operator's own arrangement; the pick from 1400 px):
+        3 columns (the operator's own arrangement; the pick on a screen wide and tall enough):
             Instrument  | Sample     | Display
             Scattering  | UB Matrix  | Message Log
             Simulation  |            | [Data Control | Remote API | Fitting]
         4 columns:
             Instrument | Sample | Scattering | Display
                        |        | Simulation | [Log | Data Control | Fitting | Remote API]
-        2 columns (the pick below 1400 px):
+        2 columns (the pick otherwise):
             [Instrument | Log | Data Control | Fitting | Remote API] | Display
             [Scattering | Sample]                                   | Simulation
 
@@ -741,7 +749,8 @@ class TAVIMainWindow(QMainWindow):
         The preset and column width picked for the window's screen, the window
         fitted to that screen, and the rare Instrument blocks folded again.
         """
-        columns, width = initial_layout_for_width(self.screen().availableGeometry().width())
+        room = self.screen().availableGeometry()
+        columns, width = initial_layout_for_size(room.width(), room.height())
         for group in self.instrument_dock.collapsible_groups.values():
             group.set_collapsed(True)
         self.set_column_width(width, fit=False)
