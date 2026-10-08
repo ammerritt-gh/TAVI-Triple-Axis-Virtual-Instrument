@@ -1177,6 +1177,8 @@ Missing keys fall back to instrument defaults.
   `alpha_2`, `alpha_3`, `alpha_4`. Single-select slots take a string (e.g.
   `"40"`); the multi-select slot (`alpha_2`) takes a list of strings (e.g.
   `["30", "40"]`). Example: `{"collimation": {"alpha_1": "40", "alpha_2": ["40"], "alpha_3": "30", "alpha_4": "30"}}`.
+  `"0"` means an open position (no collimator installed); the GUI shows it as
+  Open. Values sent and returned are unchanged.
 - `slits_mm` — `{slit_id: width}` or `{slit_id: [width, height]}` in mm. On PUMA
   the slots are `vbl_hgap` (width only), `pbl` (`[width, height]`), and
   `dbl_hgap` (width only). Example: `{"slits_mm": {"vbl_hgap": 88, "pbl": [100, 100], "dbl_hgap": 50}}`.

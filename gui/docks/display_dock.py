@@ -17,7 +17,7 @@ from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
-from gui.docks.base_dock import BaseDockWidget
+from gui.docks.base_dock import BaseDockWidget, collimation_label
 
 
 def _delta_e_info_line(meta):
@@ -375,13 +375,13 @@ class SavePlotDialog(QDialog):
         if self.info_collimations_check.isChecked():
             coll_parts = []
             if 'alpha_1' in meta:
-                coll_parts.append(f"α1={meta['alpha_1']}")
+                coll_parts.append(f"α1={collimation_label(meta['alpha_1'])}")
             if 'alpha_2' in meta:
-                coll_parts.append(f"α2={meta['alpha_2']}")
+                coll_parts.append(f"α2={collimation_label(meta['alpha_2'])}")
             if 'alpha_3' in meta:
-                coll_parts.append(f"α3={meta['alpha_3']}")
+                coll_parts.append(f"α3={collimation_label(meta['alpha_3'])}")
             if 'alpha_4' in meta:
-                coll_parts.append(f"α4={meta['alpha_4']}")
+                coll_parts.append(f"α4={collimation_label(meta['alpha_4'])}")
             if coll_parts:
                 info_lines.append("Coll: " + ", ".join(coll_parts))
         
@@ -552,13 +552,13 @@ class SavePlotDialog(QDialog):
         if self.info_collimations_check.isChecked():
             coll_parts = []
             if 'alpha_1' in meta:
-                coll_parts.append(f"α1={meta['alpha_1']}")
+                coll_parts.append(f"α1={collimation_label(meta['alpha_1'])}")
             if 'alpha_2' in meta:
-                coll_parts.append(f"α2={meta['alpha_2']}")
+                coll_parts.append(f"α2={collimation_label(meta['alpha_2'])}")
             if 'alpha_3' in meta:
-                coll_parts.append(f"α3={meta['alpha_3']}")
+                coll_parts.append(f"α3={collimation_label(meta['alpha_3'])}")
             if 'alpha_4' in meta:
-                coll_parts.append(f"α4={meta['alpha_4']}")
+                coll_parts.append(f"α4={collimation_label(meta['alpha_4'])}")
             if coll_parts:
                 info_lines.append("Coll: " + ", ".join(coll_parts))
         
@@ -1267,13 +1267,13 @@ class DisplayDock(BaseDockWidget):
         # Collimations
         coll_parts = []
         if 'alpha_1' in meta:
-            coll_parts.append(f"α1={meta['alpha_1']}")
+            coll_parts.append(f"α1={collimation_label(meta['alpha_1'])}")
         if 'alpha_2' in meta:
-            coll_parts.append(f"α2={meta['alpha_2']}")
+            coll_parts.append(f"α2={collimation_label(meta['alpha_2'])}")
         if 'alpha_3' in meta:
-            coll_parts.append(f"α3={meta['alpha_3']}")
+            coll_parts.append(f"α3={collimation_label(meta['alpha_3'])}")
         if 'alpha_4' in meta:
-            coll_parts.append(f"α4={meta['alpha_4']}")
+            coll_parts.append(f"α4={collimation_label(meta['alpha_4'])}")
         if coll_parts:
             info_lines.append("Coll: " + ", ".join(coll_parts))
         

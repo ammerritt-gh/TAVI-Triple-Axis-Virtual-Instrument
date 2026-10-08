@@ -4,6 +4,32 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QPen, QColor
 
 
+COLLIMATION_OPEN_TOOLTIP = "Open: no collimator installed, coarsest resolution."
+
+
+def collimation_label(value):
+    """Display text for a collimation value; never stored or read back.
+
+    Zero (or the metadata's "open") reads Open, other numbers carry the
+    arcminute mark, a list/tuple/set (stacked collimators) joins its non-zero
+    entries with "+", and any other string (already marked) passes through.
+    """
+    if isinstance(value, (list, tuple, set, frozenset)):
+        parts = [collimation_label(v) for v in value]
+        parts = [p for p in parts if p != "Open"]
+        return "+".join(parts) if parts else "Open"
+    if isinstance(value, str):
+        if value.strip().lower() == "open":
+            return "Open"
+        try:
+            number = float(value)
+        except ValueError:
+            return value
+    else:
+        number = float(value)
+    return "Open" if number == 0 else f"{number:g}'"
+
+
 class NoScrollComboBox(QComboBox):
     """A QComboBox that ignores mouse-wheel events unless it has focus.
 
