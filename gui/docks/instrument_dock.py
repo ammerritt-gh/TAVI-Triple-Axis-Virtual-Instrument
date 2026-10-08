@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QPushButton, QWidget)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
+from gui.docks.base_dock import (BaseDockWidget, NoScrollComboBox,
+                                 COLLIMATION_OPEN_TOOLTIP, collimation_label)
 from instruments.descriptor import ModuleKind
 
 
@@ -278,21 +279,36 @@ class InstrumentDock(BaseDockWidget):
                     slot_layout.setSpacing(3)
                     checks = {}
                     for value in slot.allowed:
-                        check = QCheckBox(f"{value}'")
+                        check = QCheckBox(collimation_label(value))
                         check.setObjectName(f"collimation_{slot.id}_{value}")
+                        check.setToolTip(COLLIMATION_OPEN_TOOLTIP)
                         slot_layout.addWidget(check)
                         checks[value] = check
+                    # Nothing checked is an open position: show it, display
+                    # only (the stored selection stays the empty set).
+                    open_label = QLabel("Open")
+                    open_label.setToolTip(COLLIMATION_OPEN_TOOLTIP)
+                    slot_layout.addWidget(open_label)
+
+                    def _sync(_=None, checks=checks, open_label=open_label):
+                        open_label.setHidden(
+                            any(c.isChecked() for c in checks.values()))
+
+                    for check in checks.values():
+                        check.toggled.connect(_sync)
+                    _sync()
                     slot_widget.setLayout(slot_layout)
                     collimations_layout.addWidget(slot_widget, row, 1, 1, 2)
                     self.collimation_widgets[slot.id] = checks
                 else:
                     combo = NoScrollComboBox()
                     combo.setObjectName(f"collimation_{slot.id}")
-                    combo.addItems(list(slot.allowed))
-                    combo.setCurrentText(slot.default)
+                    for value in slot.allowed:
+                        combo.addItem(collimation_label(value), value)
+                    combo.setCurrentIndex(max(combo.findData(slot.default), 0))
+                    combo.setToolTip(COLLIMATION_OPEN_TOOLTIP)
                     combo.setMaximumWidth(80)
                     collimations_layout.addWidget(combo, row, 1)
-                    collimations_layout.addWidget(QLabel("'"), row, 2)
                     self.collimation_widgets[slot.id] = combo
 
             main_layout.addWidget(collimations_group)
@@ -394,7 +410,7 @@ class InstrumentDock(BaseDockWidget):
                     value for value, check in widget.items() if check.isChecked()
                 }
             else:
-                values[slot_id] = widget.currentText()
+                values[slot_id] = widget.currentData()
         return values
 
     def set_collimation_values(self, values):
@@ -408,7 +424,9 @@ class InstrumentDock(BaseDockWidget):
                 for value, check in widget.items():
                     check.setChecked(value in selected)
             else:
-                widget.setCurrentText(str(values.get(slot.id, slot.default)))
+                idx = widget.findData(str(values.get(slot.id, slot.default)))
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
 
     def slit_values_mm(self):
         """{slit_id: width | (width, height)} in mm.
