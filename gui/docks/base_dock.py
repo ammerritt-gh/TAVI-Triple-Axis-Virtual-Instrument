@@ -18,15 +18,12 @@ def collimation_label(value):
         parts = [collimation_label(v) for v in value]
         parts = [p for p in parts if p != "Open"]
         return "+".join(parts) if parts else "Open"
-    if isinstance(value, str):
-        if value.strip().lower() == "open":
-            return "Open"
-        try:
-            number = float(value)
-        except ValueError:
-            return value
-    else:
+    if isinstance(value, str) and value.strip().lower() == "open":
+        return "Open"
+    try:
         number = float(value)
+    except (TypeError, ValueError):
+        return str(value)  # already marked, or unreadable (None): as before
     return "Open" if number == 0 else f"{number:g}'"
 
 
