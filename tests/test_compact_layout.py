@@ -976,32 +976,46 @@ def _on_screen(dock):
                for screen in QGuiApplication.screens())
 
 
-def test_docks_saved_off_screen_come_back(window, layout_file):
+def test_docks_saved_off_screen_come_back(window, layout_file, monkeypatch):
     """Check 6: floating docks saved off every screen come back on one after a restart.
 
-    Misalignment, shown, and UB Matrix, hidden (it floats in 4 columns), both
-    saved far off; UB Matrix is checked once opened, as the Sample dock does.
+    Misalignment (docked once by the user, so the saved state holds it) and UB
+    Matrix (opened, so floating, in 4 columns), both shown and saved far off,
+    as on a monitor since unplugged. The restart leaves them there, as a
+    window system that does not clamp would, so only the rescue brings them
+    back: checked before the window is shown (the offscreen platform may
+    clamp a window it creates) and after. A hidden floating dock cannot be
+    lost this way: Qt 6.11 restores it docked.
     """
     misalignment, ub = window.misalignment_dock, window.ub_matrix_dock
     try:
         _resize(window, MONITOR, NARROW, columns=4)
+        window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
         misalignment.setFloating(True)
-        misalignment.show()
         for dock in (misalignment, ub):
+            dock.show()
             dock.move(FAR)
         QApplication.processEvents()
-        assert not _on_screen(misalignment) and not _on_screen(ub)
+        assert ub.isFloating() and not _on_screen(misalignment) and not _on_screen(ub)
         assert window.save_layout_to_file()
     finally:
+        window.removeDockWidget(misalignment)
+        misalignment.setFloating(True)
         misalignment.hide()
-    restarted = _restart()
+        ub.hide()
+    names = ("misalignment_dock", "ub_matrix_dock")
+    _unclamped_restore(monkeypatch, *names)
+    restarted = _restart(show=False)
     try:
         assert restarted._layout_restored
-        assert restarted.misalignment_dock.isVisible() and _on_screen(restarted.misalignment_dock)
-        assert restarted.ub_matrix_dock.isHidden()
-        restarted._on_open_ub_matrix_dock()
+        assert all(not getattr(restarted, name).isHidden() for name in names)
+        lost = [name for name in names if not _on_screen(getattr(restarted, name))]
+        assert not lost, lost
+        assert "brought back" in _log(restarted)
+        restarted.show()
         QApplication.processEvents()
-        assert _on_screen(restarted.ub_matrix_dock)
+        lost = [name for name in names if not _on_screen(getattr(restarted, name))]
+        assert not lost, lost
     finally:
         _close(restarted)
 
