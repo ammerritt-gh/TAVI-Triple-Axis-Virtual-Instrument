@@ -31,7 +31,8 @@ class DataControlDock(BaseDockWidget):
         target_layout.addWidget(QLabel("Target output folder:"))
         self.save_browse_button = QPushButton("Browse")
         target_layout.addWidget(self.save_browse_button)
-        
+        target_layout.addStretch(1)  # the button keeps its natural width
+
         save_layout.addWidget(target_widget)
         
         self.save_folder_edit = QLineEdit()
@@ -71,7 +72,8 @@ class DataControlDock(BaseDockWidget):
         load_widget_layout.addWidget(self.load_browse_button)
         self.load_data_button = QPushButton("Load")
         load_widget_layout.addWidget(self.load_data_button)
-        
+        load_widget_layout.addStretch(1)  # the buttons keep their natural width
+
         load_layout.addWidget(load_widget)
         
         self.load_folder_edit = QLineEdit()
