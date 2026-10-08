@@ -45,7 +45,7 @@ def initial_layout_for_width(available_width):
 class TAVIMainWindow(QMainWindow):
     """Main window for TAVI application with dockable panels."""
 
-    # 3: the 2/3/4-column presets. An older file is set aside (.bak), not read.
+    # 3: the 2/3/4-column presets. A file of another version is set aside (.bak), not read.
     LAYOUT_VERSION = 3
 
     def __init__(self, descriptor=None, instrument_infos=None,
@@ -853,8 +853,9 @@ class TAVIMainWindow(QMainWindow):
                 backup = f"{config_path}.v{version if isinstance(version, int) else 'none'}.bak"
                 os.replace(config_path, backup)  # overwrites an older .bak
                 self._layout_note(
-                    f"Window layout: the saved layout is from an older TAVI (layout version "
-                    f"{version}) and was set aside as {backup}. Using the {self._columns}-column "
+                    f"Window layout: the saved layout is from another TAVI version (layout version "
+                    f"{version}; this one reads {self.LAYOUT_VERSION}) and was set aside as "
+                    f"{backup}. Using the {self._columns}-column "
                     f"layout picked for this screen; View > Layout changes it.")
                 return False
 
