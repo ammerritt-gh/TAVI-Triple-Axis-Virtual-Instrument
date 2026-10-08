@@ -868,9 +868,11 @@ class TAVIMainWindow(QMainWindow):
         copied there when it cannot be moved (it is then overwritten on exit). An
         unreadable file, a geometry or state Qt refuses, or any other error
         falls back to the preset. Each of these says so in the Message Log.
-        After a restore, Misalignment, and UB Matrix outside 3 columns, float
-        at their saved visibility (centred if they came back docked), and a
-        floating dock no screen shows is brought back. Call it only before show(): restoreState over a shown window leaves
+        After a restore, Misalignment and UB Matrix saved floating float again
+        at their saved visibility (centred if they came back docked); saved
+        docked, they stay put; with no saved entry, Misalignment floats, and UB
+        Matrix outside 3 columns (logged). A floating dock no screen shows is
+        brought back. Call it only before show(): restoreState over a shown window leaves
         stale tab bars that still hold tabs, which _tidy_tab_bars would show.
         """
         config_path = self._get_layout_config_path()
@@ -933,11 +935,24 @@ class TAVIMainWindow(QMainWindow):
                       f"taking {self._columns} for a lost dock's place")
 
             # Qt 6.11 restores a hidden dock that a preset took out and floated
-            # as docked, with no place: it would open as a full-width row.
-            # These two float wherever the preset gives them no place.
-            for dock in ([self.misalignment_dock]
-                         + ([] if self._columns == 3 else [self.ub_matrix_dock])):
-                self._float_centred(dock, not dock.isHidden())
+            # as docked, with no place: it would open as a full-width row. So
+            # these two float again if they were saved floating; one the user
+            # docked stays where restoreState put it. With no saved entry, the
+            # preset's rule: Misalignment floats, UB Matrix outside 3 columns.
+            floating = layout_data.get("dock_floating")
+            if not isinstance(floating, dict):
+                floating = {}
+            for dock in (self.misalignment_dock, self.ub_matrix_dock):
+                name = dock.objectName()
+                saved = floating.get(name)
+                if not isinstance(saved, bool):
+                    entry = saved
+                    saved = dock is self.misalignment_dock or self._columns != 3
+                    print(f"Warning: dock_floating[{name!r}] is {entry!r} in {config_path}; "
+                          + ("floating it, as the preset does" if saved
+                             else "leaving it where it was restored"))
+                if saved:
+                    self._float_centred(dock, not dock.isHidden())
 
             width = layout_data.get("column_width", NARROW)
             if width not in (NARROW, WIDE):
