@@ -22,9 +22,11 @@ from instruments.registry import available_instruments, get_instrument  # noqa: 
 
 IDS = [info.id for info in available_instruments()]
 
+# Held at module level so the application outlives every dock built below.
+_APP = QApplication.instance() or QApplication([sys.argv[0]])
+
 
 def _dock(instrument_id):
-    QApplication.instance() or QApplication([sys.argv[0]])
     return InstrumentDock(descriptor=get_instrument(instrument_id).descriptor())
 
 
