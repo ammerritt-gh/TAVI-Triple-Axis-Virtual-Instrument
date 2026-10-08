@@ -21,7 +21,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import SIGNAL, QPoint, Qt  # noqa: E402
 from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QGridLayout, QGroupBox,  # noqa: E402
-                               QLabel, QMessageBox, QPushButton, QToolButton)
+                               QLabel, QMessageBox, QPushButton, QTabBar, QToolButton)
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -124,6 +124,15 @@ def test_plot_gets_most_of_its_column(window):
                                     window.data_control_dock)]
     assert heights[0] > heights[1] + heights[2], heights
     assert window.display_dock.canvas.height() >= 250
+
+
+def test_one_data_control_tab_strip(window):
+    """Only the live Data Control/Remote API tab strip is painted, none at a stale spot."""
+    _resize(window, LAPTOP, NARROW)
+    strips = [bar.geometry().getRect() for bar in window.findChildren(QTabBar)
+              if bar.isVisible() and window.rect().intersects(bar.geometry())
+              and "Remote API" in [bar.tabText(i) for i in range(bar.count())]]
+    assert len(strips) == 1, strips
 
 
 @MODES
