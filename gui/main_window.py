@@ -2,6 +2,7 @@
 import sys
 import os
 import json
+import shutil
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                 QScrollArea, QMenuBar, QMenu, QMessageBox,
                                 QInputDialog, QSizePolicy, QStyle, QTabBar)
@@ -831,7 +832,8 @@ class TAVIMainWindow(QMainWindow):
         """Restore the saved layout if it is of this version; True when it now stands.
 
         No file is a first start: False, silently. A file of another version
-        (or none) is set aside once as ``view_layout.json.v<old>.bak``. An
+        (or none) is set aside once as ``view_layout.json.v<old>.bak``, or
+        copied there when it cannot be moved (it is then overwritten on exit). An
         unreadable file, a geometry or state Qt refuses, or any other error
         falls back to the preset. Each of these says so in the Message Log.
         After a restore, a floating dock no screen shows is brought back.
@@ -851,12 +853,24 @@ class TAVIMainWindow(QMainWindow):
             version = layout_data.get("layout_version")
             if version != self.LAYOUT_VERSION:
                 backup = f"{config_path}.v{version if isinstance(version, int) else 'none'}.bak"
-                os.replace(config_path, backup)  # overwrites an older .bak
+                try:
+                    os.replace(config_path, backup)  # overwrites an older .bak
+                    kept = f"was set aside as {backup}"
+                except OSError as moving:
+                    # A locked file may still be readable: copy it aside instead.
+                    # Either way this file is overwritten when TAVI closes.
+                    try:
+                        shutil.copyfile(config_path, backup)
+                        kept = (f"could not be moved ({moving}), so it was copied to {backup}; "
+                                f"{config_path} itself is overwritten when TAVI closes")
+                    except OSError as copying:
+                        kept = (f"could not be moved ({moving}; copying failed too: "
+                                f"{copying}); {config_path} is overwritten when TAVI closes")
                 self._layout_note(
                     f"Window layout: the saved layout is from another TAVI version (layout version "
-                    f"{version}; this one reads {self.LAYOUT_VERSION}) and was set aside as "
-                    f"{backup}. Using the {self._columns}-column "
-                    f"layout picked for this screen; View > Layout changes it.")
+                    f"{version}; this one reads {self.LAYOUT_VERSION}) and {kept}. Using the "
+                    f"{self._columns}-column layout picked for this screen; View > Layout "
+                    f"changes it.")
                 return False
 
             geometry = QByteArray.fromBase64(layout_data["window_geometry"].encode('ascii'))
