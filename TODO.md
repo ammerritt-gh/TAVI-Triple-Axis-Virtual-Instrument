@@ -131,6 +131,11 @@ Roadmap order per CONTROL_FEATURES §9:
       future driven mono/rha axis with `focusing_known=False` (today only
       IN12's Heusler rva) would KeyError in `update_ideal_bending_buttons`.
 
+## Known better shapes
+
+- 2026-10-08 · gui/main_window.py layout presets · one module-level PRESETS table per column count read by `_setup_dock_layout`, `_split_columns`/`_split_display_column` and the lost-dock homing, instead of four places that must change together · revisit: the first on-sight preset revision; if it touches more than one method, build the table first · j199268729c39 ab7426198a833-3
+- 2026-10-08 · tools/ui_snapshots.py · drop the windows11 style probe (always falls back offscreen) and set Fusion with the platform palette directly, about 25 lines less · revisit: the probe slows or hangs a snapshot run, or a Qt upgrade · j199268729c39 ab7426198a833-4
+
 ## Housekeeping
 
 - [x] **Test-runner note** - done 2026-09-09. The interpreter crash on a full
