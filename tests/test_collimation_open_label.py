@@ -36,7 +36,7 @@ def _open_label(dock, slot_id):
 
 
 def test_all_four_instruments_are_covered():
-    assert len(IDS) == 4
+    assert {"puma", "in8", "in12", "panda"} <= set(IDS)
 
 
 @pytest.mark.parametrize("instrument_id", IDS)
