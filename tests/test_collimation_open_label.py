@@ -109,3 +109,4 @@ def test_label_helper_on_metadata_shapes():
     assert collimation_label([30, 0, 60]) == "30'+60'"
     assert collimation_label([0, 0, 0]) == "Open"
     assert collimation_label("30'+40'") == "30'+40'"
+    assert collimation_label(None) == "None"  # unreadable file value: no crash
