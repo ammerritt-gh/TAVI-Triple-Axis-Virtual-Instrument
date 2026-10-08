@@ -1,7 +1,8 @@
 """Compact-window checks on the real offscreen window and controller (PUMA).
 
 Numbered as in the compact-window plan: 4, labels sit beside their fields;
-5, nothing in the four form docks is clipped.
+5, nothing in the four form docks is clipped; 8, the menu routes that
+replaced the Simulation dock's buttons are wired.
 """
 import os
 import sys
@@ -13,10 +14,10 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtCore import SIGNAL, QPoint  # noqa: E402
 from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QGridLayout, QLabel,  # noqa: E402
-                               QPushButton, QToolButton)
+                               QMessageBox, QPushButton, QToolButton)
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -43,6 +44,7 @@ def window():
             current_instrument_id=instrument.id, save_selection=lambda _id: None,
         )
     ctrl = cm.TAVIController(win, instrument, api_overrides={"disabled": True})
+    win.controller = ctrl  # as main() does
     win.show()  # offscreen: layouts only settle on a shown window
     app.processEvents()  # lets the startup geometry timer fire before any resize
     try:
@@ -133,3 +135,38 @@ def test_nothing_clipped(window, size):
                 clipped.append(f"{name}: {type(widget).__name__} {widget.text()!r} "
                                f"{widget.width()} < {widget.sizeHint().width()} px")
     assert not clipped, "\n".join(clipped)
+
+
+@pytest.mark.parametrize("action", ["save_parameters_action", "load_parameters_action",
+                                    "clear_runtimes_action"])
+def test_menu_routes_are_wired(window, action):
+    """Check 8: the File/Config actions replacing the dock buttons reach a handler.
+
+    Load Defaults is exercised end to end by test_orientation_gui.py. The
+    handlers are bound at construction, so this counts receivers rather than
+    monkeypatching the controller afterwards.
+    """
+    assert getattr(window, action).receivers(SIGNAL("triggered(bool)")) >= 1
+    dock = window.simulation_dock
+    for removed in ("quit_button", "clear_runtimes_button", "save_button",
+                    "load_button", "defaults_button"):
+        assert not hasattr(dock, removed), removed
+
+
+def test_clear_runtime_data_keeps_other_instruments(window, monkeypatch):
+    """Clear Runtime Data deletes only the current instrument's records, and says which."""
+    ctrl = window.controller
+    tracker = ctrl.runtime_tracker
+    tracker.add_record("puma", 5, 10000, 20.0, 2.0, 28.0)
+    tracker.add_record("in8", 5, 10000, 20.0, 2.0, 28.0)
+    asked = []
+
+    def answer_yes(_parent, _title, text, *_rest):
+        asked.append(text)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", answer_yes)
+    window.clear_runtimes_action.trigger()
+    assert ctrl.instrument.display_name in asked[0]
+    assert tracker.get_record_count("puma") == 0
+    assert tracker.get_record_count("in8") >= 1

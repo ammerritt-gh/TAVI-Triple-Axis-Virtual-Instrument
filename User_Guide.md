@@ -93,7 +93,7 @@ Release returns to free mode, where the arcs follow each Q again. A save keeps t
 
 ### Aligning from cold: a walkthrough
 The whole path from a fresh start to a scan in an aligned plane, mouse and keyboard only:
-1. Start clean. Open the UB Matrix dock with **Open UB Matrix...** in the Sample dock (or **View → UB Matrix**); it opens as a floating panel. Uncheck **Lock** on any peak entry, remove extra entries with ✗ (two always remain) and clear the two that are left, and clear the two **Lock plane** fields (Defaults leaves their text). Then press **Load Defaults** in the Simulation dock. The UB is now the sample as described, with no mounting plane.
+1. Start clean. Open the UB Matrix dock with **Open UB Matrix...** in the Sample dock (or **View → UB Matrix**); it opens as a floating panel. Uncheck **Lock** on any peak entry, remove extra entries with ✗ (two always remain) and clear the two that are left, and clear the two **Lock plane** fields (Defaults leaves their text). Then choose **File → Load Defaults**. The UB is now the sample as described, with no mounting plane.
 2. For a training exercise, paste its hash into the UB Matrix dock's **Student: Load Exercise** field and press **Load**.
 3. In the Simulation dock choose **Engine: Deterministic (analytic)** for quick scans (McStas works too, more slowly).
 4. Type the (h k l) of a strong reflection, for example 2 0 0, into the Scattering dock. The instrument goes where your UB says the reflection is, which for a misaligned crystal is not quite where it is.
@@ -129,7 +129,7 @@ The simulation dock is the main center for ruinning an experiment.
 
 - Select the number of neutrons. A rough estimate for the time the simulation will take, per point, is given here.
 - To start an simulation, click the "Run Simulation" button.
-- "Stop Simulation" will stop any ongoing simulation once a point finishes. "Quit" will also stop simulations and quit.
+- "Stop Simulation" will stop any ongoing simulation once a point finishes. **File → Quit** also stops simulations, then closes TAVI.
 
 Finished simulations are saved into a named folder. When all scans are completed, the program saves a formatted data file and display figure automatically.
 ### Running Scans
@@ -179,7 +179,7 @@ limitations of every source, see
 [`docs/BACKGROUND_MODEL.md`](docs/BACKGROUND_MODEL.md).
 
 ### Runtimes Cache
-TAVI keeps a local log of the last 100 scans and their runtimes, and uses these to estimate how long scans will take. If there is an issue with the time estimations, you can clear this log with the "Clear Runtimes" button. Note that scans under different conditions do have different times, and the times are only an estimate.
+TAVI keeps a local log of the last 100 scans and their runtimes, and uses these to estimate how long scans will take. If there is an issue with the time estimations, you can clear the current instrument's part of this log with **Config → Clear Runtime Data…**, which asks first. Note that scans under different conditions do have different times, and the times are only an estimate.
 
 Estimates are now kept **per machine**: the log records which computer each scan ran on, so if you use TAVI on several machines of different speeds their timings no longer blend together. Estimates also account for the execution engine (McStas vs. deterministic) and whether a scan reuses the previous compiled binary (a reused binary skips compile time, so the estimate drops it). On a fresh machine there is no local history yet — run the Scan-time benchmark once (see Utilities, below) to give it a clean baseline; ordinary scan history then refines the estimate the more you use it.
 

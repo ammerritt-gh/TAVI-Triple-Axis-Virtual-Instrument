@@ -1,11 +1,11 @@
 """Unified Simulation Dock for TAVI application.
 
-Combines scan parameters, control buttons, diagnostic mode, counts display,
-and progress tracking into a single dockable panel.
+Run/Stop with progress and counts first, then the scan commands (neutron
+count on their first row), then diagnostic mode.
 """
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QLabel, QLineEdit, QComboBox, QGroupBox, QPushButton,
-                                QGridLayout, QCheckBox, QFormLayout, QProgressBar,
+                                QGridLayout, QCheckBox, QProgressBar,
                                 QWidget, QSizePolicy)
 from PySide6.QtCore import Qt
 
@@ -90,15 +90,67 @@ class UnifiedSimulationDock(BaseDockWidget):
         # Get the content layout from base class
         main_layout = self.content_layout
         
-        # ===== Scan Parameters Section =====
-        params_group = QGroupBox("Scan Parameters")
-        params_layout = QGridLayout()
-        params_layout.setSpacing(5)
-        params_group.setLayout(params_layout)
-        
-        # Number of neutrons as mantissa × 10^exponent
-        params_layout.addWidget(QLabel("# neutrons:"), 0, 0)
-        
+        # ===== Run and Progress: the control block, first so it is in view =====
+        control_group = QGroupBox("Run and Progress")
+        control_layout = QVBoxLayout()
+        control_group.setLayout(control_layout)
+
+        buttons_row = QHBoxLayout()
+        self.run_button = QPushButton("Run Simulation")
+        self.run_button.setDefault(True)  # the one primary action in this dock
+        buttons_row.addWidget(self.run_button)
+        self.stop_button = QPushButton("Stop Simulation")
+        buttons_row.addWidget(self.stop_button)
+        control_layout.addLayout(buttons_row)
+
+        # Estimated time before scan starts (from historical data)
+        self.pre_scan_estimate_label = QLabel("")
+        self.pre_scan_estimate_label.setStyleSheet("color: #0066cc; font-size: 10px;")
+        control_layout.addWidget(self.pre_scan_estimate_label)
+
+        # Progress bar and label
+        progress_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        progress_row.addWidget(self.progress_bar)
+        self.progress_label = QLabel("0% (0/0)")
+        progress_row.addWidget(self.progress_label)
+        control_layout.addLayout(progress_row)
+
+        # Remaining and elapsed time
+        time_row = QHBoxLayout()
+        self.remaining_time_label = QLabel("Remaining Time: ")
+        time_row.addWidget(self.remaining_time_label)
+        time_row.addSpacing(12)
+        self.elapsed_time_label = QLabel("Elapsed Time: ")
+        time_row.addWidget(self.elapsed_time_label)
+        time_row.addStretch()
+        control_layout.addLayout(time_row)
+
+        # Counts, both on one row
+        counts_row = QHBoxLayout()
+        counts_row.addWidget(QLabel("Max counts:"))
+        self.max_counts_label = QLabel("0")
+        counts_row.addWidget(self.max_counts_label)
+        counts_row.addSpacing(12)
+        counts_row.addWidget(QLabel("Total counts:"))
+        self.total_counts_label = QLabel("0")
+        counts_row.addWidget(self.total_counts_label)
+        counts_row.addStretch()
+        control_layout.addLayout(counts_row)
+
+        main_layout.addWidget(control_group)
+
+        # ===== Scan Commands Section =====
+        scan_group = QGroupBox("Scan Commands")
+        scan_layout = QVBoxLayout()
+        scan_group.setLayout(scan_layout)
+
+        # First row: number of neutrons as mantissa × 10^exponent, with the
+        # time-per-point estimate beside it
+        neutrons_layout = QGridLayout()
+        neutrons_layout.setSpacing(5)
+        neutrons_layout.addWidget(QLabel("# neutrons:"), 0, 0)
+
         # Container for mantissa × 10^exponent layout
         neutron_input_widget = QWidget()
         neutron_layout = QHBoxLayout()
@@ -107,45 +159,40 @@ class UnifiedSimulationDock(BaseDockWidget):
         neutron_layout.setAlignment(Qt.AlignLeft)
         neutron_input_widget.setLayout(neutron_layout)
         neutron_input_widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
-        
+
         self.neutron_mantissa_edit = QLineEdit()
         self.neutron_mantissa_edit.setMaximumWidth(50)
         self.neutron_mantissa_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.neutron_mantissa_edit.setPlaceholderText("1.0")
         self.neutron_mantissa_edit.setToolTip("Mantissa (e.g., 1.0, 5.0, 50)")
         neutron_layout.addWidget(self.neutron_mantissa_edit)
-        
+
         label_exp = QLabel("×10^")
         label_exp.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         neutron_layout.addWidget(label_exp)
-        
+
         self.neutron_exponent_edit = QLineEdit()
         self.neutron_exponent_edit.setMaximumWidth(35)
         self.neutron_exponent_edit.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.neutron_exponent_edit.setPlaceholderText("6")
         self.neutron_exponent_edit.setToolTip("Exponent (e.g., 6 for 10^6 = 1,000,000)")
         neutron_layout.addWidget(self.neutron_exponent_edit)
-        
-        params_layout.addWidget(neutron_input_widget, 0, 1)
-        
+
+        neutrons_layout.addWidget(neutron_input_widget, 0, 1)
+
         # Legacy compatibility: create a hidden edit that mirrors the combined value
         # This allows existing code to use number_neutrons_edit.text() transparently
         self.number_neutrons_edit = QLineEdit()
         self.number_neutrons_edit.hide()  # Hidden, just for compatibility
         self._connect_neutron_sync()
-        
+
         # Time per point estimate (updated dynamically based on neutron count)
         self.time_per_point_label = QLabel("")
         self.time_per_point_label.setStyleSheet("color: #666666; font-size: 10px;")
-        params_layout.addWidget(self.time_per_point_label, 0, 2)
-        
-        pack_grid(params_layout)
-        main_layout.addWidget(params_group)
-        
-        # ===== Scan Commands Section =====
-        scan_group = QGroupBox("Scan Commands")
-        scan_layout = QVBoxLayout()
-        scan_group.setLayout(scan_layout)
+        neutrons_layout.addWidget(self.time_per_point_label, 0, 2)
+
+        pack_grid(neutrons_layout)
+        scan_layout.addLayout(neutrons_layout)
         
         # Scan Command 1 with Relative button
         scan_layout.addWidget(QLabel("Scan Command 1:"))
@@ -253,104 +300,19 @@ class UnifiedSimulationDock(BaseDockWidget):
 
         main_layout.addWidget(scan_group)
         
-        # ===== Control Buttons Section =====
-        buttons_group = QGroupBox("Control Buttons")
-        buttons_layout = QGridLayout()
-        buttons_group.setLayout(buttons_layout)
-        
-        self.run_button = QPushButton("Run Simulation")
-        buttons_layout.addWidget(self.run_button, 0, 0)
-        
-        self.stop_button = QPushButton("Stop Simulation")
-        buttons_layout.addWidget(self.stop_button, 0, 1)
-        
-        self.quit_button = QPushButton("Quit")
-        buttons_layout.addWidget(self.quit_button, 1, 0)
-        
-        self.clear_runtimes_button = QPushButton("Clear Runtimes")
-        self.clear_runtimes_button.setToolTip(
-            "Clear cached runtime data used for scan time estimation.\n"
-            "Use this if time estimates seem incorrect."
-        )
-        buttons_layout.addWidget(self.clear_runtimes_button, 1, 1)
-        
-        main_layout.addWidget(buttons_group)
-        
-        # ===== Parameter Management Section =====
-        param_buttons_group = QGroupBox("Parameter Management")
-        param_buttons_layout = QGridLayout()
-        param_buttons_group.setLayout(param_buttons_layout)
-        
-        self.save_button = QPushButton("Save Parameters")
-        param_buttons_layout.addWidget(self.save_button, 0, 0)
-        
-        self.load_button = QPushButton("Load Parameters")
-        param_buttons_layout.addWidget(self.load_button, 0, 1)
-        
-        self.defaults_button = QPushButton("Load Defaults")
-        param_buttons_layout.addWidget(self.defaults_button, 0, 2)
-        
-        main_layout.addWidget(param_buttons_group)
-        
-        # ===== Counts Display Section =====
-        counts_group = QGroupBox("Counts")
-        counts_layout = QFormLayout()
-        counts_group.setLayout(counts_layout)
-        
-        self.max_counts_label = QLabel("0")
-        counts_layout.addRow("Max counts:", self.max_counts_label)
-        
-        self.total_counts_label = QLabel("0")
-        counts_layout.addRow("Total counts:", self.total_counts_label)
-        
-        main_layout.addWidget(counts_group)
-        
-        # ===== Diagnostic Mode Section =====
+        # ===== Diagnostic Mode Section: one row =====
         mode_group = QGroupBox("Diagnostic Mode")
         mode_layout = QHBoxLayout()
         mode_group.setLayout(mode_layout)
-        
+
         self.diagnostic_mode_check = QCheckBox("Enable Diagnostic Mode")
         mode_layout.addWidget(self.diagnostic_mode_check)
-        
+
         self.config_diagnostics_button = QPushButton("Configuration")
         mode_layout.addWidget(self.config_diagnostics_button)
-        
-        main_layout.addWidget(mode_group)
-        
-        # ===== Progress Section =====
-        progress_group = QGroupBox("Progress")
-        progress_layout = QVBoxLayout()
-        progress_group.setLayout(progress_layout)
-        
-        # Estimated time before scan starts (from historical data)
-        self.pre_scan_estimate_label = QLabel("")
-        self.pre_scan_estimate_label.setStyleSheet("color: #0066cc; font-size: 10px;")
-        progress_layout.addWidget(self.pre_scan_estimate_label)
-        
-        # Progress bar and label
-        progress_widget = QWidget()
-        progress_widget_layout = QHBoxLayout()
-        progress_widget_layout.setContentsMargins(0, 0, 0, 0)
-        progress_widget.setLayout(progress_widget_layout)
-        
-        self.progress_bar = QProgressBar()
-        progress_widget_layout.addWidget(self.progress_bar)
-        
-        self.progress_label = QLabel("0% (0/0)")
-        progress_widget_layout.addWidget(self.progress_label)
-        
-        progress_layout.addWidget(progress_widget)
-        
-        # Remaining time label
-        self.remaining_time_label = QLabel("Remaining Time: ")
-        progress_layout.addWidget(self.remaining_time_label)
+        mode_layout.addStretch()
 
-        # Elapsed time label
-        self.elapsed_time_label = QLabel("Elapsed Time: ")
-        progress_layout.addWidget(self.elapsed_time_label)
-        
-        main_layout.addWidget(progress_group)
+        main_layout.addWidget(mode_group)
         
         # Add stretch at the end to push everything up
         main_layout.addStretch()
