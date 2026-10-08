@@ -347,8 +347,9 @@ class TAVIMainWindow(QMainWindow):
 
         Every placed dock ends docked and shown, each tab group's first dock
         raised. Reciprocal Space goes back behind Display at its current
-        visibility, Misalignment floats as it is, and UB Matrix is docked only
-        in 3 columns (floating and hidden otherwise). Fitting is never tabbed
+        visibility, Misalignment floats at its visibility (centred on the
+        screen if it was docked), and UB Matrix is docked only in 3 columns
+        (floating and hidden otherwise). Fitting is never tabbed
         with Display: its overlay is drawn on the plot, so both must show at
         once. A dock moves by removal
         and re-adding, which keeps its widgets and connections. The sizes are
@@ -359,10 +360,14 @@ class TAVIMainWindow(QMainWindow):
         display, log, data, fitting, api = (
             self.display_dock, self.output_dock, self.data_control_dock, self.fitting_dock,
             self.api_dock)
-        reciprocal, ub = self.reciprocal_space_dock, self.ub_matrix_dock
+        reciprocal, ub, misalignment = (
+            self.reciprocal_space_dock, self.ub_matrix_dock, self.misalignment_dock)
         placed = [instrument, sample, scattering, simulation, display, log, data, fitting, api]
-        reciprocal_shown = not reciprocal.isHidden()
-        moved = placed + [reciprocal] + ([ub] if columns == 3 or not ub.isFloating() else [])
+        reciprocal_shown, misalignment_shown = (not reciprocal.isHidden(),
+                                                not misalignment.isHidden())
+        moved = (placed + [reciprocal]
+                 + ([ub] if columns == 3 or not ub.isFloating() else [])
+                 + ([] if misalignment.isFloating() else [misalignment]))
         for dock in moved:
             self.removeDockWidget(dock)  # detaches and hides; nothing is destroyed
         # Lay the emptied area out now: Qt (6.11) then strips the dissolved
@@ -424,6 +429,10 @@ class TAVIMainWindow(QMainWindow):
                 ub.setFloating(True)
                 self._centre_on_screen(ub)
             ub.setVisible(False)
+        if not misalignment.isFloating():  # docked by the user, or by Restore All Panels
+            misalignment.setFloating(True)
+            self._centre_on_screen(misalignment)
+        misalignment.setVisible(misalignment_shown)
         for group in tabs:
             group[0].raise_()
         self._tidy_tab_bars()
@@ -705,12 +714,19 @@ class TAVIMainWindow(QMainWindow):
                                 f"Could not save the setting: {exc}")
 
     def restore_all_docks(self):
-        """Show every panel, docking standard panels and floating Reciprocal Space."""
+        """Show every panel, docking standard panels and floating Reciprocal Space.
+
+        A panel Qt cannot dock (one never docked) stays floating; one that
+        lies off every screen is centred on the main window's screen.
+        """
         for dock in self._all_docks:
             dock.setVisible(True)
             if dock is not self.reciprocal_space_dock:
                 dock.setFloating(False)
         self._show_reciprocal_window()
+        for dock in self._all_docks:
+            if self._off_every_screen(dock):
+                self._centre_on_screen(dock)
         self.statusBar().showMessage("All panels restored", 3000)
     
     def apply_layout(self, columns):
