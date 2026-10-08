@@ -227,7 +227,7 @@ The dock never reads worker state directly — all updates arrive via `job_state
 
 - `load_api_config()` reads `config/api_config.json` tolerantly (absent file = defaults). CLI flags `--api-port N` (implies enabled) and `--no-api` in `main()` override the file.
 - Controller `__init__`: if enabled, build `ApiBridge`, backend callbacks, `TaviApiServer(host, port, token, mode, limits, backend)`, then `start()`. Bind failure (`OSError`, port in use) → message-center warning, GUI continues without API. Success logs the listening URL. Non-loopback host → security warning recommending a token.
-- `TAVIController.shutdown()`: set stop event, mark active/queued jobs stopped/cancelled, `api_server.stop()` (`httpd.shutdown()` plus broker sentinels), brief worker join. Called from the quit path and from the fixed `closeEvent` (which today references the nonexistent `stop_flag` and therefore does nothing).
+- `TAVIController.shutdown()`: set stop event, mark active/queued jobs stopped/cancelled, `api_server.stop()` (`httpd.shutdown()` plus broker sentinels), brief worker join. Called from the fixed `closeEvent`, through which File > Quit also closes (which today references the nonexistent `stop_flag` and therefore does nothing).
 
 ## 12. Validation Reuse
 
