@@ -1,10 +1,59 @@
 """Base Dock Widget with custom border painting for TAVI application."""
-from PySide6.QtWidgets import QDockWidget, QWidget, QVBoxLayout, QScrollArea, QFrame, QComboBox
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QScrollArea, QFrame,
+                               QComboBox, QLabel, QSizePolicy)
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPainter, QPen, QColor
+
+from gui import metrics
 
 
 COLLIMATION_OPEN_TOOLTIP = "Open: no collimator installed, coarsest resolution."
+
+
+def pack_grid(grid):
+    """Pack a label/field QGridLayout to its content, so labels sit beside their values.
+
+    Call after the grid is filled. A label directly left of a field is
+    right-aligned against it, the metrics gap separates the columns, fields
+    keep their own width at the left of their cell, and a trailing stretch
+    column takes the spare width.
+    """
+    grid.setHorizontalSpacing(metrics.LABEL_FIELD_GAP)
+    for index in range(grid.count()):
+        item = grid.itemAt(index)
+        widget = item.widget()
+        if widget is None:
+            continue
+        row, column, _rows, columns = grid.getItemPosition(index)
+        if isinstance(widget, QLabel):
+            right = grid.itemAtPosition(row, column + columns)
+            field = right.widget() if right is not None else None
+            if columns == 1 and field is not None and not isinstance(field, QLabel):
+                widget.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        else:
+            item.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    grid.setColumnStretch(grid.columnCount(), 1)
+
+
+class _FormContent(QWidget):
+    """Scroll-area content of a form dock, held between the metrics minimum and cap.
+
+    Below the minimum the scroll area scrolls. The cap is the size hint with a
+    Maximum policy, so the scroll area never widens the content past it -- yet
+    never squeezes it below its own layout's minimum either, so the cap cannot
+    clip a row. The content stays at the left; spare width shows to its right.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        return QSize(max(hint.width(), metrics.FORM_CONTENT_MIN_WIDTH), hint.height())
+
+    def sizeHint(self):
+        return QSize(metrics.FORM_CONTENT_MAX_WIDTH, super().sizeHint().height())
 
 
 def collimation_label(value):
@@ -96,9 +145,11 @@ class BaseDockWidget(QDockWidget):
     - A bordered frame around the entire dock content
     - Optional scroll area for long content
     - Consistent styling across all docks
+    - For the form docks (form_width=True), content held between the
+      metrics minimum and cap; the dock itself stays unconstrained
     """
-    
-    def __init__(self, title, parent=None, use_scroll_area=True):
+
+    def __init__(self, title, parent=None, use_scroll_area=True, form_width=False):
         super().__init__(title, parent)
         self.setAllowedAreas(Qt.AllDockWidgetAreas)
         
@@ -117,7 +168,7 @@ class BaseDockWidget(QDockWidget):
             scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             
             # Content widget goes inside scroll area
-            self._content_widget = QWidget()
+            self._content_widget = _FormContent() if form_width else QWidget()
             self._content_layout = QVBoxLayout()
             self._content_layout.setSpacing(8)
             self._content_layout.setContentsMargins(0, 0, 0, 0)

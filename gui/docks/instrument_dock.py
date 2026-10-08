@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QPushButton, QWidget)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import (BaseDockWidget, NoScrollComboBox,
+from gui.docks.base_dock import (BaseDockWidget, NoScrollComboBox, pack_grid,
                                  COLLIMATION_OPEN_TOOLTIP, collimation_label)
 from instruments.descriptor import ModuleKind
 
@@ -27,7 +27,8 @@ class InstrumentDock(BaseDockWidget):
     """Dock widget for instrument configuration (descriptor-driven)."""
 
     def __init__(self, parent=None, descriptor=None):
-        super().__init__("Instrument Configuration", parent, use_scroll_area=True)
+        super().__init__("Instrument Configuration", parent, use_scroll_area=True,
+                         form_width=True)
         self.setObjectName("InstrumentDock")
         if descriptor is None:
             raise ValueError("InstrumentDock requires the active InstrumentDescriptor")
@@ -130,6 +131,7 @@ class InstrumentDock(BaseDockWidget):
         self.angles_stale_label.hide()
         angles_layout.addWidget(self.angles_stale_label, 3, 0, 1, 4)
 
+        pack_grid(angles_layout)
         main_layout.addWidget(angles_group)
 
         # Energies section
@@ -158,6 +160,7 @@ class InstrumentDock(BaseDockWidget):
         self.Ef_edit.setMaximumWidth(70)
         energies_layout.addWidget(self.Ef_edit, 1, 3)
 
+        pack_grid(energies_layout)
         main_layout.addWidget(energies_group)
 
         # Crystals section (items from descriptor; ids stored as item data)
@@ -260,6 +263,7 @@ class InstrumentDock(BaseDockWidget):
         self.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
         focusing_layout.addWidget(self.rva_ideal_button, 1, 5)
 
+        pack_grid(focusing_layout)
         main_layout.addWidget(focusing_group)
 
         # Collimations section (rows generated from descriptor.collimation)
@@ -311,6 +315,7 @@ class InstrumentDock(BaseDockWidget):
                     collimations_layout.addWidget(combo, row, 1)
                     self.collimation_widgets[slot.id] = combo
 
+            pack_grid(collimations_layout)
             main_layout.addWidget(collimations_group)
 
         # Slit Apertures section (rows generated from descriptor.slits)
@@ -351,6 +356,7 @@ class InstrumentDock(BaseDockWidget):
                     widgets["width"] = width_edit
                 self.slit_widgets[slit.id] = widgets
 
+            pack_grid(slits_layout)
             main_layout.addWidget(slits_group)
 
         # Add stretch at the end to push everything up
