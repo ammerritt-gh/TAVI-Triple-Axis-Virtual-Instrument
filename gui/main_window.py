@@ -2,9 +2,9 @@
 import sys
 import os
 import json
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                 QScrollArea, QMenuBar, QMenu, QMessageBox,
-                                QInputDialog)
+                                QInputDialog, QSizePolicy, QStyle, QTabBar)
 from PySide6.QtCore import Qt, QByteArray, QTimer
 from PySide6.QtGui import QAction, QActionGroup
 
@@ -27,11 +27,26 @@ from gui.docks.api_dock import ApiDock
 from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
 
 
+LAYOUT_COLUMNS = (2, 3, 4)  # the View > Layout presets
+
+
+def initial_layout_for_width(available_width):
+    """(columns, column width) for a screen ``available_width`` logical px wide.
+
+    What first start and Reset to Default Layout pick: 2 columns, Narrow on a
+    laptop; otherwise 3 columns, Wide on a large monitor. 4 columns is only
+    ever the user's choice.
+    """
+    if available_width < metrics.LAYOUT_TWO_COLUMNS_BELOW:
+        return 2, NARROW
+    return 3, WIDE if available_width >= metrics.LAYOUT_WIDE_FROM else NARROW
+
+
 class TAVIMainWindow(QMainWindow):
     """Main window for TAVI application with dockable panels."""
-    
+
     LAYOUT_VERSION = 2
-    
+
     def __init__(self, descriptor=None, instrument_infos=None,
                  current_instrument_id=None, save_selection=None):
         super().__init__()
@@ -55,56 +70,130 @@ class TAVIMainWindow(QMainWindow):
 
         # Enable dock nesting for more flexible layouts
         self.setDockNestingEnabled(True)
-        
-        # Store default state for reset functionality
-        self._default_state = None
-        self._default_geometry = None
-        
+
         # Create dock widgets with unique object names for state persistence
         self._create_docks()
-        
+
         # Connect signals between docks
         self._connect_dock_signals()
-        
+
         # Set up the central widget (minimal, as most content is in docks)
         self._setup_central_widget()
-        
-        # Add docks to the main window
-        self._setup_dock_layout()
-        
+
+        # The screen-picked preset: what first start shows, and what a saved
+        # layout restores over.
+        self._columns, self._column_width = initial_layout_for_width(
+            self.screen().availableGeometry().width())
+        self._setup_dock_layout(self._columns)
+
         # Create menu bar with View menu
         self._create_menus()
-        
-        # Store default layout state after initial setup
-        self._store_default_state()
 
-        # Restore a saved layout when present. The default layout keeps the
-        # reciprocal-space panel closed until the user opens it from View.
-        self._column_width = NARROW
+        # A saved layout of this version wins; otherwise the preset stands,
+        # on a window fitted to the screen once it is shown.
         self._layout_restored = self._restore_layout_from_file()
+        if not self._layout_restored:
+            self.setGeometry(self.screen().availableGeometry())  # refined once shown
         self.set_column_width(self._column_width, fit=False)
-
-        # Set geometry after a small delay to avoid Qt geometry warnings, then
-        # fit the form panels to their column width so the plot gets the rest.
         QTimer.singleShot(0, self._apply_startup_geometry)
 
     def _apply_startup_geometry(self):
-        self.setGeometry(100, 100, 1600, 900)
+        """Once shown: fit the window to its screen and size the preset, unless a layout was restored.
+
+        A restored window keeps its frame unless the frame is larger than its
+        screen (a layout saved on a big monitor, opened on a laptop).
+        """
+        if not self._layout_restored:
+            self._fit_to_screen()
+        else:
+            frame, room = self.frameGeometry(), self.screen().availableGeometry()
+            if frame.width() > room.width() or frame.height() > room.height():
+                self._fit_to_screen()
+        if self._preset_unsized:
+            self._size_preset()
+
+    def _fit_to_screen(self):
+        """Maximize to the screen's available area.
+
+        The size lands at once (setGeometry is synchronous) so the docks can
+        be sized straight after; the maximize itself arrives later from the
+        window system and changes little.
+        """
+        if not self.isMaximized():
+            room, frame, inner = (self.screen().availableGeometry(), self.frameGeometry(),
+                                  self.geometry())
+            self.setGeometry(room.adjusted(inner.left() - frame.left(),
+                                           inner.top() - frame.top(),
+                                           inner.right() - frame.right(),
+                                           inner.bottom() - frame.bottom()))
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def _size_preset(self):
+        """Size the current preset to the window: the form columns to the column
+        width, the Display column to its proportions, each form column's short
+        docks to their content.
+
+        Needs the window at its size: before it is shown the dock area ignores
+        resizeDocks.
+        """
         self._fit_form_docks()
-        if not self._layout_restored:  # a saved split wins
+        self.layout().activate()  # the widths land and the panels reflow first
+        self._split_columns()
+        self._preset_unsized = False
+
+    def _split_columns(self):
+        """Vertical splits: content-sized short docks, the elastic dock takes the rest.
+
+        In each column below, the first dock is elastic (it scrolls, or is the
+        plot) and each of the others gets its content's height, capped at
+        ``metrics.SPLIT_CONTENT_MAX_SHARE`` of the column.
+        """
+        columns = {
+            2: [(self.instrument_dock, self.scattering_dock),
+                (self.display_dock, self.simulation_dock)],
+            3: [(self.instrument_dock, self.scattering_dock, self.simulation_dock),
+                (self.sample_dock, self.ub_matrix_dock)],
+            4: [(self.simulation_dock, self.scattering_dock)],
+        }[self._columns]
+        separator = self.style().pixelMetric(QStyle.PM_DockWidgetSeparatorExtent, None, self)
+        for elastic, *short in columns:
+            column = self._dock_area_height() - len(short) * separator
+            cap = int(column * metrics.SPLIT_CONTENT_MAX_SHARE)
+            sizes = [min(self._content_height(dock), cap) for dock in short]
+            self.resizeDocks([elastic, *short], [column - sum(sizes), *sizes], Qt.Vertical)
+        if self._columns != 2:
             self._split_display_column()
+
+    def _dock_area_height(self):
+        """The height the dock columns share: the window less its menu and status bars."""
+        status = self.statusBar()
+        return (self.height() - self.menuBar().height()
+                - (status.height() if status.isVisible() else 0))
+
+    def _content_height(self, dock):
+        """A dock's content height with its title bar, frame and any tab strip."""
+        scroll = dock._scroll_area
+        height = dock._content_widget.sizeHint().height() + dock.height() - scroll.height()
+        if self.tabifiedDockWidgets(dock):
+            height += max((bar.height() for bar in self.findChildren(
+                               QTabBar, options=Qt.FindDirectChildrenOnly)
+                           if bar.isVisible() and dock.windowTitle()
+                           in [bar.tabText(i) for i in range(bar.count())]), default=0)
+        return height
 
     def _split_display_column(self):
         """Give the plot most of its column; the Message Log and the tabs below stay usable.
 
-        Needs the window at its size: before it is shown the dock area ignores
-        the split and hands the height to the tabs. The three docks keep these
-        proportions as the window resizes.
+        3 columns: Display 55 %, Log 20 %, tabs 25 %; 4 columns: Display 55 %,
+        the tabs (Log among them) 45 %. The docks keep these proportions as
+        the window resizes.
         """
-        column = self.height()
-        self.resizeDocks([self.display_dock, self.output_dock, self.data_control_dock],
-                         [column * 55 // 100, column * 20 // 100, column * 25 // 100],
-                         Qt.Vertical)
+        column = self._dock_area_height()
+        if self._columns == 3:
+            docks, shares = [self.display_dock, self.output_dock, self.data_control_dock], [55, 20, 25]
+        else:
+            docks, shares = [self.display_dock, self.output_dock], [55, 45]
+        self.resizeDocks(docks, [column * share // 100 for share in shares], Qt.Vertical)
     
     def _create_docks(self):
         """Create all dock widgets."""
@@ -149,7 +238,8 @@ class TAVIMainWindow(QMainWindow):
         # Interactive reciprocal-space canvas.  It is a normal dock so users
         # can tab, float, maximise, and persist it with the existing layout.
         self.reciprocal_space_dock = ReciprocalSpaceDock(self)
-        
+        self.reciprocal_space_dock.setVisible(False)  # opened from View
+
         # Message Panel (column 3, middle)
         self.output_dock = OutputDock(self)
         
@@ -174,7 +264,16 @@ class TAVIMainWindow(QMainWindow):
             self.data_control_dock,
             self.api_dock,
         ]
-    
+
+        # Only the plot grows with the window. The form docks are already not
+        # horizontally expanding (BaseDockWidget); these share a form column in
+        # some presets (UB Matrix under Sample, the tabs behind Instrument),
+        # where an expanding dock would take a share of the spare width. They
+        # still resize; their maximum comes from their content.
+        for dock in (self.ub_matrix_dock, self.output_dock, self.data_control_dock,
+                     self.fitting_dock, self.api_dock):
+            dock.setSizePolicy(QSizePolicy.Fixed, dock.sizePolicy().verticalPolicy())
+
     def _connect_dock_signals(self):
         """Connect signals between docks."""
         # Connect sample dock button to open misalignment dock
@@ -230,93 +329,121 @@ class TAVIMainWindow(QMainWindow):
         central_widget.setMaximumSize(1, 1)
         self.setCentralWidget(central_widget)
     
-    def _setup_dock_layout(self):
-        """Set up the default dock layout (3-column arrangement).
-        
-        Layout:
-        ┌─────────────┬─────────────┬─────────────┐
-        │ Instrument  │   Sample    │  Display    │
-        │             │             │  (Plot)     │
-        ├─────────────┼─────────────┼─────────────┤
-        │ Scattering  │ Simulation  │   Output    │
-        │             │             │  (Message)  │
-        │             │             ├─────────────┤
-        │             │             │    Data     │
-        │             │             │   Control   │
-        └─────────────┴─────────────┴─────────────┘
+    def _setup_dock_layout(self, columns):
+        """Place the docks in the View > Layout preset of ``columns`` (2, 3 or 4).
+
+        3 columns (the operator's own arrangement; the pick from 1400 px):
+            Instrument  | Sample     | Display
+            Scattering  | UB Matrix  | Message Log
+            Simulation  |            | [Data Control | Remote API | Fitting]
+        4 columns:
+            Instrument | Sample | Scattering | Display
+                       |        | Simulation | [Log | Data Control | Fitting | Remote API]
+        2 columns (the pick below 1400 px):
+            [Instrument | Log | Data Control | Fitting | Remote API] | Display
+            [Scattering | Sample]                                   | Simulation
+
+        Every placed dock ends docked and shown, each tab group's first dock
+        raised. Reciprocal Space goes back behind Display at its current
+        visibility, Misalignment floats as it is, and UB Matrix is docked only
+        in 3 columns (floating and hidden otherwise). Fitting is never tabbed
+        with Display: its overlay is drawn on the plot, so both must show at
+        once. A dock moves by removal
+        and re-adding, which keeps its widgets and connections. The sizes are
+        _size_preset()'s, once the window has its size.
         """
-        # Step 1: Add all docks to the left area first
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.instrument_dock)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.sample_dock)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.display_dock)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.reciprocal_space_dock)
-        self.tabifyDockWidget(self.display_dock, self.reciprocal_space_dock)
-        self.display_dock.raise_()
-        self.reciprocal_space_dock.setVisible(False)
-        
-        # Step 2: Create 3 columns by splitting horizontally
-        # Split instrument from sample (instrument stays left, sample goes right)
-        self.splitDockWidget(self.instrument_dock, self.sample_dock, Qt.Horizontal)
-        # Split sample from display (sample stays left, display goes right)
-        self.splitDockWidget(self.sample_dock, self.display_dock, Qt.Horizontal)
-        
-        # Step 3: Add bottom docks to each column
-        # Scattering below Instrument (column 1)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.scattering_dock)
-        self.splitDockWidget(self.instrument_dock, self.scattering_dock, Qt.Vertical)
-        
-        # Simulation below Sample (column 2)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.simulation_dock)
-        self.splitDockWidget(self.sample_dock, self.simulation_dock, Qt.Vertical)
-        
-        # Output below Display (column 3)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.output_dock)
-        self.splitDockWidget(self.display_dock, self.output_dock, Qt.Vertical)
-        
-        # Data Control below Output (column 3)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.data_control_dock)
-        self.splitDockWidget(self.output_dock, self.data_control_dock, Qt.Vertical)
-
-        # Remote API tabbed with Data Control (column 3, bottom). Lay the dock
-        # area out first: tabifying into the columns rebuilt above, before any
-        # layout pass, leaves Qt a second, orphaned Data Control/Remote API tab
-        # bar that is shown with the window at its stale position.
+        instrument, sample, scattering, simulation = (
+            self.instrument_dock, self.sample_dock, self.scattering_dock, self.simulation_dock)
+        display, log, data, fitting, api = (
+            self.display_dock, self.output_dock, self.data_control_dock, self.fitting_dock,
+            self.api_dock)
+        reciprocal, ub = self.reciprocal_space_dock, self.ub_matrix_dock
+        placed = [instrument, sample, scattering, simulation, display, log, data, fitting, api]
+        reciprocal_shown = not reciprocal.isHidden()
+        moved = placed + [reciprocal] + ([ub] if columns == 3 or not ub.isFloating() else [])
+        for dock in moved:
+            self.removeDockWidget(dock)  # detaches and hides; nothing is destroyed
+        # Lay the emptied area out now: Qt (6.11) then strips the dissolved
+        # tab groups' bars and parks them off the window. Without this pass
+        # they stay painted where they were, tabs and all, over the new docks.
         self.layout().activate()
-        self.addDockWidget(Qt.RightDockWidgetArea, self.api_dock)
-        self.tabifyDockWidget(self.data_control_dock, self.api_dock)
 
-        # Fitting tabbed alongside them, deliberately NOT with the Display
-        # dock: its overlay is drawn on the Display plot, so both have to be
-        # visible at once.
-        self.addDockWidget(Qt.RightDockWidgetArea, self.fitting_dock)
-        self.tabifyDockWidget(self.api_dock, self.fitting_dock)
-        self.data_control_dock.raise_()
+        def add(dock):
+            self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+            if dock.isFloating():  # only takes once the dock is in the layout
+                dock.setFloating(False)
 
-        # Misalignment dock is added and configured elsewhere to avoid duplicate layout entries.
-        
-        # Step 4: Set column widths
-        self.resizeDocks(
-            [self.instrument_dock, self.sample_dock, self.display_dock],
-            [400, 500, 450],
-            Qt.Horizontal
-        )
-        
-        # Step 5: Set row heights within each column
-        self.resizeDocks(
-            [self.instrument_dock, self.scattering_dock],
-            [400, 400],
-            Qt.Vertical
-        )
-        
-        # Make Sample shorter and Simulation taller to better use vertical space
-        self.resizeDocks(
-            [self.sample_dock, self.simulation_dock],
-            [300, 500],
-            Qt.Vertical
-        )
+        def below(upper, dock):
+            add(dock)
+            self.splitDockWidget(upper, dock, Qt.Vertical)
 
-        # The Display column's split is _split_display_column(), once the
-        # window has its size.
+        def right_of(left, dock):
+            add(dock)
+            self.splitDockWidget(left, dock, Qt.Horizontal)
+
+        add(instrument)
+        if columns == 2:
+            right_of(instrument, display)
+            below(instrument, scattering)
+            below(display, simulation)
+            tabs = [(scattering, sample), (instrument, log, data, fitting, api),
+                    (display, reciprocal)]
+        elif columns == 3:
+            right_of(instrument, sample)
+            right_of(sample, display)
+            below(instrument, scattering)
+            below(scattering, simulation)
+            below(sample, ub)
+            below(display, log)
+            below(log, data)
+            tabs = [(display, reciprocal), (data, api, fitting)]
+        else:
+            right_of(instrument, sample)
+            right_of(sample, scattering)
+            right_of(scattering, display)
+            below(scattering, simulation)
+            below(display, log)
+            tabs = [(display, reciprocal), (log, data, fitting, api)]
+
+        # Lay the dock area out before tabifying: tabifying into columns
+        # rebuilt before any layout pass leaves Qt a second, orphaned tab bar
+        # that is shown with the window at its stale position.
+        self.layout().activate()
+        for group in tabs:
+            for previous, dock in zip(group, group[1:]):
+                add(dock)
+                self.tabifyDockWidget(previous, dock)
+
+        for dock in placed + ([ub] if columns == 3 else []):
+            dock.setVisible(True)
+        reciprocal.setVisible(reciprocal_shown)
+        if columns != 3:
+            if not ub.isFloating():
+                ub.setFloating(True)
+                self._centre_on_screen(ub)
+            ub.setVisible(False)
+        for group in tabs:
+            group[0].raise_()
+        self._tidy_tab_bars()
+        self._columns = columns
+        self._preset_unsized = True
+
+    def _tidy_tab_bars(self):
+        """Show the live tab strips and hide the dead ones (Qt 6.11 does neither here).
+
+        On a shown window Qt leaves a new tab group's bar hidden until it next
+        applies a whole state, and leaves a dissolved group's bar where it was;
+        once the layout has been laid out with the group gone (see
+        _setup_dock_layout) that bar holds no tabs. So a bar with tabs is a
+        live group's and one with none is dead. A one-tab bar (a group whose
+        other docks are closed) is Qt's to show or park. Qt does not reuse the
+        dead bars: a few small hidden widgets per layout change.
+        """
+        for bar in self.findChildren(QTabBar, options=Qt.FindDirectChildrenOnly):
+            if bar.count() >= 2:
+                bar.show()
+            elif bar.count() == 0:
+                bar.hide()
 
     
     def _create_menus(self):
@@ -360,6 +487,18 @@ class TAVIMainWindow(QMainWindow):
         
         view_menu.addSeparator()
 
+        # Layout: plain actions, not radio items, so no check mark lies about
+        # the arrangement once the user drags a dock.
+        layout_menu = view_menu.addMenu("&Layout")
+        self.layout_actions = {}
+        for columns in LAYOUT_COLUMNS:
+            action = QAction(f"&{columns} columns", self)
+            action.setStatusTip(f"Arrange the panels in {columns} columns; changes the "
+                                f"dock arrangement only, not the column width or any field")
+            action.triggered.connect(lambda _checked=False, n=columns: self.apply_layout(n))
+            layout_menu.addAction(action)
+            self.layout_actions[columns] = action
+
         # Column Width: a setting (it stays checked), not an arrangement.
         width_menu = view_menu.addMenu("Column &Width")
         width_group = QActionGroup(self)
@@ -385,6 +524,9 @@ class TAVIMainWindow(QMainWindow):
         
         # Reset to Default Layout action
         reset_layout_action = QAction("Reset to &Default Layout", self)
+        reset_layout_action.setStatusTip(
+            "The layout and column width picked for this screen, the window fitted "
+            "to it, and the rare Instrument blocks folded")
         reset_layout_action.triggered.connect(self.reset_to_default_layout)
         view_menu.addAction(reset_layout_action)
         
@@ -560,11 +702,6 @@ class TAVIMainWindow(QMainWindow):
             QMessageBox.warning(self, "MPI processes",
                                 f"Could not save the setting: {exc}")
 
-    def _store_default_state(self):
-        """Store the default window state for reset functionality."""
-        self._default_state = self.saveState()
-        self._default_geometry = self.saveGeometry()
-    
     def restore_all_docks(self):
         """Show every panel, docking standard panels and floating Reciprocal Space."""
         for dock in self._all_docks:
@@ -574,14 +711,31 @@ class TAVIMainWindow(QMainWindow):
         self._show_reciprocal_window()
         self.statusBar().showMessage("All panels restored", 3000)
     
+    def apply_layout(self, columns):
+        """View > Layout: arrange the docks in the ``columns`` preset; the column width stays."""
+        self._setup_dock_layout(columns)
+        self._size_preset()
+        self.statusBar().showMessage(f"Panels arranged in {columns} columns", 3000)
+
     def reset_to_default_layout(self):
-        """Reset the dock layout to the default arrangement."""
-        if self._default_state is not None:
-            self.restoreState(self._default_state)
-        if self._default_geometry is not None:
-            self.restoreGeometry(self._default_geometry)
-        self._split_display_column()
-        self.statusBar().showMessage("Layout reset to default", 3000)
+        """View > Reset to Default Layout: what first start would pick for this screen.
+
+        The preset and column width picked for the window's screen, the window
+        fitted to that screen, and the rare Instrument blocks folded again.
+        """
+        columns, width = initial_layout_for_width(self.screen().availableGeometry().width())
+        for group in self.instrument_dock.collapsible_groups.values():
+            group.set_collapsed(True)
+        self.set_column_width(width, fit=False)
+        self._setup_dock_layout(columns)
+        self._fit_to_screen()
+        self._size_preset()
+        self.statusBar().showMessage(
+            f"Layout reset to the default for this screen: {columns} columns, {width}", 3000)
+
+    def _centre_on_screen(self, dock):
+        """Move a floating dock to the centre of the main window's screen."""
+        dock.move(self.screen().availableGeometry().center() - dock.rect().center())
 
     def _form_docks(self):
         return [self.instrument_dock, self.sample_dock,
@@ -602,9 +756,15 @@ class TAVIMainWindow(QMainWindow):
 
         Wide sizes them two blocks wide only where the window then still
         leaves the plot ``metrics.WIDE_PLOT_MIN_WIDTH``; otherwise one block,
-        the same fallback each panel makes when it is too narrow for two.
+        the same fallback each panel makes when it is too narrow for two. A
+        form panel in the Display column (Simulation, in 2 columns) takes that
+        column's width and reflows to it instead.
         """
-        docks = [d for d in self._form_docks() if d.isVisible() and not d.isFloating()]
+        display_x = self.display_dock.x() if self.display_dock.isVisible() else None
+        # A tab behind another is "visible" but parked off the window: skip it.
+        docks = [d for d in self._form_docks()
+                 if d.isVisible() and not d.visibleRegion().isEmpty() and not d.isFloating()
+                 and d.x() != display_x]
         if not docks:
             return
         count = 1
@@ -612,7 +772,17 @@ class TAVIMainWindow(QMainWindow):
             columns = len({d.x() for d in docks})  # docks stacked in a column share x
             if columns * docks[0].width_for_blocks(2) + metrics.WIDE_PLOT_MIN_WIDTH <= self.width():
                 count = 2
-        self.resizeDocks(docks, [d.width_for_blocks(count) for d in docks], Qt.Horizontal)
+        # Never narrower than another dock sharing the column can go (UB
+        # Matrix under Sample): Qt would paint that dock over the next column.
+        others = [d for d in self._all_docks if d.isVisible() and not d.isFloating()
+                  and not d.visibleRegion().isEmpty() and d not in docks]
+
+        def width(dock):
+            floor = max((o.minimumSizeHint().width() for o in others if o.x() == dock.x()),
+                        default=0)
+            return max(dock.width_for_blocks(count), floor)
+
+        self.resizeDocks(docks, [width(d) for d in docks], Qt.Horizontal)
 
     def save_layout_to_file(self):
         """Save the current layout to a JSON config file."""
@@ -670,6 +840,7 @@ class TAVIMainWindow(QMainWindow):
                     layout_data["window_state"].encode('ascii')
                 )
                 self.restoreState(state_bytes)
+                self._preset_unsized = False  # the saved sizes stand
             
             # Restore dock visibility
             if "dock_visibility" in layout_data:
@@ -699,6 +870,7 @@ class TAVIMainWindow(QMainWindow):
                           f"{config_path}; folding it (the default)")
                     collapsed = True
                 group.set_collapsed(collapsed)
+            self._tidy_tab_bars()  # the bars of the preset the state replaced
             return True
         except Exception as e:
             print(f"Warning: Failed to restore layout: {e}")
