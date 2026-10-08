@@ -201,6 +201,7 @@ class UnifiedSampleDock(BaseDockWidget):
         # Crystal system info label
         self.crystal_system_label = QLabel("Crystal System: —")
         self.crystal_system_label.setStyleSheet("color: gray; font-size: 10px;")
+        self.crystal_system_label.setWordWrap(True)  # trigonal's constraints pass a block
         spacegroup_layout.addWidget(self.crystal_system_label)
         
         # View reflection rules button
