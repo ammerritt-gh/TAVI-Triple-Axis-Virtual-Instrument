@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QWidget, QSizePolicy)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import BaseDockWidget
+from gui.docks.base_dock import BaseDockWidget, pack_grid
 
 
 # Define linked parameter groups - parameters within a group control the same thing
@@ -84,7 +84,7 @@ class UnifiedSimulationDock(BaseDockWidget):
     STYLE_NORMAL = ""
     
     def __init__(self, parent=None):
-        super().__init__("Simulation", parent, use_scroll_area=True)
+        super().__init__("Simulation", parent, use_scroll_area=True, form_width=True)
         self.setObjectName("SimulationDock")
         
         # Get the content layout from base class
@@ -139,6 +139,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.time_per_point_label.setStyleSheet("color: #666666; font-size: 10px;")
         params_layout.addWidget(self.time_per_point_label, 0, 2)
         
+        pack_grid(params_layout)
         main_layout.addWidget(params_group)
         
         # ===== Scan Commands Section =====
@@ -154,7 +155,6 @@ class UnifiedSimulationDock(BaseDockWidget):
         scan_1_row.addWidget(self.scan_command_1_edit)
         self.relative_1_button = QPushButton("Relative")
         self.relative_1_button.setCheckable(True)
-        self.relative_1_button.setMaximumWidth(70)
         self.relative_1_button.setToolTip("Scan values are offsets from current value")
         self.relative_1_button.setStyleSheet("")
         scan_1_row.addWidget(self.relative_1_button)
@@ -175,7 +175,6 @@ class UnifiedSimulationDock(BaseDockWidget):
         scan_2_row.addWidget(self.scan_command_2_edit)
         self.relative_2_button = QPushButton("Relative")
         self.relative_2_button.setCheckable(True)
-        self.relative_2_button.setMaximumWidth(70)
         self.relative_2_button.setToolTip("Scan values are offsets from current value")
         self.relative_2_button.setStyleSheet("")
         scan_2_row.addWidget(self.relative_2_button)

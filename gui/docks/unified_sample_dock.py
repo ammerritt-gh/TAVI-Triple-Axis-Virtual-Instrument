@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QCheckBox)
 from PySide6.QtCore import Qt, Signal
 
-from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
+from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox, pack_grid
 from tavi.space_groups import (SPACE_GROUPS, CRYSTAL_SYSTEMS, EXTINCTION_RULES,
                                 get_space_group, get_extinction_rule_text)
 
@@ -80,7 +80,7 @@ class UnifiedSampleDock(BaseDockWidget):
     reflection_source_changed = Signal(bool)
     
     def __init__(self, parent=None, descriptor=None):
-        super().__init__("Sample", parent, use_scroll_area=True)
+        super().__init__("Sample", parent, use_scroll_area=True, form_width=True)
         self.setObjectName("SampleDock")
         if descriptor is None:
             raise ValueError("UnifiedSampleDock requires the active InstrumentDescriptor")
@@ -149,6 +149,7 @@ class UnifiedSampleDock(BaseDockWidget):
         self.mount_status_label = QLabel("Standard setting")
         self.mount_status_label.setStyleSheet("color: gray; font-size: 10px;")
         mount_layout.addWidget(self.mount_status_label, 1, 0, 1, 3)
+        pack_grid(mount_layout)
         main_layout.addWidget(mount_group)
 
         # ===== Space Group Section =====
@@ -261,6 +262,7 @@ class UnifiedSampleDock(BaseDockWidget):
         lattice_layout.addWidget(self.lattice_gamma_edit, 1, 7)
         lattice_layout.addWidget(QLabel("°"), 1, 8)
         
+        pack_grid(lattice_layout)
         lattice_main_layout.addLayout(lattice_layout)
         
         # Validation warning label (hidden when valid)
@@ -309,6 +311,7 @@ class UnifiedSampleDock(BaseDockWidget):
         orientation_info.setStyleSheet("color: gray; font-size: 10px;")
         orientation_layout.addWidget(orientation_info, 1, 0, 1, 6)
         
+        pack_grid(orientation_layout)
         main_layout.addWidget(orientation_group)
         
         # ===== UB Matrix Section =====

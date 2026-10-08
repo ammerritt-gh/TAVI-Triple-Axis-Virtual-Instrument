@@ -5,14 +5,14 @@ Contains absolute Q-space, relative HKL space, and energy transfer parameters.
 from PySide6.QtWidgets import (QLabel, QLineEdit, QGroupBox, QGridLayout)
 from PySide6.QtCore import Qt
 
-from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox
+from gui.docks.base_dock import BaseDockWidget, NoScrollComboBox, pack_grid
 
 
 class UnifiedScatteringDock(BaseDockWidget):
     """Dock widget for scattering parameters (Q-space, HKL, energy transfer)."""
     
     def __init__(self, parent=None):
-        super().__init__("Scattering", parent, use_scroll_area=True)
+        super().__init__("Scattering", parent, use_scroll_area=True, form_width=True)
         self.setObjectName("ScatteringDock")
         
         # Get the content layout from base class
@@ -45,6 +45,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         q_layout.addWidget(self.qz_edit, 2, 1)
         q_layout.addWidget(QLabel("1/Å"), 2, 2)
         
+        pack_grid(q_layout)
         main_layout.addWidget(q_group)
         
         # ===== Relative HKL Space Section =====
@@ -71,6 +72,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         self.L_edit.setMaximumWidth(80)
         hkl_layout.addWidget(self.L_edit, 2, 1)
         
+        pack_grid(hkl_layout)
         main_layout.addWidget(hkl_group)
         
         # ===== Energy Transfer Section =====
@@ -85,6 +87,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         energy_layout.addWidget(self.deltaE_edit, 0, 1)
         energy_layout.addWidget(QLabel("meV"), 0, 2)
         
+        pack_grid(energy_layout)
         main_layout.addWidget(energy_group)
         
         # ===== Ki/Kf Fixed Mode Section =====
@@ -107,6 +110,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         mode_layout.addWidget(self.fixed_E_edit, 1, 1)
         mode_layout.addWidget(QLabel("meV"), 1, 2)
         
+        pack_grid(mode_layout)
         main_layout.addWidget(mode_group)
         
         # Add stretch at the end to push everything up
