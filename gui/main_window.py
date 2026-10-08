@@ -736,10 +736,48 @@ class TAVIMainWindow(QMainWindow):
         self.statusBar().showMessage("All panels restored", 3000)
     
     def apply_layout(self, columns):
-        """View > Layout: arrange the docks in the ``columns`` preset; the column width stays."""
+        """View > Layout: arrange the docks in the ``columns`` preset; the column width stays.
+
+        A preset the window's screen is too narrow for is not applied: the
+        layout stays as it is, and the status bar and the Message Log say why.
+        """
+        need, room = self._width_needed(columns), self.screen().availableSize().width()
+        if need > room:
+            message = (f"Window layout: {columns} columns need about {need} px; this screen "
+                       f"gives {room} px, so the layout is unchanged.")
+            self._layout_note(message)
+            self.statusBar().showMessage(message, 10000)
+            return
         self._setup_dock_layout(columns)
         self._size_preset()
         self.statusBar().showMessage(f"Panels arranged in {columns} columns", 3000)
+
+    def _width_needed(self, columns):
+        """The narrowest window the ``columns`` preset fits, in px; narrower, Qt
+        grows the window to it.
+
+        Each column of the preset (as _setup_dock_layout places it) is as wide
+        as the widest minimum of its docks, tabs included; Reciprocal Space
+        counts only while shown. Plus the 1 px central widget, and a separator
+        beside each column.
+        """
+        instrument, sample, scattering, simulation = (
+            self.instrument_dock, self.sample_dock, self.scattering_dock, self.simulation_dock)
+        display, log, data, fitting, api = (
+            self.display_dock, self.output_dock, self.data_control_dock, self.fitting_dock,
+            self.api_dock)
+        plot = [display] + ([] if self.reciprocal_space_dock.isHidden()
+                            else [self.reciprocal_space_dock])
+        side_by_side = {
+            2: [[instrument, log, data, fitting, api, scattering, sample], plot + [simulation]],
+            3: [[instrument, scattering, simulation], [sample, self.ub_matrix_dock],
+                plot + [log, data, api, fitting]],
+            4: [[instrument], [sample], [scattering, simulation], plot + [log, data, fitting, api]],
+        }[columns]
+        separator = self.style().pixelMetric(QStyle.PM_DockWidgetSeparatorExtent, None, self)
+        return (sum(max(dock.minimumSizeHint().width() for dock in column) + separator
+                    for column in side_by_side)
+                + self.centralWidget().minimumWidth())
 
     def reset_to_default_layout(self):
         """View > Reset to Default Layout: what first start would pick for this screen.

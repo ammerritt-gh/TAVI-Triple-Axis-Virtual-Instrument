@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from collections import Counter
+from contextlib import contextmanager
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -24,8 +25,8 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import SIGNAL, QPoint, Qt  # noqa: E402
-from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication  # noqa: E402
+from PySide6.QtCore import SIGNAL, QPoint, QSize, Qt  # noqa: E402
+from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QScreen  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout,  # noqa: E402
                                QGroupBox, QLabel, QMessageBox, QPushButton, QTabBar,
@@ -39,7 +40,6 @@ from instruments.registry import available_instruments, get_instrument  # noqa: 
 
 FORM_DOCKS = ("instrument_dock", "sample_dock", "scattering_dock", "simulation_dock")
 LAPTOP, MONITOR = (1108, 851), (2560, 1392)
-SIZES = pytest.mark.parametrize("size", [LAPTOP, MONITOR], ids=["1108x851", "2560x1392"])
 MODES = pytest.mark.parametrize("mode", [NARROW, WIDE])
 GAP_TOLERANCE = 2  # px
 INSTRUMENTS = ["puma", "in8", "in12", "panda"]
@@ -98,22 +98,36 @@ def _trigger(action):
         QApplication.processEvents()
 
 
+@contextmanager
+def _screen(size):
+    """The window's screen reports ``size`` as its available size, as View > Layout reads it.
+
+    The offscreen platform has one 800x800 screen; a reference size stands
+    for a maximised window on a screen of that size.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(QScreen, "availableSize", lambda _screen: QSize(*size))
+        yield
+
+
 def _resize(win, size, mode=None, columns=None):
-    """Window at ``size``; then View > Column Width ``mode`` and View > Layout ``columns``.
+    """Window at ``size`` on a screen that size; then View > Column Width ``mode`` and View > Layout ``columns``.
 
     The preset is applied first too, so the previous one's minimum cannot hold
-    the window open; one that cannot fit ``size`` (4 columns need about 1140 px)
-    grows the window to its minimum, as Qt does on screen.
+    the window open. A preset the screen cannot hold fails here: View > Layout
+    refuses it (4 columns at the laptop size).
     """
-    if columns is not None:
-        _trigger(win.layout_actions[columns])
-    win.resize(*size)
-    QApplication.processEvents()
-    assert (win.width(), win.height()) == size or win.minimumSizeHint().width() > size[0]
-    if mode is not None:
-        _trigger(win.column_width_actions[mode])
-    if columns is not None:
-        _trigger(win.layout_actions[columns])  # sized at this window size
+    with _screen(size):
+        if columns is not None:
+            _trigger(win.layout_actions[columns])
+        win.resize(*size)
+        QApplication.processEvents()
+        assert (win.width(), win.height()) == size
+        if mode is not None:
+            _trigger(win.column_width_actions[mode])
+        if columns is not None:
+            _trigger(win.layout_actions[columns])  # sized at this window size
+            assert win._columns == columns, f"{columns} columns refused at {size}"
 
 
 PLACED = ("instrument_dock", "sample_dock", "scattering_dock", "simulation_dock",
@@ -303,6 +317,42 @@ def test_preset_places_every_dock(window, columns, size):
         QApplication.processEvents()
 
 
+def test_four_columns_refused_on_a_screen_too_narrow(window):
+    """View > Layout > 4 columns on the laptop's screen: the layout and window stay, the reason is shown.
+
+    The status bar and the Message Log name the width needed and the width
+    the screen gives. On the monitor's screen the preset applies.
+    """
+    _resize(window, LAPTOP, NARROW, columns=2)
+    before = {name: getattr(window, name).geometry() for name in PLACED}
+    with _screen(LAPTOP):
+        _trigger(window.layout_actions[4])
+    assert window._columns == 2 and window.width() <= LAPTOP[0], (window._columns, window.width())
+    assert {name: getattr(window, name).geometry() for name in PLACED} == before
+    _assert_preset_placement(window, 2)
+    said = _log(window).splitlines()[-1]
+    assert "4 columns need about" in said and f"this screen gives {LAPTOP[0]} px" in said, said
+    assert window.statusBar().currentMessage() in said
+    _resize(window, MONITOR, NARROW, columns=4)
+    _assert_preset_placement(window, 4)
+
+
+@pytest.mark.parametrize("reciprocal", [False, True], ids=["plot", "plot+reciprocal"])
+@pytest.mark.parametrize("columns", [2, 3, 4])
+def test_width_needed_is_the_presets_minimum(window, columns, reciprocal):
+    """The width View > Layout checks against the screen is the window minimum the preset gives."""
+    dock = window.reciprocal_space_dock
+    if reciprocal:
+        dock.toggleViewAction().trigger()  # View > Reciprocal Space: tabbed behind Display
+    try:
+        _resize(window, MONITOR, NARROW, columns=columns)
+        assert window._width_needed(columns) == window.minimumSizeHint().width()
+    finally:
+        if reciprocal:
+            dock.toggleViewAction().trigger()
+            QApplication.processEvents()
+
+
 def test_two_columns_keep_the_work_surface_on_screen(window):
     """Check 3: 2 columns at 1108x851, Narrow, nothing scrolled: Run to the plot, all on screen."""
     _resize(window, LAPTOP, NARROW, columns=2)
@@ -370,12 +420,15 @@ def test_labels_sit_beside_their_fields(window, mode):
     assert not bad, f"{len(bad)} of {seen} pairs not beside their label:\n" + "\n".join(bad)
 
 
-COLUMNS = pytest.mark.parametrize("columns", [2, 3, 4], ids=["2col", "3col", "4col"])
+# Each preset at each reference size, but 4 columns at the laptop size: its screen cannot hold them.
+LAYOUTS = pytest.mark.parametrize(
+    "size, columns", [(size, columns) for size in (LAPTOP, MONITOR) for columns in (2, 3, 4)
+                      if (size, columns) != (LAPTOP, 4)],
+    ids=lambda value: f"{value[0]}x{value[1]}" if isinstance(value, tuple) else f"{value}col")
 
 
-@SIZES
+@LAYOUTS
 @MODES
-@COLUMNS
 def test_nothing_clipped(window, size, mode, columns):
     """Check 5: every visible text control is at least its size hint wide, or elided with a tooltip."""
     _resize(window, size, mode, columns)
@@ -532,9 +585,8 @@ def test_menu_routes_are_wired(window, action):
         assert not hasattr(dock, removed), removed
 
 
-@SIZES
+@LAYOUTS
 @MODES
-@COLUMNS
 def test_blocks_fit_without_horizontal_scroll(window, size, mode, columns):
     """No form dock scrolls sideways or cuts a block off; no block is wider than one block."""
     _resize(window, size, mode, columns)

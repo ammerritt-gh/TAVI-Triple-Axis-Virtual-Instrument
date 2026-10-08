@@ -21,12 +21,13 @@ and drawn in Segoe UI 9 pt, the real window's font on Windows (the offscreen
 platform has no font database of its own), and widgets in the style a real
 QApplication gets on this machine (``windows11`` on Windows 11), asked of the
 platform in a child process; if that fails the shots fall back to the
-offscreen default, Fusion, and say so. A preset that cannot fit a size
-(4 columns need about 1140 px) grows the window to its minimum, as on screen;
-the shot is kept, at the grown size and named for it, with a printed
-SIZE MISMATCH line. Exit code 0 when
-every PNG was written, 1 when the window did not build or a grab was null or
-of a size the window did not have.
+offscreen default, Fusion, and say so. Each size stands for a maximised
+window on a screen of that size: View > Layout refuses a preset too wide for
+the screen (4 columns at 1108 px), and that combination is reported as
+skipped, not shot. A window that still comes out larger than asked (its
+minimum) is shot at the grown size, named for it, with a printed SIZE
+MISMATCH line. Exit code 0 when every PNG not skipped was written, 1 when the
+window did not build or a grab was null or of a size the window did not have.
 """
 import argparse
 import json
@@ -184,7 +185,8 @@ def main():
         print(f"refusing to run: config resolves to {resolved}, not under {tmp_config}")
         return 1
 
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtCore import QSize
+    from PySide6.QtGui import QFont, QFontDatabase, QScreen
     from PySide6.QtWidgets import QApplication
 
     app = QApplication([sys.argv[0]])
@@ -224,6 +226,8 @@ def main():
         window.show()
         app.processEvents()  # lets the startup timer fire before any resize
         for width, height in args.size or SIZES:
+            # The screen View > Layout checks a preset against (offscreen's own is 800x800).
+            QScreen.availableSize = lambda _screen, size=QSize(width, height): size
             for columns, column_width in _combinations(width, height, args.columns,
                                                        args.column_width):
                 trigger(window.layout_actions[columns])  # first: the old preset's minimum goes
@@ -231,6 +235,10 @@ def main():
                 app.processEvents()
                 trigger(window.column_width_actions[column_width])
                 trigger(window.layout_actions[columns])  # sized at this window size
+                if window._columns != columns:  # refused, the layout left as it was
+                    print(f"skipped: {columns} columns do not fit {width} px "
+                          f"({column_width})")
+                    continue
                 # Named by the size grabbed, never the size asked for.
                 name = (f"{instrument.id}_{window.width()}x{window.height()}"
                         f"_{columns}col_{column_width}")
