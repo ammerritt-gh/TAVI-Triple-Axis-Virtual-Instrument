@@ -1,16 +1,21 @@
 """Compact-window checks on the real offscreen window and controller (PUMA).
 
-Numbered as in the compact-window plan: 4, labels sit beside their fields;
-5, nothing in the four form docks is clipped; 7, the Instrument blocks run in
-usage order and the folded ones summarise their fields; 8, the menu routes
-that replaced the Simulation dock's buttons are wired. Checks 4 and 5 run in both
-View > Column Width settings, beside the block checks: each form group is
-one block wide, Wide lays a wide dock out two-up in usage order, and the
-setting is saved with the layout.
+Numbered as in the compact-window plan: 1, the first-start layout pick;
+2, each View > Layout preset places every dock; 3, the 2-column work surface
+is on screen at the laptop size; 4, labels sit beside their fields (in 4
+columns); 5, nothing in the four form docks is clipped; 6, the layout file:
+round trip, the version set-aside, bad files and lost docks; 7, the Instrument
+blocks run in usage order and the folded ones summarise their fields; 8, the
+menu routes that replaced the Simulation dock's buttons are wired. Checks 4
+and 5 run in both View > Column Width settings, beside the block checks: each
+form group is one block wide, Wide lays a wide dock out two-up in usage order,
+and the setting is saved with the layout. No preset switch may leave a stray
+tab strip painted in the window.
 """
 import json
 import os
 import sys
+from collections import Counter
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -87,14 +92,62 @@ def _use_windows_ui_font(app):
         app.setFont(QFont("Segoe UI", 9))
 
 
-def _resize(win, size, mode=None):
+def _trigger(action):
+    action.trigger()  # as the View menu does
+    for _ in range(3):  # the dock resize, then each panel's reflow
+        QApplication.processEvents()
+
+
+def _resize(win, size, mode=None, columns=None):
+    """Window at ``size``; then View > Column Width ``mode`` and View > Layout ``columns``.
+
+    The preset is applied first too, so the previous one's minimum cannot hold
+    the window open; one that cannot fit ``size`` (4 columns need about 1140 px)
+    grows the window to its minimum, as Qt does on screen.
+    """
+    if columns is not None:
+        _trigger(win.layout_actions[columns])
     win.resize(*size)
     QApplication.processEvents()
-    assert (win.width(), win.height()) == size
+    assert (win.width(), win.height()) == size or win.minimumSizeHint().width() > size[0]
     if mode is not None:
-        win.column_width_actions[mode].trigger()  # as the View menu does
-        for _ in range(3):  # the dock resize, then each panel's reflow
-            QApplication.processEvents()
+        _trigger(win.column_width_actions[mode])
+    if columns is not None:
+        _trigger(win.layout_actions[columns])  # sized at this window size
+
+
+PLACED = ("instrument_dock", "sample_dock", "scattering_dock", "simulation_dock",
+          "display_dock", "output_dock", "data_control_dock", "fitting_dock", "api_dock")
+# Each preset's columns, left to right, each listed top to bottom; and the
+# docks tabbed behind another (primary first in each group).
+PRESET_COLUMNS = {
+    2: [["instrument_dock", "scattering_dock"], ["display_dock", "simulation_dock"]],
+    3: [["instrument_dock", "scattering_dock", "simulation_dock"],
+        ["sample_dock", "ub_matrix_dock"],
+        ["display_dock", "output_dock", "data_control_dock"]],
+    4: [["instrument_dock"], ["sample_dock"], ["scattering_dock", "simulation_dock"],
+        ["display_dock", "output_dock"]],
+}
+PRESET_TABS = {
+    2: [["scattering_dock", "sample_dock"],
+        ["instrument_dock", "output_dock", "data_control_dock", "fitting_dock", "api_dock"]],
+    3: [["data_control_dock", "api_dock", "fitting_dock"]],
+    4: [["output_dock", "data_control_dock", "fitting_dock", "api_dock"]],
+}
+
+
+def _tab_strips(win):
+    """The tab strips painted inside the window, as the sets of their tab titles."""
+    return Counter(frozenset(bar.tabText(i) for i in range(bar.count()))
+                   for bar in win.findChildren(QTabBar, options=Qt.FindDirectChildrenOnly)
+                   if bar.isVisible() and win.rect().intersects(bar.geometry()))
+
+
+def _assert_no_stray_tab_strip(win, columns):
+    """Exactly the preset's live tab strips: no stale one from an earlier arrangement, no twin."""
+    expected = Counter(frozenset(getattr(win, name).windowTitle() for name in group)
+                       for group in PRESET_TABS[columns])
+    assert _tab_strips(win) == expected
 
 
 def _blocks(dock):
@@ -129,31 +182,113 @@ def _label_field_pairs(dock):
                 yield label, field
 
 
-def test_plot_gets_most_of_its_column(window):
-    """The default split gives Display more height than the Log and the tabs together.
+def test_initial_layout_for_width():
+    """Check 1: first start picks 2 columns Narrow on a laptop, 3 on a monitor, Wide from 2000 px."""
+    from gui.main_window import initial_layout_for_width
 
-    First in the module: a later test restores a saved layout into this window.
-    """
-    _resize(window, LAPTOP, NARROW)
+    assert initial_layout_for_width(1108) == (2, NARROW)
+    assert initial_layout_for_width(1600) == (3, NARROW)
+    assert initial_layout_for_width(2560) == (3, WIDE)
+    assert initial_layout_for_width(metrics.LAYOUT_TWO_COLUMNS_BELOW - 1)[0] == 2
+    assert initial_layout_for_width(metrics.LAYOUT_TWO_COLUMNS_BELOW) == (3, NARROW)
+    assert initial_layout_for_width(metrics.LAYOUT_WIDE_FROM) == (3, WIDE)
+
+
+def test_plot_gets_most_of_its_column(window):
+    """In 3 columns Display gets more height than the Log and the tabs together."""
+    _resize(window, LAPTOP, NARROW, columns=3)
     heights = [d.height() for d in (window.display_dock, window.output_dock,
                                     window.data_control_dock)]
     assert heights[0] > heights[1] + heights[2], heights
-    assert window.display_dock.canvas.height() >= 250
+    assert window.display_dock.canvas.height() >= metrics.DISPLAY_CANVAS_MIN_HEIGHT
 
 
-def test_one_data_control_tab_strip(window):
-    """Only the live Data Control/Remote API tab strip is painted, none at a stale spot."""
-    _resize(window, LAPTOP, NARROW)
-    strips = [bar.geometry().getRect() for bar in window.findChildren(QTabBar)
-              if bar.isVisible() and window.rect().intersects(bar.geometry())
-              and "Remote API" in [bar.tabText(i) for i in range(bar.count())]]
-    assert len(strips) == 1, strips
+@pytest.mark.parametrize("columns, size", [(2, LAPTOP), (3, MONITOR), (4, MONITOR), (3, LAPTOP)],
+                         ids=["2-1108x851", "3-2560x1392", "4-2560x1392", "3-1108x851"])
+def test_preset_places_every_dock(window, columns, size):
+    """Check 2: every placed dock docked and shown, in its column or behind its tab; no stray strip."""
+    _resize(window, size, NARROW, columns=columns)
+    assert (window.width(), window.height()) == size  # the preset fits its reference size
+    for name in PLACED:
+        dock = getattr(window, name)
+        assert not dock.isFloating() and not dock.isHidden(), name
+    lefts = []
+    for column in PRESET_COLUMNS[columns]:
+        docks = [getattr(window, name) for name in column]
+        assert all(not dock.visibleRegion().isEmpty() for dock in docks), column
+        assert len({dock.x() for dock in docks}) == 1, column  # one column
+        tops = [dock.y() for dock in docks]
+        assert tops == sorted(tops), column  # in order, top to bottom
+        lefts.append(docks[0].x())
+    assert lefts == sorted(lefts) and len(set(lefts)) == len(lefts), lefts
+    for primary, *behind in PRESET_TABS[columns]:
+        tabbed = window.tabifiedDockWidgets(getattr(window, primary))
+        assert all(getattr(window, name) in tabbed for name in behind), primary
+        assert not getattr(window, primary).visibleRegion().isEmpty(), primary  # raised
+    ub = window.ub_matrix_dock
+    assert (not ub.isFloating() and ub.isVisible()) if columns == 3 else (
+        ub.isFloating() and ub.isHidden())
+    _assert_no_stray_tab_strip(window, columns)
+    reciprocal = window.reciprocal_space_dock
+    assert reciprocal.isHidden()  # as at first start
+    reciprocal.toggleViewAction().trigger()  # View > Reciprocal Space
+    QApplication.processEvents()
+    try:
+        assert reciprocal in window.tabifiedDockWidgets(window.display_dock)
+    finally:
+        reciprocal.toggleViewAction().trigger()
+        QApplication.processEvents()
+
+
+def test_two_columns_keep_the_work_surface_on_screen(window):
+    """Check 3: 2 columns at 1108x851, Narrow, nothing scrolled: Run to the plot, all on screen."""
+    _resize(window, LAPTOP, NARROW, columns=2)
+    must_see = {window.simulation_dock: ["run_button", "stop_button", "progress_bar",
+                                         "scan_command_1_edit", "scan_command_2_edit"],
+                window.scattering_dock: ["H_edit", "K_edit", "L_edit", "deltaE_edit"]}
+    for dock, names in must_see.items():
+        assert not dock.visibleRegion().isEmpty(), dock.windowTitle()  # the raised tab
+        scroll = dock._scroll_area
+        scroll.verticalScrollBar().setValue(0)
+        viewport = scroll.viewport()
+        for name in names:
+            widget = getattr(dock, name)
+            rect = widget.rect().translated(widget.mapTo(viewport, QPoint(0, 0)))
+            assert viewport.rect().contains(rect), (name, rect, viewport.rect())
+    canvas = window.display_dock.canvas
+    assert canvas.width() >= metrics.DISPLAY_CANVAS_MIN_WIDTH
+    assert canvas.height() >= metrics.DISPLAY_CANVAS_MIN_HEIGHT
+
+
+def test_switching_layouts_keeps_fields_folds_and_width(window):
+    """Switching 2, 3, 4 columns keeps field values, the folds, the column width and the plot."""
+    group = window.instrument_dock.collapsible_groups["instrument.source"]
+    canvas = window.display_dock.canvas
+    # A plain field in a dock that changes tab group with every preset (the
+    # H/K/L fields would keep their pending-edit border after the test).
+    field = window.data_control_dock.save_folder_edit
+    before = field.text()
+    field.setText("C:/kept/across/layouts")
+    try:
+        _resize(window, MONITOR, WIDE)
+        group.set_collapsed(False)
+        for columns in (2, 3, 4, 2):
+            _resize(window, MONITOR, columns=columns)
+            assert field.text() == "C:/kept/across/layouts"
+            assert not group.is_collapsed()
+            assert window._column_width == WIDE and window.column_width_actions[WIDE].isChecked()
+            assert window.display_dock.canvas is canvas and canvas.isVisible()
+            _assert_no_stray_tab_strip(window, columns)
+    finally:
+        group.set_collapsed(True)
+        window.set_column_width(NARROW, fit=False)
+        field.setText(before)
 
 
 @MODES
 def test_labels_sit_beside_their_fields(window, mode):
-    """Check 4: from a label's text to its field is the metrics gap, not the dock's spare width."""
-    _resize(window, MONITOR, mode)
+    """Check 4 (4 columns): from a label's text to its field is the metrics gap, not spare width."""
+    _resize(window, MONITOR, mode, columns=4)
     seen, bad = 0, []
     for name in FORM_DOCKS:
         for label, field in _label_field_pairs(getattr(window, name)):
@@ -172,11 +307,15 @@ def test_labels_sit_beside_their_fields(window, mode):
     assert not bad, f"{len(bad)} of {seen} pairs not beside their label:\n" + "\n".join(bad)
 
 
+COLUMNS = pytest.mark.parametrize("columns", [2, 3, 4], ids=["2col", "3col", "4col"])
+
+
 @SIZES
 @MODES
-def test_nothing_clipped(window, size, mode):
+@COLUMNS
+def test_nothing_clipped(window, size, mode, columns):
     """Check 5: every visible text control is at least its size hint wide, or elided with a tooltip."""
-    _resize(window, size, mode)
+    _resize(window, size, mode, columns)
     clipped = []
     for name in FORM_DOCKS:
         dock = getattr(window, name)
@@ -213,9 +352,10 @@ def test_menu_routes_are_wired(window, action):
 
 @SIZES
 @MODES
-def test_blocks_fit_without_horizontal_scroll(window, size, mode):
+@COLUMNS
+def test_blocks_fit_without_horizontal_scroll(window, size, mode, columns):
     """No form dock scrolls sideways or cuts a block off; no block is wider than one block."""
-    _resize(window, size, mode)
+    _resize(window, size, mode, columns)
     bad = []
     for name in FORM_DOCKS:
         dock = getattr(window, name)
@@ -234,7 +374,7 @@ def test_blocks_fit_without_horizontal_scroll(window, size, mode):
 def test_wide_lays_blocks_two_up_in_usage_order(window):
     """Wide at 2560x1392: down the left column, then the right; Narrow: one column."""
     dock = window.instrument_dock
-    _resize(window, MONITOR, WIDE)
+    _resize(window, MONITOR, WIDE, columns=3)
     columns = _block_columns(dock)
     assert len(columns) == 2, columns
     placed = sorted(_blocks(dock), key=lambda block: (block.x(), block.y()))
@@ -247,7 +387,7 @@ def test_wide_lays_blocks_two_up_in_usage_order(window):
 def test_wide_falls_back_to_one_column_when_narrow(window):
     """Wide, with the dock dragged narrower than two blocks, gives one column."""
     dock = window.instrument_dock
-    _resize(window, MONITOR, WIDE)
+    _resize(window, MONITOR, WIDE, columns=3)
     assert len(_block_columns(dock)) == 2
     narrower = dock.width_for_blocks(2) - 2 * metrics.BLOCK_REFLOW_HYSTERESIS
     window.resizeDocks([dock, window.scattering_dock], [narrower, narrower], Qt.Horizontal)
@@ -256,23 +396,24 @@ def test_wide_falls_back_to_one_column_when_narrow(window):
     assert len(_block_columns(dock)) == 1
 
 
-def test_column_width_saved_with_the_layout(window, tmp_path, monkeypatch):
-    """Save then restore round-trips column_width; missing or unknown reads as Narrow."""
-    path = tmp_path / "view_layout.json"
-    monkeypatch.setattr(window, "_get_layout_config_path", lambda: str(path))
+def test_column_width_saved_with_the_layout(window, layout_file):
+    """Save then restart round-trips column_width; missing or unknown reads as Narrow."""
     try:
         window.set_column_width(WIDE, fit=False)
         assert window.save_layout_to_file()
-        assert json.loads(path.read_text(encoding="utf-8"))["column_width"] == WIDE
-        window.set_column_width(NARROW, fit=False)
-        assert window._restore_layout_from_file()
-        assert window._column_width == WIDE
-        for stored in ({}, {"column_width": "huge"}):
-            path.write_text(json.dumps({"layout_version": 2, **stored}), encoding="utf-8")
-            assert window._restore_layout_from_file()
-            assert window._column_width == NARROW, stored
     finally:
         window.set_column_width(NARROW, fit=False)
+    saved = json.loads(layout_file.read_text(encoding="utf-8"))
+    assert saved["column_width"] == WIDE
+    rest = {key: value for key, value in saved.items() if key != "column_width"}
+    for stored, expected in ((saved, WIDE), (rest, NARROW), ({**rest, "column_width": "huge"}, NARROW)):
+        layout_file.write_text(json.dumps(stored), encoding="utf-8")
+        restarted = _restart(show=False)
+        try:
+            assert restarted._layout_restored
+            assert restarted._column_width == expected, stored.get("column_width")
+        finally:
+            _close(restarted)
 
 
 @pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12", "panda"])
@@ -431,7 +572,7 @@ def test_folded_blocks_summarise_their_fields(instrument_id):
 
 def test_header_toggles_from_the_keyboard_without_reflow(window):
     """Space and Enter fold and unfold a block; the blocks keep their columns."""
-    _resize(window, MONITOR, WIDE)
+    _resize(window, MONITOR, WIDE, columns=3)
     dock = window.instrument_dock
     group = dock.collapsible_groups["instrument.focusing"]
     columns = {_title(block): block.x() for block in _blocks(dock)}
@@ -452,43 +593,97 @@ def test_header_toggles_from_the_keyboard_without_reflow(window):
         group.set_collapsed(True)
 
 
-def test_folded_state_saved_with_the_layout(window, tmp_path, monkeypatch, capsys):
-    """Save then restore round-trips the folds; a missing or non-boolean entry folds, logged."""
-    path = tmp_path / "view_layout.json"
-    monkeypatch.setattr(window, "_get_layout_config_path", lambda: str(path))
+def test_folded_state_saved_with_the_layout(window, layout_file, capsys):
+    """Save then restart round-trips the folds; a missing or non-boolean entry folds, logged."""
     groups = window.instrument_dock.collapsible_groups
-
-    def state():
-        return {key: group.is_collapsed() for key, group in groups.items()}
-
     try:
         groups["instrument.focusing"].set_collapsed(False)
         assert window.save_layout_to_file()
-        saved = json.loads(path.read_text(encoding="utf-8"))["collapsed_groups"]
-        assert saved == {"instrument.focusing": False, "instrument.modules": True,
-                         "instrument.source": True}
+    finally:
         groups["instrument.focusing"].set_collapsed(True)
-        groups["instrument.source"].set_collapsed(False)
-        assert window._restore_layout_from_file()
-        assert state() == saved
-
-        cases = [
-            ({}, {key: True for key in groups}),
-            ({"collapsed_groups": ["instrument.source"]}, {key: True for key in groups}),
-            ({"collapsed_groups": {"instrument.focusing": "no", "instrument.source": False}},
-             {"instrument.focusing": True, "instrument.modules": True,
-              "instrument.source": False}),
-        ]
-        for stored, expected in cases:
-            for group in groups.values():
-                group.set_collapsed(False)
-            path.write_text(json.dumps({"layout_version": 2, **stored}), encoding="utf-8")
-            capsys.readouterr()
-            assert window._restore_layout_from_file()
-            assert state() == expected, stored
+    layout = json.loads(layout_file.read_text(encoding="utf-8"))
+    saved = layout.pop("collapsed_groups")
+    assert saved == {"instrument.focusing": False, "instrument.modules": True,
+                     "instrument.source": True}
+    layout_file.write_text(json.dumps({**layout, "collapsed_groups": saved}), encoding="utf-8")
+    restarted = _restart(show=False)
+    try:
+        assert {key: group.is_collapsed() for key, group
+                in restarted.instrument_dock.collapsible_groups.items()} == saved
+    finally:
+        _close(restarted)
+    cases = [
+        ({}, {key: True for key in groups}),
+        ({"collapsed_groups": ["instrument.source"]}, {key: True for key in groups}),
+        ({"collapsed_groups": {"instrument.focusing": "no", "instrument.source": False}},
+         {"instrument.focusing": True, "instrument.modules": True,
+          "instrument.source": False}),
+    ]
+    for stored, expected in cases:
+        layout_file.write_text(json.dumps({**layout, **stored}), encoding="utf-8")
+        capsys.readouterr()
+        restarted = _restart(show=False)
+        try:
+            assert restarted._layout_restored
+            state = {key: group.is_collapsed()
+                     for key, group in restarted.instrument_dock.collapsible_groups.items()}
+            assert state == expected, stored
             logged = capsys.readouterr().out
             for key, collapsed in expected.items():  # no case stores a valid True
                 assert (f"collapsed_groups[{key!r}]" in logged) == collapsed, (stored, logged)
-    finally:
-        for group in groups.values():
-            group.set_collapsed(True)
+        finally:
+            _close(restarted)
+
+
+@pytest.fixture
+def layout_file(window, tmp_path, monkeypatch):
+    """A view_layout.json in a temp folder, read and written by every window while the test runs.
+
+    Patched on the shared window too: an earlier test's instance patch, once
+    undone, leaves an instance attribute that would shadow the class's.
+    """
+    path = tmp_path / "view_layout.json"
+    monkeypatch.setattr(cm.TAVIMainWindow, "_get_layout_config_path", lambda self: str(path))
+    monkeypatch.setattr(window, "_get_layout_config_path", lambda: str(path))
+    return path
+
+
+def _restart(show=True):
+    """A new window as main() builds it (no controller): the layout file restored, then shown.
+
+    The shared window is never restored into: restoring over a shown window
+    leaves the replaced tab groups' strips behind, which TAVI never does.
+    """
+    instrument = get_instrument("puma")
+    win = cm.TAVIMainWindow(
+        instrument.descriptor(), instrument_infos=available_instruments(),
+        current_instrument_id=instrument.id, save_selection=lambda _id: None,
+    )
+    if show:
+        win.show()
+        for _ in range(3):  # the startup timer: fit to the screen, size the preset
+            QApplication.processEvents()
+    return win
+
+
+def _close(win):
+    win.deleteLater()
+    QApplication.processEvents()
+
+
+def test_reset_picks_for_the_screen_and_refolds(window):
+    """Reset to Default Layout: the screen's pick and width, the window fitted, the blocks folded."""
+    from gui.main_window import initial_layout_for_width
+
+    groups = window.instrument_dock.collapsible_groups
+    _resize(window, MONITOR, WIDE, columns=4)
+    groups["instrument.focusing"].set_collapsed(False)
+    window.reset_to_default_layout()
+    for _ in range(3):
+        QApplication.processEvents()
+    columns, width = initial_layout_for_width(window.screen().availableGeometry().width())
+    assert window._columns == columns and window._column_width == width
+    assert window.column_width_actions[width].isChecked()
+    assert all(group.is_collapsed() for group in groups.values())
+    assert window.isMaximized()
+    _assert_no_stray_tab_strip(window, columns)

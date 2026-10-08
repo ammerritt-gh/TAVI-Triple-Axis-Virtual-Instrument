@@ -61,7 +61,7 @@ def test_main_window_registers_the_fitting_dock():
         "the layout persistence skip it"
     )
     # And placed in the default layout.
-    layout_start = source.index("def _setup_dock_layout(self):")
+    layout_start = source.index("def _setup_dock_layout(self")
     layout_end = source.index("def _create_menus(self):", layout_start)
     layout_body = source[layout_start:layout_end]
     assert "self.fitting_dock" in layout_body, (
