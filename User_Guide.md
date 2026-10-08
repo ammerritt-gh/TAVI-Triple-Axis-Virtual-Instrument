@@ -38,6 +38,8 @@ This contains experimental modules that are not normally included or set up. On 
 ## Scattering Dock
 The scattering dock controls the parameters of the scattering experiment i.e. the QE-setup and scattering mode. Like the instrument control, the scattering controls are linked together, and e.g. changes to energy transfers will change angles and final/initial energies depending on the mode.
 
+The first block shows the point twice: Q (Å⁻¹, the neutron's view) on the left and HKL (r.l.u., the sample's view) on the right, with the energy transfer ΔE below both. The rows sit level, but qx is not H: Q = UB·HKL, and the two coincide only in the standard setting. The Fixed Mode block below it sets whether Ki or Kf is held, and that energy.
+
 The usage of absolute Q or relative HKL space is determined by the "Sample frame mode" box in the sample dock. With this off, the isntrument uses absolute Q units. With it on, it uses HKL space, using the sample lattice parameters.
 
 ## Sample Dock

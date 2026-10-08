@@ -270,6 +270,32 @@ def test_every_group_fits_one_block(instrument_id):
         app.setFont(font)
 
 
+def test_scattering_point_is_q_beside_hkl(window):
+    """Q left, HKL right on level rows, ΔE below, Fixed Mode its own block; Tab runs Q, HKL, ΔE, mode."""
+    _resize(window, MONITOR, NARROW)
+    dock = window.scattering_dock
+
+    def at(widget):
+        return widget.mapTo(window, QPoint(0, 0))
+
+    for q, hkl in ((dock.qx_edit, dock.H_edit), (dock.qy_edit, dock.K_edit),
+                   (dock.qz_edit, dock.L_edit)):
+        assert at(q).y() == at(hkl).y() and at(q).x() < at(hkl).x()
+    assert at(dock.deltaE_edit).y() > at(dock.qz_edit).y()
+    point, fixed = _blocks(dock)
+    assert point.isAncestorOf(dock.deltaE_edit) and not point.isAncestorOf(dock.K_fixed_combo)
+    assert fixed.isAncestorOf(dock.K_fixed_combo) and fixed.isAncestorOf(dock.fixed_E_edit)
+    chain = [dock.qx_edit, dock.qy_edit, dock.qz_edit, dock.H_edit, dock.K_edit,
+             dock.L_edit, dock.deltaE_edit, dock.K_fixed_combo, dock.fixed_E_edit]
+    seen, widget = [], dock.qx_edit
+    while len(seen) < len(chain):
+        if widget in chain:
+            seen.append(widget)
+        widget = widget.nextInFocusChain()
+        assert widget is not dock.qx_edit, "focus chain closed early"
+    assert seen == chain
+
+
 def test_clear_runtime_data_keeps_other_instruments(window, monkeypatch):
     """Clear Runtime Data deletes only the current instrument's records, and says which."""
     ctrl = window.controller
