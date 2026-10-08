@@ -175,3 +175,26 @@ vendored copies of the four geometry modules have not been synced with this work
 Done when: the operator has run a hands-on alignment pass (find peaks, Calculate
 UB, read residuals, lock a plane, a training exercise) on the real GUI and the
 defects it finds are fixed or filed, and ISAR's geometry copy is synced.
+
+## Compact window: blocks, column width, 2/3/4-column layouts
+
+**State:** landed untested
+
+PR #54 (`383a6779`, 2026-10-08) made form groups ~300 px blocks that stack in
+View → Column Width → Narrow and pair up in Wide, added View → Layout 2/3/4
+columns (first start picks by screen width and height; a 2560 screen opens the
+operator's own 3-column arrangement, Wide), put Q beside HKL with Fixed Mode
+separate, ordered the Instrument dock by use with Focusing, Modules and Source
+folded, moved Save/Load/Defaults to File and Clear Runtime Data (current
+instrument only) to Config, and raised the layout file to version 3 (old files
+renamed `.bak`). Checked only offscreen in Fusion; the real Windows 11 look has
+not been seen. Left for the operator: Reciprocal Space, opened in 3 columns on a
+1400–1520 px screen, docks behind the plot and widens the window past the screen
+(fix would open it floating there, which moves its documented place); merging
+the small Scattering dock into another is deferred by the operator; on-sight
+wording (lattice units in the title, "Along x:"/"In plane:", plain Q/HKL
+headers) and the 980 px height threshold for 3 columns are open to change.
+
+Done when: the operator has used the new window live on the 27" monitor and the
+12" laptop and the defects he finds are fixed or filed, and the Reciprocal Space
+placement is ruled.
