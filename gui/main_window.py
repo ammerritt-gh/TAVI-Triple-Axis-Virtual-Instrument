@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                 QScrollArea, QMenuBar, QMenu, QMessageBox,
                                 QInputDialog, QSizePolicy, QStyle, QTabBar)
 from PySide6.QtCore import Qt, QByteArray, QTimer
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
 
 import tavi
 from tavi.local_state import config_path as local_config_path
@@ -45,7 +45,8 @@ def initial_layout_for_width(available_width):
 class TAVIMainWindow(QMainWindow):
     """Main window for TAVI application with dockable panels."""
 
-    LAYOUT_VERSION = 2
+    # 3: the 2/3/4-column presets. An older file is set aside (.bak), not read.
+    LAYOUT_VERSION = 3
 
     def __init__(self, descriptor=None, instrument_infos=None,
                  current_instrument_id=None, save_selection=None):
@@ -737,6 +738,15 @@ class TAVIMainWindow(QMainWindow):
         """Move a floating dock to the centre of the main window's screen."""
         dock.move(self.screen().availableGeometry().center() - dock.rect().center())
 
+    def _layout_note(self, message):
+        """Tell the user about the window layout, in the Message Log and on the console.
+
+        Written straight into the log: the restore runs before the controller
+        (and its message signal) exists.
+        """
+        print(message)
+        self.output_dock.message_text.append(message)
+
     def _form_docks(self):
         return [self.instrument_dock, self.sample_dock,
                 self.scattering_dock, self.simulation_dock]
@@ -800,6 +810,7 @@ class TAVIMainWindow(QMainWindow):
                     dock.objectName(): dock.isFloating() for dock in self._all_docks
                 },
                 "column_width": self._column_width,
+                "columns": self._columns,  # the last View > Layout preset applied
                 "collapsed_groups": {
                     key: group.is_collapsed()
                     for key, group in self.instrument_dock.collapsible_groups.items()
@@ -817,31 +828,45 @@ class TAVIMainWindow(QMainWindow):
             return False
     
     def _restore_layout_from_file(self):
-        """Restore layout from the JSON config file if it exists."""
+        """Restore the saved layout if it is of this version; True when it now stands.
+
+        No file is a first start: False, silently. A file of another version
+        (or none) is set aside once as ``view_layout.json.v<old>.bak``. An
+        unreadable file, a geometry or state Qt refuses, or any other error
+        falls back to the preset. Each of these says so in the Message Log.
+        After a restore, a floating dock no screen shows is brought back.
+        """
         config_path = self._get_layout_config_path()
-        
+
         if not os.path.exists(config_path):
             return False
-        
+
+        touched = False  # once Qt has been handed the saved state
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 layout_data = json.load(f)
-            
-            # Restore window geometry
-            if "window_geometry" in layout_data:
-                geometry_bytes = QByteArray.fromBase64(
-                    layout_data["window_geometry"].encode('ascii')
-                )
-                self.restoreGeometry(geometry_bytes)
-            
-            # Restore window state (dock positions)
-            if "window_state" in layout_data:
-                state_bytes = QByteArray.fromBase64(
-                    layout_data["window_state"].encode('ascii')
-                )
-                self.restoreState(state_bytes)
-                self._preset_unsized = False  # the saved sizes stand
-            
+            if not isinstance(layout_data, dict):
+                raise ValueError(f"a JSON {type(layout_data).__name__}, not an object")
+
+            version = layout_data.get("layout_version")
+            if version != self.LAYOUT_VERSION:
+                backup = f"{config_path}.v{version if isinstance(version, int) else 'none'}.bak"
+                os.replace(config_path, backup)  # overwrites an older .bak
+                self._layout_note(
+                    f"Window layout: the saved layout is from an older TAVI (layout version "
+                    f"{version}) and was set aside as {backup}. Using the {self._columns}-column "
+                    f"layout picked for this screen; View > Layout changes it.")
+                return False
+
+            geometry = QByteArray.fromBase64(layout_data["window_geometry"].encode('ascii'))
+            state = QByteArray.fromBase64(layout_data["window_state"].encode('ascii'))
+            touched = True
+            if not self.restoreGeometry(geometry):
+                raise ValueError("Qt refused its window_geometry")
+            if not self.restoreState(state):
+                raise ValueError("Qt refused its window_state")
+            self._preset_unsized = False  # the saved sizes stand
+
             # Restore dock visibility
             if "dock_visibility" in layout_data:
                 for dock in self._all_docks:
@@ -849,7 +874,14 @@ class TAVIMainWindow(QMainWindow):
                     if name in layout_data["dock_visibility"]:
                         dock.setVisible(layout_data["dock_visibility"][name])
 
-            # Missing (a file from before the setting) means Narrow.
+            # The last preset applied: where a lost dock goes back to.
+            columns = layout_data.get("columns")
+            if columns in LAYOUT_COLUMNS:
+                self._columns = columns
+            else:
+                print(f"Warning: columns is {columns!r} in {config_path}; "
+                      f"taking {self._columns} for a lost dock's place")
+
             width = layout_data.get("column_width", NARROW)
             if width not in (NARROW, WIDE):
                 print(f"Warning: unknown column_width {width!r} in {config_path}; "
@@ -870,11 +902,40 @@ class TAVIMainWindow(QMainWindow):
                           f"{config_path}; folding it (the default)")
                     collapsed = True
                 group.set_collapsed(collapsed)
-            self._tidy_tab_bars()  # the bars of the preset the state replaced
-            return True
         except Exception as e:
-            print(f"Warning: Failed to restore layout: {e}")
+            if touched:  # Qt may have moved docks before refusing
+                self._setup_dock_layout(self._columns)
+            self._layout_note(
+                f"Window layout: could not restore {config_path} ({e!r}). Using the "
+                f"{self._columns}-column layout picked for this screen.")
             return False
+        self._rescue_lost_docks()
+        self._tidy_tab_bars()  # the bars of the preset the state replaced
+        return True
+
+    def _rescue_lost_docks(self):
+        """Bring back each floating dock, shown or hidden, that lies on no screen.
+
+        Qt 6.11's restoreState already moves a floating dock it restores onto
+        a screen; this is the net under it. A dock with a place in the current
+        preset (every dock but Misalignment, and UB Matrix outside 3 columns)
+        is docked again by re-applying that preset; the others move to the
+        centre of the main window's screen.
+        """
+        screens = [screen.availableGeometry() for screen in QGuiApplication.screens()]
+        lost = [dock for dock in self._all_docks if dock.isFloating()
+                and not any(room.intersects(dock.frameGeometry()) for room in screens)]
+        if not lost:
+            return
+        homeless = [self.misalignment_dock] + ([] if self._columns == 3 else [self.ub_matrix_dock])
+        for dock in lost:
+            if dock in homeless:
+                self._centre_on_screen(dock)
+        if any(dock not in homeless for dock in lost):
+            self._setup_dock_layout(self._columns)
+        names = ", ".join(dock.windowTitle() for dock in lost)
+        self._layout_note(f"Window layout: {names} had been saved off every screen; "
+                          f"brought back.")
 
     def _show_reciprocal_window(self):
         """Show the reciprocal-space canvas as a usable floating workspace."""
