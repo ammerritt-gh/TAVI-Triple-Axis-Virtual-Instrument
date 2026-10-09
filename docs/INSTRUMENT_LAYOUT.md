@@ -179,10 +179,11 @@ mounting plane (u, v, u+v; without a described plane, the mount's horizontal x
 and z as small (h k l) and their sum, else (1 0 0), (0 1 0), (1 1 0)).
 
 **Codes.** The code keeps its 11-float layout, of which the last two (once the
-motor-zero errors) are written 0. A code with a nonzero value there, a retired
-Misalignment-dock code (two floats) or one that does not decode is refused,
-applying nothing: *this exercise was made by an older TAVI and contains
-motor-zero errors, which are no longer simulated; ask for a new code*.
+motor-zero errors) are written 0. A code with a nonzero value there, or a retired
+Misalignment-dock code (two floats), is refused, applying nothing: *this
+exercise was made by an older TAVI and contains motor-zero errors, which are no
+longer simulated; ask for a new code*. A code that does not decode at all is
+refused with *this exercise code cannot be read*.
 
 **Observable.** Generation and load both check that the instrument can reach
 at least two non-parallel reference reflections of the sample for the hidden

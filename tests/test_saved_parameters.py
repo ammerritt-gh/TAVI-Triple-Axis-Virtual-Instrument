@@ -311,7 +311,7 @@ RETIRED_DOCK_CODE = base64.urlsafe_b64encode(bytes(
 @pytest.mark.parametrize("edits, words", [
     ({"ub_training_hash": encode_training(mccode_rotation_matrix(3.0, 5.0, -2.0), 1.0, 0.0)},
      MOTOR_ZERO_REFUSAL),
-    ({"ub_training_hash": RETIRED_DOCK_CODE}, "cannot be read"),
+    ({"ub_training_hash": RETIRED_DOCK_CODE}, "no longer simulated"),
     ({"ub_training_hash": "garbage"}, "cannot be read"),
     ({"misalignment_hash_var": RETIRED_DOCK_CODE}, "Misalignment-dock exercise is retired"),
 ], ids=["zero-errors", "retired-dock-code", "garbage", "misalignment-key"])
