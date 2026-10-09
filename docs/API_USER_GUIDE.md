@@ -296,10 +296,12 @@ to submit.
 
 - Invalid scan command → `400 scan_validation` with a human-readable message.
   Pass `"force": true` in the body to override the *soft* scan-command
-  warnings (a very long scan, an advisory conflict). A hard rejection -- an
-  unknown or refused variable, a malformed command, a Q variable paired with
-  an HKL one, an angle (`A1`-`A4`, `2theta`, `omega`) paired with a Q, HKL or
-  `deltaE` variable -- is refused regardless, exactly as the GUI Run button refuses it.
+  warnings (a very long scan). A hard rejection -- an unknown or refused
+  variable, a malformed command, a Q variable paired with an HKL one, an angle
+  (`A1`-`A4`, `2theta`, `omega`) paired with a Q, HKL or `deltaE` variable, or
+  two commands that write one scan slot (the same variable twice, `A3` with
+  `omega`, `A2` with `2theta`) -- is refused regardless, exactly as the GUI Run
+  button refuses it. `A3` beside `A4` is two different slots and is accepted.
 - Any **geometrically infeasible** point → `400 infeasible_points`; the error
   `details` is the full `validation` object (so you can see which points and
   why). To queue anyway and simply **skip** the unreachable points, resubmit

@@ -930,10 +930,10 @@ class TaviApiBackend:
 
         ``force`` is the operator's deliberate override, so it clears exactly
         what the GUI Run button offers as a choice: the soft issues (a very
-        long scan, an advisory conflict). A hard issue -- the command does not
-        describe a scan that can run as written: an unknown or refused
-        variable, a malformed command, Q paired with HKL -- blocks whatever
-        the caller says. Forcing through one of those ran a scan that
+        long scan). A hard issue -- the command does not describe a scan that
+        can run as written: an unknown or refused variable, a malformed
+        command, Q paired with HKL, two commands on one scan slot -- blocks
+        whatever the caller says. Forcing through one of those ran a scan that
         silently overwrote the radius a crystal pins, or labelled points with
         coordinates they were not taken at (ruling 2026-09-10).
         """
@@ -4539,12 +4539,19 @@ class TAVIController(QObject):
         energy-transfer variable writes the same slot as the Q one, so the
         measurement is labelled as one quantity while it scans another.
 
-        Every other conflict this class detects is a judgement call, so those
-        stay overridable.
+        Two commands that write one scan slot cannot both be honoured: the same
+        variable twice, or two variables of one ``LINKED_PARAMETER_GROUPS``
+        group (A3 with omega, A2 with 2theta), since the second overwrites the
+        first's values while the axis still reports it.
         """
+        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS
+
         q_vars = {"qx", "qy", "qz"}
         hkl_vars = {"h", "k", "l"}
-        return ((v1 in q_vars and v2 in hkl_vars)
+        same_slot = v1 == v2 or any(
+            v1 in group and v2 in group for group in LINKED_PARAMETER_GROUPS.values())
+        return (same_slot
+                or (v1 in q_vars and v2 in hkl_vars)
                 or (v1 in hkl_vars and v2 in q_vars)
                 or TAVIController._is_arc_in_q_mode(v1, v2)
                 or TAVIController._is_angle_beside_q(v1, v2))
@@ -4590,14 +4597,14 @@ class TAVIController(QObject):
             return ("Conflict: an angle scan cannot be combined with a Q, HKL or "
                     "energy-transfer scan: both write the same scan slots, so one "
                     "would be read as the other")
-        if self._is_unexecutable_conflict(v1, v2):
-            return ("Conflict: Q and HKL scans describe the same target momentum "
-                    "under the current sample mount")
-
         # Check linked parameter groups (parameters that control the same thing)
         for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
             if v1 in group_vars and v2 in group_vars:
                 return f"⚠ Conflict: '{var1}' and '{var2}' are linked ({group_name.replace('_', ' ')})"
+
+        if self._is_unexecutable_conflict(v1, v2):
+            return ("Conflict: Q and HKL scans describe the same target momentum "
+                    "under the current sample mount")
 
         return ""
     
@@ -7635,16 +7642,12 @@ class TAVIController(QObject):
 
         var1, var2 = variables
 
-        # Check for conflicts between commands. These stay overridable:
-        # they were before this split. Only a command that cannot run AS
-        # WRITTEN is hard.
+        # A pair is a conflict only when its two commands cannot both run as
+        # written, so every conflict is hard: no force clears it.
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
-                if self._is_unexecutable_conflict(var1.lower(), var2.lower()):
-                    hard.append(conflict)
-                else:
-                    soft.append(conflict)
+                hard.append(conflict)
 
         return hard, soft
 
