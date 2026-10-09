@@ -141,6 +141,25 @@ def test_generation_on_panda_always_leaves_two_reachable_reflections():
         assert has_two_nonparallel(reached), (seed, reached)
 
 
+def test_generation_judges_the_rotation_a_load_will_decode():
+    """The check sees the float32, re-orthonormalised rotation a load decodes,
+    not the float64 draw, so a generated code always passes its own load check."""
+    judged = []
+    np.random.seed(3)
+    code = generate_training_exercise(45.0, accept=lambda rotation: judged.append(rotation))
+    assert np.array_equal(judged[-1], decode_mount_exercise(code))
+
+
+def test_every_generated_code_on_panda_passes_its_own_load_check():
+    state, b, hkls, _ = _setup("panda")
+    for seed in range(6):
+        np.random.seed(seed)
+        code = generate_training_exercise(45.0, accept=lambda rotation: training_reach_error(
+            state, rotation, b, hkls, _limits("panda")))
+        assert training_reach_error(state, decode_mount_exercise(code), b, hkls,
+                                    _limits("panda")) is None, seed
+
+
 def test_a_generated_exercise_is_recovered_to_aligned_from_tilted_peaks():
     """PANDA, a hidden turn of up to 45 deg: peaks found where the true
     crystal diffracts, with the arcs tilted, fit a UB the grader calls
