@@ -1396,7 +1396,12 @@ class DisplayDock(BaseDockWidget):
             metadata: Optional dict with scan metadata for info panel
         """
         from tavi.utilities import parse_scan_steps
-        from tavi.data_processing import read_1Ddetector_file, read_parameters_from_file
+        from tavi.data_processing import (read_1Ddetector_file, read_parameters_from_file,
+                                          require_output_version)
+
+        # Before any name is resolved or any state changes: an old folder's A2/A4
+        # are other axes than the canonical IDs they would match.
+        require_output_version(read_parameters_from_file(data_folder), data_folder)
         
         # Store data folder and metadata
         self._data_folder = data_folder
@@ -1474,19 +1479,10 @@ class DisplayDock(BaseDockWidget):
         self.scan_complete()
     
     def _normalize_variable_name(self, name):
-        """Normalize variable name to canonical form."""
+        """Canonical quantity ID of a scan command's variable; a refused name comes back unchanged."""
         if not name:
             return name
-        name = str(name).strip()
-        lower = name.lower()
-        if lower in ["h", "k", "l"]:
-            return lower.upper()
-        if lower in ["a1", "a2", "a3", "a4"]:
-            return lower.upper()
-        if lower == "deltae":
-            return "deltaE"
-        if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
-            return lower
-        if lower in ["omega", "sgl", "sgu", "chi"]:  # chi: old scans
-            return lower
-        return name
+        try:
+            return resolve(str(name).strip(), "scan").id
+        except QuantityRefused:
+            return name

@@ -108,7 +108,8 @@ def _point_angles(mtt, stt, att):
 # Import TAVI core modules
 from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file,
                                    simple_plot_scan_commands, display_existing_data,
-                                   read_parameters_from_file, write_1D_scan, write_2D_scan)
+                                   read_parameters_from_file, require_output_version,
+                                   write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import (parse_scan_steps, incremented_path_writing,
                             normalize_scan_commands)
@@ -2452,6 +2453,12 @@ class TAVIController(QObject):
     def public_values(self, vals):
         """An internal parameter dict under canonical IDs (what the API and job results show)."""
         return _public_values(vals, self.descriptor.slits)
+
+    def output_parameters(self, params):
+        """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only."""
+        out = self.public_values(params)
+        out.pop('sth', None)   # the stage readout of sample_rotation_deg, which 'omega' already records
+        return out
 
     def api_parameters(self):
         """GET /parameters: the GUI values under canonical IDs, or None when a field will not parse."""
@@ -5773,6 +5780,7 @@ class TAVIController(QObject):
             try:
                 # Read parameters to get scan commands
                 scan_parameters = read_parameters_from_file(folder)
+                require_output_version(scan_parameters, folder)
                 scan_cmd1 = scan_parameters.get('scan_command1', '')
                 scan_cmd2 = scan_parameters.get('scan_command2', '')
                 
@@ -5788,7 +5796,8 @@ class TAVIController(QObject):
             self.print_to_message_center("Invalid folder path for loading data")
     
     def _build_scan_metadata_from_parameters(self, params):
-        """Build scan metadata dict from loaded parameters."""
+        """Build scan metadata dict from loaded parameters (canonical IDs on disk)."""
+        params = {_to_internal(key): value for key, value in params.items()}
         metadata = {}
         
         # Number of neutrons
@@ -9437,7 +9446,7 @@ class TAVIController(QObject):
         self.actual_output_folder_updated.emit(data_folder)
         
         # Write parameters to file
-        write_parameters_to_file(data_folder, vals)
+        write_parameters_to_file(data_folder, self.output_parameters(vals))
         
         # Initialize scan arrays
         scan_parameter_input = []
@@ -10042,7 +10051,7 @@ class TAVIController(QObject):
                     }
                     # Merge with full GUI vals for completeness; scan_point_params overrides stale vals
                     full_params = {**vals, **scan_point_params}
-                    write_parameters_to_file(scan_folder, full_params)
+                    write_parameters_to_file(scan_folder, self.output_parameters(full_params))
 
                     if metadata.get('transmission'):
                         self.message_printed.emit(

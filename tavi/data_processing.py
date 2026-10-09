@@ -9,6 +9,8 @@ import re
 import json
 import numpy as np
 
+from tavi.quantities import API_VERSION
+
 
 def read_1Ddetector_file(scan_folder):
     """Read detector data from a McStas 1D detector file.
@@ -89,6 +91,8 @@ def write_parameters_to_file(target_folder, parameters):
             items.append((k, value))
 
     with open(file_path, 'w') as file:
+        # Quantities are keyed by canonical ID; the version marks the A2/A4/A6 numbering.
+        file.write(f"api_version: {API_VERSION}\n")
         for key, value in items:
             file.write(f"{key}: {value}\n")
 
@@ -137,11 +141,33 @@ def read_parameters_from_file(target_folder):
     except FileNotFoundError:
         print(f"Warning: Parameter file not found at {file_path}")
 
-    # A folder written before the goniometer arcs records the lower arc as
-    # 'chi'; read it as 'sgl' (the old key stays for old 'chi' scan commands).
-    if 'chi' in parameters and 'sgl' not in parameters:
-        parameters['sgl'] = parameters['chi']
     return parameters
+
+
+class OutputVersionError(ValueError):
+    """A scan folder written under another naming contract; str() is the message to show."""
+
+
+def require_output_version(parameters, folder):
+    """Raise OutputVersionError unless ``parameters`` (a folder's scan_parameters.txt,
+    read) carry this TAVI's api_version. An empty dict is no parameter file at all and
+    passes: the caller already treats that as a folder without scan commands. Judge the
+    version before resolving any name in the folder: an old file's A2 and A4 mean other
+    axes than the canonical IDs they would be matched against.
+    """
+    if not parameters:
+        return
+    version = parameters.get('api_version')
+    if version == API_VERSION:
+        return
+    if version is None:
+        raise OutputVersionError(
+            f"{folder} was written by an older TAVI with the old angle numbering "
+            f"(A2 was the sample 2θ, A4 the analyzer 2θ); it cannot be loaded. "
+            f"The folder is left untouched.")
+    raise OutputVersionError(
+        f"{folder} was written under api_version {version}; this TAVI reads "
+        f"{API_VERSION}, so it cannot be loaded. The folder is left untouched.")
 
 
 def simple_plot_scan_commands(scan_point, target_folder):
