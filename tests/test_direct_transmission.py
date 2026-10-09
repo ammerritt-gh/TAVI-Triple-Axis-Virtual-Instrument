@@ -508,7 +508,7 @@ def test_validate_http_endpoint_accepts_engine_seed_noiseless_body():
         port = srv._httpd.server_address[1]
         url = "http://127.0.0.1:%d%s/validate" % (port, API_PREFIX)
         data = json.dumps(
-            {"engine": "deterministic", "seed": 7, "noiseless": True}
+            {"api_version": 2, "engine": "deterministic", "seed": 7, "noiseless": True}
         ).encode("utf-8")
         req = urllib.request.Request(
             url, data=data, method="POST",

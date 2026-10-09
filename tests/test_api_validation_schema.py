@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 
 from tavi.api_server import ApiError, TaviApiServer, API_PREFIX
+from api_helpers import with_version
 from tavi.sample_library import default_sample_library
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
 
@@ -30,6 +31,7 @@ from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
 
 def _request(url, method="GET", data=None, headers=None, timeout=5):
     hdrs = dict(headers or {})
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")

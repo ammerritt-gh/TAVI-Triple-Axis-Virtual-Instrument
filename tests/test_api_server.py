@@ -31,6 +31,7 @@ from tavi.api_server import (
     MAX_WAITERS,
 )
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob
+from api_helpers import with_version
 
 
 # ==========================================================================
@@ -128,6 +129,7 @@ def _request(url, method="GET", data=None, headers=None, timeout=5):
     asserted on.
     """
     hdrs = dict(headers or {})
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
@@ -748,6 +750,7 @@ def test_json_safe_helper():
 def _request_h(url, method="GET", data=None, headers=None, timeout=10):
     """Like ``_request`` but also returns the response headers dict."""
     hdrs = dict(headers or {})
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")

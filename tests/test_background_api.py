@@ -8,6 +8,7 @@ import urllib.request
 import pytest
 
 from tavi import background
+from api_helpers import with_version
 from tavi.api_server import (
     API_PREFIX,
     ApiError,
@@ -86,6 +87,7 @@ def test_background_contract_keys_and_scan_validate_parity():
 
 def _request(url, method="GET", data=None, timeout=5):
     headers = {}
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         headers["Content-Type"] = "application/json"

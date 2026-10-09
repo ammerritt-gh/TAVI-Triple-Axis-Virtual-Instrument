@@ -27,6 +27,7 @@ from tavi.api_server import (
     ALLOWED_ENGINES, DEFAULT_ENGINE, parse_scan_engine,
 )
 from tavi.scan_jobs import JobRegistry, ScanJob, ScanResult
+from api_helpers import with_version
 
 
 # ==========================================================================
@@ -179,6 +180,7 @@ def test_launch_summary_reaches_job_data_snapshot():
 
 def _request(url, method="GET", data=None, timeout=5):
     hdrs = {}
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         hdrs["Content-Type"] = "application/json"
