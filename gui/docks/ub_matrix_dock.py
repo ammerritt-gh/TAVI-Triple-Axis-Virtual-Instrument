@@ -593,12 +593,8 @@ class UBMatrixDock(BaseDockWidget):
         self.max_ori_spin.setMaximumWidth(80)
         teacher_grid.addWidget(self.max_ori_spin, 0, 1)
 
-        self.include_orientation_check = QCheckBox("Orientation")
-        self.include_orientation_check.setChecked(True)
-        teacher_grid.addWidget(self.include_orientation_check, 1, 0)
-
         self.generate_training_button = QPushButton("Generate")
-        teacher_grid.addWidget(self.generate_training_button, 1, 1)
+        teacher_grid.addWidget(self.generate_training_button, 1, 0)
 
         training_layout.addLayout(teacher_grid)
 
