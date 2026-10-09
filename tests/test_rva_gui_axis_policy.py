@@ -189,7 +189,7 @@ def test_rva_is_a_patchable_api_field():
 def test_rva_appears_in_get_schema_fields():
     with _controller("in8") as ctrl:
         names = {f["name"] for f in ctrl.build_api_schema()["fields"]}
-        assert "rva" in names
+        assert "analyzer_vertical_radius_m" in names
 
 
 def test_an_explicit_rva_on_a_fixed_axis_is_refused_by_the_api():

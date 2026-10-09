@@ -28,6 +28,7 @@ from tavi.scan_fits import (
     plan_goto,
 )
 from tavi.scan_fits import _DEFAULT_N_CURVE, _stall_is_expected
+from tavi.quantities import QUANTITIES, to_public
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONTROLLER_PATH = os.path.join(REPO_ROOT, "TAVI_PySide6.py")
@@ -461,35 +462,29 @@ def test_peak_max_negative_counts_refused():
 # --------------------------------------------------------------------------
 
 def test_scan_variable_to_field_rows():
-    expected = {
-        "h": "H", "k": "K", "l": "L", "energy_transfer_mev": "deltaE",
-        "q_instrument_x_inv_angstrom": "qx", "q_instrument_y_inv_angstrom": "qy",
-        "q_instrument_z_inv_angstrom": "qz",
-        "mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
-        "sample_rotation_deg": "omega", "analyzer_two_theta_deg": "att",
-        "sample_lower_arc_deg": "sgl", "sample_upper_arc_deg": "sgu",
-        "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
-        "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": None,
-    }
+    # The controller's field map is keyed by canonical ID, so a goto writes the field
+    # whose ID it scanned (the rva exception aside).
+    expected = {q.id: q.id for q in QUANTITIES if q.scannable}
+    expected["analyzer_vertical_radius_m"] = None
     assert SCAN_VARIABLE_TO_FIELD == expected
 
 
 def test_field_for_scan_variable_lookup():
-    assert field_for_scan_variable("A2") == "mtt"
-    assert field_for_scan_variable("A4") == "stt"
-    assert field_for_scan_variable("2theta") == "stt"
-    assert field_for_scan_variable("A6") == "att"
-    assert field_for_scan_variable("omega") == "omega"
+    assert field_for_scan_variable("A2") == "mono_two_theta_deg"
+    assert field_for_scan_variable("A4") == "sample_two_theta_deg"
+    assert field_for_scan_variable("2theta") == "sample_two_theta_deg"
+    assert field_for_scan_variable("A6") == "analyzer_two_theta_deg"
+    assert field_for_scan_variable("omega") == "sample_rotation_deg"
     assert field_for_scan_variable("A3") == field_for_scan_variable("omega")
     # psi is an alias of the sample rotation; kappa is not modelled.
-    assert field_for_scan_variable("psi") == "omega"
+    assert field_for_scan_variable("psi") == "sample_rotation_deg"
     assert field_for_scan_variable("kappa") is None
     assert field_for_scan_variable("chi") is None
     assert field_for_scan_variable("rva") is None
     # The registry resolves any case and the full ID.
-    assert field_for_scan_variable("a4") == "stt"
-    assert field_for_scan_variable("sample_two_theta_deg") == "stt"
-    assert field_for_scan_variable("DELTAE") == "deltaE"
+    assert field_for_scan_variable("a4") == "sample_two_theta_deg"
+    assert field_for_scan_variable("sample_two_theta_deg") == "sample_two_theta_deg"
+    assert field_for_scan_variable("DELTAE") == "energy_transfer_mev"
     # Unknowns and non-strings are simply not goto-able.
     assert field_for_scan_variable("nonsense") is None
     assert field_for_scan_variable("") is None
@@ -507,7 +502,7 @@ def test_plan_goto_ok_path_carries_field_and_float():
     assert plan.ok is True
     assert plan.reason == ""
     assert plan.variable == "A3"
-    assert plan.field == "omega"
+    assert plan.field == "sample_rotation_deg"
     assert isinstance(plan.value, float)
     assert plan.value == 12.4173
 
@@ -522,7 +517,7 @@ def test_plan_goto_accepts_int_numeric_string_and_numpy_float():
 
 def test_plan_goto_case_insensitive_variable():
     plan = plan_goto("a4", 45.0, busy=False)
-    assert plan.ok and plan.field == "stt"
+    assert plan.ok and plan.field == "sample_two_theta_deg"
 
 
 def test_plan_goto_refuses_when_busy_before_anything_else():
@@ -621,8 +616,10 @@ def test_every_mapped_field_exists_in_the_controller_field_map():
     """MAINTAINERS: if ``_api_field_map`` renames a field, update
     ``SCAN_VARIABLE_TO_FIELD`` in ``tavi/scan_fits.py`` in the same change."""
     body = _api_field_map_body()
-    keys = set(re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)':", body, re.MULTILINE))
-    assert "mtt" in keys, "field-map scan found no keys -- the scan pattern broke"
+    # The literal is keyed by internal name; the map is renamed to canonical IDs at its end.
+    keys = {to_public(k) for k in
+            re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)':", body, re.MULTILINE)}
+    assert "mono_two_theta_deg" in keys, "field-map scan found no keys -- the scan pattern broke"
 
     missing = sorted({f for f in SCAN_VARIABLE_TO_FIELD.values() if f} - keys)
     assert not missing, (
@@ -639,16 +636,22 @@ def test_known_api_field_map_keys_are_unchanged():
     """
     known = {
         'orientation_mode', 'lock_plane',
-        'mtt', 'stt', 'omega', 'sgl', 'sgu', 'att',
-        'Ki', 'Ei', 'Kf', 'Ef', 'K_fixed', 'fixed_E',
-        'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
-        'lattice_a', 'lattice_b', 'lattice_c',
-        'lattice_alpha', 'lattice_beta', 'lattice_gamma',
+        'mono_two_theta_deg', 'sample_two_theta_deg', 'sample_rotation_deg',
+        'sample_lower_arc_deg', 'sample_upper_arc_deg', 'analyzer_two_theta_deg',
+        'incident_wavevector_inv_angstrom', 'incident_energy_mev',
+        'final_wavevector_inv_angstrom', 'final_energy_mev', 'K_fixed', 'fixed_E',
+        'q_instrument_x_inv_angstrom', 'q_instrument_y_inv_angstrom',
+        'q_instrument_z_inv_angstrom', 'h', 'k', 'l', 'energy_transfer_mev',
+        'lattice_a_angstrom', 'lattice_b_angstrom', 'lattice_c_angstrom',
+        'lattice_alpha_deg', 'lattice_beta_deg', 'lattice_gamma_deg',
         'sample', 'monocris', 'anacris',
-        'rhm', 'rvm', 'rha', 'rva', 'source_type', 'source_dE',
-        'modules', 'collimation', 'slits_mm',
+        'mono_horizontal_radius_m', 'mono_vertical_radius_m',
+        'analyzer_horizontal_radius_m', 'analyzer_vertical_radius_m',
+        'source_type', 'source_dE',
+        'modules', 'collimation',
         'number_neutrons', 'scan_command1', 'scan_command2', 'diagnostic_mode',
-    }
+    }   # the slit gaps of the active instrument are added from its descriptor
     body = _api_field_map_body()
-    actual = set(re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)': \(", body, re.MULTILINE))
+    actual = {to_public(k) for k in
+              re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)': \(", body, re.MULTILINE)}
     assert actual == known

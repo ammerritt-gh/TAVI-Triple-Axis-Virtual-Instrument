@@ -729,20 +729,23 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # --------------------------------------------------------------------------
 
 # Canonical scan quantity ID -> settable GUI parameter field
-# (TAVI_PySide6.TAVIController._api_field_map). The field names are still the
-# internal ones (mtt, stt, omega, att) until U3; the keys are the registry's, so
-# A2/mtt reach 'mtt', A4/stt/2theta 'stt', A6/att 'att', and A3/sth/omega/psi
-# 'omega'. 'analyzer_vertical_radius_m' is None: no settable field exists in
-# _api_field_map for it, so it is known but not goto-able.
+# (TAVI_PySide6.TAVIController._api_field_map, itself keyed by canonical ID, so a
+# goto from A2/mtt, A4/stt/2theta, A6/att or A3/sth/omega/psi writes the quantity
+# the scan named). 'analyzer_vertical_radius_m' is None: it is known but not
+# goto-able.
 SCAN_VARIABLE_TO_FIELD = {
-    "h": "H", "k": "K", "l": "L", "energy_transfer_mev": "deltaE",
-    "q_instrument_x_inv_angstrom": "qx", "q_instrument_y_inv_angstrom": "qy",
-    "q_instrument_z_inv_angstrom": "qz",
-    "mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
-    "sample_rotation_deg": "omega", "analyzer_two_theta_deg": "att",
-    "sample_lower_arc_deg": "sgl", "sample_upper_arc_deg": "sgu",
-    "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
-    "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": None,
+    "h": "h", "k": "k", "l": "l", "energy_transfer_mev": "energy_transfer_mev",
+    "q_instrument_x_inv_angstrom": "q_instrument_x_inv_angstrom",
+    "q_instrument_y_inv_angstrom": "q_instrument_y_inv_angstrom",
+    "q_instrument_z_inv_angstrom": "q_instrument_z_inv_angstrom",
+    "mono_two_theta_deg": "mono_two_theta_deg", "sample_two_theta_deg": "sample_two_theta_deg",
+    "sample_rotation_deg": "sample_rotation_deg",
+    "analyzer_two_theta_deg": "analyzer_two_theta_deg",
+    "sample_lower_arc_deg": "sample_lower_arc_deg", "sample_upper_arc_deg": "sample_upper_arc_deg",
+    "mono_horizontal_radius_m": "mono_horizontal_radius_m",
+    "mono_vertical_radius_m": "mono_vertical_radius_m",
+    "analyzer_horizontal_radius_m": "analyzer_horizontal_radius_m",
+    "analyzer_vertical_radius_m": None,
 }
 
 

@@ -53,7 +53,7 @@ def _assert_committed(edit):
 def test_apply_parameters_commits_direct_and_derived_fields(controller):
     applied, errors = controller.apply_parameters({"Ei": 20.0})
 
-    assert applied == {"Ei": 20.0}
+    assert applied == {"incident_energy_mev": 20.0}
     assert errors == {}
     _assert_committed(controller.window.instrument_dock.Ei_edit)
     _assert_committed(controller.window.instrument_dock.Ki_edit)
@@ -83,7 +83,7 @@ def test_restoring_defaults_does_not_leave_pending_fields(controller):
 def test_user_edit_during_saved_flash_remains_pending(controller):
     edit = controller.window.instrument_dock.Ei_edit
     applied, errors = controller.apply_parameters({"Ei": 20.0})
-    assert applied == {"Ei": 20.0}
+    assert applied == {"incident_energy_mev": 20.0}
     assert errors == {}
 
     edit.setText("21")

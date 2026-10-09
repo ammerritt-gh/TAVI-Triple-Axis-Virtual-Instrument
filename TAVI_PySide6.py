@@ -137,8 +137,10 @@ from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
 from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
-from tavi.quantities import QUANTITIES, QuantityRefused, UnknownQuantity
-from tavi.quantities import resolve as resolve_quantity
+from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
+from tavi.quantities import normalize_write_names, resolve as resolve_quantity
+from tavi.quantities import public_values as _public_values
+from tavi.quantities import to_internal as _to_internal, to_public as _to_public
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection,
                                      reference_hkls)
@@ -322,15 +324,18 @@ class TaviApiBackend:
         }
 
     def get_parameters(self):
-        return self._bridge.call_on_gui(self._controller.get_gui_values)
+        return self._bridge.call_on_gui(self._controller.api_parameters)
 
     def get_state(self):
         def read():
             # lock_stale is not a GUI value (so never a launch value or scan
             # metadata); /state adds it, read from the one stale function.
             vals = self._controller.get_gui_values()
-            if vals is not None:
-                vals['lock_stale'] = self._controller.lock_stale(vals)
+            if vals is None:
+                return None
+            stale = self._controller.lock_stale(vals)
+            vals = self._controller.public_values(vals)
+            vals['lock_stale'] = stale
             return vals
         params = self._bridge.call_on_gui(read)
         registry = self._controller._job_registry
@@ -1048,10 +1053,10 @@ class TaviApiBackend:
         return validation
 
     def get_resolution(self, query):
-        """GET /resolution -- theoretical TAS resolution at one (H,K,L,deltaE).
+        """GET /resolution -- theoretical TAS resolution at one (h, k, l, energy transfer).
 
-        ``query`` carries optional floats ``H``/``K``/``L``/``deltaE`` (``None``
-        -> current GUI value) and a validated ``method`` (``auto`` /
+        ``query`` carries optional floats under the canonical IDs ``h``/``k``/``l``/
+        ``energy_transfer_mev`` (``None`` -> current GUI value) and a validated ``method`` (``auto`` /
         ``cooper_nathans`` / ``popovici``). Bridged onto the GUI thread like
         :meth:`submit_validate`; a pure read that mutates no state. An infeasible
         geometry returns ``{"ok": false, "reason": ...}`` (the same refusal-string
@@ -1069,8 +1074,8 @@ class TaviApiBackend:
         H/K/L/deltaE (``None``) default to the current GUI values there.
         """
         return self._controller.compute_resolution(
-            query.get("H"), query.get("K"), query.get("L"),
-            query.get("deltaE"), query.get("method") or "auto",
+            query.get("h"), query.get("k"), query.get("l"),
+            query.get("energy_transfer_mev"), query.get("method") or "auto",
         )
 
     def get_schema(self):
@@ -2444,6 +2449,15 @@ class TAVIController(QObject):
         vals.update(self._lock_fields())
         return vals
 
+    def public_values(self, vals):
+        """An internal parameter dict under canonical IDs (what the API and job results show)."""
+        return _public_values(vals, self.descriptor.slits)
+
+    def api_parameters(self):
+        """GET /parameters: the GUI values under canonical IDs, or None when a field will not parse."""
+        vals = self.get_gui_values()
+        return None if vals is None else self.public_values(vals)
+
     def _build_sample_mount(self, vals):
         """Build the current component-agnostic sample mount from GUI lattice + UB."""
         local_ub_matrix = copy.deepcopy(self.ub_matrix)
@@ -2743,41 +2757,54 @@ class TAVIController(QObject):
         patch or a missing scan command.
         """
         vals = self._default_parameter_values()
-        patch = patch or {}
         field_map = self._api_field_map()
 
-        # (a) Parse/validate the patch with apply_parameters' own parse fns;
-        #     unknown field / bad value collects the identical 400.
+        # (a) Resolve the names, then parse/validate the patch with apply_parameters'
+        #     own parse fns; an unknown name / bad value collects the identical 400.
+        patch, submitted, errors = self._api_resolve_patch(patch or {}, field_map)
+        if errors:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"errors": errors},
+            )
         parsed = {}
-        errors = {}
         for name, value in patch.items():
             if name in self._API_READ_ONLY_FIELDS:
                 # Known field (declared read-only in build_api_schema), not an
                 # unrecognized one -- see _api_field_map's docstring.
-                errors[name] = "read-only field"
+                errors[submitted[name]] = "read-only field"
                 continue
             if name in self._LOCK_FIELDS:
-                errors[name] = ("a scan runs in the session's orientation mode; "
-                                "set it with PATCH /parameters")
-                continue
-            spec = field_map.get(name)
-            if spec is None:
-                errors[name] = self._API_REMOVED_FIELDS.get(name, "unknown field")
+                errors[submitted[name]] = ("a scan runs in the session's orientation mode; "
+                                           "set it with PATCH /parameters")
                 continue
             try:
-                parsed[name] = spec[0](value)
+                parsed[name] = field_map[name][0](value)
             except (ValueError, TypeError) as exc:
-                errors[name] = "invalid value: %s" % exc
-        errors.update(self._lock_refusals(
-            {n: v for n, v in patch.items() if n in self._LOCK_HELD_FIELDS}))
+                errors[submitted[name]] = "invalid value: %s" % exc
+        errors.update({submitted[n]: reason for n, reason in self._lock_refusals(
+            {n: v for n, v in patch.items() if n in self._LOCK_HELD_FIELDS}).items()})
         if errors:
             raise ApiError(
                 400, "invalid_parameters", "One or more fields failed",
                 details={"errors": errors},
             )
 
-        patched = set(parsed)
-        vals.update(parsed)
+        # The frozen parameters and the plugins keep the internal names (until U3);
+        # slit gaps land in the nested slits_mm each plugin indexes.
+        internal = {_to_internal(n): v for n, v in parsed.items() if not n.startswith("slit.")}
+        patched = set(internal)
+        vals.update(internal)
+        for slit in self.descriptor.slits:
+            width = parsed.get(f"slit.{slit.stable_id}.horizontal_gap_mm")
+            height = parsed.get(f"slit.{slit.stable_id}.vertical_gap_mm")
+            if slit.has_height:
+                old_width, old_height = vals['slits_mm'][slit.id]
+                if width is not None or height is not None:
+                    vals['slits_mm'][slit.id] = (old_width if width is None else width,
+                                                 old_height if height is None else height)
+            elif width is not None:
+                vals['slits_mm'][slit.id] = width
 
         # Naming an explicit radius holds THAT axis, and only that axis --
         # per-axis is what a per-axis mode means. This replaces the old
@@ -2804,15 +2831,6 @@ class TAVIController(QObject):
         if 'modules' in patched and isinstance(vals.get('modules'), dict):
             for module_id, default in self._descriptor_module_defaults().items():
                 vals['modules'].setdefault(module_id, default)
-
-        # Same hole, same fix, for slits_mm: a patched dict naming only one
-        # declared slit dropped the rest, and every instrument plugin indexes
-        # each slit id directly (e.g. puma/plugin.py's `slits_mm['pbl']`,
-        # `['vbl_hgap']`, `['dbl_hgap']`) -- KeyError at launch for a request
-        # the parser accepts today.
-        if 'slits_mm' in patched and isinstance(vals.get('slits_mm'), dict):
-            for slit_id, default in self._descriptor_slit_defaults().items():
-                vals['slits_mm'].setdefault(slit_id, default)
 
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
@@ -6915,6 +6933,9 @@ class TAVIController(QObject):
 
     def submit_scan_job(self, launch_state, source):
         """Create, register, and enqueue a scan job. GUI-thread-only entry."""
+        # The job's public parameters (GET /scan/{id}) are canonical IDs; the plugins
+        # keep reading the internal 'vals'.
+        launch_state['public_vals'] = self.public_values(launch_state['vals'])
         job = ScanJob(
             job_id=self._job_registry.next_id(),
             source=source,
@@ -7426,7 +7447,7 @@ class TAVIController(QObject):
         if server is None:
             return
         try:
-            server.publish(event, data)
+            server.publish(event, dict(data, api_version=API_VERSION))
             self._api_publish_last_error = None
         except Exception as exc:
             msg = f"API: failed to publish '{event}' event: {exc}"
@@ -7646,6 +7667,10 @@ class TAVIController(QObject):
     def _api_field_map(self):
         """Return ``{field: (parse_fn, setter_fn, after_handler_or_None)}``.
 
+        Keyed by canonical ID for every quantity (the GUI values' internal names
+        are renamed at the end; the slit gaps of this instrument are one key each)
+        and by its own name for every other setting.
+
         Covers every WRITABLE key ``get_gui_values()`` returns. ``parse_fn(value)``
         validates/coerces the incoming JSON value (raising ``ValueError`` with a
         human message on bad input), ``setter_fn(parsed)`` writes the widget,
@@ -7814,7 +7839,7 @@ class TAVIController(QObject):
                 plane.append(tuple(float(x) for x in hkl))
             return tuple(plane)
 
-        return {
+        fields = {
             # the scattering-plane lock: applied by apply_parameters itself,
             # which validates the whole body first (_lock_refusals/_lock_action)
             'orientation_mode': (p_choice(["free", "locked"], "orientation_mode"), None, None),
@@ -7878,18 +7903,37 @@ class TAVIController(QObject):
             # descriptor-driven containers
             'modules': (p_modules, idock.set_module_values, self.update_ideal_bending_buttons),
             'collimation': (p_dict, idock.set_collimation_values, None),
-            'slits_mm': (p_dict, idock.set_slit_values_mm, None),
             # simulation control
             'number_neutrons': (p_int_pos, sim.set_number_neutrons, None),
             'scan_command1': (p_str, lambda v: self._set_and_confirm_text(sim.scan_command_1_edit, v), self.validate_scan_commands),
             'scan_command2': (p_str, lambda v: self._set_and_confirm_text(sim.scan_command_2_edit, v), self.validate_scan_commands),
             'diagnostic_mode': (p_bool, sim.diagnostic_mode_check.setChecked, None),
         }
+        fields = {_to_public(name): spec for name, spec in fields.items()}
+        # Slit gaps: only this instrument's own apertures, one key per gap, in mm.
+        for slit in self.descriptor.slits:
+            for axis, widget in (("horizontal", "width"), ("vertical", "height")):
+                edit = idock.slit_widgets[slit.id].get(widget)
+                if edit is not None:
+                    fields[f"slit.{slit.stable_id}.{axis}_gap_mm"] = (p_float, set_text(edit), None)
+        return fields
+
+    def _api_resolve_patch(self, patch, field_map):
+        """Resolve the names of one write: ``({key: value}, {key: name as sent}, {name: refusal})``.
+
+        Canonical IDs and registry aliases (any case) both work; two names for one
+        quantity, a retired or derived-only name, an unknown name and a slit of another
+        instrument are refusals, found before anything is applied.
+        """
+        keys, errors = normalize_write_names(
+            patch, set(field_map) | set(self._API_READ_ONLY_FIELDS))
+        return ({key: patch[name] for name, key in keys.items()},
+                {key: name for name, key in keys.items()}, errors)
 
     # Dependency order for applying API parameter writes (sec 8 step b): lattice
     # first, then energy mode, then Q/HKL, then angles. Fields not listed are
     # applied afterward in patch order.
-    _API_APPLY_ORDER = (
+    _API_APPLY_ORDER = tuple(_to_public(name) for name in (
         # Sample first: selecting it adopts the sample's own lattice, so an
         # explicit lattice_* in the same patch (applied next) still wins.
         'sample',
@@ -7898,18 +7942,7 @@ class TAVIController(QObject):
         'K_fixed', 'fixed_E', 'Ki', 'Ei', 'Kf', 'Ef',
         'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
         'mtt', 'stt', 'omega', 'sgl', 'sgu', 'att',
-    )
-
-    # Fields the API once accepted and now refuses with a reason (D6): the
-    # old chi was a beam-fixed tilt under the turntable, so aliasing it to an
-    # arc would give different physics under the old name.
-    _API_REMOVED_FIELDS = {
-        'chi': "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper)",
-        'psi': "retired: psi was TAVI's zero correction of the turntable A3 and no "
-               "longer exists; set the sample rotation 'omega' (A3) itself",
-        'kappa': "retired: kappa was TAVI's zero correction of the lower arc sgl and "
-                 "no longer exists; set the arc 'sgl' itself",
-    }
+    ))
 
     # Keys the API reports that no write may set (declared readOnly in
     # build_api_schema): derived curvature policy, the mounting plane, which
@@ -7919,7 +7952,7 @@ class TAVIController(QObject):
 
     # The lock's request fields, and the fields a locked plane holds.
     _LOCK_FIELDS = ('orientation_mode', 'lock_plane')
-    _LOCK_HELD_FIELDS = ('sgl', 'sgu')
+    _LOCK_HELD_FIELDS = ('sample_lower_arc_deg', 'sample_upper_arc_deg')
 
     def _lock_refusals(self, body):
         """{field: reason} for the fields of one request body a lock refuses:
@@ -7931,8 +7964,8 @@ class TAVIController(QObject):
         held = [n for n in body if n in self._LOCK_HELD_FIELDS]
         mode = [n for n in body if n in self._LOCK_FIELDS]
         if held and mode:
-            reason = ("orientation_mode/lock_plane cannot be combined with sgl or "
-                      "sgu in one request; send two")
+            reason = ("orientation_mode/lock_plane cannot be combined with "
+                      "sample_lower_arc_deg or sample_upper_arc_deg in one request; send two")
             return {n: reason for n in held + mode}
         other = [n for n in body if n not in self._LOCK_FIELDS]
         if other and (body.get('orientation_mode') == "locked" or 'lock_plane' in body):
@@ -7998,7 +8031,7 @@ class TAVIController(QObject):
         # way the old reading may be unavailable: the goto still runs, but
         # there is then nothing to revert to.
         current = self.get_gui_values()
-        old_value = current.get(plan.field) if current else None
+        old_value = current.get(_to_internal(plan.field)) if current else None
 
         applied, errors = self.apply_parameters({plan.field: plan.value})
         if errors or plan.field not in applied:
@@ -8079,38 +8112,33 @@ class TAVIController(QObject):
         """
         field_map = self._api_field_map()
         applied = {}
-        errors = {}
 
         if not isinstance(patch, dict):
             return applied, {"_": "patch must be a JSON object"}
 
+        # (0) Names first: a retired, unknown, derived-only or twice-assigned name
+        # refuses the whole request, so a client cannot mistake a partial write for
+        # one that honoured the name it still sends. Read-only fields are known
+        # names (declared readOnly in build_api_schema; see _api_field_map's
+        # docstring) and refuse the request the same way.
+        patch, submitted, errors = self._api_resolve_patch(patch, field_map)
+        errors.update({submitted[name]: "read-only field"
+                       for name in patch if name in self._API_READ_ONLY_FIELDS})
+        if errors:
+            return applied, errors
+
         # (a) Parse/validate everything first; never partially apply a field.
         parsed = {}
         for name, value in patch.items():
-            if name in self._API_READ_ONLY_FIELDS:
-                # Known field (declared read-only in build_api_schema), not an
-                # unrecognized one -- see _api_field_map's docstring.
-                errors[name] = "read-only field"
-                continue
-            spec = field_map.get(name)
-            if spec is None:
-                errors[name] = self._API_REMOVED_FIELDS.get(name, "unknown field")
-                continue
-            parse_fn = spec[0]
             try:
-                parsed[name] = parse_fn(value)
+                parsed[name] = field_map[name][0](value)
             except (ValueError, TypeError) as exc:
-                errors[name] = "invalid value: %s" % exc
-
-        # A retired field (chi, psi, kappa) refuses the whole request: nothing
-        # beside it is applied, so a client cannot mistake a partial write for
-        # one that honoured the name it still sends.
-        if any(name in self._API_REMOVED_FIELDS for name in patch):
-            return applied, errors
+                errors[submitted[name]] = "invalid value: %s" % exc
 
         # (a') The lock is validated over the whole body; a refused lock
         # request, or a field the lock holds, applies nothing at all.
-        lock_errors = self._lock_refusals(patch)
+        lock_errors = {submitted[name]: reason
+                       for name, reason in self._lock_refusals(patch).items()}
         errors.update(lock_errors)
         lock_request = any(n in patch for n in self._LOCK_FIELDS)
         lock_action = None
@@ -8120,7 +8148,7 @@ class TAVIController(QObject):
                                                 parsed.get('lock_plane'))
             except ValueError as exc:
                 field = 'lock_plane' if 'lock_plane' in parsed else 'orientation_mode'
-                errors[field] = "refused: %s" % exc
+                errors[submitted[field]] = "refused: %s" % exc
         if lock_errors or (lock_request and errors):
             return applied, errors
 
@@ -8147,7 +8175,7 @@ class TAVIController(QObject):
             try:
                 setter_fn(value)
             except Exception as exc:  # setter failure: surface, do not swallow
-                errors[name] = "could not apply: %s" % exc
+                errors[submitted[name]] = "could not apply: %s" % exc
                 continue
             applied[name] = value
             if after is not None and after not in after_handlers:
@@ -8452,7 +8480,7 @@ class TAVIController(QObject):
 
         # Static type/units metadata (the only hand-kept part); every live field
         # gets an entry, unknowns default to number/None.
-        meta = {
+        meta = {_to_public(name): spec for name, spec in {
             'orientation_mode': ('string', None), 'lock_plane': ('object', 'r.l.u.'),
             'mtt': ('number', 'degrees'), 'stt': ('number', 'degrees'),
             'omega': ('number', 'degrees'), 'sgl': ('number', 'degrees'),
@@ -8475,11 +8503,10 @@ class TAVIController(QObject):
             'rva': ('number', None),
             'source_type': ('string', None), 'source_dE': ('number', 'meV'),
             'modules': ('object', None), 'collimation': ('object', None),
-            'slits_mm': ('object', 'mm'),
             'number_neutrons': ('integer', 'count'),
             'scan_command1': ('string', None), 'scan_command2': ('string', None),
             'diagnostic_mode': ('boolean', None),
-        }
+        }.items()}
 
         # Allowed values pulled live from the descriptor / static choice maps.
         allowed = {
@@ -8495,7 +8522,7 @@ class TAVIController(QObject):
 
         fields = []
         for name in field_names:
-            ftype, units = meta.get(name, ('number', None))
+            ftype, units = meta.get(name, ('number', 'mm' if name.startswith("slit.") else None))
             entry = {"name": name, "type": ftype}
             if units is not None:
                 entry["units"] = units
@@ -8513,8 +8540,8 @@ class TAVIController(QObject):
             "type": "object",
             "readOnly": True,
             "description": (
-                "Per-axis curvature policy (rhm/rvm/rha/rva -> "
-                "'%s'/'%s'/'%s'), derived from the Ideal locks and from which "
+                "Per-axis curvature policy (mono/analyzer horizontal/vertical radius "
+                "ID -> '%s'/'%s'/'%s'), derived from the Ideal locks and from which "
                 "axes the scan command names. Read-only." % (
                     CurvatureMode.AUTOFOCUS.value, CurvatureMode.HELD.value,
                     CurvatureMode.SCANNED.value,
@@ -8548,6 +8575,7 @@ class TAVIController(QObject):
         limits = getattr(self, "_api_limits", None)
 
         return {
+            "api_version": API_VERSION,
             "instrument": self.descriptor.id,
             "fields": fields,
             # Selectable execution backends for POST /scan (§6.4). "mcstas" is
@@ -9491,7 +9519,7 @@ class TAVIController(QObject):
                         counts=[None] * n_points,
                         counts_grid=None,
                         output_folder=data_folder,
-                        metadata=dict(vals),
+                        metadata=self.public_values(vals),
                         applied_curvature=[None] * n_points,
                     )
                     job.progress_total = len(scan_parameter_input)
@@ -9557,7 +9585,7 @@ class TAVIController(QObject):
                         counts=None,
                         counts_grid=[[None] * n_cols for _ in range(n_rows)],
                         output_folder=data_folder,
-                        metadata=dict(vals),
+                        metadata=self.public_values(vals),
                         # Flat, row-major (idx_y * n_cols + idx_x) -- the same
                         # linear order _mark_executed_result_point already uses
                         # to flatten a 2D scan for planned/executed_feasible_mask.
@@ -9592,7 +9620,7 @@ class TAVIController(QObject):
                     counts=[None],
                     counts_grid=None,
                     output_folder=data_folder,
-                    metadata=dict(vals),
+                    metadata=self.public_values(vals),
                     applied_curvature=[None],
                 )
                 job.progress_total = len(scan_parameter_input)
