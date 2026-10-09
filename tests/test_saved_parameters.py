@@ -516,3 +516,28 @@ def test_a_valid_file_loads_as_before(in8, saved_file):
     assert _same(expected, _state(in8))
     assert os.path.exists(saved_file) and not os.path.exists(saved_file + ".bak")
     in8.set_default_parameters()
+
+
+@pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12", "panda"])
+def test_two_slit_gaps_are_saved_under_their_canonical_keys_and_restored(instrument_id, saved_file):
+    """Each gap is saved under its own API name, with no slits_mm block, and a fresh start restores it."""
+    generator, ctrl = _fresh_start(instrument_id)
+    try:
+        dock = ctrl.window.instrument_dock
+        first, second = ctrl.descriptor.slits[:2]
+        dock.slit_widgets[first.id]["width"].setText("33.5")
+        dock.slit_widgets[second.id]["width"].setText("21.5")
+        expected = dock.slit_values_mm()
+        ctrl.save_parameters()
+        with open(saved_file, "r", encoding="utf-8") as fh:
+            block = json.load(fh)[instrument_id]
+    finally:
+        generator.close()
+    assert "slits_mm" not in block
+    assert block[f"slit.{first.stable_id}.horizontal_gap_mm"] == 33.5
+    assert block[f"slit.{second.stable_id}.horizontal_gap_mm"] == 21.5
+    generator, restored = _fresh_start(instrument_id)
+    try:
+        assert restored.window.instrument_dock.slit_values_mm() == expected
+    finally:
+        generator.close()

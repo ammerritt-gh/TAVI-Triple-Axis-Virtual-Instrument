@@ -5891,13 +5891,16 @@ class TAVIController(QObject):
             for slot_id, value in parameters.get("collimation", {}).items()
         }
 
-    @staticmethod
-    def _saved_slit_values(parameters):
-        # JSON round-trips (width, height) tuples as lists
-        return {
-            slit_id: tuple(value) if isinstance(value, list) else value
-            for slit_id, value in parameters.get("slits_mm", {}).items()
-        }
+    def _saved_slit_values(self, parameters):
+        """{slit_id: gaps} read from each gap's own key; a missing gap keeps its descriptor default."""
+        defaults = self._descriptor_slit_defaults()
+        values = {}
+        for slit in self.descriptor.slits:
+            # The key names public_values writes for the API, so save and load share one mapping.
+            flat = _public_values({"slits_mm": {slit.id: defaults[slit.id]}}, [slit])
+            gaps = tuple(parameters.get(key, gap) for key, gap in flat.items())
+            values[slit.id] = gaps if slit.has_height else gaps[0]
+        return values
 
     def _slit_values_for_save(self):
         try:
@@ -5906,10 +5909,7 @@ class TAVIController(QObject):
             # Malformed text in a slit field; persist nothing so load falls
             # back to the descriptor defaults.
             return {}
-        return {
-            slit_id: list(value) if isinstance(value, tuple) else value
-            for slit_id, value in slit_values.items()
-        }
+        return _public_values({"slits_mm": slit_values}, self.descriptor.slits)
 
     def save_parameters(self):
         """Save all parameters to JSON file."""
@@ -5954,7 +5954,7 @@ class TAVIController(QObject):
                 self.window.instrument_dock.collimation_values().items()
             },
             # Slit apertures (stored in mm)
-            "slits_mm": self._slit_values_for_save(),
+            **self._slit_values_for_save(),
             "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
             "lattice_a_angstrom": self.window.sample_dock.lattice_a_edit.text(),
             "lattice_b_angstrom": self.window.sample_dock.lattice_b_edit.text(),
