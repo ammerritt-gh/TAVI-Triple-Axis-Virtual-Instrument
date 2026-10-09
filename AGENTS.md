@@ -31,6 +31,12 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 
 ---
 
+## Audience and stability
+
+TAVI is software facilities and students rely on: not single-user hobby software, and not enterprise software either. It overrides the floor's User Scope for its public contracts only; everything else stays under User Scope's proportionality. Public contracts — scan names, API fields and behaviour, saved parameters, outputs and the journal, the modules ISAR and TAS_MCP consume, the instrument-author contract — change formally: a checked version, a documented migration or a clear refusal, never a silent reinterpretation. UI work uses the ui-professional lens (the operator made this standing, 2026-10-09).
+
+---
+
 ## Domain Concepts
 
 ### Triple-Axis Spectrometer Flow
