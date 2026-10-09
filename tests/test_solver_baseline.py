@@ -20,7 +20,6 @@ _spec = importlib.util.spec_from_file_location("solver_baseline_cases",
 cases = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cases)
 
-_RETIRING_KEYS = set(cases.RETIRING_KEYS)
 BASELINE = json.loads((DATA / "solver_baseline.json").read_text(encoding="utf-8"))
 TOLERANCE = BASELINE["tolerance"]
 
@@ -61,7 +60,7 @@ def test_case_matches_baseline(key, recomputed):
             f"{key}: metadata {entry['name']} ({entry['role']}) = "
             f"{snap.metadata[entry['name']]!r}, baseline {entry['value']!r}")
     recorded_names = {entry["name"] for entry in recorded["params"]}
-    unrecorded = set(snap.params) - recorded_names - _RETIRING_KEYS
+    unrecorded = set(snap.params) - recorded_names
     assert not unrecorded, f"{key}: emitted but not in the baseline: {sorted(unrecorded)}"
 
 

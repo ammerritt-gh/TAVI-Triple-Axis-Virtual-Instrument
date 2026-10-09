@@ -22,11 +22,6 @@ PLUGINS = {
     "PANDA": ("instruments.panda.plugin", "PANDAPlugin"),
 }
 
-# The psi/kappa corrections and hidden zero errors, retired: no snapshot carries
-# these keys any more; the baseline never recorded them.
-RETIRING_KEYS = frozenset({"kappa_param", "psi_param", "mis_omega_param", "mis_chi_param",
-                           "psi", "kappa"})
-
 FIXED_E_MEV = 14.7
 RADII = ("rhm", "rvm", "rha", "rva")
 RLU_CASES = (
@@ -227,7 +222,7 @@ def record(snap):
     mode = snap.metadata["scan_mode"]
     params = [{"name": name, "role": param_role(name),
                "value": _plain(f"param {name}", snap.params[name])}
-              for name in sorted(snap.params) if name not in RETIRING_KEYS]
+              for name in sorted(snap.params)]
     metadata = []
     for name in META_NAMES:
         if snap.metadata.get(name) is None and _absent_in_mode(name, mode):
