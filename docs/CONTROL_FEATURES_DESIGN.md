@@ -169,11 +169,11 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 | `A2`, `2theta` | `stt` | |
 | `A3` | `omega` | |
 | `A4` | `att` | |
-| `omega` | `psi` | **Both** `omega` and `psi` step template slot 10, which is seeded from the `psi` field. A scan named `omega` therefore moves `psi`; mapping it to an `omega` field would move the wrong axis. |
-| `psi`, `kappa` | same name | |
+| `omega` | `omega` | `omega` is A3 itself (the turntable). The old ψ correction that `omega` once moved is retired. |
 | `rhm`, `rvm`, `rha` | same name | Bender curvatures. |
-| `sgl`, `sgu` | same name | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 11) are seeded from these fields. |
+| `sgl`, `sgu` | same name | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 9) are seeded from these fields. |
 | `chi` | `None` | Retired (the arcs replaced it). An old scan named `chi` is refused by name, not treated as unknown. |
+| `psi`, `kappa` | `None` | Retired (the corrections are gone). A scan naming them is refused by name. |
 | `rva` | `None` | No settable field exists in `_api_field_map`. |
 
 An unknown variable also returns `None`. The GUI disables all three goto buttons with the reason in their tooltip.

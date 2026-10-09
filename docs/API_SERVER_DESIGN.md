@@ -8,7 +8,7 @@
 > **Forward note (2026-07-03):** user-facing documentation now lives in
 > `docs/API_USER_GUIDE.md`. That guide is the authoritative reference for
 > clients (humans and LLM agents) — exact endpoints, request/response JSON,
-> the full parameter table (49 keys, 45 writable), scan-command syntax, SSE events, budgets,
+> the full parameter table (47 keys, 43 writable), scan-command syntax, SSE events, budgets,
 > and gotchas. This document remains the design/architecture record.
 >
 > **Post-design fixes (not in the original body):**
@@ -191,7 +191,7 @@ A declarative field map in the controller mirrors `get_gui_values()` exactly:
 'monocris':  FieldSpec(crystal-id check, set_mono_id, update_monocris_info)
 'modules':   dict-valued, set_module_values, ...
 'scan_command1': FieldSpec(str, scan_command_1_edit.setText, validate_scan_commands)
-# ... energies, angles, lattice, kappa/psi, collimation, slits, number_neutrons, source, diagnostic_mode
+# ... energies, angles, lattice, collimation, slits, number_neutrons, source, diagnostic_mode
 ```
 
 `apply_parameters(patch) -> (applied, errors)` runs on the GUI thread via the bridge:

@@ -339,10 +339,10 @@ class InstrumentPlugin(Protocol):
 
 Why the `new_state` split (audit, §17.2): the scan config is a
 `copy.deepcopy(self.PUMA)` of **live session state**, not a pure function of GUI
-values — hidden training misalignments (`mis_omega`/`mis_chi`) are set on the
-live object from a hash and are deliberately absent from `gui_values`; a
-`gui_values -> config` constructor would silently drop them and change
-training-exercise physics. `sample_mount` is an explicit argument because
+values — the hidden true mount `U_true` (a training exercise's rotation) is
+set on the live object from a hash and is deliberately absent from
+`gui_values`; a `gui_values -> config` constructor would silently drop it and
+change training-exercise physics. `sample_mount` is an explicit argument because
 `_build_sample_mount` depends on the controller's `ub_matrix` (session state
 built from generic `tavi/` modules) — passing it in keeps the plugin free of UB
 coupling. The three controller sites that need a bare state to poke generic TAS
@@ -359,10 +359,10 @@ point refuses it with the solver's own words (an error flag
 validation, the GUI run and the real scan alike. The mount and the stage reach
 McStas as one `sample_mount` Arm: `build_point_params` fills
 `sample_rx/ry/rz_param` from `TAS_Instrument.sample_orientation_params`, i.e.
-`sample_arm_euler(goniometer, physical angles, U_true)`. The `sample_mount`
+`sample_arm_euler(goniometer, stage readouts, U_true)`. The `sample_mount`
 argument above is the operator's belief (rlu HKL to Q for the solver); the
 simulated crystal is the state's hidden `U_true`, which the deep copy carries
-like the zero errors (`docs/INSTRUMENT_LAYOUT.md`, "Truth and belief"). No
+(`docs/INSTRUMENT_LAYOUT.md`, "Truth and belief"). No
 plugin builds sample rotations of its own.
 
 The shared queue deep-copies the complete launch state once more before
@@ -968,7 +968,7 @@ differs from the sketch-level bullets in §11, this section wins.
 5. **The Phase-0 example descriptor is 8 parameters short.** The real instrument
    declares **25** McStas parameters (`:878–893` + `:1324–1333`), matching
    `build_puma_point_params` (`:524`). Missing from `_PUMA_PARAMS`: `chi_param`,
-   `kappa_param`, `mis_chi_param`, `psi_param`, `mis_omega_param`,
+   the four correction and zero-error inspection parameters (since retired),
    `mount_rx_param`, `mount_ry_param`, `mount_rz_param`. They join the shared
    core set (generic sample-orientation hierarchy → IN8 inherits them too).
 6. **Already general (less work than §2.2 implied):**
@@ -994,9 +994,8 @@ recorded here so later phases pick them up deliberately.
    crystal table with **divergent values** (mono slabwidth 0.018 vs 0.0202;
    analyzer ncolumns/nrows swapped: 5/21 vs 21/5). Fix belongs to Phase 2's
    single crystal source.
-2. `TAVI_PySide6.py:2626` calls `set_misalignment(omega_m, chi_m, psi_m)` (3
-   args) against a 2-parameter signature
-   (`set_misalignment(mis_omega=None, mis_chi=None)`,
+2. `TAVI_PySide6.py:2626` called the zero-error setter with 3 args against a
+   2-parameter signature (both since retired;
    historical PUMA definition line 186); the `TypeError` is caught at `:2635`,
    so misalignment-hash restore from `parameters.json` silently fails today.
 3. `update_monocris_info`/`update_anacris_info` are each defined **twice** in
@@ -1055,7 +1054,7 @@ recorded here so later phases pick them up deliberately.
     `self._mcstas_name = instrument.descriptor().mcstas_name`; crystal init via
     `self.instrument.crystal_info("PG[002]", "PG[002]")`.
   - **G3 rename:** `self.PUMA` → `self.instrument_state` (22 occurrences;
-    preserve the 3-arg `set_misalignment` call at `:2626` as-is).
+    preserve the 3-arg zero-error setter call at `:2626` as-is).
   - **G4 crystal info:** 4 `mono_ana_crystals_setup` call sites
     (`:581/:588/:1498/:1505`) → `self.instrument.crystal_info(...)`.
   - **G5 converters:** delete the 7 function-local import lines.
@@ -1118,11 +1117,10 @@ valid C identifier; `component_path` exists on disk if set; non-empty libraries
 declared `goniometer` the TAS runtime can drive (every TAS uses
 `tas_goniometer(arc_travel)`: `A3` about y carrying `sgl` about x and `sgu`
 about z). The runtime drives the stage by name, so a runnable stage must have
-exactly the axes `A3`, `sgl`, `sgu` in that order, and an axis's optional
-`correction` / `zero_error` (the state fields holding its operator correction
-and hidden zero error: `A3` psi / mis_omega, `sgl` kappa / mis_chi, `sgu`
-none) must name one of `psi`, `kappa` / `mis_omega`, `mis_chi`. Any other stage
-(an Eulerian cradle) is legal as data and refused here, not per point.
+exactly the axes `A3`, `sgl`, `sgu` in that order (an axis carries a name, an
+axis vector and its travel; the operator corrections and hidden zero errors it
+once could name are retired). Any other stage (an Eulerian cradle) is legal as
+data and refused here, not per point.
 
 Expected results: fixed `puma_descriptor()` → `[]` at `runnable=True`;
 `in8_descriptor()` → `[]` at `runnable=False`, and at `runnable=True` errors
@@ -1143,7 +1141,7 @@ Key assertions per file (see §17.4 for the file list):
 - **Plugin:** `isinstance(PUMAPlugin(), InstrumentPlugin)`; id/display/mcstas
   name consistency; `default_state()` matches legacy defaults and returns fresh
   objects; `scan_config` applies the full GUI mapping (`alpha_2` list, base not
-  mutated, hidden `mis_omega` propagates) and passes curvature through as
+  mutated, the session's plane lock propagates) and passes curvature through as
   magnitudes — `rva == 0.8` is PUMA's PG(002) declaring that axis fixed, and
   NMO ⇒ flat monochromator is `PUMA_Instrument.effective_curvature_axis`
   (folding the fitted NMO into rhm/rvm's resolved policy for every consumer:

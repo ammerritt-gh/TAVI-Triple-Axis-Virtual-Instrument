@@ -6019,8 +6019,8 @@ class TAVIController(QObject):
     # v3: the true mount apart from the operator's UB -- "true_mount"
     # {U_described, mount_plane}.
     # v4: the psi/kappa corrections, the hidden zero errors and the
-    # Misalignment dock are gone (no kappa_var, psi_offset_var or
-    # misalignment_hash_var; a plane lock carries no kappa). The version is
+    # Misalignment dock are gone (no correction or misalignment-hash
+    # variables; a plane lock carries no correction). The version is
     # enforced: a block of any other version is refused whole, never converted
     # (_saved_parameters_refusal).
     PARAMETERS_SCHEMA_VERSION = 4

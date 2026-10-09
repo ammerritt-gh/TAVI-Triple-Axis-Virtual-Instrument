@@ -129,18 +129,16 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 | `sample_rz_param` | Sample arm rotation about z | `sample_mount` rotation |
 | `sgl_param` | Lower arc `sgl` readout | Debugging/inspection |
 | `sgu_param` | Upper arc `sgu` readout | Debugging/inspection |
-| `kappa_param` | Lower-arc (`sgl`) correction | Debugging/inspection |
-| `psi_param` | Turntable (A3) correction | Debugging/inspection |
 
 The whole sample orientation is one Arm. `sample_rx/ry/rz_param` are the McStas
 Euler angles of `(R_stage · U)^T`, where `R_stage` is the goniometer (A3, `sgl`,
-`sgu`) at its **physical** angles (readout + correction + hidden zero error)
+`sgu`) at its **readouts** (there is no correction and no zero error)
 and `U` is the true crystal mount `U_true` (`tavi/orientation.py`
 `sample_arm_euler`, filled per point by
 `TAS_Instrument.sample_orientation_params`). The arm never reads the
 operator's UB: fitting or editing the UB changes the readouts commanded for an
 HKL, not the simulated crystal (`docs/INSTRUMENT_LAYOUT.md`, "Truth and
-belief"). They are runtime parameters: a new A3, arc setting, correction, UB or
+belief"). They are runtime parameters: a new A3, arc setting, UB or
 true mount never recompiles, and `build_fingerprint` does not see them. Every
 instrument shares this set.
 
@@ -150,12 +148,6 @@ non-cubic `Single_crystal` sample must give explicit lattice vectors
 (`ax, ay, az`, `bx, ...`) in TAVI's frame (a along x, b in the horizontal xz
 plane, c completing it: `tavi/sample_mount.py` `reciprocal_basis_tas`), or its
 crystal axes will not be where the UB says.
-
-### Hidden Misalignment Parameters (Training)
-| Parameter | Description |
-|-----------|-------------|
-| `mis_chi_param` | Hidden lower-arc (`sgl`) zero error, inspection only |
-| `mis_omega_param` | Hidden turntable (A3) zero error, inspection only |
 
 ### Source Parameters
 | Parameter | Description | Used By |
