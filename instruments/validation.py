@@ -41,11 +41,8 @@ _CRYSTAL_REQUIRED_FIELDS = (
 )
 
 
-# The TAS runtime's stage (rule R6): its axis names, in order, and the state
-# fields an axis may name as its operator correction or hidden zero error.
+# The TAS runtime's stage (rule R6): its axis names, in order.
 _TAS_STAGE_AXES = ("A3", "sgl", "sgu")
-_TAS_CORRECTIONS = ("psi", "kappa")
-_TAS_ZERO_ERRORS = ("mis_omega", "mis_chi")
 
 
 class DescriptorValidationError(ValueError):
@@ -335,9 +332,9 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
 
     # --- R6: a stage the TAS runtime drives ---------------------------------------------------------
     # Every runnable instrument runs on instruments/tas_runtime.py, which drives
-    # the stage by these axis names (scan slots, arc fields, McStas parameters)
-    # and keeps corrections and zero errors in these state fields. Any other
-    # stage is legal as data (structural rules) but refused here, not per point.
+    # the stage by these axis names (scan slots, arc fields, McStas parameters).
+    # Any other stage is legal as data (structural rules) but refused here, not
+    # per point.
     if not d.goniometer:
         errors.append("goniometer: runnable instrument must declare its sample stage")
     else:
@@ -347,14 +344,6 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
                 f"goniometer: a runnable instrument (TAS runtime) must declare the axes "
                 f"{', '.join(_TAS_STAGE_AXES)} in that order, got {', '.join(names)}"
             )
-        for ax in d.goniometer:
-            for kind, value, allowed in (("correction", ax.correction, _TAS_CORRECTIONS),
-                                         ("zero_error", ax.zero_error, _TAS_ZERO_ERRORS)):
-                if value is not None and value not in allowed:
-                    errors.append(
-                        f"goniometer[{ax.name!r}]: {kind} {value!r} is not a TAS runtime "
-                        f"field (one of {', '.join(allowed)})"
-                    )
 
     return errors
 

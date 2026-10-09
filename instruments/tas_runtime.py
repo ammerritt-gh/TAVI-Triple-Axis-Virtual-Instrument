@@ -46,20 +46,11 @@ log = logging.getLogger(__name__)
 
 # A scan point is a list of SCAN_POINT_LENGTH numbers: slots 0-3 are the
 # mode's coordinates (qx qy qz dE, H K L dE, or A1 A2 A3 A4), 4-7 the radii
-# rhm rvm rha rva, then the stage slots below. The arc slots are read in
-# angle mode only; Q modes solve the arcs per point. A point of 11 slots
-# (written before the upper-arc slot existed) has sgu = 0.
-SLOT_SGL, SLOT_KAPPA, SLOT_PSI, SLOT_SGU = 8, 9, 10, 11
-SCAN_POINT_LENGTH = 12
-
-
-def stage_corrections(gonio, values):
-    """The operator correction per goniometer axis, {axis name: degrees}:
-    ``values[ax.correction]`` for an axis that declares a correction field
-    (TAS: psi on A3, kappa on sgl), 0 for one that declares none. ``values``
-    maps field names to degrees (the GUI values, or ``vars(state)``)."""
-    return {ax.name: float(values[ax.correction]) if ax.correction else 0.0
-            for ax in gonio}
+# rhm rvm rha rva, then the arc slots below. The arc slots are read in
+# angle mode only; Q modes solve the arcs per point. A point of 9 slots has
+# sgu = 0.
+SLOT_SGL, SLOT_SGU = 8, 9
+SCAN_POINT_LENGTH = 10
 
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):
@@ -201,12 +192,6 @@ class TAS_Instrument:
         self.sense_mono = 1
         self.sense_sample = -1
         self.sense_ana = 1
-        # Operator corrections (visible): turntable and lower arc.
-        self.psi = 0    # turntable correction
-        self.kappa = 0  # lower-arc correction
-        # Hidden zero errors (training exercises): turntable and lower arc.
-        self.mis_omega = 0
-        self.mis_chi = 0
         self.K_fixed = "Ki_fixed" # working in Ki- or Kf-fixed mode
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
@@ -216,15 +201,14 @@ class TAS_Instrument:
         # solver and feasibility, never by the McStas sample arm.
         self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
         # The truth: the crystal's real mount, U_true = R_hidden @ U_described
-        # (docs/INSTRUMENT_LAYOUT.md "Truth and belief"). Hidden like the zero
-        # errors; written only by the controller's one setter, read only by
-        # the McStas sample arm, the analytic engine and training grading.
+        # (docs/INSTRUMENT_LAYOUT.md "Truth and belief"). Hidden; written only
+        # by the controller's one setter, read only by the McStas sample arm,
+        # the analytic engine and training grading.
         self.U_true = np.eye(3)
         # The locked scattering plane (operator state; rides the deep copy into
         # every scan config): None in free mode, else {"hkl_u": [h, k, l],
-        # "hkl_v": [h, k, l], "tilts": {inner axis: degrees}, "kappa": deg},
-        # the tilts being readouts that never move while locked and kappa the
-        # lower-arc correction frozen with them.
+        # "hkl_v": [h, k, l], "tilts": {inner axis: degrees}}, the tilts being
+        # readouts that never move while locked.
         self.plane_lock = None
         # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
         # point by _solve_point_geometry on its private copy of the state, so
@@ -247,8 +231,8 @@ class TAS_Instrument:
             else:
                 print(f"Parameter '{key}' not found.")
 
-    def set_angles(self, A1=None, A2=None, A3=None, A4=None, kappa=None, psi=None):
-        """Method to set A1-A4 angles and the turntable/lower-arc corrections."""
+    def set_angles(self, A1=None, A2=None, A3=None, A4=None):
+        """Method to set A1-A4 angles."""
         if A1 is not None:
             self.A1 = A1
         if A2 is not None:
@@ -257,22 +241,6 @@ class TAS_Instrument:
             self.A3 = A3
         if A4 is not None:
             self.A4 = A4
-        if kappa is not None:
-            self.kappa = kappa
-        if psi is not None:
-            self.psi = psi
-
-    def set_misalignment(self, mis_omega=None, mis_chi=None):
-        """Method to set hidden misalignment angles for training exercises.
-
-        Args:
-            mis_omega: In-plane misalignment angle (degrees) - corrected by psi offset
-            mis_chi: Out-of-plane misalignment angle (degrees) - corrected by kappa offset
-        """
-        if mis_omega is not None:
-            self.mis_omega = mis_omega
-        if mis_chi is not None:
-            self.mis_chi = mis_chi
 
     @property
     def goniometer(self):
@@ -291,35 +259,23 @@ class TAS_Instrument:
             return [STAGE_FLAG_PREFIX + str(exc)]
         return []
 
-    def physical_stage_angles(self):
-        """Stage angles the crystal really sits at: readout + operator
-        correction + hidden zero error, each from the field the axis's
-        description names (the readout is the state attribute named after the
-        axis; validation guarantees A3/sgl/sgu). Read only by the McStas
-        sample arm and the analytic engine (``true_point_hkl``)."""
-        fields = vars(self)
-        corrections = stage_corrections(self.goniometer, fields)
-        return {
-            ax.name: (fields[ax.name] + corrections[ax.name]
-                      + (fields[ax.zero_error] if ax.zero_error else 0.0))
-            for ax in self.goniometer
-        }
+    def stage_readouts(self):
+        """The stage angles, {axis name: degrees}: the readout is the state
+        attribute named after the axis (validation guarantees A3/sgl/sgu).
+        The crystal sits exactly there: no correction, no zero error."""
+        return {ax.name: getattr(self, ax.name) for ax in self.goniometer}
 
     def sample_orientation_params(self):
         """Per-point McStas parameters of the sample: the single sample arm's
-        rotation (``sample_arm_euler`` of the physical angles and the true
-        mount ``U_true``, never the operator's UB), plus the arc readouts,
-        corrections and zero errors as inspection values."""
+        rotation (``sample_arm_euler`` of the stage readouts and the true
+        mount ``U_true``, never the operator's UB), plus the arc readouts as
+        inspection values."""
         rx, ry, rz = sample_arm_euler(
-            self.goniometer, self.physical_stage_angles(), self.U_true
+            self.goniometer, self.stage_readouts(), self.U_true
         )
         return {
             "sgl_param": self.sgl,
             "sgu_param": self.sgu,
-            "kappa_param": self.kappa,
-            "mis_chi_param": self.mis_chi,
-            "psi_param": self.psi,
-            "mis_omega_param": self.mis_omega,
             "sample_rx_param": rx,
             "sample_ry_param": ry,
             "sample_rz_param": rz,
@@ -1216,9 +1172,9 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         scans, idx_1d = scan_item
         idx_x, idx_y = -1, -1
 
-    if len(scans) < 11:
+    if len(scans) <= SLOT_SGL:
         raise ValueError(
-            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least 11."
+            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least {SLOT_SGL + 1}."
         )
 
     geom = _solve_point_geometry(point_state, scan_mode, scans, vals)
@@ -1231,12 +1187,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     q_vector = (qx, qy, qz) if qx is not None and qy is not None and qz is not None else None
 
     rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-    kappa_scan, psi_scan = scans[SLOT_KAPPA], scans[SLOT_PSI]
-    if point_state.plane_lock is not None:
-        # A locked point runs at the lock's exact kappa, whichever launch
-        # built it (the GUI field holds it rounded); a kappa scan under a
-        # lock is refused before the run.
-        kappa_scan = point_state.plane_lock["kappa"]
     # The arcs this point runs at: solved (Q modes) or its own slots (angle).
     sgl, sgu = geom["sgl"], geom["sgu"]
 
@@ -1292,8 +1242,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
 
     rhm, rvm, rha, rva = radii["rhm"], radii["rvm"], radii["rha"], radii["rva"]
 
-    point_state.kappa = kappa_scan
-    point_state.psi = psi_scan
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
     # Read the APPLIED values back off the state rather than keep the
     # pre-setter locals: set_crystal_bending signs each radius onto the
@@ -1304,8 +1252,7 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     rhm, rvm, rha, rva = point_state.rhm, point_state.rvm, point_state.rha, point_state.rva
 
     output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
-    orientation_info = (f"ω={omega_scan:.2f}, sgl={sgl:.2f}, sgu={sgu:.2f}, "
-                        f"ψ={psi_scan:.2f}, κ={kappa_scan:.2f}")
+    orientation_info = f"ω={omega_scan:.2f}, sgl={sgl:.2f}, sgu={sgu:.2f}"
     if scan_mode == "momentum":
         log_message = (
             f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
@@ -1362,8 +1309,6 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         'omega': omega_scan,
         'sgl': sgl,
         'sgu': sgu,
-        'psi': psi_scan,
-        'kappa': kappa_scan,
     }
     metadata['transmission'] = geom["transmission"]
     metadata.update(point_state.point_energy_metadata(
@@ -1395,19 +1340,17 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
 def true_point_hkl(state, metadata, B_true):
     """The (H, K, L) the crystal really presents at one solved scan point.
 
-    The point's readouts and corrections (``metadata`` of
-    ``compute_scan_snapshot``) plus the hidden zero errors on ``state`` give
-    the physical stage angles; with the point's stt, Ki, Kf and the sample
-    sense they give the mount-frame Q (``q_mount_from_stage``), read through
-    the true mount: ``(U_true @ B_true)^-1``. ``B_true`` is the selected
-    sample's own lattice, never the lattice fields. Read only by the analytic
-    engine for its model evaluation; the result is never written into point
-    metadata or a scan result (it would show the hidden truth).
+    The point's stage readouts (``metadata`` of ``compute_scan_snapshot``),
+    with its stt, Ki, Kf and the sample sense, give the mount-frame Q
+    (``q_mount_from_stage``), read through the true mount:
+    ``(U_true @ B_true)^-1``. ``B_true`` is the selected sample's own lattice,
+    never the lattice fields. Read only by the analytic engine for its model
+    evaluation; the result is never written into point metadata or a scan
+    result (it would show the hidden truth).
     """
     point = copy.copy(state)
     point.A3, point.sgl, point.sgu = metadata["sth"], metadata["sgl"], metadata["sgu"]
-    point.psi, point.kappa = metadata["psi"], metadata["kappa"]
-    q_mount = q_mount_from_stage(point.goniometer, point.physical_stage_angles(),
+    q_mount = q_mount_from_stage(point.goniometer, point.stage_readouts(),
                                  metadata["stt"], metadata["Ki"], metadata["Kf"],
                                  point.sense_sample)
     return tuple(float(v) for v in np.linalg.solve(point.U_true @ B_true, q_mount))

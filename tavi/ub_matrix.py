@@ -91,8 +91,8 @@ class ObservedPeak:
             None resolves to the stage record's sense, else (a legacy save,
             a TAS_MCP peak) to the sign of stt.
         stage: Optional stage record (``tavi.orientation.stage_record``: the
-            axes, their readouts, and from Take Position the corrections in
-            force, ki, kf and the sense). When present, Q is read through the
+            axes, their readouts, and from Take Position ki, kf and the
+            sense). When present, Q is read through the
             full stage and only ``stt`` of ``angles`` is used (the UB dock
             still writes the legacy triple of the same Q,
             ``tavi.orientation.legacy_triple``, for readers that ignore the
@@ -117,28 +117,24 @@ class ObservedPeak:
         """No stage record: the angles are the legacy (sth, saz, stt) triple."""
         return self.stage is None
 
-    def q_mount(self, corrections=None) -> np.ndarray:
-        """U @ B @ hkl measured at this peak, in the readout frame of
-        ``corrections`` (the corrections in force now, {axis: degrees}).
+    def q_mount(self) -> np.ndarray:
+        """U @ B @ hkl measured at this peak, in the readout frame.
 
-        A stage peak enters at readout + (correction at record time -
-        correction now), so a correction changed after Take Position does not
-        move it; ``corrections`` None reads it as recorded. Hidden zero errors
-        are never part of a record. A legacy peak ignores ``corrections``.
-        """
+        A stage record saved under a nonzero retired correction raises
+        ``ValueError`` (``tavi.orientation.record_angles``)."""
         sth, saz, stt = self.angles
         if self.ki <= 0 or self.kf <= 0:
             return np.array([0.0, 0.0, 0.0])
         if self.stage is not None:
             return q_mount_from_stage(gonio_from_record(self.stage),
-                                      record_angles(self.stage, corrections),
+                                      record_angles(self.stage),
                                       stt, self.ki, self.kf, self.sense_sample)
         return q_mount_from_legacy_angles(sth, saz, stt, self.ki, self.kf, self.sense_sample)
 
     @property
     def q_lab(self) -> np.ndarray:
         """U @ B @ hkl in the mounted sample frame, from the stored setting
-        (``q_mount`` as recorded)."""
+        (``q_mount``)."""
         return self.q_mount()
 
     @property
@@ -179,7 +175,7 @@ class ObservedPeak:
 
 
 def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
-                          B: np.ndarray, corrections=None) -> np.ndarray:
+                          B: np.ndarray) -> np.ndarray:
     """Calculate the U orientation matrix from two observed Bragg peaks.
 
     Uses the Busing-Levy (1967) method:
@@ -191,8 +187,6 @@ def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
         peak1: First observed Bragg peak.
         peak2: Second observed Bragg peak.
         B: 3x3 B matrix.
-        corrections: The corrections in force now ({axis: degrees}); the fit
-            is in their readout frame (``ObservedPeak.q_mount``).
 
     Returns:
         np.ndarray: 3x3 U matrix (orthogonal, det ~ +1).
@@ -205,8 +199,8 @@ def calculate_U_two_peaks(peak1: ObservedPeak, peak2: ObservedPeak,
     q2_c = B @ np.array(peak2.hkl)
 
     # Lab-frame Q vectors
-    q1_l = peak1.q_mount(corrections)
-    q2_l = peak2.q_mount(corrections)
+    q1_l = peak1.q_mount()
+    q2_l = peak2.q_mount()
 
     # Validate
     for label, v in [("peak1 crystal", q1_c), ("peak2 crystal", q2_c),
@@ -255,7 +249,7 @@ def u_from_plane(B: np.ndarray, hkl_u, hkl_v) -> np.ndarray:
     return T_mount @ T_crystal.T
 
 
-def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:
+def refine_U_matrix(peaks: list, B: np.ndarray) -> np.ndarray:
     """Calculate U from multiple peaks using SVD-based Procrustes solution.
 
     Minimizes sum_i ||q_lab_i - U @ B @ hkl_i||^2 subject to U being orthogonal.
@@ -265,7 +259,6 @@ def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:
     Args:
         peaks: List of ObservedPeak instances.
         B: 3x3 B matrix.
-        corrections: The corrections in force now (see calculate_U_two_peaks).
 
     Returns:
         np.ndarray: 3x3 U matrix (orthogonal, det ~ +1).
@@ -274,7 +267,7 @@ def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:
     if len(valid_peaks) < 2:
         raise ValueError(f"Need at least 2 valid peaks, got {len(valid_peaks)}.")
     if len(valid_peaks) == 2:
-        return calculate_U_two_peaks(valid_peaks[0], valid_peaks[1], B, corrections)
+        return calculate_U_two_peaks(valid_peaks[0], valid_peaks[1], B)
 
     # Build paired point sets: q_crystal (P) and q_lab (Q)
     # We want U such that Q ~ U @ P
@@ -283,7 +276,7 @@ def refine_U_matrix(peaks: list, B: np.ndarray, corrections=None) -> np.ndarray:
 
     for i, peak in enumerate(valid_peaks):
         P[:, i] = B @ np.array(peak.hkl)
-        Q[:, i] = peak.q_mount(corrections)
+        Q[:, i] = peak.q_mount()
 
     # Cross-covariance matrix
     H_mat = P @ Q.T  # Note: we want U s.t. Q = U @ P, so H = P @ Q^T
@@ -317,10 +310,9 @@ def _angle_deg(a, b):
     return math.degrees(math.atan2(float(np.linalg.norm(np.cross(a, b))), float(a @ b)))
 
 
-def alignment_residuals(ub, peaks, corrections=None) -> dict:
+def alignment_residuals(ub, peaks) -> dict:
     """How the valid ``peaks`` agree with the operator's ``ub`` (U @ B, the
-    lattice fields' B) and with each other, in the readout frame of
-    ``corrections`` (the fit's frame, ``ObservedPeak.q_mount``).
+    lattice fields' B) and with each other.
 
     Per peak: ``q_obs`` = |q|, ``q_calc`` = |UB hkl| (= |B hkl|),
     ``q_mismatch`` = q_obs / q_calc - 1, ``angle_deg`` between q and UB hkl.
@@ -336,7 +328,7 @@ def alignment_residuals(ub, peaks, corrections=None) -> dict:
     for peak in peaks:
         if not peak.is_valid:
             continue
-        q = peak.q_mount(corrections)
+        q = peak.q_mount()
         q_ub = ub @ np.asarray(peak.hkl, dtype=float)
         q_obs, q_calc = float(np.linalg.norm(q)), float(np.linalg.norm(q_ub))
         rows.append({"hkl": tuple(peak.hkl), "q_obs": q_obs, "q_calc": q_calc,
@@ -726,12 +718,8 @@ class UBMatrix:
         q = np.array([float(qx), float(qy), float(qz)])
         hkl = np.linalg.solve(self._UB, q)
         return float(hkl[0]), float(hkl[1]), float(hkl[2])
-    def calculate_U_from_peaks(self, corrections=None) -> np.ndarray:
+    def calculate_U_from_peaks(self) -> np.ndarray:
         """Calculate U from stored peaks and apply it.
-
-        ``corrections`` are the corrections in force now ({axis: degrees});
-        the fitted UB lives in their readout frame. None reads every peak as
-        recorded.
 
         Returns:
             np.ndarray: The calculated U matrix.
@@ -741,9 +729,9 @@ class UBMatrix:
             raise ValueError(f"Need at least 2 valid peaks, have {len(valid)}.")
 
         if len(valid) == 2:
-            U = calculate_U_two_peaks(valid[0], valid[1], self._B, corrections)
+            U = calculate_U_two_peaks(valid[0], valid[1], self._B)
         else:
-            U = refine_U_matrix(valid, self._B, corrections)
+            U = refine_U_matrix(valid, self._B)
 
         self.set_U(U)
         return U
@@ -833,7 +821,7 @@ def generate_training_exercise(max_ori_angle: float = 10.0,
                      f"that this instrument can observe ({max_draws} tried): {reason}")
 
 
-def encode_training(U: np.ndarray, mis_omega: float, mis_chi: float) -> str:
+def encode_training(U: np.ndarray, turntable_zero: float, lower_arc_zero: float) -> str:
     """Encode a training exercise (U matrix + two motor-zero floats) into a hash string.
 
     Packs 11 floats (9 for U + 2 motor-zero values, which a mount-only
@@ -841,13 +829,13 @@ def encode_training(U: np.ndarray, mis_omega: float, mis_chi: float) -> str:
 
     Args:
         U: 3x3 orientation matrix.
-        mis_omega: Turntable motor-zero (degrees); retired, 0 in every new code.
-        mis_chi: Lower-arc motor-zero (degrees); retired, 0 in every new code.
+        turntable_zero: Turntable motor-zero (degrees); retired, 0 in every new code.
+        lower_arc_zero: Lower-arc motor-zero (degrees); retired, 0 in every new code.
 
     Returns:
         str: Encoded hash string.
     """
-    values = list(U.flatten()) + [float(mis_omega), float(mis_chi)]
+    values = list(U.flatten()) + [float(turntable_zero), float(lower_arc_zero)]
     packed = struct.pack('<11f', *values)
     obfuscated = _xor_bytes(packed, _OBFUSCATION_KEY)
     return base64.urlsafe_b64encode(obfuscated).decode('ascii')
@@ -857,21 +845,21 @@ def decode_training(hash_str: str) -> tuple:
     """Decode a training exercise hash string.
 
     Returns:
-        tuple: (U_matrix as np.ndarray(3,3), mis_omega, mis_chi)
+        tuple: (U_matrix as np.ndarray(3,3), turntable_zero, lower_arc_zero)
     """
     try:
         obfuscated = base64.urlsafe_b64decode(hash_str.encode('ascii'))
         packed = _xor_bytes(obfuscated, _OBFUSCATION_KEY)
         values = struct.unpack('<11f', packed)
         U = np.array(values[:9]).reshape(3, 3)
-        mis_omega = values[9]
-        mis_chi = values[10]
+        turntable_zero = values[9]
+        lower_arc_zero = values[10]
     except Exception as e:
         raise ValueError(f"Invalid training hash: {e}")
     # The hash stores float32: orthonormalise (the nearest rotation, polar
     # decomposition) so the hidden mount is an exact rotation.
     left, _, right = np.linalg.svd(validate_rotation_matrix(U))
-    return left @ right, float(mis_omega), float(mis_chi)
+    return left @ right, float(turntable_zero), float(lower_arc_zero)
 
 
 MOTOR_ZERO_REFUSAL = ("this exercise was made by an older TAVI and contains motor-zero "
@@ -886,11 +874,11 @@ def decode_mount_exercise(hash_str: str) -> np.ndarray:
     motor-zero values are not 0.
     """
     try:
-        rotation, mis_omega, mis_chi = decode_training(hash_str)
+        rotation, turntable_zero, lower_arc_zero = decode_training(hash_str)
     except ValueError as exc:
         raise ValueError(f"this exercise code cannot be read ({exc}); it may be damaged or "
                          "made by an older TAVI. Ask for a new code") from exc
-    if mis_omega != 0.0 or mis_chi != 0.0:
+    if turntable_zero != 0.0 or lower_arc_zero != 0.0:
         raise ValueError(MOTOR_ZERO_REFUSAL)
     return rotation
 
@@ -902,17 +890,17 @@ def has_two_nonparallel(hkls) -> bool:
                for i, a in enumerate(vectors) for b in vectors[i + 1:])
 
 
-def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_errors,
+def grade_alignment(gonio, sense, ki, kf, ub, u_true, b_true,
                     hkls, locked=None, tol_good=0.5, tol_close=2.0) -> dict:
     """Grade the operator's alignment against the truth by its worst miss.
 
     For each reflection in ``hkls``: the readouts the operator's belief
     commands -- ``ub`` (U @ B from the UB and the lattice fields) through
     ``solve_stage`` on ``gonio``, free, or on the plane lock's tilts
-    ``locked`` ({inner axis: degrees}) when one is set -- plus ``corrections``
-    and the hidden ``zero_errors`` ({axis: degrees}) are the physical angles.
-    The miss is the larger of the angle between the true reflection in the
-    lab, ``R_stage(physical) @ u_true @ b_true @ hkl`` (signed per ``sense``),
+    ``locked`` ({inner axis: degrees}) when one is set -- are the angles the
+    crystal sits at. The miss is the larger of the angle between the true
+    reflection in the lab, ``R_stage(readouts) @ u_true @ b_true @ hkl``
+    (signed per ``sense``),
     and the commanded lab Q, and the 2theta difference between the commanded
     and the true |Q| at the same ``ki``, ``kf``. A true |Q| that closes no
     scattering triangle there is a miss of inf, named. A reflection the
@@ -944,10 +932,8 @@ def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_
         except ValueError as exc:               # StageUnreachable included
             skipped.append(f"{hkl_text(hkl)}: {exc}")
             continue
-        physical = {ax.name: readouts[ax.name] + corrections.get(ax.name, 0.0)
-                    + zero_errors.get(ax.name, 0.0) for ax in gonio}
         q_true = u_true @ b_true @ h
-        true_lab = stage_rotation(gonio, physical) @ (flip * q_true)
+        true_lab = stage_rotation(gonio, readouts) @ (flip * q_true)
         miss = math.degrees(math.atan2(float(np.linalg.norm(np.cross(true_lab, q_lab))),
                                        float(true_lab @ q_lab)))
         try:

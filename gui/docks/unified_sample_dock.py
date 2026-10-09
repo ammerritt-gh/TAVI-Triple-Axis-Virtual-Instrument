@@ -269,35 +269,6 @@ class UnifiedSampleDock(BaseDockWidget):
         
         self.add_block(self.lattice_group)
         
-        # ===== Sample Alignment Offsets Section =====
-        orientation_group = QGroupBox("Sample Alignment Offsets")
-        orientation_layout = QGridLayout()
-        orientation_layout.setSpacing(5)
-        orientation_group.setLayout(orientation_layout)
-        
-        # Row 0: psi (ψ) corrects the turntable A3, kappa (κ) the lower arc sgl
-        orientation_layout.addWidget(QLabel("ψ:"), 0, 0)
-        self.psi_edit = QLineEdit()
-        self.psi_edit.setMaximumWidth(70)
-        self.psi_edit.setToolTip("Correction of the turntable A3 (ω) - in-plane")
-        orientation_layout.addWidget(self.psi_edit, 0, 1)
-        orientation_layout.addWidget(QLabel("°"), 0, 2)
-
-        orientation_layout.addWidget(QLabel("κ:"), 0, 3)
-        self.kappa_edit = QLineEdit()
-        self.kappa_edit.setMaximumWidth(70)
-        self.kappa_edit.setToolTip("Correction of the lower arc sgl - out-of-plane")
-        orientation_layout.addWidget(self.kappa_edit, 0, 4)
-        orientation_layout.addWidget(QLabel("°"), 0, 5)
-        
-        # Info label
-        orientation_info = QLabel("ψ: correction of ω (A3), κ: correction of sgl")
-        orientation_info.setStyleSheet("color: gray; font-size: 10px;")
-        orientation_layout.addWidget(orientation_info, 1, 0, 1, 6)
-        
-        pack_grid(orientation_layout)
-        self.add_block(orientation_group)
-        
         # ===== UB Matrix Section =====
         ub_group = QGroupBox("UB Matrix")
         ub_layout = QVBoxLayout()

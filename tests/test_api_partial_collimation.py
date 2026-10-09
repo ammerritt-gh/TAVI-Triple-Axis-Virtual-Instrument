@@ -231,14 +231,15 @@ def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller):
 def test_a_command_conflict_stays_the_operators_call(in8_controller):
     """Conflicts were overridable before the hard/soft split and remain so.
 
-    Scanning H against the sample offset psi is a supported combination the
+    Scanning H against the sample rotation omega is a combination the
     conflict check flags advisorily; promoting it to a hard refusal would have
     blocked real scans.
     """
     hard, soft = in8_controller._scan_command_issues(
-        "H 1.99 2.01 0.01", "psi -1 1 0.5"
+        "H 1.99 2.01 0.01", "omega -1 1 0.5"
     )
     assert hard == [], hard
+    assert soft, "the conflict is still flagged, advisorily"
 
 
 class _SyncBridge:

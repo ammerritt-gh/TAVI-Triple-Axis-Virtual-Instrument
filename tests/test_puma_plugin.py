@@ -83,7 +83,8 @@ def test_scan_config_applies_gui_mapping():
     pytest.importorskip("mcstasscript")
     plugin = PUMAPlugin()
     base = plugin.default_state()
-    base.mis_omega = 1.5          # hidden training state, absent from GUI values
+    base.plane_lock = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0],
+                       "tilts": {"sgl": 0.0, "sgu": 0.0}}  # operator state, absent from GUI values
     base_rhm = base.rhm
     mount = object()              # scan_config only assigns it
     diagnostics = {"Detector PSD": True}
@@ -91,7 +92,7 @@ def test_scan_config_applies_gui_mapping():
     config = plugin.scan_config(base, _gui_vals(), "Al_bragg", diagnostics, mount)
 
     assert config is not base and base.rhm == base_rhm  # base not mutated
-    assert config.mis_omega == 1.5                      # hidden state propagates
+    assert config.plane_lock == base.plane_lock         # session state propagates
     assert config.K_fixed == "Ki Fixed"
     assert (config.rhm, config.rvm, config.rha, config.rva) == (2.5, 1.2, 2.5, 0.8)
     assert config.monocris == config.anacris == "pg002"

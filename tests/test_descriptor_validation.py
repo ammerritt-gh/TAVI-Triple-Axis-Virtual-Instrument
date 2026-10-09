@@ -298,9 +298,8 @@ def test_goniometer_structural_negative_cases(axes, expected):
     assert any(expected in e for e in validate_descriptor(_with_gonio(*axes)))
 
 
-def _tas(name, axis, correction=None, zero_error=None):
-    return GonioAxis(name, axis, AxisLimits(-math.inf, 0.0, math.inf),
-                     correction=correction, zero_error=zero_error)
+def _tas(name, axis):
+    return GonioAxis(name, axis, AxisLimits(-math.inf, 0.0, math.inf))
 
 
 @pytest.mark.parametrize(("axes", "expected"), [
@@ -308,18 +307,12 @@ def _tas(name, axis, correction=None, zero_error=None):
       _tas("phi", (0.0, 0.0, 1.0))), "must declare the axes A3, sgl, sgu"),
     ((_tas("A3", (0.0, 1.0, 0.0)), _tas("sgl", (1.0, 0.0, 0.0))),
      "must declare the axes A3, sgl, sgu"),
-    ((_tas("A3", (0.0, 1.0, 0.0), correction="kappa_offset"),
-      _tas("sgl", (1.0, 0.0, 0.0)), _tas("sgu", (0.0, 0.0, 1.0))),
-     "correction 'kappa_offset'"),
-    ((_tas("A3", (0.0, 1.0, 0.0), zero_error="mis_phi"),
-      _tas("sgl", (1.0, 0.0, 0.0)), _tas("sgu", (0.0, 0.0, 1.0))),
-     "zero_error 'mis_phi'"),
-], ids=["eulerian-names", "two-axes", "unknown-correction", "unknown-zero-error"])
+], ids=["eulerian-names", "two-axes"])
 def test_runnable_goniometer_must_be_one_the_tas_runtime_drives(axes, expected):
     """The TAS runtime drives A3/sgl/sgu by name (scan slots, arc fields,
-    McStas parameters) and reads corrections and zero errors from its own
-    fields, so a runnable stage it cannot drive is refused at validation, not
-    per point. The same stage stays legal as data (structural validation)."""
+    McStas parameters), so a runnable stage it cannot drive is refused at
+    validation, not per point. The same stage stays legal as data
+    (structural validation)."""
     d = _with_gonio(*axes)
     assert validate_descriptor(d) == []
     errors = validate_descriptor(d, runnable=True)

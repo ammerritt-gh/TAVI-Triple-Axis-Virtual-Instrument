@@ -11,7 +11,7 @@ and a snapshot's ``params`` is just "this instrument's parameters".
 Adjusted from the Phase-0 draft (2026-07-02, see §17.2 of the design record):
 ``new_state(gui_values)`` is replaced by ``default_state()`` + ``scan_config(...)``
 because a scan config is a deep copy of *live session state* (which carries
-hidden training misalignments absent from the GUI values), and a transitional
+the hidden true mount, absent from the GUI values), and a transitional
 ``crystal_info(...)`` hook covers the controller's live crystal-parameter needs
 until Phase 2 sources them from the descriptor.
 
@@ -163,7 +163,7 @@ class InstrumentPlugin(Protocol):
         ``_build_scan_puma_config`` -- each instrument owns the mapping from its
         GUI fields to its config object. ``base_state`` (the live session state)
         is required because it carries state that is deliberately absent from
-        ``gui_values`` (e.g. hidden training misalignments). ``sample_mount`` is
+        ``gui_values`` (e.g. the hidden true mount). ``sample_mount`` is
         built by the controller (it depends on the session UB matrix) and passed
         in so the plugin stays free of UB coupling.
 

@@ -17,7 +17,7 @@ def test_frozen_internal_instrument_state_is_captured(tmp_path):
     scope = {}
     exec(compile("def run_simulation(launch_state):\n    return None\n",
                  str(tmp_path / "TAVI_PySide6.py"), "exec"), scope)
-    launch = {"vals": {"omega": 0}, "scan_config": SimpleNamespace(mis_omega=7.5, mis_chi=-2)}
+    launch = {"vals": {"omega": 0}, "scan_config": SimpleNamespace(hidden_a=7.5, hidden_b=-2)}
     recorder.install()
     try:
         scope["run_simulation"](launch)
@@ -26,8 +26,8 @@ def test_frozen_internal_instrument_state_is_captured(tmp_path):
         recorder.stream.close()
     events = [json.loads(line) for line in (tmp_path / "report/events.jsonl").read_text(encoding="utf-8").splitlines()]
     event = next(e for e in events if e["kind"] == "call")
-    assert event["fields"]["launch_state"]["scan_config"] == {"mis_omega": 7.5, "mis_chi": -2}
-    assert launch["scan_config"].mis_omega == 7.5
+    assert event["fields"]["launch_state"]["scan_config"] == {"hidden_a": 7.5, "hidden_b": -2}
+    assert launch["scan_config"].hidden_a == 7.5
 
 
 def test_worker_caught_exception_and_exact_subprocess_output(tmp_path):
