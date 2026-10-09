@@ -295,10 +295,12 @@ def puma_descriptor() -> InstrumentDescriptor:
                             default="30"),
         ),
         slits=(
-            SlitSpec("vbl_hgap", "Post-mono (width)", default_width_mm=88),
+            SlitSpec("vbl_hgap", "Post-mono (width)", default_width_mm=88,
+                     stable_id="post_mono"),
             SlitSpec("pbl", "Pre-sample (W×H)", has_height=True,
-                     default_width_mm=100, default_height_mm=100),
-            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50),
+                     default_width_mm=100, default_height_mm=100, stable_id="pre_sample"),
+            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50,
+                     stable_id="detector"),
         ),
         source_types=(
             SourceType("Maxwellian", "Maxwellian"),

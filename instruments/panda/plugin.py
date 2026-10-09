@@ -275,11 +275,12 @@ def panda_descriptor() -> InstrumentDescriptor:
         # PANDA's three motorized apertures, defaults from vPANDA (ms1 = 40 mm,
         # ss1/ss2 = 40 x 80 mm). ms1 is the horizontal virtual source itself.
         slits=(
-            SlitSpec("ms1", "Virtual source (width)", default_width_mm=40),
+            SlitSpec("ms1", "Virtual source (width)", default_width_mm=40,
+                     stable_id="virtual_source"),
             SlitSpec("ss1", "Pre-sample (W×H)", has_height=True,
-                     default_width_mm=40, default_height_mm=80),
+                     default_width_mm=40, default_height_mm=80, stable_id="pre_sample"),
             SlitSpec("ss2", "Sample exit (W×H)", has_height=True,
-                     default_width_mm=40, default_height_mm=80),
+                     default_width_mm=40, default_height_mm=80, stable_id="sample_exit"),
         ),
         source_types=(
             SourceType("Maxwellian", "Maxwellian"),

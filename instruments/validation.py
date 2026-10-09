@@ -330,6 +330,19 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
         if not items:
             errors.append(f"{list_name}: runnable instrument needs at least one entry")
 
+    # --- R5b: public slit names ---------------------------------------------------------------------
+    from tavi.quantities import by_id
+    for slit in d.slits:
+        axes = ("horizontal", "vertical") if slit.has_height else ("horizontal",)
+        for axis in axes:
+            try:
+                by_id(f"slit.{slit.stable_id}.{axis}_gap_mm")
+            except KeyError:
+                errors.append(
+                    f"slits: {slit.id!r} needs a stable_id the quantity registry has "
+                    f"a {axis} gap for, got {slit.stable_id!r}"
+                )
+
     # --- R6: a stage the TAS runtime drives ---------------------------------------------------------
     # Every runnable instrument runs on instruments/tas_runtime.py, which drives
     # the stage by these axis names (scan slots, arc fields, McStas parameters).

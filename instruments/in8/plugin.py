@@ -222,8 +222,9 @@ def in8_descriptor() -> InstrumentDescriptor:
         # PLACEHOLDER apertures.
         slits=(
             SlitSpec("sbl", "Pre-sample (W×H)", has_height=True,
-                     default_width_mm=40, default_height_mm=100),
-            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=40),
+                     default_width_mm=40, default_height_mm=100, stable_id="pre_sample"),
+            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=40,
+                     stable_id="detector"),
         ),
         source_types=(
             SourceType("Maxwellian", "Maxwellian"),
