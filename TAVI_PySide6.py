@@ -1163,8 +1163,8 @@ class TAVIController(QObject):
         self.mount_plane = None
         self.R_hidden = np.eye(3)
         self._exercise = None
-        # (code, reason) last reported as left out of parameters.json, so a Run
-        # that changes nothing does not say it again.
+        # (code, reason) last reported as blocking the save of parameters.json, so
+        # a Run that changes nothing does not say it again.
         self._unsaved_exercise_report = None
         self._set_true_mount()
 
@@ -5997,19 +5997,19 @@ class TAVIController(QObject):
             # The locked scattering plane (null = free).
             "plane_lock": copy.deepcopy(self.instrument_state.plane_lock),
         }
-        # An exercise these values cannot observe would make the next start refuse
-        # the whole file: it is left out, and the live exercise stays loaded.
+        # An exercise these values cannot observe would be written with its
+        # fitted UB but no hidden mount, and restore would not match. The file is
+        # not replaced: the last consistent save stays on disk.
         reason = self._saved_exercise_refusal(parameters) if parameters["ub_training_hash"] else None
         if reason:
-            parameters["ub_training_hash"] = ""
             if self._unsaved_exercise_report != (self._exercise, reason):
                 self._unsaved_exercise_report = (self._exercise, reason)
                 self.print_to_message_center(
-                    "Loaded exercise not saved: it cannot be observed with the current "
-                    "sample, energy or crystals. Its code can be entered again later; "
-                    "the live exercise is unchanged.")
-        else:
-            self._unsaved_exercise_report = None
+                    "Parameters not saved: the loaded exercise cannot be observed with the "
+                    "current sample, fixed energy or crystals. Restore those settings or "
+                    "clear the exercise, and saving resumes.")
+            return
+        self._unsaved_exercise_report = None
         # Namespace by instrument id with a schema version (design record §9,
         # §16.8): {"<instrument_id>": {"_schema": 1, ...}}.
         parameters["_schema"] = self.PARAMETERS_SCHEMA_VERSION
