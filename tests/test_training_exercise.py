@@ -315,6 +315,27 @@ def test_an_exercise_past_the_instruments_motor_limits_is_refused(in8):
     assert training_reach_error(state, np.eye(3), b, hkls, {}) is None
 
 
+def test_a_phonon_only_sample_cannot_host_an_exercise_and_says_why(in8, said):
+    """Al_rod_phonon has a lattice but no reflection table and no space group:
+    it has no Bragg peak to align on, so generation refuses and says so."""
+    in8.set_default_parameters()
+    stop = _watch(in8, said)
+    try:
+        in8.window.sample_dock.set_sample_by_key("Al_rod_phonon")
+        in8.on_generate_training()
+        assert in8.window.ub_matrix_dock.training_hash_display.text() == ""
+        assert any("Failed to generate training" in m and "this sample has no Bragg "
+                   "reflections to align on; choose a Bragg sample" in m for m in said), said
+
+        said.clear()
+        in8.window.sample_dock.set_sample_by_key("Al_bragg")
+        in8.on_generate_training()
+        assert in8.window.ub_matrix_dock.training_hash_display.text()
+    finally:
+        stop()
+        in8.set_default_parameters()
+
+
 def test_the_reach_check_reads_the_tables_beside_the_package_not_the_working_directory(
         in8, monkeypatch):
     """Started from tests/, the check reads the same reflection tables (and so
