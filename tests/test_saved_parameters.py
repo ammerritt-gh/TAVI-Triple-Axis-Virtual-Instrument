@@ -397,6 +397,44 @@ def test_the_exercise_is_judged_on_the_files_sample_not_the_live_one(in8, saved_
     in8.set_default_parameters()
 
 
+@pytest.mark.parametrize("change", ["fixed energy", "sample"])
+def test_an_exercise_the_saved_values_cannot_observe_is_left_out_of_the_file(
+        in8, saved_file, change):
+    """Every Run saves. Lowering the fixed energy (or dropping the sample) after
+    an exercise is loaded must not write a file the next start refuses: the
+    exercise is left out of it, the live one stays, and one line says so, once."""
+    in8.set_default_parameters()
+    in8._install_exercise(GOOD_CODE)
+    log_before = len(_log(in8))
+    if change == "fixed energy":
+        in8.window.scattering_dock.fixed_E_edit.setText("4.0")   # closes no Al reflection
+    else:
+        assert in8.window.sample_dock.set_sample_by_key(None)     # "No sample"
+    in8.save_parameters()
+    in8.save_parameters()                                       # the next Run
+    assert in8._exercise == GOOD_CODE
+    with open(saved_file, "r", encoding="utf-8") as fh:
+        assert json.load(fh)["in8"]["ub_training_hash"] == ""
+    assert _log(in8)[log_before:].count("Loaded exercise not saved") == 1, _log(in8)
+
+    in8.load_parameters(keep_current_on_refusal=True)           # File > Load Parameters
+    assert in8._exercise is None
+    assert os.path.exists(saved_file) and not os.path.exists(saved_file + ".bak")
+    in8.set_default_parameters()
+
+
+def test_an_observable_exercise_is_written_and_restored(in8, saved_file):
+    in8.set_default_parameters()
+    in8._install_exercise(GOOD_CODE)
+    in8.save_parameters()
+    with open(saved_file, "r", encoding="utf-8") as fh:
+        assert json.load(fh)["in8"]["ub_training_hash"] == GOOD_CODE
+    in8.set_default_parameters()
+    in8.load_parameters(keep_current_on_refusal=True)
+    assert in8._exercise == GOOD_CODE
+    in8.set_default_parameters()
+
+
 def test_a_valid_file_loads_as_before(in8, saved_file):
     in8.set_default_parameters()
     in8._set_true_mount(U_described=mccode_rotation_matrix(0.0, 12.0, 0.0))
