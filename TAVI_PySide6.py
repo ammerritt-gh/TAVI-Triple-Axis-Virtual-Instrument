@@ -6864,9 +6864,9 @@ class TAVIController(QObject):
             self.descriptor.monitors
         )
         self.current_sample_settings = {}
-        # The truth back to defaults (I3): no exercise (R_hidden = I, zero
-        # errors 0, both hashes), the standard setting, no mounting plane, and
-        # the operator's UB equal to it. Never refused (the lock was released
+        # The truth back to defaults (I3): no exercise (R_hidden = I, no training
+        # code), the standard setting, no mounting plane, and the operator's UB
+        # equal to it. Never refused (the lock was released
         # above): Defaults is the way out of any exercise state.
         self._clear_exercise()
         self.mount_plane = None

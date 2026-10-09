@@ -160,9 +160,10 @@ There is one training exercise: a crystal mounted crooked. A hidden rotation
 `R_hidden` of the crystal in its mount, `U_true = R_hidden · U_described`,
 is encoded in a hash that the UB Matrix dock generates, loads, clears and
 checks; the student finds peaks, fits a UB and presses *Check My Alignment*.
-(The Misalignment dock and the hidden motor-zero errors, ψ and κ, are retired:
-a zero error of a turntable or an arc is not a rotation of the crystal once the
-arcs tilt, so a UB fit could not undo it exactly.)
+(The Misalignment dock is retired, and so are the ψ and κ corrections and the
+hidden motor-zero errors: a zero error of a turntable or an arc is not a
+rotation of the crystal once the arcs tilt, so a UB fit could not undo it
+exactly.)
 
 **What is exact.** The hidden error is always exactly representable by U. From
 correctly indexed reflections, the correct lattice and noiseless peaks, a UB
