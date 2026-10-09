@@ -66,7 +66,7 @@ sample_arm = instrument.add_component(
 )
 
 # Using a parameter in a calculation
-sample_arm.set_ROTATED([0, "A1_param / 2", 0])  # half the A1 angle
+sample_arm.set_ROTATED([0, "A1_param / 2", 0])  # half the internal A1 angle (the mono 2-theta)
 
 # Combining multiple parameters
 sample_arm.set_AT([0, 0, "L1_param + offset_param"])
@@ -105,6 +105,31 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 | `A3_param` | Sample turntable readout | Inspection (the turntable reaches McStas through `sample_r*_param`) |
 | `A4_param` | Analyzer 2-theta angle | `analyzer_cradle`, `detector_arm` rotation |
 
+**These names are internal, not the public angle names.** The `A*_param`
+McStas parameters (and the `A1`–`A4` attributes, the `mtt`/`stt`/`att` edits
+and the scan-slot layout in `instruments/tas_runtime.py`) keep TAVI's older
+numbering until the internals are renamed (U3): internal A1 is the
+monochromator 2θ, A2 the sample 2θ, A3 the sample rotation, A4 the analyzer
+2θ. Everything a user sees (GUI labels, scan commands, the API, saved
+settings, output files) uses the ILL numbering instead, so the same number can
+mean two axes depending on which side of the boundary you read it. Read this
+table, not the digit:
+
+| McStas parameter | Internal name | Physical quantity | Public ILL number | Canonical ID |
+|---|---|---|---|---|
+| `A1_param` | A1, `mtt` | monochromator 2θ | **A2** | `mono_two_theta_deg` |
+| `A2_param` | A2, `stt` | sample 2θ | **A4** | `sample_two_theta_deg` |
+| `A3_param` | A3, `sth`, `omega` | sample rotation (turntable) | A3 | `sample_rotation_deg` |
+| `A4_param` | A4, `att` | analyzer 2θ | **A6** | `analyzer_two_theta_deg` |
+| `sgl_param` | `sgl` | lower sample arc | (none) | `sample_lower_arc_deg` |
+| `sgu_param` | `sgu` | upper sample arc | (none) | `sample_upper_arc_deg` |
+| `rhm_param`, `rvm_param` | `rhm`, `rvm` | monochromator radii | (none) | `mono_horizontal_radius_m`, `mono_vertical_radius_m` |
+| `rha_param`, `rva_param` | `rha`, `rva` | analyzer radii | (none) | `analyzer_horizontal_radius_m`, `analyzer_vertical_radius_m` |
+
+The public A1 (monochromator θ) and A5 (analyzer θ) have no McStas parameter:
+they are half of A2 and A6 and are never inputs. `docs/INSTRUMENT_LAYOUT.md`
+holds the public angle table.
+
 ### Crystal Bending Parameters
 | Parameter | Description | Used By |
 |-----------|-------------|---------|
@@ -120,6 +145,11 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 | `pbl_hgap_param` | Pre-sample slit width (horizontal, before sample) | `sample_slit` |
 | `pbl_vgap_param` | Pre-sample slit height (vertical, before sample) | `sample_slit` |
 | `dbl_hgap_param` | Detector slit width (before detector) | `detector_slit` |
+
+These are metres, under the plugin's own slit names. The public name of each
+gap is a key in millimetres: `vbl_hgap_param` is `slit.post_mono.horizontal_gap_mm`,
+`pbl_hgap_param` and `pbl_vgap_param` are `slit.pre_sample.horizontal_gap_mm` and
+`.vertical_gap_mm`, and `dbl_hgap_param` is `slit.detector.horizontal_gap_mm`.
 
 ### Sample Orientation Parameters
 | Parameter | Description | Used By |

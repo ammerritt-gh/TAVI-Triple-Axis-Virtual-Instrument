@@ -7,6 +7,8 @@
 
 > Companion documents: `docs/API_SERVER_DESIGN.md` (the live remote-API architecture this builds on), `docs/API_USER_GUIDE.md` (client-facing endpoint/field reference), `docs/PIPELINE_DESIGN.md` (per-point prep/run pipeline), `docs/INSTRUMENT_LAYOUT.md` (TAS geometry, angles, scan modes), `docs/MCSTAS_PARAMETERS.md` (build-time vs run-time parameter split).
 
+> **Names in this draft (2026-10-10).** The API examples below were written before API version 2 and use the old spellings (`Ei`, `H`, `deltaE`, `omega`, `rhm`). Those are still accepted aliases, but a real request now needs `"api_version": 2` and every reply names quantities by canonical ID (`incident_energy_mev`, `h`, `energy_transfer_mev` ...); the ILL angle numbers apply (A2 mono 2θ, A3 sample rotation, A4 sample 2θ, A6 analyzer 2θ). See `docs/API_USER_GUIDE.md` §15.
+
 ---
 
 ## 0. Framing — what belongs in TAVI, and what does not
@@ -159,22 +161,21 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 
 #### The scan-variable → field table
 
-`SCAN_VARIABLE_TO_FIELD` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes. It is derived from the scan-point template (`_build_scan_point_template`) and `_SCAN_VARIABLE_TO_INDEX`; a `None` means *known variable, not goto-able*, which is a different refusal from *unknown variable*.
+`SCAN_VARIABLE_TO_FIELD` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes. Since API version 2 both sides are canonical IDs (`tavi/quantities.py`): the scan name is resolved through the registry first, so every spelling of a quantity (an ILL number, a NICOS name, an alias) drives the same field. A `None` means *known variable, not goto-able*, which is a different refusal from *unknown variable*.
 
-| Scan variable | Field | Note |
+| Scan variable (canonical ID; aliases) | Field | Note |
 |---|---|---|
-| `H`, `K`, `L`, `deltaE` | same name | Reciprocal-space and energy targets. |
-| `qx`, `qy`, `qz` | same name | |
-| `A1` | `mtt` | Angle-mode template slots are `[mtt, stt, omega, att]`. |
-| `A2`, `2theta` | `stt` | |
-| `A3` | `omega` | |
-| `A4` | `att` | |
-| `omega` | `omega` | `omega` is A3 itself (the turntable). The old ψ correction that `omega` once moved is retired. |
-| `rhm`, `rvm`, `rha` | same name | Bender curvatures. |
-| `sgl`, `sgu` | same name | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 9) are seeded from these fields. |
-| `chi` | `None` | Retired (the arcs replaced it). An old scan named `chi` is refused by name, not treated as unknown. |
-| `psi`, `kappa` | `None` | Retired (the corrections are gone). A scan naming them is refused by name. |
-| `rva` | `None` | No settable field exists in `_api_field_map`. |
+| `h`, `k`, `l`, `energy_transfer_mev` (`H`, `K`, `L`, `deltaE`) | same ID | Reciprocal-space and energy targets. |
+| `q_instrument_x/y/z_inv_angstrom` (`qx`, `qy`, `qz`) | same ID | |
+| `mono_two_theta_deg` (`A2`, `mtt`) | same ID | The monochromator 2θ. The controller writes it to its internal `mtt` edit. |
+| `sample_two_theta_deg` (`A4`, `stt`, `2theta`) | same ID | The sample 2θ. |
+| `sample_rotation_deg` (`A3`, `sth`, `omega`, `psi`) | same ID | The turntable itself. The old ψ correction that `omega` once moved is retired; `psi` is now just a spelling of this quantity. |
+| `analyzer_two_theta_deg` (`A6`, `att`) | same ID | The analyzer 2θ. |
+| `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m` (`rhm`, `rvm`, `rha`) | same ID | Bender curvatures. |
+| `sample_lower_arc_deg`, `sample_upper_arc_deg` (`sgl`, `sgu`) | same ID | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 9) are seeded from these fields. |
+| `analyzer_vertical_radius_m` (`rva`) | `None` | No settable field exists in `_api_field_map`. |
+
+`A1` and `A5` (the derived Bragg angles) and the retired `chi`, `phi`, `kappa` are not scan variables at all: the registry refuses them, so they never reach this table. The angle-mode template slots the controller still uses are `[mtt, stt, omega, att]` (internal names, kept until the slot layout is removed); the explicit table that maps each canonical ID to its slot is `_SCAN_VARIABLE_TO_INDEX` in `TAVI_PySide6.py`.
 
 An unknown variable also returns `None`. The GUI disables all three goto buttons with the reason in their tooltip.
 
@@ -339,7 +340,7 @@ These are **control recipes, not analysis.** A recipe strings together goto-CEN 
 | Recipe | Composition | Control content only |
 |---|---|---|
 | **Rocking curve** | scan `omega` (or `A3`) ±range about current setting; optional auto goto-CEN | Peak-finding on the sample rotation — pure alignment. |
-| **θ–2θ** | coupled scan of `A1` and `A2` (a §2 path in angle space, `A2 = 2·A1`) | Standard powder/alignment line; a path scan over angle indices. |
+| **θ–2θ** | coupled scan of `A3` and `A4` (a §2 path in angle space, `A4 = 2·A3`) | Standard powder/alignment line; a path scan over angle indices. |
 | **Const-Q energy scan** | `scan deltaE start stop step` at a fixed HKL (a plain 1D command, pre-templated) | Convenience wrapper — no new mechanism. |
 
 ### 4.3 Surface
@@ -404,14 +405,14 @@ def cooper_nathans(cfg: ResolutionConfig) -> ResolutionResult: ...
 **API:**
 
 ```
-GET /api/v1/resolution?H=1.0&K=1.0&L=0&deltaE=5.0
+GET /api/v1/resolution?h=1.0&k=1.0&l=0&energy_transfer_mev=5.0
 → 200  { "ok": true, "matrix": [[...]x4], "r0": ...,
          "fwhm": { "dE": 0.94, "dq_par": 0.012, "dq_perp": 0.031, "dq_z": 0.058 },
          "bragg": {...}, "basis": {...},
          "config": { "collimation": "60-40-40-60", "eta_m": 30.0, ... } }
 ```
 
-Read-only (allowed in read-only mode — it moves nothing). Omitted H/K/L/deltaE default to the current GUI values; supplied ones are evaluated **without** touching widgets (pure computation on a copied state, like `POST /validate`). Infeasible point → `"ok": false` with the standard feasibility reason. The echoed `config` block makes results reproducible and debuggable.
+Read-only (allowed in read-only mode — it moves nothing). Omitted h/k/l/energy_transfer_mev (aliases `H`/`K`/`L`/`deltaE`) default to the current GUI values; an unknown query key is a 400; supplied ones are evaluated **without** touching widgets (pure computation on a copied state, like `POST /validate`). Infeasible point → `"ok": false` with the standard feasibility reason. The echoed `config` block makes results reproducible and debuggable.
 
 Optional validation tie-in (advisory only, never blocking): the §validation response and `POST /validate` may attach `resolution.fwhm` per scan so a client sees step-size-vs-resolution at plan time. Warnings ("scan step 0.001 rlu is 12× finer than dq_par") are `diagnostics`, not blockers — resolution is information, and only budgets/feasibility reject.
 
@@ -426,7 +427,7 @@ Optional validation tie-in (advisory only, never blocking): the §validation res
 | (Q, E) point infeasible | Refuse with the existing feasibility reason ("scattering triangle does not close…") — same strings as validation, so clients handle one vocabulary. |
 | Collimation "open"/undefined for a segment | Use the descriptor's documented effective divergence (guide critical angle or a stated default); echo the value used in `config` — never silently assume. |
 | Mosaic not part of instrument state | v1: descriptor-level constants per crystal (PG(002) ~30′ etc.), echoed in `config`. Open question below. |
-| Matrix not positive-definite (degenerate geometry, e.g. A4 → 0) | Refuse: "resolution undefined at this geometry". |
+| Matrix not positive-definite (degenerate geometry, e.g. A6 → 0, the analyzer 2θ) | Refuse: "resolution undefined at this geometry". |
 
 ### 5.6 Verification
 
@@ -489,7 +490,7 @@ GET /scan/j-0021/data → result carries "engine": "deterministic" in metadata/p
 | Configured `Phonon_DFT` dispersion/reflection file is missing or malformed | Fail the deterministic job with the loader's concrete filename/validation reason. There is no equation or centering fallback for an explicitly configured composite model. |
 | Sample feature the analytic model cannot express (multiple scattering, full one-phonon structure factor) | Documented **fidelity gap, not an error** — the deterministic result is honestly labelled as an idealized model. Provenance (`engine: "deterministic"`) is the client's signal not to expect MC-level realism. |
 | Environment / instrument / sample background | **No longer a gap in what can be expressed:** independently scaled catalog sources are planted as an analytic superposition on both engines (§6.7). Ray-traced environment or shielding scattering remains future fidelity work. |
-| Resolution matrix undefined (degenerate geometry, A4 → 0) | Refuse with the **same reason strings as §5** ("resolution undefined at this geometry") — one vocabulary across resolution and deterministic execution. |
+| Resolution matrix undefined (degenerate geometry, analyzer 2θ A6 → 0) | Refuse with the **same reason strings as §5** ("resolution undefined at this geometry") — one vocabulary across resolution and deterministic execution. |
 | (Q, E) point infeasible | Same feasibility refusal as MC — geometry is checked identically; the engine switch changes only how counts are produced, never whether a point is reachable. |
 
 ### 6.6 Boundary note
@@ -565,7 +566,7 @@ campaign clients pin `catalog_version` and stamp the complete source request.
 
 TAVI jobs currently cost **wall-clock compute** (the `eta` from `tavi/runtime_tracker.py`). A real experiment costs **beam time**: counting time plus the time to move the spectrometer's axes between points. The clock adds a second, physically meaningful cost — **simulated experimental time** — computed per job from the angles TAVI already knows, and exposes it alongside the existing wall-clock ETA.
 
-The physics is free. `compute_scan_snapshot` already computes **every axis angle at every point** (A2/mtt, A3/omega, A4/stt, analyzer att, plus bending/orientation) via `calculate_angles`. So:
+The physics is free. `compute_scan_snapshot` already computes **every axis angle at every point** (mono 2θ A2, sample rotation A3, sample 2θ A4, analyzer 2θ A6, plus bending/orientation) via `calculate_angles`. So:
 
 - **Counting time** = points × a counting-time model (see open questions).
 - **Movement time** follows the **Teixeira Parente metric**: along the ordered scan path, each step's move time is `max over axes of |Δangle_axis| / velocity_axis` (the axes move in parallel, so the slowest axis sets the step), summed over the path. This needs **no new physics** — only per-axis angular velocities and a difference of angles TAVI already produces.

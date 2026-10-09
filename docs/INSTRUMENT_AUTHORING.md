@@ -195,8 +195,9 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
 ## The scans-array contract
 
 `compute_scan_snapshot` (shared) consumes per-point `scans` lists with a
-fixed layout: indices 0–3 are mode-specific (qx/qy/qz/ΔE, H/K/L/ΔE, or
-A1–A4), 4–7 are rhm/rvm/rha/rva, then the stage slots `SLOT_SGL` (8) and `SLOT_SGU` (9) from
+fixed layout: indices 0–3 are mode-specific (qx/qy/qz/ΔE, H/K/L/ΔE, or the
+angles: mono 2θ, sample 2θ, sample rotation, analyzer 2θ, which the public
+numbering calls A2, A4, A3, A6), 4–7 are rhm/rvm/rha/rva, then the stage slots `SLOT_SGL` (8) and `SLOT_SGU` (9) from
 `instruments/tas_runtime.py` (`SCAN_POINT_LENGTH` = 10). Angle mode reads the
 arcs from their slots; Q modes solve them per point. A point of 9 slots,
 written before the `sgu` slot existed, runs with `sgu` = 0. Every instrument's

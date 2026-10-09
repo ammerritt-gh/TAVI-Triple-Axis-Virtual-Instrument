@@ -3,7 +3,7 @@
 > **Status:** live
 > **Authority:** the client-facing API contract: endpoints, fields, scan syntax, events
 
-*Last updated: 2026-07-28*
+*Last updated: 2026-10-10 (API version 2: the naming contract)*
 
 This guide is written for **both humans and LLM agents**. Every example is exact
 and self-contained; you can paste any section into an LLM's context and it will
@@ -24,6 +24,15 @@ and the local user can restrict or disable remote control at any time from the
 
 The transport is plain HTTP/REST with JSON bodies, plus Server-Sent Events (SSE)
 for live streaming. No client library is required.
+
+**Versioning.** This guide describes **API version 2**. Every request that
+writes or validates (`PATCH /parameters`, `POST /scan`, `POST /validate`,
+`PUT /background`) must carry `"api_version": 2` in its JSON body; without it
+(or with any other value) the server answers `400 api_version_required` and
+changes nothing. Version 2 renumbered the angles the ILL way (A2 is the
+monochromator 2θ, A4 the sample 2θ, A6 the analyzer 2θ) and gave every
+quantity a canonical ID such as `mono_two_theta_deg`. A client written for the
+old names is refused, never reinterpreted: see §15 *Breaking change*.
 
 **Base URL:** `http://127.0.0.1:8642/api/v1`
 
@@ -46,25 +55,36 @@ BASE URL: http://127.0.0.1:8642/api/v1   (JSON in, JSON out; add header
 
 KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
-  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...47 keys returned, 43 writable...}, budget}
-  PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
-  POST /validate  body {"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
-  POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
+  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...canonical IDs; 49-51 keys depending on the instrument...}, budget}
+  PATCH /parameters  body {"api_version":2,"incident_energy_mev":14.7,"h":2.0}  -> {"applied":["incident_energy_mev","h"],"errors":{}}
+  POST /validate  body {"api_version":2,"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
+  POST /scan  body {"api_version":2,"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
               engine "deterministic" = fast analytic S(Q,w) x resolution + seeded Poisson (validator); check result.metadata.cn_valid
               "background" = complete tavi.background/2 source config; REPLACES the session config for this job (never merges)
-  GET/PUT /background       -> read/replace the session background config {"spec":...,"resolved":...}; PUT needs write access
+  GET/PUT /background       -> read/replace the session background config {"spec":...,"resolved":...}; PUT needs write access and "api_version":2
   GET  /scan/{id}?wait=N     -> block up to N s for terminal state; body carries "timed_out":bool
   GET  /scan/{id}/data       -> result + scan_values_1, counts (or counts_grid), skipped_points
   GET  /scan/{id}/plot.png   -> 512x512 PNG of current arrays (409 no_data if nothing renderable yet)
   GET  /journal?limit=N      -> human-readable session log (params, job lifecycle, mode/budget events)
   POST /scan/{id}/stop  |  POST /stop {"clear_queue":true}  -> drain-stop one job | stop running + clear queue
 
+API VERSION 2: every PATCH /parameters, POST /scan, POST /validate and PUT /background body must contain
+  "api_version": 2, or the answer is 400 api_version_required and nothing changes. Names are canonical IDs (aliases
+  are accepted on input). The angles follow the ILL numbering: A2 = MONO 2theta (mono_two_theta_deg), A4 = SAMPLE 2theta
+  (sample_two_theta_deg), A6 = ANALYZER 2theta (analyzer_two_theta_deg), A3 = sample rotation (sample_rotation_deg). Under the old
+  numbering A2 was the sample 2theta and A4 the analyzer: an old script is refused, never reinterpreted.
+  A request naming a retired, derived-only, read-only, unknown or duplicate key is refused whole, with nothing applied.
+
 SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them via
-  scan_command1 / scan_command2, e.g. PATCH /parameters {"scan_command1":"H 1.99 2.01 0.01"}.
+  scan_command1 / scan_command2, e.g. PATCH /parameters {"api_version":2,"scan_command1":"H 1.99 2.01 0.01"}.
   SYNTAX: "VARIABLE start stop STEP". The 3rd number (last token) is the STEP SIZE, not a point count.
   "H 1.99 2.01 0.01" = 3 points (1.99, 2.00, 2.01). A step larger than the range is an error.
   Two non-empty commands = a 2D scan (points multiply). One command = 1D. None = single point.
-  Scannable variables: H K L, qx qy qz, deltaE, A1 A2 A3 A4, omega (= A3), 2theta, sgl sgu (angle mode only; chi, psi and kappa are refused), rhm rvm rha rva.
+  Scannable variables, by canonical ID [aliases]: h k l [H K L]; q_instrument_x_inv_angstrom q_instrument_y_inv_angstrom
+  q_instrument_z_inv_angstrom [qx qy qz]; energy_transfer_mev [deltaE]; mono_two_theta_deg [A2 mtt]; sample_rotation_deg [A3 sth omega psi];
+  sample_two_theta_deg [A4 stt 2theta]; analyzer_two_theta_deg [A6 att]; sample_lower_arc_deg [sgl] and sample_upper_arc_deg [sgu] (angle mode only);
+  mono_horizontal_radius_m mono_vertical_radius_m analyzer_horizontal_radius_m analyzer_vertical_radius_m [rhm rvm rha rva].
+  A1 and A5 are derived Bragg angles (refused; scan A2 or A6). chi, phi, kappa are refused. Slit gaps cannot be scanned.
 
 GOLDEN WORKFLOW:
   1. GET /schema  (learn fields, allowed values, and limits for THIS instrument — do this first)
@@ -86,6 +106,7 @@ BUDGET LIMITS (API jobs only): <=10 queued jobs, <=200 points/scan,
   <=1e8 neutrons/point, <=1e10 total pending neutrons. Over-limit POST /scan -> HTTP 429.
 
 RULES:
+  - Send "api_version": 2 in every write/validate body. Use canonical IDs from /schema; never the pre-version-2 key names.
   - Read /schema then /state before submitting; do not submit if mode!="allow".
   - Prefer wait= long-poll over repeat GETs; never spin in a tight loop.
   - A count of null means the point was not measured / was invalid — never treat null as 0.
@@ -122,28 +143,31 @@ curl http://127.0.0.1:8642/api/v1/state
 ```
 ```json
 {"instrument": "puma", "mode": "allow", "busy": false, "current_job": null,
- "queue": [], "parameters": {"Ei": 14.7, "Ki": 2.662, "H": 2.0, "K": 0.0,
- "L": 0.0, "scan_command1": "", "scan_command2": "", "number_neutrons": 1000000,
- "...": "35 more fields"}, "budget": {"pending_neutrons": 0.0, "budget": 1e10,
+ "queue": [], "parameters": {"incident_energy_mev": 14.7,
+ "incident_wavevector_inv_angstrom": 2.662, "h": 2.0, "k": 0.0,
+ "l": 0.0, "scan_command1": "", "scan_command2": "", "number_neutrons": 1000000,
+ "...": "42 more fields"}, "budget": {"pending_neutrons": 0.0, "budget": 1e10,
  "queued_jobs": 0, "max_queued": 10}}
 ```
 
-**3. Set parameters** — pick an incident energy and a 3-point scan over H:
+**3. Set parameters** — pick an incident energy and a 3-point scan over H. Every
+write carries `"api_version": 2`; `Ei` is an accepted alias of the canonical
+`incident_energy_mev`, and the reply always names fields canonically:
 
 ```bash
 curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   -H "Content-Type: application/json" \
-  -d '{"Ei": 14.7, "scan_command1": "H 1.99 2.01 0.01", "number_neutrons": 100000}'
+  -d '{"api_version": 2, "Ei": 14.7, "scan_command1": "H 1.99 2.01 0.01", "number_neutrons": 100000}'
 ```
 ```json
-{"applied": ["Ei", "scan_command1", "number_neutrons"], "errors": {}}
+{"applied": ["incident_energy_mev", "scan_command1", "number_neutrons"], "errors": {}}
 ```
 
 **4. Submit the scan** (returns immediately; the scan runs as a queued job):
 
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" -d '{"api_version": 2}'
 ```
 ```json
 {"job_id": "j-0001", "state": "queued", "position": 0}
@@ -159,7 +183,7 @@ curl http://127.0.0.1:8642/api/v1/scan/j-0001
  "submitted_at": 1751500000.0, "started_at": 1751500001.0, "finished_at": 1751500040.0,
  "progress": {"done": 3, "total": 3}, "error": null,
  "launch": {"scan_command1": "H 1.99 2.01 0.01", "scan_command2": "", "number_neutrons": 100000},
- "result": {"mode": "1D", "variable_1": "H", "variable_2": null,
+ "result": {"mode": "1D", "variable_1": "h", "variable_2": null,
  "total_counts": 452.0, "max_counts": 310.0, "output_folder": "output/scan"}}
 ```
 ```bash
@@ -168,7 +192,7 @@ curl http://127.0.0.1:8642/api/v1/scan/j-0001/data
 ```json
 {"job_id": "j-0001", "source": "api", "state": "done", "progress": {"done": 3, "total": 3},
  "error": null, "launch": {"scan_command1": "H 1.99 2.01 0.01", "scan_command2": "", "number_neutrons": 100000},
- "result": {"mode": "1D", "variable_1": "H", "variable_2": null,
+ "result": {"mode": "1D", "variable_1": "h", "variable_2": null,
  "total_counts": 452.0, "max_counts": 310.0, "output_folder": "output/scan",
  "scan_values_1": [1.99, 2.0, 2.01], "scan_values_2": null,
  "valid_mask_1": [true, true, true], "valid_mask_2d": null,
@@ -182,10 +206,12 @@ curl http://127.0.0.1:8642/api/v1/scan/j-0001/data
 
 1. **Read state.** `GET /state`. Confirm `mode` is `allow` (writes are allowed)
    and inspect `busy` / `queue` to see if a scan is already running.
-2. **Set parameters.** `PATCH /parameters` with the fields you want to change.
-   Linked fields recompute automatically (set `Ei` and `Ki` updates; set `H` and
-   `qx`/`qy`/`qz` update via the UB matrix). The scan itself is defined by the
-   `scan_command1` and (optionally) `scan_command2` parameters.
+2. **Set parameters.** `PATCH /parameters` with `"api_version": 2` and the
+   fields you want to change. Linked fields recompute automatically (set
+   `incident_energy_mev` and `incident_wavevector_inv_angstrom` updates; set `h`
+   and the three `q_instrument_*_inv_angstrom` fields update via the UB
+   matrix). The scan itself is defined by the `scan_command1` and (optionally)
+   `scan_command2` parameters.
 3. **Submit.** `POST /scan`. The server validates the scan commands, checks every
    point's geometric feasibility, and enforces budgets, then queues the job and
    returns a `job_id` plus a `validation` object. A bad scan command returns
@@ -215,12 +241,12 @@ Liveness probe. No auth required, even when a token is set.
 
 ### GET /state
 Full snapshot: instrument id, access mode, busy flag, the currently running job
-id (or `null`), the list of queued job ids, the complete parameter dict (47
-keys returned, 43 writable — see §6), the configured limits (if any), current budget usage, and the
+id (or `null`), the list of queued job ids, the complete parameter dict (49 to
+51 keys depending on the instrument, 45 to 47 of them writable — see §6), the configured limits (if any), current budget usage, and the
 session's background configuration (the same object `GET /background` returns).
 ```json
 {"instrument": "puma", "mode": "allow", "busy": true, "current_job": "j-0003",
- "queue": ["j-0004", "j-0005"], "parameters": {"Ei": 14.7, "...": "..."},
+ "queue": ["j-0004", "j-0005"], "parameters": {"incident_energy_mev": 14.7, "...": "..."},
  "limits": {"max_queued": 10, "max_points": 200, "max_neutrons_per_point": 1e8,
  "queue_neutron_budget": 1e10},
  "budget": {"pending_neutrons": 3.0e8, "budget": 1e10, "queued_jobs": 2, "max_queued": 10},
@@ -235,47 +261,83 @@ Just the parameter dict (the same object that appears under `parameters` in
 `/state`). See §6 for every field.
 
 ### PATCH /parameters
-Partial parameter write. Body is a JSON object of `field: value` pairs. Returns
-the list of applied fields and a per-field error map.
+Partial parameter write. Body is a JSON object of `field: value` pairs plus the
+required `"api_version": 2` (§1). Returns the list of applied fields and a
+per-field error map. A field is named by its canonical ID (§6); the aliases in
+the §6 table (`Ei`, `H`, `A4`, `stt` ...) are accepted too, in any letter case,
+and the reply always names a field canonically.
 ```bash
 curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
-  -H "Content-Type: application/json" -d '{"Ei": 14.7, "H": 2.0}'
+  -H "Content-Type: application/json" \
+  -d '{"api_version": 2, "incident_energy_mev": 14.7, "h": 2.0}'
 ```
 ```json
-{"applied": ["Ei", "H"], "errors": {}}
+{"applied": ["incident_energy_mev", "h"], "errors": {}}
 ```
-- Unknown field or bad value → `400 invalid_parameters`, and the body discloses
-  exactly which fields were applied and which failed:
+- No `api_version`, or a value other than the integer `2` (`1`, `3`, `"2"`,
+  `2.0` and `true` all fail) → `400 api_version_required`. The message names
+  the change and points to §15; nothing is applied, queued or replaced.
+```json
+{"error": {"code": "api_version_required",
+ "message": "This request needs \"api_version\": 2 (got missing). TAVI's names changed: angle numbering now follows the ILL (A2 mono 2theta, A4 sample 2theta, A6 analyzer 2theta) and quantities have canonical IDs such as mono_two_theta_deg. Read the Breaking change section of the API guide, then add the field to the body.",
+ "details": {"required_api_version": 2}}}
+```
+- A **key-level** problem refuses the **whole request** with `400
+  invalid_parameters` and applies nothing (`details.applied` is `[]`): an
+  unknown field; a retired name (`chi`, `phi`, `kappa`, `slits_mm`, the
+  metre-valued slit names such as `vbl_hgap`, the unit-less `lattice_a` ...);
+  a derived-only quantity (`A1`, `A5`, `applied_*_radius_m`); a read-only
+  field; a slit gap this instrument does not have; or one quantity named twice
+  (`A4` together with `stt`, `A3` with `omega`). Each error is keyed by the
+  name **as you sent it** and says what to send instead:
 ```json
 {"error": {"code": "invalid_parameters", "message": "One or more fields failed",
- "details": {"applied": [], "errors": {"bogus_field": "unknown field"}}}}
+ "details": {"applied": [], "errors": {
+  "A1": "independent crystal rocking is not modelled yet; set A2 (mono 2θ)",
+  "chi": "chi is a four-circle tilt axis that TAVI does not model; its sample tilt arcs are sgl and sgu",
+  "slits_mm": "slits_mm is retired: set each gap by its own key, slit.<stable_id>.horizontal_gap_mm or .vertical_gap_mm (millimetres)",
+  "bogus_field": "unknown field"}}}}
+```
+```json
+{"error": {"code": "invalid_parameters", "message": "One or more fields failed",
+ "details": {"applied": [], "errors": {
+  "stt": "sample_two_theta_deg is assigned twice, as 'A4' and 'stt'; send it once",
+  "A4": "sample_two_theta_deg is assigned twice, as 'A4' and 'stt'; send it once"}}}}
+```
+- A **value** problem (not a number, outside an arc's travel ...) is reported
+  per field: that field is skipped and the other valid fields still apply.
+  `details.applied` lists what did:
+```json
+{"error": {"code": "invalid_parameters", "message": "One or more fields failed",
+ "details": {"applied": ["k"], "errors": {"h": "invalid value: could not convert string to float: 'abc'"}}}}
 ```
 - While a scan is running or queued, a write is rejected with `409 busy` unless
   you pass `?force=1` (e.g. `PATCH /parameters?force=1`).
 - In **read-only** mode, any write returns `403 read_only`.
-- Each field is validated first and applied all-or-nothing: a field with a bad
-  value is skipped entirely and reported in `errors`; valid fields still apply.
+- Within one field, a bad value is skipped entirely, never half-applied.
 - The mounted **sample** is one of these fields: set `"sample": "<id>"` (e.g.
   `"Al_phonon_DFT"`, `"Pb_phonon_DFT"`, `"Al_bragg"`, or `"none"`). Allowed ids come from the sample
   library and are listed under the `sample` field of `GET /schema`; an unknown id
   → `400 invalid_parameters`. Selecting a sample adopts its lattice, so pass any
-  explicit `lattice_*` overrides in the *same* patch (they win). The chosen
+  explicit `lattice_*_angstrom` / `lattice_*_deg` overrides in the *same* patch (they win). The chosen
   sample travels into each job's `launch.parameters` (as `sample`/`sample_key`).
 
 ### POST /scan
-Submit a scan job. The job runs the scan currently defined by the
+Submit a scan job. The body carries the required `"api_version": 2` (§1; a
+missing or other value is `400 api_version_required` before anything runs). The
+job runs the scan currently defined by the
 `scan_command1` / `scan_command2` parameters. An optional inline `parameters`
 object is applied **first** (same rules as `PATCH /parameters`), then the scan
 commands are validated, budgets are checked, and the job is queued.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.99 2.01 0.01"}}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.99 2.01 0.01"}}'
 ```
 ```json
 {"job_id": "j-0004", "state": "queued", "position": 0,
  "eta": {"estimated_seconds": 42.0, "confidence": "high", "samples": 11},
- "validation": {"points": 3, "per_command": [{"variable": "H", "count": 3,
+ "validation": {"points": 3, "per_command": [{"variable": "h", "count": 3,
    "values": [1.99, 2.0, 2.01]}], "cost": {"pending_neutrons": 0.0,
    "budget": 1e10, "queued_jobs": 0, "max_queued": 10, "points": 3,
    "neutrons_per_point": 100000.0, "job_neutrons": 300000.0},
@@ -297,10 +359,12 @@ to submit.
 - Invalid scan command → `400 scan_validation` with a human-readable message.
   Pass `"force": true` in the body to override the *soft* scan-command
   warnings (a very long scan). A hard rejection -- an unknown or refused
-  variable, a malformed command, a Q variable paired with an HKL one, an angle
-  (`A1`-`A4`, `2theta`, `omega`) paired with a Q, HKL or `deltaE` variable, or
-  two commands that write one scan slot (the same variable twice, `A3` with
-  `omega`, `A2` with `2theta`) -- is refused regardless, exactly as the GUI Run
+  variable (`A1`, `A5`, `chi`, a slit gap ...), a malformed command, a Q variable
+  paired with an HKL one, an angle (`A2`, `A3`, `A4`, `A6`, an arc, or an alias
+  such as `mtt`, `omega`, `stt`, `2theta`) paired with a Q, HKL or `deltaE`
+  variable, or two commands that write one scan slot (the same variable twice,
+  or two spellings of one quantity: `A3` with `omega`, `A4` with `stt`, `A2`
+  with `mtt`) -- is refused regardless, exactly as the GUI Run
   button refuses it. `A3` beside `A4` is two different slots and is accepted.
 - Any **geometrically infeasible** point → `400 infeasible_points`; the error
   `details` is the full `validation` object (so you can see which points and
@@ -317,7 +381,7 @@ to submit.
 ```
 - In read-only mode → `403 read_only`.
 - **Unknown top-level body key → `400 bad_request`.** The `POST /scan` body
-  accepts only `parameters`, `force`, `allow_partial`, `isolated`, `engine`,
+  accepts only `api_version`, `parameters`, `force`, `allow_partial`, `isolated`, `engine`,
   `seed`, `noiseless`, and `background`; any other top-level key is rejected (the error names
   the offending key and lists the allowed set). This is a guard against typos
   such as sending `scan_command1` at the top level instead of nesting it under
@@ -346,7 +410,7 @@ GUI is the loaded instrument.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"H": 3.0, "scan_command1": "K -0.1 0.1 0.02"}}'
+  -d '{"api_version": 2, "parameters": {"h": 3.0, "scan_command1": "K -0.1 0.1 0.02"}}'
 ```
 A scan submitted without a non-empty `scan_command1` (or a lone `scan_command2`,
 which is swapped in) is rejected with `400 missing_required`, since the launch
@@ -384,7 +448,7 @@ Two deterministic-only body fields:
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "deltaE 0.5 3.0 0.125"},
+  -d '{"api_version": 2, "parameters": {"scan_command1": "deltaE 0.5 3.0 0.125"},
        "engine": "deterministic", "seed": 1, "noiseless": false}'
 ```
 
@@ -402,7 +466,7 @@ normalize to disabled at scale `1.0`.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "deltaE 0.5 3.0 0.125"},
+  -d '{"api_version": 2, "parameters": {"scan_command1": "deltaE 0.5 3.0 0.125"},
        "engine": "deterministic",
        "background": {"catalog_version": 2, "enabled": true,
                       "sources": {
@@ -471,8 +535,10 @@ dispersion-file contract are documented in
 ### POST /validate
 Dry-run the exact checks `POST /scan` performs — scan-command parsing, per-point
 feasibility, budget, background resolution, and ETA — **without queueing
-anything and without mutating any parameter**. Its accepted body fields are
-optional `parameters`, `force`, `background`, `engine`, `seed`, and
+anything and without mutating any parameter**. It needs the same
+`"api_version": 2` as a write (a validation under the wrong names would
+answer for a different job than the one you submit). Its accepted body fields are
+the required `api_version` and optional `parameters`, `force`, `background`, `engine`, `seed`, and
 `noiseless` — the same engine/noise selection `POST /scan` accepts, so a dry
 run answers for the exact job the client will submit; `allow_partial` and
 queue-only controls remain `POST /scan`-only. Any inline
@@ -482,7 +548,7 @@ mode**.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/validate \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.05"}}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.9 2.1 0.05"}}'
 ```
 Returns the `validation` object (§5 *Validation object*) plus two extra fields:
 - `would_queue` — `true` if `POST /scan` with the same body would be accepted.
@@ -490,7 +556,7 @@ Returns the `validation` object (§5 *Validation object*) plus two extra fields:
   (empty when `would_queue` is `true`), e.g. `"infeasible_points: 2 point(s)
   unreachable"` or `"scan_validation: ..."` or `"limit_exceeded: ..."`.
 ```json
-{"points": 5, "per_command": [{"variable": "H", "count": 5,
+{"points": 5, "per_command": [{"variable": "h", "count": 5,
   "values": [1.9, 1.95, 2.0, 2.05, 2.1]}],
  "cost": {"pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0,
   "max_queued": 10, "points": 5, "neutrons_per_point": 100000.0,
@@ -579,20 +645,23 @@ curl http://127.0.0.1:8642/api/v1/background
 
 ### PUT /background
 Replace the session background configuration **wholesale** (it never merges
-with the stored one). Write-gated. Returns the same `{"spec", "resolved"}`
+with the stored one). Write-gated, and the body carries the required
+`"api_version": 2` (§1). Returns the same `{"spec", "resolved"}`
 object as `GET /background`.
 
 ```bash
 curl -X PUT http://127.0.0.1:8642/api/v1/background \
   -H "Content-Type: application/json" \
-  -d '{"catalog_version": 2, "enabled": true,
+  -d '{"api_version": 2, "catalog_version": 2, "enabled": true,
        "sources": {
          "instrument_aluminum_powder": {"enabled": true, "scale": 0.5},
          "environment_cosmic_spikes": {"enabled": true, "scale": 2.5}}}'
 ```
 
 Rules:
-- Top-level fields are exactly `catalog_version`, `enabled`, and `sources`.
+- Top-level fields are exactly `api_version` (the API version, §1; not part of the stored
+  spec), `catalog_version`, `enabled`, and `sources`. The `background` object
+  inside a `POST /scan` / `POST /validate` body has no `api_version` of its own.
 - `catalog_version` is required and must equal `2`; this pins the catalog
   numerics used by long-running consumers.
 - Source entries contain exactly `enabled` and `scale`. Unknown ids or fields
@@ -635,25 +704,32 @@ rejected as well; no request-side migration is performed.
 
 ### GET /resolution
 Theoretical triple-axis **resolution** (Cooper–Nathans / Popovici) at one
-`(H, K, L, deltaE)` point, computed from the current instrument configuration.
+`(h, k, l, energy_transfer_mev)` point, computed from the current instrument configuration.
 Read-only, never mutates, so — like `/state`, `/schema` and `/validate` — it is
-**allowed in read-only mode**. All query params are optional:
+**allowed in read-only mode**. A GET has no body, so it needs no
+`api_version`. All query params are optional:
 
 | Param | Meaning | Default |
 |-------|---------|---------|
-| `H`, `K`, `L` | Reciprocal-lattice point (r.l.u.) | current GUI values |
-| `deltaE` | Energy transfer (meV) | current GUI value |
+| `h`, `k`, `l` (aliases `H`, `K`, `L`) | Reciprocal-lattice point (r.l.u.) | current GUI values |
+| `energy_transfer_mev` (alias `deltaE`) | Energy transfer (meV) | current GUI value |
 | `method` | `auto`, `cooper_nathans`, or `popovici` | `auto` |
+
+The query keys are read through the same name registry as writes (any letter
+case). Any other key is `400 bad_request` rather than silently ignored, so a
+typo cannot resolve at the GUI's own point: an unknown name (`?foo=1`), a
+quantity that is not a resolution field (`?Ei=14`), a cache-busting
+parameter (`?_=1`), or two spellings of one quantity (`?H=1&h=1`).
 
 `method=auto` picks **Popovici** when the instrument config carries spatial
 information (mono/analyzer curvatures — `rhm`/`rvm`/`rha` — make the config
 "spatial"), otherwise **Cooper–Nathans**. When Popovici runs with defaulted
 spatial dimensions, that is intended: the `warnings` and `config.provenance`
-carry the honesty (which dimensions were defaulted). A non-numeric `H`/`K`/`L`/
-`deltaE` → `400 bad_request`; an unrecognized `method` → `400 bad_request`.
+carry the honesty (which dimensions were defaulted). A non-numeric `h`/`k`/`l`/
+`energy_transfer_mev` → `400 bad_request`; an unrecognized `method` → `400 bad_request`.
 
 ```bash
-curl "http://127.0.0.1:8642/api/v1/resolution?H=2&K=0&L=0&deltaE=1.5&method=cooper_nathans"
+curl "http://127.0.0.1:8642/api/v1/resolution?h=2&k=0&l=0&energy_transfer_mev=1.5&method=cooper_nathans"
 ```
 
 Successful response (serialized resolution result):
@@ -692,13 +768,17 @@ Machine-readable self-description of the API, generated at request time from liv
 instrument data (no hand-maintained duplicate). Read-only, no side effects,
 **allowed in read-only mode**.
 ```json
-{"instrument": "puma",
- "fields": [{"name": "Ei", "type": "number", "units": "meV"},
+{"api_version": 2, "instrument": "puma",
+ "fields": [{"name": "incident_energy_mev", "type": "number", "units": "meV"},
    {"name": "K_fixed", "type": "string", "allowed": ["Ki Fixed", "Kf Fixed"]},
    {"name": "monocris", "type": "string", "allowed": ["pg002", "pg002_test"]},
    {"...": "one entry per writable parameter"}],
- "scan_variables": ["H", "K", "L", "qx", "qy", "qz", "deltaE", "A1", "A2",
-   "A3", "A4", "omega", "2theta", "sgl", "sgu", "rhm", "rvm", "rha", "rva"],
+ "scan_variables": ["mono_two_theta_deg", "sample_rotation_deg",
+   "sample_two_theta_deg", "analyzer_two_theta_deg", "sample_lower_arc_deg",
+   "sample_upper_arc_deg", "h", "k", "l", "q_instrument_x_inv_angstrom",
+   "q_instrument_y_inv_angstrom", "q_instrument_z_inv_angstrom",
+   "energy_transfer_mev", "mono_horizontal_radius_m", "mono_vertical_radius_m",
+   "analyzer_horizontal_radius_m", "analyzer_vertical_radius_m"],
  "engines": ["mcstas", "deterministic"],
  "scan_body_fields": [
    {"name": "engine", "type": "string", "allowed": ["mcstas", "deterministic"],
@@ -734,8 +814,13 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
  "examples": ["align-on-bragg-peak", "elastic-h-scan", "constant-q-energy-scan",
    "quick-look-vs-production"]}
 ```
-Each field carries `name`, `type`, `units` (where known), and `allowed` (the
-permitted values for choice fields — crystal ids, `K_fixed` modes, source types).
+Each field carries `name` (the canonical ID, §6), `type`, `units` (where
+known), and `allowed` (the permitted values for choice fields — crystal ids,
+`K_fixed` modes, source types). `api_version` is the version the server
+speaks (§1). `scan_variables` lists canonical IDs; the aliases accepted in a
+scan command (§7) are not repeated there. The slit gaps appear as
+`slit.<stable_id>.horizontal_gap_mm` / `.vertical_gap_mm` fields, only for the
+active instrument's own slits.
 `engines` is the list of execution backends selectable via the `POST /scan`
 `engine` body field; `scan_body_fields` documents the optional top-level scan
 body fields (`engine`, `seed`, `noiseless`, `background`) beyond `parameters`.
@@ -760,7 +845,8 @@ curl -X POST http://127.0.0.1:8642/api/v1/scan \
 ```
 
 ### GET /scan/{id}
-Job status. Returns the job snapshot: state, source (`gui`/`api`), timestamps,
+Job status. Returns the job snapshot (it carries `"api_version": 2`, as does every
+SSE event): state, source (`gui`/`api`), timestamps,
 `progress: {done, total}`, error (or `null`), a small `launch` summary, a
 `result` summary (count totals and output folder — no arrays here), and an `eta`
 object (see *ETA object* below).
@@ -769,7 +855,7 @@ object (see *ETA object* below).
  "submitted_at": 1751500000.0, "started_at": 1751500001.0, "finished_at": null,
  "progress": {"done": 1, "total": 3}, "error": null,
  "launch": {"scan_command1": "H 1.99 2.01 0.01", "scan_command2": "", "number_neutrons": 100000},
- "result": {"mode": "1D", "variable_1": "H", "variable_2": null,
+ "result": {"mode": "1D", "variable_1": "h", "variable_2": null,
  "total_counts": 82.0, "max_counts": 82.0, "output_folder": "output/scan"},
  "eta": {"estimated_seconds": 8.0, "confidence": "medium", "samples": 4}}
 ```
@@ -785,8 +871,9 @@ carries kind `transmission`.
 **Direct transmission (a zero two-theta).** A zero take-off on the
 monochromator, sample, or analyser is a legal geometry (nothing crashes or
 diverges), but the instrument selects no energy there: TAVI records the
-absent side's `Ei`/`Ki` or `Ef`/`Kf`, and `deltaE` when either is absent, as
-`null` rather than inventing a value, both in the API result and in the
+absent side's `incident_energy_mev`/`incident_wavevector_inv_angstrom` or
+`final_energy_mev`/`final_wavevector_inv_angstrom`, and `energy_transfer_mev`
+when either is absent, as `null` rather than inventing a value, both in the API result and in the
 saved per-point `scan_parameters.txt` (written as the literal `None`).
 `result.transmission_points` is the per-point trace, one `{"index", "axes"}`
 entry per marked point (`axes` drawn from `mono`/`sample`/`ana`) — the only
@@ -842,7 +929,7 @@ from the job `state` (`running` = partial, a terminal state = final).
 ```json
 {"job_id": "j-0003", "source": "api", "state": "running", "progress": {"done": 1, "total": 3},
  "error": null, "launch": {"scan_command1": "H 1.99 2.01 0.01", "scan_command2": "", "number_neutrons": 100000},
- "result": {"mode": "1D", "variable_1": "H", "variable_2": null,
+ "result": {"mode": "1D", "variable_1": "h", "variable_2": null,
  "total_counts": 82.0, "max_counts": 82.0, "output_folder": "output/scan",
  "scan_values_1": [1.99, 2.0, 2.01], "scan_values_2": null,
  "valid_mask_1": [true, true, true], "valid_mask_2d": null,
@@ -857,7 +944,10 @@ id → `404 unknown_job`.
 **Resolution parameters in `launch.parameters` / `result.metadata`.** Every job's
 frozen parameter snapshot (exposed as `launch.parameters` on `GET /scan/{id}` and
 as `result.metadata` here) carries a flat set of resolution/geometry fields for
-downstream analysis (e.g. reconstructing the theoretical resolution offline):
+downstream analysis (e.g. reconstructing the theoretical resolution offline).
+Every quantity in these two objects is named by its canonical ID (§6; the slit
+gaps as `slit.<stable_id>.<axis>_gap_mm`), and `result.metadata` carries
+`"api_version": 2`:
 
 | Key | Meaning |
 |-----|---------|
@@ -872,18 +962,21 @@ theoretical-resolution adapter reads; they are absent only for an instrument tha
 does not implement resolution support.
 
 **Crystal curvature.** A monochromator or analyzer crystal has up to four
-bending-radius axes: `rhm`/`rvm` (mono horizontal/vertical), `rha`/`rva`
-(analyzer horizontal/vertical). Two contracts apply, and mixing them up is the
-single easiest mistake a client can make here:
+bending-radius axes: `mono_horizontal_radius_m`, `mono_vertical_radius_m`,
+`analyzer_horizontal_radius_m`, `analyzer_vertical_radius_m`. In this section
+`rhm`/`rvm`/`rha`/`rva` are the accepted short aliases of these four IDs, in
+that order; a reply always uses the long IDs. Two contracts apply, and mixing
+them up is the single easiest mistake a client can make here:
 
 - Every field you **send** (`rhm`/`rvm`/`rha`/`rva` in a `PATCH /parameters`
   or `POST /scan` patch) is a **magnitude in metres**. `0` always means FLAT
   and is always legal — a minimum radius bounds how tightly a bender may
   bend, never whether it may be straight.
 - `result.applied_curvature` (below) is **signed**: which side the crystal
-  actually bent toward. Never send a value from there back as an `rhm`/etc.
-  input expecting it to mean the same thing — an input is a magnitude, an
-  output is signed geometry.
+  actually bent toward, under the derived-only IDs `applied_mono_horizontal_radius_m`
+  and its three siblings (writing one is refused). Never send a value from
+  there back as an `rhm`/etc. input expecting it to mean the same thing — an
+  input is a magnitude, an output is signed geometry.
 
 *Naming a radius HOLDS that axis.* Patching `rhm`/`rvm`/`rha`/`rva` pins that
 one axis to the value you sent for the rest of the request; every axis you do
@@ -920,7 +1013,8 @@ value, `0` included when the declared radius is nonzero:
 ```
 
 *`curvature_modes`* (`GET /parameters` / `GET /state`) is **read-only derived
-state** — one of `"autofocus"`, `"held"`, `"scanned"` per axis. Writing it is
+state** — one of `"autofocus"`, `"held"`, `"scanned"` per axis, keyed by the
+four requested-radius IDs. Writing it is
 refused outright, before any of the checks above run:
 ```json
 {"error": {"code": "invalid_parameters", "message": "One or more fields failed",
@@ -944,39 +1038,39 @@ neither asks the missing optics model for an answer, so both are accepted.
 *`result.applied_curvature`* is the per-point record of what each point
 **actually** ran with — not what the scan launched with. Curvature stopped
 being constant across a whole scan once autofocus started tracking the
-measurement (a fixed-`Kf` scan can sweep `rhm` from e.g. 11.6 m to 15.5 m
-point to point), so `result.metadata`'s `rhm`/`rvm`/`rha`/`rva` are only the
+measurement (a fixed-`Kf` scan can sweep `mono_horizontal_radius_m` from e.g. 11.6 m to 15.5 m
+point to point), so `result.metadata`'s four requested-radius IDs are only the
 **launch reference the scan started from** — the number the request patched
 or the launch-time ideal — never what any individual point ran with. Shape:
 a flat list, index-parallel with `counts` (row-major for a 2D scan: index
 `iy * len(scan_values_1) + ix`, matching how `counts_grid` is addressed as
-`counts_grid[iy][ix]`), one `{"rhm": ..., "rvm": ..., "rha": ..., "rva": ...}`
+`counts_grid[iy][ix]`), one `{"applied_mono_horizontal_radius_m": ..., "applied_mono_vertical_radius_m": ..., "applied_analyzer_horizontal_radius_m": ..., "applied_analyzer_vertical_radius_m": ...}`
 dict per point, **SIGNED** — the same convention the McStas per-point files
 and `set_crystal_bending` use. `None` at an index means that point was
 skipped or never measured, exactly like `counts`/`counts_grid` — never a
 flat `0.0` standing in for "not run". The sign is derived from **the point's
-own actual take-off angle** (`sign(sin(A1/2))` for `rhm`/`rvm`,
-`sign(sin(A4/2))` for `rha`/`rva`) — never from the instrument's declared
+own actual take-off angle** (the sign of sin A1, with A1 = A2/2, for the
+monochromator radii; the sign of sin A5, with A5 = A6/2, for the analyzer radii) — never from the instrument's declared
 scattering sense, because a direct-angle scan can legitimately put a crystal
-on the opposite kinematic branch (PANDA's declared `A4` range spans both
+on the opposite kinematic branch (PANDA's declared `A6` range spans both
 signs), where the wrong sign would cost the resolution model roughly seven
 orders of magnitude. Worked example (PUMA, `Kf`-fixed 14.7 meV, H=1 K=0 L=0,
 `"scan_command1": "deltaE -3 6 3"`, 4 points; exact values from
 `tests/test_applied_curvature.py`'s
-`test_deterministic_engine_applied_curvature_tracks_each_point`): `rhm`
+`test_deterministic_engine_applied_curvature_tracks_each_point`): the mono horizontal radius
 differs at every point (the mono take-off tracks the sweeping `Ki` as
-`deltaE` moves) while `rha` and `rva` stay constant (`Kf`, and so the
-analyzer take-off, never moves; `rva` sits at PUMA's fixed 0.8 m) —
+`deltaE` moves) while the analyzer radii stay constant (`Kf`, and so the
+analyzer take-off, never moves; the vertical one sits at PUMA's fixed 0.8 m) —
 ```json
 "applied_curvature": [
-  {"rhm": 11.622126892276503, "rvm": 1.8048675766859756, "rha": 2.303415039562502, "rva": 0.8},
-  {"rhm": 13.027208057840836, "rvm": 1.6101992005397268, "rha": 2.303415039562502, "rva": 0.8},
-  {"rhm": 14.294840540011975, "rvm": 1.4674105626632215, "rha": 2.303415039562502, "rva": 0.8},
-  {"rhm": 15.458873902922761, "rvm": 1.3569164307649897, "rha": 2.303415039562502, "rva": 0.8}
+  {"applied_mono_horizontal_radius_m": 11.622126892276503, "applied_mono_vertical_radius_m": 1.8048675766859756, "applied_analyzer_horizontal_radius_m": 2.303415039562502, "applied_analyzer_vertical_radius_m": 0.8},
+  {"applied_mono_horizontal_radius_m": 13.027208057840836, "applied_mono_vertical_radius_m": 1.6101992005397268, "applied_analyzer_horizontal_radius_m": 2.303415039562502, "applied_analyzer_vertical_radius_m": 0.8},
+  {"applied_mono_horizontal_radius_m": 14.294840540011975, "applied_mono_vertical_radius_m": 1.4674105626632215, "applied_analyzer_horizontal_radius_m": 2.303415039562502, "applied_analyzer_vertical_radius_m": 0.8},
+  {"applied_mono_horizontal_radius_m": 15.458873902922761, "applied_mono_vertical_radius_m": 1.3569164307649897, "applied_analyzer_horizontal_radius_m": 2.303415039562502, "applied_analyzer_vertical_radius_m": 0.8}
 ]
 ```
 (all positive here because this scan never crosses to the opposite take-off
-branch; `result.metadata["rhm"]` for this same launch is the single launch
+branch; `result.metadata["mono_horizontal_radius_m"]` for this same launch is the single launch
 reference value, unaffected by any of the four points above.)
 
 *Copying a returned result back as the next request's parameters is **not**
@@ -1068,11 +1162,11 @@ curl "http://127.0.0.1:8642/api/v1/journal?limit=20"
 ```
 ```json
 {"entries": [
-   {"ts": "2026-07-03T14:05:01", "kind": "parameter", "text": "api: set H, scan_command1"},
+   {"ts": "2026-07-03T14:05:01", "kind": "parameter", "text": "api: set h, scan_command1"},
    {"ts": "2026-07-03T14:05:01", "kind": "job", "text": "j-0004: queued (source: api)"},
    {"ts": "2026-07-03T14:05:02", "kind": "job", "text": "j-0004: started"},
    {"ts": "2026-07-03T14:05:44", "kind": "job",
-    "text": "j-0004: H scan 1.990 to 2.010, 5 pts, max 31 counts at H=2.000"}],
+    "text": "j-0004: h scan 1.990 to 2.010, 5 pts, max 31 counts at h=2.000"}],
  "total_recorded": 4}
 ```
 `?limit=N` (default `100`, capped at `1000`) returns the newest `N` entries with
@@ -1088,8 +1182,9 @@ Server-Sent Events stream. See §8.
 
 | HTTP | code | When |
 |---|---|---|
-| 400 | `bad_request` | Malformed JSON body, non-object body, or a PATCH field whose value is not a scalar/object. |
-| 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) had an unknown field or a bad value. `details` lists `applied` and `errors`. |
+| 400 | `bad_request` | Malformed JSON body, non-object body, a PATCH field whose value is not a scalar/object, or an unknown query key on `GET /resolution`. |
+| 400 | `api_version_required` | A `PATCH /parameters`, `POST /scan`, `POST /validate` or `PUT /background` body had no `"api_version": 2` (or another value). Nothing was applied, queued or replaced. `details.required_api_version` is `2`; see §15. |
+| 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) named an unknown, retired, derived-only, read-only, absent or duplicate key (the whole request is refused, `applied` is empty), or had a bad value (that field is skipped). `details` lists `applied` and `errors`, keyed by the names you sent. |
 | 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, step larger than range). `"force": true` overrides only the soft warnings; hard rejections stand. |
 | 400 | `invalid_background` | A background configuration (`PUT /background`, or the `background` field of `POST /scan` / `POST /validate`) failed to resolve — for example a missing/mismatched `catalog_version`, unknown source id or nested field, non-boolean enable, or invalid scale. On `PUT` the stored configuration is untouched; on `POST /scan` `details.background` is the validation background block. Unknown top-level fields are `bad_request`. |
 | 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
@@ -1112,63 +1207,102 @@ Server-Sent Events stream. See §8.
 
 ## 6. Parameter field reference
 
-All 47 keys of `GET /state`'s `parameters` (`GET /parameters` returns the same 46 without `lock_stale`); 43 are writable via `PATCH /parameters`; `curvature_modes`, `mount_plane_u`, `mount_plane_v` and `lock_stale` are read-only.
-Many are **linked**: writing one triggers the same recompute the GUI does when a
+Every quantity is named by its **canonical ID**, which is what `GET`, the
+job snapshot, `result.metadata`, the SSE events and the saved scan files
+emit. The *Aliases* column lists the other spellings a **request** accepts, in
+any letter case (an alias never appears in a reply). An alias is not a
+convenience that may change meaning later: `A2` is the monochromator 2θ, `A4`
+the sample 2θ and `A6` the analyzer 2θ (§15). `A1` and `A5` are derived Bragg
+angles and are not fields.
+
+A PUMA `GET /state` returns 50 parameter keys (`GET /parameters` the same 49
+without `lock_stale`); 46 are writable via `PATCH /parameters`. IN8 and IN12
+have 49 keys and 45 writable, PANDA 51 and 47: the difference is the slit gaps,
+which are the active instrument's own. `curvature_modes`, `mount_plane_u`,
+`mount_plane_v` and `lock_stale` are read-only. In the text below, short names
+such as `sgl` and `sgu` stand for their canonical IDs (`sample_lower_arc_deg`,
+`sample_upper_arc_deg`).
+Many fields are **linked**: writing one triggers the same recompute the GUI does when a
 user presses Enter, so dependent fields update automatically.
 
-| Field | Type | Units | Meaning / linked recompute |
-|---|---|---|---|
-| `mtt` | number | degrees | Monochromator take-off angle (scan variable `A1`). Recomputes energies/Q. |
-| `stt` | number | degrees | Sample scattering angle (scan variable `A2`). |
-| `omega` | number | degrees | Sample rotation (scan variable `A3`; same physical angle as sample θ). |
-| `sgl` | number | degrees | Lower sample tilt arc readout: turns about the horizontal axis perpendicular to the beam at A3 = 0 (stage x), riding on the turntable. Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. A value outside the arc's travel (PUMA and IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words an angle-mode point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
-| `sgu` | number | degrees | Upper sample tilt arc readout: turns about the beam axis at A3 = 0 (stage z), riding on `sgl`. Same rules as `sgl`. |
-| `orientation_mode` | string | — | `"free"` (the arcs are solved per Q) or `"locked"` (a scattering plane is locked: the arcs stay put and every Q is solved at the locked tilts; a Q out of the plane is refused naming the plane and the angle). Writing `"locked"` locks `lock_plane` from the same request, or the default plane (the mounting plane, else the first two UB peaks, else (1 0 0)/(0 1 0)), where the current UB levels it; a plane the arcs cannot level within travel is refused with the reason. Writing `"free"` releases. While locked, a write of `sgl` or `sgu` is refused, in `PATCH` and in a scan's `parameters` alike (`400`, naming the lock: release first), and a scan starts from the locked arcs; a request combining `orientation_mode` or `lock_plane` with `sgl` or `sgu` is refused whichever way it switches (send two). A lock request (`orientation_mode: "locked"` or `lock_plane`) must stand alone: with any other field (a lattice parameter, say, which would change the UB the lock is computed from) it is a `400` and nothing applies; send two PATCHes instead. Releasing (`"free"`) may carry other fields, except `sgl` and `sgu`; a refused release applies none of them. Not settable in a scan's `parameters`: a scan runs in the session's mode. See the User Guide's *Lock plane*. |
-| `lock_plane` | object or null | r.l.u. | The locked plane's two vectors, `{"u": [h, k, l], "v": [h, k, l]}`; `null` when free. Writing it alone locks that plane (as `orientation_mode: "locked"` with it); while a different plane is locked it is refused (release first). |
-| `lock_stale` | boolean or null | — | **Read-only, in `GET /state` only** (not `GET /parameters`, not a scan result's `parameters`). `true` when the current UB (U and lattice fields) no longer levels the locked plane at the locked tilts within 0.05°; `null` when free. The UB dock's STALE mark reads the same function. |
-| `att` | number | degrees | Analyzer take-off angle (scan variable `A4`). |
-| `Ki` | number | Å⁻¹ | Incident wavevector. Linked: `Ki` ↔ `Ei`. |
-| `Ei` | number | meV | Incident energy. Linked: `Ei` ↔ `Ki`. |
-| `Kf` | number | Å⁻¹ | Final wavevector. Linked: `Kf` ↔ `Ef`. |
-| `Ef` | number | meV | Final energy. Linked: `Ef` ↔ `Kf`. |
-| `K_fixed` | string | — | Energy mode. Exactly `"Ki Fixed"` or `"Kf Fixed"`. |
-| `fixed_E` | number | meV | The fixed energy value used by the current `K_fixed` mode. |
-| `qx` | number | Å⁻¹ | Q component (instrument frame). Linked: `H`/`K`/`L` → `qx`/`qy`/`qz` via UB. |
-| `qy` | number | Å⁻¹ | Q component (instrument frame). |
-| `qz` | number | Å⁻¹ | Q component (instrument frame). |
-| `H` | number | r.l.u. | Miller index H. Linked: `H`/`K`/`L` → `qx`/`qy`/`qz` via UB matrix. |
-| `K` | number | r.l.u. | Miller index K. |
-| `L` | number | r.l.u. | Miller index L. |
-| `deltaE` | number | meV | Energy transfer. Recomputes angles/energies. |
-| `lattice_a` | number | Å | Lattice constant a. Recomputes UB → Q/HKL. |
-| `lattice_b` | number | Å | Lattice constant b. |
-| `lattice_c` | number | Å | Lattice constant c. |
-| `lattice_alpha` | number | degrees | Lattice angle α. |
-| `lattice_beta` | number | degrees | Lattice angle β. |
-| `lattice_gamma` | number | degrees | Lattice angle γ. |
-| `sample` | string | — | Sample id from the shared sample library; the allowed values are the `sample` field's `allowed` list in `GET /schema`. Writable. |
-| `mount_plane_u` | array or null | r.l.u. | **Read-only.** The (h k l) the sample is mounted with along the mount x axis, as described in the Sample dock's optional mounting plane; `null` when the mount is not from a plane (the standard setting, or after a sample change cleared the description). A write returns `400 invalid_parameters` with `"read-only field"`. |
-| `mount_plane_v` | array or null | r.l.u. | **Read-only.** The (h k l) described in the horizontal plane with `mount_plane_u`; `null` with it. |
-| `monocris` | string | — | Monochromator crystal id. PUMA: `"pg002"` or `"pg002_test"`. |
-| `anacris` | string | — | Analyzer crystal id. PUMA: `"pg002"`. |
-| `rhm` | number | m | Monochromator horizontal bending radius, magnitude. `0` = flat. See §5 *Crystal curvature* below. |
-| `rvm` | number | m | Monochromator vertical bending radius, magnitude. `0` = flat. |
-| `rha` | number | m | Analyzer horizontal bending radius, magnitude. `0` = flat. |
-| `rva` | number | m | Analyzer vertical bending radius, magnitude. `0` = flat. |
-| `curvature_modes` | object | — | **Read-only.** `{"rhm"/"rvm"/"rha"/"rva": "autofocus"\|"held"\|"scanned"}`. Derived, never writable — see §5 *Crystal curvature*. |
-| `source_type` | string | — | Source model id. PUMA: `"Maxwellian"` or `"Mono"`. |
-| `source_dE` | number | meV | Source energy spread (only meaningful for the `"Mono"` source). |
-| `modules` | object | — | Experimental modules. See below. |
-| `collimation` | object | — | Collimator selections. See below. |
-| `slits_mm` | object | — | Slit openings in mm. See below. |
-| `number_neutrons` | integer | count | Neutrons simulated per point. Positive integer; also accepts a numeric string like `"1e8"`. |
-| `scan_command1` | string | — | First scan command (§7). Empty string = no scan on this axis. |
-| `scan_command2` | string | — | Second scan command (§7). Both set = 2D scan. |
-| `diagnostic_mode` | boolean | — | Enable per-point diagnostic capture. |
+| Canonical ID | Aliases (input only) | Type | Units | Meaning / linked recompute |
+|---|---|---|---|---|
+| `orientation_mode` | — | string | — | `"free"` (the arcs are solved per Q) or `"locked"` (a scattering plane is locked: the arcs stay put and every Q is solved at the locked tilts; a Q out of the plane is refused naming the plane and the angle). Writing `"locked"` locks `lock_plane` from the same request, or the default plane (the mounting plane, else the first two UB peaks, else (1 0 0)/(0 1 0)), where the current UB levels it; a plane the arcs cannot level within travel is refused with the reason. Writing `"free"` releases. While locked, a write of `sgl` or `sgu` is refused, in `PATCH` and in a scan's `parameters` alike (`400`, naming the lock: release first), and a scan starts from the locked arcs; a request combining `orientation_mode` or `lock_plane` with `sgl` or `sgu` is refused whichever way it switches (send two). A lock request (`orientation_mode: "locked"` or `lock_plane`) must stand alone: with any other field (a lattice parameter, say, which would change the UB the lock is computed from) it is a `400` and nothing applies; send two PATCHes instead. Releasing (`"free"`) may carry other fields, except `sgl` and `sgu`; a refused release applies none of them. Not settable in a scan's `parameters`: a scan runs in the session's mode. See the User Guide's *Lock plane*. |
+| `lock_plane` | — | object or null | r.l.u. | The locked plane's two vectors, `{"u": [h, k, l], "v": [h, k, l]}`; `null` when free. Writing it alone locks that plane (as `orientation_mode: "locked"` with it); while a different plane is locked it is refused (release first). |
+| `lock_stale` | — | boolean or null | — | **Read-only, in `GET /state` only** (not `GET /parameters`, not a scan result's `parameters`). `true` when the current UB (U and lattice fields) no longer levels the locked plane at the locked tilts within 0.05°; `null` when free. The UB dock's STALE mark reads the same function. |
+| `mono_two_theta_deg` | `A2`, `mtt` | number | degrees | Monochromator scattering angle 2θ (ILL **A2**, NICOS `mtt`). Recomputes energies/Q. Signed by the instrument's mono sense (`docs/INSTRUMENT_LAYOUT.md`, *Main Rotation Angles*). |
+| `sample_rotation_deg` | `A3`, `sth`, `omega`, `psi` | number | degrees | Sample rotation about the vertical axis (ILL **A3**, NICOS `sth`; the same physical angle as sample θ). `omega` and `psi` name this one field. |
+| `sample_two_theta_deg` | `A4`, `stt`, `2theta` | number | degrees | Sample scattering angle 2θ (ILL **A4**, NICOS `stt`). Signed by the instrument's sample sense. |
+| `analyzer_two_theta_deg` | `A6`, `att` | number | degrees | Analyzer scattering angle 2θ (ILL **A6**, NICOS `att`). Signed by the instrument's analyzer sense. |
+| `sample_lower_arc_deg` | `sgl` | number | degrees | Lower sample tilt arc readout: turns about the horizontal axis perpendicular to the beam at A3 = 0 (stage x), riding on the turntable. Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. A value outside the arc's travel (PUMA and IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words an angle-mode point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
+| `sample_upper_arc_deg` | `sgu` | number | degrees | Upper sample tilt arc readout: turns about the beam axis at A3 = 0 (stage z), riding on `sgl`. Same rules as `sgl`. |
+| `incident_wavevector_inv_angstrom` | `Ki` | number | Å⁻¹ | Incident wavevector. Linked with `incident_energy_mev`. |
+| `incident_energy_mev` | `Ei` | number | meV | Incident energy. Linked with `incident_wavevector_inv_angstrom`. |
+| `final_wavevector_inv_angstrom` | `Kf` | number | Å⁻¹ | Final wavevector. Linked with `final_energy_mev`. |
+| `final_energy_mev` | `Ef` | number | meV | Final energy. Linked with `final_wavevector_inv_angstrom`. |
+| `K_fixed` | — | string | — | Energy mode. Exactly `"Ki Fixed"` or `"Kf Fixed"`. |
+| `fixed_E` | — | number | meV | The fixed energy value used by the current `K_fixed` mode. |
+| `q_instrument_x_inv_angstrom` | `qx` | number | Å⁻¹ | Q component in the public instrument frame (x and y horizontal, z vertical). Linked: `h`/`k`/`l` → the three `q_instrument_*` fields via UB. |
+| `q_instrument_y_inv_angstrom` | `qy` | number | Å⁻¹ | Q component, public instrument frame (y horizontal). |
+| `q_instrument_z_inv_angstrom` | `qz` | number | Å⁻¹ | Q component, public instrument frame (z vertical). |
+| `h` | `H` | number | r.l.u. | Miller index h. Linked: `h`/`k`/`l` → the three `q_instrument_*` fields via UB matrix. |
+| `k` | `K` | number | r.l.u. | Miller index k. |
+| `l` | `L` | number | r.l.u. | Miller index l. |
+| `energy_transfer_mev` | `deltaE` | number | meV | Energy transfer, positive = neutron energy loss. Recomputes angles/energies. |
+| `lattice_a_angstrom` | `a` | number | Å | Lattice constant a. Recomputes UB → Q/HKL. |
+| `lattice_b_angstrom` | `b` | number | Å | Lattice constant b. |
+| `lattice_c_angstrom` | `c` | number | Å | Lattice constant c. |
+| `lattice_alpha_deg` | `alpha` | number | degrees | Lattice angle α. |
+| `lattice_beta_deg` | `beta` | number | degrees | Lattice angle β. |
+| `lattice_gamma_deg` | `gamma` | number | degrees | Lattice angle γ. |
+| `sample` | — | string | — | Sample id from the shared sample library; the allowed values are the `sample` field's `allowed` list in `GET /schema`. Writable. |
+| `mount_plane_u` | — | array or null | r.l.u. | **Read-only.** The (h k l) the sample is mounted with along the mount x axis, as described in the Sample dock's optional mounting plane; `null` when the mount is not from a plane (the standard setting, or after a sample change cleared the description). A write returns `400 invalid_parameters` with `"read-only field"`. |
+| `mount_plane_v` | — | array or null | r.l.u. | **Read-only.** The (h k l) described in the horizontal plane with `mount_plane_u`; `null` with it. |
+| `monocris` | — | string | — | Monochromator crystal id. PUMA: `"pg002"` or `"pg002_test"`. |
+| `anacris` | — | string | — | Analyzer crystal id. PUMA: `"pg002"`. |
+| `mono_horizontal_radius_m` | `rhm` | number | m | Monochromator horizontal bending radius, magnitude. `0` = flat. See §5 *Crystal curvature* below. |
+| `mono_vertical_radius_m` | `rvm` | number | m | Monochromator vertical bending radius, magnitude. `0` = flat. |
+| `analyzer_horizontal_radius_m` | `rha` | number | m | Analyzer horizontal bending radius, magnitude. `0` = flat. |
+| `analyzer_vertical_radius_m` | `rva` | number | m | Analyzer vertical bending radius, magnitude. `0` = flat. |
+| `curvature_modes` | — | object | — | **Read-only.** `{"mono_horizontal_radius_m"/"mono_vertical_radius_m"/"analyzer_horizontal_radius_m"/"analyzer_vertical_radius_m": "autofocus"\|"held"\|"scanned"}`. Derived, never writable — see §5 *Crystal curvature*. |
+| `source_type` | — | string | — | Source model id. PUMA: `"Maxwellian"` or `"Mono"`. |
+| `source_dE` | — | number | meV | Source energy spread (only meaningful for the `"Mono"` source). |
+| `modules` | — | object | — | Experimental modules. See below. |
+| `collimation` | — | object | — | Collimator selections. See below. |
+| `slit.<stable_id>.horizontal_gap_mm` | `<stable_id>_hgap` | number | mm | Horizontal gap of one slit of the **active instrument**, full width in millimetres. One key per gap; see *Slit gaps* below for the IDs. |
+| `slit.<stable_id>.vertical_gap_mm` | `<stable_id>_vgap` | number | mm | Vertical gap of a slit that has one (a pre-sample or sample-exit slit); same rules. |
+| `number_neutrons` | — | integer | count | Neutrons simulated per point. Positive integer; also accepts a numeric string like `"1e8"`. |
+| `scan_command1` | — | string | — | First scan command (§7). Empty string = no scan on this axis. |
+| `scan_command2` | — | string | — | Second scan command (§7). Both set = 2D scan. |
+| `diagnostic_mode` | — | boolean | — | Enable per-point diagnostic capture. |
 
-**Removed field.** `chi` is gone. The old `chi` was a tilt fixed to the beam under the turntable, so treating it as an alias of an arc would give different physics under the same name. Writing it, in `PATCH /parameters` or in the `parameters` of `POST /scan` / `POST /validate`, returns `400 invalid_parameters`. The error names the two arcs: `{"errors": {"chi": "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper)"}}`.
+**Slit gaps.** `slit.<stable_id>.horizontal_gap_mm` (and `.vertical_gap_mm`
+where the slit has a height) replace the old `slits_mm` object: one key per gap,
+always in millimetres, and only the active instrument's own appear in `GET`,
+`/schema` and `result.metadata`. Naming a slit the instrument lacks is refused.
 
-**Retired fields.** `psi` and `kappa`, TAVI's zero corrections of the turntable A3 and the lower arc `sgl`, are gone with the corrections themselves: the crystal sits exactly at the `omega`, `sgl` and `sgu` readouts. Naming either in `PATCH /parameters` or in the `parameters` of `POST /scan` / `POST /validate` returns `400 invalid_parameters` naming the retirement and what to set instead (`{"errors": {"psi": "retired: psi was TAVI's zero correction of the turntable A3 and no longer exists; set the sample rotation 'omega' (A3) itself"}}`), and **nothing else in that request is applied**; they are never ignored. They are not in `/schema` or in the parameter dict, and a scan command naming them is refused. The `orientation` scan mode that scanned them has no scan variable left.
+| Instrument | `<stable_id>` with horizontal gap | also a vertical gap |
+|---|---|---|
+| PUMA | `post_mono`, `pre_sample`, `detector` | `pre_sample` |
+| IN8, IN12 | `pre_sample`, `detector` | `pre_sample` |
+| PANDA | `virtual_source`, `pre_sample`, `sample_exit` | `pre_sample`, `sample_exit` |
+
+A slit gap is a settable parameter, not a scan variable: a scan command naming
+one is refused with `slit scans arrive with the point plan`.
+
+**Retired and refused names.** These are refused as request keys (`400
+invalid_parameters`, the whole request, nothing applied) with a message that
+says what to send instead: `chi`, `phi` and `kappa` (TAVI has no such axes; its
+sample tilt arcs are `sgl` and `sgu`); `slits_mm` and the old metre-valued slit
+names (`vbl_hgap`, `pbl_hgap`, `pbl_vgap`, `dbl_hgap`, `sbl_wgap`, `sbl_hgap`,
+`ms1_wgap`, `ss1_wgap`, `ss1_hgap`, `ss2_wgap`, `ss2_hgap`); the unit-less
+`lattice_a` ... `lattice_gamma` (use `lattice_a_angstrom` ...
+`lattice_gamma_deg`); the derived `A1`, `mono_theta_deg`, `A5`,
+`analyzer_theta_deg` (set A2 or A6) and the four `applied_*_radius_m` (derived
+by the take-off branch). `psi` is **no longer retired**: the old ψ correction is
+gone, and the name is now just another alias of `sample_rotation_deg`, the
+turntable itself. The corrections no longer exist as quantities, and none of
+these names appears in `/schema` or in the parameter dict.
 
 **Dict-valued fields** — when writing these, send an object keyed by slot id.
 Missing keys fall back to instrument defaults.
@@ -1182,9 +1316,8 @@ Missing keys fall back to instrument defaults.
   `["30", "40"]`). Example: `{"collimation": {"alpha_1": "40", "alpha_2": ["40"], "alpha_3": "30", "alpha_4": "30"}}`.
   `"0"` means an open position (no collimator installed); the GUI shows it as
   Open. Values sent and returned are unchanged.
-- `slits_mm` — `{slit_id: width}` or `{slit_id: [width, height]}` in mm. On PUMA
-  the slots are `vbl_hgap` (width only), `pbl` (`[width, height]`), and
-  `dbl_hgap` (width only). Example: `{"slits_mm": {"vbl_hgap": 88, "pbl": [100, 100], "dbl_hgap": 50}}`.
+- Slit gaps are not dict-valued: each is its own key (see *Slit gaps*). Example:
+  `{"slit.post_mono.horizontal_gap_mm": 88, "slit.pre_sample.vertical_gap_mm": 100}`.
   Note: multi-select collimation values are returned by `GET /parameters` as a
   sorted JSON list.
 
@@ -1210,28 +1343,49 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 - **Single point:** leave both commands empty. The scan runs one point at the
   current parameter values.
 
-**Scannable variable names** (case-insensitive; canonicalized on submit):
+**Scannable variable names** (case-insensitive; a canonical ID or any alias
+works, and the name is resolved to the canonical ID on submit):
 
-| Variable(s) | Scans over |
-|---|---|
-| `H` `K` `L` | Miller indices (reciprocal-lattice units) |
-| `qx` `qy` `qz` | Q components (instrument frame) |
-| `deltaE` | energy transfer (meV) |
-| `A1` `A2` `A3` `A4` | raw instrument angles |
-| `omega` | the sample rotation A3 itself (alias of A3, angle mode; `omega 35 36 1` turns the turntable to 35° and 36°) |
-| `2theta` | sample two-theta (alias of A2's index) |
-| `sgl` `sgu` | the goniometer arcs, in angle mode only (with A1-A4 or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. |
-| `kappa` `psi` | refused: retired, the error says so and names `omega` / `sgl` |
-| `chi` | refused: retired, the error names `sgl`/`sgu` |
-| `rhm` `rvm` `rha` `rva` | crystal bending radii |
+| Canonical ID | Aliases | Scans over |
+|---|---|---|
+| `h` `k` `l` | `H` `K` `L` | Miller indices (reciprocal-lattice units) |
+| `q_instrument_x_inv_angstrom` `q_instrument_y_inv_angstrom` `q_instrument_z_inv_angstrom` | `qx` `qy` `qz` | Q components (public instrument frame, z vertical) |
+| `energy_transfer_mev` | `deltaE` | energy transfer (meV) |
+| `mono_two_theta_deg` | `A2` `mtt` | monochromator 2θ (angle mode) |
+| `sample_rotation_deg` | `A3` `sth` `omega` `psi` | the sample rotation, the turntable itself (angle mode; `omega 35 36 1` turns it to 35° and 36°) |
+| `sample_two_theta_deg` | `A4` `stt` `2theta` | sample 2θ (angle mode) |
+| `analyzer_two_theta_deg` | `A6` `att` | analyzer 2θ (angle mode) |
+| `sample_lower_arc_deg` `sample_upper_arc_deg` | `sgl` `sgu` | the goniometer arcs, in angle mode only (with the angles above or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. |
+| `mono_horizontal_radius_m` `mono_vertical_radius_m` `analyzer_horizontal_radius_m` `analyzer_vertical_radius_m` | `rhm` `rvm` `rha` `rva` | crystal bending radii |
+| *refused* | `A1` `A5` (`mono_theta_deg`, `analyzer_theta_deg`) | derived Bragg angles: the error says `independent crystal rocking is not modelled yet; scan A2 (mono 2θ)` (or A6) |
+| *refused* | `chi` `phi` `kappa` | TAVI has no such axes; the error names the arcs `sgl`/`sgu` where that is the answer |
+| *refused* | `slit.<stable_id>.<axis>_gap_mm` | `slit scans arrive with the point plan` |
+| *refused* | `Ei` `Ki` `Ef` `Kf`, `a` ... `gamma`, `applied_*_radius_m` | settable or derived, but not scannable |
+
+An unknown name is refused with the list of valid ones. Whatever spelling a
+command uses, replies name the canonical ID: `per_command[].variable`,
+`result.variable_1` / `variable_2`, the keys of `skipped_points[].values` and of
+`validation.infeasible[].values`, and the SSE events. `launch.scan_command1` /
+`scan_command2` echo the command text exactly as you sent it.
+
+The grammar did not change. The numbering did: **`A2` is the monochromator 2θ,
+`A4` the sample 2θ and `A6` the analyzer 2θ** (before API version 2, `A2` was
+the sample 2θ and `A4` the analyzer 2θ: §15). Two commands on one quantity
+(`A4` with `stt`, `A3` with `omega`, `A2` with `mtt`), and an angle beside a Q,
+HKL or `deltaE` command, are refused; `force` clears neither.
 
 Examples:
 ```json
 {"scan_command1": "H 1.9 2.1 0.01"}                       // 21-point 1D scan over H
 {"scan_command1": "deltaE 0 10 0.5"}                       // energy scan, 0..10 meV
 {"scan_command1": "H 1.9 2.1 0.02", "scan_command2": "deltaE 0 8 1"}  // 2D H–E map
+{"scan_command1": "A3 34 36 0.5"}                           // turn the sample: sample_rotation_deg
+{"scan_command1": "A4 -75 -65 2.5"}                         // sample 2θ (the old A2)
+{"scan_command1": "A2 40 44 1", "scan_command2": "A6 40 44 1"}  // mono 2θ × analyzer 2θ map
 {"scan_command1": "", "scan_command2": ""}                 // single point at current settings
 ```
+The angle examples are angle-mode scans: they move the named axes and hold the
+rest, so the scattering triangle is whatever those angles make it.
 
 ---
 
@@ -1246,7 +1400,8 @@ beyond that `GET /events` returns `503 too_many_clients`.
 curl -N http://127.0.0.1:8642/api/v1/events
 ```
 
-A typical 3-point 1D scan produces this sequence (auth header omitted; add
+Every event payload also carries `"api_version": 2` (left out of the examples
+below). A typical 3-point 1D scan produces this sequence (auth header omitted; add
 `-H "Authorization: Bearer <token>"` if a token is set):
 
 ```
@@ -1259,7 +1414,7 @@ event: job_started
 data: {"job_id": "j-0001", "source": "api"}
 
 event: scan_initialized
-data: {"job_id": "j-0001", "mode": "1D", "variable_1": "H", "variable_2": null,
+data: {"job_id": "j-0001", "mode": "1D", "variable_1": "h", "variable_2": null,
        "scan_values_1": [1.99, 2.0, 2.01], "scan_values_2": null,
        "valid_mask_1": [true, true, true], "valid_mask_2d": null}
 
@@ -1295,7 +1450,7 @@ data: {"job_id": "j-0001", "state": "done", "error": null}
 | `point` | 1D/single: `job_id`, `index`, `value`, `counts`. 2D: `job_id`, `ix`, `iy`, `value_1`, `value_2`, `counts`. |
 | `point_invalid` | Same shape as `point` but with no `counts` (the point was geometrically unreachable). |
 | `progress` | `job_id`, `done`, `total`, `elapsed` (seconds). |
-| `parameters_changed` | `fields` (list of applied field names), `source` (`api`). Emitted on every successful write. |
+| `parameters_changed` | `fields` (list of applied canonical field IDs), `source` (`api`). Emitted on every successful write. |
 | `job_finished` | `job_id`, `state` (terminal), `error` (or `null`). |
 
 Any float that would be `NaN` is serialized as `null` in every event.
@@ -1453,11 +1608,13 @@ Additional notes:
   measurement", not zero counts.
 - **`503 gui_busy`** means the GUI thread was tied up (often a modal dialog open
   on the operator's screen). Back off a moment and retry.
-- **`rhm`/`rvm`/`rha`/`rva` are magnitudes going in, signed coming out.** A
+- **The radii (`rhm`/`rvm`/`rha`/`rva`, canonically `mono_horizontal_radius_m` ...)
+  are magnitudes going in, signed coming out.** A
   value you send is a bending-radius magnitude in metres (`0` = flat); the
-  per-point radii in `result.applied_curvature` are signed by the point's
-  actual take-off branch. Copying a signed `applied_curvature` value back as
-  an input is fine numerically (inputs take `abs()`) but also **HOLDS** that
+  per-point radii in `result.applied_curvature` (`applied_mono_horizontal_radius_m` ...)
+  are signed by the point's
+  actual take-off branch. Copying a signed `applied_curvature` value into the
+  matching requested-radius field is fine numerically (inputs take `abs()`) but also **HOLDS** that
   axis — not the same mode the original point ran in. See §5 *Crystal
   curvature*.
 - **A scan through a zero two-theta runs under McStas, not just at the exact
@@ -1466,10 +1623,10 @@ Additional notes:
   diverges near zero take-off — PG(002) at 1° two-theta records an `Ef` of
   roughly 24 eV. No threshold or ceiling is applied to that neighbourhood.
   The instrument's declared axis limits still apply and are a different
-  refusal: IN8's A1 runs 11°–90°, so an A1 = 0 point there is
+  refusal: IN8's A2 (mono 2θ) runs 11°–90°, so an A2 = 0 point there is
   `physical_infeasible` (out of range) for every engine, exactly as on the
   real instrument -- direct transmission is only reachable where a limit
-  allows it (A4 on IN8, for example).
+  allows it (A6, the analyzer 2θ, on IN8, for example).
 
 ---
 
@@ -1493,15 +1650,16 @@ Set the elastic condition and center, then dry-run the tight scan:
 ```bash
 curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   -H "Content-Type: application/json" \
-  -d '{"Ei": 14.7, "deltaE": 0, "H": 2.0, "K": 0.0, "L": 0.0}'
-# -> {"applied": ["Ei", "deltaE", "H", "K", "L"], "errors": {}}
+  -d '{"api_version": 2, "incident_energy_mev": 14.7, "energy_transfer_mev": 0,
+       "h": 2.0, "k": 0.0, "l": 0.0}'
+# -> {"applied": ["incident_energy_mev", "h", "k", "l", "energy_transfer_mev"], "errors": {}}
 
 curl -X POST http://127.0.0.1:8642/api/v1/validate \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.98 2.02 0.005", "number_neutrons": 200000}}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.98 2.02 0.005", "number_neutrons": 200000}}'
 ```
 ```json
-{"points": 9, "per_command": [{"variable": "H", "count": 9,
+{"points": 9, "per_command": [{"variable": "h", "count": 9,
   "values": [1.98, 1.985, 1.99, 1.995, 2.0, 2.005, 2.01, 2.015, 2.02]}],
  "cost": {"points": 9, "neutrons_per_point": 200000.0, "job_neutrons": 1800000.0,
   "pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0, "max_queued": 10},
@@ -1513,7 +1671,7 @@ long-poll for the result:
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.98 2.02 0.005", "number_neutrons": 200000}, "isolated": true}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.98 2.02 0.005", "number_neutrons": 200000}, "isolated": true}'
 # -> 202 {"job_id": "j-0007", "state": "queued", "position": 0, "isolated": true,
 #         "eta": {"estimated_seconds": 96.0, "confidence": "high", "samples": 12},
 #         "validation": {"points": 9, "infeasible": [], ...}}
@@ -1523,14 +1681,14 @@ curl "http://127.0.0.1:8642/api/v1/scan/j-0007?wait=120"
 ```json
 {"job_id": "j-0007", "state": "done", "isolated": true,
  "progress": {"done": 9, "total": 9}, "timed_out": false,
- "result": {"mode": "1D", "variable_1": "H", "total_counts": 5120.0, "max_counts": 2010.0}}
+ "result": {"mode": "1D", "variable_1": "h", "total_counts": 5120.0, "max_counts": 2010.0}}
 ```
 ```bash
 curl http://127.0.0.1:8642/api/v1/scan/j-0007/data
 ```
 ```json
 {"job_id": "j-0007", "state": "done",
- "result": {"variable_1": "H", "scan_values_1": [1.98, 1.985, 1.99, 1.995, 2.0,
+ "result": {"variable_1": "h", "scan_values_1": [1.98, 1.985, 1.99, 1.995, 2.0,
    2.005, 2.01, 2.015, 2.02],
    "counts": [95.0, 210.0, 640.0, 1480.0, 2010.0, 1500.0, 690.0, 205.0, 90.0]}}
 ```
@@ -1551,17 +1709,18 @@ the 202 to confirm the point list before the scan runs.
 ```bash
 curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   -H "Content-Type: application/json" \
-  -d '{"Ei": 14.7, "deltaE": 0, "K": 0.0, "L": 0.0,
+  -d '{"api_version": 2, "incident_energy_mev": 14.7, "energy_transfer_mev": 0,
+       "k": 0.0, "l": 0.0,
        "scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 1000000}'
-# -> {"applied": ["Ei", "deltaE", "K", "L", "scan_command1", "number_neutrons"], "errors": {}}
+# -> {"applied": ["incident_energy_mev", "k", "l", "energy_transfer_mev", "scan_command1", "number_neutrons"], "errors": {}}
 
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" -d '{"api_version": 2}'
 ```
 ```json
 {"job_id": "j-0008", "state": "queued", "position": 0,
  "eta": {"estimated_seconds": 470.0, "confidence": "high", "samples": 12},
- "validation": {"points": 11, "per_command": [{"variable": "H", "count": 11,
+ "validation": {"points": 11, "per_command": [{"variable": "h", "count": 11,
    "values": [1.9, 1.92, 1.94, 1.96, 1.98, 2.0, 2.02, 2.04, 2.06, 2.08, 2.1]}],
    "cost": {"points": 11, "neutrons_per_point": 1000000.0, "job_neutrons": 11000000.0,
     "pending_neutrons": 0.0, "budget": 1e10, "queued_jobs": 0, "max_queued": 10},
@@ -1577,7 +1736,7 @@ curl "http://127.0.0.1:8642/api/v1/scan/j-0008?wait=120"
 # -> {"state": "done", "progress": {"done": 11, "total": 11}, "timed_out": false, ...}
 ```
 **Gotchas.**
-- `deltaE: 0` is what makes this *elastic*; omit it and you inherit whatever
+- `energy_transfer_mev: 0` is what makes this *elastic*; omit it and you inherit whatever
   energy transfer was set previously.
 - A `wait=` poll returns `"timed_out": true` while the job is still running —
   just call it again with the same `?wait=N`; it is not an error.
@@ -1592,20 +1751,20 @@ choose whether to skip them.
 ```bash
 curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   -H "Content-Type: application/json" \
-  -d '{"Ei": 14.7, "H": 2.0, "K": 0.0, "L": 0.0,
+  -d '{"api_version": 2, "incident_energy_mev": 14.7, "h": 2.0, "k": 0.0, "l": 0.0,
        "scan_command1": "deltaE 0 20 2", "number_neutrons": 1000000}'
 
 curl -X POST http://127.0.0.1:8642/api/v1/validate \
-  -H "Content-Type: application/json" -d '{}'
+  -H "Content-Type: application/json" -d '{"api_version": 2}'
 ```
 ```json
-{"points": 11, "per_command": [{"variable": "deltaE", "count": 11,
+{"points": 11, "per_command": [{"variable": "energy_transfer_mev", "count": 11,
   "values": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20]}],
  "cost": {"points": 11, "neutrons_per_point": 1000000.0, "job_neutrons": 11000000.0, "...": "..."},
  "eta": {"estimated_seconds": 480.0, "confidence": "medium", "samples": 5},
  "infeasible": [
-   {"index": 9, "values": {"deltaE": 18}, "reason": "scattering triangle does not close"},
-   {"index": 10, "values": {"deltaE": 20}, "reason": "scattering triangle does not close"}],
+   {"index": 9, "values": {"energy_transfer_mev": 18}, "reason": "scattering triangle does not close"},
+   {"index": 10, "values": {"energy_transfer_mev": 20}, "reason": "scattering triangle does not close"}],
  "would_queue": false,
  "blockers": ["infeasible_points: 2 point(s) unreachable"]}
 ```
@@ -1614,7 +1773,7 @@ have two choices: shorten the scan (e.g. `"deltaE 0 16 2"`), or keep the range
 and skip the two unreachable points with `allow_partial`:
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
-  -H "Content-Type: application/json" -d '{"allow_partial": true}'
+  -H "Content-Type: application/json" -d '{"api_version": 2, "allow_partial": true}'
 # -> 202 {"job_id": "j-0009", "state": "queued", "position": 0,
 #         "validation": {"points": 11, "infeasible": [ ...index 9,10... ]}}
 
@@ -1622,12 +1781,12 @@ curl http://127.0.0.1:8642/api/v1/scan/j-0009/data
 ```
 ```json
 {"job_id": "j-0009", "state": "done",
- "result": {"variable_1": "deltaE",
+ "result": {"variable_1": "energy_transfer_mev",
    "scan_values_1": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
    "counts": [1820.0, 640.0, 210.0, 95.0, 60.0, 44.0, 30.0, 22.0, 15.0, null, null],
    "skipped_points": [
-     {"index": 9, "values": {"deltaE": 18}, "reason": "scattering triangle does not close"},
-     {"index": 10, "values": {"deltaE": 20}, "reason": "scattering triangle does not close"}]}}
+     {"index": 9, "values": {"energy_transfer_mev": 18}, "reason": "scattering triangle does not close"},
+     {"index": 10, "values": {"energy_transfer_mev": 20}, "reason": "scattering triangle does not close"}]}}
 ```
 **Gotchas.**
 - Skipped points are **never silent**: they appear as `null` in `counts` *and*
@@ -1648,7 +1807,7 @@ Quick look (few neutrons, cold history):
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 50000}}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 50000}}'
 ```
 ```json
 {"job_id": "j-0010", "state": "queued", "position": 0,
@@ -1668,13 +1827,13 @@ neutron count:
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/validate \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 5000000}}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 5000000}}'
 # -> {"points": 11, "eta": {"estimated_seconds": 2350.0, "confidence": "medium", "samples": 3},
 #     "would_queue": true, "blockers": []}
 
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 5000000}}'
+  -d '{"api_version": 2, "parameters": {"scan_command1": "H 1.9 2.1 0.02", "number_neutrons": 5000000}}'
 # -> 202 {"job_id": "j-0011", "eta": {"estimated_seconds": 2350.0, "confidence": "medium", "samples": 3}}
 ```
 Read the two runs back from the journal to tie them together:
@@ -1685,10 +1844,10 @@ curl "http://127.0.0.1:8642/api/v1/journal?limit=6"
 {"entries": [
    {"ts": "2026-07-03T15:20:05", "kind": "job", "text": "j-0010: queued (source: api)"},
    {"ts": "2026-07-03T15:20:42", "kind": "job",
-    "text": "j-0010: H scan 1.900 to 2.100, 11 pts, max 44 counts at H=2.000"},
+    "text": "j-0010: h scan 1.900 to 2.100, 11 pts, max 44 counts at h=2.000"},
    {"ts": "2026-07-03T15:21:10", "kind": "job", "text": "j-0011: queued (source: api)"},
    {"ts": "2026-07-03T15:58:00", "kind": "job",
-    "text": "j-0011: H scan 1.900 to 2.100, 11 pts, max 4380 counts at H=2.000"}],
+    "text": "j-0011: h scan 1.900 to 2.100, 11 pts, max 4380 counts at h=2.000"}],
  "total_recorded": 24}
 ```
 **Gotchas.**
@@ -1707,6 +1866,115 @@ curl "http://127.0.0.1:8642/api/v1/journal?limit=6"
   provenance, and limitations.
 - `components/PHONON_DFT.md` — the custom component and shared dispersion-file
   contract.
-- `docs/INSTRUMENT_LAYOUT.md` — TAS/PUMA geometry, angles, and scan modes.
+- `docs/INSTRUMENT_LAYOUT.md` — TAS/PUMA geometry, the angle table (ILL A1–A6) and the conventions behind every sign and frame, and scan modes.
 - `docs/MCSTAS_PARAMETERS.md` — which parameters are build-time vs run-time.
 - `User_Guide.md` — the interactive GUI workflow.
+
+---
+
+## 15. Breaking change: API version 2
+
+API version 2 is a deliberate break, made once so the angle numbers mean what
+they mean at every neutron facility. Nothing is converted and nothing is
+guessed: an old client is **refused**, never reinterpreted.
+
+### What changed
+
+1. **ILL angle numbering, A1–A6.** The angles are numbered in beam order, with
+   each crystal's θ and 2θ as a pair: A1 monochromator θ (derived), **A2
+   monochromator 2θ**, A3 sample rotation, **A4 sample 2θ**, A5 analyzer θ
+   (derived), **A6 analyzer 2θ**. The angle table, with signs and zeros, is in
+   `docs/INSTRUMENT_LAYOUT.md`.
+2. **Canonical IDs.** Every quantity has one canonical ID (`mono_two_theta_deg`,
+   `h`, `incident_energy_mev` ...) with its unit in the name. Requests accept
+   the registry's aliases; replies, saved files and output files use the
+   canonical ID only. The IDs are the first column of §6.
+3. **`api_version: 2` is required** in the body of every `PATCH /parameters`,
+   `POST /scan`, `POST /validate` and `PUT /background`. Without it, or with any
+   other value, the answer is `400 api_version_required` and nothing happens.
+   `GET` routes and the two stop routes take no body version.
+4. **Key-level refusals.** A request that names a retired, derived-only,
+   read-only, unknown or absent-slit key, or one quantity twice, is refused
+   whole (`400 invalid_parameters`, nothing applied); a bad *value* is still
+   reported per field. `GET /resolution` refuses query keys it does not know.
+5. **Slit gaps** are one key each, `slit.<stable_id>.horizontal_gap_mm` /
+   `.vertical_gap_mm`, replacing the `slits_mm` object.
+6. **Saved state version 5.** `config/parameters.json` blocks carry the canonical
+   IDs and `_schema` 5. A file of any other version is refused whole: at
+   start-up it is set aside as `parameters.json.bak` (`.bak2` ...) and defaults
+   load, with one message in the message centre; *File > Load Parameters* of such
+   a file changes nothing.
+7. **Versioned outputs.** Every `scan_parameters.txt` (the scan's and each
+   point's) now starts with the line `api_version: 2` and is keyed by canonical
+   IDs; the axis label of `1D_scan_data.txt` / `2D_scan_data.txt` is the
+   canonical ID. A scan folder written before the break (no `api_version`
+   line, or another value) is refused when loaded, with a message naming the
+   folder; the folder itself is never modified.
+8. **`psi`** is no longer a retired name: it is an alias of
+   `sample_rotation_deg`, the turntable. The ψ and κ corrections stay gone.
+
+### Old to new: the angles
+
+The numbers moved. Renaming an `A2` or `A4` in place **changes the axis you
+control**, so map by meaning, never by number:
+
+| Old TAVI number | What it was | Old keys and aliases | New ILL number | Canonical ID |
+|---|---|---|---|---|
+| A1 | monochromator 2θ | `mtt` | **A2** | `mono_two_theta_deg` |
+| A2 | sample 2θ | `stt`, `2theta` | **A4** | `sample_two_theta_deg` |
+| A3 | sample rotation | `omega` | A3 (unchanged) | `sample_rotation_deg` |
+| A4 | analyzer 2θ | `att` | **A6** | `analyzer_two_theta_deg` |
+| (none) | lower sample arc | `sgl` | (no ILL number) | `sample_lower_arc_deg` |
+| (none) | upper sample arc | `sgu` | (no ILL number) | `sample_upper_arc_deg` |
+| (none) | monochromator θ | (not a field) | A1, derived | `mono_theta_deg` |
+| (none) | analyzer θ | (not a field) | A5, derived | `analyzer_theta_deg` |
+
+The NICOS-style names (`mtt`, `stt`, `att`, `omega`, `sgl`, `sgu`) kept their
+physical meaning and are still accepted, so they are the safe spelling for a
+script that has to run on both sides of the break. A client that merely adds
+`"api_version": 2` and keeps sending `"A2": 40` meaning the sample 2θ now
+moves the monochromator: adding the version is the client saying it has
+read this section.
+
+### Old to new: everything else
+
+| Old key | Canonical ID |
+|---|---|
+| `Ki`, `Ei`, `Kf`, `Ef` | `incident_wavevector_inv_angstrom`, `incident_energy_mev`, `final_wavevector_inv_angstrom`, `final_energy_mev` |
+| `qx`, `qy`, `qz` | `q_instrument_x_inv_angstrom`, `q_instrument_y_inv_angstrom`, `q_instrument_z_inv_angstrom` |
+| `H`, `K`, `L` | `h`, `k`, `l` |
+| `deltaE` | `energy_transfer_mev` |
+| `lattice_a`, `lattice_b`, `lattice_c` | `lattice_a_angstrom`, `lattice_b_angstrom`, `lattice_c_angstrom` |
+| `lattice_alpha`, `lattice_beta`, `lattice_gamma` | `lattice_alpha_deg`, `lattice_beta_deg`, `lattice_gamma_deg` |
+| `rhm`, `rvm`, `rha`, `rva` | `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m`, `analyzer_vertical_radius_m` |
+| `applied_curvature` entries `rhm` ... `rva` | `applied_mono_horizontal_radius_m` ... `applied_analyzer_vertical_radius_m` |
+| `slits_mm`, PUMA `vbl_hgap` | `slit.post_mono.horizontal_gap_mm` |
+| `slits_mm`, PUMA `pbl` `[w, h]` | `slit.pre_sample.horizontal_gap_mm`, `slit.pre_sample.vertical_gap_mm` |
+| `slits_mm`, PUMA/IN8/IN12 `dbl_hgap` | `slit.detector.horizontal_gap_mm` |
+| `slits_mm`, IN8/IN12 `sbl` `[w, h]` | `slit.pre_sample.horizontal_gap_mm`, `slit.pre_sample.vertical_gap_mm` |
+| `slits_mm`, PANDA `ms1` | `slit.virtual_source.horizontal_gap_mm` |
+| `slits_mm`, PANDA `ss1` `[w, h]` | `slit.pre_sample.horizontal_gap_mm`, `slit.pre_sample.vertical_gap_mm` |
+| `slits_mm`, PANDA `ss2` `[w, h]` | `slit.sample_exit.horizontal_gap_mm`, `slit.sample_exit.vertical_gap_mm` |
+| `chi`, `kappa`, `phi` | no equivalent; refused (the arcs are `sgl`, `sgu`) |
+
+Values and units are unchanged (slit gaps stay in millimetres). Replies,
+`result.metadata`, `launch.parameters` and the SSE events name only canonical
+IDs, so a client that reads `state["parameters"]["mtt"]` must read
+`state["parameters"]["mono_two_theta_deg"]` instead.
+
+### What an old client sees
+
+- A write or validate without `"api_version": 2`: `400 api_version_required`,
+  with the message "This request needs "api_version": 2 ... Read the Breaking
+  change section of the API guide". Nothing is applied, queued or replaced.
+- A write that adds the version but names `chi`, `kappa`, `slits_mm`,
+  `lattice_a` or another retired key: `400 invalid_parameters`, the whole request
+  refused, the message naming the replacement.
+- `GET /resolution` with a key it does not know (including a cache-buster):
+  `400 bad_request`.
+- A pre-break `parameters.json`: set aside as a backup, defaults load. A
+  pre-break scan folder: refused on load, left untouched.
+
+There is no converter and no compatibility mode, on purpose: a quiet
+translation of `A2` would be exactly the silent change of axis the version
+exists to prevent.

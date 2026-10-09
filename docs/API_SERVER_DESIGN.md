@@ -8,10 +8,35 @@
 > **Forward note (2026-07-03):** user-facing documentation now lives in
 > `docs/API_USER_GUIDE.md`. That guide is the authoritative reference for
 > clients (humans and LLM agents) — exact endpoints, request/response JSON,
-> the full parameter table (47 keys, 43 writable), scan-command syntax, SSE events, budgets,
-> and gotchas. This document remains the design/architecture record.
+> the full parameter table (canonical IDs; 49 to 51 keys depending on the
+> instrument), scan-command syntax, SSE events, budgets,
+> and gotchas. This document remains the design/architecture record. Names
+> below are the original design's (`Ei`, `H`, `A1`...): since API version 2
+> they are accepted aliases, and the wire form is the canonical ID.
 >
 > **Post-design fixes (not in the original body):**
+> - **API version 2: the naming contract (U2).** Every request that writes or
+>   validates (`PATCH /parameters`, `POST /scan`, `POST /validate`,
+>   `PUT /background`) must carry `"api_version": 2`, checked by
+>   `require_api_version` in `tavi/api_server.py` before any backend call, so a
+>   missing or other value is `400 api_version_required` with state unchanged
+>   (GETs and the stop routes carry none). The reason is the renumbering of the
+>   angles to the ILL scheme (A2 mono 2θ, A4 sample 2θ, A6 analyzer 2θ): an
+>   `"A2": 40` from an old client would silently move another axis, so the
+>   break is declared in the request instead of translated. Names live in one
+>   registry, `tavi/quantities.py` (canonical IDs, aliases, refusals), which the
+>   server, the field map and the scan validator all resolve through;
+>   `_api_field_map` is keyed by canonical ID and translates to the
+>   controller's internal names at the boundary until those are renamed (U3).
+>   Key-level problems (unknown, retired, derived-only, read-only, absent slit,
+>   or one quantity twice) refuse the whole request; value problems still
+>   report per field. Slit gaps are per-gap keys
+>   (`slit.<stable_id>.horizontal_gap_mm`), replacing `slits_mm`. The
+>   client-facing description and the old-to-new tables are
+>   `docs/API_USER_GUIDE.md` §15.
+> - **Saved scan files are versioned.** Every `scan_parameters.txt` starts with
+>   `api_version: 2` and is keyed by canonical IDs; a folder without it is
+>   refused when loaded.
 > - `set`/`frozenset` values are JSON-serialized as sorted lists (both the API
 >   server and `scan_jobs` sanitizers) so multi-select collimation survives
 >   `json.dumps`.
@@ -128,7 +153,7 @@ All endpoints under `/api/v1`. Errors are `{"error": {"code": str, "message": st
 | GET | `/health` | Liveness | `{"status":"ok","instrument":"puma","mode":"allow"}`; no auth |
 | GET | `/state` | Full snapshot | instrument id, mode, busy, current job, queue ids, budget usage, full `get_gui_values()` dict |
 | GET | `/parameters` | Parameters only | the `get_gui_values()` dict, read via bridge |
-| PATCH | `/parameters` | Partial set | body e.g. `{"Ei": 14.7, "scan_command1": "H 1.9 2.1 0.01"}` → `{"applied": [...], "errors": {}}`. 400 with per-field errors; 409 while a scan is running (unless `?force=1`); 403 in read-only mode |
+| PATCH | `/parameters` | Partial set | body e.g. `{"api_version": 2, "incident_energy_mev": 14.7, "scan_command1": "H 1.9 2.1 0.01"}` → `{"applied": [...], "errors": {}}`. 400 `api_version_required` without the version; 400 with per-field errors; 409 while a scan is running (unless `?force=1`); 403 in read-only mode |
 | POST | `/scan` | Submit job | optional inline `"parameters"` patch applied first → 202 `{"job_id":"j-0004","state":"queued","position":1}`. 400 `scan_validation`; 429 `limit_exceeded` with reason and usage; 403 in read-only mode |
 | GET | `/scan/{id}` | Job status | state, source, timestamps, `progress: {done, total}`, count totals, output folder, error |
 | GET | `/scan/{id}/data` | Scan arrays | same shape mid-run and final, distinguished by `complete` flag; see §6.1 |
@@ -141,7 +166,7 @@ All endpoints under `/api/v1`. Errors are `{"error": {"code": str, "message": st
 
 ```json
 {"job_id": "j-0003", "state": "running", "complete": false, "mode": "1D",
- "variable_1": "H", "variable_2": null,
+ "variable_1": "h", "variable_2": null,
  "scan_values_1": [1.9, 1.92, "..."], "scan_values_2": null,
  "valid_mask_1": [true, "..."], "valid_mask_2d": null,
  "counts": [123.0, null, "..."],
@@ -186,8 +211,8 @@ A declarative field map in the controller mirrors `get_gui_values()` exactly:
 
 ```python
 # field name -> FieldSpec(parse, widget_setter, after_handler)
-'Ei':        FieldSpec(float, instrument_dock.Ei_edit.setText, on_Ei_changed)
-'H':         FieldSpec(float, scattering_dock.H_edit.setText, on_HKL_changed)
+'incident_energy_mev': FieldSpec(float, instrument_dock.Ei_edit.setText, on_Ei_changed)
+'h':         FieldSpec(float, scattering_dock.H_edit.setText, on_HKL_changed)
 'monocris':  FieldSpec(crystal-id check, set_mono_id, update_monocris_info)
 'modules':   dict-valued, set_module_values, ...
 'scan_command1': FieldSpec(str, scan_command_1_edit.setText, validate_scan_commands)
@@ -196,10 +221,10 @@ A declarative field map in the controller mirrors `get_gui_values()` exactly:
 
 `apply_parameters(patch) -> (applied, errors)` runs on the GUI thread via the bridge:
 
-1. Parse and validate every field first; unknown key or bad value → collect in `errors`, skip that field entirely (no partial application within a field).
+1. Resolve every key through the registry first (canonical ID or alias): an unknown, retired, derived-only, read-only or absent key, or one quantity named twice, refuses the whole request with nothing applied. Then parse and validate every value; a bad value → collect in `errors`, skip that field entirely (no partial application within a field).
 2. Apply in dependency order: lattice → energy mode (`K_fixed`, `fixed_E`, Ki/Ei/Kf/Ef) → Q/HKL → angles → the rest. Same rationale as the ordering in `load_parameters` (~:2677).
 3. Fire each field's `after` handler once (deduplicated) — the `on_*` handlers read widget text, so setText-then-call is exactly the user's Enter-key path. Update the `_previous_values` tracking so later focus events do not refire.
-4. Log to the message center and API dock (`API: set Ei=14.7, H=2.0`); publish a `parameters_changed` SSE event.
+4. Log to the message center and API dock (`API: set incident_energy_mev=14.7, h=2.0`); publish a `parameters_changed` SSE event.
 5. Return per-field results; any errors → HTTP 400 that honestly discloses the partial `applied` list.
 
 ## 9. SSE Design
@@ -248,7 +273,7 @@ Each phase lands and is verifiable independently:
 - `python -m py_compile` on all changed files; `python -c "import tavi.api_server, tavi.scan_jobs"` (must import without Qt).
 - Launch the GUI (`run-tavi-dev.bat`) and exercise with `curl`:
   - `/health`, `/state`, `/parameters` while idle and mid-scan.
-  - `PATCH /parameters` with `{"Ei": 14.0}` → Ei and linked Ki widgets visibly update; a bad field → 400 with per-field error.
+  - `PATCH /parameters` with `{"api_version": 2, "incident_energy_mev": 14.0}` → Ei and linked Ki widgets visibly update; a bad field → 400 with per-field error.
   - `POST /scan` twice → second job queues; `/scan/{id}` shows progress; `/scan/{id}/data` mid-run (partial, `complete: false`) and after completion.
   - `curl -N .../events` during a scan → `scan_initialized`, `point`, `progress`, `job_finished`; killing curl mid-scan leaves the server healthy.
   - Over-limit submission (e.g. 500 points) → 429 with reason and usage.

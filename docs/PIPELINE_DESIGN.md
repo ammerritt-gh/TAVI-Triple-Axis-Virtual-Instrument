@@ -141,7 +141,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
             'error_flags': list — from calculate_angles(), empty if OK
             'metadata': dict — scan_mode, qx/qy/qz or H/K/L, angles, 
                                 bending, orientation values for logging
-                                and scan_parameters.txt
+                                and scan_parameters.txt (internal names;
+                                the file is written under canonical IDs)
             'indices': dict — idx_1d / idx_x / idx_y for display updates
             'log_message': str — human-readable scan parameter summary
     """
@@ -364,7 +365,8 @@ snapshot = {
     'deltaE': float,            # energy transfer for this point
     'error_flags': list,        # [] if OK, ['mtt', 'stt', ...] if error
     
-    # For postprocessing / logging (written to scan_parameters.txt)
+    # For postprocessing / logging (internal names, kept until U3; written to
+    # scan_parameters.txt under canonical IDs by output_parameters())
     'metadata': {
         'scan_mode': str,       # 'momentum', 'rlu', 'angle', 'orientation'
         'qx': float | None,
@@ -444,7 +446,7 @@ The instrument object from plugin `build()` is used by the simulation thread for
 
 - **DisplayDock**: results still arrive in order (simulation thread processes points sequentially). No out-of-order handling needed.
 - **Signal semantics**: `scan_point_updated_1d/2d`, `scan_completed`, `progress_updated` are emitted from the simulation thread exactly as before, at the same logical points.
-- **Output file format**: `scan_parameters.txt`, detector files, `.instr` copy — all unchanged.
+- **Output file format**: detector files and the `.instr` copy are unchanged. `scan_parameters.txt` changed with the naming contract (API version 2): the scan-level file and every point's file start with the line `api_version: 2` and are keyed by canonical IDs (`TAVIController.output_parameters`, which drops the `sth` stage readout because `omega` already records the same quantity), and a folder without that line is refused at load (`tavi.data_processing.require_output_version`).
 - **Diagnostic mode**: instrument diagram request is emitted once after plugin `build()`. Diagnostic monitors are build-time decisions, frozen at build time. The direct-binary slice keeps diagnostic plotting on the retained first-point `backengine()` McStasData; later direct-invocation points do not replace that retained diagnostic data.
 - **Single-point scans**: work identically; the prep thread computes one snapshot and exits.
 - **Progress signal semantics**: `progress_updated` still reports queued controller progress in command order, including skipped points. The timing labels and runtime history now use only executable points, so queue progress and runtime estimates are intentionally distinct.
