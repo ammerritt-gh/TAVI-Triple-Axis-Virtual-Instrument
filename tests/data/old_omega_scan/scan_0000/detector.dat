@@ -1,0 +1,24 @@
+# Format: McCode with text headers
+# URL: http://www.mccode.org
+# Creator:  3.4.65, git
+# Instrument: PUMA_McScript.instr
+# Ncount: 1000000
+# Trace: no
+# Gravitation: no
+# Param: A1_param=41.167
+# Param: A2_param=-34.3025
+# Param: A3_param=-17.1513
+# Param: A4_param=41.167
+# Param: E0_param=14.7
+# type: array_0d
+# Source: PUMA_McScript (PUMA_McScript.instr)
+# component: detector
+# title: Single monitor detector
+# Ncount: 10000000
+# filename: detector.dat
+# statistics: None
+# signal: None
+# values: 12.0 1.2 120
+# xylimits: 0 0 0 0 0 0
+# variables: I I_err N
+12.0 1.2 120

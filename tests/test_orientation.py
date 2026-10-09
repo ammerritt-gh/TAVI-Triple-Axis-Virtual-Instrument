@@ -768,17 +768,18 @@ def test_non_finite_arc_is_refused_on_every_instrument(models, name, bad):
         check_travel(model.goniometer, {"sgu": bad})
 
 
-def test_old_scan_folder_reads_chi_as_sgl(tmp_path):
-    from tavi.data_processing import read_parameters_from_file
+def test_an_old_chi_folder_is_refused_not_read_as_sgl(tmp_path):
+    """A folder from before the arcs has no api_version: it is refused whole, so its
+    chi is never read under another name."""
+    from tavi.data_processing import (OutputVersionError, read_parameters_from_file,
+                                      require_output_version)
 
     (tmp_path / "scan_parameters.txt").write_text(
         "scan_command1: chi 0 2 1\nchi: 2.5\n", encoding="utf-8")
     params = read_parameters_from_file(str(tmp_path))
-    assert params["sgl"] == 2.5 and params["chi"] == 2.5
-
-    (tmp_path / "scan_parameters.txt").write_text(
-        "chi: 2.5\nsgl: 1.0\n", encoding="utf-8")
-    assert read_parameters_from_file(str(tmp_path))["sgl"] == 1.0
+    assert "sgl" not in params
+    with pytest.raises(OutputVersionError, match="older TAVI"):
+        require_output_version(params, str(tmp_path))
 
 
 # --- locked mode --------------------------------------------------------------------
