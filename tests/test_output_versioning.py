@@ -131,6 +131,8 @@ def _current_folder(controller, tmp_path):
 def test_a_current_folder_loads_and_shows_its_counts(ctrl, tmp_path):
     folder, start = _current_folder(ctrl, tmp_path)
     assert read_parameters_from_file(str(folder))["api_version"] == API_VERSION
+    with open(folder / "1D_scan_data.txt", encoding="utf-8") as handle:     # the scanned axis, by ID
+        assert handle.readline().split() == ["#", "sample_rotation_deg", "counts"]
 
     _load(ctrl, folder)
 
