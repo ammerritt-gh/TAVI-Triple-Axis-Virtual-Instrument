@@ -12,6 +12,7 @@ form group is one block wide, Wide lays a wide dock out two-up in usage order,
 and the setting is saved with the layout. No preset switch may leave a stray
 tab strip painted in the window.
 """
+import base64
 import json
 import os
 import sys
@@ -496,7 +497,6 @@ def _feed_runtime_texts(win):
         "⚠ Trigonal (R) requires a = b = c; Trigonal (R) requires α = β = γ")
     sample.lattice_warning_label.show()
     sample.update_ub_indicator(False)
-    sample.update_misalignment_indicator(False)
     ctrl._set_angles_stale("the analyzer cannot reach this kf: A6 would be 181.3 deg, "
                            "past its 140 deg limit")
     for group in win.instrument_dock.collapsible_groups.values():
@@ -509,7 +509,7 @@ def _feed_runtime_texts(win):
                    "time_per_point_label", "point_count_label", "total_time_estimate_label",
                    "scan_warning_1_label", "scan_warning_2_label", "scan_conflict_label"],
              sample: ["mount_status_label", "crystal_system_label", "lattice_warning_label",
-                      "ub_indicator_label", "misalignment_indicator_label"],
+                      "ub_indicator_label"],
              win.instrument_dock: ["angles_stale_label"]}
     fed = {name: getattr(dock, name) for dock, attrs in names.items() for name in attrs}
     fed.update({f"{key} summary": group.summary_label
@@ -1118,31 +1118,29 @@ def _on_screen(dock):
 def test_docks_saved_off_screen_come_back(window, layout_file, monkeypatch):
     """Check 6: floating docks saved off every screen come back on one after a restart.
 
-    Misalignment (docked once by the user, so the saved state holds it) and UB
-    Matrix (opened, so floating, in 4 columns), both shown and saved far off,
-    as on a monitor since unplugged. The restart leaves them there, as a
-    window system that does not clamp would, so only the rescue brings them
-    back: checked before the window is shown (the offscreen platform may
-    clamp a window it creates) and after. A hidden floating dock cannot be
-    lost this way: Qt 6.11 restores it docked.
+    UB Matrix (docked once by the user, so the saved state holds it, then
+    floating as in 4 columns), shown and saved far off, as on a monitor
+    since unplugged. The restart leaves it there, as a window system that
+    does not clamp would, so only the rescue brings it back: checked before
+    the window is shown (the offscreen platform may clamp a window it
+    creates) and after. A hidden floating dock cannot be lost this way: Qt
+    6.11 restores it docked.
     """
-    misalignment, ub = window.misalignment_dock, window.ub_matrix_dock
+    ub = window.ub_matrix_dock
     try:
         _resize(window, MONITOR, NARROW, columns=4)
-        window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
-        misalignment.setFloating(True)
-        for dock in (misalignment, ub):
-            dock.show()
-            dock.move(FAR)
+        window.addDockWidget(Qt.RightDockWidgetArea, ub)
+        ub.setFloating(True)
+        ub.show()
+        ub.move(FAR)
         QApplication.processEvents()
-        assert ub.isFloating() and not _on_screen(misalignment) and not _on_screen(ub)
+        assert ub.isFloating() and not _on_screen(ub)
         assert window.save_layout_to_file()
     finally:
-        window.removeDockWidget(misalignment)
-        misalignment.setFloating(True)
-        misalignment.hide()
+        window.removeDockWidget(ub)
+        ub.setFloating(True)
         ub.hide()
-    names = ("misalignment_dock", "ub_matrix_dock")
+    names = ("ub_matrix_dock",)
     _unclamped_restore(monkeypatch, *names)
     restarted = _restart(show=False)
     try:
@@ -1243,51 +1241,25 @@ def test_docked_ub_matrix_stays_docked_after_restart(window, layout_file, capsys
         _close(restarted)
 
 
-def test_hidden_misalignment_opens_floating_after_restart(window, layout_file):
-    """Check 6: Misalignment docked by the user, floated by a preset and closed opens floating after a restart."""
-    misalignment = window.misalignment_dock
-    try:
-        _resize(window, MONITOR, NARROW, columns=4)
-        window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
-        misalignment.setFloating(False)  # docked by the user
-        _resize(window, MONITOR, NARROW, columns=4)  # the preset floats it again
-        misalignment.hide()
-        assert misalignment.isFloating()
-        assert window.save_layout_to_file()
-    finally:
-        misalignment.hide()
-    restarted = _restart()
-    try:
-        misalignment = restarted.misalignment_dock
-        assert misalignment.isHidden()
-        before = _open_from_sample_dock(restarted, "open_misalignment_button")
-        assert misalignment.isVisible() and misalignment.isFloating() and _on_screen(misalignment)
-        moved = [name for name, rect in before.items()
-                 if getattr(restarted, name).geometry() != rect]
-        assert not moved, moved
-    finally:
-        _close(restarted)
-
-
 def test_lost_docks_are_rescued(window):
     """The rescue itself: a homeless dock is centred on the screen, a placed one docked again."""
-    misalignment, display = window.misalignment_dock, window.display_dock
+    ub, display = window.ub_matrix_dock, window.display_dock
     _resize(window, MONITOR, NARROW, columns=4)
     try:
-        misalignment.setFloating(True)
-        misalignment.show()
+        ub.setFloating(True)
+        ub.show()
         display.setFloating(True)
-        for dock in (misalignment, display):
+        for dock in (ub, display):
             dock.move(FAR)
         QApplication.processEvents()
         window._rescue_lost_docks()
         QApplication.processEvents()
-        assert _on_screen(misalignment)
+        assert _on_screen(ub)
         assert not display.isFloating() and not display.visibleRegion().isEmpty()
         assert "brought back" in _log(window)
         _assert_no_stray_tab_strip(window, 4)
     finally:
-        misalignment.hide()
+        ub.hide()
         if display.isFloating():
             _resize(window, MONITOR, NARROW, columns=4)
 
@@ -1363,74 +1335,106 @@ def test_lost_dock_without_a_place_still_docks(window):
         _resize(window, MONITOR, NARROW, columns=3)
 
 
-@pytest.mark.parametrize("visibility", [["MisalignmentDock"], {"MisalignmentDock": "yes"}],
+@pytest.mark.parametrize("visibility", [["UBMatrixDock"], {"UBMatrixDock": "yes"}],
                          ids=["list", "not-bool"])
 def test_fallback_still_rescues_lost_docks(window, layout_file, monkeypatch, visibility):
-    """A v3 file failing after restoreState falls back to the preset and still brings Misalignment back.
+    """A v3 file failing after restoreState falls back to the preset and still brings UB Matrix back.
 
     On screen before the window is shown (TAVI's own rescue; the platform
     may also clamp a window it creates) and once opened.
     """
-    misalignment = window.misalignment_dock
+    ub = window.ub_matrix_dock
     try:
         # Docked once by the user and floated again: now part of the saved state.
-        window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
-        misalignment.setFloating(True)
-        misalignment.show()
-        misalignment.move(FAR)
+        _resize(window, MONITOR, NARROW, columns=4)
+        window.addDockWidget(Qt.RightDockWidgetArea, ub)
+        ub.setFloating(True)
+        ub.show()
+        ub.move(FAR)
         QApplication.processEvents()
         assert window.save_layout_to_file()
     finally:
-        window.removeDockWidget(misalignment)
-        misalignment.setFloating(True)
-        misalignment.hide()
+        window.removeDockWidget(ub)
+        ub.setFloating(True)
+        ub.hide()
     layout = json.loads(layout_file.read_text(encoding="utf-8"))
     layout["dock_visibility"] = visibility
     layout_file.write_text(json.dumps(layout), encoding="utf-8")
-    _unclamped_restore(monkeypatch, "misalignment_dock")
+    _unclamped_restore(monkeypatch, "ub_matrix_dock")
     restarted = _restart(show=False)
     try:
-        assert _on_screen(restarted.misalignment_dock)
+        assert _on_screen(restarted.ub_matrix_dock)
         restarted.show()
-        restarted._on_open_misalignment_dock()
+        restarted._on_open_ub_matrix_dock()
         QApplication.processEvents()
-        assert _on_screen(restarted.misalignment_dock)
+        assert _on_screen(restarted.ub_matrix_dock)
+    finally:
+        _close(restarted)
+
+
+def test_a_layout_naming_the_retired_misalignment_dock_restores_without_it(
+        window, layout_file):
+    """A layout saved while the Misalignment dock existed (its dock in Qt's
+    window_state, and its names in dock_visibility and dock_floating) restores
+    without error and without that dock: nothing falls back to the preset."""
+    from PySide6.QtWidgets import QDockWidget, QLabel
+
+    retired = QDockWidget("Misalignment Training", window)
+    retired.setObjectName("MisalignmentDock")
+    retired.setWidget(QLabel("retired"))
+    window.addDockWidget(Qt.RightDockWidgetArea, retired)
+    retired.setFloating(True)
+    retired.show()
+    try:
+        _resize(window, MONITOR, NARROW, columns=4)
+        QApplication.processEvents()
+        assert window.save_layout_to_file()
+    finally:
+        window.removeDockWidget(retired)
+        retired.deleteLater()
+    layout = json.loads(layout_file.read_text(encoding="utf-8"))
+    state = base64.b64decode(layout["window_state"])
+    assert "MisalignmentDock".encode("utf-16-be") in state       # Qt's own state names it
+    layout["dock_visibility"]["MisalignmentDock"] = True
+    layout["dock_floating"]["MisalignmentDock"] = True
+    layout_file.write_text(json.dumps(layout), encoding="utf-8")
+    restarted = _restart()
+    try:
+        assert restarted._layout_restored
+        assert "could not restore" not in _log(restarted)
+        assert not hasattr(restarted, "misalignment_dock")
+        assert not restarted.findChildren(QDockWidget, "MisalignmentDock")
+        assert {dock.objectName() for dock in restarted._all_docks}.isdisjoint({"MisalignmentDock"})
     finally:
         _close(restarted)
 
 
 @pytest.mark.parametrize("columns", [2, 3, 4])
-@pytest.mark.parametrize("docked_once", [True, False], ids=["docked-once", "off-screen"])
-def test_presets_after_restore_all_panels(window, columns, docked_once):
-    """View > Restore All Panels, then a preset: Misalignment floats on screen, the rest as check 2.
+@pytest.mark.parametrize("off_screen", [False, True], ids=["on-screen", "off-screen"])
+def test_presets_after_restore_all_panels(window, columns, off_screen):
+    """View > Restore All Panels, then a preset: UB Matrix where the preset puts it, the rest as check 2.
 
-    Misalignment was docked once by the user and floated again (Restore All
-    Panels docks it back), or was left floating off every screen.
+    UB Matrix was closed floating on screen, or left floating off every
+    screen (Restore All Panels docks it, or centres it when Qt cannot).
     """
-    misalignment, reciprocal = window.misalignment_dock, window.reciprocal_space_dock
+    ub, reciprocal = window.ub_matrix_dock, window.reciprocal_space_dock
     _resize(window, MONITOR, NARROW, columns=3)
     try:
-        if docked_once:
-            window.addDockWidget(Qt.RightDockWidgetArea, misalignment)
-            misalignment.setFloating(True)
-        else:
-            misalignment.show()  # a window that has been on screen keeps its place
-            misalignment.move(FAR)
-        misalignment.hide()
+        if off_screen:
+            ub.setFloating(True)
+            ub.show()  # a window that has been on screen keeps its place
+            ub.move(FAR)
+        ub.hide()
         QApplication.processEvents()
         window.restore_all_docks()
         QApplication.processEvents()
         assert all(_on_screen(dock) for dock in window._all_docks if dock.isFloating())
         _resize(window, MONITOR, NARROW, columns=columns)
-        assert misalignment.isFloating() and misalignment.isVisible() and _on_screen(misalignment)
+        assert ub.isFloating() == (columns != 3) and ub.isVisible() == (columns == 3)
         assert reciprocal.isVisible() and reciprocal in window.tabifiedDockWidgets(
             window.display_dock)
         _assert_preset_placement(window, columns, [("display_dock", "reciprocal_space_dock")])
     finally:
-        if not misalignment.isFloating():
-            window.removeDockWidget(misalignment)
-            misalignment.setFloating(True)
-        misalignment.hide()
         reciprocal.hide()
         _resize(window, MONITOR, NARROW, columns=columns)
 

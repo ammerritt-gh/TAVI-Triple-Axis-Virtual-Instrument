@@ -1173,6 +1173,36 @@ def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None
     return True, None
 
 
+def training_reach_error(state, u_true, b_true, hkls):
+    """Why the true crystal cannot be observed on ``state``, or None.
+
+    A training exercise is observable when at least two non-parallel
+    reflections of ``hkls`` (the sample's scatterable reflections) reach the
+    detector: the true Q ``U_true @ B_true @ hkl`` closes the elastic
+    scattering triangle at ``state``'s fixed energy and the stage brings it
+    into the scattering plane within its arc travel. Each reflection goes
+    through ``check_point_feasibility``, the run's own solve; a locked plane
+    is ignored, since a student finds the peaks with the arcs free.
+    """
+    from tavi.ub_matrix import has_two_nonparallel
+
+    free = copy.copy(state)
+    free.plane_lock = None
+    u_true, b_true = np.asarray(u_true, dtype=float), np.asarray(b_true, dtype=float)
+    reached = []
+    for hkl in hkls:
+        q = component_q_to_instrument_q(u_true @ b_true @ np.asarray(hkl, dtype=float))
+        feasible, _ = check_point_feasibility(free, "momentum", [*q, 0.0], {})
+        if feasible:
+            reached.append(hkl)
+            if has_two_nonparallel(reached):
+                return None
+    return (f"only {len(reached)} reflection(s) of this sample (indices up to 2 in size, "
+            "non-zero structure factor) can be brought into the scattering plane within "
+            "the sample stage's travel at this fixed energy; at least two non-parallel "
+            "ones are needed")
+
+
 def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_folder,
                           is_2d_scan=False, variable_name1="", variable_name2="",
                           scan_command1="", scan_command2=""):

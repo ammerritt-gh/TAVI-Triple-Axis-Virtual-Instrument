@@ -3,11 +3,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 import re
 import math
 from fractions import Fraction
 
 from tavi.space_groups import get_space_group, is_reflection_allowed
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,31 @@ def load_reflections(path: str | Path) -> list[Reflection]:
     if not reflections:
         raise ValueError(f"reflection table contains no usable positive F2 rows: {source}")
     return reflections
+
+
+def reference_hkls(reflection_source, space_group, components_dir, limit: int = 2):
+    """Integer (h, k, l), each index at most ``limit`` in magnitude, that a
+    sample can scatter, shortest |hkl| first.
+
+    The sample's own reflection table decides when it has one that loads (its
+    positive F2 rows); otherwise the space group's centering rule does, which
+    claims no structure-factor filtering. A table that fails to load is
+    logged, never skipped silently."""
+    rows = None
+    if reflection_source:
+        try:
+            rows = [(r.h, r.k, r.l) for r in
+                    load_reflections(Path(components_dir) / reflection_source)]
+        except (OSError, UnicodeError, ValueError) as exc:
+            log.warning("reflection table %s unusable (%s); using the centering rule",
+                        reflection_source, exc)
+    if rows is None:
+        rows = [(h, k, l) for h in range(-limit, limit + 1) for k in range(-limit, limit + 1)
+                for l in range(-limit, limit + 1)
+                if (h, k, l) != (0, 0, 0) and centering_allowed(h, k, l, space_group)]
+    hkls = {tuple(int(round(x)) for x in hkl) for hkl in rows
+            if all(abs(x - round(x)) < 1e-9 and abs(x) <= limit for x in hkl)}
+    return sorted(hkls, key=lambda hkl: (sum(x * x for x in hkl), hkl))
 
 
 def centering_allowed(h: int, k: int, l: int, space_group: int | None) -> bool:

@@ -22,7 +22,6 @@ from gui.docks.output_dock import OutputDock
 from gui.docks.data_control_dock import DataControlDock
 from gui.docks.display_dock import DisplayDock
 from gui.docks.fitting_dock import FittingDock
-from gui.docks.misalignment_dock import MisalignmentDock
 from gui.docks.ub_matrix_dock import UBMatrixDock
 from gui.docks.api_dock import ApiDock
 from gui.docks.reciprocal_space_dock import ReciprocalSpaceDock
@@ -235,15 +234,6 @@ class TAVIMainWindow(QMainWindow):
         # Sample Panel (column 2, top)
         self.sample_dock = UnifiedSampleDock(self, descriptor=self.descriptor)
         
-        # Misalignment Training Panel (initially hidden, opened from Sample panel)
-        self.misalignment_dock = MisalignmentDock(self)
-        # Prefer it to open as a floating panel and start hidden
-        try:
-            self.misalignment_dock.setFloating(True)
-            self.misalignment_dock.setVisible(False)
-        except Exception:
-            pass
-        
         # UB Matrix Panel (initially hidden, opened from Sample panel)
         self.ub_matrix_dock = UBMatrixDock(self, descriptor=self.descriptor)
         try:
@@ -283,7 +273,6 @@ class TAVIMainWindow(QMainWindow):
             self.instrument_dock,
             self.scattering_dock,
             self.sample_dock,
-            self.misalignment_dock,
             self.ub_matrix_dock,
             self.simulation_dock,
             self.display_dock,
@@ -305,16 +294,6 @@ class TAVIMainWindow(QMainWindow):
 
     def _connect_dock_signals(self):
         """Connect signals between docks."""
-        # Connect sample dock button to open misalignment dock
-        self.sample_dock.open_misalignment_dock_requested.connect(
-            self._on_open_misalignment_dock
-        )
-        
-        # Connect misalignment dock signal to update sample dock indicator
-        self.misalignment_dock.misalignment_changed.connect(
-            self.sample_dock.update_misalignment_indicator
-        )
-        
         # Connect sample dock button to open UB matrix dock
         self.sample_dock.open_ub_matrix_dock_requested.connect(
             self._on_open_ub_matrix_dock
@@ -336,13 +315,6 @@ class TAVIMainWindow(QMainWindow):
             self.fitting_dock.on_scan_finished
         )
 
-    def _on_open_misalignment_dock(self):
-        """Handle request to open the misalignment dock."""
-        # Show and raise the misalignment dock
-        self.misalignment_dock.setVisible(True)
-        self.misalignment_dock.raise_()
-        self.misalignment_dock.activateWindow()
-    
     def _on_open_ub_matrix_dock(self):
         """Handle request to open the UB matrix dock."""
         self.ub_matrix_dock.setVisible(True)
@@ -374,8 +346,7 @@ class TAVIMainWindow(QMainWindow):
 
         Every placed dock ends docked and shown, each tab group's first dock
         raised. Reciprocal Space goes back behind Display at its current
-        visibility, Misalignment floats at its visibility (centred on the
-        screen if it was docked), and UB Matrix is docked only in 3 columns
+        visibility, and UB Matrix is docked only in 3 columns
         (floating and hidden otherwise). Fitting is never tabbed
         with Display: its overlay is drawn on the plot, so both must show at
         once. A dock moves by removal
@@ -387,14 +358,11 @@ class TAVIMainWindow(QMainWindow):
         display, log, data, fitting, api = (
             self.display_dock, self.output_dock, self.data_control_dock, self.fitting_dock,
             self.api_dock)
-        reciprocal, ub, misalignment = (
-            self.reciprocal_space_dock, self.ub_matrix_dock, self.misalignment_dock)
+        reciprocal, ub = self.reciprocal_space_dock, self.ub_matrix_dock
         placed = [instrument, sample, scattering, simulation, display, log, data, fitting, api]
-        reciprocal_shown, misalignment_shown = (not reciprocal.isHidden(),
-                                                not misalignment.isHidden())
+        reciprocal_shown = not reciprocal.isHidden()
         moved = (placed + [reciprocal]
-                 + ([ub] if columns == 3 or not ub.isFloating() else [])
-                 + ([] if misalignment.isFloating() else [misalignment]))
+                 + ([ub] if columns == 3 or not ub.isFloating() else []))
         for dock in moved:
             self.removeDockWidget(dock)  # detaches and hides; nothing is destroyed
         # Lay the emptied area out now: Qt (6.11) then strips the dissolved
@@ -453,8 +421,6 @@ class TAVIMainWindow(QMainWindow):
         reciprocal.setVisible(reciprocal_shown)
         if columns != 3:
             self._float_centred(ub, False)
-        # Docked by the user, or by Restore All Panels.
-        self._float_centred(misalignment, misalignment_shown)
         for group in tabs:
             group[0].raise_()
         self._tidy_tab_bars()
@@ -943,10 +909,11 @@ class TAVIMainWindow(QMainWindow):
         falls back to the preset. Each of these says so in the Message Log.
         (Too wide for its screen, a restored layout gives way once shown:
         _apply_startup_geometry.)
-        After a restore, Misalignment and UB Matrix saved floating float again
-        at their saved visibility (centred if they came back docked); saved
-        docked, they stay put; with no saved entry, Misalignment floats, and UB
-        Matrix outside 3 columns (logged). A floating dock no screen shows is
+        After a restore, UB Matrix saved floating floats again at its saved
+        visibility (centred if it came back docked); saved docked, it stays
+        put; with no saved entry, it floats outside 3 columns (logged). A
+        layout that still names the retired Misalignment dock restores without
+        it. A floating dock no screen shows is
         brought back. Call it only before show(): restoreState over a shown window leaves
         stale tab bars that still hold tabs, which _tidy_tab_bars would show.
         """
@@ -1011,18 +978,20 @@ class TAVIMainWindow(QMainWindow):
 
             # Qt 6.11 restores a hidden dock that a preset took out and floated
             # as docked, with no place: it would open as a full-width row. So
-            # these two float again if they were saved floating; one the user
-            # docked stays where restoreState put it. With no saved entry, the
-            # preset's rule: Misalignment floats, UB Matrix outside 3 columns.
+            # UB Matrix floats again if it was saved floating; docked by the
+            # user it stays where restoreState put it. With no saved entry, the
+            # preset's rule: UB Matrix floats outside 3 columns. A dock the
+            # layout names that no longer exists (the retired Misalignment
+            # dock) is ignored by Qt and by the loops here.
             floating = layout_data.get("dock_floating")
             if not isinstance(floating, dict):
                 floating = {}
-            for dock in (self.misalignment_dock, self.ub_matrix_dock):
+            for dock in (self.ub_matrix_dock,):
                 name = dock.objectName()
                 saved = floating.get(name)
                 if not isinstance(saved, bool):
                     entry = saved
-                    saved = dock is self.misalignment_dock or self._columns != 3
+                    saved = self._columns != 3
                     print(f"Warning: dock_floating[{name!r}] is {entry!r} in {config_path}; "
                           + ("floating it, as the preset does" if saved
                              else "leaving it where it was restored"))
@@ -1055,7 +1024,7 @@ class TAVIMainWindow(QMainWindow):
                 f"{self._columns}-column layout picked for this screen.")
             if touched:  # Qt may have moved docks, onto no screen too, before it failed
                 self._setup_dock_layout(self._columns)
-                self._rescue_lost_docks()  # the preset leaves Misalignment where it is
+                self._rescue_lost_docks()
             return False
         self._rescue_lost_docks()
         self._tidy_tab_bars()  # the bars of the preset the state replaced
@@ -1066,15 +1035,15 @@ class TAVIMainWindow(QMainWindow):
 
         Qt usually puts such a window back on a screen itself; this is the
         net under it. Only the lost docks move: one with a place in the
-        current preset (every dock but Misalignment, and UB Matrix outside
-        3 columns) docks again where it last was, or at the edge of the dock
-        area when Qt kept no place; the others move to the centre of the
-        main window's screen.
+        current preset (every dock but UB Matrix outside 3 columns) docks
+        again where it last was, or at the edge of the dock area when Qt
+        kept no place; UB Matrix outside 3 columns moves to the centre of
+        the main window's screen.
         """
         lost = [dock for dock in self._all_docks if self._off_every_screen(dock)]
         if not lost:
             return
-        homeless = [self.misalignment_dock] + ([] if self._columns == 3 else [self.ub_matrix_dock])
+        homeless = [] if self._columns == 3 else [self.ub_matrix_dock]
         for dock in lost:
             if dock in homeless:
                 self._centre_on_screen(dock)
