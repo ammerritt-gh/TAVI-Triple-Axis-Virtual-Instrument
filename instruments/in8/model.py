@@ -213,14 +213,10 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
 
         # Sample orientation (shared with every TAVI instrument): one
         # sample_mount Arm whose runtime rotation carries the goniometer at
-        # its physical angles and the crystal mount; the corrections and
-        # zero errors are declared for inspection only.
+        # its readout angles and the crystal mount; the arc readouts are
+        # declared for inspection only.
         instrument.add_parameter("sgl_param", value=0, comment="Lower arc sgl readout")
         instrument.add_parameter("sgu_param", value=0, comment="Upper arc sgu readout")
-        instrument.add_parameter("kappa_param", value=0, comment="Kappa - lower-arc correction")
-        instrument.add_parameter("mis_chi_param", value=0, comment="Hidden lower-arc zero error (training)")
-        instrument.add_parameter("psi_param", value=0, comment="Psi - omega alignment offset")
-        instrument.add_parameter("mis_omega_param", value=0, comment="Hidden omega misalignment (training)")
         instrument.add_parameter("sample_rx_param", value=0, comment="Sample arm rotation about x (stage and mount)")
         instrument.add_parameter("sample_ry_param", value=0, comment="Sample arm rotation about y (stage and mount)")
         instrument.add_parameter("sample_rz_param", value=0, comment="Sample arm rotation about z (stage and mount)")

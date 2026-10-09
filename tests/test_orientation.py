@@ -9,6 +9,7 @@ arm, independently of ``sample_arm_euler``, as the generated C does it:
 ``R_rel = mccode_rotation_matrix(ROTATED)``.
 """
 import copy
+import dataclasses
 import importlib
 import math
 
@@ -222,22 +223,14 @@ def _miss_deg(a, b):
 
 @pytest.mark.parametrize("sense", [-1, 1])
 @pytest.mark.parametrize("name", list(INSTRUMENTS))
-def test_correction_changed_after_take_position_keeps_the_crystal_in_place(models, name, sense):
-    """Peaks taken under psi = 1, psi then set to 2, refit, drive to a new HKL:
-    the emitted physical angles put the per-sense -/+ U_true B hkl on Q_lab.
-
-    Hidden zero errors are on throughout and are never part of a record. The
-    new psi (and kappa) cancel them, the one case where the operator's model
-    (readout frame, no zero errors) is exact for a tilted crystal: a turntable
-    or lower-arc offset is not a mount rotation once the arcs move, so any
-    other case can only be fitted in the least-squares sense."""
-    from instruments.tas_runtime import stage_corrections
-
+def test_peaks_taken_on_the_true_crystal_drive_it_back_to_a_new_hkl(models, name, sense):
+    """Peaks taken where the TRUE crystal reflects, refit, drive to a new HKL:
+    the emitted stage angles put the per-sense -/+ U_true B hkl on Q_lab. The
+    record holds the readouts, ki, kf and the sense, nothing else."""
     model = copy.deepcopy(models[name])
     model.sense_sample = sense
     u_true = _rot((1, 0, 0), 3.0) @ U_IN_PLANE
     model.U_true = u_true                  # the arm reads the true mount
-    model.mis_omega, model.mis_chi, model.kappa = -2.0, -0.3, 0.3
     gonio = model.goniometer
 
     def solve(q_mount):
@@ -247,42 +240,47 @@ def test_correction_changed_after_take_position_keeps_the_crystal_in_place(model
         assert flags == []
         return angles
 
-    # Take Position under psi = 1 at the setting where the TRUE crystal reflects.
-    model.psi = 1.0
     peaks = []
     for hkl in [(1, 0, 0), (0, 1, 0), (1, 1, 0)]:
         _mtt, stt, a3, sgl, _att, sgu = solve(u_true @ CUBIC_B @ np.array(hkl, float))
-        readouts = {"A3": a3 - model.psi - model.mis_omega,     # physical -> readout
-                    "sgl": sgl - model.kappa - model.mis_chi, "sgu": sgu}
-        record = stage_record(gonio, readouts, stage_corrections(gonio, vars(model)),
+        record = stage_record(gonio, {"A3": a3, "sgl": sgl, "sgu": sgu},
                               ki=K, kf=K, sense=sense)
-        assert set(record) == {"axes", "angles", "corrections", "ki", "kf", "sense"}
-        peaks.append(ObservedPeak(hkl=hkl, angles=(readouts["A3"], 0.0, stt), ki=K, kf=K,
-                                  stage=record))
+        assert set(record) == {"axes", "angles", "ki", "kf", "sense"}
+        peaks.append(ObservedPeak(hkl=hkl, angles=(a3, 0.0, stt), ki=K, kf=K, stage=record))
     assert all(p.sense_sample == sense for p in peaks)
 
-    model.psi = 2.0
+    ub = UBMatrix(*LATTICE)
+    ub.peaks = peaks
+    ub.calculate_U_from_peaks()
     target = np.array((1, -1, 0), dtype=float)
+    _mtt, stt, a3, sgl, _att, sgu = solve(ub.UB @ target)
+    model.A3, model.sgl, model.sgu = a3, sgl, sgu
+    params = model.build_point_params(0.0)
+    arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
+                                 params["sample_rz_param"])      # (R_stage U_true)^T
+    lab = arm.T @ (CUBIC_B @ target)
+    assert np.allclose(-lab if sense > 0 else lab, lab_q_from_stt(K, K, stt),
+                       rtol=0.0, atol=1e-9)
 
-    def drive_and_emit(corrections):
-        ub = UBMatrix(*LATTICE)
-        ub.peaks = peaks
-        ub.calculate_U_from_peaks(corrections)
-        _mtt, stt, a3, sgl, _att, sgu = solve(ub.UB @ target)
-        model.A3, model.sgl, model.sgu = a3, sgl, sgu
-        params = model.build_point_params(0.0)
-        arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
-                                     params["sample_rz_param"])      # (R_stage U_true)^T
-        lab = arm.T @ (CUBIC_B @ target)
-        return (-lab if sense > 0 else lab), lab_q_from_stt(K, K, stt)
 
-    placed, q_lab = drive_and_emit(stage_corrections(gonio, vars(model)))
-    assert np.allclose(placed, q_lab, rtol=0.0, atol=1e-9)
+def test_a_stage_record_taken_under_a_retired_correction_is_refused():
+    """A record saved while psi/kappa existed may carry "corrections". All zero
+    it reads as it is; a nonzero one put the peak in another readout frame and
+    is refused rather than read wrongly."""
+    from instruments.descriptor import tas_goniometer
+    from tavi.orientation import record_angles
 
-    # Reading the peaks as recorded (the correction change ignored) misses by
-    # the 1 deg psi moved: the rule is what brings the crystal back.
-    placed, q_lab = drive_and_emit(None)
-    assert _miss_deg(placed, q_lab) > 0.5
+    record = stage_record(tas_goniometer(), {"A3": 30.0, "sgl": 2.0, "sgu": -1.0},
+                          ki=K, kf=K, sense=1)
+    assert set(record) == {"axes", "angles", "ki", "kf", "sense"}
+    zero = {**record, "corrections": {"A3": 0.0, "sgl": 0.0, "sgu": 0.0}}
+    assert record_angles(zero) == record_angles(record) == {"A3": 30.0, "sgl": 2.0, "sgu": -1.0}
+
+    old = {**record, "corrections": {"A3": 1.0, "sgl": 0.0, "sgu": 0.0}}
+    with pytest.raises(ValueError, match="psi/kappa correction"):
+        record_angles(old)
+    with pytest.raises(ValueError, match="psi/kappa correction"):
+        ObservedPeak(hkl=(1, 0, 0), angles=(30.0, 2.0, 40.0), ki=K, kf=K, stage=old).q_mount()
 
 
 @pytest.mark.parametrize("hkls", [
@@ -746,9 +744,9 @@ def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
     assert "chi" not in snapshot.metadata
     assert (snapshot.params["sgl_param"], snapshot.params["sgu_param"]) == (3.0, -2.0)
 
-    # An 11-slot point (written before the sgu slot) runs with sgu = 0.
+    # A 9-slot point (written before the sgu slot) runs with sgu = 0.
     geom = tas_runtime._solve_point_geometry(
-        copy.deepcopy(config), "angle", point(3.0, -2.0)[:11], _in12_vals())
+        copy.deepcopy(config), "angle", point(3.0, -2.0)[:9], _in12_vals())
     assert (geom["sgl"], geom["sgu"]) == (3.0, 0.0)
 
     feasible, reason = tas_runtime.check_point_feasibility(
@@ -774,7 +772,7 @@ def test_old_scan_folder_reads_chi_as_sgl(tmp_path):
     from tavi.data_processing import read_parameters_from_file
 
     (tmp_path / "scan_parameters.txt").write_text(
-        "scan_command1: chi 0 2 1\nchi: 2.5\nkappa: 0.0\n", encoding="utf-8")
+        "scan_command1: chi 0 2 1\nchi: 2.5\n", encoding="utf-8")
     params = read_parameters_from_file(str(tmp_path))
     assert params["sgl"] == 2.5 and params["chi"] == 2.5
 
@@ -857,12 +855,12 @@ def _locked_in12(u):
     config.sample_mount = SampleMount.from_lattice_tas(*LATTICE, R_mount=u)
     tilts = lock_plane(config.goniometer, config.sample_mount.mounted_basis, *PLANE_001)
     config.plane_lock = {"hkl_u": list(PLANE_001[0]), "hkl_v": list(PLANE_001[1]),
-                         "tilts": tilts, "kappa": 0.0}
+                         "tilts": tilts}
     return plugin, config
 
 
 def _rlu_point(hkl):
-    return [*hkl, 0.0, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0, 0.0, 0.0]
+    return [*hkl, 0.0, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0]
 
 
 def test_a_lock_refuses_an_out_of_plane_point_naming_the_plane_and_the_angle(tmp_path):
@@ -956,19 +954,18 @@ def test_an_angle_mode_point_runs_at_the_lock_or_is_refused(tmp_path):
                       + locked_plane_text(tilts, PLANE_001))
 
 
-# --- corrections and zero errors reach McStas as axis rotations -------------------
+# --- the stage readouts reach McStas as axis rotations -------------------------------
 
-@pytest.mark.parametrize(("field", "axis_name"), [
-    ("psi", "A3"), ("mis_omega", "A3"), ("kappa", "sgl"), ("mis_chi", "sgl"),
-])
-def test_offset_changes_the_emitted_rotation_by_that_axis_rotation(models, field, axis_name):
+@pytest.mark.parametrize("axis_name", ["A3", "sgl", "sgu"])
+def test_a_readout_changes_the_emitted_rotation_by_that_axis_rotation(models, axis_name):
     model = copy.deepcopy(models["in8"])
     u = _rot((2, -1, 1), 6.0)
     model.U_true = u                       # the arm reads the true mount
     model.A3, model.sgl, model.sgu = 37.0, 4.0, -6.0
+    assert model.stage_readouts() == {"A3": 37.0, "sgl": 4.0, "sgu": -6.0}
     before = mccode_rotation_matrix(*sample_arm_euler(
-        model.goniometer, model.physical_stage_angles(), u)).T
-    setattr(model, field, 1.75)
+        model.goniometer, model.stage_readouts(), u)).T
+    setattr(model, axis_name, getattr(model, axis_name) + 1.75)
     params = model.build_point_params(0.0)
     emitted = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
                                      params["sample_rz_param"]).T
@@ -978,29 +975,14 @@ def test_offset_changes_the_emitted_rotation_by_that_axis_rotation(models, field
                 @ _rot((0, 0, 1), shifted["sgu"]) @ u)
     assert np.allclose(emitted, expected, rtol=0.0, atol=1e-12)
     assert not np.allclose(emitted, before, rtol=0.0, atol=1e-6)
+    assert not [name for name in params if name.startswith(("kappa", "psi", "mis"))]
 
 
-def test_corrections_and_zero_errors_follow_the_stage_description(models, monkeypatch):
-    """Which state field corrects an axis, and which hides its zero error, is
-    declared on the axis (TAS: A3 psi / mis_omega, sgl kappa / mis_chi, sgu
-    none). A description that maps them otherwise is read as written."""
-    import dataclasses
+def test_the_stage_description_carries_no_correction_and_no_zero_offset(models):
+    """The stage is data: axis, travel, nothing the runtime adds to a readout."""
+    from instruments.descriptor import GonioAxis
 
-    from instruments.tas_runtime import TAS_Instrument, stage_corrections
-
-    model = copy.deepcopy(models["in8"])
-    a3, sgl, sgu = model.goniometer
-    assert [(ax.correction, ax.zero_error) for ax in model.goniometer] == [
-        ("psi", "mis_omega"), ("kappa", "mis_chi"), (None, None)]
-    remapped = (dataclasses.replace(a3, correction="kappa", zero_error=None),
-                dataclasses.replace(sgl, correction=None, zero_error=None),
-                dataclasses.replace(sgu, correction="psi", zero_error="mis_chi"))
-    monkeypatch.setattr(TAS_Instrument, "goniometer", property(lambda self: remapped))
-    model.A3, model.sgl, model.sgu = 30.0, 2.0, -3.0
-    model.psi, model.kappa, model.mis_omega, model.mis_chi = 1.0, 0.5, 0.25, -0.125
-    assert model.physical_stage_angles() == {"A3": 30.5, "sgl": 2.0, "sgu": -2.125}
-    assert stage_corrections(remapped, {"psi": 1.0, "kappa": 0.5}) == {
-        "A3": 0.5, "sgl": 0.0, "sgu": 1.0}
+    assert [f.name for f in dataclasses.fields(GonioAxis)] == ["name", "axis", "limits"]
 
 
 @pytest.mark.parametrize(("angles", "named"), [
@@ -1034,8 +1016,7 @@ def test_build_fingerprint_is_unchanged_by_orientation(name, cls):
     plugin = getattr(importlib.import_module(f"instruments.{name}.plugin"), cls)()
     config = plugin.default_state()
     before = plugin.build_fingerprint(config)
-    for field, value in (("A3", 12.0), ("sgl", 3.0), ("sgu", -4.0), ("psi", 1.0),
-                         ("kappa", -1.0), ("mis_omega", 0.5), ("mis_chi", 0.25)):
+    for field, value in (("A3", 12.0), ("sgl", 3.0), ("sgu", -4.0)):
         setattr(config, field, value)
     config.sample_mount = SampleMount(CUBIC_B, _rot((1, 1, 0), 8.0))
     config.U_true = _rot((1, -1, 0), 5.0)
@@ -1091,13 +1072,12 @@ def test_a_plane_that_spans_nothing_is_refused_with_the_reason(hkl_u, hkl_v, rea
 Q_200 = component_q_to_instrument_q(CUBIC_B @ np.array([2.0, 0.0, 0.0]))
 
 
-def _engine_point(config, mode, coords, tmp_path, sgl=0.0, sgu=0.0, kappa=0.0, psi=0.0):
+def _engine_point(config, mode, coords, tmp_path, sgl=0.0, sgu=0.0):
     """One IN8 scan point through the shared snapshot, and the engine's HKL."""
-    from instruments.tas_runtime import (SLOT_KAPPA, SLOT_PSI, SLOT_SGL, SLOT_SGU,
-                                         true_point_hkl)
+    from instruments.tas_runtime import SLOT_SGL, SLOT_SGU, true_point_hkl
 
-    point = [*coords, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0, 0.0, 0.0]
-    point[SLOT_SGL], point[SLOT_SGU], point[SLOT_KAPPA], point[SLOT_PSI] = sgl, sgu, kappa, psi
+    point = [*coords, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0]
+    point[SLOT_SGL], point[SLOT_SGU] = sgl, sgu
     plugin, _ = _plugin_config(_in12_vals(), "in8")
     snapshot = plugin.compute_snapshot((point, 0), 0, mode, config, _in12_vals(), str(tmp_path))
     assert snapshot.error_flags == []
@@ -1133,32 +1113,28 @@ def test_engine_hkl_through_a_wrong_ub_misses_the_reflection(tmp_path, sense):
 
 
 @pytest.mark.parametrize("mode", ["rlu", "momentum", "orientation", "angle"])
-def test_hidden_turntable_zero_error_reaches_the_engine_in_every_mode(tmp_path, mode):
-    """WIP Entry 14: a hidden 3 deg turntable zero error with psi = 0 takes
-    the crystal off (2 0 0) in every mode; psi = -3 puts it back."""
+def test_a_hidden_mount_rotation_reaches_the_engine_in_every_mode(tmp_path, mode):
+    """A hidden 3 deg turn of the crystal in its mount takes it off (2 0 0)
+    in every mode, by exactly that turn."""
     coords = (2, 0, 0, 0) if mode == "rlu" else (*Q_200, 0.0)
     sgl = sgu = 0.0
     if mode == "angle":
         reference, _ = _engine_point(_in8_config(-1), "rlu", (2, 0, 0, 0), tmp_path)
         coords, sgl, sgu = _angle_coords(reference)
     hkls = {}
-    for mis, psi in ((0.0, 0.0), (3.0, 0.0), (3.0, -3.0)):
-        config = _in8_config(-1)
-        config.mis_omega = mis
-        _, hkls[(mis, psi)] = _engine_point(config, mode, coords, tmp_path,
-                                            sgl=sgl, sgu=sgu, psi=psi)
-    assert hkls[(0.0, 0.0)] == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
-    assert np.linalg.norm(hkls[(3.0, 0.0)] - [2.0, 0.0, 0.0]) > 0.05
-    assert hkls[(3.0, -3.0)] == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
+    for turn in (0.0, 3.0):
+        config = _in8_config(-1, u_true=_rot((0, 1, 0), turn))
+        _, hkls[turn] = _engine_point(config, mode, coords, tmp_path, sgl=sgl, sgu=sgu)
+    assert hkls[0.0] == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
+    assert _miss_deg(hkls[3.0], np.array([2.0, 0.0, 0.0])) == pytest.approx(3.0, abs=1e-6)
 
 
 @pytest.mark.parametrize("sense", [-1, 1])
 @pytest.mark.parametrize("mode", ["rlu", "momentum", "orientation", "angle"])
 def test_engine_hkl_is_the_emitted_arm_on_lab_q_and_ignores_the_ub(tmp_path, mode, sense):
-    """At tilted arcs, with zero errors and corrections in force, B_true @ hkl
-    is the emitted sample arm's rotation applied to the lab Q (signed per
-    sense): the engine sees the crystal McStas builds. In the Q and angle
-    modes the operator's UB does not move it."""
+    """At tilted arcs, B_true @ hkl is the emitted sample arm's rotation
+    applied to the lab Q (signed per sense): the engine sees the crystal McStas
+    builds. In the Q and angle modes the operator's UB does not move it."""
     u_true = _rot((1, 2, 0), 6.0) @ U_IN_PLANE
     coords = {"rlu": (2, 1, 0.5, 0.0), "momentum": (2.4, 0.6, 0.5, 0.0),
               "orientation": (2.4, 0.6, 0.5, 0.0)}.get(mode)
@@ -1171,9 +1147,7 @@ def test_engine_hkl_is_the_emitted_arm_on_lab_q_and_ignores_the_ub(tmp_path, mod
     found = []
     for u_operator in (_rot((1, 0, 0), 5.0), _rot((0, 1, 1), 9.0)):
         config = _in8_config(sense, u_true, u_operator)
-        config.mis_omega, config.mis_chi = 0.7, -0.4
-        snapshot, hkl = _engine_point(config, mode, coords, tmp_path,
-                                      sgl=sgl, sgu=sgu, kappa=-0.2, psi=0.3)
+        snapshot, hkl = _engine_point(config, mode, coords, tmp_path, sgl=sgl, sgu=sgu)
         md, params = snapshot.metadata, snapshot.params
         assert abs(md["sgl"]) + abs(md["sgu"]) > 1.0                 # the arcs are tilted
         arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
@@ -1193,51 +1167,44 @@ STANDARD_REFLECTIONS = [(1, 0, 0), (0, 1, 0), (1, 1, 0)]
 SENSES = [("puma", -1), ("in8", 1)]
 
 
-def _true_peak(gonio, sense, hkl, u_true, b_true, corrections, zero_errors, k=K):
-    """A peak taken where the true crystal diffracts: the physical setting
-    that puts the true reflection on the lab Q, recorded as readouts
-    (physical - correction - zero error) with the corrections in force."""
+def _true_peak(gonio, sense, hkl, u_true, b_true, k=K):
+    """A peak taken where the true crystal diffracts: the setting that puts the
+    true reflection on the lab Q, recorded as the stage readouts."""
     q = u_true @ b_true @ np.array(hkl, dtype=float)
     stt = stt_from_q_norm(float(np.linalg.norm(q)), k, k, sense)
-    physical = solve_stage(gonio, -q if sense > 0 else q, lab_q_from_stt(k, k, stt))
-    readouts = {name: angle - corrections.get(name, 0.0) - zero_errors.get(name, 0.0)
-                for name, angle in physical.items()}
-    record = stage_record(gonio, readouts, corrections=corrections, ki=k, kf=k, sense=sense)
+    readouts = solve_stage(gonio, -q if sense > 0 else q, lab_q_from_stt(k, k, stt))
+    record = stage_record(gonio, readouts, ki=k, kf=k, sense=sense)
     return ObservedPeak(hkl=tuple(hkl), angles=(readouts["A3"], readouts["sgl"], stt),
                         ki=k, kf=k, stage=record)
 
 
-def _fit_and_grade(gonio, sense, u_true, zero_errors, corrections, peak_hkls,
-                   turn_ub=np.eye(3)):
+def _fit_and_grade(gonio, sense, u_true, peak_hkls, turn_ub=np.eye(3)):
     """The operator fits a UB from peaks taken on the true crystal (lattice
     fields right), optionally turns it, and is graded on those peaks plus the
     standard-setting reflections."""
     from tavi.ub_matrix import grade_alignment
 
     ub = UBMatrix(*LATTICE)
-    ub.peaks = [_true_peak(gonio, sense, hkl, u_true, CUBIC_B, corrections, zero_errors)
-                for hkl in peak_hkls]
-    ub.calculate_U_from_peaks(corrections)
-    return grade_alignment(gonio, sense, K, K, turn_ub @ ub.UB, corrections, u_true, CUBIC_B,
-                           zero_errors, list(peak_hkls) + STANDARD_REFLECTIONS)
+    ub.peaks = [_true_peak(gonio, sense, hkl, u_true, CUBIC_B) for hkl in peak_hkls]
+    ub.calculate_U_from_peaks()
+    return grade_alignment(gonio, sense, K, K, turn_ub @ ub.UB, u_true, CUBIC_B,
+                           list(peak_hkls) + STANDARD_REFLECTIONS)
 
 
-@pytest.mark.parametrize("psi", [0.0, -3.0], ids=["fit-absorbs", "psi-corrects"])
 @pytest.mark.parametrize(("name", "sense"), SENSES, ids=[n for n, _ in SENSES])
-def test_a_fit_on_the_true_crystal_grades_aligned(models, name, sense, psi):
-    """A hidden 3 deg turntable zero error: a fit with psi = 0 absorbs it,
-    psi = -3 corrects it; both command the true reflections (aligned). The
-    grade compares settings, not U with U or psi with the zero error."""
-    grade = _fit_and_grade(models[name].goniometer, sense, U_IN_PLANE, {"A3": 3.0},
-                           {"A3": psi}, PEAKS_2)
+def test_a_fit_on_the_true_crystal_grades_aligned(models, name, sense):
+    """A hidden 23 deg turn of the mount: a fit from peaks on the true crystal
+    commands the true reflections (aligned). The grade compares settings, not
+    U with U."""
+    grade = _fit_and_grade(models[name].goniometer, sense, U_IN_PLANE, PEAKS_2)
     assert grade["status"] == "aligned", grade
     assert grade["worst_miss"] < 1e-6
 
 
 @pytest.mark.parametrize(("name", "sense"), SENSES, ids=[n for n, _ in SENSES])
 def test_a_ub_five_degrees_off_grades_way_off(models, name, sense):
-    grade = _fit_and_grade(models[name].goniometer, sense, U_IN_PLANE, {"A3": 3.0},
-                           {"A3": 0.0}, PEAKS_2, turn_ub=_rot((0, 1, 0), 5.0))
+    grade = _fit_and_grade(models[name].goniometer, sense, U_IN_PLANE, PEAKS_2,
+                           turn_ub=_rot((0, 1, 0), 5.0))
     assert grade["status"] == "way_off", grade
     assert grade["worst_miss"] == pytest.approx(5.0, abs=1e-6)
 
@@ -1247,8 +1214,8 @@ def test_an_exact_u_on_lattice_fields_two_percent_off_grades_by_its_two_theta_mi
 
     gonio = models["in8"].goniometer
     b_fields = reciprocal_basis_tas(*(1.02 * x for x in LATTICE[:3]), *LATTICE[3:])
-    grade = grade_alignment(gonio, 1, K, K, U_IN_PLANE @ b_fields, {}, U_IN_PLANE, CUBIC_B,
-                            {}, STANDARD_REFLECTIONS)
+    grade = grade_alignment(gonio, 1, K, K, U_IN_PLANE @ b_fields, U_IN_PLANE, CUBIC_B,
+                            STANDARD_REFLECTIONS)
 
     def stt(b, hkl):
         return stt_from_q_norm(float(np.linalg.norm(b @ np.array(hkl, dtype=float))), K, K, 1)
@@ -1265,34 +1232,26 @@ def test_a_reflection_whose_true_q_closes_no_triangle_grades_way_off(models):
     from tavi.ub_matrix import grade_alignment
 
     b_fields = reciprocal_basis_tas(4.6, 4.6, 4.6, 90.0, 90.0, 90.0)
-    grade = grade_alignment(models["in8"].goniometer, 1, K, K, b_fields, {}, np.eye(3),
-                            CUBIC_B, {}, STANDARD_REFLECTIONS + [(2, 2, 0)])
+    grade = grade_alignment(models["in8"].goniometer, 1, K, K, b_fields, np.eye(3),
+                            CUBIC_B, STANDARD_REFLECTIONS + [(2, 2, 0)])
     assert grade["status"] == "way_off" and grade["worst_hkl"] == (2, 2, 0), grade
     assert grade["worst_miss"] == math.inf
     assert "(2 2 0) closes no scattering triangle" in grade["summary"]
 
 
-@pytest.mark.parametrize("cancelling", [True, False], ids=["cancelling", "residual"])
-def test_tilted_truth_grades_by_what_the_fit_leaves(models, cancelling):
-    """Under tilted arcs a correction is absorbed exactly only when it cancels
-    the zero error (amendment 3c): then aligned; otherwise the grade is the
-    least-squares fit's residual miss, smaller than the offsets themselves."""
-    gonio = models["in8"].goniometer
+@pytest.mark.parametrize(("name", "sense"), SENSES, ids=[n for n, _ in SENSES])
+def test_a_tilted_truth_is_recovered_exactly_from_tilted_peaks(models, name, sense):
+    """A hidden turn about a tilted axis needs the arcs for every peak. The
+    error is exactly a U, so a fit from correctly indexed, noiseless peaks
+    recovers it and the grade is aligned to rounding -- no 'approximately'."""
+    gonio = models[name].goniometer
     u_true = _rot((2, 0, -1), 8.0) @ U_IN_PLANE
-    zero_errors = {"A3": 3.0, "sgl": 2.0}
-    corrections = {"A3": -3.0, "sgl": -2.0} if cancelling else {}
     peaks = [(1, 0, 0), (0, 1, 0), (1, 1, 0), (2, 1, 0)]
     for hkl in peaks:                                # the peaks need the arcs
         q = u_true @ CUBIC_B @ np.array(hkl, dtype=float)
         assert abs(q[1]) / np.linalg.norm(q) > math.sin(math.radians(1.0))
-    grade = _fit_and_grade(gonio, 1, u_true, zero_errors, corrections, peaks)
-    if cancelling:
-        assert grade["status"] == "aligned" and grade["worst_miss"] < 1e-6, grade
-    else:
-        assert 0.05 < grade["worst_miss"] < math.hypot(3.0, 2.0), grade
-        band = "aligned" if grade["worst_miss"] <= 0.5 else (
-            "close" if grade["worst_miss"] <= 2.0 else "way_off")
-        assert grade["status"] == band
+    grade = _fit_and_grade(gonio, sense, u_true, peaks)
+    assert grade["status"] == "aligned" and grade["worst_miss"] < 1e-6, grade
 
 
 def test_too_few_reachable_reflections_or_no_sample_cannot_be_assessed(models):
@@ -1303,13 +1262,13 @@ def test_too_few_reachable_reflections_or_no_sample_cannot_be_assessed(models):
 
     gonio = models["in8"].goniometer
     b_fields = reciprocal_basis_tas(3.0, 5.0, 4.05, 90.0, 90.0, 90.0)
-    grade = grade_alignment(gonio, 1, 1.0, 1.0, b_fields, {}, np.eye(3), CUBIC_B, {},
+    grade = grade_alignment(gonio, 1, 1.0, 1.0, b_fields, np.eye(3), CUBIC_B,
                             STANDARD_REFLECTIONS)
     assert grade["status"] == "cannot_assess", grade
     assert "fewer than two" in grade["summary"]
     assert [s.split(":")[0] for s in grade["skipped"]] == ["(1 0 0)", "(1 1 0)"]
 
-    grade = grade_alignment(gonio, 1, K, K, CUBIC_B, {}, np.eye(3), None, {},
+    grade = grade_alignment(gonio, 1, K, K, CUBIC_B, np.eye(3), None,
                             STANDARD_REFLECTIONS)
     assert grade["status"] == "cannot_assess" and "no sample" in grade["summary"]
 
@@ -1370,42 +1329,33 @@ def test_an_irrational_plane_normal_has_no_zone_axis():
 # --- Unit 3 (C3): residuals and the peak-pair check ---------------------------------
 
 RESIDUAL_HKLS = [(1, 0, 0), (0, 1, 0), (1, 1, 0), (1, 0, 1)]
-# Corrections now; the hidden zero errors cancel them, so the operator's model
-# (readout frame, no zero errors) is exact even under tilted arcs.
-NOW = {"A3": 0.4, "sgl": -0.25}
-ZERO_ERRORS = {"A3": -0.4, "sgl": 0.25}
-# A correction changed between peaks: each was taken under its own.
-TAKEN_UNDER = [{"A3": 0.0}, {"A3": 0.4, "sgl": -0.25}, {"A3": -1.0, "sgl": 0.5},
-               {"sgl": 0.3}]
 
 
 def _residual_set(models, lattice, sense, seed, hkls=RESIDUAL_HKLS, relabel=None,
                   fields=None):
     """Peaks ``hkls`` taken where a seeded true crystal (not U = I)
-    diffracts, each under its own corrections; optionally some relabelled
-    ({index: hkl}); a UB fitted from them on the lattice ``fields`` (default
-    the true one) and the residuals in the frame of the corrections now."""
+    diffracts; optionally some relabelled ({index: hkl}); a UB fitted from
+    them on the lattice ``fields`` (default the true one) and its residuals."""
     from tavi.ub_matrix import alignment_residuals
 
     gonio = models["in8"].goniometer
     b_true = reciprocal_basis_tas(*LATTICES[lattice])
     u_true = _random_mount(np.random.default_rng(seed))
-    peaks = [_true_peak(gonio, sense, hkl, u_true, b_true, taken, ZERO_ERRORS)
-             for hkl, taken in zip(hkls, TAKEN_UNDER)]
+    peaks = [_true_peak(gonio, sense, hkl, u_true, b_true) for hkl in hkls]
     for index, hkl in (relabel or {}).items():
         peaks[index].hkl = hkl
     ub = UBMatrix(*(fields or LATTICES[lattice]))
     ub.peaks = peaks
-    ub.calculate_U_from_peaks(NOW)
-    return peaks, alignment_residuals(ub.UB, peaks, NOW)
+    ub.calculate_U_from_peaks()
+    return peaks, alignment_residuals(ub.UB, peaks)
 
 
 @pytest.mark.parametrize("sense", [-1, 1])
 @pytest.mark.parametrize("lattice", ["cubic", "monoclinic"])
 def test_a_clean_peak_set_has_no_flag_and_no_residual(models, lattice, sense):
-    """At different arc settings and corrections: every per-peak angle and
-    every pair difference is under 1e-6 deg (a sense applied twice would put
-    a peak 180 deg off)."""
+    """At different arc settings: every per-peak angle and every pair
+    difference is under 1e-6 deg (a sense applied twice would put a peak 180
+    deg off)."""
     peaks, result = _residual_set(models, lattice, sense, seed=31)
     upper = [p.stage["angles"]["sgu"] for p in peaks]
     assert max(upper) - min(upper) > 0.5, upper
@@ -1481,7 +1431,7 @@ def _refine_peaks(models, lattice, hkls, seed=53):
     gonio = models["in8"].goniometer
     u_true = _random_mount(np.random.default_rng(seed))
     b_true = reciprocal_basis_tas(*lattice)
-    return [_true_peak(gonio, 1, hkl, u_true, b_true, {}, {}, k=4.0) for hkl in hkls]
+    return [_true_peak(gonio, 1, hkl, u_true, b_true, k=4.0) for hkl in hkls]
 
 
 @pytest.mark.parametrize("case", list(REFINE_CASES))

@@ -29,7 +29,7 @@ from instruments.puma.plugin import puma_descriptor  # noqa: F401  (re-export)
 # Shared "core" TAS parameters every instrument needs; instrument-specific extras
 # (slits, bending, selector) are appended per instrument. The sample-arm
 # parameters are part of the core because every TAVI instrument emits the same
-# single sample arm (the stage at its physical angles and the crystal mount).
+# single sample arm (the stage at its readout angles and the crystal mount).
 _CORE_PARAMS = (
     ParameterSpec("A1_param", "Monochromator 2-theta angle"),
     ParameterSpec("A2_param", "Sample 2-theta angle"),
@@ -38,10 +38,6 @@ _CORE_PARAMS = (
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0),
     ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0),
-    ParameterSpec("kappa_param", "Kappa - lower-arc correction", default=0.0),
-    ParameterSpec("mis_chi_param", "Hidden lower-arc zero error (training)", default=0.0),
-    ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
-    ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
     ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),
     ParameterSpec("sample_ry_param", "Sample arm rotation about y (stage and mount)", default=0.0),
     ParameterSpec("sample_rz_param", "Sample arm rotation about z (stage and mount)", default=0.0),

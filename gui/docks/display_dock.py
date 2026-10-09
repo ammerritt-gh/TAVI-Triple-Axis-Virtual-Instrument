@@ -138,22 +138,17 @@ class SavePlotDialog(QDialog):
         self.info_crystals_check.setChecked(True)
         self.info_crystals_check.toggled.connect(self._on_option_changed)
         info_layout.addWidget(self.info_crystals_check, row, 0)
-        
-        self.info_alignment_check = QCheckBox("Sample alignment offsets")
-        self.info_alignment_check.setChecked(True)
-        self.info_alignment_check.toggled.connect(self._on_option_changed)
-        info_layout.addWidget(self.info_alignment_check, row, 1)
-        
-        row += 1
+
         self.info_q_hkl_check = QCheckBox("Q/HKL + ΔE")
         self.info_q_hkl_check.setChecked(True)
         self.info_q_hkl_check.toggled.connect(self._on_option_changed)
-        info_layout.addWidget(self.info_q_hkl_check, row, 0)
-        
+        info_layout.addWidget(self.info_q_hkl_check, row, 1)
+
+        row += 1
         self.info_nmo_vs_check = QCheckBox("NMO / Velocity selector")
         self.info_nmo_vs_check.setChecked(True)
         self.info_nmo_vs_check.toggled.connect(self._on_option_changed)
-        info_layout.addWidget(self.info_nmo_vs_check, row, 1)
+        info_layout.addWidget(self.info_nmo_vs_check, row, 0)
         
         options_layout.addWidget(info_group)
         
@@ -254,7 +249,6 @@ class SavePlotDialog(QDialog):
             self.info_fixed_e_check.isChecked(),
             self.info_collimations_check.isChecked(),
             self.info_crystals_check.isChecked(),
-            self.info_alignment_check.isChecked(),
             self.info_q_hkl_check.isChecked(),
             self.info_nmo_vs_check.isChecked()
         ])
@@ -393,17 +387,6 @@ class SavePlotDialog(QDialog):
                 crystal_parts.append(f"Ana={meta['anacris']}")
             if crystal_parts:
                 info_lines.append("Crystals: " + ", ".join(crystal_parts))
-        
-        if self.info_alignment_check.isChecked():
-            align_parts = []
-            if 'kappa' in meta and meta['kappa'] != 0:
-                align_parts.append(f"κ={meta['kappa']:.2f}°")
-            if 'psi' in meta and meta['psi'] != 0:
-                align_parts.append(f"ψ={meta['psi']:.2f}°")
-            if align_parts:
-                info_lines.append("Alignment: " + ", ".join(align_parts))
-            elif 'kappa' in meta or 'psi' in meta:
-                info_lines.append("Alignment: none")
         
         if self.info_q_hkl_check.isChecked():
             if all(k in meta for k in ['H', 'K', 'L']):
@@ -571,17 +554,6 @@ class SavePlotDialog(QDialog):
             if crystal_parts:
                 info_lines.append("Crystals: " + ", ".join(crystal_parts))
         
-        if self.info_alignment_check.isChecked():
-            align_parts = []
-            if 'kappa' in meta and meta['kappa'] != 0:
-                align_parts.append(f"κ={meta['kappa']:.2f}°")
-            if 'psi' in meta and meta['psi'] != 0:
-                align_parts.append(f"ψ={meta['psi']:.2f}°")
-            if align_parts:
-                info_lines.append("Alignment: " + ", ".join(align_parts))
-            elif 'kappa' in meta or 'psi' in meta:
-                info_lines.append("Alignment: none")
-        
         if self.info_q_hkl_check.isChecked():
             if all(k in meta for k in ['H', 'K', 'L']):
                 info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
@@ -707,7 +679,7 @@ class DisplayDock(BaseDockWidget):
             return 'ΔE (meV)'
         elif variable_name in ['H', 'K', 'L']:
             return f'{variable_name} (r.l.u.)'
-        elif variable_name in ['omega', 'sgl', 'sgu', 'chi', 'kappa', 'psi']:  # chi: old scans
+        elif variable_name in ['omega', 'sgl', 'sgu', 'chi']:  # chi: old scans
             return f'{variable_name} (°)'
         elif variable_name in ['mtt', 'stt', 'att', 'A1', 'A2', 'A3', 'A4']:
             return f'{variable_name} (°)'
@@ -1286,17 +1258,6 @@ class DisplayDock(BaseDockWidget):
         if crystal_parts:
             info_lines.append("Crystals: " + ", ".join(crystal_parts))
         
-        # Alignment offsets
-        align_parts = []
-        if 'kappa' in meta and meta['kappa'] != 0:
-            align_parts.append(f"κ={meta['kappa']:.2f}°")
-        if 'psi' in meta and meta['psi'] != 0:
-            align_parts.append(f"ψ={meta['psi']:.2f}°")
-        if align_parts:
-            info_lines.append("Alignment: " + ", ".join(align_parts))
-        elif 'kappa' in meta or 'psi' in meta:
-            info_lines.append("Alignment: none")
-        
         # Q/HKL + ΔE
         if all(k in meta for k in ['H', 'K', 'L']):
             info_lines.append(f"(H,K,L) = ({meta['H']:.3f}, {meta['K']:.3f}, {meta['L']:.3f})")
@@ -1425,7 +1386,6 @@ class DisplayDock(BaseDockWidget):
                 - fixed_E: float (meV)
                 - alpha_1, alpha_2, alpha_3, alpha_4: str (collimations)
                 - monocris, anacris: str (crystal names)
-                - kappa, psi: float (alignment offsets in degrees)
                 - qx, qy, qz: float (Q-space coordinates)
                 - H, K, L: float (HKL coordinates)
                 - deltaE: float (energy transfer in meV)
@@ -1535,6 +1495,6 @@ class DisplayDock(BaseDockWidget):
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
             return lower
-        if lower in ["omega", "sgl", "sgu", "chi", "kappa", "psi"]:  # chi: old scans
+        if lower in ["omega", "sgl", "sgu", "chi"]:  # chi: old scans
             return lower
         return name

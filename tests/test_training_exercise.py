@@ -59,9 +59,9 @@ def test_a_mount_only_code_decodes_and_every_other_code_is_refused():
     assert np.allclose(decode_mount_exercise(encode_training(rotation, 0.0, 0.0)),
                        rotation, atol=1e-6)
 
-    for zero_errors in ((1.25, 0.0), (0.0, -0.5), (0.5, 0.5)):
+    for motor_zeros in ((1.25, 0.0), (0.0, -0.5), (0.5, 0.5)):
         with pytest.raises(ValueError) as old:
-            decode_mount_exercise(encode_training(rotation, *zero_errors))
+            decode_mount_exercise(encode_training(rotation, *motor_zeros))
         assert str(old.value) == MOTOR_ZERO_REFUSAL == (
             "this exercise was made by an older TAVI and contains motor-zero errors, "
             "which are no longer simulated; ask for a new code")
@@ -153,7 +153,7 @@ def test_a_generated_exercise_is_recovered_to_aligned_from_tilted_peaks():
     ub.peaks = peaks
     ub.calculate_U_from_peaks()
 
-    grade = grade_alignment(gonio, sense, k, k, ub.UB, {}, u_true, b, {}, [p.hkl for p in peaks])
+    grade = grade_alignment(gonio, sense, k, k, ub.UB, u_true, b, [p.hkl for p in peaks])
     assert grade["status"] == "aligned" and grade["worst_miss"] < 1e-6, grade
     assert np.allclose(ub.U, u_true, atol=1e-5)
 
@@ -234,6 +234,47 @@ def test_a_refused_code_applies_nothing(in8, said):
     finally:
         stop()
         in8.set_default_parameters()
+
+
+@pytest.mark.parametrize("fixture", ["in8", "panda"])
+def test_both_engines_present_the_same_hkl_for_a_loaded_mount_only_exercise(
+        request, fixture, tmp_path):
+    """Audit entry 14: with a hidden mount rotation loaded, the analytic
+    engine's presented (H, K, L) (``true_point_hkl``: the point's readouts and
+    U_true through B_true) is the (H, K, L) the McStas path is given (the
+    emitted sample-arm rotation applied to the lab Q, through B_true), at the
+    same commanded point; and both differ from the commanded one by the hidden
+    turn. No McStas run: the emitted parameters are what McStas receives."""
+    from instruments.tas_runtime import true_point_hkl
+    from tavi.tas_geometry import lab_q_from_stt
+
+    ctrl = request.getfixturevalue(fixture)
+    ctrl.set_default_parameters()
+    code = encode_training(mccode_rotation_matrix(3.0, 5.0, -2.0), 0.0, 0.0)
+    _press_load(ctrl, code)
+    assert ctrl._exercise == code
+    b_true = ctrl._true_B()
+    sign = -1.0 if ctrl.instrument_state.sense_sample > 0 else 1.0
+    try:
+        for commanded in ((2.0, 0.0, 0.2), (1.5, 1.0, 0.3), (2.0, 0.5, -0.2)):
+            launch = ctrl.build_api_launch_state(
+                {"H": commanded[0], "K": commanded[1], "L": commanded[2], "deltaE": 0.0,
+                 "scan_command1": f"H {commanded[0]} {commanded[0]} 1"})
+            vals, config = launch["vals"], launch["scan_config"]
+            point = ctrl._build_scan_point_template("rlu", vals)
+            snapshot = ctrl.instrument.compute_snapshot(
+                (point, 0), 0, "rlu", config, vals, str(tmp_path))
+            assert snapshot.error_flags == [], snapshot.error_flags
+            md, params = snapshot.metadata, snapshot.params
+            analytic = np.array(true_point_hkl(config, md, b_true))
+            arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
+                                         params["sample_rz_param"])
+            mcstas = np.linalg.solve(
+                b_true, sign * arm @ lab_q_from_stt(md["Ki"], md["Kf"], md["stt"]))
+            assert analytic == pytest.approx(mcstas, abs=1e-9), commanded
+            assert np.linalg.norm(analytic - commanded) > 0.05, "the hidden turn must show"
+    finally:
+        ctrl.set_default_parameters()
 
 
 def test_an_old_mount_only_code_loads(in8):

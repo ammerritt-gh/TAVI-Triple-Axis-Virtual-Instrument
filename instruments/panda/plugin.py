@@ -128,10 +128,6 @@ _PANDA_PARAMS = (
     # Sample orientation: the single sample arm (generic TAS; shared with PUMA/IN8).
     ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0),
     ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0),
-    ParameterSpec("kappa_param", "Kappa - lower-arc correction", default=0.0),
-    ParameterSpec("mis_chi_param", "Hidden lower-arc zero error (training)", default=0.0),
-    ParameterSpec("psi_param", "Psi - omega alignment offset", default=0.0),
-    ParameterSpec("mis_omega_param", "Hidden omega misalignment (training)", default=0.0),
     ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),
     ParameterSpec("sample_ry_param", "Sample arm rotation about y (stage and mount)", default=0.0),
     ParameterSpec("sample_rz_param", "Sample arm rotation about z (stage and mount)", default=0.0),

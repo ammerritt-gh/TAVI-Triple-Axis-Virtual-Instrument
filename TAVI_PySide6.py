@@ -28,14 +28,11 @@ from instruments.contract import (
 )
 from instruments.tas_runtime import (
     SCAN_POINT_LENGTH,
-    SLOT_KAPPA,
-    SLOT_PSI,
     SLOT_SGL,
     SLOT_SGU,
     STAGE_FLAG_PREFIX,
     check_point_feasibility,
     describe_scan_error_flags,
-    stage_corrections,
     training_reach_error,
 )
 
@@ -1555,9 +1552,6 @@ class TAVIController(QObject):
         self.window.sample_dock.mount_apply_button.clicked.connect(self.on_apply_mount_plane)
         self.window.sample_dock.mount_clear_button.clicked.connect(self.on_clear_mount_plane)
 
-        # Sample orientation controls - connected later in signal setup
-        # (omega/sgl/sgu are stage readouts, psi/kappa are their corrections)
-        
         # UB Matrix dock
         self.window.ub_matrix_dock.calculate_ub_button.clicked.connect(self.on_calculate_ub)
         self.window.ub_matrix_dock.refine_lattice_button.clicked.connect(self.on_refine_lattice)
@@ -1714,9 +1708,6 @@ class TAVIController(QObject):
         # Lattice parameters - only update via Save button (lock/unlock mechanism)
         # Connect the lattice save signal from the sample dock
         self.window.sample_dock.lattice_parameters_changed.connect(self.on_lattice_changed)
-        # Sample alignment offsets (kappa and psi)
-        self.window.sample_dock.kappa_edit.editingFinished.connect(self.on_alignment_offset_changed)
-        self.window.sample_dock.psi_edit.editingFinished.connect(self.on_alignment_offset_changed)
         # Sample selection change -> update the instrument state and show status
         try:
             self.window.sample_dock.sample_combo.currentTextChanged.connect(self.on_sample_changed)
@@ -1770,12 +1761,6 @@ class TAVIController(QObject):
             self.window.scattering_dock.K_edit,
             self.window.scattering_dock.L_edit,
             self.window.scattering_dock.deltaE_edit,
-        ])
-        
-        # Sample dock - only alignment offsets, NOT lattice fields (those use lock/unlock)
-        line_edits.extend([
-            self.window.sample_dock.kappa_edit,
-            self.window.sample_dock.psi_edit,
         ])
         
         # Scan controls dock
@@ -2335,10 +2320,6 @@ class TAVIController(QObject):
         metadata['monocris'] = vals.get('monocris', self.descriptor.mono_crystals[0].id)
         metadata['anacris'] = vals.get('anacris', self.descriptor.ana_crystals[0].id)
         
-        # Alignment offsets
-        metadata['kappa'] = vals.get('kappa', 0)
-        metadata['psi'] = vals.get('psi', 0)
-        
         # Q-space coordinates
         metadata['qx'] = vals.get('qx', 0)
         metadata['qy'] = vals.get('qy', 0)
@@ -2408,8 +2389,6 @@ class TAVIController(QObject):
                 'lattice_alpha': float(self.window.sample_dock.lattice_alpha_edit.text() or 90),
                 'lattice_beta': float(self.window.sample_dock.lattice_beta_edit.text() or 90),
                 'lattice_gamma': float(self.window.sample_dock.lattice_gamma_edit.text() or 90),
-                'kappa': float(self.window.sample_dock.kappa_edit.text() or 0),
-                'psi': float(self.window.sample_dock.psi_edit.text() or 0),
                 # Selected sample as its library id; the "no sample" entry maps
                 # to key None internally but surfaces to the API as "none" so it
                 # round-trips through apply_parameters/isolation restore.
@@ -3144,7 +3123,7 @@ class TAVIController(QObject):
             return "deltaE"
         if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
             return lower
-        if lower in ["sgl", "sgu", "kappa", "psi"]:
+        if lower in ["sgl", "sgu"]:
             return lower
         return name
 
@@ -3628,7 +3607,7 @@ class TAVIController(QObject):
             "att_var": att, "Ki_var": 2.6634, "Kf_var": 2.6634,
             "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
             "qx_var": 3.1028, "qy_var": 0, "qz_var": 0, "H_var": 2, "K_var": 0,
-            "L_var": 0, "deltaE_var": 0, "kappa_var": 0, "psi_offset_var": 0,
+            "L_var": 0, "deltaE_var": 0,
             "lattice_a_var": 4.05, "lattice_b_var": 4.05, "lattice_c_var": 4.05,
             "lattice_alpha_var": 90, "lattice_beta_var": 90, "lattice_gamma_var": 90,
         }
@@ -4157,19 +4136,6 @@ class TAVIController(QObject):
         _, self.anacris_info = self.instrument.crystal_info(monocris, anacris)
         self.update_all_variables()
     
-    def on_alignment_offset_changed(self):
-        """Handle changes to the corrections (kappa: lower arc sgl, psi: turntable A3)."""
-        if self.updating:
-            return
-        try:
-            kappa = float(self.window.sample_dock.kappa_edit.text() or 0)
-            psi = float(self.window.sample_dock.psi_edit.text() or 0)
-            self.instrument_state.kappa = kappa
-            self.instrument_state.psi = psi
-            self.print_to_message_center(f"Alignment offsets updated: κ={kappa}° (lower arc), ψ={psi}° (turntable)")
-        except ValueError:
-            self.print_to_message_center("Invalid alignment offset value")
-    
     def validate_scan_commands(self):
         """Validate scan commands for errors, typos, and parameter conflicts.
         
@@ -4423,7 +4389,8 @@ class TAVIController(QObject):
         Returns:
             tuple: (normalized_variable_name or None, warning_message or None)
         """
-        from gui.docks.unified_simulation_dock import SCAN_CHI_REFUSAL, VALID_SCAN_VARIABLES
+        from gui.docks.unified_simulation_dock import (
+            SCAN_CHI_REFUSAL, SCAN_CORRECTION_REFUSAL, VALID_SCAN_VARIABLES)
 
         if not command:
             return (None, None)
@@ -4448,6 +4415,9 @@ class TAVIController(QObject):
         # that axis, so it is refused by name rather than aliased (D6).
         if var_lower == "chi":
             return (None, SCAN_CHI_REFUSAL)
+        # psi and kappa were TAVI's zero corrections of A3 and sgl; retired.
+        if var_lower in ("psi", "kappa"):
+            return (None, SCAN_CORRECTION_REFUSAL)
 
         # Check for known variable name
         if var_lower not in VALID_SCAN_VARIABLES:
@@ -4458,8 +4428,8 @@ class TAVIController(QObject):
             else:
                 return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, sgl, sgu, etc.")
         
-        # A locked plane holds the arcs and the lower-arc correction.
-        if var_lower in ("sgl", "sgu", "kappa") and self._lock_text():
+        # A locked plane holds the arcs.
+        if var_lower in ("sgl", "sgu") and self._lock_text():
             return (None, f"'{var_name}' cannot be scanned: {self._lock_text()} holds "
                           "it. Release the lock first.")
 
@@ -4562,8 +4532,7 @@ class TAVIController(QObject):
         solves the arcs per point, so the arc command would be silently
         ignored (A6).
 
-        Every other conflict this class detects is a judgement call -- scanning
-        H against the sample offset psi is a supported combination -- so those
+        Every other conflict this class detects is a judgement call, so those
         stay overridable.
         """
         q_vars = {"qx", "qy", "qz"}
@@ -4601,8 +4570,7 @@ class TAVIController(QObject):
         
         if self._is_arc_in_q_mode(v1, v2):
             return ("Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, "
-                    "so they cannot be scanned in it; scan 'kappa' (the lower-arc "
-                    "correction) instead, or scan the arcs in angle mode")
+                    "so they cannot be scanned in it; scan the arcs in angle mode")
         if self._is_unexecutable_conflict(v1, v2):
             return ("Conflict: Q and HKL scans describe the same target momentum "
                     "under the current sample mount")
@@ -4648,24 +4616,20 @@ class TAVIController(QObject):
             return vals.get('K', 0)
         elif var == 'l':
             return vals.get('L', 0)
-        # Instrument angles (A3 is calculated sample angle; omega is an offset scan)
+        # Instrument angles (omega is the sample rotation A3)
         elif var == 'a1':
             return vals.get('mtt', 0)
         elif var == 'a2' or var == '2theta':
             return vals.get('stt', 0)
-        elif var == 'a3':
+        elif var == 'a3' or var == 'omega':
             return vals.get('omega', 0)
         elif var == 'a4':
             return vals.get('att', 0)
-        # Sample stage slots (arcs, corrections)
+        # Sample stage slots (arcs)
         elif var == 'sgl':
             return scan_point_template[SLOT_SGL]
         elif var == 'sgu':
             return scan_point_template[SLOT_SGU]
-        elif var == 'kappa':
-            return scan_point_template[SLOT_KAPPA]
-        elif var == 'psi' or var == 'omega':
-            return scan_point_template[SLOT_PSI]
         # Crystal bending
         elif var == 'rhm':
             return vals.get('rhm', 0)
@@ -5000,13 +4964,13 @@ class TAVIController(QObject):
             cmd2: Second scan command
             
         Returns:
-            str: One of 'momentum', 'rlu', 'angle', 'orientation'
+            str: One of 'momentum', 'rlu', 'angle'. (The runtime still has an
+            'orientation' mode; no scan variable selects it.)
         """
         momentum_vars = {'qx', 'qy', 'qz', 'deltae'}
         rlu_vars = {'h', 'k', 'l'}
-        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta', 'sgl', 'sgu'}
-        orientation_vars = {'omega', 'psi', 'kappa'}
-        
+        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta', 'omega', 'sgl', 'sgu'}
+
         vars_used = set()
         for cmd in [cmd1, cmd2]:
             if cmd:
@@ -5020,8 +4984,6 @@ class TAVIController(QObject):
             return "momentum"
         elif vars_used & angle_vars:
             return "angle"
-        elif vars_used & orientation_vars:
-            return "orientation"
         else:
             # Default to rlu mode if no specific scan variables
             return "rlu"
@@ -5282,33 +5244,31 @@ class TAVIController(QObject):
 
     def _lock_for(self, plane, vals=None):
         """A plane_lock holding ``plane`` where the operator's UB levels it
-        (``lock_plane``, inside travel), kappa frozen at its value. Raises
-        ValueError (StageUnreachable included) with the reason."""
+        (``lock_plane``, inside travel). Raises ValueError (StageUnreachable
+        included) with the reason."""
         vals = vals or self.get_gui_values()
         if not vals:
             raise ValueError("a field does not read as a number")
         tilts = lock_plane(self.instrument_state.goniometer,
                            self._build_sample_mount(vals).mounted_basis, *plane)
         return {"hkl_u": [float(x) for x in plane[0]], "hkl_v": [float(x) for x in plane[1]],
-                "tilts": tilts, "kappa": float(vals['kappa'])}
+                "tilts": tilts}
 
     def _set_plane_lock(self, lock):
         """The one writer of the lock (None releases). Locking puts the arc
-        readouts at the lock's tilts and kappa at the lock's (one source for
-        GUI and API launches, a restore included); while locked the arc fields
-        and kappa are read-only with a tooltip naming the lock. The caller
-        re-solves the angles (``_update_ub_display``)."""
+        readouts at the lock's tilts (one source for GUI and API launches, a
+        restore included); while locked the arc fields are read-only with a
+        tooltip naming the lock. The caller re-solves the angles
+        (``_update_ub_display``)."""
         state = self.instrument_state
         state.plane_lock = lock
-        idock, sam = self.window.instrument_dock, self.window.sample_dock
+        idock = self.window.instrument_dock
         if lock is not None:
             state.sgl, state.sgu = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
             idock.sgl_edit.setText(format_editable_number(state.sgl))
             idock.sgu_edit.setText(format_editable_number(state.sgu))
-            state.kappa = lock["kappa"]
-            sam.kappa_edit.setText(format_editable_number(state.kappa))
         held = f"Held by {self._lock_text()}; release the lock to change it." if lock else None
-        for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
+        for edit in (idock.sgl_edit, idock.sgu_edit):
             if edit.property("free_tooltip") is None:
                 edit.setProperty("free_tooltip", edit.toolTip())
             edit.setReadOnly(lock is not None)
@@ -5378,7 +5338,7 @@ class TAVIController(QObject):
         self._set_plane_lock(lock)
         self._update_ub_display()
         self.print_to_message_center(
-            f"Scattering plane locked: {self._lock_text()}; the tilts and kappa stay put")
+            f"Scattering plane locked: {self._lock_text()}; the tilts stay put")
 
     def on_release_plane(self):
         """UB dock Release: back to free mode, the arcs solved per Q."""
@@ -5400,8 +5360,7 @@ class TAVIController(QObject):
         try:
             lock = {"hkl_u": [float(x) for x in raw["hkl_u"]],
                     "hkl_v": [float(x) for x in raw["hkl_v"]],
-                    "tilts": {str(name): float(v) for name, v in raw["tilts"].items()},
-                    "kappa": float(raw.get("kappa", 0.0))}
+                    "tilts": {str(name): float(v) for name, v in raw["tilts"].items()}}
             if len(lock["hkl_u"]) != 3 or len(lock["hkl_v"]) != 3:
                 raise ValueError("the plane needs two (h k l) vectors")
             inner = self.instrument_state.goniometer[1:]
@@ -5475,10 +5434,10 @@ class TAVIController(QObject):
         the operator's peaks' HKLs plus three reflections of the mounting
         plane (u, v, u+v; with no plane described, the described mount's x
         and z as small (h k l) and their sum, else (1 0 0), (0 1 0),
-        (1 1 0)), commanded by the operator's UB, lattice fields and
-        corrections, against the truth (U_true, the sample's own B, the zero
-        errors). Names the skipped reflections and the result in the message
-        center; returns the grade, or None when it could not run."""
+        (1 1 0)), commanded by the operator's UB and lattice fields, against
+        the truth (U_true, the sample's own B). Names the skipped reflections
+        and the result in the message center; returns the grade, or None when
+        it could not run."""
         try:
             vals = self.get_gui_values()
             state = self.instrument_state
@@ -5508,8 +5467,7 @@ class TAVIController(QObject):
             grade = grade_alignment(
                 gonio, state.sense_sample, vals['Ki'], vals['Kf'],
                 self._build_sample_mount(vals).mounted_basis,
-                stage_corrections(gonio, vals), state.U_true, b_true,
-                {ax.name: getattr(state, ax.zero_error) for ax in gonio if ax.zero_error},
+                state.U_true, b_true,
                 hkls,
                 # Commanded as the operator would drive: at the lock's tilts
                 # when a plane is locked, else the free solve.
@@ -5535,23 +5493,20 @@ class TAVIController(QObject):
 
             # Sync lattice from GUI
             vals = self.get_gui_values()
-            corrections = None
             if vals:
                 self.ub_matrix.set_lattice(
                     vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
                     vals['lattice_alpha'], vals['lattice_beta'], vals['lattice_gamma'],
                 )
-                # The UB lives in the readout frame of the corrections in force.
-                corrections = stage_corrections(self.instrument_state.goniometer, vals)
 
-            U = self.ub_matrix.calculate_U_from_peaks(corrections)
+            U = self.ub_matrix.calculate_U_from_peaks()
             belief = None
             self._update_ub_display()
             self.print_to_message_center(
                 f"UB matrix calculated from {len([p for p in self.ub_matrix.peaks if p.is_valid])} peaks"
             )
             # How the peaks agree with the new UB and with each other (3.1).
-            residuals = alignment_residuals(self.ub_matrix.UB, self.ub_matrix.peaks, corrections)
+            residuals = alignment_residuals(self.ub_matrix.UB, self.ub_matrix.peaks)
             self.window.ub_matrix_dock.show_residuals(residuals, self.ub_matrix.UB)
             self.print_to_message_center(residuals["summary"])
             # Refresh HKL/angles for current Q
@@ -5635,9 +5590,8 @@ class TAVIController(QObject):
 
     def on_take_peak_position(self, peak_index: int):
         """Take Position: record the stage readouts of every goniometer axis,
-        the corrections in force, ki, kf and the sense into the peak's stage
-        record. The readouts are the dock fields (A3 is the ω field); hidden
-        zero errors are never read."""
+        ki, kf and the sense into the peak's stage record. The readouts are
+        the dock fields (A3 is the ω field)."""
         if self._angles_stale:
             self.print_to_message_center(
                 f"Take Position refused for peak {peak_index + 1}: the angles do not match "
@@ -5651,14 +5605,13 @@ class TAVIController(QObject):
             readouts = {"A3": vals['omega'], "sgl": vals['sgl'], "sgu": vals['sgu']}
             record = stage_record(
                 self.instrument_state.goniometer, readouts,
-                corrections=stage_corrections(self.instrument_state.goniometer, vals),
                 ki=vals['Ki'], kf=vals['Kf'], sense=self.instrument_state.sense_sample,
             )
             pw.set_angles_from_position(record, vals['stt'], vals['Ki'], vals['Kf'])
             shown = ", ".join(f"{name}={value:.2f}°" for name, value in record["angles"].items())
             self.print_to_message_center(
                 f"Peak {peak_index + 1}: position taken "
-                f"({shown}, 2θ={vals['stt']:.2f}°, ψ={vals['psi']:.2f}°, κ={vals['kappa']:.2f}°, "
+                f"({shown}, 2θ={vals['stt']:.2f}°, "
                 f"ki={vals['Ki']:.4f}, kf={vals['Kf']:.4f})"
             )
 
@@ -5855,14 +5808,6 @@ class TAVIController(QObject):
         if 'anacris' in params:
             metadata['anacris'] = params['anacris']
         
-        # Alignment offsets
-        for key in ['kappa', 'psi']:
-            if key in params:
-                try:
-                    metadata[key] = float(params[key])
-                except (ValueError, TypeError):
-                    pass
-        
         # Q-space coordinates
         for key in ['qx', 'qy', 'qz']:
             if key in params:
@@ -5996,9 +5941,6 @@ class TAVIController(QObject):
             "lattice_alpha_var": self.window.sample_dock.lattice_alpha_edit.text(),
             "lattice_beta_var": self.window.sample_dock.lattice_beta_edit.text(),
             "lattice_gamma_var": self.window.sample_dock.lattice_gamma_edit.text(),
-            # Sample alignment offsets (kappa and psi)
-            "kappa_var": self.window.sample_dock.kappa_edit.text(),
-            "psi_offset_var": self.window.sample_dock.psi_edit.text(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
@@ -6359,10 +6301,6 @@ class TAVIController(QObject):
                 # Default scan: H-scan around Al (200) Bragg peak
                 self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
                 self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
-                
-                # Sample alignment offsets (kappa and psi)
-                self.window.sample_dock.kappa_edit.setText(format_editable_number(parameters.get("kappa_var", 0)))
-                self.window.sample_dock.psi_edit.setText(format_editable_number(parameters.get("psi_offset_var", 0)))
                 # Restore sample selection by persisted sample id (default Al
                 # Bragg). The mounting plane is replaced from the block below,
                 # so the sample swap's plane clear (I5) has nothing to clear.
@@ -6624,7 +6562,6 @@ class TAVIController(QObject):
             'H': 2.0, 'K': 0.0, 'L': 0.0, 'deltaE': 0.0,
             'lattice_a': 4.05, 'lattice_b': 4.05, 'lattice_c': 4.05,
             'lattice_alpha': 90.0, 'lattice_beta': 90.0, 'lattice_gamma': 90.0,
-            'kappa': 0.0, 'psi': 0.0,
             'sample': "Al_bragg" if "Al_bragg" in sample_ids else "none",
             # Read-only description of the session's mount, which every launch
             # uses (the true mount rides on instrument_state, never on vals).
@@ -6681,11 +6618,10 @@ class TAVIController(QObject):
                 if vals['curvature_modes'][axis] == CurvatureMode.AUTOFOCUS:
                     vals[axis] = ideal[axis]
         # The session's plane lock rides on instrument_state into every launch
-        # and holds the arcs and kappa, so a launch starts from them.
+        # and holds the arcs, so a launch starts from them.
         lock = self.instrument_state.plane_lock
         if lock is not None:
             vals['sgl'], vals['sgu'] = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
-            vals['kappa'] = lock["kappa"]
         vals.update(self._lock_fields())
         return vals
 
@@ -6744,9 +6680,6 @@ class TAVIController(QObject):
         self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(90, 6))
         self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(90, 6))
         self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(90, 6))
-        # Sample alignment offset defaults
-        self.window.sample_dock.kappa_edit.setText("0")
-        self.window.sample_dock.psi_edit.setText("0")
         # Default scan: H-scan around Al (200) Bragg peak - quick 21 point scan
         self.window.simulation_dock.scan_command_1_edit.setText("H 1.9 2.1 0.01")
         self.window.simulation_dock.scan_command_2_edit.setText("")
@@ -7532,9 +7465,8 @@ class TAVIController(QObject):
         var1, var2 = variables
 
         # Check for conflicts between commands. These stay overridable:
-        # they were before this split, and legitimate combinations exist
-        # (scanning H against the sample offset psi, say). Only a command
-        # that cannot run AS WRITTEN is hard.
+        # they were before this split. Only a command that cannot run AS
+        # WRITTEN is hard.
         if var1 and var2:
             conflict = self._check_scan_parameter_conflict(var1, var2)
             if conflict:
@@ -7781,9 +7713,6 @@ class TAVIController(QObject):
             'lattice_alpha': (p_float, set_text(sam.lattice_alpha_edit), self.on_lattice_changed),
             'lattice_beta': (p_float, set_text(sam.lattice_beta_edit), self.on_lattice_changed),
             'lattice_gamma': (p_float, set_text(sam.lattice_gamma_edit), self.on_lattice_changed),
-            # alignment offsets
-            'kappa': (p_float, set_text(sam.kappa_edit), self.on_alignment_offset_changed),
-            'psi': (p_float, set_text(sam.psi_edit), self.on_alignment_offset_changed),
             # sample selection (drives instrument_state.sample_key + lattice)
             'sample': (p_choice(sample_ids, "sample"), set_sample, None),
             # crystals
@@ -7834,8 +7763,11 @@ class TAVIController(QObject):
     # old chi was a beam-fixed tilt under the turntable, so aliasing it to an
     # arc would give different physics under the old name.
     _API_REMOVED_FIELDS = {
-        'chi': "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper); "
-               "'kappa' is the lower-arc correction",
+        'chi': "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper)",
+        'psi': "retired: psi was TAVI's zero correction of the turntable A3 and no "
+               "longer exists; set the sample rotation 'omega' (A3) itself",
+        'kappa': "retired: kappa was TAVI's zero correction of the lower arc sgl and "
+                 "no longer exists; set the arc 'sgl' itself",
     }
 
     # Keys the API reports that no write may set (declared readOnly in
@@ -7846,20 +7778,20 @@ class TAVIController(QObject):
 
     # The lock's request fields, and the fields a locked plane holds.
     _LOCK_FIELDS = ('orientation_mode', 'lock_plane')
-    _LOCK_HELD_FIELDS = ('sgl', 'sgu', 'kappa')
+    _LOCK_HELD_FIELDS = ('sgl', 'sgu')
 
     def _lock_refusals(self, body):
         """{field: reason} for the fields of one request body a lock refuses:
-        sgl, sgu or kappa beside orientation_mode/lock_plane (whichever way it
+        sgl or sgu beside orientation_mode/lock_plane (whichever way it
         switches: two requests instead); any other field beside a lock request
         (orientation_mode "locked" or lock_plane), so the lock is computed on
         the state as it stands, never on a lattice or UB the same body
-        changes; and sgl, sgu or kappa while locked."""
+        changes; and sgl or sgu while locked."""
         held = [n for n in body if n in self._LOCK_HELD_FIELDS]
         mode = [n for n in body if n in self._LOCK_FIELDS]
         if held and mode:
-            reason = ("orientation_mode/lock_plane cannot be combined with sgl, sgu or "
-                      "kappa in one request; send two")
+            reason = ("orientation_mode/lock_plane cannot be combined with sgl or "
+                      "sgu in one request; send two")
             return {n: reason for n in held + mode}
         other = [n for n in body if n not in self._LOCK_FIELDS]
         if other and (body.get('orientation_mode') == "locked" or 'lock_plane' in body):
@@ -8029,6 +7961,12 @@ class TAVIController(QObject):
             except (ValueError, TypeError) as exc:
                 errors[name] = "invalid value: %s" % exc
 
+        # A retired field (chi, psi, kappa) refuses the whole request: nothing
+        # beside it is applied, so a client cannot mistake a partial write for
+        # one that honoured the name it still sends.
+        if any(name in self._API_REMOVED_FIELDS for name in patch):
+            return applied, errors
+
         # (a') The lock is validated over the whole body; a refused lock
         # request, or a field the lock holds, applies nothing at all.
         lock_errors = self._lock_refusals(patch)
@@ -8133,14 +8071,14 @@ class TAVIController(QObject):
 
     # Scan-variable -> scan-point index: the one map the GUI point count, the
     # API validation expansion and run_simulation all use (slot layout in
-    # instruments.tas_runtime). omega steps the psi slot.
+    # instruments.tas_runtime). omega is the sample rotation A3: the same slot.
     _SCAN_VARIABLE_TO_INDEX = {
         'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
         'H': 0, 'K': 1, 'L': 2,
         'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
-        'omega': SLOT_PSI, '2theta': 1,
+        'omega': 2, '2theta': 1,
         'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-        'sgl': SLOT_SGL, 'sgu': SLOT_SGU, 'kappa': SLOT_KAPPA, 'psi': SLOT_PSI,
+        'sgl': SLOT_SGL, 'sgu': SLOT_SGU,
     }
 
     def _build_scan_point_template(self, scan_mode, vals):
@@ -8157,8 +8095,6 @@ class TAVIController(QObject):
         # The arc readouts drive angle mode; Q modes solve the arcs instead.
         template[SLOT_SGL] = vals['sgl']
         template[SLOT_SGU] = vals['sgu']
-        template[SLOT_KAPPA] = vals['kappa']
-        template[SLOT_PSI] = vals['psi']
         return template
 
     def validate_scan_launch_state(self, launch_state):
@@ -8386,7 +8322,6 @@ class TAVIController(QObject):
             'lattice_alpha': ('number', 'degrees'),
             'lattice_beta': ('number', 'degrees'),
             'lattice_gamma': ('number', 'degrees'),
-            'kappa': ('number', 'degrees'), 'psi': ('number', 'degrees'),
             'sample': ('string', None),
             'monocris': ('string', None), 'anacris': ('string', None),
             'rhm': ('number', None), 'rvm': ('number', None), 'rha': ('number', None),
@@ -8491,7 +8426,7 @@ class TAVIController(QObject):
             "scan_variables": [
                 "H", "K", "L", "qx", "qy", "qz", "deltaE",
                 "A1", "A2", "A3", "A4", "omega", "2theta",
-                "sgl", "sgu", "kappa", "psi", "rhm", "rvm", "rha", "rva",
+                "sgl", "sgu", "rhm", "rvm", "rha", "rva",
             ],
             "scan_command_grammar": (
                 "VARIABLE start stop STEP. The third number (the last token) is "
@@ -9798,8 +9733,6 @@ class TAVIController(QObject):
                 rha = metadata['rha']
                 rva = metadata['rva']
                 omega_scan = metadata['omega']
-                psi_scan = metadata['psi']
-                kappa_scan = metadata['kappa']
                 timing = snapshot.timing
                 prep_duration = float(timing.get('prep_duration_s', 0.0))
                 prep_compute_duration = float(timing.get('prep_compute_duration_s', 0.0))

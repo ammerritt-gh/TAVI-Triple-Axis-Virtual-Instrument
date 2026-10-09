@@ -107,19 +107,13 @@ class GonioAxis:
     zero (McStas sample frame: x, z horizontal, y up); a positive angle turns
     right-handedly about it. A goniometer is a tuple of these, outermost
     (the turntable) first: ``R_stage = R_1 @ R_2 @ ... @ R_N``. Provenance for
-    ``limits`` lives in the instrument's MODEL_STATUS.md.
-
-    ``correction`` names the instrument-state field holding the operator's
-    correction of this axis, ``zero_error`` the field holding its hidden zero
-    error (training); None when the axis has none. The McStas sample arm turns
-    the axis to readout + correction + zero error.
+    ``limits`` lives in the instrument's MODEL_STATUS.md. The McStas sample arm
+    turns the axis to its readout.
     """
 
     name: str
     axis: tuple[float, float, float]
     limits: AxisLimits
-    correction: str | None = None
-    zero_error: str | None = None
 
     @property
     def lower(self) -> float:
@@ -133,13 +127,10 @@ class GonioAxis:
 def tas_goniometer(arc_travel: float = UNDOCUMENTED) -> tuple[GonioAxis, ...]:
     """A TAS sample stage: turntable ``A3`` about y carrying a lower arc ``sgl``
     about x and an upper arc ``sgu`` about z, each arc within +/-``arc_travel``
-    degrees. The turntable turns freely. psi corrects the turntable and kappa
-    the lower arc; mis_omega and mis_chi are their hidden zero errors."""
+    degrees. The turntable turns freely."""
     return (
-        GonioAxis("A3", (0.0, 1.0, 0.0), AxisLimits(-math.inf, 0.0, math.inf),
-                  correction="psi", zero_error="mis_omega"),
-        GonioAxis("sgl", (1.0, 0.0, 0.0), AxisLimits(-arc_travel, 0.0, arc_travel),
-                  correction="kappa", zero_error="mis_chi"),
+        GonioAxis("A3", (0.0, 1.0, 0.0), AxisLimits(-math.inf, 0.0, math.inf)),
+        GonioAxis("sgl", (1.0, 0.0, 0.0), AxisLimits(-arc_travel, 0.0, arc_travel)),
         GonioAxis("sgu", (0.0, 0.0, 1.0), AxisLimits(-arc_travel, 0.0, arc_travel)),
     )
 

@@ -96,14 +96,15 @@ def test_scan_config_applies_gui_mapping():
     pytest.importorskip("mcstasscript")
     plugin = IN8Plugin()
     base = plugin.default_state()
-    base.mis_omega = 1.5          # hidden training state, absent from GUI values
+    base.plane_lock = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0],
+                       "tilts": {"sgl": 0.0, "sgu": 0.0}}  # operator state, absent from GUI values
     mount = object()
     diagnostics = {"Detector PSD": True}
 
     config = plugin.scan_config(base, _gui_vals(), "Al_bragg", diagnostics, mount)
 
     assert config is not base and base.alpha_3 == 0   # base not mutated
-    assert config.mis_omega == 1.5                    # hidden state propagates
+    assert config.plane_lock == base.plane_lock       # session state propagates
     assert config.K_fixed == "Kf Fixed"
     # scan_config is a pass-through of the GUI magnitudes now -- branch
     # signing and fixed-axis policy live in set_crystal_bending, the shared

@@ -1,10 +1,9 @@
 """Solver baseline cases, shared by make_solver_baseline.py (writes the JSON) and
 test_solver_baseline.py (recomputes and compares).
 
-Every case is solved from the plugin's own descriptor and default state, with the
-psi/kappa corrections and hidden zero errors set to 0, the default crystals, a
-cubic a = 4.05 A sample and the GUI launch state's 14.7 meV fixed energy (the one
-value no plugin declares). Nothing here reads config/.
+Every case is solved from the plugin's own descriptor and default state, the
+default crystals, a cubic a = 4.05 A sample and the GUI launch state's 14.7 meV
+fixed energy (the one value no plugin declares). Nothing here reads config/.
 """
 import copy
 import importlib
@@ -23,7 +22,8 @@ PLUGINS = {
     "PANDA": ("instruments.panda.plugin", "PANDAPlugin"),
 }
 
-# The psi/kappa corrections and hidden zero errors, retired by the next slice.
+# The psi/kappa corrections and hidden zero errors, retired: no snapshot carries
+# these keys any more; the baseline never recorded them.
 RETIRING_KEYS = frozenset({"kappa_param", "psi_param", "mis_omega_param", "mis_chi_param",
                            "psi", "kappa"})
 
@@ -114,7 +114,6 @@ def _launch_vals(descriptor, **overrides):
                             else s.default_width_mm) for s in descriptor.slits},
         "rhm": 0.0, "rvm": 0.0, "rha": 0.0, "rva": 0.0,
         "curvature_modes": _modes(),
-        "kappa": 0.0, "psi": 0.0,
     }
     vals.update(overrides)
     return vals
@@ -130,8 +129,8 @@ def _fixed_axis(descriptor):
 
 
 def _point(head, vals, sgl=0.0, sgu=0.0):
-    """A 12-slot scan point: the mode's four coordinates, the radii, then sgl kappa psi sgu."""
-    return [*head, vals["rhm"], vals["rvm"], vals["rha"], vals["rva"], sgl, 0.0, 0.0, sgu]
+    """A 10-slot scan point: the mode's four coordinates, the radii, then sgl sgu."""
+    return [*head, vals["rhm"], vals["rvm"], vals["rha"], vals["rva"], sgl, sgu]
 
 
 def build_cases(label):
@@ -145,7 +144,6 @@ def build_cases(label):
     descriptor = plugin.descriptor()
     base = plugin.default_state()
     base.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
-    base.psi = base.kappa = base.mis_omega = base.mis_chi = 0.0
     results = {}
 
     def solve(name, mode, scans, vals, note="", state=base):
@@ -192,7 +190,7 @@ def build_cases(label):
     tilts = lock_plane(locked.goniometer, locked.sample_mount.mounted_basis,
                        (1, 0, 0), (0, 1, 0.2))
     locked.plane_lock = {"hkl_u": [1.0, 0.0, 0.0], "hkl_v": [0.0, 1.0, 0.2],
-                         "tilts": tilts, "kappa": 0.0}
+                         "tilts": tilts}
     vals = _launch_vals(descriptor)
     solve("plane_lock_01p2", "rlu", _point([0.0, 1.0, 0.2, 0.0], vals), vals,
           "plane (1,0,0)/(0,1,0.2) held by lock_plane", state=locked)

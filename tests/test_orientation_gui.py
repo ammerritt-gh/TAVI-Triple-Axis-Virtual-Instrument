@@ -22,6 +22,7 @@ import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi.api_server import ApiError  # noqa: E402
 from tavi.local_state import config_path  # noqa: E402
+from tavi.orientation import axis_rotation  # noqa: E402
 from tavi.tas_geometry import component_q_to_instrument_q, mccode_rotation_matrix  # noqa: E402
 from tavi.ub_matrix import encode_training  # noqa: E402
 
@@ -268,10 +269,11 @@ def test_chi_scan_is_refused_naming_the_arcs(controller):
     assert any("'sgl'" in b and "'sgu'" in b for b in result["blockers"])
 
 
-def test_arc_scan_in_a_q_mode_is_refused_naming_kappa(controller):
+def test_arc_scan_in_a_q_mode_is_refused_naming_angle_mode(controller):
     for other in ("H 1.9 2.1 0.1", "qx 2 2.2 0.1", "deltaE 0 2 1"):
         hard, _soft = controller._scan_command_issues("sgl 0 2 1", other)
-        assert len(hard) == 1 and "kappa" in hard[0], (other, hard)
+        assert len(hard) == 1 and "scan the arcs in angle mode" in hard[0], (other, hard)
+        assert "kappa" not in hard[0]
     # Alone (or with an angle), an arc scan is an angle-mode scan.
     for pair in (("sgu 0 2 1", ""), ("sgl 0 2 1", "A3 30 31 1")):
         assert controller._scan_command_issues(*pair) == ([], [])
@@ -281,7 +283,7 @@ def test_arc_scan_in_a_q_mode_is_refused_naming_kappa(controller):
 def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path):
     """The arcs patched over the API reach the sample arm of an angle-mode scan
     point, composed here from the stage description (A3 about y, sgl about x,
-    sgu about z; physical = readout + correction + zero error)."""
+    sgu about z; the crystal sits at the readouts)."""
     from tavi.tas_geometry import mccode_rotation_matrix
 
     launch = controller.build_api_launch_state(
@@ -299,13 +301,85 @@ def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path
         k = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
         return np.eye(3) + math.sin(t) * k + (1 - math.cos(t)) * (k @ k)
 
-    stage = (rot((0, 1, 0), 35.0 + config.psi + config.mis_omega)
-             @ rot((1, 0, 0), 3.0 + config.kappa + config.mis_chi)
-             @ rot((0, 0, 1), -2.0))
+    stage = rot((0, 1, 0), 35.0) @ rot((1, 0, 0), 3.0) @ rot((0, 0, 1), -2.0)
     arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
                                  params["sample_rz_param"])
     assert np.allclose(arm, (stage @ config.U_true).T, rtol=0.0, atol=1e-12)
     assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (3.0, -2.0)
+
+
+def test_omega_scan_drives_the_sample_rotation_itself(controller, tmp_path, monkeypatch):
+    """'omega 35 36 1' turns the turntable A3 to 35 and 36 deg: in the scan
+    point, in the metadata and in the sample arm the point emits. (It used to
+    step a hidden correction of A3 inside a Q-mode scan, so the turntable
+    stood wherever Q put it.)"""
+    from tavi.scan_jobs import ScanJob
+    from tavi.tas_geometry import mccode_rotation_matrix
+
+    controller.set_default_parameters()
+    controller.output_directory = str(tmp_path)
+    assert controller._determine_scan_mode("omega 35 36 1", "") == "angle"
+    launch = controller.build_api_launch_state({"scan_command1": "omega 35 36 1"})
+    launch["engine"] = "deterministic"
+    snapshots, compute = [], controller.instrument.compute_snapshot
+    monkeypatch.setattr(controller.instrument, "compute_snapshot",
+                        lambda *a, **k: snapshots.append(compute(*a, **k)) or snapshots[-1])
+    job = ScanJob(job_id="t-omega", source="api", launch_state=launch)
+
+    controller.run_simulation(launch, job=job)
+
+    assert [s.metadata["sth"] for s in snapshots] == [35.0, 36.0]
+    assert [s.metadata["omega"] for s in snapshots] == [35.0, 36.0]
+    config = launch["scan_config"]
+    for snapshot, angle in zip(snapshots, (35.0, 36.0)):
+        arm = mccode_rotation_matrix(snapshot.params["sample_rx_param"],
+                                     snapshot.params["sample_ry_param"],
+                                     snapshot.params["sample_rz_param"])
+        turntable = axis_rotation((0, 1, 0), angle)
+        assert np.allclose(arm, (turntable @ config.U_true).T, rtol=0.0, atol=1e-12)
+
+
+def test_goto_cen_on_an_omega_scan_moves_the_sample_rotation(controller):
+    controller.set_default_parameters()
+    controller.window.instrument_dock.omega_edit.setText("30")
+    ok, message = controller.goto_scan_variable("omega", 41.5)
+    assert ok, message
+    assert _field(controller.window.instrument_dock.omega_edit) == pytest.approx(41.5)
+    assert "(field omega)" in message
+    controller.set_default_parameters()
+
+
+@pytest.mark.parametrize("name, replacement", [("psi", "omega"), ("kappa", "sgl")])
+def test_the_two_retired_corrections_are_refused_wherever_an_api_client_can_reach_them(
+        controller, name, replacement):
+    """HTTP 400 naming the retirement, before any state changes, whichever way
+    they arrive: a PATCH beside a valid field, a scan body, /validate, a scan
+    command; and they are in neither the schema nor the scan variables."""
+    controller.set_default_parameters()
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    before = controller.get_gui_values()
+
+    for call in (lambda: backend.patch_parameters({name: 0.5, "H": 1.1}, force=True),
+                 lambda: backend.submit_validate({"parameters": {name: 0.5, "H": 1.1}}),
+                 lambda: controller.build_api_launch_state({name: 0.5, "H": 1.1})):
+        with pytest.raises(ApiError) as refused:
+            call()
+        assert refused.value.status == 400
+        reason = refused.value.details["errors"][name]
+        assert "retired" in reason and f"'{replacement}'" in reason, reason
+    assert controller.get_gui_values() == before            # H was not applied either
+
+    hard, _soft = controller._scan_command_issues(f"{name} 0 1 1", "")
+    assert len(hard) == 1 and "retired" in hard[0], hard
+    for variable in (name, name.upper()):
+        assert controller._validate_scan_commands_text(f"{variable} 0 1 1", "")
+
+    schema = controller.build_api_schema()
+    assert name not in [f["name"] for f in schema["fields"]]
+    assert name not in schema["scan_variables"]
+    assert name not in controller.get_gui_values()
+    ok, message = controller.goto_scan_variable(name, 1.0)
+    assert not ok and "unknown scan variable" in message
 
 
 # --- 1.7: peaks and Take Position on the stage ------------------------------------
@@ -337,23 +411,16 @@ def _take_peaks(controller, hkls):
     return taken
 
 
-def _set_corrections(controller, psi, kappa):
-    sam = controller.window.sample_dock
-    sam.psi_edit.setText(repr(psi))
-    sam.kappa_edit.setText(repr(kappa))
-
-
-def test_take_position_records_the_stage_and_zero_errors_never_enter(controller):
-    """Take Position records every stage readout, the corrections, ki, kf and
-    the sense; changing only the hidden zero errors leaves the fitted UB
-    unchanged; a saved peak reloads with its record."""
+def test_take_position_records_the_stage_readouts_ki_kf_and_the_sense(controller):
+    """Take Position records every stage readout, ki, kf and the sense, and
+    nothing about the hidden truth: a different hidden mount leaves the fitted
+    UB unchanged; a saved peak reloads with its record."""
     from tavi.tas_geometry import mccode_rotation_matrix
 
     gonio = controller.instrument_state.goniometer
-    _set_corrections(controller, 1.0, 0.5)
     fits = []
-    for mis in ((0.7, -0.4), (-2.0, 1.5)):
-        controller.instrument_state.set_misalignment(*mis)
+    for hidden in (mccode_rotation_matrix(0.7, -0.4, 0.2), mccode_rotation_matrix(-2.0, 1.5, 0.9)):
+        controller._set_true_mount(R_hidden=hidden)
         # The same tilted belief both times, so the peaks need both arcs.
         controller.ub_matrix.set_U(mccode_rotation_matrix(2.0, 10.0, -1.5))
         taken = _take_peaks(controller, [(2, 0, 0), (0, 2, 0)])
@@ -363,12 +430,12 @@ def test_take_position_records_the_stage_and_zero_errors_never_enter(controller)
             assert not pw.is_legacy and pw.legacy_label.isHidden()
             record = data["stage"]
             assert record["angles"] == pytest.approx(shown)
-            assert record["corrections"] == {"A3": 1.0, "sgl": 0.5, "sgu": 0.0}
             assert record["sense"] == controller.instrument_state.sense_sample
             assert (record["ki"], record["kf"]) == pytest.approx((data["ki"], data["kf"]), abs=1e-4)
-            assert set(record) == {"axes", "angles", "corrections", "ki", "kf", "sense"}
+            assert set(record) == {"axes", "angles", "ki", "kf", "sense"}
         controller.on_calculate_ub()
         fits.append(controller.ub_matrix.U)
+    controller._set_true_mount(R_hidden=np.eye(3))
     assert np.array_equal(fits[0], fits[1])
 
     saved = [p.to_dict() for p in controller.ub_matrix.peaks]
@@ -386,8 +453,6 @@ def test_a_stage_peak_saves_a_legacy_triple_with_its_legacy_meaning(controller):
     from tavi.tas_geometry import mccode_rotation_matrix
     from tavi.ub_matrix import UBMatrix
 
-    controller.instrument_state.set_misalignment(0.0, 0.0)
-    _set_corrections(controller, 0.0, 0.0)
     controller.ub_matrix.set_U(mccode_rotation_matrix(4.0, 15.0, -6.0))
     taken = _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
     assert max(abs(shown["sgl"]) + abs(shown["sgu"]) for _, _, shown in taken) > 5.0
@@ -402,23 +467,6 @@ def test_a_stage_peak_saves_a_legacy_triple_with_its_legacy_meaning(controller):
     assert all(p.is_legacy for p in legacy.peaks)
     legacy.calculate_U_from_peaks()
     assert np.allclose(legacy.U, fitted, rtol=0.0, atol=1e-6)
-
-
-def test_refit_after_a_psi_change_turns_the_ub_by_that_change(controller):
-    """In the plane (no arcs) a correction change is exactly a turn of the UB
-    about the vertical: peaks taken under psi = 1 and refit under psi = 2 give
-    a UB turned by 1 degree, so the same peaks stay at the same dial."""
-    controller.instrument_state.set_misalignment(0.0, 0.0)
-    controller.ub_matrix.reset_U()
-    _set_corrections(controller, 1.0, 0.0)
-    _take_peaks(controller, [(2, 0, 0), (0, 2, 0)])
-    controller.on_calculate_ub()
-    u_at_1 = controller.ub_matrix.U
-    _set_corrections(controller, 2.0, 0.0)
-    controller.on_calculate_ub()
-    turn = controller.ub_matrix.U @ u_at_1.T
-    assert math.degrees(math.acos((np.trace(turn) - 1) / 2)) == pytest.approx(1.0, abs=1e-9)
-    assert abs(turn[1, 1]) == pytest.approx(1.0, abs=1e-12)     # about the mount vertical
 
 
 def test_legacy_peaks_load_marked_and_fit_as_before(controller):
@@ -448,7 +496,6 @@ def test_legacy_peaks_load_marked_and_fit_as_before(controller):
         assert data["stage"] is None and "legacy" not in data
         assert data["angles"] == pytest.approx(tuple(peak["angles"]), abs=1e-4)
 
-    _set_corrections(controller, 1.5, -0.5)          # a legacy peak ignores them
     controller.on_calculate_ub()
     expected = UBMatrix.from_dict({"lattice": lattice,
                                    "peaks": [ObservedPeak.from_dict(d).to_dict() for d in saved]})
@@ -552,8 +599,8 @@ def test_angle_mode_point_past_travel_is_invalid_before_the_run(in12, tmp_path):
     assert job.result.valid_mask_2d == [[True, True, False]] * 2
 
 
-def test_orientation_scan_is_judged_by_the_solved_arcs(in12, tmp_path):
-    """A psi scan solves the arcs from Q per point, so an sgl field past
+def test_q_scan_is_judged_by_the_solved_arcs(in12, tmp_path):
+    """A qx scan solves the arcs from Q per point, so an sgl field past
     travel does not make its points invalid: the GUI count and the run's
     mask agree."""
     from tavi.scan_jobs import ScanJob
@@ -562,10 +609,10 @@ def test_orientation_scan_is_judged_by_the_solved_arcs(in12, tmp_path):
     _set_q(in12, 2.0, 0.5, 0.0)
     in12.window.instrument_dock.sgl_edit.setText("25")
     try:
-        assert in12._count_valid_scan_points("psi -2 2 1", "") == (5, 0)
-        launch = in12.build_api_launch_state({"scan_command1": "psi -2 2 1"})
+        assert in12._count_valid_scan_points("qx 1.9 2.1 0.05", "") == (5, 0)
+        launch = in12.build_api_launch_state({"scan_command1": "qx 1.9 2.1 0.05"})
         launch["engine"] = "deterministic"
-        job = ScanJob(job_id="t-psi-arcs", source="api", launch_state=launch)
+        job = ScanJob(job_id="t-q-arcs", source="api", launch_state=launch)
         in12.run_simulation(launch, job=job)
         assert job.result.valid_mask_1 == [True] * 5
     finally:
@@ -657,9 +704,11 @@ def _with_hidden_truth(controller):
 
 
 def _path_calculate_ub(controller, _monkeypatch):
+    from tavi.tas_geometry import mccode_rotation_matrix
+
     before = controller.ub_matrix.U
+    controller.ub_matrix.set_U(mccode_rotation_matrix(0.0, -5.0, 1.0))   # peaks follow this belief
     _take_peaks(controller, [(2, 0, 0), (0, 2, 0)])
-    _set_corrections(controller, 0.5, 0.0)        # the fit sees a correction change
     controller.on_calculate_ub()
     assert not np.array_equal(controller.ub_matrix.U, before)
 
@@ -703,8 +752,8 @@ def _path_refine_lattice(controller, monkeypatch):
 
 def _path_api_patch(controller, _monkeypatch):
     backend = cm.TaviApiBackend(controller, _SyncBridge())
-    for field, value in (("omega", 31.0), ("sgl", 1.0), ("sgu", -1.0), ("psi", 0.5),
-                         ("kappa", -0.25), ("lattice_a", 4.1), ("lattice_b", 4.12),
+    for field, value in (("omega", 31.0), ("sgl", 1.0), ("sgu", -1.0),
+                         ("lattice_a", 4.1), ("lattice_b", 4.12),
                          ("lattice_c", 4.0), ("lattice_alpha", 90.5), ("lattice_beta", 89.5),
                          ("lattice_gamma", 90.25), ("H", 1.0), ("K", 1.0), ("L", 0.0),
                          ("sample", "Pb_phonon_DFT")):
@@ -723,7 +772,7 @@ def _path_sample_selection(controller, _monkeypatch):
 def test_belief_write_paths_never_touch_the_truth(controller, monkeypatch, write):
     """Calculate UB, a manual UB edit, Reset, a lattice edit, Refine Lattice,
     an API PATCH of every writable orientation field, and a sample selection
-    leave U_described, R_hidden, the zero errors and U_true bit for bit."""
+    leave U_described, R_hidden and U_true bit for bit."""
     from tavi.tas_geometry import mccode_rotation_matrix
 
     _with_hidden_truth(controller)
@@ -989,8 +1038,7 @@ def test_the_dock_grades_a_fit_from_true_peaks_aligned(controller, messages):
     state, vals = controller.instrument_state, controller.get_gui_values()
     assert vals["deltaE"] == 0.0
     peaks = [_true_peak(state.goniometer, state.sense_sample, hkl, state.U_true,
-                        controller._true_B(), {"A3": 0.0, "sgl": 0.0, "sgu": 0.0},
-                        {}, k=vals["Kf"]).to_dict()
+                        controller._true_B(), k=vals["Kf"]).to_dict()
              for hkl in ((2, 0, 0), (0, 2, 0))]
     dock.set_peak_entries(peaks)
     controller.on_calculate_ub()
@@ -1111,7 +1159,7 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
     """Under a (1 0 1)/(0 1 0) lock: /validate refuses the out-of-plane points
     naming the plane and the angle, the GUI count agrees; a three-point
     in-plane rlu scan built through the API path and through the GUI Run
-    path runs every point at the lock's tilts; sgl and kappa scans are
+    path runs every point at the lock's tilts; sgl and sgu scans are
     refused naming the lock; an out-of-plane HKL edit moves no readout and
     leaves the lock as it was."""
     controller.set_default_parameters()
@@ -1147,7 +1195,7 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
         assert arcs == [(tilts["sgl"], tilts["sgu"])] * 6
         assert controller._count_valid_scan_points("K -0.1 0.1 0.1", "") == (3, 0)
 
-        for variable in ("sgl", "kappa"):
+        for variable in ("sgl", "sgu"):
             hard, _soft = controller._scan_command_issues(f"{variable} 0 1 1", "")
             assert len(hard) == 1 and "locked scattering plane (1 0 1)/(0 1 0)" in hard[0], hard
 
@@ -1170,19 +1218,19 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
 # --- Unit 2 (C7): the lock in the GUI, the API and saved state ---------------------
 
 def _arcs(controller):
-    """The arc fields' text, the arc readouts and the physical arcs."""
+    """The arc fields' text, the arc readouts and the stage readouts' arcs."""
     idock, state = controller.window.instrument_dock, controller.instrument_state
-    physical = state.physical_stage_angles()
+    readouts = state.stage_readouts()
     return ((idock.sgl_edit.text(), idock.sgu_edit.text()), (state.sgl, state.sgu),
-            (physical["sgl"], physical["sgu"]))
+            (readouts["sgl"], readouts["sgu"]))
 
 
 def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controller, messages):
     """Under a lock: a UB change and a lattice change leave the arcs (fields,
-    readouts, physical) where they are and set the stale mark; kappa is
-    read-only and an API kappa write is refused; loading or clearing either
-    exercise and a remount are refused naming the lock; a sample swap stays
-    allowed; Release returns to free mode."""
+    readouts) where they are and set the stale mark; the arc fields are
+    read-only; loading or clearing the exercise and a remount are refused
+    naming the lock; a sample swap stays allowed; Release returns to free
+    mode."""
     controller.set_default_parameters()
     idock, sam, dock = (controller.window.instrument_dock, controller.window.sample_dock,
                         controller.window.ub_matrix_dock)
@@ -1191,7 +1239,7 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
     _set_hkl(controller, 1, 0, 1)
     held = _arcs(controller)
     assert held[1] == (tilts["sgl"], tilts["sgu"])
-    for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
+    for edit in (idock.sgl_edit, idock.sgu_edit):
         assert edit.isReadOnly() and "locked scattering plane (1 0 1)/(0 1 0)" in edit.toolTip()
     params = controller.get_gui_values()
     assert (params["orientation_mode"], params["lock_plane"]) == (
@@ -1212,9 +1260,9 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
     controller.on_lattice_changed()
     assert _arcs(controller) == held and "STALE" in dock.lock_status_label.text()
 
-    with pytest.raises(ApiError) as kappa:
-        backend.patch_parameters({"kappa": 0.5}, force=True)
-    assert "holds kappa" in kappa.value.details["errors"]["kappa"]
+    with pytest.raises(ApiError) as held_arc:
+        backend.patch_parameters({"sgu": 0.5}, force=True)
+    assert "holds sgu" in held_arc.value.details["errors"]["sgu"]
     messages.clear()
     _load_exercise(controller)
     controller.on_clear_training()
@@ -1233,27 +1281,25 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
     controller.on_release_plane()
     assert controller.instrument_state.plane_lock is None
     assert controller.get_gui_values()["orientation_mode"] == "free"
-    for edit in (idock.sgl_edit, idock.sgu_edit, sam.kappa_edit):
+    for edit in (idock.sgl_edit, idock.sgu_edit):
         assert not edit.isReadOnly() and "locked" not in edit.toolTip()
     assert dock.lock_plane_button.isEnabled() and not dock.release_plane_button.isEnabled()
     controller.set_default_parameters()
 
 
 def _orientation_snapshot(ctrl):
-    """The whole orientation and lock state: readouts, corrections, UB,
-    U_true, zero errors, plane_lock."""
-    state, idock, sam = ctrl.instrument_state, ctrl.window.instrument_dock, ctrl.window.sample_dock
+    """The whole orientation and lock state: readouts, UB, U_true, plane_lock."""
+    state, idock = ctrl.instrument_state, ctrl.window.instrument_dock
     return json.dumps({
         "readouts": [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)],
-        "state": [state.A3, state.sgl, state.sgu, state.psi, state.kappa],
-        "corrections": [sam.psi_edit.text(), sam.kappa_edit.text()],
+        "state": [state.A3, state.sgl, state.sgu],
         "ub": ctrl.ub_matrix.UB.tolist(), "U_true": state.U_true.tolist(),
-        "zero_errors": [state.mis_omega, state.mis_chi], "plane_lock": state.plane_lock,
+        "plane_lock": state.plane_lock,
     })
 
 
 def test_every_refused_lock_patch_moves_nothing(controller, in12):
-    """Each refused PATCH (sgl, kappa, a lock combined with sgl/sgu/kappa
+    """Each refused PATCH (sgl, a lock combined with sgl/sgu
     whichever way it switches, a lock request with any other field, a second
     lock, a lock past travel) is a 400 and the whole orientation and lock
     state is identical before and after; a scan body cannot set the
@@ -1281,7 +1327,7 @@ def test_every_refused_lock_patch_moves_nothing(controller, in12):
     assert controller.instrument_state.plane_lock["hkl_u"] == [1.0, 0.0, 1.0]
     for body, field, words in (
             ({"sgl": 1.0}, "sgl", "holds sgl"),
-            ({"kappa": 0.5, "H": 1.1}, "kappa", "holds kappa"),
+            ({"sgu": 0.5, "H": 1.1}, "sgu", "holds sgu"),
             ({"orientation_mode": "free", "sgl": 1.0}, "orientation_mode", "send two"),
             ({"lock_plane": {"u": [1, 0, 0], "v": [0, 1, 0]}}, "lock_plane",
              "is in force; release it first")):
@@ -1310,14 +1356,12 @@ def test_a_locked_session_with_an_exercise_round_trips_exactly(controller):
 
     def scramble(block):
         assert block["plane_lock"] == json.loads(saved[0])
-        block["kappa_var"] = "1.5"                         # the lock's kappa wins
+        assert "kappa" not in block["plane_lock"]
         controller.set_default_parameters()                # nothing carried over
 
     _reload_with(controller, scramble)
 
     assert json.dumps(state.plane_lock) == saved[0]
-    kappa = state.plane_lock["kappa"]
-    assert (float(controller.window.sample_dock.kappa_edit.text()), state.kappa) == (kappa, kappa)
     assert np.array_equal(state.U_true, saved[1])
     assert controller._exercise == saved[2]
     assert controller.window.instrument_dock.sgl_edit.isReadOnly()
@@ -1329,7 +1373,7 @@ def test_a_saved_lock_past_travel_is_released_on_restore(in12, in12_messages):
 
     def past_travel(block):
         block["plane_lock"] = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0],
-                               "tilts": {"sgl": 25.0, "sgu": 0.0}, "kappa": 0.0}
+                               "tilts": {"sgl": 25.0, "sgu": 0.0}}
 
     _reload_with(in12, past_travel)
     assert in12.instrument_state.plane_lock is None
@@ -1421,7 +1465,6 @@ def test_calculate_ub_shows_the_residuals_of_its_peaks(controller, messages):
     pair, at the display precision of ``alignment_residuals``'s values, and
     the message center gets its summary; a re-indexed peak of the same |Q|
     is marked by the pair check, its words in the tooltip."""
-    from instruments.tas_runtime import stage_corrections
     from tavi.ub_matrix import alignment_residuals
 
     controller.set_default_parameters()
@@ -1430,10 +1473,7 @@ def test_calculate_ub_shows_the_residuals_of_its_peaks(controller, messages):
     messages.clear()
     controller.on_calculate_ub()
 
-    corrections = stage_corrections(controller.instrument_state.goniometer,
-                                    controller.get_gui_values())
-    expected = alignment_residuals(controller.ub_matrix.UB, controller.ub_matrix.peaks,
-                                   corrections)
+    expected = alignment_residuals(controller.ub_matrix.UB, controller.ub_matrix.peaks)
     assert [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())] == [
         "Peak / pair", "Observed", "From indices", "Off", "Angle to UB"]
     assert table.rowCount() == 6 and expected["flags"] == []
@@ -1470,22 +1510,6 @@ def _peak_retaken(controller, _monkeypatch):
     controller.window.ub_matrix_dock.get_peak_widget(0).take_position_button.click()
 
 
-def _peak_retaken_after_a_correction(controller, _monkeypatch):
-    """psi changed, then Take Position at the peak's own displayed readouts:
-    no field text changes, but the record (corrections, so measured Q) does."""
-    idock = controller.window.instrument_dock
-    pw = controller.window.ub_matrix_dock.get_peak_widget(0)
-    for src, dst in zip((*pw.axis_edits, pw.stt_edit, pw.ki_edit, pw.kf_edit),
-                        (idock.omega_edit, idock.sgl_edit, idock.sgu_edit, idock.stt_edit,
-                         idock.Ki_edit, idock.Kf_edit)):
-        dst.setText(src.text())
-    shown, before = [e.text() for e in pw._fields()], pw.get_peak_data()["stage"]
-    controller.window.sample_dock.psi_edit.setText("0.9")
-    pw.take_position_button.click()
-    assert [e.text() for e in pw._fields()] == shown
-    assert pw.get_peak_data()["stage"]["corrections"] != before["corrections"]
-
-
 def _defaults(controller, _monkeypatch):
     controller.set_default_parameters()
 
@@ -1509,7 +1533,6 @@ def _same_lattice_sample(controller, _monkeypatch):
     _path_manual_ub, _path_reset, _path_lattice_edit, _path_refine_lattice, _path_api_patch,
     _restored, _exercise_loaded, _defaults,
     _path_sample_selection, _same_lattice_sample, _peak_added, _peak_removed, _peak_reindexed, _peak_retaken,
-    _peak_retaken_after_a_correction,
 ], ids=lambda f: f.__name__.lstrip("_"))
 def test_the_residual_table_describes_only_the_last_calculate_ub(controller, monkeypatch,
                                                                 change):
@@ -1519,7 +1542,6 @@ def test_the_residual_table_describes_only_the_last_calculate_ub(controller, mon
     _with_hidden_truth(controller)
     table = controller.window.ub_matrix_dock.residual_table
     _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
-    _set_corrections(controller, 0.5, 0.0)        # the fit is not the described mount
     controller.on_calculate_ub()
     assert table.rowCount() == 6
     _lock(controller, PLANE_H0H)
@@ -1537,7 +1559,6 @@ def test_a_failed_fit_leaves_the_previous_ub_and_an_empty_table(controller, mess
     controller.set_default_parameters()
     dock = controller.window.ub_matrix_dock
     _take_peaks(controller, [(2, 0, 0), (0, 2, 0), (1, 1, 1)])
-    _set_corrections(controller, 0.5, 0.0)
     controller.on_calculate_ub()
     assert dock.residual_table.rowCount() == 6
     ub, lattice = controller.ub_matrix.UB, controller.ub_matrix.lattice
@@ -1570,7 +1591,7 @@ def _peaks_of(controller, lattice, hkls):
     state, vals = controller.instrument_state, controller.get_gui_values()
     controller.window.ub_matrix_dock.set_peak_entries([
         _true_peak(state.goniometer, state.sense_sample, hkl, np.eye(3),
-                   reciprocal_basis_tas(*lattice), {}, {}, k=vals["Kf"]).to_dict()
+                   reciprocal_basis_tas(*lattice), k=vals["Kf"]).to_dict()
         for hkl in hkls])
 
 
@@ -1655,7 +1676,7 @@ def test_refine_lattice_with_an_unreadable_field_is_refused(controller, monkeypa
     words and moves nothing."""
     controller.set_default_parameters()
     _peaks_of(controller, TETRAGONAL, [(2, 0, 0), (0, 2, 0), (0, 0, 2)])
-    controller.window.sample_dock.psi_edit.setText("x")
+    controller.window.scattering_dock.deltaE_edit.setText("x")
     fields, ub = _lattice_fields(controller), controller.ub_matrix.UB
     messages.clear()
 
@@ -1666,36 +1687,6 @@ def test_refine_lattice_with_an_unreadable_field_is_refused(controller, monkeypa
     assert _lattice_fields(controller) == fields
     assert np.array_equal(controller.ub_matrix.UB, ub)
     controller.set_default_parameters()
-
-
-# --- Unit 3 (C5): a locked plane runs at the lock's exact kappa --------------------
-
-def test_a_locked_point_runs_at_the_locks_exact_kappa(controller, tmp_path):
-    """Kappa 0.123456 locked: the field shows it rounded, yet the GUI launch's
-    snapshot runs at the lock's kappa exactly (state and metadata), the same
-    as the API launch's."""
-    controller.set_default_parameters()
-    sam, sim = controller.window.sample_dock, controller.window.simulation_dock
-    sam.kappa_edit.setText("0.123456")
-    try:
-        _lock(controller, PLANE_H0H)
-        kappa = controller.instrument_state.plane_lock["kappa"]
-        assert kappa == 0.123456 and float(sam.kappa_edit.text()) != kappa
-        _set_hkl(controller, 1, 0, 1)
-        api = controller.build_api_launch_state(
-            {"scan_command1": "K -0.1 0.1 0.1", "H": 1.0, "K": 0.0, "L": 1.0})
-        sim.scan_command_1_edit.setText("K -0.1 0.1 0.1")
-        gui = controller._collect_simulation_launch_state()
-        seen = []
-        for launch in (api, gui):
-            point = controller._build_scan_point_template("rlu", launch["vals"])
-            snapshot = controller.instrument.compute_snapshot(
-                (point, 0), 0, "rlu", launch["scan_config"], launch["vals"], str(tmp_path))
-            seen.append((snapshot.metadata["kappa"], snapshot.params["kappa_param"]))
-        assert seen == [(kappa, kappa)] * 2
-    finally:
-        sim.scan_command_1_edit.setText("")
-        controller.set_default_parameters()
 
 
 # --- Unit 3 (C6): the belief follows a sample swap; grading follows the mount ------
@@ -1756,12 +1747,12 @@ def test_a_sample_swap_ends_an_open_lattice_edit(controller):
 
 
 def test_a_swap_with_an_unreadable_field_says_the_ub_did_not_move(controller, messages):
-    """psi does not read as a number: the swap cannot move the UB to the new
-    lattice fields, and the message center says so."""
+    """A field does not read as a number: the swap cannot move the UB to the
+    new lattice fields, and the message center says so."""
     controller.set_default_parameters()
     sam = controller.window.sample_dock
     try:
-        sam.psi_edit.setText("x")
+        controller.window.scattering_dock.deltaE_edit.setText("x")
         lattice = controller.ub_matrix.lattice
         messages.clear()
 
@@ -1770,7 +1761,7 @@ def test_a_swap_with_an_unreadable_field_says_the_ub_did_not_move(controller, me
         assert controller.ub_matrix.lattice == lattice
         assert any("UB was not moved to the lattice fields" in m for m in messages), messages
     finally:
-        sam.psi_edit.setText("0")
+        controller.window.scattering_dock.deltaE_edit.setText("0")
         controller.set_default_parameters()
 
 
@@ -1793,7 +1784,7 @@ def test_grading_reflections_follow_the_described_mount(in12, in12_messages, mon
 
     seen, grade_alignment = [], cm.grade_alignment
     monkeypatch.setattr(cm, "grade_alignment",
-                        lambda *a, **k: seen.append(list(a[9])) or grade_alignment(*a, **k))
+                        lambda *a, **k: seen.append(list(a[7])) or grade_alignment(*a, **k))
     in12.set_default_parameters()
     in12.window.ub_matrix_dock.set_peak_entries([])
     in12_messages.clear()
@@ -1866,12 +1857,12 @@ def _flagged_rows(table):
 def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages, monkeypatch,
                                                             tmp_path):
     """Programme 3.4 on the real widgets: from a cold start with a training
-    exercise loaded (a hidden 2 deg turn about the vertical and a 1 deg
-    turntable zero error), the operator finds (2 0 0) and (0 2 0) with A3
-    rocking scans on the deterministic engine, goes to each fitted centre,
-    takes the positions, mis-indexes the second as (2 2 0), sees it flagged,
-    corrects it, reads a clean fit and the plane, locks it and runs a
-    three-point scan whose every point runs at the lock's tilts and kappa."""
+    exercise loaded (a hidden 2 deg turn of the mount about the vertical), the
+    operator finds (2 0 0) and (0 2 0) with A3 rocking scans on the
+    deterministic engine, goes to each fitted centre, takes the positions,
+    mis-indexes the second as (2 2 0), sees it flagged, corrects it, reads a
+    clean fit and the plane, locks it and runs a three-point scan whose every
+    point runs at the lock's tilts."""
     window, dock = controller.window, controller.window.ub_matrix_dock
     sim, fit, scat = window.simulation_dock, window.fitting_dock, window.scattering_dock
     table = dock.residual_table
@@ -1891,7 +1882,6 @@ def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages
     _cold_start(controller)
     try:
         _type(window.data_control_dock.save_folder_edit, str(tmp_path / "acceptance"))
-        _type(window.sample_dock.kappa_edit, "0.123456")   # kappa from an earlier alignment
         _type(sim.neutron_exponent_edit, "8")
         sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("deterministic"))
         _load_training_by_hand(controller, ACCEPTANCE_HASHES[0])
@@ -1938,7 +1928,6 @@ def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages
         dock.lock_plane_button.click()
         lock = controller.instrument_state.plane_lock
         assert (lock["hkl_u"], lock["hkl_v"]) == ([2.0, 0.0, 0.0], [0.0, 2.0, 0.0])
-        assert lock["kappa"] == 0.123456
         sim.relative_1_button.click()
         for edit, value in zip((scat.H_edit, scat.K_edit, scat.L_edit), (2, 0, 0)):
             _type(edit, str(value))
@@ -1951,8 +1940,8 @@ def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages
         sim.run_button.click()
         _settle(lambda: not controller._scan_busy())
         assert dialogs == []
-        assert [(s.metadata["sgl"], s.metadata["sgu"], s.metadata["kappa"]) for s in snapshots] \
-            == [(lock["tilts"]["sgl"], lock["tilts"]["sgu"], lock["kappa"])] * 3
+        assert [(s.metadata["sgl"], s.metadata["sgu"]) for s in snapshots] \
+            == [(lock["tilts"]["sgl"], lock["tilts"]["sgu"])] * 3
         assert window.display_dock.scan_snapshot()["counts"][1] > 100   # on the crystal
     finally:
         if sim.relative_1_button.isChecked():

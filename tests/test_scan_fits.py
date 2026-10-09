@@ -465,7 +465,7 @@ def test_scan_variable_to_field_rows():
         "H": "H", "K": "K", "L": "L", "deltaE": "deltaE",
         "qx": "qx", "qy": "qy", "qz": "qz",
         "A1": "mtt", "A2": "stt", "2theta": "stt", "A3": "omega", "A4": "att",
-        "omega": "psi", "psi": "psi", "kappa": "kappa",
+        "omega": "omega",
         "sgl": "sgl", "sgu": "sgu",
         "chi": None, "rva": None,
         "rhm": "rhm", "rvm": "rvm", "rha": "rha",
@@ -476,7 +476,10 @@ def test_scan_variable_to_field_rows():
 def test_field_for_scan_variable_lookup():
     assert field_for_scan_variable("A2") == "stt"
     assert field_for_scan_variable("2theta") == "stt"
-    assert field_for_scan_variable("omega") == "psi"
+    assert field_for_scan_variable("omega") == "omega"
+    assert field_for_scan_variable("A3") == field_for_scan_variable("omega")
+    # The retired corrections are unknown: a goto on them is refused by name.
+    assert field_for_scan_variable("psi") is None and field_for_scan_variable("kappa") is None
     assert field_for_scan_variable("chi") is None
     assert field_for_scan_variable("rva") is None
     # Case-insensitive fallback onto a known spelling.
@@ -633,7 +636,7 @@ def test_known_api_field_map_keys_are_unchanged():
         'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
         'lattice_a', 'lattice_b', 'lattice_c',
         'lattice_alpha', 'lattice_beta', 'lattice_gamma',
-        'kappa', 'psi', 'sample', 'monocris', 'anacris',
+        'sample', 'monocris', 'anacris',
         'rhm', 'rvm', 'rha', 'rva', 'source_type', 'source_dE',
         'modules', 'collimation', 'slits_mm',
         'number_neutrons', 'scan_command1', 'scan_command2', 'diagnostic_mode',

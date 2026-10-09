@@ -18,10 +18,9 @@ Sense. Sample sense follows the vTAS Friedel convention verified live on IN8
 scattering vector, the -1 branch puts ``+U B hkl`` there. Callers hand
 ``solve_stage`` the already-signed mount vector.
 
-Readout, correction, physical. The operator's UB lives in the readout frame
-at the corrections in force: ``solve_stage`` returns READOUTS. The McStas
-sample arm alone receives the physical angles, readout + correction +
-hidden zero error (``sample_arm_euler``).
+Readouts. The operator's UB lives in the readout frame: ``solve_stage``
+returns READOUTS, and the McStas sample arm receives them as they are
+(``sample_arm_euler``). There is no correction and no zero error.
 
 Imports nothing from ``instruments/`` and nothing Qt: ISAR vendors this file.
 """
@@ -126,32 +125,26 @@ def stage_rotation(gonio, angles):
 def q_mount_from_stage(gonio, angles, stt, ki, kf, sense_sample):
     """Return ``U @ B @ hkl`` (mount frame) measured at a full stage setting.
 
-    ``angles`` are the stage angles in the frame the UB lives in (readouts at
-    today's corrections); ``stt`` is the signed sample two-theta.
+    ``angles`` are the stage readouts, the frame the UB lives in; ``stt`` is
+    the signed sample two-theta.
     """
     q = stage_rotation(gonio, angles).T @ lab_q_from_stt(ki, kf, stt)
     return -q if sense_sample > 0 else q
 
 
-def stage_record(gonio, angles, corrections=None, ki=None, kf=None, sense=None):
+def stage_record(gonio, angles, ki=None, kf=None, sense=None):
     """A JSON-friendly record of a stage setting that describes its own axes:
     ``{"axes": [[name, [x, y, z]], ...], "angles": {name: degrees}}``, the
     ``angles`` being the readouts of every axis.
 
-    Take Position adds what was in force when the peak was taken:
-    ``"corrections"`` ({name: degrees}, the operator corrections per axis),
-    ``"ki"``, ``"kf"`` and ``"sense"``. Hidden zero errors are never recorded.
-    A record without ``"corrections"`` is read in the frame of the moment
-    (see ``record_angles``).
+    Take Position adds what was in force when the peak was taken: ``"ki"``,
+    ``"kf"`` and ``"sense"``.
     """
     _check_names(gonio, angles)
     record = {
         "axes": [[ax.name, [float(v) for v in ax.axis]] for ax in gonio],
         "angles": {ax.name: float(angles[ax.name]) for ax in gonio},
     }
-    if corrections is not None:
-        record["corrections"] = {ax.name: float(corrections.get(ax.name, 0.0))
-                                 for ax in gonio}
     for key, value in (("ki", ki), ("kf", kf)):
         if value is not None:
             record[key] = float(value)
@@ -160,18 +153,19 @@ def stage_record(gonio, angles, corrections=None, ki=None, kf=None, sense=None):
     return record
 
 
-def record_angles(record, corrections=None):
-    """A recorded setting in today's readout frame (the fit rule, A1):
-    readout + (correction at record time - correction now), per axis, so a
-    correction changed after the peak was taken does not move the peak.
-    ``corrections`` None, or a record without corrections, reads the
-    readouts as they are."""
-    angles = {name: float(value) for name, value in record["angles"].items()}
-    taken = record.get("corrections")
-    if taken is None or corrections is None:
-        return angles
-    return {name: value + float(taken.get(name, 0.0)) - float(corrections.get(name, 0.0))
-            for name, value in angles.items()}
+def record_angles(record):
+    """A recorded setting's readouts, {axis: degrees}.
+
+    A record saved while the psi/kappa corrections existed may carry
+    ``"corrections"``. All zero it is read as it is; a nonzero one put the
+    peak in another readout frame, which cannot be reconstructed, so it is
+    refused (``ValueError``) rather than read wrongly."""
+    taken = record.get("corrections") or {}
+    if any(float(value) != 0.0 for value in taken.values()):
+        raise ValueError("this peak was taken under a psi/kappa correction, which TAVI "
+                         "no longer has, so its stage record cannot be read; take the "
+                         "peak again")
+    return {name: float(value) for name, value in record["angles"].items()}
 
 
 def gonio_from_record(record):

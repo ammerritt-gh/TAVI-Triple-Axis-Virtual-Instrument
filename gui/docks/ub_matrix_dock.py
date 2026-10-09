@@ -101,7 +101,7 @@ class PeakEntryWidget(QFrame):
     The angle columns follow the goniometer description: one readout per
     stage axis, then the sample two-theta. A peak taken with Take Position
     carries a stage record (``tavi.orientation.stage_record``: readouts,
-    corrections in force, ki, kf, sense). A peak without one (a save from
+    ki, kf, sense). A peak without one (a save from
     before the goniometer, a TAS_MCP peak) keeps the legacy (omega, chi, 2theta)
     triple and its meaning, and is marked "legacy" -- derived from the missing
     record, never stored.
@@ -206,8 +206,7 @@ class PeakEntryWidget(QFrame):
         # Row 3: Take Position
         self.take_position_button = QPushButton("\U0001f4cd Take Position")
         self.take_position_button.setToolTip(
-            "Record the current stage readouts, the corrections in force, ki, kf "
-            "and the scattering sense"
+            "Record the current stage readouts, ki, kf and the scattering sense"
         )
         self.take_position_button.clicked.connect(lambda: self.take_position_requested.emit(self.index))
         fields_grid.addWidget(self.take_position_button, 3, 4, 1, 2)
@@ -272,8 +271,8 @@ class PeakEntryWidget(QFrame):
         """Return peak data from UI fields (``ObservedPeak.to_dict`` shape).
 
         A stage peak's record takes the readouts from the axis fields; a peak
-        typed in by hand gets a record without corrections, read in the frame
-        of the moment. A legacy peak keeps its triple and no record.
+        typed in by hand gets a record of its own. A legacy peak keeps its
+        triple and no record.
         """
         try:
             values = [float(edit.text() or 0) for edit in self.axis_edits]
@@ -340,7 +339,7 @@ class PeakEntryWidget(QFrame):
         self.stt_edit.setText(self._fmt(stt))
         self.ki_edit.setText(self._fmt(ki))
         self.kf_edit.setText(self._fmt(kf))
-        # The record changed even when no field text did (a correction only).
+        # The record changed even when no field text did (ki, kf or the sense).
         self.peak_data_changed.emit(self.index)
 
     def update_valid_indicator(self, is_valid: bool):
@@ -479,7 +478,7 @@ class UBMatrixDock(BaseDockWidget):
             lock_row.addWidget(edit)
         self.lock_plane_button = QPushButton("Lock")
         self.lock_plane_button.setToolTip(
-            "Put the arcs where the UB levels this plane and keep them (and kappa) there")
+            "Put the arcs where the UB levels this plane and keep them there")
         self.release_plane_button = QPushButton("Release")
         self.release_plane_button.setToolTip("Back to free mode: the arcs follow each Q")
         self.release_plane_button.setEnabled(False)

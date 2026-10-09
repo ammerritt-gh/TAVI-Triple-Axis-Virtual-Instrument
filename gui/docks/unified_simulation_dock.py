@@ -17,26 +17,22 @@ from gui.docks.base_dock import BaseDockWidget, pack_grid
 LINKED_PARAMETER_GROUPS = {
     # Sample 2theta - A2 and 2theta are the same angle
     "sample_2theta": {"a2", "2theta"},
-    # Sample theta - A3 is the calculated angle; omega/psi are in-plane offsets
+    # Sample rotation - A3 and omega are the same turntable angle
     "sample_theta": {"omega", "a3"},
-    # A3, omega, and psi all affect in-plane sample rotation
-    "sample_in_plane_offset": {"omega", "a3", "psi"},
-    # The lower arc sgl and its correction kappa move the same axis
-    "sample_out_plane": {"sgl", "kappa"},
 }
 
 # Define mode conflicts - scanning orientation angles conflicts with momentum/HKL scans
 # (an arc with a Q/HKL variable is refused outright; see TAVIController._is_arc_in_q_mode)
 MODE_CONFLICTS = {
     # Orientation angles conflict with momentum/HKL because they change the Q-to-angle mapping
-    "orientation_vs_q": ({"omega", "a3", "psi", "kappa"}, {"qx", "qy", "qz", "h", "k", "l"}),
+    "orientation_vs_q": ({"omega", "a3"}, {"qx", "qy", "qz", "h", "k", "l"}),
 }
 
 # Known valid scan variables with descriptions
 VALID_SCAN_VARIABLES = {
     "qx", "qy", "qz", "deltae", "h", "k", "l",
     "a1", "a2", "a3", "a4", "2theta",
-    "omega", "sgl", "sgu", "kappa", "psi",
+    "omega", "sgl", "sgu",
     "rhm", "rvm", "rha", "rva",
     "vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"
 }
@@ -44,7 +40,13 @@ VALID_SCAN_VARIABLES = {
 # The refusal for a scan over the retired chi (the old beam-fixed tilt under
 # the turntable), shared by the GUI and the API.
 SCAN_CHI_REFUSAL = ("'chi' is no longer a scan variable: scan the arcs 'sgl' (lower) "
-                    "or 'sgu' (upper) in angle mode, or 'kappa', the lower-arc correction")
+                    "or 'sgu' (upper) in angle mode")
+
+# The refusal for a scan over the retired psi or kappa (TAVI's zero corrections
+# of the turntable A3 and the lower arc sgl), shared by the GUI and the API.
+SCAN_CORRECTION_REFUSAL = ("'psi' and 'kappa' are retired: they were TAVI's zero corrections "
+                           "of the turntable and the lower arc. Scan the sample rotation "
+                           "'omega' (A3) or the arc 'sgl' itself")
 
 # Descriptions for each scan variable (for help dialog)
 SCAN_VARIABLE_DESCRIPTIONS = {
@@ -58,13 +60,11 @@ SCAN_VARIABLE_DESCRIPTIONS = {
     "a1": "Monochromator 2θ angle (degrees)",
     "a2": "Sample 2θ scattering angle (degrees)",
     "2theta": "Sample 2θ scattering angle (degrees) - alias for A2",
-    "a3": "Sample θ rotation angle (degrees) - same as ω (omega)",
+    "a3": "Sample rotation, the turntable (degrees) - same as ω (omega)",
     "a4": "Analyzer 2θ angle (degrees)",
-    "omega": "Sample θ rotation angle (degrees) - alias for A3",
+    "omega": "Sample rotation, the turntable A3 (degrees) - alias for A3",
     "sgl": "Lower goniometer arc (degrees) - angle-mode scans only; Q/HKL scans solve it",
     "sgu": "Upper goniometer arc (degrees) - angle-mode scans only; Q/HKL scans solve it",
-    "psi": "Correction of the turntable A3 (degrees)",
-    "kappa": "Correction of the lower arc sgl (degrees)",
     "rhm": "Monochromator horizontal bending radius (m)",
     "rvm": "Monochromator vertical bending radius (m)",
     "rha": "Analyzer horizontal bending radius (m)",
@@ -377,7 +377,7 @@ class UnifiedSimulationDock(BaseDockWidget):
 
 <h3>Relative Mode</h3>
 <p>When "Relative to current" is checked, start and end are offsets from the current value.</p>
-<p>Example: <code>omega -5 5 0.5</code> with relative mode scans ±5° around current omega.</p>
+<p>Example: <code>omega -5 5 0.5</code> with relative mode scans the sample rotation (A3) ±5° around its current value.</p>
 
 <h3>Valid Scan Variables</h3>
 <table border="1" cellpadding="4" cellspacing="0">
@@ -387,7 +387,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         categories = [
             ("Reciprocal Space", ["h", "k", "l", "qx", "qy", "qz", "deltae"]),
             ("Instrument Angles", ["a1", "a2", "2theta", "a3", "a4"]),
-            ("Sample Orientation", ["omega", "sgl", "sgu", "psi", "kappa"]),
+            ("Sample Orientation", ["omega", "sgl", "sgu"]),
             ("Crystal Focusing", ["rhm", "rvm", "rha", "rva"]),
             ("Slit Apertures", ["vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"]),
         ]

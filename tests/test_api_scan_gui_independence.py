@@ -198,7 +198,7 @@ def test_builtin_launch_state_stays_frozen_through_real_queue_boundary(
 
     ctrl.run_simulation = capture_run
     try:
-        ctrl.instrument_state.mis_omega = 1.25
+        ctrl.instrument_state.U_true = ctrl.instrument_state.U_true * 1.25   # hidden state
         ctrl.diagnostic_settings = {
             "Detector PSD": True,
             "nested": {"gain": [1.0]},
@@ -219,18 +219,18 @@ def test_builtin_launch_state_stays_frozen_through_real_queue_boundary(
             launch = ctrl._collect_simulation_launch_state()
 
         expected_h = launch["vals"]["H"]
-        expected_mis_omega = launch["scan_config"].mis_omega
+        expected_u_true = launch["scan_config"].U_true.copy()
         expected_mount = launch["scan_config"].sample_mount.R_mount.copy()
         expected_gain = launch["diagnostic_settings"]["nested"]["gain"][:]
         expected_background_enabled = launch["background"]["enabled"]
 
         job = ctrl.submit_scan_job(launch, source)
 
-        ctrl.instrument_state.mis_omega = 99.0
+        ctrl.instrument_state.U_true = ctrl.instrument_state.U_true * 0 + 99.0
         ctrl.diagnostic_settings["nested"]["gain"].append(99.0)
         ctrl.background_profile["enabled"] = False
         launch["vals"]["H"] = 99.0
-        launch["scan_config"].mis_omega = 99.0
+        launch["scan_config"].U_true[0, 0] = 99.0
         launch["scan_config"].sample_mount.R_mount[0, 0] = 99.0
         launch["diagnostic_settings"]["nested"]["gain"].append(99.0)
         launch["background"]["enabled"] = False
@@ -239,7 +239,7 @@ def test_builtin_launch_state_stays_frozen_through_real_queue_boundary(
         frozen = captured["launch_state"]
         assert frozen is job.launch_state
         assert frozen["vals"]["H"] == expected_h
-        assert frozen["scan_config"].mis_omega == expected_mis_omega
+        assert frozen["scan_config"].U_true.tolist() == expected_u_true.tolist()
         assert frozen["scan_config"].sample_mount.R_mount.tolist() == (
             expected_mount.tolist())
         assert frozen["diagnostic_settings"]["nested"]["gain"] == expected_gain

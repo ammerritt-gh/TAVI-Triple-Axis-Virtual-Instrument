@@ -729,8 +729,8 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # Scan variable -> settable GUI parameter field (TAVI_PySide6.TAVIController._api_field_map).
 # Derived from the scan-point template (_build_scan_point_template) and
 # _SCAN_VARIABLE_TO_INDEX: angle-mode slots are [mtt, stt, omega, att] so A1->mtt,
-# A2/2theta->stt, A3->omega, A4->att. Scan variables 'omega' and 'psi' both step
-# template slot 10, which is seeded from the psi field -> both map to 'psi'.
+# A2/2theta->stt, A3->omega, A4->att. The scan variable 'omega' steps the same
+# slot as A3, the sample rotation itself, so it maps to the 'omega' field.
 # 'sgl'/'sgu' (angle-mode scans only) step slots seeded from their own fields.
 # 'chi' is None: a retired variable, known only so an old scan's goto is refused
 # by name. 'rva' is None: no settable field exists in _api_field_map.
@@ -738,7 +738,7 @@ SCAN_VARIABLE_TO_FIELD = {
     "H": "H", "K": "K", "L": "L", "deltaE": "deltaE",
     "qx": "qx", "qy": "qy", "qz": "qz",
     "A1": "mtt", "A2": "stt", "2theta": "stt", "A3": "omega", "A4": "att",
-    "omega": "psi", "psi": "psi", "kappa": "kappa",
+    "omega": "omega",
     "sgl": "sgl", "sgu": "sgu",
     "chi": None, "rva": None,
     "rhm": "rhm", "rvm": "rvm", "rha": "rha",
