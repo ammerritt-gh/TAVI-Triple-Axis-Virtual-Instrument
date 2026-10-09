@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+API_VERSION = 2   # every mutating API request names it; it marks the A2/A4/A6 renumbering
 SLIT_SCAN_REFUSAL = "slit scans arrive with the point plan"
 LATTICE_REFUSAL = "lattice parameters are set over the API, never scanned"
 APPLIED_REFUSAL = "applied radii are derived by the take-off branch; no input sets them"
@@ -34,6 +35,7 @@ class Quantity:
     writable: bool = False          # may be set over the API or in a dock
     derived_only: bool = False      # an observable no input may set
     refusal: str = ""               # message when a context's flags refuse it
+    write_refusal: str = ""         # the same for an API write, where "scan" would mislead
     ill: str = ""                   # ILL A-number, angles only
     nicos: str = ""                 # NICOS motor name, angles only
 
@@ -52,6 +54,7 @@ QUANTITIES: tuple[Quantity, ...] = (
     Quantity("mono_theta_deg", "°", "Mono θ — A1 (°)", "monochromator Bragg angle, θ = 2θ/2",
              "derived: A1 = A2/2, signed as A2", aliases=("A1", "mth"), derived_only=True,
              refusal="independent crystal rocking is not modelled yet; scan A2 (mono 2θ)",
+             write_refusal="independent crystal rocking is not modelled yet; set A2 (mono 2θ)",
              ill="A1", nicos="mth"),
     Quantity("mono_two_theta_deg", "°", "Mono 2θ — A2 (°)", "monochromator scattering angle 2θ",
              "signed as the diffraction angle", aliases=("A2", "mtt"), scannable=True,
@@ -66,6 +69,7 @@ QUANTITIES: tuple[Quantity, ...] = (
     Quantity("analyzer_theta_deg", "°", "Analyzer θ — A5 (°)", "analyzer Bragg angle, θ = 2θ/2",
              "derived: A5 = A6/2, signed as A6", aliases=("A5", "ath"), derived_only=True,
              refusal="independent crystal rocking is not modelled yet; scan A6 (analyzer 2θ)",
+             write_refusal="independent crystal rocking is not modelled yet; set A6 (analyzer 2θ)",
              ill="A5", nicos="ath"),
     Quantity("analyzer_two_theta_deg", "°", "Analyzer 2θ — A6 (°)", "analyzer scattering angle 2θ",
              "signed as the diffraction angle", aliases=("A6", "att"), scannable=True,
@@ -162,6 +166,11 @@ _RETIRED = {
     "kappa": "kappa is a diffraction-goniometer axis that TAVI does not have",
     **{old: f"{old} is retired: it was in metres; use {new}, which is in millimetres"
        for old, new in _OLD_SLITS.items()},
+    "slits_mm": "slits_mm is retired: set each gap by its own key, "
+                "slit.<stable_id>.horizontal_gap_mm or .vertical_gap_mm (millimetres)",
+    **{f"lattice_{axis}": f"lattice_{axis} is retired: use lattice_{axis}_{unit} (or {axis})"
+       for axis, unit in (("a", "angstrom"), ("b", "angstrom"), ("c", "angstrom"),
+                          ("alpha", "deg"), ("beta", "deg"), ("gamma", "deg"))},
 }
 
 
@@ -205,5 +214,99 @@ def resolve(name: str, context: str) -> Quantity:
             raise QuantityRefused(_RETIRED[key])
         raise UnknownQuantity(f"unknown quantity {name!r}")
     if q.derived_only or not {"scan": q.scannable, "write": q.writable}[context]:
-        raise QuantityRefused(q.refusal or f"{q.id} cannot be {_VERB[context]}")
+        raise QuantityRefused((q.write_refusal if context == "write" else "") or q.refusal
+                              or f"{q.id} cannot be {_VERB[context]}")
     return q
+
+
+# Interim (U3 deletes the internal names): the field the controller, the plugins and the
+# frozen parameter dict still use for each public quantity. Slit gaps are not here: their
+# internal form is the nested slits_mm dict, flattened by public_values().
+_INTERNAL = {
+    "mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt", "sample_rotation_deg": "omega",
+    "analyzer_two_theta_deg": "att", "sample_lower_arc_deg": "sgl", "sample_upper_arc_deg": "sgu",
+    "h": "H", "k": "K", "l": "L",
+    "q_instrument_x_inv_angstrom": "qx", "q_instrument_y_inv_angstrom": "qy",
+    "q_instrument_z_inv_angstrom": "qz", "energy_transfer_mev": "deltaE",
+    "incident_energy_mev": "Ei", "final_energy_mev": "Ef",
+    "incident_wavevector_inv_angstrom": "Ki", "final_wavevector_inv_angstrom": "Kf",
+    "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
+    "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": "rva",
+    "lattice_a_angstrom": "lattice_a", "lattice_b_angstrom": "lattice_b",
+    "lattice_c_angstrom": "lattice_c", "lattice_alpha_deg": "lattice_alpha",
+    "lattice_beta_deg": "lattice_beta", "lattice_gamma_deg": "lattice_gamma",
+}
+_PUBLIC = {internal: canonical for canonical, internal in _INTERNAL.items()}
+_APPLIED = {"rhm": "applied_mono_horizontal_radius_m", "rvm": "applied_mono_vertical_radius_m",
+            "rha": "applied_analyzer_horizontal_radius_m",
+            "rva": "applied_analyzer_vertical_radius_m"}
+
+
+def to_internal(canonical_id: str) -> str:
+    return _INTERNAL.get(canonical_id, canonical_id)
+
+
+def to_public(internal_name: str) -> str:
+    return _PUBLIC.get(internal_name, internal_name)
+
+
+def public_applied_radii(applied: dict) -> dict:
+    """A point's applied radii ({"rhm": ...}) under their derived-only canonical IDs."""
+    return {_APPLIED[axis]: value for axis, value in applied.items()}
+
+
+def public_values(vals: dict, slits=()) -> dict:
+    """An internal parameter dict under canonical IDs; names that are no quantity pass through.
+
+    ``slits`` are the active descriptor's SlitSpecs (id, stable_id, has_height): the nested
+    ``slits_mm`` becomes one flat key per gap, and only this instrument's own appear.
+    """
+    out = {}
+    for key, value in vals.items():
+        if key == "slits_mm":
+            for slit in slits:
+                if slit.id not in value:
+                    continue
+                gaps = value[slit.id]
+                width, height = gaps if slit.has_height else (gaps, None)
+                out[f"slit.{slit.stable_id}.horizontal_gap_mm"] = width
+                if slit.has_height:
+                    out[f"slit.{slit.stable_id}.vertical_gap_mm"] = height
+        elif key == "curvature_modes":
+            out[key] = {to_public(axis): mode for axis, mode in value.items()}
+        else:
+            out[to_public(key)] = value
+    return out
+
+
+def normalize_write_names(names, accept):
+    """Resolve the names of one API write; return ({name: key}, {name: refusal}).
+
+    ``accept`` is every key the caller can set: canonical IDs of quantities it has plus the
+    exact names of its other settings. Any refusal means the whole request is refused: a
+    retired, unknown, derived or absent name, or two names for one quantity (both reported).
+    """
+    settings = set(accept) - _BY_ID.keys()
+    keys, errors, first = {}, {}, {}
+    for name in names:
+        if name in settings:
+            key = name
+        else:
+            try:
+                key = resolve(name, "write").id
+            except UnknownQuantity:
+                errors[name] = "unknown field"
+                continue
+            except QuantityRefused as exc:
+                errors[name] = str(exc)
+                continue
+            if key not in accept:
+                errors[name] = f"{key} does not exist on this instrument"
+                continue
+        if key in first:
+            errors[name] = errors[first[key]] = (
+                f"{key} is assigned twice, as {first[key]!r} and {name!r}; send it once")
+            continue
+        first[key] = name
+        keys[name] = key
+    return keys, errors
