@@ -42,6 +42,8 @@ from typing import Optional
 import numpy as np
 from scipy.optimize import minimize
 
+from tavi.quantities import QuantityRefused, resolve
+
 log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------
@@ -726,48 +728,45 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # Goto mapping
 # --------------------------------------------------------------------------
 
-# Scan variable -> settable GUI parameter field (TAVI_PySide6.TAVIController._api_field_map).
-# Derived from the scan-point template (_build_scan_point_template) and
-# _SCAN_VARIABLE_TO_INDEX: angle-mode slots are [mtt, stt, omega, att] so A1->mtt,
-# A2/2theta->stt, A3->omega, A4->att. The scan variable 'omega' steps the same
-# slot as A3, the sample rotation itself, so it maps to the 'omega' field.
-# 'sgl'/'sgu' (angle-mode scans only) step slots seeded from their own fields.
-# 'chi' is None: a retired variable, known only so an old scan's goto is refused
-# by name. 'rva' is None: no settable field exists in _api_field_map.
+# Canonical scan quantity ID -> settable GUI parameter field
+# (TAVI_PySide6.TAVIController._api_field_map). The field names are still the
+# internal ones (mtt, stt, omega, att) until U3; the keys are the registry's, so
+# A2/mtt reach 'mtt', A4/stt/2theta 'stt', A6/att 'att', and A3/sth/omega/psi
+# 'omega'. 'analyzer_vertical_radius_m' is None: no settable field exists in
+# _api_field_map for it, so it is known but not goto-able.
 SCAN_VARIABLE_TO_FIELD = {
-    "H": "H", "K": "K", "L": "L", "deltaE": "deltaE",
-    "qx": "qx", "qy": "qy", "qz": "qz",
-    "A1": "mtt", "A2": "stt", "2theta": "stt", "A3": "omega", "A4": "att",
-    "omega": "omega",
-    "sgl": "sgl", "sgu": "sgu",
-    "chi": None, "rva": None,
-    "rhm": "rhm", "rvm": "rvm", "rha": "rha",
+    "h": "H", "k": "K", "l": "L", "energy_transfer_mev": "deltaE",
+    "q_instrument_x_inv_angstrom": "qx", "q_instrument_y_inv_angstrom": "qy",
+    "q_instrument_z_inv_angstrom": "qz",
+    "mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
+    "sample_rotation_deg": "omega", "analyzer_two_theta_deg": "att",
+    "sample_lower_arc_deg": "sgl", "sample_upper_arc_deg": "sgu",
+    "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
+    "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": None,
 }
-
-#: Case-insensitive index onto the canonical spellings above.  Built once;
-#: lower-case collisions cannot occur in the table as written.
-_SCAN_VARIABLE_FOLDED = {name.lower(): name for name in SCAN_VARIABLE_TO_FIELD}
 
 
 def _canonical_scan_variable(name) -> Optional[str]:
-    """Canonical spelling of a scan variable, or ``None`` if it is unknown.
+    """Canonical ID of a scan variable (any registry spelling), or ``None`` if
+    the registry refuses it as a scan command.
 
     Knowing *that* a variable exists is separate from knowing whether it is
-    goto-able: ``chi``/``rva`` are known rows whose field is ``None``, and the
-    two cases must produce different refusals.
+    goto-able: ``analyzer_vertical_radius_m`` is a known row whose field is
+    ``None``, and the two cases must produce different refusals.
     """
     if not isinstance(name, str):
         return None
-    if name in SCAN_VARIABLE_TO_FIELD:
-        return name
-    return _SCAN_VARIABLE_FOLDED.get(name.lower())
+    try:
+        return resolve(name.strip(), "scan").id
+    except QuantityRefused:
+        return None
 
 
 def field_for_scan_variable(name: str) -> Optional[str]:
     """Settable parameter field for a scan variable; ``None`` = not goto-able.
 
-    Exact (case-sensitive) match first, then a case-insensitive lookup against
-    the known spellings.  An unknown variable returns ``None``.
+    Any registry spelling (ID, alias, any case) resolves. A name the registry
+    refuses as a scan command returns ``None``.
     """
     canonical = _canonical_scan_variable(name)
     if canonical is None:

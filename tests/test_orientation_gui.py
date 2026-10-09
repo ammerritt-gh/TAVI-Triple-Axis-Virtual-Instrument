@@ -262,11 +262,11 @@ def test_api_arcs_are_writable_fields_in_the_schema(controller):
 
 def test_chi_scan_is_refused_naming_the_arcs(controller):
     hard, _soft = controller._scan_command_issues("chi 0 2 1", "")
-    assert len(hard) == 1 and "'sgl'" in hard[0] and "'sgu'" in hard[0]
+    assert len(hard) == 1 and "sgl" in hard[0] and "sgu" in hard[0]
     backend = cm.TaviApiBackend(controller, _SyncBridge())
     result = backend.submit_validate({"parameters": {"scan_command1": "chi 0 2 1"}})
     assert result["would_queue"] is False
-    assert any("'sgl'" in b and "'sgu'" in b for b in result["blockers"])
+    assert any("sgl" in b and "sgu" in b for b in result["blockers"])
 
 
 def test_arc_scan_in_a_q_mode_is_refused_naming_angle_mode(controller):
@@ -291,7 +291,7 @@ def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path
     assert controller.validate_scan_launch_state(launch)["infeasible"] == []
     vals, config = launch["vals"], launch["scan_config"]
     point = controller._build_scan_point_template("angle", vals)
-    point[controller._SCAN_VARIABLE_TO_INDEX["A3"]] = 35.0
+    point[controller._SCAN_VARIABLE_TO_INDEX["sample_rotation_deg"]] = 35.0
     snapshot = controller.instrument.compute_snapshot(
         (point, 0), 0, "angle", config, vals, str(tmp_path))
     params = snapshot.params
@@ -369,17 +369,22 @@ def test_the_two_retired_corrections_are_refused_wherever_an_api_client_can_reac
         assert "retired" in reason and f"'{replacement}'" in reason, reason
     assert controller.get_gui_values() == before            # H was not applied either
 
+    # As a scan command psi is an alias of the sample rotation now; kappa is not modelled.
     hard, _soft = controller._scan_command_issues(f"{name} 0 1 1", "")
-    assert len(hard) == 1 and "retired" in hard[0], hard
-    for variable in (name, name.upper()):
-        assert controller._validate_scan_commands_text(f"{variable} 0 1 1", "")
+    if name == "psi":
+        assert hard == [], hard
+    else:
+        assert len(hard) == 1 and "does not have" in hard[0], hard
+        for variable in (name, name.upper()):
+            assert controller._validate_scan_commands_text(f"{variable} 0 1 1", "")
 
     schema = controller.build_api_schema()
     assert name not in [f["name"] for f in schema["fields"]]
     assert name not in schema["scan_variables"]
     assert name not in controller.get_gui_values()
-    ok, message = controller.goto_scan_variable(name, 1.0)
-    assert not ok and "unknown scan variable" in message
+    if name == "kappa":
+        ok, message = controller.goto_scan_variable(name, 1.0)
+        assert not ok and "unknown scan variable" in message
 
 
 # --- 1.7: peaks and Take Position on the stage ------------------------------------
@@ -1187,7 +1192,7 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
             template = controller._build_scan_point_template("rlu", launch["vals"])
             for index, k in enumerate((-0.1, 0.0, 0.1)):
                 point = template[:]
-                point[controller._SCAN_VARIABLE_TO_INDEX["K"]] = k
+                point[controller._SCAN_VARIABLE_TO_INDEX["k"]] = k
                 metadata = controller.instrument.compute_snapshot(
                     (point, index), index, "rlu", launch["scan_config"], launch["vals"],
                     str(tmp_path)).metadata

@@ -470,7 +470,7 @@ def _feed_runtime_texts(win):
     exist, so the format strings are the real ones. Returns {name: label}.
     """
     from tavi.runtime_tracker import RuntimeTracker
-    from gui.docks.unified_simulation_dock import SCAN_CHI_REFUSAL
+    from tavi.quantities import QuantityRefused, resolve
 
     ctrl, sim, sample = win.controller, win.simulation_dock, win.sample_dock
     long_time = RuntimeTracker.format_time(HOURS)  # "123h 59m 59s"
@@ -483,9 +483,11 @@ def _feed_runtime_texts(win):
     sim.update_point_count_display(1000, 1000, 999999, 1)
     sim.update_total_time_estimate(long_time, RuntimeTracker.format_time(3723))
     sim.set_scan_command_warning(
-        1, "Unknown variable 'xyz'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, "
-           "omega, sgl, sgu, etc.")
-    sim.set_scan_command_warning(2, SCAN_CHI_REFUSAL)
+        1, "Unknown variable 'xyz'. Valid: H, K, L, qx, qy, qz, deltaE, A2, A3, A4, A6, "
+           "sgl, sgu, rhm, rvm, rha, rva")
+    with pytest.raises(QuantityRefused) as chi_refusal:
+        resolve("chi", "scan")
+    sim.set_scan_command_warning(2, str(chi_refusal.value))
     sim.set_scan_conflict_warning(
         "Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, so they cannot be "
         "scanned in it; scan 'kappa' (the lower-arc correction) instead, or scan the arcs "

@@ -10,63 +10,15 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt
 
 from gui.docks.base_dock import BaseDockWidget, pack_grid
+from tavi.quantities import QUANTITIES
 
 
-# Define linked parameter groups - parameters within a group control the same thing
-# and should not be scanned together
-LINKED_PARAMETER_GROUPS = {
-    # Sample 2theta - A2 and 2theta are the same angle
-    "sample_2theta": {"a2", "2theta"},
-    # Sample rotation - A3 and omega are the same turntable angle
-    "sample_theta": {"omega", "a3"},
-}
-
-# Known valid scan variables with descriptions
-VALID_SCAN_VARIABLES = {
-    "qx", "qy", "qz", "deltae", "h", "k", "l",
-    "a1", "a2", "a3", "a4", "2theta",
-    "omega", "sgl", "sgu",
-    "rhm", "rvm", "rha", "rva",
-    "vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"
-}
-
-# The refusal for a scan over the retired chi (the old beam-fixed tilt under
-# the turntable), shared by the GUI and the API.
-SCAN_CHI_REFUSAL = ("'chi' is no longer a scan variable: scan the arcs 'sgl' (lower) "
-                    "or 'sgu' (upper) in angle mode")
-
-# The refusal for a scan over the retired psi or kappa (TAVI's zero corrections
-# of the turntable A3 and the lower arc sgl), shared by the GUI and the API.
-SCAN_CORRECTION_REFUSAL = ("'psi' and 'kappa' are retired: they were TAVI's zero corrections "
-                           "of the turntable and the lower arc. Scan the sample rotation "
-                           "'omega' (A3) or the arc 'sgl' itself")
-
-# Descriptions for each scan variable (for help dialog)
-SCAN_VARIABLE_DESCRIPTIONS = {
-    "h": "H index in reciprocal lattice units (r.l.u.)",
-    "k": "K index in reciprocal lattice units (r.l.u.)",
-    "l": "L index in reciprocal lattice units (r.l.u.)",
-    "qx": "Momentum transfer x-component (Å⁻¹)",
-    "qy": "Momentum transfer y-component (Å⁻¹)",
-    "qz": "Momentum transfer z-component (Å⁻¹)",
-    "deltae": "Energy transfer ΔE (meV)",
-    "a1": "Monochromator 2θ angle (degrees)",
-    "a2": "Sample 2θ scattering angle (degrees)",
-    "2theta": "Sample 2θ scattering angle (degrees) - alias for A2",
-    "a3": "Sample rotation, the turntable (degrees) - same as ω (omega)",
-    "a4": "Analyzer 2θ angle (degrees)",
-    "omega": "Sample rotation, the turntable A3 (degrees) - alias for A3",
-    "sgl": "Lower goniometer arc (degrees) - angle-mode scans only; Q/HKL scans solve it",
-    "sgu": "Upper goniometer arc (degrees) - angle-mode scans only; Q/HKL scans solve it",
-    "rhm": "Monochromator horizontal bending radius (m)",
-    "rvm": "Monochromator vertical bending radius (m)",
-    "rha": "Analyzer horizontal bending radius (m)",
-    "rva": "Analyzer vertical bending radius (m)",
-    "vbl_hgap": "Post-mono slit width (m) - between monochromator and sample",
-    "pbl_hgap": "Pre-sample slit width (m) - horizontal aperture before sample",
-    "pbl_vgap": "Pre-sample slit height (m) - vertical aperture before sample",
-    "dbl_hgap": "Detector slit width (m) - before detector",
-}
+# Scan commands name a scannable quantity of the registry (tavi/quantities.py)
+# by its canonical ID or any alias, in any case; this is the one list of them.
+_SCANNABLE = [q for q in QUANTITIES if q.scannable]
+VALID_SCAN_VARIABLES = {name.casefold() for q in _SCANNABLE for name in (q.id, *q.aliases)}
+# The spelling shown to the operator: the first alias (A2, qx, H), else the ID.
+SCAN_VARIABLE_SHORT_NAMES = [(q.aliases or (q.id,))[0] for q in _SCANNABLE]
 
 
 class UnifiedSimulationDock(BaseDockWidget):
@@ -370,28 +322,21 @@ class UnifiedSimulationDock(BaseDockWidget):
 
 <h3>Relative Mode</h3>
 <p>When "Relative to current" is checked, start and end are offsets from the current value.</p>
-<p>Example: <code>omega -5 5 0.5</code> with relative mode scans the sample rotation (A3) ±5° around its current value.</p>
+<p>Example: <code>A3 -5 5 0.5</code> with relative mode scans the sample rotation ±5° around its current value.</p>
 
 <h3>Valid Scan Variables</h3>
+<p>Any name in a row works, in any case; the last is the full ID.</p>
 <table border="1" cellpadding="4" cellspacing="0">
 <tr><th>Variable</th><th>Description</th></tr>
 """
-        # Sort variables by category
-        categories = [
-            ("Reciprocal Space", ["h", "k", "l", "qx", "qy", "qz", "deltae"]),
-            ("Instrument Angles", ["a1", "a2", "2theta", "a3", "a4"]),
-            ("Sample Orientation", ["omega", "sgl", "sgu"]),
-            ("Crystal Focusing", ["rhm", "rvm", "rha", "rva"]),
-            ("Slit Apertures", ["vbl_hgap", "pbl_hgap", "pbl_vgap", "dbl_hgap"]),
-        ]
-        
-        for category, vars in categories:
-            help_text += f'<tr><td colspan="2"><b>{category}</b></td></tr>\n'
-            for var in vars:
-                desc = SCAN_VARIABLE_DESCRIPTIONS.get(var, "")
-                help_text += f'<tr><td><code>{var}</code></td><td>{desc}</td></tr>\n'
-        
+        for q in _SCANNABLE:
+            names = ", ".join(f"<code>{n}</code>" for n in (*q.aliases, q.id))
+            help_text += f"<tr><td>{names}</td><td>{q.description} ({q.unit})</td></tr>\n"
         help_text += "</table>"
+        help_text += "<h3>Derived, Not Scannable</h3>"
+        for q in QUANTITIES:
+            if q.derived_only and q.refusal and q.ill:
+                help_text += f"<p><code>{q.aliases[0]}</code>: {q.refusal}</p>"
         
         text_edit.setHtml(help_text)
         layout.addWidget(text_edit)

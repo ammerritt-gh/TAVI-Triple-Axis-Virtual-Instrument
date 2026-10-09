@@ -462,28 +462,33 @@ def test_peak_max_negative_counts_refused():
 
 def test_scan_variable_to_field_rows():
     expected = {
-        "H": "H", "K": "K", "L": "L", "deltaE": "deltaE",
-        "qx": "qx", "qy": "qy", "qz": "qz",
-        "A1": "mtt", "A2": "stt", "2theta": "stt", "A3": "omega", "A4": "att",
-        "omega": "omega",
-        "sgl": "sgl", "sgu": "sgu",
-        "chi": None, "rva": None,
-        "rhm": "rhm", "rvm": "rvm", "rha": "rha",
+        "h": "H", "k": "K", "l": "L", "energy_transfer_mev": "deltaE",
+        "q_instrument_x_inv_angstrom": "qx", "q_instrument_y_inv_angstrom": "qy",
+        "q_instrument_z_inv_angstrom": "qz",
+        "mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
+        "sample_rotation_deg": "omega", "analyzer_two_theta_deg": "att",
+        "sample_lower_arc_deg": "sgl", "sample_upper_arc_deg": "sgu",
+        "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
+        "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": None,
     }
     assert SCAN_VARIABLE_TO_FIELD == expected
 
 
 def test_field_for_scan_variable_lookup():
-    assert field_for_scan_variable("A2") == "stt"
+    assert field_for_scan_variable("A2") == "mtt"
+    assert field_for_scan_variable("A4") == "stt"
     assert field_for_scan_variable("2theta") == "stt"
+    assert field_for_scan_variable("A6") == "att"
     assert field_for_scan_variable("omega") == "omega"
     assert field_for_scan_variable("A3") == field_for_scan_variable("omega")
-    # The retired corrections are unknown: a goto on them is refused by name.
-    assert field_for_scan_variable("psi") is None and field_for_scan_variable("kappa") is None
+    # psi is an alias of the sample rotation; kappa is not modelled.
+    assert field_for_scan_variable("psi") == "omega"
+    assert field_for_scan_variable("kappa") is None
     assert field_for_scan_variable("chi") is None
     assert field_for_scan_variable("rva") is None
-    # Case-insensitive fallback onto a known spelling.
-    assert field_for_scan_variable("a4") == "att"
+    # The registry resolves any case and the full ID.
+    assert field_for_scan_variable("a4") == "stt"
+    assert field_for_scan_variable("sample_two_theta_deg") == "stt"
     assert field_for_scan_variable("DELTAE") == "deltaE"
     # Unknowns and non-strings are simply not goto-able.
     assert field_for_scan_variable("nonsense") is None
@@ -516,7 +521,7 @@ def test_plan_goto_accepts_int_numeric_string_and_numpy_float():
 
 
 def test_plan_goto_case_insensitive_variable():
-    plan = plan_goto("a2", 45.0, busy=False)
+    plan = plan_goto("a4", 45.0, busy=False)
     assert plan.ok and plan.field == "stt"
 
 
@@ -532,9 +537,12 @@ def test_plan_goto_refuses_when_busy_before_anything_else():
 
 
 def test_plan_goto_distinguishes_not_gotoable_from_unknown():
-    known = plan_goto("chi", 1.0, busy=False)
+    known = plan_goto("rva", 1.0, busy=False)
     assert known.ok is False
-    assert known.reason == "'chi' is not goto-able"
+    assert known.reason == "'rva' is not goto-able"
+
+    retired = plan_goto("chi", 1.0, busy=False)
+    assert retired.reason == "unknown scan variable 'chi'"
 
     also_known = plan_goto("rva", 1.0, busy=False)
     assert also_known.reason == "'rva' is not goto-able"

@@ -27,6 +27,7 @@ from instruments.contract import (
     RunExecutionState,
 )
 from instruments.tas_runtime import (
+    CURVATURE_AXIS_BY_ID,
     SCAN_POINT_LENGTH,
     SLOT_SGL,
     SLOT_SGU,
@@ -136,6 +137,8 @@ from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
 from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
+from tavi.quantities import QUANTITIES, QuantityRefused, UnknownQuantity
+from tavi.quantities import resolve as resolve_quantity
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection,
                                      reference_hkls)
@@ -3107,30 +3110,18 @@ class TAVIController(QObject):
             pass
 
     def normalize_scan_variable(self, name):
-        """Normalize scan variable names to canonical form.
-        
-        Note: omega and 2theta are kept as-is for display purposes,
-        but they map to the same indices as A3 and A2 respectively.
+        """Canonical quantity ID of a scan command's variable name.
+
+        Any registry spelling (ID, alias, any case) resolves; a name the
+        registry refuses as a scan command comes back unchanged, and the
+        validators report it.
         """
         if not name:
             return name
-        name = str(name).strip()
-        lower = name.lower()
-        if lower in ["h", "k", "l"]:
-            return lower.upper()
-        if lower in ["a1", "a2", "a3", "a4"]:
-            return lower.upper()
-        if lower == "2theta":
-            return "2theta"  # Keep as 2theta for display, maps to same index as A2
-        if lower == "omega":
-            return "omega"  # Keep as omega for display, maps to same index as A3
-        if lower == "deltae":
-            return "deltaE"
-        if lower in ["qx", "qy", "qz", "rhm", "rvm", "rha", "rva"]:
-            return lower
-        if lower in ["sgl", "sgu"]:
-            return lower
-        return name
+        try:
+            return resolve_quantity(str(name).strip(), "scan").id
+        except QuantityRefused:
+            return name
 
     def _field_value_changed(self, field_name: str, current_value: float, tolerance: float = 1e-9) -> bool:
         """
@@ -4151,10 +4142,6 @@ class TAVIController(QObject):
         4. Conflicts between linked parameters (e.g., qx + H)
         5. Pair conflicts (an angle beside a Q, HKL or deltaE scan)
         """
-        from gui.docks.unified_simulation_dock import (
-            LINKED_PARAMETER_GROUPS, VALID_SCAN_VARIABLES
-        )
-        
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         
@@ -4301,9 +4288,9 @@ class TAVIController(QObject):
             cmd = (cmd or "").strip()
             if not cmd:
                 continue
-            var = self.normalize_scan_variable(cmd.split()[0])
-            if var:
-                named.add(var.lower())
+            axis = CURVATURE_AXIS_BY_ID.get(self.normalize_scan_variable(cmd.split()[0]))
+            if axis:
+                named.add(axis)
         return named
 
     def _held_curvature_issues(self, monocris, anacris, scan_named_axes=None):
@@ -4395,7 +4382,7 @@ class TAVIController(QObject):
             tuple: (normalized_variable_name or None, warning_message or None)
         """
         from gui.docks.unified_simulation_dock import (
-            SCAN_CHI_REFUSAL, SCAN_CORRECTION_REFUSAL, VALID_SCAN_VARIABLES)
+            SCAN_VARIABLE_SHORT_NAMES, VALID_SCAN_VARIABLES)
 
         if not command:
             return (None, None)
@@ -4410,31 +4397,22 @@ class TAVIController(QObject):
             return (None, "Too many parts: use 'variable start end step'")
         
         var_name = parts[0]
-        var_lower = var_name.lower()
-        
-        # Handle 2theta as alias for A2
-        if var_lower == "2theta":
-            var_lower = "a2"
-
-        # The old chi was a beam-fixed tilt under the turntable; no arc is
-        # that axis, so it is refused by name rather than aliased (D6).
-        if var_lower == "chi":
-            return (None, SCAN_CHI_REFUSAL)
-        # psi and kappa were TAVI's zero corrections of A3 and sgl; retired.
-        if var_lower in ("psi", "kappa"):
-            return (None, SCAN_CORRECTION_REFUSAL)
-
-        # Check for known variable name
-        if var_lower not in VALID_SCAN_VARIABLES:
-            # Try to suggest similar names
-            suggestions = [v for v in VALID_SCAN_VARIABLES if var_lower in v or v in var_lower]
+        try:
+            var_id = resolve_quantity(var_name, "scan").id
+        except UnknownQuantity:
+            var_lower = var_name.lower()
+            suggestions = [v for v in sorted(VALID_SCAN_VARIABLES)
+                           if var_lower in v or v in var_lower]
             if suggestions:
                 return (None, f"Unknown variable '{var_name}'. Did you mean: {', '.join(suggestions)}?")
-            else:
-                return (None, f"Unknown variable '{var_name}'. Valid: qx, qy, qz, H, K, L, deltaE, A1-A4, 2theta, omega, sgl, sgu, etc.")
-        
+            return (None, f"Unknown variable '{var_name}'. Valid: "
+                          f"{', '.join(SCAN_VARIABLE_SHORT_NAMES)}")
+        except QuantityRefused as refused:
+            # Derived angles, retired names, old slit names, slit scans: the registry's words.
+            return (None, str(refused))
+
         # A locked plane holds the arcs.
-        if var_lower in ("sgl", "sgu") and self._lock_text():
+        if var_id in self._SCAN_ARCS and self._lock_text():
             return (None, f"'{var_name}' cannot be scanned: {self._lock_text()} holds "
                           "it. Release the lock first.")
 
@@ -4443,9 +4421,10 @@ class TAVIController(QObject):
         # reads scans[4:8] and would otherwise let the scan override the pin,
         # so a scan that looked accepted would either do nothing or quietly
         # defeat the fixed value.
+        axis = CURVATURE_AXIS_BY_ID.get(var_id)
         fixed_by = fixed_axes or {}
-        if var_lower in fixed_by:
-            return (None, f"'{var_name}' is fixed on the {fixed_by[var_lower]} "
+        if axis in fixed_by:
+            return (None, f"'{var_name}' is fixed on the {fixed_by[axis]} "
                           f"and cannot be scanned.")
 
         # Validate numeric parts
@@ -4468,11 +4447,11 @@ class TAVIController(QObject):
 
         # Check for zero step
         if step == 0:
-            return (var_lower, "Step size cannot be zero.")
+            return (var_id, "Step size cannot be zero.")
         
         # Check step sign consistency with direction
         if (end > start and step < 0) or (end < start and step > 0):
-            return (var_lower, "Step sign doesn't match direction (start → end).")
+            return (var_id, "Step sign doesn't match direction (start → end).")
         
         # After the step guards: the expansion below divides by the step and
         # calls parse_scan_steps, so a zero or wrong-sign step must have been
@@ -4485,19 +4464,19 @@ class TAVIController(QObject):
         # relative command's real requested radii are the current value plus
         # every offset ``parse_scan_steps`` would produce, which needs a base
         # value from ``current_values``.
-        axis_spec = (curvature_axes or {}).get(var_lower)
+        axis_spec = (curvature_axes or {}).get(axis)
         if axis_spec is not None:
             curvature_axis, crystal_name = axis_spec
             base_value = None
             if relative:
-                base_value = (current_values or {}).get(var_lower)
+                base_value = (current_values or {}).get(axis)
                 if base_value is None:
                     return (None, f"'{var_name}' is a relative curvature scan "
                                   f"but its current value is not numeric.")
             from instruments.tas_runtime import curvature_scan_error
 
             error = curvature_scan_error(
-                var_lower, start, end, step, relative, base_value,
+                axis, start, end, step, relative, base_value,
                 curvature_axis, crystal_name,
             )
             if error:
@@ -4508,21 +4487,28 @@ class TAVIController(QObject):
         num_points = int(np.floor(abs(end - start) / abs(step) + 0.5)) + 1
         
         if num_points > 1000:
-            return (var_lower, f"⚠ {num_points} points - this may take a very long time!")
+            return (var_id, f"⚠ {num_points} points - this may take a very long time!")
         elif num_points > 500:
-            return (var_lower, f"Warning: {num_points} scan points. Consider fewer steps.")
+            return (var_id, f"Warning: {num_points} scan points. Consider fewer steps.")
         elif num_points == 1:
-            return (var_lower, f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end}).")
+            return (var_id, f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end}).")
         elif num_points <= 0:
-            return (var_lower, "Invalid range: no points would be generated.")
+            return (var_id, "Invalid range: no points would be generated.")
         
-        # Normalize variable name
-        normalized = self.normalize_scan_variable(var_name)
-        return (normalized.lower() if normalized else var_lower, None)
+        return (var_id, None)
     
+    # Interim (U3 replaces the conflict rules): scan quantities by canonical ID.
+    _SCAN_ARCS = frozenset({"sample_lower_arc_deg", "sample_upper_arc_deg"})
+    _SCAN_ANGLES = frozenset({"mono_two_theta_deg", "sample_two_theta_deg",
+                              "sample_rotation_deg", "analyzer_two_theta_deg"})
+    _SCAN_Q_VARS = frozenset({"q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom",
+                              "q_instrument_z_inv_angstrom"})
+    _SCAN_HKL_VARS = frozenset({"h", "k", "l"})
+    _SCAN_Q_MODE = _SCAN_Q_VARS | _SCAN_HKL_VARS | {"energy_transfer_mev"}
+
     @staticmethod
     def _is_unexecutable_conflict(v1: str, v2: str) -> bool:
-        """True when two scan variables cannot both be honoured as written.
+        """True when two scan variables (canonical IDs) cannot both be honoured as written.
 
         A scan point stores its first four values in one slot group that
         ``_solve_point_geometry`` reads as (qx, qy, qz, dE) in momentum mode and
@@ -4535,61 +4521,50 @@ class TAVIController(QObject):
         An arc (``sgl``/``sgu``) scanned beside a Q, HKL or energy-transfer
         variable is the same kind of lie: that makes it a Q-mode scan, which
         solves the arcs per point, so the arc command would be silently
-        ignored (A6). An angle (A1-A4, 2theta, omega) beside a Q, HKL or
+        ignored (A6). An angle (A2, A3, A4, A6) beside a Q, HKL or
         energy-transfer variable writes the same slot as the Q one, so the
         measurement is labelled as one quantity while it scans another.
 
         Two commands that write one scan slot cannot both be honoured: the same
-        variable twice, or two variables of one ``LINKED_PARAMETER_GROUPS``
-        group (A3 with omega, A2 with 2theta), since the second overwrites the
-        first's values while the axis still reports it.
+        quantity twice, under any two spellings (A3 with omega, A4 with stt),
+        since the second overwrites the first's values while the axis still
+        reports it.
         """
-        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS
-
-        q_vars = {"qx", "qy", "qz"}
-        hkl_vars = {"h", "k", "l"}
-        same_slot = v1 == v2 or any(
-            v1 in group and v2 in group for group in LINKED_PARAMETER_GROUPS.values())
-        return (same_slot
-                or (v1 in q_vars and v2 in hkl_vars)
-                or (v1 in hkl_vars and v2 in q_vars)
+        return (v1 == v2
+                or (v1 in TAVIController._SCAN_Q_VARS and v2 in TAVIController._SCAN_HKL_VARS)
+                or (v1 in TAVIController._SCAN_HKL_VARS and v2 in TAVIController._SCAN_Q_VARS)
                 or TAVIController._is_arc_in_q_mode(v1, v2)
                 or TAVIController._is_angle_beside_q(v1, v2))
 
     @staticmethod
     def _is_arc_in_q_mode(v1: str, v2: str) -> bool:
         """True when one command scans an arc and the other makes it a Q mode."""
-        arcs = {"sgl", "sgu"}
-        q_mode = {"qx", "qy", "qz", "deltae", "h", "k", "l"}
+        arcs, q_mode = TAVIController._SCAN_ARCS, TAVIController._SCAN_Q_MODE
         return (v1 in arcs and v2 in q_mode) or (v2 in arcs and v1 in q_mode)
 
     @staticmethod
     def _is_angle_beside_q(v1: str, v2: str) -> bool:
         """True when one command scans an angle and the other a Q, HKL or deltaE."""
-        angles = {"a1", "a2", "a3", "a4", "2theta", "omega"}
-        q_mode = {"qx", "qy", "qz", "deltae", "h", "k", "l"}
+        angles, q_mode = TAVIController._SCAN_ANGLES, TAVIController._SCAN_Q_MODE
         return (v1 in angles and v2 in q_mode) or (v2 in angles and v1 in q_mode)
 
     def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
         """Check if two scan variables conflict with each other.
-        
+
         Args:
-            var1: First variable name (lowercase)
-            var2: Second variable name (lowercase)
-            
+            var1: First variable's canonical ID
+            var2: Second variable's canonical ID
+
         Returns:
             str: Conflict warning message, or empty string if no conflict
         """
-        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS
-
-        # Normalize to lowercase for comparison
         v1 = var1.lower()
         v2 = var2.lower()
-        
-        # Same variable - definitely a conflict
+
+        # Same quantity (under any spellings) - definitely a conflict
         if v1 == v2:
             return f"⚠ Both commands scan '{v1}' - use different parameters"
-        
+
         if self._is_arc_in_q_mode(v1, v2):
             return ("Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, "
                     "so they cannot be scanned in it; scan the arcs in angle mode")
@@ -4597,38 +4572,35 @@ class TAVIController(QObject):
             return ("Conflict: an angle scan cannot be combined with a Q, HKL or "
                     "energy-transfer scan: both write the same scan slots, so one "
                     "would be read as the other")
-        # Check linked parameter groups (parameters that control the same thing)
-        for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
-            if v1 in group_vars and v2 in group_vars:
-                return f"⚠ Conflict: '{var1}' and '{var2}' are linked ({group_name.replace('_', ' ')})"
 
         if self._is_unexecutable_conflict(v1, v2):
             return ("Conflict: Q and HKL scans describe the same target momentum "
                     "under the current sample mount")
 
         return ""
-    
+
     def _get_current_value_for_variable(self, var_name: str, vals: dict, scan_point_template: list) -> float:
         """Get the current value for a scan variable to use as relative base.
         
         Args:
-            var_name: Normalized variable name (e.g., 'qx', 'H', 'omega')
+            var_name: Canonical quantity ID (e.g., 'q_instrument_x_inv_angstrom', 'h',
+                'sample_rotation_deg')
             vals: Dictionary of GUI values
             scan_point_template: Template array with current values
-            
+
         Returns:
             float: Current value for the variable
         """
         var = var_name.lower() if var_name else ""
-        
+
         # Q-space variables
-        if var == 'qx':
+        if var == 'q_instrument_x_inv_angstrom':
             return vals.get('qx', 0)
-        elif var == 'qy':
+        elif var == 'q_instrument_y_inv_angstrom':
             return vals.get('qy', 0)
-        elif var == 'qz':
+        elif var == 'q_instrument_z_inv_angstrom':
             return vals.get('qz', 0)
-        elif var == 'deltae':
+        elif var == 'energy_transfer_mev':
             return vals.get('deltaE', 0)
         # HKL variables
         elif var == 'h':
@@ -4637,32 +4609,26 @@ class TAVIController(QObject):
             return vals.get('K', 0)
         elif var == 'l':
             return vals.get('L', 0)
-        # Instrument angles (omega is the sample rotation A3)
-        elif var == 'a1':
+        # Instrument angles (the fields keep their internal names until U3)
+        elif var == 'mono_two_theta_deg':
             return vals.get('mtt', 0)
-        elif var == 'a2' or var == '2theta':
+        elif var == 'sample_two_theta_deg':
             return vals.get('stt', 0)
-        elif var == 'a3' or var == 'omega':
+        elif var == 'sample_rotation_deg':
             return vals.get('omega', 0)
-        elif var == 'a4':
+        elif var == 'analyzer_two_theta_deg':
             return vals.get('att', 0)
         # Sample stage slots (arcs)
-        elif var == 'sgl':
+        elif var == 'sample_lower_arc_deg':
             return scan_point_template[SLOT_SGL]
-        elif var == 'sgu':
+        elif var == 'sample_upper_arc_deg':
             return scan_point_template[SLOT_SGU]
         # Crystal bending
-        elif var == 'rhm':
-            return vals.get('rhm', 0)
-        elif var == 'rvm':
-            return vals.get('rvm', 0)
-        elif var == 'rha':
-            return vals.get('rha', 0)
-        elif var == 'rva':
-            return vals.get('rva', 0)
-        
+        elif var in CURVATURE_AXIS_BY_ID:
+            return vals.get(CURVATURE_AXIS_BY_ID[var], 0)
+
         return 0
-    
+
     def _trigger_scan_update(self):
         """Trigger a debounced update of scan estimates."""
         self._scan_update_timer.start()
@@ -4988,16 +4954,16 @@ class TAVIController(QObject):
             str: One of 'momentum', 'rlu', 'angle'. (The runtime still has an
             'orientation' mode; no scan variable selects it.)
         """
-        momentum_vars = {'qx', 'qy', 'qz', 'deltae'}
-        rlu_vars = {'h', 'k', 'l'}
-        angle_vars = {'a1', 'a2', 'a3', 'a4', '2theta', 'omega', 'sgl', 'sgu'}
+        momentum_vars = self._SCAN_Q_VARS | {'energy_transfer_mev'}
+        rlu_vars = self._SCAN_HKL_VARS
+        angle_vars = self._SCAN_ANGLES | self._SCAN_ARCS
 
         vars_used = set()
         for cmd in [cmd1, cmd2]:
             if cmd:
                 parts = cmd.split()
                 if parts:
-                    vars_used.add(parts[0].lower())
+                    vars_used.add(self.normalize_scan_variable(parts[0]))
         
         if vars_used & rlu_vars:
             return "rlu"
@@ -7135,8 +7101,9 @@ class TAVIController(QObject):
                 var = self.normalize_scan_variable(parts[0])
         if not var:
             mode = self._determine_scan_mode(cmd1, cmd2)
-            var = {"rlu": "H", "momentum": "qx",
-                   "angle": "A3", "orientation": "omega"}.get(mode, "H")
+            var = {"rlu": "h", "momentum": "q_instrument_x_inv_angstrom",
+                   "angle": "sample_rotation_deg",
+                   "orientation": "sample_rotation_deg"}.get(mode, "h")
 
         template = self._build_scan_point_template(
             self._determine_scan_mode(var, ""), vals
@@ -8243,16 +8210,21 @@ class TAVIController(QObject):
             return npts(c2)
         return npts(c1) * npts(c2)
 
-    # Scan-variable -> scan-point index: the one map the GUI point count, the
-    # API validation expansion and run_simulation all use (slot layout in
-    # instruments.tas_runtime). omega is the sample rotation A3: the same slot.
+    # Interim (U3 deletes the slots): canonical quantity ID -> scan-point index, the
+    # one map the GUI point count, the API validation expansion and run_simulation
+    # all use (slot layout in instruments.tas_runtime). The angle slots are the
+    # trap: slot 0 holds the mono 2theta (ILL A2), slot 1 the sample 2theta (A4),
+    # slot 2 the sample rotation (A3), slot 3 the analyzer 2theta (A6) -- the
+    # order of the old TAVI A1..A4, not of the ILL numbers. Q and HKL share 0-2.
     _SCAN_VARIABLE_TO_INDEX = {
-        'qx': 0, 'qy': 1, 'qz': 2, 'deltaE': 3,
-        'H': 0, 'K': 1, 'L': 2,
-        'A1': 0, 'A2': 1, 'A3': 2, 'A4': 3,
-        'omega': 2, '2theta': 1,
-        'rhm': 4, 'rvm': 5, 'rha': 6, 'rva': 7,
-        'sgl': SLOT_SGL, 'sgu': SLOT_SGU,
+        'q_instrument_x_inv_angstrom': 0, 'q_instrument_y_inv_angstrom': 1,
+        'q_instrument_z_inv_angstrom': 2, 'energy_transfer_mev': 3,
+        'h': 0, 'k': 1, 'l': 2,
+        'mono_two_theta_deg': 0, 'sample_two_theta_deg': 1,
+        'sample_rotation_deg': 2, 'analyzer_two_theta_deg': 3,
+        'mono_horizontal_radius_m': 4, 'mono_vertical_radius_m': 5,
+        'analyzer_horizontal_radius_m': 6, 'analyzer_vertical_radius_m': 7,
+        'sample_lower_arc_deg': SLOT_SGL, 'sample_upper_arc_deg': SLOT_SGU,
     }
 
     def _build_scan_point_template(self, scan_mode, vals):
@@ -8310,12 +8282,13 @@ class TAVIController(QObject):
 
         def _curvature_violation(values):
             for var, val in values.items():
-                axis_spec = curvature_axes.get(var)
+                axis = CURVATURE_AXIS_BY_ID.get(var)
+                axis_spec = curvature_axes.get(axis)
                 if axis_spec is None:
                     continue
                 curvature_axis, crystal_name = axis_spec
                 error = curvature_scan_error(
-                    var, val, val, 1.0, False, None, curvature_axis, crystal_name,
+                    axis, val, val, 1.0, False, None, curvature_axis, crystal_name,
                 )
                 if error:
                     return error
@@ -8597,11 +8570,7 @@ class TAVIController(QObject):
                                 "configured profile wholesale (never merges). "
                                 "See the top-level 'background' block."},
             ],
-            "scan_variables": [
-                "H", "K", "L", "qx", "qy", "qz", "deltaE",
-                "A1", "A2", "A3", "A4", "omega", "2theta",
-                "sgl", "sgu", "rhm", "rvm", "rha", "rva",
-            ],
+            "scan_variables": [q.id for q in QUANTITIES if q.scannable],
             "scan_command_grammar": (
                 "VARIABLE start stop STEP. The third number (the last token) is "
                 "the STEP SIZE, not the number of points. "

@@ -236,7 +236,7 @@ def test_scanned_rha_lands_on_the_negative_take_off_branch(tmp_path):
     snapshot = plugin.compute_snapshot(
         (scans, 0), 0, "angle", state,
         {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
-        variable_name1="rha",
+        variable_name1="analyzer_horizontal_radius_m",
     )
 
     assert snapshot.error_flags == []

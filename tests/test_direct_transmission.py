@@ -332,7 +332,7 @@ def test_deterministic_engine_a4_scan_skips_only_the_transmission_point(tmp_path
             "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
             "monocris": "pg002", "anacris": "pg002", "source_type": "Mono",
             "mtt": mtt, "stt": -71.25, "omega": -35.63,
-            "scan_command1": "A4 -1 1 1",
+            "scan_command1": "A6 -1 1 1",
         })
         launch["engine"] = "deterministic"
 
@@ -350,7 +350,7 @@ def test_deterministic_engine_a4_scan_skips_only_the_transmission_point(tmp_path
         assert math.isfinite(result.counts[2]), result.counts
 
         assert result.skipped_points == [{
-            "index": 1, "values": {"A4": 0.0}, "kind": "transmission",
+            "index": 1, "values": {"analyzer_two_theta_deg": 0.0}, "kind": "transmission",
             "reason": "direct transmission (ana); the analytic engine makes "
                       "no claim",
         }]
@@ -365,7 +365,7 @@ def test_deterministic_engine_stt_scan_skips_forward_scattering_point(tmp_path):
             "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
             "monocris": "pg002", "anacris": "pg002", "source_type": "Maxwellian",
             "mtt": 41.19, "stt": -1.0, "omega": -35.63, "att": -41.19,
-            "scan_command1": "A2 -1 1 1",
+            "scan_command1": "A4 -1 1 1",
         })
         launch["engine"] = "deterministic"
 
@@ -380,7 +380,7 @@ def test_deterministic_engine_stt_scan_skips_forward_scattering_point(tmp_path):
         assert math.isfinite(result.counts[2]), result.counts
 
         assert result.skipped_points == [{
-            "index": 1, "values": {"A2": 0.0}, "kind": "transmission",
+            "index": 1, "values": {"sample_two_theta_deg": 0.0}, "kind": "transmission",
             "reason": "direct transmission (sample); the analytic engine "
                       "makes no claim",
         }]
@@ -403,7 +403,7 @@ def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, 
         "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002", "source_type": "Mono",
         "mtt": mtt, "stt": -71.25, "omega": -35.63,
-        "scan_command1": "A4 -1 1 1",
+        "scan_command1": "A6 -1 1 1",
     }
     with _controller("in8") as ctrl:
         ctrl.output_directory = str(tmp_path)

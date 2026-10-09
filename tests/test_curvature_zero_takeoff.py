@@ -144,7 +144,7 @@ def _panda_autofocus_snapshot(att, tmp_path):
     feasible, reason = plugin.check_point_feasibility(state, "angle", scans, vals)
     assert feasible, f"A4={att} was refused: {reason}"
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path), variable_name1="A4",
+        (scans, 0), 0, "angle", state, vals, str(tmp_path), variable_name1="analyzer_two_theta_deg",
     )
     return snapshot
 
@@ -206,7 +206,7 @@ def test_a4_zero_held_radius_is_stored_at_its_commanded_magnitude(tmp_path):
     assert feasible, reason
 
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path), variable_name1="A4",
+        (scans, 0), 0, "angle", state, vals, str(tmp_path), variable_name1="analyzer_two_theta_deg",
     )
     assert snapshot.error_flags == []
     assert abs(snapshot.params["rha_param"]) == pytest.approx(1.234)

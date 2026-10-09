@@ -18,6 +18,7 @@ import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
 from gui.docks.base_dock import BaseDockWidget, collimation_label
+from tavi.quantities import QuantityRefused, resolve
 
 
 def _delta_e_info_line(meta):
@@ -672,20 +673,11 @@ class DisplayDock(BaseDockWidget):
         self.status_label.setText("No scan data")
     
     def _get_axis_label(self, variable_name):
-        """Get proper axis label with units for a variable."""
-        if variable_name in ['qx', 'qy', 'qz']:
-            return f'{variable_name} (Å⁻¹)'
-        elif variable_name == 'deltaE':
-            return 'ΔE (meV)'
-        elif variable_name in ['H', 'K', 'L']:
-            return f'{variable_name} (r.l.u.)'
-        elif variable_name in ['omega', 'sgl', 'sgu', 'chi']:  # chi: old scans
-            return f'{variable_name} (°)'
-        elif variable_name in ['mtt', 'stt', 'att', 'A1', 'A2', 'A3', 'A4']:
-            return f'{variable_name} (°)'
-        elif variable_name in ['rhm', 'rvm', 'rha', 'rva']:
-            return f'{variable_name} (m)'
-        else:
+        """Axis label with units: the registry's label for the quantity the name
+        means; a name the registry does not know as a scan command stays as is."""
+        try:
+            return resolve(variable_name, "scan").label
+        except QuantityRefused:
             return variable_name
     
     @Slot(str, list, list, str, str, list)

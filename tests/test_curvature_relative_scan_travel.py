@@ -139,25 +139,26 @@ def test_a_relative_scan_expanding_to_exactly_zero_is_accepted():
         _CurvatureManifestController(), launch_state)
 
     assert result["requested_points"] == 2
-    assert result["point_manifest"][0]["values"]["rhm"] == pytest.approx(0.0)
+    assert result["point_manifest"][0]["values"]["mono_horizontal_radius_m"] == pytest.approx(0.0)
     assert result["point_manifest"][0]["feasible"] is True
-    assert result["point_manifest"][1]["values"]["rhm"] == pytest.approx(0.5)
+    assert result["point_manifest"][1]["values"]["mono_horizontal_radius_m"] == pytest.approx(0.5)
     assert result["point_manifest"][1]["feasible"] is False
     assert result["point_manifest"][1]["kind"] == "curvature_out_of_travel"
 
 
-def test_relative_a1_scan_uses_the_real_current_value_lookup_not_a_naive_vals_get():
+def test_relative_a2_scan_uses_the_real_current_value_lookup_not_a_naive_vals_get():
     """D19: the stub's ``_get_current_value_for_variable`` must not diverge
     from the real controller's name-canonicalising method. Every other test
     here scans "rhm", whose vals key happens to already equal the normalized
     variable name, so a naive ``vals.get(var_name, 0)`` looked right by
-    accident. "A1" exposes it: ``normalize_scan_variable`` returns "A1", but
-    the real lookup reads ``vals['mtt']`` for A1 -- there is no ``vals['A1']``
+    accident. "A2" exposes it: ``normalize_scan_variable`` returns
+    "mono_two_theta_deg", but the real lookup reads ``vals['mtt']`` for it -- there is no
+    ``vals['mono_two_theta_deg']``
     -- so the naive version silently uses 0 as the relative base instead of
     the instrument's actual current angle."""
     launch_state = {
         "vals": {
-            "scan_command1": "A1 -1 1 1", "scan_command2": "",
+            "scan_command1": "A2 -1 1 1", "scan_command2": "",
             "mtt": 41.167, "rhm": 2.5,
             "monocris": "pg002", "anacris": "pg002",
         },

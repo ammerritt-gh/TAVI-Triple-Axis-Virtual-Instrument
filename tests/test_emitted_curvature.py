@@ -250,7 +250,7 @@ def test_metadata_matches_emitted_params_for_a_scanned_curvature_axis(tmp_path):
     scans = [41.18, 0.0, 0.0, -41.18, 0.0, 0.0, 1.75, 0.0, 0.0, 0.0, 0.0]
     snapshot = plugin.compute_snapshot(
         (scans, 0), 0, "angle", state, vals, str(tmp_path),
-        variable_name1="rha",
+        variable_name1="analyzer_horizontal_radius_m",
     )
     assert snapshot.error_flags == []
     expected_rha = -1.75   # IN8's analyzer take-off is the negative branch
