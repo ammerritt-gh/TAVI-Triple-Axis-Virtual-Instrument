@@ -16,6 +16,7 @@ from PySide6.QtGui import QColor
 
 from gui.docks.base_dock import BaseDockWidget
 from instruments.descriptor import tas_goniometer
+from tavi import quantities
 from tavi.orientation import hkl_text, legacy_triple, stage_record
 
 
@@ -192,9 +193,11 @@ class PeakEntryWidget(QFrame):
             self.axis_edits.append(edit)
 
         # Row 2: 2theta, ki, kf
-        fields_grid.addWidget(QLabel("2θ:"), 2, 0)
+        stt = quantities.by_id("sample_two_theta_deg")
+        self.stt_label = QLabel(stt.label)
+        fields_grid.addWidget(self.stt_label, 2, 0)
         self.stt_edit = QLineEdit("0")
-        self.stt_edit.setToolTip("Sample two-theta")
+        self.stt_edit.setToolTip(f"Sample two-theta. NICOS name: {stt.nicos}.")
         fields_grid.addWidget(self.stt_edit, 2, 1)
         fields_grid.addWidget(QLabel("ki:"), 2, 2)
         self.ki_edit = QLineEdit("0")
