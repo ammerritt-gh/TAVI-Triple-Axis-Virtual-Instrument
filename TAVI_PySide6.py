@@ -6037,8 +6037,20 @@ class TAVIController(QObject):
     # file) is refused whole, never converted (_saved_parameters_refusal).
     PARAMETERS_SCHEMA_VERSION = 4
 
-    def _saved_parameters_refusal(self, path):
-        """Why this saved file cannot be restored, or None.
+    @staticmethod
+    def _read_saved_parameters(path):
+        """``(document, refusal)``: the saved file parsed once, or why it cannot
+        be read. ``load_parameters`` judges and applies that one document."""
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                return json.load(file), None
+        except ValueError as exc:
+            return None, f"it is not readable JSON ({exc})"
+        except OSError as exc:
+            return None, f"it could not be read ({exc})"
+
+    def _saved_parameters_refusal(self, document):
+        """Why this saved document cannot be restored, or None.
 
         Judges the whole document before anything is applied: every top-level
         entry must be an instrument block of this version, so a flat legacy file,
@@ -6047,14 +6059,9 @@ class TAVIController(QObject):
         away with it). Then this instrument's block: each saved peak's stage
         record and the saved exercise (a mount-only code this instrument, sample,
         crystals, energy and described mount IN THE FILE can still observe --
-        never the live ones). Unreadable JSON is not refused here:
-        ``load_parameters`` meets it as it always did.
+        never the live ones). Unreadable files never get here:
+        ``_read_saved_parameters`` refuses them.
         """
-        try:
-            with open(path, "r", encoding="utf-8") as file:
-                document = json.load(file)
-        except (OSError, json.JSONDecodeError):
-            return None
         if not isinstance(document, dict):
             return "it is not a settings file"
         for block in document.values():
@@ -6331,215 +6338,215 @@ class TAVIController(QObject):
         """
         parameters_path = local_config_path("parameters.json")
         if os.path.exists(parameters_path):
-            refusal = self._saved_parameters_refusal(parameters_path)
+            document, refusal = self._read_saved_parameters(parameters_path)
+            refusal = refusal or self._saved_parameters_refusal(document)
             if refusal:
                 self._refuse_parameters_file(parameters_path, refusal, keep_current_on_refusal)
                 return
-            with open(parameters_path, "r", encoding="utf-8") as file:
-                parameters = self._parameters_block(json.load(file))
-                parameters = self._normalise_loaded_numbers(parameters)
+            parameters = self._parameters_block(document)
+            parameters = self._normalise_loaded_numbers(parameters)
 
-                # No saved block for this instrument (fresh install or a file
-                # saved only for other instruments): use the full default path so
-                # derived values like ideal bending radii are applied, not left at 0.
-                if not parameters and keep_current_on_refusal:
-                    self.print_to_message_center(
-                        f"{parameters_path} holds no settings for '{self.instrument.id}'; "
-                        "the current settings are unchanged")
-                    return
-                if not parameters:
-                    self.set_default_parameters()
-                    self.print_to_message_center(
-                        f"No saved parameters for '{self.instrument.id}'; defaults loaded"
-                    )
-                    return
+            # No saved block for this instrument (fresh install or a file
+            # saved only for other instruments): use the full default path so
+            # derived values like ideal bending radii are applied, not left at 0.
+            if not parameters and keep_current_on_refusal:
+                self.print_to_message_center(
+                    f"{parameters_path} holds no settings for '{self.instrument.id}'; "
+                    "the current settings are unchanged")
+                return
+            if not parameters:
+                self.set_default_parameters()
+                self.print_to_message_center(
+                    f"No saved parameters for '{self.instrument.id}'; defaults loaded"
+                )
+                return
 
-                # Restore replaces the lock too: free until the saved one (if
-                # any) goes back on after the hidden truth, below.
-                self._set_plane_lock(None)
+            # Restore replaces the lock too: free until the saved one (if
+            # any) goes back on after the hidden truth, below.
+            self._set_plane_lock(None)
 
-                # Block signals during loading to prevent premature validation
-                self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
-                self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
+            # Block signals during loading to prevent premature validation
+            self.window.simulation_dock.scan_command_1_edit.blockSignals(True)
+            self.window.simulation_dock.scan_command_2_edit.blockSignals(True)
 
-                # Set GUI values from parameters (saved crystal values may be
-                # legacy display labels or CrystalSpec ids; both resolve)
-                self.window.instrument_dock.set_mono_id(self._saved_crystal_id(
-                    parameters.get("monocris_var"), self.descriptor.mono_crystals
-                ))
-                self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
-                    parameters.get("anacris_var"), self.descriptor.ana_crystals
-                ))
-                mtt, stt, omega, att = self._reference_angles(
-                    self.window.instrument_dock.selected_mono_id(),
-                    self.window.instrument_dock.selected_ana_id(),
-                )
-                self._set_tracked_angle_text(
-                    'mtt', self.window.instrument_dock.mtt_edit,
-                    parameters.get("mtt_var", mtt),
-                )
-                self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", stt)))
-                self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", omega)))
-                # A save from before the arcs carries the lower arc as chi_var.
-                self.window.instrument_dock.sgl_edit.setText(format_editable_number(
-                    parameters.get("sgl_var", parameters.get("chi_var", 0))))
-                self.window.instrument_dock.sgu_edit.setText(format_editable_number(parameters.get("sgu_var", 0)))
-                self._set_tracked_angle_text(
-                    'att', self.window.instrument_dock.att_edit,
-                    parameters.get("att_var", att),
-                )
-                self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
-                self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
-                self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("Ei_var", "14.7")))
-                self.window.instrument_dock.Ef_edit.setText(format_editable_number(parameters.get("Ef_var", "14.7")))
-                self.window.instrument_dock.set_source_id(
-                    parameters.get("source_type_var", self.descriptor.source_types[0].id)
-                )
-                self.window.instrument_dock.source_dE_edit.setText(format_editable_number(parameters.get("source_dE_var", "2")))
-                # Descriptor-driven categories (nested containers; legacy flat
-                # keys from pre-Phase-2 files migrate through the fallbacks)
-                self.window.instrument_dock.set_module_values(
-                    self._saved_module_values(parameters)
-                )
-                self.window.instrument_dock.set_collimation_values(
-                    self._saved_collimation_values(parameters)
-                )
-                self.window.instrument_dock.set_slit_values_mm(
-                    self._saved_slit_values(parameters)
-                )
+            # Set GUI values from parameters (saved crystal values may be
+            # legacy display labels or CrystalSpec ids; both resolve)
+            self.window.instrument_dock.set_mono_id(self._saved_crystal_id(
+                parameters.get("monocris_var"), self.descriptor.mono_crystals
+            ))
+            self.window.instrument_dock.set_ana_id(self._saved_crystal_id(
+                parameters.get("anacris_var"), self.descriptor.ana_crystals
+            ))
+            mtt, stt, omega, att = self._reference_angles(
+                self.window.instrument_dock.selected_mono_id(),
+                self.window.instrument_dock.selected_ana_id(),
+            )
+            self._set_tracked_angle_text(
+                'mtt', self.window.instrument_dock.mtt_edit,
+                parameters.get("mtt_var", mtt),
+            )
+            self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", stt)))
+            self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", omega)))
+            # A save from before the arcs carries the lower arc as chi_var.
+            self.window.instrument_dock.sgl_edit.setText(format_editable_number(
+                parameters.get("sgl_var", parameters.get("chi_var", 0))))
+            self.window.instrument_dock.sgu_edit.setText(format_editable_number(parameters.get("sgu_var", 0)))
+            self._set_tracked_angle_text(
+                'att', self.window.instrument_dock.att_edit,
+                parameters.get("att_var", att),
+            )
+            self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
+            self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
+            self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("Ei_var", "14.7")))
+            self.window.instrument_dock.Ef_edit.setText(format_editable_number(parameters.get("Ef_var", "14.7")))
+            self.window.instrument_dock.set_source_id(
+                parameters.get("source_type_var", self.descriptor.source_types[0].id)
+            )
+            self.window.instrument_dock.source_dE_edit.setText(format_editable_number(parameters.get("source_dE_var", "2")))
+            # Descriptor-driven categories (nested containers; legacy flat
+            # keys from pre-Phase-2 files migrate through the fallbacks)
+            self.window.instrument_dock.set_module_values(
+                self._saved_module_values(parameters)
+            )
+            self.window.instrument_dock.set_collimation_values(
+                self._saved_collimation_values(parameters)
+            )
+            self.window.instrument_dock.set_slit_values_mm(
+                self._saved_slit_values(parameters)
+            )
 
-                # Load absolute bending values (backward-compatible with factor-based params).
-                # A block missing the rva keys (pre-slice-4 schema) resets the
-                # whole curvature block to safe defaults rather than loading
-                # three real values next to a phantom rva.
-                curvature_state = self._saved_curvature_state(parameters)
-                self._load_bending_parameters(curvature_state)
+            # Load absolute bending values (backward-compatible with factor-based params).
+            # A block missing the rva keys (pre-slice-4 schema) resets the
+            # whole curvature block to safe defaults rather than loading
+            # three real values next to a phantom rva.
+            curvature_state = self._saved_curvature_state(parameters)
+            self._load_bending_parameters(curvature_state)
 
-                # Restore ideal lock state
-                self._apply_bending_lock_state(
-                    curvature_state["rhm_ideal_locked"],
-                    curvature_state["rvm_ideal_locked"],
-                    curvature_state["rha_ideal_locked"],
-                    curvature_state["rva_ideal_locked"],
+            # Restore ideal lock state
+            self._apply_bending_lock_state(
+                curvature_state["rhm_ideal_locked"],
+                curvature_state["rvm_ideal_locked"],
+                curvature_state["rha_ideal_locked"],
+                curvature_state["rva_ideal_locked"],
+            )
+            
+            self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
+            self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
+            self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(parameters.get("fixed_E_var", 14.7)))
+            self.window.scattering_dock.qx_edit.setText(format_editable_number(parameters.get("qx_var", "3.1028")))
+            self.window.scattering_dock.qy_edit.setText(format_editable_number(parameters.get("qy_var", 0)))
+            self.window.scattering_dock.qz_edit.setText(format_editable_number(parameters.get("qz_var", 0)))
+            # HKL values
+            self.window.scattering_dock.H_edit.setText(format_editable_number(parameters.get("H_var", 2)))
+            self.window.scattering_dock.K_edit.setText(format_editable_number(parameters.get("K_var", 0)))
+            self.window.scattering_dock.L_edit.setText(format_editable_number(parameters.get("L_var", 0)))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(parameters.get("deltaE_var", 0)))
+            self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
+            # Default scan: H-scan around Al (200) Bragg peak
+            self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
+            self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
+            # Restore sample selection by persisted sample id (default Al
+            # Bragg). The mounting plane is replaced from the block below,
+            # so the sample swap's plane clear (I5) has nothing to clear.
+            self.mount_plane = None
+            try:
+                saved_sample = parameters.get("current_sample_settings", {})
+                if not self.window.sample_dock.set_sample_by_key(
+                    saved_sample.get("sample_key", "Al_bragg")
+                ):
+                    self.window.sample_dock.set_sample_by_key("Al_bragg")
+            except Exception:
+                pass
+            # Saved lattice values are applied AFTER the sample restore: the
+            # sample-change handler adopts the sample's own lattice, and the
+            # user's saved (possibly hand-edited) values must win on reload.
+            self.window.sample_dock.lattice_a_edit.setText(format_editable_number(parameters.get("lattice_a_var", "4.05"), 6))
+            self.window.sample_dock.lattice_b_edit.setText(format_editable_number(parameters.get("lattice_b_var", "4.05"), 6))
+            self.window.sample_dock.lattice_c_edit.setText(format_editable_number(parameters.get("lattice_c_var", "4.05"), 6))
+            self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(parameters.get("lattice_alpha_var", "90"), 6))
+            self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(parameters.get("lattice_beta_var", "90"), 6))
+            self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(parameters.get("lattice_gamma_var", "90"), 6))
+            # Restore space group selection
+            try:
+                sg_number = parameters.get("space_group_number_var")
+                if sg_number is not None and hasattr(self.window.sample_dock, 'spacegroup_combo'):
+                    idx = self.window.sample_dock.spacegroup_combo.findData(int(sg_number))
+                    if idx >= 0:
+                        self.window.sample_dock.spacegroup_combo.setCurrentIndex(idx)
+            except Exception:
+                pass
+            reflection_table_check = getattr(
+                self.window.sample_dock,
+                "use_sample_reflection_table_check",
+                None,
+            )
+            if reflection_table_check is not None:
+                reflection_table_check.setChecked(
+                    bool(parameters.get("use_sample_reflection_table_var", False))
                 )
-                
-                self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
-                self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
-                self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(parameters.get("fixed_E_var", 14.7)))
-                self.window.scattering_dock.qx_edit.setText(format_editable_number(parameters.get("qx_var", "3.1028")))
-                self.window.scattering_dock.qy_edit.setText(format_editable_number(parameters.get("qy_var", 0)))
-                self.window.scattering_dock.qz_edit.setText(format_editable_number(parameters.get("qz_var", 0)))
-                # HKL values
-                self.window.scattering_dock.H_edit.setText(format_editable_number(parameters.get("H_var", 2)))
-                self.window.scattering_dock.K_edit.setText(format_editable_number(parameters.get("K_var", 0)))
-                self.window.scattering_dock.L_edit.setText(format_editable_number(parameters.get("L_var", 0)))
-                self.window.scattering_dock.deltaE_edit.setText(format_editable_number(parameters.get("deltaE_var", 0)))
-                self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
-                # Default scan: H-scan around Al (200) Bragg peak
-                self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
-                self.window.simulation_dock.scan_command_2_edit.setText(parameters.get("scan_command_var2", ""))
-                # Restore sample selection by persisted sample id (default Al
-                # Bragg). The mounting plane is replaced from the block below,
-                # so the sample swap's plane clear (I5) has nothing to clear.
-                self.mount_plane = None
+            # Restore UB matrix state
+            ub_state = parameters.get("ub_matrix_state")
+            if ub_state:
                 try:
-                    saved_sample = parameters.get("current_sample_settings", {})
-                    if not self.window.sample_dock.set_sample_by_key(
-                        saved_sample.get("sample_key", "Al_bragg")
-                    ):
-                        self.window.sample_dock.set_sample_by_key("Al_bragg")
-                except Exception:
-                    pass
-                # Saved lattice values are applied AFTER the sample restore: the
-                # sample-change handler adopts the sample's own lattice, and the
-                # user's saved (possibly hand-edited) values must win on reload.
-                self.window.sample_dock.lattice_a_edit.setText(format_editable_number(parameters.get("lattice_a_var", "4.05"), 6))
-                self.window.sample_dock.lattice_b_edit.setText(format_editable_number(parameters.get("lattice_b_var", "4.05"), 6))
-                self.window.sample_dock.lattice_c_edit.setText(format_editable_number(parameters.get("lattice_c_var", "4.05"), 6))
-                self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(parameters.get("lattice_alpha_var", "90"), 6))
-                self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(parameters.get("lattice_beta_var", "90"), 6))
-                self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(parameters.get("lattice_gamma_var", "90"), 6))
-                # Restore space group selection
-                try:
-                    sg_number = parameters.get("space_group_number_var")
-                    if sg_number is not None and hasattr(self.window.sample_dock, 'spacegroup_combo'):
-                        idx = self.window.sample_dock.spacegroup_combo.findData(int(sg_number))
-                        if idx >= 0:
-                            self.window.sample_dock.spacegroup_combo.setCurrentIndex(idx)
-                except Exception:
-                    pass
-                reflection_table_check = getattr(
-                    self.window.sample_dock,
-                    "use_sample_reflection_table_check",
-                    None,
-                )
-                if reflection_table_check is not None:
-                    reflection_table_check.setChecked(
-                        bool(parameters.get("use_sample_reflection_table_var", False))
-                    )
-                # Restore UB matrix state
-                ub_state = parameters.get("ub_matrix_state")
-                if ub_state:
-                    try:
-                        self.ub_matrix = UBMatrix.from_dict(ub_state)
-                        self._update_ub_display()
-                        # Restore peak entries in dock
-                        peaks_data = []
-                        for p in self.ub_matrix.peaks:
-                            peaks_data.append(p.to_dict())
-                        if peaks_data:
-                            self.window.ub_matrix_dock.set_peak_entries(peaks_data)
-                        self._reconnect_peak_signals()
-                        self.print_to_message_center("UB matrix state restored")
-                        # Peaks without a sense predate the sample-sense fix:
-                        # on a +1 instrument that UB was fitted turned 180 deg
-                        # about the vertical. Say so; never refit silently.
-                        if self.instrument_state.sense_sample > 0 and any(
-                                p.get("sense_sample") is None
-                                for p in ub_state.get("peaks", [])):
-                            self.print_to_message_center(
-                                "This UB was saved before the sample-sense fix and may be "
-                                "turned 180° about the vertical on this instrument: press "
-                                "Calculate UB to refit it from its peaks.")
-                    except Exception as e:
-                        self.print_to_message_center(f"Failed to restore UB matrix: {e}")
-                # The hidden truth, after the sample and the UB: the operator's
-                # UB stays as saved above.
-                self._restore_hidden_truth(parameters)
-                # Then the saved lock, on the truth it was locked on.
-                self._restore_plane_lock(parameters)
-                # Set display and folder fields (use sensible defaults if missing)
-                folder_suggestion = os.path.join(self.output_directory, "initial_testing")
-                self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
-                self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
-                
-                # Load diagnostic settings with defaults for any missing keys
-                default_diag = DiagnosticConfigDialog.get_default_settings(
-                    self.descriptor.monitors
-                )
-                loaded_diag = parameters.get("diagnostic_settings", {})
-                # Merge: use loaded value if present, else default
-                self.diagnostic_settings = {**default_diag, **loaded_diag}
-                self.current_sample_settings = parameters.get("current_sample_settings", {})
-                self.background_profile = self._saved_background_profile(parameters)
-                self._refresh_background_row()
+                    self.ub_matrix = UBMatrix.from_dict(ub_state)
+                    self._update_ub_display()
+                    # Restore peak entries in dock
+                    peaks_data = []
+                    for p in self.ub_matrix.peaks:
+                        peaks_data.append(p.to_dict())
+                    if peaks_data:
+                        self.window.ub_matrix_dock.set_peak_entries(peaks_data)
+                    self._reconnect_peak_signals()
+                    self.print_to_message_center("UB matrix state restored")
+                    # Peaks without a sense predate the sample-sense fix:
+                    # on a +1 instrument that UB was fitted turned 180 deg
+                    # about the vertical. Say so; never refit silently.
+                    if self.instrument_state.sense_sample > 0 and any(
+                            p.get("sense_sample") is None
+                            for p in ub_state.get("peaks", [])):
+                        self.print_to_message_center(
+                            "This UB was saved before the sample-sense fix and may be "
+                            "turned 180° about the vertical on this instrument: press "
+                            "Calculate UB to refit it from its peaks.")
+                except Exception as e:
+                    self.print_to_message_center(f"Failed to restore UB matrix: {e}")
+            # The hidden truth, after the sample and the UB: the operator's
+            # UB stays as saved above.
+            self._restore_hidden_truth(parameters)
+            # Then the saved lock, on the truth it was locked on.
+            self._restore_plane_lock(parameters)
+            # Set display and folder fields (use sensible defaults if missing)
+            folder_suggestion = os.path.join(self.output_directory, "initial_testing")
+            self.window.data_control_dock.save_folder_edit.setText(parameters.get("save_folder_var", folder_suggestion))
+            self.window.data_control_dock.load_folder_edit.setText(parameters.get("load_folder_var", folder_suggestion))
+            
+            # Load diagnostic settings with defaults for any missing keys
+            default_diag = DiagnosticConfigDialog.get_default_settings(
+                self.descriptor.monitors
+            )
+            loaded_diag = parameters.get("diagnostic_settings", {})
+            # Merge: use loaded value if present, else default
+            self.diagnostic_settings = {**default_diag, **loaded_diag}
+            self.current_sample_settings = parameters.get("current_sample_settings", {})
+            self.background_profile = self._saved_background_profile(parameters)
+            self._refresh_background_row()
 
-                self.update_ideal_bending_buttons()
-                
-                # Unblock signals after all parameters are loaded
-                self.window.simulation_dock.scan_command_1_edit.blockSignals(False)
-                self.window.simulation_dock.scan_command_2_edit.blockSignals(False)
-                loaded_values = self.get_gui_values() or {}
-                for key in ("Ki", "Kf", "Ei", "Ef", "fixed_E", "deltaE"):
-                    if key in loaded_values:
-                        self._update_tracked_value(key, loaded_values[key])
-                # Loading replaces the complete controller state.  All tracked
-                # fields therefore have a new committed baseline, without the
-                # per-field flash reserved for direct commands/API patches.
-                self._commit_programmatic_feedback(
-                    getattr(self, "_feedback_line_edits", ())
-                )
-                
+            self.update_ideal_bending_buttons()
+            
+            # Unblock signals after all parameters are loaded
+            self.window.simulation_dock.scan_command_1_edit.blockSignals(False)
+            self.window.simulation_dock.scan_command_2_edit.blockSignals(False)
+            loaded_values = self.get_gui_values() or {}
+            for key in ("Ki", "Kf", "Ei", "Ef", "fixed_E", "deltaE"):
+                if key in loaded_values:
+                    self._update_tracked_value(key, loaded_values[key])
+            # Loading replaces the complete controller state.  All tracked
+            # fields therefore have a new committed baseline, without the
+            # per-field flash reserved for direct commands/API patches.
+            self._commit_programmatic_feedback(
+                getattr(self, "_feedback_line_edits", ())
+            )
+            
             self.print_to_message_center("Parameters loaded successfully")
         else:
             self.set_default_parameters()
