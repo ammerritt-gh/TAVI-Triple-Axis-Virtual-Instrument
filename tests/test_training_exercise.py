@@ -115,8 +115,7 @@ def test_the_check_refuses_a_rotation_the_stage_cannot_reach(instrument_id, reac
 
 def test_a_locked_plane_does_not_change_what_a_student_can_find():
     state, b, hkls, _ = _setup("panda")
-    state.plane_lock = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0], "tilts": {"sgl": 0.0, "sgu": 0.0},
-                        "kappa": 0.0}
+    state.plane_lock = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0], "tilts": {"sgl": 0.0, "sgu": 0.0}}
     # 30 deg about (1 0 1) is refused by PANDA's travel (only a parallel pair is
     # reachable), so the observable case uses 20 deg.
     assert training_reach_error(state, axis_rotation((1, 0, 1), 20.0), b, hkls,
