@@ -1163,6 +1163,9 @@ class TAVIController(QObject):
         self.mount_plane = None
         self.R_hidden = np.eye(3)
         self._exercise = None
+        # (code, reason) last reported as left out of parameters.json, so a Run
+        # that changes nothing does not say it again.
+        self._unsaved_exercise_report = None
         self._set_true_mount()
 
         # Global variables
@@ -5987,6 +5990,19 @@ class TAVIController(QObject):
             # The locked scattering plane (null = free).
             "plane_lock": copy.deepcopy(self.instrument_state.plane_lock),
         }
+        # An exercise these values cannot observe would make the next start refuse
+        # the whole file: it is left out, and the live exercise stays loaded.
+        reason = self._saved_exercise_refusal(parameters) if parameters["ub_training_hash"] else None
+        if reason:
+            parameters["ub_training_hash"] = ""
+            if self._unsaved_exercise_report != (self._exercise, reason):
+                self._unsaved_exercise_report = (self._exercise, reason)
+                self.print_to_message_center(
+                    "Loaded exercise not saved: it cannot be observed with the current "
+                    "sample, energy or crystals. Its code can be entered again later; "
+                    "the live exercise is unchanged.")
+        else:
+            self._unsaved_exercise_report = None
         # Namespace by instrument id with a schema version (design record §9,
         # §16.8): {"<instrument_id>": {"_schema": 1, ...}}.
         parameters["_schema"] = self.PARAMETERS_SCHEMA_VERSION
@@ -6085,28 +6101,39 @@ class TAVIController(QObject):
                 return f"saved peak {index + 1} cannot be read: {exc}"
         if str(parameters.get("misalignment_hash_var") or "") not in ("", "None"):
             return f"its Misalignment-dock exercise is retired: {MOTOR_ZERO_REFUSAL}"
+        return self._saved_exercise_refusal(parameters)
+
+    def _saved_exercise_refusal(self, parameters):
+        """Why a block's saved exercise cannot be restored, or None. The code
+        must decode, and this instrument must observe it with the block's own
+        sample, crystals, energy and described mount -- never the live ones.
+        ``save_parameters`` judges what it writes with this same rule, so a file
+        it writes is never refused for its exercise."""
         hash_str = str(parameters.get("ub_training_hash") or "")
-        if hash_str and hash_str != "None":
-            try:
-                rotation = decode_mount_exercise(hash_str)
-            except ValueError as exc:
-                return f"its saved exercise is refused: {exc}"
-            described, _plane, _problem = self._saved_mount(parameters)
-            sample_key = (parameters.get("current_sample_settings") or {}).get(
-                "sample_key", "Al_bragg")
-            if not any(s.id == sample_key for s in self.descriptor.samples):
-                sample_key = "Al_bragg"
-            try:
-                fixed_E = float(parameters.get("fixed_E_var", 14.7))
-            except (TypeError, ValueError):
-                fixed_E = 14.7
-            reason = self._exercise_reach_error(
-                rotation, described, sample_key,
-                self._saved_crystal_id(parameters.get("monocris_var"), self.descriptor.mono_crystals),
-                self._saved_crystal_id(parameters.get("anacris_var"), self.descriptor.ana_crystals),
-                parameters.get("K_fixed_var", "Kf Fixed"), fixed_E)
-            if reason:
-                return f"its saved exercise cannot be observed here: {reason}"
+        if not hash_str or hash_str == "None":
+            return None
+        try:
+            rotation = decode_mount_exercise(hash_str)
+        except ValueError as exc:
+            return f"its saved exercise is refused: {exc}"
+        described, _plane, _problem = self._saved_mount(parameters)
+        sample_key = (parameters.get("current_sample_settings") or {}).get(
+            "sample_key", "Al_bragg")
+        if sample_key is None:  # "No sample" is saved as null
+            sample_key = "none"
+        if not any(s.id == sample_key for s in self.descriptor.samples):
+            sample_key = "Al_bragg"
+        try:
+            fixed_E = float(parameters.get("fixed_E_var", 14.7))
+        except (TypeError, ValueError):
+            fixed_E = 14.7
+        reason = self._exercise_reach_error(
+            rotation, described, sample_key,
+            self._saved_crystal_id(parameters.get("monocris_var"), self.descriptor.mono_crystals),
+            self._saved_crystal_id(parameters.get("anacris_var"), self.descriptor.ana_crystals),
+            parameters.get("K_fixed_var", "Kf Fixed"), fixed_E)
+        if reason:
+            return f"its saved exercise cannot be observed here: {reason}"
         return None
 
     @staticmethod
