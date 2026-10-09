@@ -351,8 +351,9 @@ def in12_descriptor() -> InstrumentDescriptor:
         # 50 mm detector tube.
         slits=(
             SlitSpec("sbl", "Pre-sample (W×H)", has_height=True,
-                     default_width_mm=30, default_height_mm=60),
-            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50),
+                     default_width_mm=30, default_height_mm=60, stable_id="pre_sample"),
+            SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50,
+                     stable_id="detector"),
         ),
         source_types=(
             SourceType("Maxwellian", "Maxwellian"),
