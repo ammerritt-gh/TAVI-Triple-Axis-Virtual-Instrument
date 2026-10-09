@@ -228,16 +228,49 @@ def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller):
     assert soft == []
 
 
-def test_a_command_conflict_stays_the_operators_call(in8_controller):
+@pytest.mark.parametrize("cmd1, cmd2", [
+    ("H 1.99 2.01 0.01", "omega -1 1 0.5"),
+    ("deltaE 0 5 1", "omega -1 1 0.5"),
+    ("H 1.99 2.01 0.01", "A3 -1 1 0.5"),
+    ("qx 1.9 2.1 0.1", "A4 40 41 1"),
+])
+def test_an_angle_beside_a_q_hkl_or_energy_scan_is_refused_even_forced(
+        in8_controller, cmd1, cmd2):
+    """Both commands write the same scan slots, so the pair cannot be scanned as
+    written; the GUI Run gate and the API (with force) refuse it alike."""
+    dock = in8_controller.window.simulation_dock
+    dock.scan_command_1_edit.setText(cmd1)
+    dock.scan_command_2_edit.setText(cmd2)
+    try:
+        gui_hard, gui_soft = in8_controller._preflight_scan_validation()
+    finally:
+        dock.scan_command_1_edit.setText("")
+        dock.scan_command_2_edit.setText("")
+    assert gui_hard and "cannot be combined" in gui_hard[0], gui_hard
+    assert "cannot be combined" not in " ".join(gui_soft)
+
+    hard, soft = in8_controller._scan_command_issues(cmd1, cmd2)
+    assert hard and "cannot be combined" in hard[0] and soft == []
+
+    backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
+    result = backend.submit_validate({
+        "parameters": {"scan_command1": cmd1, "scan_command2": cmd2}, "force": True})
+    assert result["would_queue"] is False
+    assert any("cannot be combined" in b for b in result["blockers"]), result["blockers"]
+
+
+def test_angle_pairs_that_write_distinct_slots_are_accepted(in8_controller):
+    for cmd1, cmd2 in (("A3 30 31 1", "A4 40 41 1"), ("omega 30 31 1", "sgl 0 1 1")):
+        assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], []), (cmd1, cmd2)
+
+
+def test_a_linked_pair_stays_the_operators_call(in8_controller):
     """Conflicts were overridable before the hard/soft split and remain so.
 
-    Scanning H against the sample rotation omega is a combination the
-    conflict check flags advisorily; promoting it to a hard refusal would have
-    blocked real scans.
+    A2 and 2theta are one angle; the linked-group check flags the pair
+    advisorily and promoting it to a hard refusal would block real scans.
     """
-    hard, soft = in8_controller._scan_command_issues(
-        "H 1.99 2.01 0.01", "omega -1 1 0.5"
-    )
+    hard, soft = in8_controller._scan_command_issues("A2 30 31 1", "2theta 30 31 1")
     assert hard == [], hard
     assert soft, "the conflict is still flagged, advisorily"
 
