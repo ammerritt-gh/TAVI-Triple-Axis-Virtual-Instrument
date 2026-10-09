@@ -799,8 +799,9 @@ def generate_training_exercise(max_ori_angle: float = 10.0,
         max_ori_angle: Maximum rotation angle (degrees); 0 gives the identity,
             i.e. no hidden error.
         accept: Optional ``accept(R) -> None | str`` called with each drawn
-            rotation: None takes it, a string is the reason it is refused and
-            the rotation is drawn again, up to ``max_draws`` times.
+            rotation as ``decode_mount_exercise`` returns it: None takes it, a
+            string is the reason it is refused and the rotation is drawn again,
+            up to ``max_draws`` times.
 
     Returns:
         str: Encoded hash string.
@@ -811,10 +812,11 @@ def generate_training_exercise(max_ori_angle: float = 10.0,
     """
     reason = None
     for _ in range(max_draws):
-        U = _random_rotation_matrix(max_ori_angle)
-        reason = accept(U) if accept is not None else None
+        code = encode_training(_random_rotation_matrix(max_ori_angle), 0.0, 0.0)
+        # Judged as a load decodes it, so an accepted code always loads.
+        reason = accept(decode_mount_exercise(code)) if accept is not None else None
         if reason is None:
-            return encode_training(U, 0.0, 0.0)
+            return code
     raise ValueError(f"no hidden rotation within {max_ori_angle:g}° could be drawn "
                      f"that this instrument can observe ({max_draws} tried): {reason}")
 
