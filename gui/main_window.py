@@ -986,17 +986,17 @@ class TAVIMainWindow(QMainWindow):
             floating = layout_data.get("dock_floating")
             if not isinstance(floating, dict):
                 floating = {}
-            for dock in (self.ub_matrix_dock,):
-                name = dock.objectName()
-                saved = floating.get(name)
-                if not isinstance(saved, bool):
-                    entry = saved
-                    saved = self._columns != 3
-                    print(f"Warning: dock_floating[{name!r}] is {entry!r} in {config_path}; "
-                          + ("floating it, as the preset does" if saved
-                             else "leaving it where it was restored"))
-                if saved:
-                    self._float_centred(dock, not dock.isHidden())
+            dock = self.ub_matrix_dock
+            name = dock.objectName()
+            saved = floating.get(name)
+            if not isinstance(saved, bool):
+                entry = saved
+                saved = self._columns != 3
+                print(f"Warning: dock_floating[{name!r}] is {entry!r} in {config_path}; "
+                      + ("floating it, as the preset does" if saved
+                         else "leaving it where it was restored"))
+            if saved:
+                self._float_centred(dock, not dock.isHidden())
 
             width = layout_data.get("column_width", NARROW)
             if width not in (NARROW, WIDE):
