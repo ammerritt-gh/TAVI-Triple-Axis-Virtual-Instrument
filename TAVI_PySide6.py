@@ -8937,7 +8937,7 @@ class TAVIController(QObject):
                ", noiseless" if noiseless else "")
         )
         # The model sees the crystal as it really sits: the sample's own
-        # lattice (true B) through the true mount and zero errors on the
+        # lattice (true B) through the true mount on the
         # frozen scan_config. "No sample" has no crystal, so no HKL.
         from instruments.tas_runtime import true_point_hkl
         B_true = compute_B_matrix(*spec.lattice) if spec.lattice is not None else None
