@@ -67,9 +67,6 @@ class ReflectionRulesDialog(QDialog):
 class UnifiedSampleDock(BaseDockWidget):
     """Unified dock widget for sample configuration."""
     
-    # Signal to request opening the misalignment dock
-    open_misalignment_dock_requested = Signal()
-    
     # Signal to request opening the UB matrix dock
     open_ub_matrix_dock_requested = Signal()
     
@@ -320,28 +317,7 @@ class UnifiedSampleDock(BaseDockWidget):
         
         self.add_block(ub_group)
 
-        # ===== Misalignment Training Section =====
-        misalignment_group = QGroupBox("Misalignment Training")
-        misalignment_layout = QVBoxLayout()
-        misalignment_layout.setSpacing(8)
-        misalignment_group.setLayout(misalignment_layout)
-        
-        # Button to open misalignment dock
-        self.open_misalignment_button = QPushButton("Open Misalignment Training...")
-        self.open_misalignment_button.setMinimumHeight(30)
-        misalignment_layout.addWidget(self.open_misalignment_button)
-        
-        # Status indicator
-        self.misalignment_indicator_label = QLabel("⚪ No misalignment loaded")
-        self.misalignment_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
-        self.misalignment_indicator_label.setAlignment(Qt.AlignCenter)
-        misalignment_layout.addWidget(self.misalignment_indicator_label)
-        
-        self.add_block(misalignment_group)
-        
-        
         # Connect internal signals
-        self.open_misalignment_button.clicked.connect(self._on_open_misalignment_dock)
         self.open_ub_matrix_button.clicked.connect(self._on_open_ub_matrix_dock)
         self.lattice_lock_button.clicked.connect(self._on_lattice_lock_toggled)
         self.lattice_save_button.clicked.connect(self._on_lattice_save)
@@ -392,10 +368,6 @@ class UnifiedSampleDock(BaseDockWidget):
             self.mount_status_label.setText(
                 f"Mounted: ({shown(plane[0])}) along x, ({shown(plane[1])}) in plane")
 
-    def _on_open_misalignment_dock(self):
-        """Handle button click to open misalignment dock."""
-        self.open_misalignment_dock_requested.emit()
-    
     def _on_open_ub_matrix_dock(self):
         """Handle button click to open UB matrix dock."""
         self.open_ub_matrix_dock_requested.emit()
@@ -412,19 +384,6 @@ class UnifiedSampleDock(BaseDockWidget):
         else:
             self.ub_indicator_label.setText("\u26aa UB = identity (standard setting)")
             self.ub_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
-    
-    def update_misalignment_indicator(self, has_misalignment: bool):
-        """Update the indicator to show if misalignment is loaded.
-        
-        Args:
-            has_misalignment: True if misalignment is loaded, False otherwise
-        """
-        if has_misalignment:
-            self.misalignment_indicator_label.setText("🟢 Misalignment loaded")
-            self.misalignment_indicator_label.setStyleSheet("color: green; font-weight: bold; font-size: 11px;")
-        else:
-            self.misalignment_indicator_label.setText("⚪ No misalignment loaded")
-            self.misalignment_indicator_label.setStyleSheet("color: gray; font-size: 11px;")
     
     # ===== Lattice Lock/Unlock Methods =====
     

@@ -773,7 +773,7 @@ class UBMatrix:
         return ub
 
 
-# ===== Training Mode: Hidden Orientation + Misalignment =====
+# ===== Training Mode: Hidden Mount Rotation =====
 
 def _random_rotation_matrix(max_angle_deg: float) -> np.ndarray:
     """Generate a random rotation matrix with angle up to max_angle_deg.
@@ -802,44 +802,47 @@ def _random_rotation_matrix(max_angle_deg: float) -> np.ndarray:
 
 
 def generate_training_exercise(max_ori_angle: float = 10.0,
-                                max_mis_angle: float = 5.0,
-                                include_orientation: bool = True,
-                                include_misalignment: bool = True) -> str:
-    """Generate a training exercise hash with hidden orientation and/or misalignment.
+                               include_orientation: bool = True,
+                               accept=None, max_draws: int = 50) -> str:
+    """Generate a mount-only training exercise hash: a hidden rotation of the
+    crystal in its mount (``U_true = R_hidden @ U_described``). Both motor-zero
+    values of the code are written as 0; the code keeps its 11-float layout.
 
     Args:
-        max_ori_angle: Maximum orientation rotation angle (degrees).
-        max_mis_angle: Maximum misalignment angle for omega/chi (degrees).
-        include_orientation: Whether to include a random U rotation.
-        include_misalignment: Whether to include angular misalignment.
+        max_ori_angle: Maximum rotation angle (degrees).
+        include_orientation: Whether to include a random rotation (False
+            gives the identity, i.e. no hidden error).
+        accept: Optional ``accept(R) -> None | str`` called with each drawn
+            rotation: None takes it, a string is the reason it is refused and
+            the rotation is drawn again, up to ``max_draws`` times.
 
     Returns:
         str: Encoded hash string.
+
+    Raises:
+        ValueError: when no draw was accepted; the message carries the last
+            reason.
     """
-    if include_orientation:
-        U = _random_rotation_matrix(max_ori_angle)
-    else:
-        U = np.eye(3)
-
-    if include_misalignment:
-        mis_omega = np.random.uniform(-max_mis_angle, max_mis_angle)
-        mis_chi = np.random.uniform(-max_mis_angle, max_mis_angle)
-    else:
-        mis_omega = 0.0
-        mis_chi = 0.0
-
-    return encode_training(U, mis_omega, mis_chi)
+    reason = None
+    for _ in range(max_draws if include_orientation else 1):
+        U = _random_rotation_matrix(max_ori_angle) if include_orientation else np.eye(3)
+        reason = accept(U) if accept is not None else None
+        if reason is None:
+            return encode_training(U, 0.0, 0.0)
+    raise ValueError(f"no hidden rotation within {max_ori_angle:g}° could be drawn "
+                     f"that this instrument can observe ({max_draws} tried): {reason}")
 
 
 def encode_training(U: np.ndarray, mis_omega: float, mis_chi: float) -> str:
-    """Encode a training exercise (U matrix + misalignment) into a hash string.
+    """Encode a training exercise (U matrix + two motor-zero floats) into a hash string.
 
-    Packs 11 floats (9 for U + 2 for misalignment), XOR-obfuscates, base64 encodes.
+    Packs 11 floats (9 for U + 2 motor-zero values, which a mount-only
+    exercise leaves 0), XOR-obfuscates, base64 encodes.
 
     Args:
         U: 3x3 orientation matrix.
-        mis_omega: In-plane misalignment (degrees).
-        mis_chi: Out-of-plane misalignment (degrees).
+        mis_omega: Turntable motor-zero (degrees); retired, 0 in every new code.
+        mis_chi: Lower-arc motor-zero (degrees); retired, 0 in every new code.
 
     Returns:
         str: Encoded hash string.
@@ -869,6 +872,34 @@ def decode_training(hash_str: str) -> tuple:
     # decomposition) so the hidden mount is an exact rotation.
     left, _, right = np.linalg.svd(validate_rotation_matrix(U))
     return left @ right, float(mis_omega), float(mis_chi)
+
+
+MOTOR_ZERO_REFUSAL = ("this exercise was made by an older TAVI and contains motor-zero "
+                      "errors, which are no longer simulated; ask for a new code")
+
+
+def decode_mount_exercise(hash_str: str) -> np.ndarray:
+    """The hidden mount rotation of a mount-only exercise code.
+
+    Raises ``ValueError`` with the reason, applying nothing, for a code that
+    does not decode (a retired Misalignment-dock code included) or whose
+    motor-zero values are not 0.
+    """
+    try:
+        rotation, mis_omega, mis_chi = decode_training(hash_str)
+    except ValueError as exc:
+        raise ValueError(f"this exercise code cannot be read ({exc}); it may be damaged or "
+                         "made by an older TAVI. Ask for a new code") from exc
+    if mis_omega != 0.0 or mis_chi != 0.0:
+        raise ValueError(MOTOR_ZERO_REFUSAL)
+    return rotation
+
+
+def has_two_nonparallel(hkls) -> bool:
+    """True when two of ``hkls`` point in different directions (so they fix an orientation)."""
+    vectors = [np.asarray(hkl, dtype=float) for hkl in hkls]
+    return any(np.linalg.norm(np.cross(a, b)) > 1e-9
+               for i, a in enumerate(vectors) for b in vectors[i + 1:])
 
 
 def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_errors,
@@ -926,9 +957,7 @@ def grade_alignment(gonio, sense, ki, kf, ub, corrections, u_true, b_true, zero_
             miss = math.inf                     # the true |Q| closes no triangle here
         misses.append((tuple(hkl), miss))
 
-    reached = [np.asarray(hkl, dtype=float) for hkl, _ in misses]
-    if not any(np.linalg.norm(np.cross(a, b)) > 1e-9
-               for i, a in enumerate(reached) for b in reached[i + 1:]):
+    if not has_two_nonparallel(hkl for hkl, _ in misses):
         return cannot("fewer than two non-parallel reflections are reachable", skipped)
     worst_hkl, worst = max(misses, key=lambda item: item[1])
     status = "aligned" if worst <= tol_good else "close" if worst <= tol_close else "way_off"

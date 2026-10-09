@@ -36,6 +36,7 @@ from instruments.tas_runtime import (
     check_point_feasibility,
     describe_scan_error_flags,
     stage_corrections,
+    training_reach_error,
 )
 
 log = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ from tavi.tas_geometry import (
     lab_q_from_stt,
 )
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
-                            decode_training, generate_training_exercise, encode_training, get_scattering_plane_info,
+                            decode_mount_exercise, generate_training_exercise, get_scattering_plane_info,
                             u_from_plane, validate_rotation_matrix, alignment_residuals,
                             refine_lattice_from_peaks, small_integer_indices)
 from tavi.runtime_tracker import RuntimeTracker
@@ -138,7 +139,8 @@ from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
-                                     primitive_miller, ProjectedReflection)
+                                     primitive_miller, ProjectedReflection,
+                                     reference_hkls)
 from tavi.reciprocal_interaction import (LiveReciprocalResult, ReachOverlay,
                                          ReciprocalState, format_small,
                                          triangle_can_close)
@@ -1158,7 +1160,7 @@ class TAVIController(QObject):
         # The truth apart from it (docs/INSTRUMENT_LAYOUT.md "Truth and
         # belief"): the sample as described (identity = the standard setting,
         # or from the mounting plane), the hidden training rotation, and the
-        # one loaded exercise, None or (kind, hash) -- the docks only show it.
+        # loaded training exercise, None or its hash -- the docks only show it.
         self.U_described = np.eye(3)
         self.mount_plane = None
         self.R_hidden = np.eye(3)
@@ -1555,11 +1557,6 @@ class TAVIController(QObject):
 
         # Sample orientation controls - connected later in signal setup
         # (omega/sgl/sgu are stage readouts, psi/kappa are their corrections)
-        
-        # Misalignment training dock
-        self.window.misalignment_dock.check_alignment_button.clicked.connect(self.on_check_alignment)
-        self.window.misalignment_dock.load_hash_button.clicked.connect(self.on_load_misalignment_hash)
-        self.window.misalignment_dock.clear_misalignment_button.clicked.connect(self.on_clear_misalignment)
         
         # UB Matrix dock
         self.window.ub_matrix_dock.calculate_ub_button.clicked.connect(self.on_calculate_ub)
@@ -5100,12 +5097,9 @@ class TAVIController(QObject):
             self.print_to_message_center("Invalid arc (sgl/sgu) value")
     
     # ===== The true mount and the one loaded exercise =====
-    # U_true = R_hidden @ U_described and the zero errors are the truth the
-    # McStas sample arm reads; the operator's UB is belief and none of the
+    # U_true = R_hidden @ U_described is the truth the McStas sample arm and
+    # the analytic engine read; the operator's UB is belief and none of the
     # paths below write it except to reset it to U_described (I3).
-
-    _EXERCISE_NAMES = {"training": "UB training exercise",
-                       "misalignment": "misalignment exercise"}
 
     def _set_true_mount(self, U_described=None, R_hidden=None):
         """The one writer of ``instrument_state.U_true`` (R_hidden @ U_described)."""
@@ -5115,49 +5109,64 @@ class TAVIController(QObject):
             self.R_hidden = np.array(R_hidden, dtype=float)
         self.instrument_state.U_true = self.R_hidden @ self.U_described
 
-    def _install_exercise(self, kind, hash_str):
-        """Make ``hash_str`` the one loaded exercise: R_hidden (a training
-        exercise's rotation, else identity) and the zero errors, nothing else
-        -- no UB write and no refusal (restore calls this directly). Raises
-        ValueError on a bad hash, before anything changes."""
-        if kind == "training":
-            rotation, mis_omega, mis_chi = decode_training(hash_str)
-        else:
-            from gui.docks.misalignment_dock import decode_misalignment
-            rotation = np.eye(3)
-            mis_omega, mis_chi = decode_misalignment(hash_str)
+    def _exercise_reach_error(self, rotation, u_described, sample_key, monocris, anacris,
+                              K_fixed, fixed_E):
+        """Why a hidden mount ``rotation`` cannot be observed (None when it
+        can), judged on the sample, described mount, crystals and fixed
+        energy GIVEN: the live ones for a generation or a load, a saved
+        file's for a restore. Never the live ones by default."""
+        spec = next((s for s in self.descriptor.samples if s.id == sample_key), None)
+        if spec is None or spec.lattice is None:
+            return "no sample with a crystal is selected, so there is nothing to observe"
+        state = self.instrument.default_state()
+        state.monocris, state.anacris = monocris, anacris
+        state.K_fixed, state.fixed_E = K_fixed, fixed_E
+        hkls = reference_hkls(spec.reflection_source, spec.space_group,
+                              os.path.join(os.getcwd(), "components"))
+        return training_reach_error(state, rotation @ np.asarray(u_described, dtype=float),
+                                    compute_B_matrix(*spec.lattice), hkls)
+
+    def _live_reach_error(self, rotation):
+        """``_exercise_reach_error`` on what the windows show now."""
+        vals = self.get_gui_values()
+        if not vals:
+            return "a field does not read as a number"
+        return self._exercise_reach_error(
+            rotation, self.U_described, self.window.sample_dock.get_selected_sample_key(),
+            vals['monocris'], vals['anacris'], vals['K_fixed'], vals['fixed_E'])
+
+    def _install_exercise(self, hash_str):
+        """Make ``hash_str`` the loaded exercise: R_hidden, nothing else -- no
+        UB write and no lock check. Raises ValueError, before anything
+        changes, for a code that is not a mount-only exercise (see
+        ``decode_mount_exercise``) or that this instrument cannot observe."""
+        rotation = decode_mount_exercise(hash_str)
+        reason = self._live_reach_error(rotation)
+        if reason:
+            raise ValueError(f"the instrument cannot observe this exercise: {reason}")
         self._set_true_mount(R_hidden=rotation)
-        self.instrument_state.set_misalignment(mis_omega=mis_omega, mis_chi=mis_chi)
-        self._exercise = (kind, hash_str)
+        self._exercise = hash_str
         self._show_exercise()
 
     def _clear_exercise(self):
-        """No exercise: R_hidden = I and zero errors 0."""
+        """No exercise: R_hidden = I."""
         self._exercise = None
         self._set_true_mount(R_hidden=np.eye(3))
-        self.instrument_state.set_misalignment(mis_omega=0.0, mis_chi=0.0)
         self._show_exercise()
 
     def _show_exercise(self):
-        """Both docks show the controller's exercise state (hash field and
-        status); they hold no hidden value."""
-        kind, hash_str = self._exercise or (None, "")
+        """The UB dock shows the controller's exercise state (hash field and
+        status); it holds no hidden value."""
         ub_dock = self.window.ub_matrix_dock
-        ub_dock.load_hash_edit.setText(hash_str if kind == "training" else "")
-        ub_dock.update_training_status(kind == "training")
-        self.window.misalignment_dock.show_misalignment(
-            hash_str if kind == "misalignment" else "")
+        ub_dock.load_hash_edit.setText(self._exercise or "")
+        ub_dock.update_training_status(self._exercise is not None)
 
-    def _exercise_refusal(self, kind, action):
-        """Why ``action`` ("load"/"clear") of a ``kind`` exercise is refused,
-        or None. The zero errors have one owner: one exercise at a time. A
-        locked plane's physical tilt never moves: release it first."""
+    def _exercise_refusal(self, action):
+        """Why ``action`` ("load"/"clear") of the exercise is refused, or
+        None. A locked plane's physical tilt never moves: release it first."""
         if self._lock_text():
-            return (f"Cannot {action} the {self._EXERCISE_NAMES[kind]}: it would move "
+            return (f"Cannot {action} the exercise: it would move "
                     f"{self._lock_text()}. Release the lock first.")
-        if self._exercise is not None and self._exercise[0] != kind:
-            return (f"Cannot {action} the {self._EXERCISE_NAMES[kind]}: the "
-                    f"{self._EXERCISE_NAMES[self._exercise[0]]} is loaded. Clear it first.")
         return None
 
     def _reset_ub_to_described(self):
@@ -5429,60 +5438,40 @@ class TAVIController(QObject):
                 f"Could not drop the plane lock from parameters.json ({exc}); "
                 "it may be restored on the next start of this instrument")
 
-    def _load_exercise(self, kind, hash_str):
-        """Interactive load (I3): refused while the other exercise is loaded;
-        then the hidden truth, and the operator's UB reset to U_described."""
-        label = self._EXERCISE_NAMES[kind]
+    def _load_exercise(self, hash_str):
+        """Interactive load (I3): refused under a lock and for a code that is
+        not an observable mount-only exercise; then the hidden truth, and the
+        operator's UB reset to U_described."""
         if not hash_str:
-            self.print_to_message_center(f"No {label} hash entered")
+            self.print_to_message_center("No exercise hash entered")
             return False
-        refusal = self._exercise_refusal(kind, "load")
+        refusal = self._exercise_refusal("load")
         if refusal:
             self.print_to_message_center(refusal)
             return False
         try:
-            self._install_exercise(kind, hash_str)
+            self._install_exercise(hash_str)
         except ValueError as e:
-            self.print_to_message_center(f"Invalid {label} hash: {e}")
+            self.print_to_message_center(f"Exercise refused: {e}")
             return False
         self._reset_ub_to_described()
         return True
 
-    def _unload_exercise(self, kind):
-        """Interactive clear (I3): refused while the other exercise is loaded."""
-        refusal = self._exercise_refusal(kind, "clear")
+    def _unload_exercise(self):
+        """Interactive clear (I3)."""
+        refusal = self._exercise_refusal("clear")
         if refusal:
             self.print_to_message_center(refusal)
             return False
         if self._exercise is None:
-            self.print_to_message_center(f"No {self._EXERCISE_NAMES[kind]} loaded")
+            self.print_to_message_center("No exercise loaded")
             return False
         self._clear_exercise()
         self._reset_ub_to_described()
         return True
 
-    def on_load_misalignment_hash(self):
-        """Load a misalignment exercise: hidden zero errors on the instrument."""
-        hash_str = self.window.misalignment_dock.load_hash_edit.text().strip()
-        if self._load_exercise("misalignment", hash_str):
-            self.print_to_message_center("Hidden misalignment loaded and applied to instrument")
-
-    def on_clear_misalignment(self):
-        """Clear the misalignment exercise: zero errors back to 0."""
-        if self._unload_exercise("misalignment"):
-            self.print_to_message_center("Misalignment cleared")
-
-    def on_check_alignment(self):
-        """Grade the alignment against the misalignment exercise (the one grader)."""
-        if self._exercise is None or self._exercise[0] != "misalignment":
-            self.print_to_message_center("No misalignment exercise loaded")
-            return
-        grade = self._grade_alignment()
-        if grade is not None:
-            self.window.misalignment_dock.update_alignment_feedback(grade)
-
     def _grade_alignment(self):
-        """The one grader both docks call (``tavi.ub_matrix.grade_alignment``):
+        """The grader (``tavi.ub_matrix.grade_alignment``):
         the operator's peaks' HKLs plus three reflections of the mounting
         plane (u, v, u+v; with no plane described, the described mount's x
         and z as small (h k l) and their sum, else (1 0 0), (0 1 0),
@@ -5724,40 +5713,39 @@ class TAVIController(QObject):
     # ===== UB Training Methods =====
 
     def on_generate_training(self):
-        """Generate a training exercise hash with hidden orientation + misalignment."""
+        """Generate a mount-only training exercise hash: a hidden rotation of
+        the crystal in its mount that this instrument can observe (redrawn a
+        bounded number of times; otherwise the reason is said)."""
         try:
-            max_ori = self.window.ub_matrix_dock.max_ori_spin.value()
-            max_mis = self.window.ub_matrix_dock.max_mis_spin.value()
-            include_ori = self.window.ub_matrix_dock.include_orientation_check.isChecked()
-            include_mis = self.window.ub_matrix_dock.include_misalignment_check.isChecked()
-
+            dock = self.window.ub_matrix_dock
             hash_str = generate_training_exercise(
-                max_ori_angle=max_ori,
-                max_mis_angle=max_mis,
-                include_orientation=include_ori,
-                include_misalignment=include_mis,
+                max_ori_angle=dock.max_ori_spin.value(),
+                include_orientation=dock.include_orientation_check.isChecked(),
+                accept=self._live_reach_error,
             )
-            self.window.ub_matrix_dock.training_hash_display.setText(hash_str)
+            dock.training_hash_display.setText(hash_str)
             self.print_to_message_center("Training exercise generated - share the hash with students")
+        except ValueError as e:
+            self.print_to_message_center(f"Failed to generate training: {e}")
         except Exception as e:
+            log.exception("Training exercise generation failed")
             self.print_to_message_center(f"Failed to generate training: {e}")
 
     def on_load_training(self):
-        """Load a training exercise: the hidden mount rotation and zero errors
-        go to the truth; the operator's UB starts at the sample as described."""
+        """Load a training exercise: the hidden mount rotation goes to the
+        truth; the operator's UB starts at the sample as described."""
         hash_str = self.window.ub_matrix_dock.load_hash_edit.text().strip()
-        if self._load_exercise("training", hash_str):
-            self.print_to_message_center(
-                "Training exercise loaded - hidden orientation and misalignment applied")
+        if self._load_exercise(hash_str):
+            self.print_to_message_center("Training exercise loaded - hidden mount rotation applied")
 
     def on_clear_training(self):
-        """Clear the training exercise: R_hidden = I, zero errors 0."""
-        if self._unload_exercise("training"):
+        """Clear the training exercise: R_hidden = I."""
+        if self._unload_exercise():
             self.print_to_message_center("Training exercise cleared")
 
     def on_check_training(self):
         """Grade the alignment against the training exercise (the one grader)."""
-        if self._exercise is None or self._exercise[0] != "training":
+        if self._exercise is None:
             self.print_to_message_center("No training exercise loaded")
             return
         grade = self._grade_alignment()
@@ -6034,10 +6022,8 @@ class TAVIController(QObject):
                 "mount_plane": ([list(hkl) for hkl in self.mount_plane]
                                 if self.mount_plane is not None else None),
             },
-            # The one loaded exercise, by its hash only (values stay hidden);
-            # one exercise at a time, so at most one of the two is set.
-            "misalignment_hash_var": self._exercise_hash("misalignment"),
-            "ub_training_hash": self._exercise_hash("training"),
+            # The loaded exercise, by its hash only (values stay hidden).
+            "ub_training_hash": self._exercise or "",
             # The locked scattering plane (null = free).
             "plane_lock": copy.deepcopy(self.instrument_state.plane_lock),
         }
@@ -6051,10 +6037,6 @@ class TAVIController(QObject):
 
         self._edit_parameters_file(put_block)
         self.print_to_message_center("Parameters saved successfully")
-
-    def _exercise_hash(self, kind):
-        """The loaded exercise's hash when it is a ``kind`` exercise, else ""."""
-        return self._exercise[1] if self._exercise and self._exercise[0] == kind else ""
 
     def _edit_parameters_file(self, edit):
         """The one writer of parameters.json. Reads the document (only the
@@ -6266,19 +6248,14 @@ class TAVIController(QObject):
         self._show_mount_plane()
 
         self._clear_exercise()
-        for kind, key in (("misalignment", "misalignment_hash_var"),
-                          ("training", "ub_training_hash")):
-            hash_str = str(parameters.get(key) or "")
-            if not hash_str or hash_str == "None":
-                continue
+        hash_str = str(parameters.get("ub_training_hash") or "")
+        if hash_str and hash_str != "None":
             try:
-                self._install_exercise(kind, hash_str)
+                self._install_exercise(hash_str)
             except ValueError as e:
-                self.print_to_message_center(
-                    f"Failed to restore {self._EXERCISE_NAMES[kind]} from its hash: {e}")
-                continue
-            self.print_to_message_center(
-                f"{self._EXERCISE_NAMES[kind].capitalize()} restored from saved parameters")
+                self.print_to_message_center(f"Failed to restore the training exercise: {e}")
+            else:
+                self.print_to_message_center("Training exercise restored from saved parameters")
 
     def load_parameters(self):
         """Load parameters from JSON file."""

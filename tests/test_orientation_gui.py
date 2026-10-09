@@ -19,7 +19,6 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QTabBar  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
-from gui.docks.misalignment_dock import encode_misalignment  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi.api_server import ApiError  # noqa: E402
 from tavi.local_state import config_path  # noqa: E402
@@ -107,18 +106,6 @@ def _reload_with(controller, edit):
         else:
             with open(path, "wb") as fh:
                 fh.write(original)
-
-
-def test_restoring_a_misalignment_hash_applies_both_angles(controller, messages):
-    def edit(block):
-        block["misalignment_hash_var"] = encode_misalignment(1.5, -0.75)
-
-    _reload_with(controller, edit)
-
-    assert not [m for m in messages if "Failed to restore misalignment" in m]
-    assert controller.instrument_state.mis_omega == pytest.approx(1.5)
-    assert controller.instrument_state.mis_chi == pytest.approx(-0.75)
-    assert controller._exercise == ("misalignment", encode_misalignment(1.5, -0.75))
 
 
 def test_flash_timers_die_with_their_field(controller):
@@ -636,33 +623,26 @@ def test_gui_arc_edit_past_travel_reports_the_reason(in12, in12_messages):
 def _training_hash():
     from tavi.tas_geometry import mccode_rotation_matrix
     from tavi.ub_matrix import encode_training
-    return encode_training(mccode_rotation_matrix(3.0, 5.0, -2.0), 1.25, -0.5)
+    return encode_training(mccode_rotation_matrix(3.0, 5.0, -2.0), 0.0, 0.0)
 
 
-EXERCISE_HASHES = {"training": _training_hash(),
-                   "misalignment": encode_misalignment(-0.75, 0.4)}
+TRAINING_HASH = _training_hash()
 
 
-def _load_exercise(controller, kind):
-    """Paste the exercise's hash and press its dock's Load."""
-    if kind == "training":
-        controller.window.ub_matrix_dock.load_hash_edit.setText(EXERCISE_HASHES[kind])
-        controller.on_load_training()
-    else:
-        controller.window.misalignment_dock.load_hash_edit.setText(EXERCISE_HASHES[kind])
-        controller.on_load_misalignment_hash()
+def _load_exercise(controller, hash_str=TRAINING_HASH):
+    """Paste the exercise's hash and press the UB dock's Load."""
+    controller.window.ub_matrix_dock.load_hash_edit.setText(hash_str)
+    controller.on_load_training()
 
 
 def _truth(controller):
-    """Every hidden value: U_described, R_hidden, the zero errors, U_true."""
-    state = controller.instrument_state
+    """Every hidden value: U_described, R_hidden, U_true."""
     return (controller.U_described.copy(), controller.R_hidden.copy(),
-            np.array([state.mis_omega, state.mis_chi]), state.U_true.copy())
+            controller.instrument_state.U_true.copy())
 
 
 def _assert_truth_unchanged(controller, before):
-    for name, a, b in zip(("U_described", "R_hidden", "zero errors", "U_true"),
-                          before, _truth(controller)):
+    for name, a, b in zip(("U_described", "R_hidden", "U_true"), before, _truth(controller)):
         assert np.array_equal(a, b), name
 
 
@@ -673,7 +653,7 @@ def _with_hidden_truth(controller):
 
     controller.set_default_parameters()
     controller._set_true_mount(U_described=mccode_rotation_matrix(0.0, 12.0, 0.0))
-    _load_exercise(controller, "training")
+    _load_exercise(controller)
 
 
 def _path_calculate_ub(controller, _monkeypatch):
@@ -757,25 +737,23 @@ def test_belief_write_paths_never_touch_the_truth(controller, monkeypatch, write
     write(controller, monkeypatch)
 
     _assert_truth_unchanged(controller, before)
-    assert controller._exercise == ("training", EXERCISE_HASHES["training"])
+    assert controller._exercise == TRAINING_HASH
 
 
-@pytest.mark.parametrize("kind", ["training", "misalignment"])
-def test_defaults_clear_either_exercise_and_the_described_mount(controller, kind):
+def test_defaults_clear_the_exercise_and_the_described_mount(controller):
     from tavi.tas_geometry import mccode_rotation_matrix
 
     controller.set_default_parameters()
     controller._set_true_mount(U_described=mccode_rotation_matrix(0.0, 12.0, 0.0))
-    _load_exercise(controller, kind)
-    assert controller._exercise == (kind, EXERCISE_HASHES[kind])
+    _load_exercise(controller)
+    assert controller._exercise == TRAINING_HASH
     controller.ub_matrix.set_U(mccode_rotation_matrix(1.0, 2.0, 3.0))
-    if kind == "training":
-        # Defaults from a locked start: the one exception to the lock's
-        # refusals releases the lock, then clears (amend6 item 3).
-        controller.window.ub_matrix_dock.lock_u_edit.setText("1 0 1")
-        controller.window.ub_matrix_dock.lock_v_edit.setText("0 1 0")
-        controller.on_lock_plane()
-        assert controller.instrument_state.plane_lock is not None
+    # Defaults from a locked start: the one exception to the lock's
+    # refusals releases the lock, then clears (amend6 item 3).
+    controller.window.ub_matrix_dock.lock_u_edit.setText("1 0 1")
+    controller.window.ub_matrix_dock.lock_v_edit.setText("0 1 0")
+    controller.on_lock_plane()
+    assert controller.instrument_state.plane_lock is not None
 
     controller.set_default_parameters()
 
@@ -785,34 +763,9 @@ def test_defaults_clear_either_exercise_and_the_described_mount(controller, kind
     for matrix in (controller.U_described, controller.R_hidden, state.U_true,
                    controller.ub_matrix.U):
         assert np.array_equal(matrix, np.eye(3))
-    assert (state.mis_omega, state.mis_chi) == (0.0, 0.0)
     assert controller.window.ub_matrix_dock.load_hash_edit.text() == ""
-    assert controller.window.misalignment_dock.load_hash_edit.text() == ""
-    other = "misalignment" if kind == "training" else "training"
-    _load_exercise(controller, other)
-    assert controller._exercise == (other, EXERCISE_HASHES[other])
-
-
-@pytest.mark.parametrize("kind", ["training", "misalignment"])
-def test_one_exercise_at_a_time(controller, messages, kind):
-    """While one exercise owns the zero errors, loading or clearing the other
-    is refused naming it, and nothing hidden moves."""
-    controller.set_default_parameters()
-    _load_exercise(controller, kind)
-    before = _truth(controller)
-    other = "misalignment" if kind == "training" else "training"
-    messages.clear()
-
-    _load_exercise(controller, other)
-    (controller.on_clear_misalignment if other == "misalignment"
-     else controller.on_clear_training)()
-
-    loaded = cm.TAVIController._EXERCISE_NAMES[kind]
-    refusals = [m for m in messages if f"the {loaded} is loaded" in m]
-    assert len(refusals) == 2, messages
-    assert refusals[0].startswith("Cannot load") and refusals[1].startswith("Cannot clear")
-    _assert_truth_unchanged(controller, before)
-    assert controller._exercise == (kind, EXERCISE_HASHES[kind])
+    _load_exercise(controller)
+    assert controller._exercise == TRAINING_HASH
 
 
 # --- Unit 2 (C2): the mounting plane -----------------------------------------------
@@ -832,7 +785,7 @@ def test_remount_is_built_on_the_sample_lattice_not_the_fields(controller, messa
     from tavi.ub_matrix import u_from_plane
 
     controller.set_default_parameters()                  # Al_bragg, a = b = c = 4.05
-    _load_exercise(controller, "training")
+    _load_exercise(controller)
     rotation = controller.R_hidden
     controller.window.sample_dock.lattice_b_edit.setText("4.3")
     controller.on_lattice_changed()
@@ -897,7 +850,7 @@ def test_sample_swap_keeps_the_mount_and_clears_only_the_plane(controller, messa
     zero errors and U_true; the plane description goes, with one line.
     Re-selecting the same sample clears nothing and says nothing."""
     controller.set_default_parameters()
-    _load_exercise(controller, "training")
+    _load_exercise(controller)
     _apply_plane(controller, "1 1 0", "0 0 1")
     before = _truth(controller)
     sam = controller.window.sample_dock
@@ -919,19 +872,18 @@ def test_sample_swap_keeps_the_mount_and_clears_only_the_plane(controller, messa
 
 def test_training_session_round_trips_the_ub_and_the_truth_exactly(controller, messages):
     """A schema-3 save with a training exercise and a fitted UB unlike both
-    U_described and U_true restores that UB, U_true and the zero errors
-    exactly; the block carries R_hidden only inside the hash, and a hash
-    typed into the other dock but never loaded is not saved."""
+    U_described and U_true restores that UB and U_true exactly; the block
+    carries R_hidden only inside the hash, and a hash typed into the load
+    field but never loaded is not saved."""
     from tavi.tas_geometry import mccode_rotation_matrix
 
     controller.set_default_parameters()
     _apply_plane(controller, "1 1 0", "0 0 1")
-    _load_exercise(controller, "training")
+    _load_exercise(controller)
     fitted = mccode_rotation_matrix(1.5, 30.0, -2.5)
     controller.ub_matrix.set_U(fitted)
-    controller.window.misalignment_dock.load_hash_edit.setText(EXERCISE_HASHES["misalignment"])
     state = controller.instrument_state
-    saved = (controller.ub_matrix.U, state.U_true.copy(), state.mis_omega, state.mis_chi)
+    saved = (controller.ub_matrix.U, state.U_true.copy())
     assert not np.allclose(fitted, controller.U_described) and not np.allclose(fitted, saved[1])
     blocks = []
 
@@ -944,13 +896,12 @@ def test_training_session_round_trips_the_ub_and_the_truth_exactly(controller, m
     block = blocks[0]
     assert block["_schema"] == 3
     assert set(block["true_mount"]) == {"U_described", "mount_plane"}
-    assert block["ub_training_hash"] == EXERCISE_HASHES["training"]
-    assert block["misalignment_hash_var"] == ""
+    assert block["ub_training_hash"] == TRAINING_HASH
+    assert "misalignment_hash_var" not in block
     assert "R_hidden" not in json.dumps(block)
     assert np.array_equal(controller.ub_matrix.U, saved[0])
     assert np.array_equal(state.U_true, saved[1])
-    assert (state.mis_omega, state.mis_chi) == (saved[2], saved[3])
-    assert controller._exercise == ("training", EXERCISE_HASHES["training"])
+    assert controller._exercise == TRAINING_HASH
 
 
 def test_plane_mount_round_trips_on_a_non_default_sample(controller, messages):
@@ -976,16 +927,14 @@ def test_plane_mount_round_trips_on_a_non_default_sample(controller, messages):
     assert controller.window.sample_dock.mount_u_edit.text() == "1 1 0"
 
 
-@pytest.mark.parametrize("kind", ["training", "misalignment"])
-def test_restore_replaces_the_hidden_truth_in_full(controller, kind):
+def test_restore_replaces_the_hidden_truth_in_full(controller):
     """A saved block without an exercise clears the session's: R_hidden = I,
-    zero errors 0, no exercise."""
+    no exercise."""
     controller.set_default_parameters()
-    _load_exercise(controller, kind)
+    _load_exercise(controller)
 
     def no_exercise(block):
         block["ub_training_hash"] = ""
-        block["misalignment_hash_var"] = ""
 
     _reload_with(controller, no_exercise)
 
@@ -993,7 +942,6 @@ def test_restore_replaces_the_hidden_truth_in_full(controller, kind):
     assert controller._exercise is None
     assert np.array_equal(controller.R_hidden, np.eye(3))
     assert np.array_equal(state.U_true, controller.U_described)
-    assert (state.mis_omega, state.mis_chi) == (0.0, 0.0)
 
 
 # --- Unit 2 (C4): the analytic engine on the truth ----------------------------------
@@ -1028,39 +976,30 @@ def test_deterministic_counts_drop_when_the_ub_misses_the_crystal(controller, tm
 
 # --- Unit 2 (C5): training on the truth ---------------------------------------------
 
-@pytest.mark.parametrize("kind", ["training", "misalignment"])
-def test_both_docks_grade_a_fit_that_absorbs_a_turntable_offset_aligned(controller, messages,
-                                                                        kind):
-    """A hidden 3 deg turntable zero error, psi = 0, and a UB fitted from
-    peaks taken on the true crystal: the fit absorbs the offset, so the
-    reflections it commands are the true ones and either dock grades it
-    aligned (the old U-vs-U and psi-vs-zero-error checks said way off)."""
+def test_the_dock_grades_a_fit_from_true_peaks_aligned(controller, messages):
+    """A hidden 10 deg turn of the mount and a UB fitted from peaks taken on
+    the true crystal: the fit is the hidden mount, so the reflections it
+    commands are the true ones and the dock grades it aligned."""
     from tavi.tas_geometry import mccode_rotation_matrix
-    from tavi.ub_matrix import encode_training
     from test_orientation import _true_peak
 
     controller.set_default_parameters()
-    training = kind == "training"
-    dock = controller.window.ub_matrix_dock if training else controller.window.misalignment_dock
-    dock.load_hash_edit.setText(
-        encode_training(mccode_rotation_matrix(0.0, 10.0, 0.0), 3.0, 0.0) if training
-        else encode_misalignment(3.0, 0.0))
-    (controller.on_load_training if training else controller.on_load_misalignment_hash)()
+    dock = controller.window.ub_matrix_dock
+    _load_exercise(controller, encode_training(mccode_rotation_matrix(0.0, 10.0, 0.0), 0.0, 0.0))
     state, vals = controller.instrument_state, controller.get_gui_values()
     assert vals["deltaE"] == 0.0
     peaks = [_true_peak(state.goniometer, state.sense_sample, hkl, state.U_true,
                         controller._true_B(), {"A3": 0.0, "sgl": 0.0, "sgu": 0.0},
-                        {"A3": 3.0}, k=vals["Kf"]).to_dict()
+                        {}, k=vals["Kf"]).to_dict()
              for hkl in ((2, 0, 0), (0, 2, 0))]
-    controller.window.ub_matrix_dock.set_peak_entries(peaks)
+    dock.set_peak_entries(peaks)
     controller.on_calculate_ub()
     messages.clear()
 
-    (controller.on_check_training if training else controller.on_check_alignment)()
+    controller.on_check_training()
 
-    overall = dock.check_overall_label if training else dock.overall_feedback_label
-    expected = "Fully Aligned" if training else "Well Aligned"
-    assert expected in overall.text(), (overall.text(), messages)
+    assert "Fully Aligned" in dock.check_overall_label.text(), (
+        dock.check_overall_label.text(), messages)
     assert any(m.startswith("Alignment check: Worst miss 0.00° at") for m in messages), messages
 
 
@@ -1095,8 +1034,8 @@ def test_two_hidden_truths_leave_the_gui_and_the_api_identical(controller, messa
     from tavi.tas_geometry import mccode_rotation_matrix
     from tavi.ub_matrix import encode_training
 
-    hashes = [EXERCISE_HASHES["training"],
-              encode_training(mccode_rotation_matrix(-4.0, 11.0, 6.0), -2.0, 1.5)]
+    hashes = [TRAINING_HASH,
+              encode_training(mccode_rotation_matrix(-4.0, 11.0, 6.0), 0.0, 0.0)]
     window = controller.window
     skip = {shiboken6.getCppPointer(w)[0] for w in (
         window.api_dock.activity_log, window.api_dock.job_table,
@@ -1277,14 +1216,12 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
         backend.patch_parameters({"kappa": 0.5}, force=True)
     assert "holds kappa" in kappa.value.details["errors"]["kappa"]
     messages.clear()
-    for kind in ("training", "misalignment"):
-        _load_exercise(controller, kind)
+    _load_exercise(controller)
     controller.on_clear_training()
-    controller.on_clear_misalignment()
     _apply_plane(controller, "1 1 0", "0 0 1")
     controller.on_clear_mount_plane()
     refusals = [m for m in messages if "it would move the locked scattering plane" in m]
-    assert len(refusals) == 6, messages
+    assert len(refusals) == 4, messages
     assert controller._exercise is None and controller.mount_plane is None
     _assert_truth_unchanged(controller, before)
     assert _arcs(controller) == held
@@ -1362,16 +1299,14 @@ def test_every_refused_lock_patch_moves_nothing(controller, in12):
     controller.set_default_parameters()
 
 
-@pytest.mark.parametrize("kind", ["training", "misalignment"])
-def test_a_locked_session_with_an_exercise_round_trips_exactly(controller, kind):
-    """Save and restore of a locked session with either exercise loaded
-    brings back the lock, U_true and the zero errors exactly."""
+def test_a_locked_session_with_an_exercise_round_trips_exactly(controller):
+    """Save and restore of a locked session with the exercise loaded
+    brings back the lock and U_true exactly."""
     controller.set_default_parameters()
-    _load_exercise(controller, kind)
+    _load_exercise(controller)
     _lock(controller, PLANE_H0H)
     state = controller.instrument_state
-    saved = (json.dumps(state.plane_lock), state.U_true.copy(), state.mis_omega, state.mis_chi,
-             controller._exercise)
+    saved = (json.dumps(state.plane_lock), state.U_true.copy(), controller._exercise)
 
     def scramble(block):
         assert block["plane_lock"] == json.loads(saved[0])
@@ -1384,7 +1319,7 @@ def test_a_locked_session_with_an_exercise_round_trips_exactly(controller, kind)
     kappa = state.plane_lock["kappa"]
     assert (float(controller.window.sample_dock.kappa_edit.text()), state.kappa) == (kappa, kappa)
     assert np.array_equal(state.U_true, saved[1])
-    assert (state.mis_omega, state.mis_chi, controller._exercise) == saved[2:]
+    assert controller._exercise == saved[2]
     assert controller.window.instrument_dock.sgl_edit.isReadOnly()
     controller.set_default_parameters()
 
@@ -1556,7 +1491,7 @@ def _defaults(controller, _monkeypatch):
 
 
 def _exercise_loaded(controller, _monkeypatch):
-    _load_exercise(controller, "training")
+    _load_exercise(controller)
 
 
 def _restored(controller, _monkeypatch):
@@ -1879,8 +1814,8 @@ def test_grading_reflections_follow_the_described_mount(in12, in12_messages, mon
 
 # --- Unit 3 (C7): the operator acceptance, cold and mouse-only --------------------
 
-ACCEPTANCE_HASHES = (encode_training(mccode_rotation_matrix(0.0, 2.0, 0.0), 1.0, 0.0),
-                     encode_training(mccode_rotation_matrix(0.0, -3.0, 0.0), -0.5, 0.0))
+ACCEPTANCE_HASHES = (encode_training(mccode_rotation_matrix(0.0, 2.0, 0.0), 0.0, 0.0),
+                     encode_training(mccode_rotation_matrix(0.0, -3.0, 0.0), 0.0, 0.0))
 
 
 def _type(edit, text):
@@ -1960,7 +1895,7 @@ def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages
         _type(sim.neutron_exponent_edit, "8")
         sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("deterministic"))
         _load_training_by_hand(controller, ACCEPTANCE_HASHES[0])
-        assert controller._exercise == ("training", ACCEPTANCE_HASHES[0])
+        assert controller._exercise == ACCEPTANCE_HASHES[0]
         assert not sim.relative_1_button.isChecked()
         sim.relative_1_button.click()
 

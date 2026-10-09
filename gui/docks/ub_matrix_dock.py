@@ -362,7 +362,6 @@ class UBMatrixDock(BaseDockWidget):
     ub_matrix_changed = Signal(bool)  # True if non-identity UB
     lattice_refinement_requested = Signal(tuple)  # (a, b, c, alpha, beta, gamma)
     training_changed = Signal(bool)  # True if training loaded
-    misalignment_from_training = Signal(float, float)  # (mis_omega, mis_chi)
 
     def __init__(self, parent=None, descriptor=None):
         super().__init__("UB Matrix", parent, use_scroll_area=True)
@@ -595,23 +594,12 @@ class UBMatrixDock(BaseDockWidget):
         self.max_ori_spin.setMaximumWidth(80)
         teacher_grid.addWidget(self.max_ori_spin, 0, 1)
 
-        teacher_grid.addWidget(QLabel("Max misalignment:"), 0, 2)
-        self.max_mis_spin = QDoubleSpinBox()
-        self.max_mis_spin.setRange(0, 20)
-        self.max_mis_spin.setValue(5)
-        self.max_mis_spin.setSuffix("\u00b0")
-        self.max_mis_spin.setMaximumWidth(80)
-        teacher_grid.addWidget(self.max_mis_spin, 0, 3)
-
         self.include_orientation_check = QCheckBox("Orientation")
         self.include_orientation_check.setChecked(True)
         teacher_grid.addWidget(self.include_orientation_check, 1, 0)
-        self.include_misalignment_check = QCheckBox("Misalignment")
-        self.include_misalignment_check.setChecked(True)
-        teacher_grid.addWidget(self.include_misalignment_check, 1, 1)
 
         self.generate_training_button = QPushButton("Generate")
-        teacher_grid.addWidget(self.generate_training_button, 1, 2, 1, 2)
+        teacher_grid.addWidget(self.generate_training_button, 1, 1)
 
         training_layout.addLayout(teacher_grid)
 
