@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt
 from gui.docks.base_dock import (BaseDockWidget, CollapsibleGroup, NoScrollComboBox, pack_grid,
                                  COLLIMATION_OPEN_TOOLTIP, collimation_label)
 from instruments.descriptor import ModuleKind
+from gui import metrics
 from tavi import quantities
 
 
@@ -52,54 +53,69 @@ class InstrumentDock(BaseDockWidget):
         # Angles section
         angles_group = QGroupBox("Instrument Angles")
         angles_layout = QGridLayout()
-        angles_layout.setSpacing(5)
+        angles_layout.setSpacing(3)  # tight rows keep the whole block in view on short screens
         angles_group.setLayout(angles_layout)
 
         # One angle per row so the registry's long labels fit a block: labels
         # are the registry's (physical words, ILL number, unit), the NICOS name
-        # is in the tooltip. A1 and A5 are read-only readouts of 2theta/2.
-        # Row order follows the beam: mono, sample, analyzer, then the arcs.
-        def angle_row(row, quantity_id, edit=None, tip=""):
+        # is in the tooltip. Row order follows the beam: mono, sample, analyzer,
+        # then the arcs. A1 and A5 are read-only readouts of 2theta/2, inline
+        # beside their 2theta field under the mark "θ" (the registry label is
+        # their tooltip and accessible name) so all angles stay in view.
+        def angle_row(row, quantity_id, edit=None, tip="", theta=None):
             q = quantities.by_id(quantity_id)
             tip = f"{tip} NICOS name: {q.nicos}." if tip else f"NICOS name: {q.nicos}."
             label = QLabel(q.label)
             label.setToolTip(tip)
             if edit is None:
                 edit = QLineEdit()
-            edit.setMaximumWidth(70)
+            edit.setMaximumWidth(metrics.ANGLE_FIELD_WIDTH)
             edit.setToolTip(tip)
             angles_layout.addWidget(label, row, 0)
-            angles_layout.addWidget(edit, row, 1)
-            return label, edit
-
-        self.mtt_label, self.mtt_edit = angle_row(0, "mono_two_theta_deg")
-        self.mono_theta_label, self.mono_theta_edit = angle_row(
-            1, "mono_theta_deg", tip="Derived, read-only: half of the mono 2θ, signed as it.")
-        self.omega_label, self.omega_edit = angle_row(
-            2, "sample_rotation_deg",
-            tip="Sample turntable: in-plane rotation about the vertical. "
-                "Also called omega or psi in scan commands.")
-        self.stt_label, self.stt_edit = angle_row(3, "sample_two_theta_deg")
-        self.att_label, self.att_edit = angle_row(4, "analyzer_two_theta_deg")
-        self.analyzer_theta_label, self.analyzer_theta_edit = angle_row(
-            5, "analyzer_theta_deg",
-            tip="Derived, read-only: half of the analyzer 2θ, signed as it.")
-        for readout, source in ((self.mono_theta_edit, self.mtt_edit),
-                                (self.analyzer_theta_edit, self.att_edit)):
+            if theta is None:
+                angles_layout.addWidget(edit, row, 1)
+                return label, edit
+            tq = quantities.by_id(theta)
+            ttip = (f"{tq.label}. Derived, read-only: half of the 2θ beside it, "
+                    f"signed as it. NICOS name: {tq.nicos}.")
+            mark, readout = QLabel("θ"), QLineEdit()
+            readout.setMaximumWidth(metrics.ANGLE_FIELD_WIDTH)
             readout.setReadOnly(True)
             readout.setStyleSheet("background-color: #f0f0f0; color: #444;")  # as a locked UB field
-            source.textChanged.connect(lambda text, readout=readout: readout.setText(_half(text)))
+            readout.setAccessibleName(tq.label)
+            for widget in (mark, readout):
+                widget.setToolTip(ttip)
+            edit.textChanged.connect(lambda text: readout.setText(_half(text)))
+            cell = QWidget()
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(4)
+            for widget in (edit, mark, readout):
+                cell_layout.addWidget(widget)
+            angles_layout.addWidget(cell, row, 1)
+            return label, edit, mark, readout
 
-        # Rows 6-7: the sample tilt arcs (descriptor goniometer): solved from
+        self.mtt_label, self.mtt_edit, self.mono_theta_label, self.mono_theta_edit = angle_row(
+            0, "mono_two_theta_deg", theta="mono_theta_deg")
+        self.omega_label, self.omega_edit = angle_row(
+            1, "sample_rotation_deg",
+            tip="Sample turntable: in-plane rotation about the vertical. "
+                "Also called omega or psi in scan commands.")
+        self.stt_label, self.stt_edit = angle_row(2, "sample_two_theta_deg")
+        (self.att_label, self.att_edit,
+         self.analyzer_theta_label, self.analyzer_theta_edit) = angle_row(
+            3, "analyzer_two_theta_deg", theta="analyzer_theta_deg")
+
+        # Rows 4-5: the sample tilt arcs (descriptor goniometer): solved from
         # Q/HKL, operator-set for angle-mode scans. Travel from the descriptor.
         travel = {ax.name: ax for ax in self.descriptor.goniometer}
         self.sgl_edit = QLineEdit()
         self.sgu_edit = QLineEdit()
         for row, quantity_id, name, edit, text in (
-            (6, "sample_lower_arc_deg", "sgl", self.sgl_edit,
+            (4, "sample_lower_arc_deg", "sgl", self.sgl_edit,
              "Lower sample tilt arc sgl: turns about the horizontal axis "
              "perpendicular to the beam at A3 = 0 (stage x); rides on A3"),
-            (7, "sample_upper_arc_deg", "sgu", self.sgu_edit,
+            (5, "sample_upper_arc_deg", "sgu", self.sgu_edit,
              "Upper sample tilt arc sgu: turns about the beam axis at A3 = 0 "
              "(stage z); rides on sgl"),
         ):
@@ -111,13 +127,13 @@ class InstrumentDock(BaseDockWidget):
             tip = f"{text}. Solved from Q/HKL; set it here for angle-mode scans; {limits}."
             setattr(self, f"{name}_label", angle_row(row, quantity_id, edit, tip)[0])
 
-        # Row 8: shown while the angle fields do not match Q/HKL (the stage
+        # Row 6: shown while the angle fields do not match Q/HKL (the stage
         # refused the last Q/HKL edit); the controller sets and clears it.
         self.angles_stale_label = QLabel()
         self.angles_stale_label.setWordWrap(True)
         self.angles_stale_label.setStyleSheet("color: #c1121f;")
         self.angles_stale_label.hide()
-        angles_layout.addWidget(self.angles_stale_label, 8, 0, 1, 2)
+        angles_layout.addWidget(self.angles_stale_label, 6, 0, 1, 2)
 
         pack_grid(angles_layout)
         self.add_block(angles_group)
