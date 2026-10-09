@@ -214,24 +214,34 @@ def test_initial_layout_for_size():
     assert pick(wide, tall) == (3, WIDE)
 
 
-def _in_view(dock, widget):
-    """Whether ``widget`` lies wholly inside ``dock``'s scroll viewport, scrolled to the top."""
+def _in_view(dock, widget, at=0):
+    """Whether ``widget`` lies wholly inside ``dock``'s scroll viewport, scrolled to ``at`` px (default the top)."""
+    scroll = dock._scroll_area
+    scroll.verticalScrollBar().setValue(at)
+    viewport = scroll.viewport()
+    return viewport.rect().contains(widget.rect().translated(widget.mapTo(viewport, QPoint(0, 0))))
+
+
+def _top_in_view(dock, block):
+    """Whether ``block``'s top edge, its title, lies inside ``dock``'s scroll viewport, scrolled to the top."""
     scroll = dock._scroll_area
     scroll.verticalScrollBar().setValue(0)
     viewport = scroll.viewport()
-    return viewport.rect().contains(widget.rect().translated(widget.mapTo(viewport, QPoint(0, 0))))
+    return viewport.rect().contains(block.mapTo(viewport, QPoint(0, 0)))
 
 
 TITLE_BAR = 40  # px a maximised window's title bar takes from the screen's available height
 
 
 def test_three_columns_at_the_smallest_pick_show_the_first_use_path(window):
-    """3 columns at the smallest screen picking them: the first-use path is in view, nothing scrolled.
+    """3 columns at the smallest screen picking them: the first-use path is in view.
 
-    Instrument's Angles and Energies, Scattering's H, K, L and dE, and
-    Simulation's Run, Stop and progress. The scan commands may need a scroll
-    here: the threshold is set by what Instrument needs, so that 1920x1080
-    at 100 % gets 3 columns.
+    Instrument's Angles title and its four editable angle fields, Scattering's
+    H, K, L and dE, and Simulation's Run, Stop and progress are in view with
+    nothing scrolled. Energies and Wave Vectors, Instrument's second block,
+    needs a scroll of Instrument: the registry's long labels make Angles one
+    pair per row. The scan commands may need a scroll too; the threshold is set
+    by what Instrument needs, so that 1920x1080 at 100 % gets 3 columns.
     """
     _resize(window, (metrics.LAYOUT_TWO_COLUMNS_BELOW,
                      metrics.LAYOUT_THREE_COLUMNS_MIN_HEIGHT - TITLE_BAR), NARROW, columns=3)
@@ -239,12 +249,17 @@ def test_three_columns_at_the_smallest_pick_show_the_first_use_path(window):
                                           window.simulation_dock)
     angles, energies = _blocks(instrument)[:2]
     assert [_title(angles), _title(energies)] == INSTRUMENT_ORDER[:2]
-    hidden = [_title(block) for block in (angles, energies) if not _in_view(instrument, block)]
+    hidden = [] if _top_in_view(instrument, angles) else ["Angles title"]
+    hidden += [name for name in ("mtt_edit", "omega_edit", "stt_edit", "att_edit")
+               if not _in_view(instrument, getattr(instrument, name))]
     hidden += [name for dock, names in (
         (scattering, ["H_edit", "K_edit", "L_edit", "deltaE_edit"]),
         (simulation, ["run_button", "stop_button", "progress_bar"]))
         for name in names if not _in_view(dock, getattr(dock, name))]
     assert not hidden, hidden
+    # Energies is reached by a scroll of Instrument to its top edge.
+    top = energies.mapTo(instrument._scroll_area.widget(), QPoint(0, 0)).y()
+    assert _in_view(instrument, energies, at=top), "Energies: not reached by scrolling Instrument"
 
 
 @pytest.mark.parametrize("size", [LAPTOP, (1536, 826)], ids=["1108x851", "1536x826"])

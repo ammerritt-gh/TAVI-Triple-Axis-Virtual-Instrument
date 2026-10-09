@@ -30,10 +30,11 @@ HKL_TRIPLE_FIELD_WIDTH = 100
 # wide and LAYOUT_THREE_COLUMNS_MIN_HEIGHT tall, else 2; Wide from
 # LAYOUT_WIDE_FROM wide, else Narrow. 4 columns is never picked.
 # The height is measured (PUMA, 3 columns, Narrow, Segoe UI 9 pt): from a
-# 930 px tall window Instrument shows Angles and Energies whole, with
-# Scattering's H, K, L and dE and Simulation's Run, Stop and progress; the
-# scan commands may need a scroll. 940 px for a margin, plus about 40 px of
-# title bar. So 1920x1080 gets 3 columns at 100 % (about 1040 available)
+# 930 px tall window Instrument shows Angles' title and its four editable
+# fields, with Scattering's H, K, L and dE and Simulation's Run, Stop and
+# progress; Energies and the scan commands may need a scroll. 940 px for a
+# margin, plus about 40 px of title bar. So 1920x1080 gets 3 columns at 100 %
+# (about 1040 available)
 # and 2 at 125 % (about 826).
 LAYOUT_TWO_COLUMNS_BELOW = 1400
 LAYOUT_THREE_COLUMNS_MIN_HEIGHT = 980
