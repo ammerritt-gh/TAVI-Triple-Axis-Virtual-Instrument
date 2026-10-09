@@ -1129,14 +1129,15 @@ def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None
     return True, None
 
 
-def training_reach_error(state, u_true, b_true, hkls):
+def training_reach_error(state, u_true, b_true, hkls, axis_limits):
     """Why the true crystal cannot be observed on ``state``, or None.
 
     A training exercise is observable when at least two non-parallel
     reflections of ``hkls`` (the sample's scatterable reflections) reach the
     detector: the true Q ``U_true @ B_true @ hkl`` closes the elastic
     scattering triangle at ``state``'s fixed energy and the stage brings it
-    into the scattering plane within its arc travel. Each reflection goes
+    into the scattering plane within its arc travel and the instrument's
+    ``axis_limits`` (``descriptor.axis_limits``). Each reflection goes
     through ``check_point_feasibility``, the run's own solve; a locked plane
     is ignored, since a student finds the peaks with the arcs free.
     """
@@ -1148,7 +1149,8 @@ def training_reach_error(state, u_true, b_true, hkls):
     reached = []
     for hkl in hkls:
         q = component_q_to_instrument_q(u_true @ b_true @ np.asarray(hkl, dtype=float))
-        feasible, _ = check_point_feasibility(free, "momentum", [*q, 0.0], {})
+        feasible, _ = check_point_feasibility(free, "momentum", [*q, 0.0], {},
+                                              axis_limits=axis_limits)
         if feasible:
             reached.append(hkl)
             if has_two_nonparallel(reached):

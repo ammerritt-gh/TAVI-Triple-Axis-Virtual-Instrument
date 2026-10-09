@@ -5096,7 +5096,8 @@ class TAVIController(QObject):
         hkls = reference_hkls(spec.reflection_source, spec.space_group,
                               os.path.join(os.getcwd(), "components"))
         return training_reach_error(state, rotation @ np.asarray(u_described, dtype=float),
-                                    compute_B_matrix(*spec.lattice), hkls)
+                                    compute_B_matrix(*spec.lattice), hkls,
+                                    self.descriptor.axis_limits)
 
     def _live_reach_error(self, rotation):
         """``_exercise_reach_error`` on what the windows show now."""

@@ -42,6 +42,10 @@ def _setup(instrument_id):
     return state, compute_B_matrix(*spec.lattice), hkls, spec.lattice
 
 
+def _limits(instrument_id):
+    return get_instrument(instrument_id).descriptor().axis_limits
+
+
 def _true_readouts(state, u_true, b_true, hkl, k):
     """Where the stage must stand for the true crystal to diffract ``hkl``, or None."""
     q = u_true @ b_true @ np.asarray(hkl, dtype=float)
@@ -96,10 +100,11 @@ def test_the_check_refuses_a_rotation_the_stage_cannot_reach(instrument_id, reac
     45 deg out of the plane, past PANDA's +/-15 deg arcs and inside IN8's
     unlimited travel, while (1 0 0) stays put: one direction is never enough."""
     state, b, _, _ = _setup(instrument_id)
+    limits = _limits(instrument_id)
     rotation = axis_rotation((1, 0, 0), 45.0)
-    assert training_reach_error(state, np.eye(3), b, [(1, 0, 0), (0, 1, 0)]) is None
+    assert training_reach_error(state, np.eye(3), b, [(1, 0, 0), (0, 1, 0)], limits) is None
     for pair in ([(1, 0, 0), (0, 1, 0)], [(0, 1, 0), (0, 0, 1)]):
-        reason = training_reach_error(state, rotation, b, pair)
+        reason = training_reach_error(state, rotation, b, pair, limits)
         assert (reason is None) == reachable, pair
         if not reachable:
             assert "at least two non-parallel" in reason
@@ -109,7 +114,10 @@ def test_a_locked_plane_does_not_change_what_a_student_can_find():
     state, b, hkls, _ = _setup("panda")
     state.plane_lock = {"hkl_u": [1, 0, 0], "hkl_v": [0, 1, 0], "tilts": {"sgl": 0.0, "sgu": 0.0},
                         "kappa": 0.0}
-    assert training_reach_error(state, axis_rotation((1, 0, 1), 30.0), b, hkls) is None
+    # 30 deg about (1 0 1) is refused by PANDA's travel (only a parallel pair is
+    # reachable), so the observable case uses 20 deg.
+    assert training_reach_error(state, axis_rotation((1, 0, 1), 20.0), b, hkls,
+                                _limits("panda")) is None
     assert state.plane_lock is not None                    # the caller's state is not touched
 
 
@@ -123,7 +131,8 @@ def test_generation_on_panda_always_leaves_two_reachable_reflections():
     for seed in range(12):
         np.random.seed(seed)
         code = generate_training_exercise(
-            45.0, accept=lambda rotation: training_reach_error(state, rotation, b, hkls))
+            45.0, accept=lambda rotation: training_reach_error(
+                state, rotation, b, hkls, _limits("panda")))
         rotation = decode_mount_exercise(code)
         reached = [hkl for hkl in hkls if _true_readouts(state, rotation, b, hkl, k)]
         assert has_two_nonparallel(reached), (seed, reached)
@@ -137,7 +146,8 @@ def test_a_generated_exercise_is_recovered_to_aligned_from_tilted_peaks():
     k, gonio, sense = energy2k(FIXED_E), state.goniometer, state.sense_sample
     np.random.seed(2)
     code = generate_training_exercise(
-        45.0, accept=lambda rotation: training_reach_error(state, rotation, b, hkls))
+        45.0, accept=lambda rotation: training_reach_error(
+            state, rotation, b, hkls, _limits("panda")))
     u_true = decode_mount_exercise(code)
 
     found = []
@@ -285,6 +295,21 @@ def test_an_old_mount_only_code_loads(in8):
     assert np.allclose(in8.R_hidden, mccode_rotation_matrix(3.0, 5.0, -2.0), atol=1e-6)
     assert np.array_equal(in8.ub_matrix.U, in8.U_described)
     in8.set_default_parameters()
+
+
+def test_an_exercise_past_the_instruments_motor_limits_is_refused(in8):
+    """IN8's sample 2theta travel is +-120 deg. At fixed Kf 4 meV every Al (111)
+    reflection needs about 150 deg, so none is reachable within the limits; the
+    arcs alone (unlimited on IN8) would reach them, which is what the limits stop."""
+    d = in8.descriptor
+    reason = in8._exercise_reach_error(np.eye(3), in8.U_described, "Al_bragg",
+                                       d.mono_crystals[0].id, d.ana_crystals[0].id,
+                                       "Kf Fixed", 4.0)
+    assert reason and "at least two non-parallel" in reason, reason
+
+    state, b, hkls, _ = _setup("in8")
+    state.fixed_E = 4.0
+    assert training_reach_error(state, np.eye(3), b, hkls, {}) is None
 
 
 def test_panda_refuses_an_unobservable_exercise_and_says_why_at_generation(panda, said,

@@ -185,9 +185,9 @@ motor-zero errors, which are no longer simulated; ask for a new code*.
 at least two non-parallel reference reflections of the sample for the hidden
 rotation: indices up to 2 in size, non-zero structure factor (the sample's
 reflection table, else its space group's centering rule), elastic at the fixed
-energy, each brought into the scattering plane within the arcs' travel by the
-run's own solve (`instruments/tas_runtime.py` `training_reach_error`, over
-`check_point_feasibility`). Generation redraws up to 50 times and otherwise says
+energy, each brought into the scattering plane within the arcs' travel and the
+instrument's axis limits by the run's own solve (`instruments/tas_runtime.py`
+`training_reach_error`, over `check_point_feasibility`). Generation redraws up to 50 times and otherwise says
 why; load refuses. A restore applies the same check to the instrument, sample,
 crystals, fixed energy and described mount in the file being restored.
 
