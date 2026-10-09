@@ -21,7 +21,7 @@ def test_step_guards_run_before_the_curvature_expansion(command, expected):
             command, fixed_axes=None,
             curvature_axes=ctrl._curvature_axis_specs(mono, ana),
         )
-        assert var == "rhm" and expected in (warning or ""), (var, warning)
+        assert var == "mono_horizontal_radius_m" and expected in (warning or ""), (var, warning)
 
 
 def test_fixed_axis_policy_survives_a_degenerate_take_off_angle():

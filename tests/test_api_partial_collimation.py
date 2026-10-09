@@ -93,7 +93,8 @@ def test_a_fixed_curvature_axis_is_refused_as_a_scan_variable(in8_controller,
     assert "analyser" in warning          # names the crystal, not the instrument
 
     # The radii that side really does drive stay scannable.
-    for cmd, expected in (("rha 1.0 2.0 0.1", "rha"), ("rhm 3.0 5.0 0.5", "rhm")):
+    for cmd, expected in (("rha 1.0 2.0 0.1", "analyzer_horizontal_radius_m"),
+                          ("rhm 3.0 5.0 0.5", "mono_horizontal_radius_m")):
         var, warning = ctrl._validate_single_scan_command(cmd, axes)
         assert var == expected and warning is None
 
@@ -266,7 +267,7 @@ def test_angle_pairs_that_write_distinct_slots_are_accepted(in8_controller):
 
 @pytest.mark.parametrize("cmd1, cmd2", [
     ("A3 30 31 1", "omega 40 41 1"),
-    ("A2 30 31 1", "2theta 30 31 1"),
+    ("A4 30 31 1", "2theta 40 41 1"),
     ("H 1.99 2.01 0.01", "H 1.99 2.01 0.01"),
 ])
 def test_two_commands_writing_one_slot_are_refused_even_forced(in8_controller, cmd1, cmd2):

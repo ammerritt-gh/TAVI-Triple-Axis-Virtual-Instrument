@@ -334,7 +334,8 @@ def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
     snapshot = plugin.compute_snapshot(
         (scans, 0), 0, "angle", state,
         {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
-        variable_name1="rhm", variable_name2="rha",
+        variable_name1="mono_horizontal_radius_m",
+        variable_name2="analyzer_horizontal_radius_m",
     )
 
     assert snapshot.error_flags == []

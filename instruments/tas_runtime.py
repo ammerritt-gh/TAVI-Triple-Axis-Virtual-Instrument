@@ -45,12 +45,20 @@ from tavi.tas_geometry import (
 log = logging.getLogger(__name__)
 
 # A scan point is a list of SCAN_POINT_LENGTH numbers: slots 0-3 are the
-# mode's coordinates (qx qy qz dE, H K L dE, or A1 A2 A3 A4), 4-7 the radii
-# rhm rvm rha rva, then the arc slots below. The arc slots are read in
+# mode's coordinates (qx qy qz dE, H K L dE, or mono 2theta, sample 2theta,
+# sample rotation, analyzer 2theta), 4-7 the radii rhm rvm rha rva, then the
+# arc slots below. The controller's _SCAN_VARIABLE_TO_INDEX names the slots by
+# canonical quantity ID; U3 deletes both. The arc slots are read in
 # angle mode only; Q modes solve the arcs per point. A point of 9 slots has
 # sgu = 0.
 SLOT_SGL, SLOT_SGU = 8, 9
 SCAN_POINT_LENGTH = 10
+
+# Interim (U3 deletes it): the radius axis a canonical scan quantity drives.
+CURVATURE_AXIS_BY_ID = {
+    "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
+    "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": "rva",
+}
 
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):
@@ -1208,7 +1216,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
     # behaviour) unless the launch state names it AUTOFOCUS.
     radii = {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
     curvature_modes = vals.get('curvature_modes') or {}
-    scanned_axes = (variable_name1, variable_name2)
+    scanned_axes = (CURVATURE_AXIS_BY_ID.get(variable_name1),
+                    CURVATURE_AXIS_BY_ID.get(variable_name2))
     effective_modes = {}
     autofocus_axes = []
     for axis in ("rhm", "rvm", "rha", "rva"):

@@ -145,7 +145,7 @@ def test_scanned_axis_follows_its_command(tmp_path):
                  0.0, 0.0, 0.0]
         snapshot = plugin.compute_snapshot(
             (scans, 0), 0, "angle", state, vals, str(tmp_path),
-            variable_name1="rha",
+            variable_name1="analyzer_horizontal_radius_m",
         )
         assert snapshot.error_flags == []
         assert snapshot.metadata["curvature_modes"]["rha"] == "scanned"
@@ -163,7 +163,7 @@ def test_fixed_axis_ignores_mode_and_stays_at_its_declared_radius(tmp_path):
         scans = [A1, 0.0, 0.0, A4, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0]
         snapshot = compute_scan_snapshot(
             (scans, 0), 0, "angle", state, vals, str(tmp_path),
-            variable_name1="rva",  # even commanded as a bare 3.0, it must not stick
+            variable_name1="analyzer_vertical_radius_m",  # even commanded as a bare 3.0, it must not stick
         )
         assert snapshot.error_flags == []
         assert abs(snapshot.metadata["rva"]) == pytest.approx(0.8)
