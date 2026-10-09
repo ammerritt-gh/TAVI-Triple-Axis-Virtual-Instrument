@@ -23,13 +23,17 @@ from test_compact_layout import INSTRUMENTS, _standalone_instrument_dock  # noqa
 # dock attribute -> canonical ID, for the labels (sgl/sgu labels are `sgl_label`/`sgu_label`).
 LABELS = {
     "mtt_label": "mono_two_theta_deg",
-    "mono_theta_label": "mono_theta_deg",
     "omega_label": "sample_rotation_deg",
     "stt_label": "sample_two_theta_deg",
     "att_label": "analyzer_two_theta_deg",
-    "analyzer_theta_label": "analyzer_theta_deg",
     "sgl_label": "sample_lower_arc_deg",
     "sgu_label": "sample_upper_arc_deg",
+}
+# The A1/A5 readouts sit inline beside their 2theta field: a short mark is
+# visible, the registry label is their accessible name and tooltip.
+READOUTS = {
+    "mono_theta": ("mono_theta_deg", "θ"),
+    "analyzer_theta": ("analyzer_theta_deg", "θ"),
 }
 
 
@@ -50,6 +54,11 @@ def test_instrument_dock_angle_labels_are_the_registry_labels(app, instrument_id
             label = getattr(dock, attribute)
             assert label.text() == q.label, attribute
             assert q.nicos and f"NICOS name: {q.nicos}" in label.toolTip(), attribute
+        for name, (quantity_id, mark) in READOUTS.items():
+            q = quantities.by_id(quantity_id)
+            label, readout = getattr(dock, f"{name}_label"), getattr(dock, f"{name}_edit")
+            assert label.text() == mark and readout.accessibleName() == q.label, name
+            assert q.label in readout.toolTip() and f"NICOS name: {q.nicos}" in readout.toolTip(), name
         assert dock.omega_edit.toolTip() == dock.omega_label.toolTip()
         assert "psi" in dock.omega_label.toolTip()  # the turntable's explanation is kept
         assert "travel" in dock.sgl_label.toolTip()  # so is the arcs' travel text
@@ -67,8 +76,6 @@ def test_theta_readouts_follow_their_two_theta_fields(app, instrument_id):
     dock, _descriptor = _standalone_instrument_dock(instrument_id)
     try:
         assert dock.mono_theta_edit.isReadOnly() and dock.analyzer_theta_edit.isReadOnly()
-        assert dock.mono_theta_label.text() == "Mono θ — A1 (°)"
-        assert dock.analyzer_theta_label.text() == "Analyzer θ — A5 (°)"
         for two_theta, readout in ((dock.mtt_edit, dock.mono_theta_edit),
                                    (dock.att_edit, dock.analyzer_theta_edit)):
             for text, expected in (("90", "45"), ("-80.5", "-40.25"), ("0", "0"), ("", "--")):
