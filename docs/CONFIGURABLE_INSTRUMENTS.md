@@ -3,6 +3,19 @@
 > **Status:** live
 > **Authority:** the design record and decision log of the instrument plugin framework; current authoring policy is INSTRUMENT_AUTHORING.md
 
+> **Reading the angle names in this record (2026-10-10).** It was written under
+> TAVI's pre-ILL numbering, and the *internal* names it uses (`A1`–`A4`, `mtt`,
+> `stt`, `att`, `omega`, the `A*_param` McStas parameters, the scan-slot layout)
+> are still the code's, until the internals are renamed (U3): internal A1 is the
+> monochromator 2θ, A2 the sample 2θ, A3 the sample rotation, A4 the analyzer 2θ.
+> The *public* names (GUI labels, scan commands, the API, saved settings, output
+> files) follow the ILL numbering instead: A2 mono 2θ, A3 sample rotation, A4
+> sample 2θ, A6 analyzer 2θ, with A1 and A5 the derived Bragg angles. Read every
+> A-number below as the internal one unless it says otherwise; the table is in
+> `docs/INSTRUMENT_LAYOUT.md`, the old-to-new mapping in `docs/API_USER_GUIDE.md`
+> §15. Likewise `rhm`, `slits_mm`, `lattice_a` and the other pre-version-2 keys
+> named here are internal or historical; the public ones are canonical IDs.
+
 **Status:** Design decided; Phase-0 drafted; review §15 folded in (§16);
 Phase 1 + 1.5 IMPLEMENTED (2026-07-02, spec §17). **Phase 2 IMPLEMENTED
 (2026-07-02, spec §18):** the GUI renders from the descriptor (instrument dock,

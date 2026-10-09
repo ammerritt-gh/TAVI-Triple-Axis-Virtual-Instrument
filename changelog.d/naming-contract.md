@@ -1,0 +1,4 @@
+category: major
+notice: Breaking change: angles now follow the ILL numbering, so A2 is the monochromator take-off, A4 the sample 2θ and A6 the analyzer; scripts for the remote API must declare the new API version and use the new names, and settings and scan folders from an earlier TAVI are refused.
+
+TAVI's angles are now numbered the way the ILL numbers them, with physical names in the panels: A2 is the monochromator take-off, A3 the sample rotation, A4 the sample 2θ and A6 the analyzer, and the two Bragg angles A1 and A5 show as read-only values beside their 2θ fields. Scripts that drive TAVI over the remote API must declare the new API version and use the new names (an old script is refused, never silently reinterpreted), and a settings file or a scan folder saved by an earlier TAVI is refused with a message, the settings file being set aside as a backup.

@@ -28,7 +28,7 @@ drawings.
 |---|---|---|
 | Scattering senses | mono +1, sample +1, analyzer −1 | live vTAS run 2026-07-02 |
 | a3 convention | Friedel/−Q branch (±90° cubic setting jumps in vTAS readouts) | live vTAS run |
-| Axis limits | A1 11…90°, A2/A4 ±120° | ILL characteristics (A1); vTAS (A2/A4) |
+| Axis limits | A2 (mono 2θ) 11…90°, A4/A6 (sample and analyzer 2θ) ±120° | ILL characteristics (A2); vTAS (A4/A6) |
 | Arm lengths | L1–L4 = 2.28 / 2.48 / 1.05 / 0.70 m | ILL (current Thermes) |
 | Crystal d-spacings | PG002 3.355 Å, Cu200 1.807 Å | vTAS crystal table |
 | Detector opening | 42 × 89 mm | ILL |

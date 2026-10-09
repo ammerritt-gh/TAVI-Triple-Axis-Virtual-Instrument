@@ -64,10 +64,10 @@ Notes:
 
 ## Suite size and timing
 
-Measured 2026-10-07 on the 9950X3D with the command above, one run at a time:
-1779 passed and 1 skipped (`test_documentation.py`, when the shared doc
-checker is absent) in 194 s (197 s wall). No single test takes more than
-about 2.4 s. `test_orientation_gui.py` alone, 85 offscreen tests, takes about
+Measured 2026-10-10 on the 9950X3D with the command above, one run at a time:
+2342 passed and 2 skipped (`test_dispersion_map.py` in a fresh worktree, and
+`test_documentation.py` when the shared doc checker is absent) in 229 s
+(233 s wall). `test_orientation_gui.py` alone, 85 offscreen tests, takes about
 16 s with its two controllers' construction; its operator acceptance test
 takes about 1.6 s of that. Pass `--durations=15` to see the slowest tests.
 
@@ -201,6 +201,37 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
   `model` modules. `test_instrument_registry.py` imports `instruments.builtin`
   at module scope so its snapshot/restore fixture cannot wipe the built-in
   registrations for later test files.
+Naming contract (API version 2; the angle table in `docs/INSTRUMENT_LAYOUT.md`,
+the break in `docs/API_USER_GUIDE.md` §15). The trap these tests guard is that
+A2 and A4 swapped meanings, so they assert which axis moves, not just that a
+name is accepted:
+
+- `test_quantities.py` — the registry `tavi/quantities.py`: collisions between
+  IDs and aliases, `resolve()` per context (scan and write), every refusal text,
+  `normalize_write_names`, `public_values`, the NICOS name of every angle.
+- `test_scan_names.py` — scan commands through the registry on all four
+  instruments: A2, A3, A4, A6, `sgl`, `sgu` and every alias each move only the
+  named angle (a table of slots), A1/A5/`chi`/slits refused, unknown names get
+  suggestions, and the conflict pairs (`A4` with `stt`, `A3` with `omega`, `H`
+  with `A4` ...) refuse, `force` or not.
+- `test_angle_labels.py` — offscreen: the Instrument dock's angle labels are the
+  registry labels with the NICOS name in the tooltip, and the A1/A5 readouts
+  are read-only halves of their 2θ fields.
+- `test_api_version.py` — Qt-free, a fake backend over HTTP: every write and
+  validate route refuses a missing or wrong `api_version` before the backend is
+  called; GETs need none.
+- `test_api_canonical_names.py` — offscreen, a real controller, server and
+  GUI-thread bridge: replies carry canonical IDs only, `A4` writes the sample
+  2θ and `A2` the monochromator's, retired/derived/duplicate keys refuse the
+  whole request with state unchanged, a job reports canonical IDs and the
+  version, and `/resolution` answers at the requested point.
+- `test_api_partial_slits.py` — per-gap slit keys on all four instruments.
+- `test_output_versioning.py` (with the fixtures `tests/data/old_omega_scan/`
+  and `tests/data/old_a2_scan/`, built from the shape the old TAVI wrote) —
+  `scan_parameters.txt` starts with `api_version: 2` and holds canonical keys;
+  a pre-break folder is refused on load and left untouched.
+- `test_saved_parameters.py` — also pins `parameters.json` version 5, its
+  canonical keys and the per-gap slit keys.
 - `test_documentation.py` — runs the shared documentation checker
   (`Agentic-Control-Scheme/bin/doc_check.py`) over this repository so a
   missing banner, an unreachable document or a broken link fails the suite.
