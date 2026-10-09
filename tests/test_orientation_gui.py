@@ -23,6 +23,7 @@ from instruments.registry import available_instruments, get_instrument  # noqa: 
 from tavi.api_server import ApiError  # noqa: E402
 from tavi.local_state import config_path  # noqa: E402
 from tavi.orientation import axis_rotation  # noqa: E402
+from tavi.quantities import QuantityRefused, resolve  # noqa: E402
 from tavi.tas_geometry import component_q_to_instrument_q, mccode_rotation_matrix  # noqa: E402
 from tavi.ub_matrix import encode_training  # noqa: E402
 
@@ -248,12 +249,13 @@ def test_api_chi_write_is_refused_naming_the_arcs(controller):
 def test_api_arcs_are_writable_fields_in_the_schema(controller):
     backend = cm.TaviApiBackend(controller, _SyncBridge())
     result = backend.patch_parameters({"sgl": 2.5, "sgu": -1.5}, force=True)
-    assert set(result["applied"]) == {"sgl", "sgu"}
+    assert set(result["applied"]) == {"sample_lower_arc_deg", "sample_upper_arc_deg"}
     idock = controller.window.instrument_dock
     assert (_field(idock.sgl_edit), _field(idock.sgu_edit)) == (2.5, -1.5)
 
     names = [f["name"] for f in controller.build_api_schema()["fields"]]
-    assert {"sgl", "sgu"} <= set(names) and "chi" not in names
+    assert {"sample_lower_arc_deg", "sample_upper_arc_deg"} <= set(names)
+    assert "chi" not in names and "sgl" not in names
     params = controller.get_gui_values()
     assert "chi" not in params and (params["sgl"], params["sgu"]) == (2.5, -1.5)
 
@@ -345,16 +347,34 @@ def test_goto_cen_on_an_omega_scan_moves_the_sample_rotation(controller):
     ok, message = controller.goto_scan_variable("omega", 41.5)
     assert ok, message
     assert _field(controller.window.instrument_dock.omega_edit) == pytest.approx(41.5)
-    assert "(field omega)" in message
+    assert "(field sample_rotation_deg)" in message
     controller.set_default_parameters()
 
 
-@pytest.mark.parametrize("name, replacement", [("psi", "omega"), ("kappa", "sgl")])
-def test_the_two_retired_corrections_are_refused_wherever_an_api_client_can_reach_them(
+def test_psi_is_an_alias_of_the_sample_rotation_over_the_api(controller):
+    """psi keeps no retired meaning: it writes the sample rotation, and with omega in
+    the same body it is two names for one quantity, refused with nothing applied."""
+    controller.set_default_parameters()
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    before = controller.get_gui_values()
+
+    with pytest.raises(ApiError) as twice:
+        backend.patch_parameters({"psi": 12.5, "omega": 13.5}, force=True)
+    assert twice.value.status == 400
+    assert set(twice.value.details["errors"]) == {"psi", "omega"}
+    assert controller.get_gui_values() == before
+
+    assert backend.patch_parameters({"psi": 12.5}, force=True)["applied"] == ["sample_rotation_deg"]
+    assert _field(controller.window.instrument_dock.omega_edit) == pytest.approx(12.5)
+    controller.set_default_parameters()
+
+
+@pytest.mark.parametrize("name, replacement", [("kappa", "sgl")])
+def test_the_retired_correction_is_refused_wherever_an_api_client_can_reach_it(
         controller, name, replacement):
     """HTTP 400 naming the retirement, before any state changes, whichever way
-    they arrive: a PATCH beside a valid field, a scan body, /validate, a scan
-    command; and they are in neither the schema nor the scan variables."""
+    it arrives: a PATCH beside a valid field, a scan body, /validate, a scan
+    command; and it is in neither the schema nor the scan variables."""
     controller.set_default_parameters()
     backend = cm.TaviApiBackend(controller, _SyncBridge())
     before = controller.get_gui_values()
@@ -366,17 +386,14 @@ def test_the_two_retired_corrections_are_refused_wherever_an_api_client_can_reac
             call()
         assert refused.value.status == 400
         reason = refused.value.details["errors"][name]
-        assert "retired" in reason and f"'{replacement}'" in reason, reason
+        assert "does not have" in reason, reason
     assert controller.get_gui_values() == before            # H was not applied either
 
-    # As a scan command psi is an alias of the sample rotation now; kappa is not modelled.
+    # As a scan command kappa is not modelled either.
     hard, _soft = controller._scan_command_issues(f"{name} 0 1 1", "")
-    if name == "psi":
-        assert hard == [], hard
-    else:
-        assert len(hard) == 1 and "does not have" in hard[0], hard
-        for variable in (name, name.upper()):
-            assert controller._validate_scan_commands_text(f"{variable} 0 1 1", "")
+    assert len(hard) == 1 and "does not have" in hard[0], hard
+    for variable in (name, name.upper()):
+        assert controller._validate_scan_commands_text(f"{variable} 0 1 1", "")
 
     schema = controller.build_api_schema()
     assert name not in [f["name"] for f in schema["fields"]]
@@ -635,7 +652,7 @@ def test_api_arc_write_past_travel_is_refused_with_the_reason(in12):
         in12.build_api_launch_state({"sgl": 25.0})
     assert launched.value.status == 400
     assert launched.value.details["errors"]["sgl"] == reason
-    assert backend.patch_parameters({"sgl": 20.0}, force=True)["applied"] == ["sgl"]
+    assert backend.patch_parameters({"sgl": 20.0}, force=True)["applied"] == ["sample_lower_arc_deg"]
     backend.patch_parameters({"sgl": 0.0}, force=True)
 
 
@@ -755,14 +772,21 @@ def _path_refine_lattice(controller, monkeypatch):
     assert controller.ub_matrix.lattice[0] != 4.1               # the refined lattice applied
 
 
+def _canonical(name):
+    try:
+        return resolve(name, "write").id
+    except QuantityRefused:
+        return name                                         # a setting such as "sample"
+
+
 def _path_api_patch(controller, _monkeypatch):
     backend = cm.TaviApiBackend(controller, _SyncBridge())
     for field, value in (("omega", 31.0), ("sgl", 1.0), ("sgu", -1.0),
-                         ("lattice_a", 4.1), ("lattice_b", 4.12),
-                         ("lattice_c", 4.0), ("lattice_alpha", 90.5), ("lattice_beta", 89.5),
-                         ("lattice_gamma", 90.25), ("H", 1.0), ("K", 1.0), ("L", 0.0),
+                         ("a", 4.1), ("b", 4.12),
+                         ("c", 4.0), ("alpha", 90.5), ("beta", 89.5),
+                         ("gamma", 90.25), ("H", 1.0), ("K", 1.0), ("L", 0.0),
                          ("sample", "Pb_phonon_DFT")):
-        assert backend.patch_parameters({field: value}, force=True)["applied"] == [field]
+        assert backend.patch_parameters({field: value}, force=True)["applied"] == [_canonical(field)]
 
 
 def _path_sample_selection(controller, _monkeypatch):
@@ -1267,7 +1291,7 @@ def test_a_locked_plane_holds_the_arcs_through_belief_and_truth_changes(controll
 
     with pytest.raises(ApiError) as held_arc:
         backend.patch_parameters({"sgu": 0.5}, force=True)
-    assert "holds sgu" in held_arc.value.details["errors"]["sgu"]
+    assert "holds sample_upper_arc_deg" in held_arc.value.details["errors"]["sgu"]
     messages.clear()
     _load_exercise(controller)
     controller.on_clear_training()
@@ -1324,15 +1348,15 @@ def test_every_refused_lock_patch_moves_nothing(controller, in12):
         assert ctrl.window.sample_dock.lattice_c_edit.text() == lattice_c
 
     refused(controller, backend, {"orientation_mode": "locked", "sgu": 1.0}, "sgu", "send two")
-    for body in ({"orientation_mode": "locked", "lattice_c": 4.3},
-                 {"lock_plane": h0h, "lattice_c": 4.3}):
-        refused(controller, backend, body, "lattice_c", "send two PATCHes instead")
+    for body in ({"orientation_mode": "locked", "lattice_c_angstrom": 4.3},
+                 {"lock_plane": h0h, "lattice_c_angstrom": 4.3}):
+        refused(controller, backend, body, "lattice_c_angstrom", "send two PATCHes instead")
     assert backend.patch_parameters({"orientation_mode": "locked", "lock_plane": h0h},
                                     force=True)["applied"] == ["orientation_mode", "lock_plane"]
     assert controller.instrument_state.plane_lock["hkl_u"] == [1.0, 0.0, 1.0]
     for body, field, words in (
-            ({"sgl": 1.0}, "sgl", "holds sgl"),
-            ({"sgu": 0.5, "H": 1.1}, "sgu", "holds sgu"),
+            ({"sgl": 1.0}, "sgl", "holds sample_lower_arc_deg"),
+            ({"sgu": 0.5, "H": 1.1}, "sgu", "holds sample_upper_arc_deg"),
             ({"orientation_mode": "free", "sgl": 1.0}, "orientation_mode", "send two"),
             ({"lock_plane": {"u": [1, 0, 0], "v": [0, 1, 0]}}, "lock_plane",
              "is in force; release it first")):

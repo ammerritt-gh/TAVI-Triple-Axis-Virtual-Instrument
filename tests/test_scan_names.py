@@ -169,8 +169,12 @@ def test_independent_pairs_stay_compatible(in8, cmd1, cmd2):
 
 
 @pytest.mark.parametrize("name, field", [
-    ("A2", "mtt"), ("mtt", "mtt"), ("A4", "stt"), ("stt", "stt"), ("2theta", "stt"),
-    ("A6", "att"), ("att", "att"), ("A3", "omega"), ("psi", "omega"), ("sth", "omega"),
+    ("A2", "mono_two_theta_deg"), ("mtt", "mono_two_theta_deg"),
+    ("A4", "sample_two_theta_deg"), ("stt", "sample_two_theta_deg"),
+    ("2theta", "sample_two_theta_deg"),
+    ("A6", "analyzer_two_theta_deg"), ("att", "analyzer_two_theta_deg"),
+    ("A3", "sample_rotation_deg"), ("psi", "sample_rotation_deg"),
+    ("sth", "sample_rotation_deg"),
 ])
 def test_goto_maps_the_named_quantity_to_its_field(name, field):
     plan = scan_fits.plan_goto(name, 12.5, busy=False)

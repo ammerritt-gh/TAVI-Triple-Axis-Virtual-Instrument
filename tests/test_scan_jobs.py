@@ -286,7 +286,7 @@ def test_snapshot_include_data_toggles_arrays():
     assert with_data["result"]["counts"] == [1.0, 2.0, 3.0]
     assert with_data["result"]["scan_values_1"] == [1.0, 2.0, 3.0]
     assert with_data["result"]["valid_mask_1"] == [True, True, False]
-    assert with_data["result"]["metadata"] == {"foo": "bar"}
+    assert with_data["result"]["metadata"] == {"foo": "bar", "api_version": 2}
 
 
 def test_snapshot_result_none_when_no_result():

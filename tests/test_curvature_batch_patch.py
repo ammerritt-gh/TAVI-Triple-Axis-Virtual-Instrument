@@ -28,6 +28,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from tavi.quantities import to_public  # noqa: E402
 
 _INSTRUMENT_IDS = [info.id for info in available_instruments()]
 
@@ -67,7 +68,7 @@ def test_a_batched_patch_holds_both_autofocus_locked_radii(controller, order):
     patch = {key: values[key] for key in order}
     applied, errors = ctrl.apply_parameters(patch)
     assert not errors
-    assert applied == patch
+    assert applied == {to_public(k): v for k, v in patch.items()}
 
     vals = ctrl.get_gui_values()
     assert math.isclose(vals["rhm"], 9.0)
@@ -89,7 +90,7 @@ def test_a_single_radius_patch_leaves_the_other_three_axes_untouched(controller)
 
     applied, errors = ctrl.apply_parameters({"rhm": 9.0})
     assert not errors
-    assert applied == {"rhm": 9.0}
+    assert applied == {"mono_horizontal_radius_m": 9.0}
     assert math.isclose(ctrl.get_gui_values()["rhm"], 9.0)
     assert not ctrl.is_bending_locked("rhm")
 
@@ -136,7 +137,7 @@ def test_a_four_radius_patch_keeps_every_driven_radius(controller):
     patch = {key: values[key] for key in keys}
     applied, errors = ctrl.apply_parameters(patch)
     assert not errors
-    assert applied == patch
+    assert applied == {to_public(k): v for k, v in patch.items()}
 
     vals = ctrl.get_gui_values()
     for key in keys:
@@ -163,7 +164,7 @@ def test_a_batched_patch_refreshes_the_bending_buttons_exactly_once(controller):
     try:
         applied, errors = ctrl.apply_parameters({"rhm": 9.0, "rvm": 8.0})
         assert not errors
-        assert applied == {"rhm": 9.0, "rvm": 8.0}
+        assert applied == {"mono_horizontal_radius_m": 9.0, "mono_vertical_radius_m": 8.0}
         assert len(calls) == 1
     finally:
         del ctrl.update_ideal_bending_buttons

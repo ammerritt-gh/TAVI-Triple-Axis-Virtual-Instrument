@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from tavi.quantities import API_VERSION, public_applied_radii
+
 
 class JobState(str, Enum):
     """Lifecycle states for a scan job.
@@ -164,8 +166,10 @@ class ScanResult:
             'valid_mask_2d': _json_safe(self.valid_mask_2d),
             'counts': _json_safe(self.counts),
             'counts_grid': _json_safe(self.counts_grid),
-            'metadata': _json_safe(self.metadata),
-            'applied_curvature': _json_safe(self.applied_curvature),
+            'metadata': _json_safe(dict(self.metadata, api_version=API_VERSION)),
+            'applied_curvature': _json_safe([
+                None if point is None else public_applied_radii(point)
+                for point in self.applied_curvature]),
         })
         return summary
 
@@ -248,7 +252,8 @@ class ScanJob:
         under ``parameters``.
         """
         ls = self.launch_state if isinstance(self.launch_state, dict) else {}
-        vals = ls.get('vals', {})
+        # The canonical-ID view the controller made at submission, else the vals as they are.
+        vals = ls.get('public_vals') or ls.get('vals', {})
         summary = {
             'scan_command1': vals.get('scan_command1', ''),
             'scan_command2': vals.get('scan_command2', ''),
@@ -287,6 +292,7 @@ class ScanJob:
         """Return a deep-copied, JSON-safe view of this job under its lock."""
         with self.lock:
             snap = {
+                'api_version': API_VERSION,
                 'job_id': self.job_id,
                 'source': self.source,
                 'state': self.state.value,

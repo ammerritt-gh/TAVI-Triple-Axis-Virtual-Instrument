@@ -99,7 +99,7 @@ def test_deterministic_engine_applied_curvature_tracks_each_point(tmp_path):
         )
 
         # metadata (test #2): the launch reference is untouched.
-        assert result.metadata["rhm"] == pytest.approx(launch_rhm)
+        assert result.metadata["mono_horizontal_radius_m"] == pytest.approx(launch_rhm)
 
 
 def _independently_solved_curvature(ctrl, vals, H, K, L, deltaE):
