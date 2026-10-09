@@ -177,6 +177,39 @@ def test_a_valid_file_without_this_instruments_block_leaves_the_session_alone(in
     in8.set_default_parameters()
 
 
+@pytest.mark.parametrize("entry", ["start-up", "mid-session"])
+def test_a_truncated_file_is_set_aside_at_both_entry_points(in8, saved_file, entry):
+    """A file cut off mid-write is refused like any other: it cannot stop TAVI
+    starting, nor make File > Load Parameters raise."""
+    in8.set_default_parameters()
+    in8.window.instrument_dock.omega_edit.setText("41.5")
+    in8.on_omega_changed()
+    with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write('{"in8": ')
+    written = open(saved_file, "rb").read()
+
+    if entry == "start-up":
+        generator, fresh = _fresh_start()
+        try:
+            assert fresh.window.instrument_dock.omega_edit.text() != "41.5"
+            assert fresh._exercise is None
+            log = _log(fresh)
+            assert "Defaults loaded." in log, log
+        finally:
+            generator.close()
+    else:
+        before = _state(in8)
+        in8.window.load_parameters_action.trigger()
+        assert _same(before, _state(in8))
+        log = _log(in8)
+        assert "The current settings are unchanged." in log, log
+    assert not os.path.exists(saved_file)
+    with open(saved_file + ".bak", "rb") as fh:
+        assert fh.read() == written
+    assert "Saved parameters not restored: it is not readable JSON" in log, log
+    in8.set_default_parameters()
+
+
 # --- another version: refused whole ----------------------------------------------------
 
 @pytest.mark.parametrize("version", [3, 5, None], ids=["v3", "v5", "no-version"])
