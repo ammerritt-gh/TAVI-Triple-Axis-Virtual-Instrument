@@ -11,8 +11,10 @@ where:
     U = static mount orientation matrix, determined from Bragg peaks
     UB = U @ B (combined transformation into the mounted sample frame)
 
-Convention: scalar lattice parameters use the TAS component frame:
-a* along x, b* in the horizontal xz-plane, c* vertical-ish along y.
+Convention: scalar lattice parameters use the TAS component frame: direct a
+along x, direct b in the horizontal xz-plane, c carrying the remaining
+component along y. So c* is exactly vertical (+y), while a* and b* are in
+general neither along x nor horizontal (``tavi.sample_mount.reciprocal_basis_tas``).
 """
 import math
 import base64
@@ -49,7 +51,8 @@ def compute_B_matrix(a, b, c, alpha, beta, gamma):
     The B matrix transforms Miller indices to Cartesian reciprocal-space coordinates:
         Q_crystal = B @ [H, K, L]
 
-    Convention: a* along x, b* in the horizontal xz-plane, c* general.
+    Convention: direct a along x, direct b in the horizontal xz-plane, c with
+    the remaining component along y (c* is exactly vertical; a*, b* general).
 
     Args:
         a, b, c: Lattice parameters in Angstroms.
