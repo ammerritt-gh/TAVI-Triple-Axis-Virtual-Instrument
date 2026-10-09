@@ -112,14 +112,14 @@ from tavi.utilities import (parse_scan_steps, incremented_path_writing,
                             normalize_scan_commands)
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
-                              stage_record, stage_rotation)
+                              record_angles, stage_record, stage_rotation)
 from tavi.tas_geometry import (
     component_q_to_instrument_q,
     instrument_q_to_component_q,
     lab_q_from_stt,
 )
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
-                            decode_mount_exercise, generate_training_exercise, get_scattering_plane_info,
+                            MOTOR_ZERO_REFUSAL, decode_mount_exercise, generate_training_exercise, get_scattering_plane_info,
                             u_from_plane, validate_rotation_matrix, alignment_residuals,
                             refine_lattice_from_peaks, small_integer_indices)
 from tavi.runtime_tracker import RuntimeTracker
@@ -1530,7 +1530,8 @@ class TAVIController(QObject):
 
         # Parameter actions (File menu)
         self.window.save_parameters_action.triggered.connect(self.save_parameters)
-        self.window.load_parameters_action.triggered.connect(self.load_parameters)
+        self.window.load_parameters_action.triggered.connect(
+            lambda: self.load_parameters(keep_current_on_refusal=True))
         self.window.load_defaults_action.triggered.connect(self.set_default_parameters)
         
         # Diagnostics button
@@ -5097,18 +5098,23 @@ class TAVIController(QObject):
             rotation, self.U_described, self.window.sample_dock.get_selected_sample_key(),
             vals['monocris'], vals['anacris'], vals['K_fixed'], vals['fixed_E'])
 
+    def _apply_exercise(self, hash_str, rotation):
+        """The loaded exercise becomes ``hash_str`` with hidden rotation
+        ``rotation``: R_hidden and the docks' display, nothing else -- no UB
+        write, no lock check, no judgement (callers have made it)."""
+        self._set_true_mount(R_hidden=rotation)
+        self._exercise = hash_str
+        self._show_exercise()
+
     def _install_exercise(self, hash_str):
-        """Make ``hash_str`` the loaded exercise: R_hidden, nothing else -- no
-        UB write and no lock check. Raises ValueError, before anything
-        changes, for a code that is not a mount-only exercise (see
+        """Make ``hash_str`` the loaded exercise. Raises ValueError, before
+        anything changes, for a code that is not a mount-only exercise (see
         ``decode_mount_exercise``) or that this instrument cannot observe."""
         rotation = decode_mount_exercise(hash_str)
         reason = self._live_reach_error(rotation)
         if reason:
             raise ValueError(f"the instrument cannot observe this exercise: {reason}")
-        self._set_true_mount(R_hidden=rotation)
-        self._exercise = hash_str
-        self._show_exercise()
+        self._apply_exercise(hash_str, rotation)
 
     def _clear_exercise(self):
         """No exercise: R_hidden = I."""
@@ -6008,14 +6014,104 @@ class TAVIController(QObject):
             with open(parameters_path, "w", encoding="utf-8", newline="\n") as file:
                 json.dump(document, file)
 
-    # v2 (this branch): rva joined rhm/rvm/rha as a real GUI field with its
-    # own saved radius and Ideal lock. _parameters_block does not itself
-    # reject an older version -- see _saved_curvature_state, which detects
-    # and resets an incomplete (pre-rva) curvature block instead.
+    # v2: rva joined rhm/rvm/rha as a real GUI field with its own saved
+    # radius and Ideal lock.
     # v3: the true mount apart from the operator's UB -- "true_mount"
-    # {U_described, mount_plane}; an older block loads best-effort through
-    # _restore_hidden_truth.
-    PARAMETERS_SCHEMA_VERSION = 3
+    # {U_described, mount_plane}.
+    # v4: the psi/kappa corrections, the hidden zero errors and the
+    # Misalignment dock are gone (no kappa_var, psi_offset_var or
+    # misalignment_hash_var; a plane lock carries no kappa). The version is
+    # enforced: a block of any other version is refused whole, never converted
+    # (_saved_parameters_refusal).
+    PARAMETERS_SCHEMA_VERSION = 4
+
+    def _saved_parameters_refusal(self, path):
+        """Why this instrument's saved block cannot be restored, or None.
+
+        Reads the file and judges the whole block before anything is applied:
+        its version, each saved peak's stage record and the saved exercise
+        (it must be a mount-only code this instrument, sample, crystals,
+        energy and described mount IN THE FILE can still observe -- never the
+        live ones). A file that is unreadable, or holds no block for this
+        instrument, is not refused here: ``load_parameters`` meets it as it
+        always did.
+        """
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                parameters = self._parameters_block(json.load(file))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not parameters:
+            return None
+        version = parameters.get("_schema")
+        if version != self.PARAMETERS_SCHEMA_VERSION:
+            return (f"it was saved by another TAVI (file version "
+                    f"{'none' if version is None else version}; this one reads "
+                    f"{self.PARAMETERS_SCHEMA_VERSION})")
+        ub_state = parameters.get("ub_matrix_state")
+        peaks = ub_state.get("peaks") if isinstance(ub_state, dict) else None
+        for index, peak in enumerate(peaks if isinstance(peaks, list) else []):
+            stage = peak.get("stage") if isinstance(peak, dict) else None
+            if stage is None:
+                continue
+            try:
+                record_angles(stage)
+            except (ValueError, AttributeError, TypeError, KeyError) as exc:
+                return f"saved peak {index + 1} cannot be read: {exc}"
+        if str(parameters.get("misalignment_hash_var") or "") not in ("", "None"):
+            return f"its Misalignment-dock exercise is retired: {MOTOR_ZERO_REFUSAL}"
+        hash_str = str(parameters.get("ub_training_hash") or "")
+        if hash_str and hash_str != "None":
+            try:
+                rotation = decode_mount_exercise(hash_str)
+            except ValueError as exc:
+                return f"its saved exercise is refused: {exc}"
+            described, _plane, _problem = self._saved_mount(parameters)
+            sample_key = (parameters.get("current_sample_settings") or {}).get(
+                "sample_key", "Al_bragg")
+            if not any(s.id == sample_key for s in self.descriptor.samples):
+                sample_key = "Al_bragg"
+            try:
+                fixed_E = float(parameters.get("fixed_E_var", 14.7))
+            except (TypeError, ValueError):
+                fixed_E = 14.7
+            reason = self._exercise_reach_error(
+                rotation, described, sample_key,
+                self._saved_crystal_id(parameters.get("monocris_var"), self.descriptor.mono_crystals),
+                self._saved_crystal_id(parameters.get("anacris_var"), self.descriptor.ana_crystals),
+                parameters.get("K_fixed_var", "Kf Fixed"), fixed_E)
+            if reason:
+                return f"its saved exercise cannot be observed here: {reason}"
+        return None
+
+    @staticmethod
+    def _free_backup_path(path):
+        """``path.bak``, else ``path.bak2``, ``path.bak3``, ... : the first
+        name nothing is using, so no backup is ever overwritten."""
+        path = os.fspath(path)
+        candidate, number = path + ".bak", 1
+        while os.path.exists(candidate):
+            number += 1
+            candidate = f"{path}.bak{number}"
+        return candidate
+
+    def _refuse_parameters_file(self, path, reason, keep_current):
+        """A saved file that cannot be restored: set it aside as a backup,
+        load the defaults (``keep_current``: leave the session exactly as it
+        is, for File > Load Parameters), and say why in one message-centre
+        line that names the backup."""
+        backup = self._free_backup_path(path)
+        try:
+            os.rename(path, backup)
+            kept = f"The file was renamed {backup}."
+        except OSError as exc:
+            log.warning("Could not rename %s to %s: %s", path, backup, exc)
+            kept = f"It could not be renamed ({exc}), so it will be refused again."
+        if not keep_current:
+            self.set_default_parameters()
+        self.print_to_message_center(
+            f"Saved parameters not restored: {reason}. {kept} "
+            + ("The current settings are unchanged." if keep_current else "Defaults loaded."))
 
     def _parameters_block(self, document):
         """This instrument's block from ``{"<id>": {"_schema": N, ...}}``.
@@ -6160,20 +6256,18 @@ class TAVIController(QObject):
             )
             return default
 
-    def _restore_hidden_truth(self, parameters):
-        """Restore is a full replace of the hidden truth, in this order:
-        the described mount, then the one exercise (absent hashes mean
-        R_hidden = I and zero errors 0); the saved plane lock goes after
-        both (``_restore_plane_lock``). No interactive
-        refusal runs, the operator's UB is not touched, and no file is
-        written."""
+    @staticmethod
+    def _saved_mount(parameters):
+        """``(U_described, mount_plane, problem)`` of a saved block: the mount
+        the sample is described with, its optional plane, and None or why the
+        saved mount is unreadable (then the standard setting)."""
         true_mount = parameters.get("true_mount")
         if isinstance(true_mount, dict):
             described = true_mount.get("U_described")
             plane = true_mount.get("mount_plane")
         else:
-            # Pre-schema-3 block, best effort (legacy saves are not carried):
-            # its UB is taken as the mount, so it diffracts where its UB says.
+            # A block without a true mount, best effort: its UB is taken as
+            # the mount, so it diffracts where its UB says.
             described, plane = (parameters.get("ub_matrix_state") or {}).get("U"), None
         try:
             described = validate_rotation_matrix(np.eye(3) if described is None else described)
@@ -6182,9 +6276,21 @@ class TAVIController(QObject):
                 if len(plane) != 2 or any(len(hkl) != 3 for hkl in plane):
                     raise ValueError("the mounting plane needs two (h k l) vectors")
         except (ValueError, TypeError) as e:
+            return np.eye(3), None, str(e)
+        return described, plane, None
+
+    def _restore_hidden_truth(self, parameters):
+        """Restore is a full replace of the hidden truth, in this order:
+        the described mount, then the one exercise (absent hashes mean
+        R_hidden = I); the saved plane lock goes after both
+        (``_restore_plane_lock``). The exercise was judged before anything was
+        applied (``_saved_parameters_refusal``), so it installs without a
+        second look. No interactive refusal runs, the operator's UB is not
+        touched, and no file is written."""
+        described, plane, problem = self._saved_mount(parameters)
+        if problem:
             self.print_to_message_center(
-                f"Saved sample mount unreadable ({e}); the standard setting is used")
-            described, plane = np.eye(3), None
+                f"Saved sample mount unreadable ({problem}); the standard setting is used")
         self.mount_plane = plane
         self._set_true_mount(U_described=described)
         self._show_mount_plane()
@@ -6192,17 +6298,24 @@ class TAVIController(QObject):
         self._clear_exercise()
         hash_str = str(parameters.get("ub_training_hash") or "")
         if hash_str and hash_str != "None":
-            try:
-                self._install_exercise(hash_str)
-            except ValueError as e:
-                self.print_to_message_center(f"Failed to restore the training exercise: {e}")
-            else:
-                self.print_to_message_center("Training exercise restored from saved parameters")
+            self._apply_exercise(hash_str, decode_mount_exercise(hash_str))
+            self.print_to_message_center("Training exercise restored from saved parameters")
 
-    def load_parameters(self):
-        """Load parameters from JSON file."""
+    def load_parameters(self, keep_current_on_refusal=False):
+        """Load parameters from JSON file.
+
+        A file this TAVI cannot restore whole (another version, a peak or an
+        exercise it refuses; ``_saved_parameters_refusal``) is set aside as a
+        backup and changes nothing else. At start-up the defaults load; for
+        File > Load Parameters, ``keep_current_on_refusal``, the session stays
+        exactly as the operator left it.
+        """
         parameters_path = local_config_path("parameters.json")
         if os.path.exists(parameters_path):
+            refusal = self._saved_parameters_refusal(parameters_path)
+            if refusal:
+                self._refuse_parameters_file(parameters_path, refusal, keep_current_on_refusal)
+                return
             with open(parameters_path, "r", encoding="utf-8") as file:
                 parameters = self._parameters_block(json.load(file))
                 parameters = self._normalise_loaded_numbers(parameters)

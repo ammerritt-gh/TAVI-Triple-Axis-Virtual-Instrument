@@ -943,7 +943,7 @@ def test_training_session_round_trips_the_ub_and_the_truth_exactly(controller, m
     _reload_with(controller, scramble)
 
     block = blocks[0]
-    assert block["_schema"] == 3
+    assert block["_schema"] == 4
     assert set(block["true_mount"]) == {"U_described", "mount_plane"}
     assert block["ub_training_hash"] == TRAINING_HASH
     assert "misalignment_hash_var" not in block
