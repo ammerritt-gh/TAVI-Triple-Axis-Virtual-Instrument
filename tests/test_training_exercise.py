@@ -315,6 +315,29 @@ def test_an_exercise_past_the_instruments_motor_limits_is_refused(in8):
     assert training_reach_error(state, np.eye(3), b, hkls, {}) is None
 
 
+def test_the_reach_check_reads_the_tables_beside_the_package_not_the_working_directory(
+        in8, monkeypatch):
+    """Started from tests/, the check reads the same reflection tables (and so
+    judges the same reflections) as from the repository root."""
+    from instruments.paths import COMPONENTS_DIR
+
+    d = in8.descriptor
+    args = ("Al_phonon_DFT", d.mono_crystals[0].id, d.ana_crystals[0].id, "Kf Fixed", 14.7)
+    read = []
+    real = cm.reference_hkls
+
+    def spy(source, space_group, components_dir):
+        read.append(components_dir)
+        return real(source, space_group, components_dir)
+
+    monkeypatch.setattr(cm, "reference_hkls", spy)
+    from_root = in8._exercise_reach_error(np.eye(3), in8.U_described, *args)
+    monkeypatch.chdir(os.path.dirname(__file__))
+    from_tests = in8._exercise_reach_error(np.eye(3), in8.U_described, *args)
+    assert from_tests == from_root
+    assert read == [COMPONENTS_DIR, COMPONENTS_DIR], read
+
+
 def test_panda_refuses_an_unobservable_exercise_and_says_why_at_generation(panda, said,
                                                                          monkeypatch):
     """With only (1 0 0) and (0 1 0) to find, a 45 deg turn about x leaves PANDA

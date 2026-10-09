@@ -35,6 +35,7 @@ from instruments.tas_runtime import (
     describe_scan_error_flags,
     training_reach_error,
 )
+from instruments.paths import COMPONENTS_DIR
 
 log = logging.getLogger(__name__)
 
@@ -5093,8 +5094,7 @@ class TAVIController(QObject):
         state = self.instrument.default_state()
         state.monocris, state.anacris = monocris, anacris
         state.K_fixed, state.fixed_E = K_fixed, fixed_E
-        hkls = reference_hkls(spec.reflection_source, spec.space_group,
-                              os.path.join(os.getcwd(), "components"))
+        hkls = reference_hkls(spec.reflection_source, spec.space_group, COMPONENTS_DIR)
         return training_reach_error(state, rotation @ np.asarray(u_described, dtype=float),
                                     compute_B_matrix(*spec.lattice), hkls,
                                     self.descriptor.axis_limits)
