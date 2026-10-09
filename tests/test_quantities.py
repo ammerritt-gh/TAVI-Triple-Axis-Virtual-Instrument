@@ -1,8 +1,8 @@
 """The quantity registry: aliases resolve, refusals name their replacement, the check rejects bad tables."""
 import pytest
 
-from tavi.quantities import (QUANTITIES, Quantity, QuantityRefused, by_id, index_table,
-                             resolve, SLIT_SCAN_REFUSAL)
+from tavi.quantities import (QUANTITIES, Quantity, QuantityRefused, UnknownQuantity, by_id,
+                             index_table, resolve, SLIT_SCAN_REFUSAL)
 
 SCAN_AND_WRITE = [
     ("A2", "mono_two_theta_deg"), ("mtt", "mono_two_theta_deg"),
@@ -175,3 +175,13 @@ def test_check_rejects_duplicate_alias_within_one_quantity():
 
 def test_check_accepts_alias_equal_to_own_canonical_id():
     assert index_table([_q("h", "H")])["h"].id == "h"
+
+
+def test_a_name_in_no_row_is_unknown_but_a_refused_one_is_not():
+    """The GUI suggests spellings for an unknown name and quotes the registry for a refused one."""
+    with pytest.raises(UnknownQuantity):
+        resolve("xyz", "scan")
+    for refused in ("chi", "A1", "pre_sample_hgap", "Ei"):
+        with pytest.raises(QuantityRefused) as caught:
+            resolve(refused, "scan")
+        assert not isinstance(caught.value, UnknownQuantity), refused

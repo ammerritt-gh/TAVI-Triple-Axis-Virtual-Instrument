@@ -18,6 +18,10 @@ class QuantityRefused(ValueError):
     """A name that cannot be used in this context; str() is the user-facing refusal."""
 
 
+class UnknownQuantity(QuantityRefused):
+    """A name that is in no row of the registry and not a retired name either."""
+
+
 @dataclass(frozen=True)
 class Quantity:
     id: str                         # canonical ID: saved state, API output, metadata
@@ -199,7 +203,7 @@ def resolve(name: str, context: str) -> Quantity:
     if q is None:
         if key in _RETIRED:
             raise QuantityRefused(_RETIRED[key])
-        raise QuantityRefused(f"unknown quantity {name!r}")
+        raise UnknownQuantity(f"unknown quantity {name!r}")
     if q.derived_only or not {"scan": q.scannable, "write": q.writable}[context]:
         raise QuantityRefused(q.refusal or f"{q.id} cannot be {_VERB[context]}")
     return q
