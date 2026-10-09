@@ -122,7 +122,7 @@ from tavi.tas_geometry import (
     lab_q_from_stt,
 )
 from tavi.ub_matrix import (UBMatrix, ObservedPeak, compute_B_matrix, grade_alignment,
-                            MOTOR_ZERO_REFUSAL, decode_mount_exercise, generate_training_exercise, get_scattering_plane_info,
+                            decode_mount_exercise, generate_training_exercise, get_scattering_plane_info,
                             u_from_plane, validate_rotation_matrix, alignment_residuals,
                             refine_lattice_from_peaks, small_integer_indices)
 from tavi.runtime_tracker import RuntimeTracker
@@ -3606,10 +3606,10 @@ class TAVIController(QObject):
 
     def _load_bending_parameters(self, parameters):
         """Load absolute bending radii from the saved parameter block."""
-        self.window.instrument_dock.rhm_edit.setText(format_editable_number(parameters.get("rhm_var", "0")))
-        self.window.instrument_dock.rvm_edit.setText(format_editable_number(parameters.get("rvm_var", "0")))
-        self.window.instrument_dock.rha_edit.setText(format_editable_number(parameters.get("rha_var", "0")))
-        self.window.instrument_dock.rva_edit.setText(format_editable_number(parameters.get("rva_var", "0")))
+        self.window.instrument_dock.rhm_edit.setText(format_editable_number(parameters.get("mono_horizontal_radius_m", "0")))
+        self.window.instrument_dock.rvm_edit.setText(format_editable_number(parameters.get("mono_vertical_radius_m", "0")))
+        self.window.instrument_dock.rha_edit.setText(format_editable_number(parameters.get("analyzer_horizontal_radius_m", "0")))
+        self.window.instrument_dock.rva_edit.setText(format_editable_number(parameters.get("analyzer_vertical_radius_m", "0")))
 
     def _normalise_loaded_numbers(self, parameters):
         """Replace malformed saved numeric values with documented defaults.
@@ -3622,15 +3622,15 @@ class TAVIController(QObject):
             self._saved_crystal_id(parameters.get("anacris_var"), self.descriptor.ana_crystals),
         )
         defaults = {
-            "rhm_var": 0, "rvm_var": 0, "rha_var": 0, "rva_var": 0,
-            "mtt_var": mtt, "stt_var": stt, "omega_var": omega,
-            "sgl_var": 0, "sgu_var": 0, "chi_var": 0,  # chi_var: legacy save, read as sgl
-            "att_var": att, "Ki_var": 2.6634, "Kf_var": 2.6634,
-            "Ei_var": 14.7, "Ef_var": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
-            "qx_var": 3.1028, "qy_var": 0, "qz_var": 0, "H_var": 2, "K_var": 0,
-            "L_var": 0, "deltaE_var": 0,
-            "lattice_a_var": 4.05, "lattice_b_var": 4.05, "lattice_c_var": 4.05,
-            "lattice_alpha_var": 90, "lattice_beta_var": 90, "lattice_gamma_var": 90,
+            "mono_horizontal_radius_m": 0, "mono_vertical_radius_m": 0, "analyzer_horizontal_radius_m": 0, "analyzer_vertical_radius_m": 0,
+            "mono_two_theta_deg": mtt, "sample_two_theta_deg": stt, "sample_rotation_deg": omega,
+            "sample_lower_arc_deg": 0, "sample_upper_arc_deg": 0,
+            "analyzer_two_theta_deg": att, "incident_wavevector_inv_angstrom": 2.6634, "final_wavevector_inv_angstrom": 2.6634,
+            "incident_energy_mev": 14.7, "final_energy_mev": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
+            "q_instrument_x_inv_angstrom": 3.1028, "q_instrument_y_inv_angstrom": 0, "q_instrument_z_inv_angstrom": 0, "h": 2, "k": 0,
+            "l": 0, "energy_transfer_mev": 0,
+            "lattice_a_angstrom": 4.05, "lattice_b_angstrom": 4.05, "lattice_c_angstrom": 4.05,
+            "lattice_alpha_deg": 90, "lattice_beta_deg": 90, "lattice_gamma_deg": 90,
         }
         result = dict(parameters)
         for key, default in defaults.items():
@@ -5914,38 +5914,38 @@ class TAVIController(QObject):
     def save_parameters(self):
         """Save all parameters to JSON file."""
         parameters = {
-            "mtt_var": self.window.instrument_dock.mtt_edit.text(),
-            "stt_var": self.window.instrument_dock.stt_edit.text(),
-            "omega_var": self.window.instrument_dock.omega_edit.text(),
-            "sgl_var": self.window.instrument_dock.sgl_edit.text(),
-            "sgu_var": self.window.instrument_dock.sgu_edit.text(),
-            "att_var": self.window.instrument_dock.att_edit.text(),
-            "Ki_var": self.window.instrument_dock.Ki_edit.text(),
-            "Kf_var": self.window.instrument_dock.Kf_edit.text(),
-            "Ei_var": self.window.instrument_dock.Ei_edit.text(),
-            "Ef_var": self.window.instrument_dock.Ef_edit.text(),
+            "mono_two_theta_deg": self.window.instrument_dock.mtt_edit.text(),
+            "sample_two_theta_deg": self.window.instrument_dock.stt_edit.text(),
+            "sample_rotation_deg": self.window.instrument_dock.omega_edit.text(),
+            "sample_lower_arc_deg": self.window.instrument_dock.sgl_edit.text(),
+            "sample_upper_arc_deg": self.window.instrument_dock.sgu_edit.text(),
+            "analyzer_two_theta_deg": self.window.instrument_dock.att_edit.text(),
+            "incident_wavevector_inv_angstrom": self.window.instrument_dock.Ki_edit.text(),
+            "final_wavevector_inv_angstrom": self.window.instrument_dock.Kf_edit.text(),
+            "incident_energy_mev": self.window.instrument_dock.Ei_edit.text(),
+            "final_energy_mev": self.window.instrument_dock.Ef_edit.text(),
             "number_neutrons_var": self.window.simulation_dock.get_number_neutrons(),
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
             "source_type_var": self.window.instrument_dock.selected_source_id(),
             "source_dE_var": self.window.instrument_dock.source_dE_edit.text(),
             "modules": self.window.instrument_dock.module_values(),
-            "rhm_var": self.window.instrument_dock.rhm_edit.text(),
-            "rvm_var": self.window.instrument_dock.rvm_edit.text(),
-            "rha_var": self.window.instrument_dock.rha_edit.text(),
-            "rva_var": self.window.instrument_dock.rva_edit.text(),
+            "mono_horizontal_radius_m": self.window.instrument_dock.rhm_edit.text(),
+            "mono_vertical_radius_m": self.window.instrument_dock.rvm_edit.text(),
+            "analyzer_horizontal_radius_m": self.window.instrument_dock.rha_edit.text(),
+            "analyzer_vertical_radius_m": self.window.instrument_dock.rva_edit.text(),
             "rhm_ideal_locked": self.is_bending_locked("rhm"),
             "rvm_ideal_locked": self.is_bending_locked("rvm"),
             "rha_ideal_locked": self.is_bending_locked("rha"),
             "rva_ideal_locked": self.is_bending_locked("rva"),
             "fixed_E_var": self.window.scattering_dock.fixed_E_edit.text(),
-            "qx_var": self.window.scattering_dock.qx_edit.text(),
-            "qy_var": self.window.scattering_dock.qy_edit.text(),
-            "qz_var": self.window.scattering_dock.qz_edit.text(),
+            "q_instrument_x_inv_angstrom": self.window.scattering_dock.qx_edit.text(),
+            "q_instrument_y_inv_angstrom": self.window.scattering_dock.qy_edit.text(),
+            "q_instrument_z_inv_angstrom": self.window.scattering_dock.qz_edit.text(),
             # HKL values
-            "H_var": self.window.scattering_dock.H_edit.text(),
-            "K_var": self.window.scattering_dock.K_edit.text(),
-            "L_var": self.window.scattering_dock.L_edit.text(),
-            "deltaE_var": self.window.scattering_dock.deltaE_edit.text(),
+            "h": self.window.scattering_dock.H_edit.text(),
+            "k": self.window.scattering_dock.K_edit.text(),
+            "l": self.window.scattering_dock.L_edit.text(),
+            "energy_transfer_mev": self.window.scattering_dock.deltaE_edit.text(),
             "monocris_var": self.window.instrument_dock.selected_mono_id(),
             "anacris_var": self.window.instrument_dock.selected_ana_id(),
             "collimation": {
@@ -5956,12 +5956,12 @@ class TAVIController(QObject):
             # Slit apertures (stored in mm)
             "slits_mm": self._slit_values_for_save(),
             "diagnostic_mode_var": self.window.simulation_dock.diagnostic_mode_check.isChecked(),
-            "lattice_a_var": self.window.sample_dock.lattice_a_edit.text(),
-            "lattice_b_var": self.window.sample_dock.lattice_b_edit.text(),
-            "lattice_c_var": self.window.sample_dock.lattice_c_edit.text(),
-            "lattice_alpha_var": self.window.sample_dock.lattice_alpha_edit.text(),
-            "lattice_beta_var": self.window.sample_dock.lattice_beta_edit.text(),
-            "lattice_gamma_var": self.window.sample_dock.lattice_gamma_edit.text(),
+            "lattice_a_angstrom": self.window.sample_dock.lattice_a_edit.text(),
+            "lattice_b_angstrom": self.window.sample_dock.lattice_b_edit.text(),
+            "lattice_c_angstrom": self.window.sample_dock.lattice_c_edit.text(),
+            "lattice_alpha_deg": self.window.sample_dock.lattice_alpha_edit.text(),
+            "lattice_beta_deg": self.window.sample_dock.lattice_beta_edit.text(),
+            "lattice_gamma_deg": self.window.sample_dock.lattice_gamma_edit.text(),
             "scan_command_var1": self.window.simulation_dock.scan_command_1_edit.text(),
             "scan_command_var2": self.window.simulation_dock.scan_command_2_edit.text(),
             "save_folder_var": self.window.data_control_dock.save_folder_edit.text(),
@@ -6048,10 +6048,13 @@ class TAVIController(QObject):
     # {U_described, mount_plane}.
     # v4: the psi/kappa corrections, the hidden zero errors and the
     # Misalignment dock are gone (no correction or misalignment-hash
-    # variables; a plane lock carries no correction). The version is
-    # enforced: a file with a block of any other version (or a flat legacy
-    # file) is refused whole, never converted (_saved_parameters_refusal).
-    PARAMETERS_SCHEMA_VERSION = 4
+    # variables; a plane lock carries no correction).
+    # v5: physical quantities are saved under their canonical IDs
+    # (tavi/quantities.py) and A2/A4/A6 count the ILL way; a v4 file would
+    # read its angles under the wrong meaning. The version is enforced: a
+    # file with a block of any other version (or a flat legacy file) is
+    # refused whole, never converted (_saved_parameters_refusal).
+    PARAMETERS_SCHEMA_VERSION = 5
 
     @staticmethod
     def _read_saved_parameters(path):
@@ -6099,8 +6102,6 @@ class TAVIController(QObject):
                 record_angles(stage)
             except (ValueError, AttributeError, TypeError, KeyError) as exc:
                 return f"saved peak {index + 1} cannot be read: {exc}"
-        if str(parameters.get("misalignment_hash_var") or "") not in ("", "None"):
-            return f"its Misalignment-dock exercise is retired: {MOTOR_ZERO_REFUSAL}"
         return self._saved_exercise_refusal(parameters)
 
     def _saved_exercise_refusal(self, parameters):
@@ -6175,40 +6176,6 @@ class TAVIController(QObject):
             return {}
         block = document.get(self.instrument.id, {})
         return block if isinstance(block, dict) else {}
-
-    # All four bending radii start flat and unlocked -- the same safe,
-    # feature-free state a fresh install would ask for these fields.
-    _CURVATURE_VAR_KEYS = ("rhm_var", "rvm_var", "rha_var", "rva_var")
-    _CURVATURE_LOCK_KEYS = (
-        "rhm_ideal_locked", "rvm_ideal_locked", "rha_ideal_locked", "rva_ideal_locked",
-    )
-
-    def _saved_curvature_state(self, parameters):
-        """{var/lock key: saved value} for all four curvature axes, or defaults.
-
-        A v1 save predates ``rva`` as a GUI field: it carries the first three
-        var/lock keys but never ``rva_var``/``rva_ideal_locked``. Loading
-        those three from such a block while rva silently defaulted to
-        "0"/unlocked would present a half-populated curvature state as a real
-        save -- an operator's genuinely locked rha next to a phantom flat,
-        unlocked rva. This repo resets and fails loudly rather than migrating
-        a pre-release format (the same rule ``_saved_background_profile``
-        already applies to an incompatible background catalog): an incomplete
-        curvature block is discarded as a whole and the operator is told,
-        rather than silently patched key by key.
-        """
-        keys = self._CURVATURE_VAR_KEYS + self._CURVATURE_LOCK_KEYS
-        if all(key in parameters for key in keys):
-            return {key: parameters[key] for key in keys}
-        defaults = {key: "0" for key in self._CURVATURE_VAR_KEYS}
-        defaults.update({key: False for key in self._CURVATURE_LOCK_KEYS})
-        if any(key in parameters for key in keys):
-            self.print_to_message_center(
-                "Saved curvature state predates the rva field and is "
-                "incomplete; reset to safe defaults (all four radii flat "
-                "and unlocked)"
-            )
-        return defaults
 
     @staticmethod
     def _dominant_execution_mode(point_stage_timings):
@@ -6410,22 +6377,21 @@ class TAVIController(QObject):
             )
             self._set_tracked_angle_text(
                 'mtt', self.window.instrument_dock.mtt_edit,
-                parameters.get("mtt_var", mtt),
+                parameters.get("mono_two_theta_deg", mtt),
             )
-            self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("stt_var", stt)))
-            self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("omega_var", omega)))
-            # A save from before the arcs carries the lower arc as chi_var.
+            self.window.instrument_dock.stt_edit.setText(format_editable_number(parameters.get("sample_two_theta_deg", stt)))
+            self.window.instrument_dock.omega_edit.setText(format_editable_number(parameters.get("sample_rotation_deg", omega)))
             self.window.instrument_dock.sgl_edit.setText(format_editable_number(
-                parameters.get("sgl_var", parameters.get("chi_var", 0))))
-            self.window.instrument_dock.sgu_edit.setText(format_editable_number(parameters.get("sgu_var", 0)))
+                parameters.get("sample_lower_arc_deg", 0)))
+            self.window.instrument_dock.sgu_edit.setText(format_editable_number(parameters.get("sample_upper_arc_deg", 0)))
             self._set_tracked_angle_text(
                 'att', self.window.instrument_dock.att_edit,
-                parameters.get("att_var", att),
+                parameters.get("analyzer_two_theta_deg", att),
             )
-            self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("Ki_var", "2.6634")))
-            self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("Kf_var", "2.6634")))
-            self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("Ei_var", "14.7")))
-            self.window.instrument_dock.Ef_edit.setText(format_editable_number(parameters.get("Ef_var", "14.7")))
+            self.window.instrument_dock.Ki_edit.setText(format_editable_number(parameters.get("incident_wavevector_inv_angstrom", "2.6634")))
+            self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("final_wavevector_inv_angstrom", "2.6634")))
+            self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("incident_energy_mev", "14.7")))
+            self.window.instrument_dock.Ef_edit.setText(format_editable_number(parameters.get("final_energy_mev", "14.7")))
             self.window.instrument_dock.set_source_id(
                 parameters.get("source_type_var", self.descriptor.source_types[0].id)
             )
@@ -6442,32 +6408,26 @@ class TAVIController(QObject):
                 self._saved_slit_values(parameters)
             )
 
-            # Load absolute bending values (backward-compatible with factor-based params).
-            # A block missing the rva keys (pre-slice-4 schema) resets the
-            # whole curvature block to safe defaults rather than loading
-            # three real values next to a phantom rva.
-            curvature_state = self._saved_curvature_state(parameters)
-            self._load_bending_parameters(curvature_state)
-
-            # Restore ideal lock state
+            # Absolute bending radii, then the ideal locks
+            self._load_bending_parameters(parameters)
             self._apply_bending_lock_state(
-                curvature_state["rhm_ideal_locked"],
-                curvature_state["rvm_ideal_locked"],
-                curvature_state["rha_ideal_locked"],
-                curvature_state["rva_ideal_locked"],
+                parameters.get("rhm_ideal_locked", False),
+                parameters.get("rvm_ideal_locked", False),
+                parameters.get("rha_ideal_locked", False),
+                parameters.get("rva_ideal_locked", False),
             )
             
             self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
             self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
             self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(parameters.get("fixed_E_var", 14.7)))
-            self.window.scattering_dock.qx_edit.setText(format_editable_number(parameters.get("qx_var", "3.1028")))
-            self.window.scattering_dock.qy_edit.setText(format_editable_number(parameters.get("qy_var", 0)))
-            self.window.scattering_dock.qz_edit.setText(format_editable_number(parameters.get("qz_var", 0)))
+            self.window.scattering_dock.qx_edit.setText(format_editable_number(parameters.get("q_instrument_x_inv_angstrom", "3.1028")))
+            self.window.scattering_dock.qy_edit.setText(format_editable_number(parameters.get("q_instrument_y_inv_angstrom", 0)))
+            self.window.scattering_dock.qz_edit.setText(format_editable_number(parameters.get("q_instrument_z_inv_angstrom", 0)))
             # HKL values
-            self.window.scattering_dock.H_edit.setText(format_editable_number(parameters.get("H_var", 2)))
-            self.window.scattering_dock.K_edit.setText(format_editable_number(parameters.get("K_var", 0)))
-            self.window.scattering_dock.L_edit.setText(format_editable_number(parameters.get("L_var", 0)))
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(parameters.get("deltaE_var", 0)))
+            self.window.scattering_dock.H_edit.setText(format_editable_number(parameters.get("h", 2)))
+            self.window.scattering_dock.K_edit.setText(format_editable_number(parameters.get("k", 0)))
+            self.window.scattering_dock.L_edit.setText(format_editable_number(parameters.get("l", 0)))
+            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(parameters.get("energy_transfer_mev", 0)))
             self.window.simulation_dock.diagnostic_mode_check.setChecked(parameters.get("diagnostic_mode_var", True))
             # Default scan: H-scan around Al (200) Bragg peak
             self.window.simulation_dock.scan_command_1_edit.setText(parameters.get("scan_command_var1", "H 1.9 2.1 0.01"))
@@ -6487,12 +6447,12 @@ class TAVIController(QObject):
             # Saved lattice values are applied AFTER the sample restore: the
             # sample-change handler adopts the sample's own lattice, and the
             # user's saved (possibly hand-edited) values must win on reload.
-            self.window.sample_dock.lattice_a_edit.setText(format_editable_number(parameters.get("lattice_a_var", "4.05"), 6))
-            self.window.sample_dock.lattice_b_edit.setText(format_editable_number(parameters.get("lattice_b_var", "4.05"), 6))
-            self.window.sample_dock.lattice_c_edit.setText(format_editable_number(parameters.get("lattice_c_var", "4.05"), 6))
-            self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(parameters.get("lattice_alpha_var", "90"), 6))
-            self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(parameters.get("lattice_beta_var", "90"), 6))
-            self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(parameters.get("lattice_gamma_var", "90"), 6))
+            self.window.sample_dock.lattice_a_edit.setText(format_editable_number(parameters.get("lattice_a_angstrom", "4.05"), 6))
+            self.window.sample_dock.lattice_b_edit.setText(format_editable_number(parameters.get("lattice_b_angstrom", "4.05"), 6))
+            self.window.sample_dock.lattice_c_edit.setText(format_editable_number(parameters.get("lattice_c_angstrom", "4.05"), 6))
+            self.window.sample_dock.lattice_alpha_edit.setText(format_editable_number(parameters.get("lattice_alpha_deg", "90"), 6))
+            self.window.sample_dock.lattice_beta_edit.setText(format_editable_number(parameters.get("lattice_beta_deg", "90"), 6))
+            self.window.sample_dock.lattice_gamma_edit.setText(format_editable_number(parameters.get("lattice_gamma_deg", "90"), 6))
             # Restore space group selection
             try:
                 sg_number = parameters.get("space_group_number_var")

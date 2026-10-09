@@ -25,10 +25,10 @@ def _controller_stub():
 def test_namespaced_block_selected_by_instrument_id():
     controller = _controller_stub()
     document = {
-        "puma": {"_schema": 1, "mtt_var": "41.167"},
-        "in8": {"_schema": 1, "mtt_var": "77.0"},
+        "puma": {"_schema": 1, "mono_two_theta_deg": "41.167"},
+        "in8": {"_schema": 1, "mono_two_theta_deg": "77.0"},
     }
-    assert controller._parameters_block(document)["mtt_var"] == "41.167"
+    assert controller._parameters_block(document)["mono_two_theta_deg"] == "41.167"
 
 
 def test_missing_or_malformed_block_gives_empty():
@@ -76,7 +76,7 @@ def test_empty_block_falls_back_to_full_defaults():
     import inspect
 
     controller = _controller_stub()
-    legacy_flat = {"mtt_var": "41.167", "rhm_var": "13.0272"}
+    legacy_flat = {"mono_two_theta_deg": "41.167", "mono_horizontal_radius_m": "13.0272"}
     assert controller._parameters_block(legacy_flat) == {}
 
     source = inspect.getsource(controller_module.TAVIController.load_parameters)
@@ -92,7 +92,7 @@ def test_saved_lattice_wins_over_sample_lattice_adoption():
     import inspect
 
     source = inspect.getsource(controller_module.TAVIController.load_parameters)
-    assert source.index("set_sample_by_key") < source.index("lattice_a_var")
+    assert source.index("set_sample_by_key") < source.index("lattice_a_angstrom")
 
     handler = inspect.getsource(controller_module.TAVIController.on_sample_changed)
     assert "_adopt_sample_lattice" in handler

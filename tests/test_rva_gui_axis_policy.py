@@ -232,57 +232,6 @@ def test_rva_at_its_own_fixed_radius_is_accepted_by_the_api():
 # ------------------------------------------------------------- persistence
 
 
-def _controller_stub():
-    from types import SimpleNamespace
-    controller = cm.TAVIController.__new__(cm.TAVIController)
-    controller.instrument = SimpleNamespace(id="puma")
-    controller.messages = []
-    controller.print_to_message_center = controller.messages.append
-    return controller
-
-
-def test_saved_curvature_state_round_trips_when_complete():
-    controller = _controller_stub()
-    saved = {
-        "rhm_var": "13.0", "rvm_var": "1.6", "rha_var": "2.3", "rva_var": "0.8",
-        "rhm_ideal_locked": True, "rvm_ideal_locked": False,
-        "rha_ideal_locked": True, "rva_ideal_locked": False,
-    }
-    state = controller._saved_curvature_state(saved)
-    assert state == saved
-    assert controller.messages == []
-
-
-def test_saved_curvature_state_resets_visibly_when_rva_keys_are_missing():
-    """A pre-slice-4 save has rhm/rvm/rha but never rva -- the whole block
-    must reset to safe defaults, not load three real values next to a
-    phantom flat, unlocked rva."""
-    controller = _controller_stub()
-    legacy = {
-        "rhm_var": "13.0", "rvm_var": "1.6", "rha_var": "2.3",
-        "rhm_ideal_locked": True, "rvm_ideal_locked": False,
-        "rha_ideal_locked": True,
-    }
-    state = controller._saved_curvature_state(legacy)
-    assert state == {
-        "rhm_var": "0", "rvm_var": "0", "rha_var": "0", "rva_var": "0",
-        "rhm_ideal_locked": False, "rvm_ideal_locked": False,
-        "rha_ideal_locked": False, "rva_ideal_locked": False,
-    }
-    assert len(controller.messages) == 1
-    assert "reset to safe defaults" in controller.messages[0]
-
-
-def test_saved_curvature_state_defaults_quietly_when_entirely_absent():
-    """A fresh instrument (no curvature keys saved at all) is not the
-    incomplete-schema case -- no warning, just the safe defaults."""
-    controller = _controller_stub()
-    state = controller._saved_curvature_state({"mtt_var": "41.167"})
-    assert state["rva_var"] == "0"
-    assert state["rva_ideal_locked"] is False
-    assert controller.messages == []
-
-
 def test_all_four_radii_and_locks_round_trip_through_save_and_load(tmp_path):
     with _controller("in8") as ctrl:
         d = ctrl.descriptor
