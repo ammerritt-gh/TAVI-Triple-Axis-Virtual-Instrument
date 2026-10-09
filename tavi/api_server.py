@@ -48,6 +48,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 from tavi.local_state import config_path as local_config_path
+from tavi.quantities import API_VERSION, QuantityRefused, resolve
 
 
 # Sentinel pushed into every SSE client queue on shutdown so handler loops exit.
@@ -210,6 +211,30 @@ VALIDATE_BODY_KEYS = frozenset({
     "parameters", "force", "background", "engine", "seed", "noiseless",
 })
 STOP_BODY_KEYS = frozenset({"clear_queue"})
+
+
+def require_api_version(body):
+    """Return ``body`` without its ``api_version``; 400 unless it names this API's version.
+
+    Every mutating or validating request carries it. TAVI's names changed (ILL angle
+    numbering, canonical IDs), so an old client is refused here, before any state
+    changes, instead of being silently reinterpreted. Qt-free so the contract can be
+    unit-tested standalone.
+    """
+    if not isinstance(body, dict):
+        return body
+    version = body.get("api_version")
+    if type(version) is not int or version != API_VERSION:
+        raise ApiError(
+            400, "api_version_required",
+            "This request needs \"api_version\": %d (got %s). TAVI's names changed: angle "
+            "numbering now follows the ILL (A2 mono 2theta, A4 sample 2theta, A6 analyzer "
+            "2theta) and quantities have canonical IDs such as mono_two_theta_deg. Read the "
+            "Breaking change section of the API guide, then add the field to the body."
+            % (API_VERSION, "missing" if "api_version" not in body else repr(version)),
+            details={"required_api_version": API_VERSION},
+        )
+    return {k: v for k, v in body.items() if k != "api_version"}
 
 
 def reject_unknown_body_keys(body, allowed):
@@ -610,7 +635,7 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             if method == "PATCH":
                 if not self._check_writable():
                     return
-                body = self._read_json_body()
+                body = require_api_version(self._read_json_body())
                 force = _query_flag(query, "force")
                 self._send_json(200, self._call_backend("patch_parameters", body, force))
                 return
@@ -639,7 +664,7 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             # gated on write access (it never mutates), so it works in
             # read-only mode too.
             self._require_method(method, "POST")
-            body = self._read_json_body()
+            body = require_api_version(self._read_json_body())
             reject_unknown_body_keys(body, VALIDATE_BODY_KEYS)
             self._send_json(200, self._call_backend("submit_validate", body))
             return
@@ -655,27 +680,22 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             if method == "PUT":
                 if not self._check_writable():
                     return
-                body = self._read_json_body()
+                body = require_api_version(self._read_json_body())
                 reject_unknown_body_keys(body, BACKGROUND_SPEC_KEYS)
                 self._send_json(200, self._call_backend("set_background", body))
                 return
             raise ApiError(405, "method_not_allowed", "Method not allowed: %s" % method)
 
         if segments == ["resolution"]:
-            # Theoretical TAS resolution at one (H, K, L, deltaE) point. Read-only
+            # Theoretical TAS resolution at one (h, k, l, energy transfer) point. Read-only
             # (never mutates), so -- like /state, /schema and /validate -- it is
-            # allowed in read-only access mode. All query params are optional;
-            # omitted (H, K, L, deltaE) default to the current GUI values and an
+            # allowed in read-only access mode, and a GET needs no api_version. All query
+            # params are optional; omitted ones default to the current GUI values and an
             # omitted method defaults to "auto". An infeasible geometry comes back
             # as HTTP 200 with {"ok": false, "reason": ...} (not an error envelope).
             self._require_method(method, "GET")
-            resolution_query = {
-                "H": self._parse_float_query(query, "H"),
-                "K": self._parse_float_query(query, "K"),
-                "L": self._parse_float_query(query, "L"),
-                "deltaE": self._parse_float_query(query, "deltaE"),
-                "method": self._parse_resolution_method(query),
-            }
+            resolution_query = self._parse_resolution_quantities(query)
+            resolution_query["method"] = self._parse_resolution_method(query)
             self._send_json(200, self._call_backend("get_resolution", resolution_query))
             return
 
@@ -688,7 +708,7 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             self._require_method(method, "POST")
             if not self._check_writable():
                 return
-            body = self._read_json_body()
+            body = require_api_version(self._read_json_body())
             reject_unknown_body_keys(body, SCAN_BODY_KEYS)
             idem_key = self.headers.get("Idempotency-Key")
             if idem_key:
@@ -797,6 +817,40 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
 
     #: Resolution methods GET /resolution accepts (mirrors tavi.resolution).
     _RESOLUTION_METHODS = ("auto", "cooper_nathans", "popovici")
+
+    #: The quantities GET /resolution takes; the backend receives them as canonical IDs.
+    _RESOLUTION_QUANTITIES = ("h", "k", "l", "energy_transfer_mev")
+
+    @classmethod
+    def _parse_resolution_quantities(cls, query):
+        """``{canonical ID: float or None}`` for the point asked about.
+
+        Names go through the registry (``h``, ``H``, ``energy_transfer_mev``, ``deltaE``...).
+        Anything else, and two spellings of one quantity, is a 400 rather than an ignored
+        key: a typo'd name must not silently resolve at the GUI's own point.
+        """
+        point = dict.fromkeys(cls._RESOLUTION_QUANTITIES)
+        given = {}
+        for name in query:
+            if name == "method":
+                continue
+            try:
+                key = resolve(name, "write").id
+            except QuantityRefused as exc:
+                raise ApiError(400, "bad_request", "resolution query %r: %s" % (name, exc))
+            if key not in point:
+                raise ApiError(
+                    400, "bad_request",
+                    "resolution query %r is not a resolution field; allowed: %s, method"
+                    % (name, ", ".join(cls._RESOLUTION_QUANTITIES)))
+            if key in given:
+                raise ApiError(
+                    400, "bad_request",
+                    "resolution query %r and %r name the same quantity %s"
+                    % (given[key], name, key))
+            given[key] = name
+            point[key] = cls._parse_float_query(query, name)
+        return point
 
     @staticmethod
     def _parse_float_query(query, name):

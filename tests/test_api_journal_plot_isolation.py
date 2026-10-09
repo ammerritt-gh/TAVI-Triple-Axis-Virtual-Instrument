@@ -26,6 +26,7 @@ from tavi.api_server import ApiError, TaviApiServer, API_PREFIX
 from tavi.journal import SessionJournal, JOURNAL_MAXLEN
 from tavi.plot_render import render_scan_plot_png, NoPlotData
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob, ScanResult
+from api_helpers import with_version
 
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -37,6 +38,7 @@ _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 def _request(url, method="GET", data=None, headers=None, timeout=5):
     hdrs = dict(headers or {})
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")

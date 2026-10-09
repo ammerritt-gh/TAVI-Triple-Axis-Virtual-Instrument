@@ -15,6 +15,7 @@ import pytest
 
 from tavi.api_server import ApiError, TaviApiServer, API_PREFIX
 from tavi.scan_jobs import ScanJob
+from api_helpers import with_version
 
 
 # A representative serialized ResolutionResult (as get_resolution would return).
@@ -93,6 +94,7 @@ def _start_server(backend=None, token=None, mode="allow"):
 
 def _request(url, method="GET", data=None, headers=None, timeout=5):
     hdrs = dict(headers or {})
+    data = with_version(url, method, data)
     if data is not None and not isinstance(data, (bytes, bytearray)):
         data = json.dumps(data).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
@@ -130,9 +132,10 @@ def test_resolution_routes_to_backend_and_returns_dict(server):
         base + "/resolution?H=2&K=0&L=0&deltaE=1.5&method=cooper_nathans")
     assert status == 200
     assert body == CANNED_RESOLUTION
-    # The backend saw parsed floats + the method string.
+    # The backend saw parsed floats under canonical IDs + the method string.
     assert backend.calls == [("get_resolution", {
-        "H": 2.0, "K": 0.0, "L": 0.0, "deltaE": 1.5, "method": "cooper_nathans"})]
+        "h": 2.0, "k": 0.0, "l": 0.0, "energy_transfer_mev": 1.5,
+        "method": "cooper_nathans"})]
 
 
 def test_resolution_defaults_when_params_absent(server):
@@ -141,7 +144,7 @@ def test_resolution_defaults_when_params_absent(server):
     assert status == 200
     # Omitted floats -> None (backend fills GUI defaults); method -> "auto".
     assert backend.calls == [("get_resolution", {
-        "H": None, "K": None, "L": None, "deltaE": None, "method": "auto"})]
+        "h": None, "k": None, "l": None, "energy_transfer_mev": None, "method": "auto"})]
 
 
 def test_resolution_partial_params(server):
@@ -149,7 +152,33 @@ def test_resolution_partial_params(server):
     status, _body = _request(base + "/resolution?H=1.0&deltaE=3")
     assert status == 200
     assert backend.calls == [("get_resolution", {
-        "H": 1.0, "K": None, "L": None, "deltaE": 3.0, "method": "auto"})]
+        "h": 1.0, "k": None, "l": None, "energy_transfer_mev": 3.0, "method": "auto"})]
+
+
+def test_resolution_takes_canonical_ids_and_aliases_alike(server):
+    _srv, base, backend = server
+    status, _body = _request(
+        base + "/resolution?h=1&k=0&l=0&energy_transfer_mev=2")
+    assert status == 200
+    status, _body = _request(base + "/resolution?H=1&K=0&L=0&deltaE=2")
+    assert status == 200
+    assert backend.calls[0] == backend.calls[1]
+    assert backend.calls[0][1]["energy_transfer_mev"] == 2.0
+
+
+@pytest.mark.parametrize("query", [
+    "H=1&h=1",                              # two spellings of one quantity
+    "deltaE=1&energy_transfer_mev=1",
+    "nonsense=1",                           # unknown
+    "Ei=14",                                # a quantity, but not a resolution field
+    "kappa=1",                              # retired
+])
+def test_resolution_refuses_unknown_and_duplicate_names(server, query):
+    _srv, base, backend = server
+    status, body = _request(base + "/resolution?" + query)
+    assert status == 400
+    assert body["error"]["code"] == "bad_request"
+    assert backend.calls == []
 
 
 def test_resolution_bad_float_400(server):
