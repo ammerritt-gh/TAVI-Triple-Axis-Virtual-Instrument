@@ -5091,6 +5091,9 @@ class TAVIController(QObject):
         spec = next((s for s in self.descriptor.samples if s.id == sample_key), None)
         if spec is None or spec.lattice is None:
             return "no sample with a crystal is selected, so there is nothing to observe"
+        if spec.reflection_source is None and spec.space_group is None:
+            # reference_hkls would fall back to every hkl here (no centering rule to apply).
+            return "this sample has no Bragg reflections to align on; choose a Bragg sample"
         state = self.instrument.default_state()
         state.monocris, state.anacris = monocris, anacris
         state.K_fixed, state.fixed_E = K_fixed, fixed_E
