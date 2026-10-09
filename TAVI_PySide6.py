@@ -6031,33 +6031,39 @@ class TAVIController(QObject):
     # v4: the psi/kappa corrections, the hidden zero errors and the
     # Misalignment dock are gone (no correction or misalignment-hash
     # variables; a plane lock carries no correction). The version is
-    # enforced: a block of any other version is refused whole, never converted
-    # (_saved_parameters_refusal).
+    # enforced: a file with a block of any other version (or a flat legacy
+    # file) is refused whole, never converted (_saved_parameters_refusal).
     PARAMETERS_SCHEMA_VERSION = 4
 
     def _saved_parameters_refusal(self, path):
-        """Why this instrument's saved block cannot be restored, or None.
+        """Why this saved file cannot be restored, or None.
 
-        Reads the file and judges the whole block before anything is applied:
-        its version, each saved peak's stage record and the saved exercise
-        (it must be a mount-only code this instrument, sample, crystals,
-        energy and described mount IN THE FILE can still observe -- never the
-        live ones). A file that is unreadable, or holds no block for this
-        instrument, is not refused here: ``load_parameters`` meets it as it
-        always did.
+        Judges the whole document before anything is applied: every top-level
+        entry must be an instrument block of this version, so a flat legacy file,
+        or a block of another version beside a current one, refuses the file
+        (otherwise a later start on that other instrument would rename this block
+        away with it). Then this instrument's block: each saved peak's stage
+        record and the saved exercise (a mount-only code this instrument, sample,
+        crystals, energy and described mount IN THE FILE can still observe --
+        never the live ones). Unreadable JSON is not refused here:
+        ``load_parameters`` meets it as it always did.
         """
         try:
             with open(path, "r", encoding="utf-8") as file:
-                parameters = self._parameters_block(json.load(file))
+                document = json.load(file)
         except (OSError, json.JSONDecodeError):
             return None
+        if not isinstance(document, dict):
+            return "it is not a settings file"
+        for block in document.values():
+            version = block.get("_schema") if isinstance(block, dict) else None
+            if version != self.PARAMETERS_SCHEMA_VERSION:
+                return (f"it was saved by another TAVI (file version "
+                        f"{'none' if version is None else version}; this one reads "
+                        f"{self.PARAMETERS_SCHEMA_VERSION})")
+        parameters = self._parameters_block(document)
         if not parameters:
             return None
-        version = parameters.get("_schema")
-        if version != self.PARAMETERS_SCHEMA_VERSION:
-            return (f"it was saved by another TAVI (file version "
-                    f"{'none' if version is None else version}; this one reads "
-                    f"{self.PARAMETERS_SCHEMA_VERSION})")
         ub_state = parameters.get("ub_matrix_state")
         peaks = ub_state.get("peaks") if isinstance(ub_state, dict) else None
         for index, peak in enumerate(peaks if isinstance(peaks, list) else []):
@@ -6318,7 +6324,8 @@ class TAVIController(QObject):
         exercise it refuses; ``_saved_parameters_refusal``) is set aside as a
         backup and changes nothing else. At start-up the defaults load; for
         File > Load Parameters, ``keep_current_on_refusal``, the session stays
-        exactly as the operator left it.
+        exactly as the operator left it, and a valid file with no block for
+        this instrument is left in place and changes nothing either.
         """
         parameters_path = local_config_path("parameters.json")
         if os.path.exists(parameters_path):
@@ -6330,9 +6337,14 @@ class TAVIController(QObject):
                 parameters = self._parameters_block(json.load(file))
                 parameters = self._normalise_loaded_numbers(parameters)
 
-                # No saved block for this instrument (fresh install or a
-                # pre-namespacing file): use the full default path so derived
-                # values like ideal bending radii are applied, not left at 0.
+                # No saved block for this instrument (fresh install or a file
+                # saved only for other instruments): use the full default path so
+                # derived values like ideal bending radii are applied, not left at 0.
+                if not parameters and keep_current_on_refusal:
+                    self.print_to_message_center(
+                        f"{parameters_path} holds no settings for '{self.instrument.id}'; "
+                        "the current settings are unchanged")
+                    return
                 if not parameters:
                     self.set_default_parameters()
                     self.print_to_message_center(

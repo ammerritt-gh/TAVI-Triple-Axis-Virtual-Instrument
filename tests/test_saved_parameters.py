@@ -88,6 +88,95 @@ def _fresh_start(instrument_id="in8"):
     return generator, next(generator)
 
 
+# --- the whole document: flat files, other instruments' blocks -------------------------
+
+FLAT_LEGACY = {"monocris_var": "pg002", "omega_var": "33.3", "sgl_var": "1.5"}
+
+
+def test_a_flat_legacy_file_is_refused_at_start(in8, saved_file):
+    """Pre-namespacing fields at the top level and no instrument block: set aside,
+    not read as defaults that leave the file in place."""
+    in8.set_default_parameters()
+    with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(FLAT_LEGACY, fh)
+    written = open(saved_file, "rb").read()
+
+    generator, fresh = _fresh_start()
+    try:
+        assert not os.path.exists(saved_file)
+        with open(saved_file + ".bak", "rb") as fh:
+            assert fh.read() == written
+        assert ("Saved parameters not restored: it was saved by another TAVI (file version "
+                f"none; this one reads 4). The file was renamed {saved_file}.bak. "
+                "Defaults loaded.") in _log(fresh), _log(fresh)
+    finally:
+        generator.close()
+    in8.set_default_parameters()
+
+
+def test_a_flat_legacy_file_is_refused_mid_session_and_changes_nothing(in8, saved_file):
+    in8.set_default_parameters()
+    in8.window.instrument_dock.omega_edit.setText("41.5")
+    in8.on_omega_changed()
+    with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(FLAT_LEGACY, fh)
+    written = open(saved_file, "rb").read()
+    before = _state(in8)
+
+    in8.window.load_parameters_action.trigger()
+
+    assert _same(before, _state(in8))
+    assert not os.path.exists(saved_file)
+    with open(saved_file + ".bak", "rb") as fh:
+        assert fh.read() == written
+    assert ("Saved parameters not restored: it was saved by another TAVI (file version "
+            f"none; this one reads 4). The file was renamed {saved_file}.bak. "
+            "The current settings are unchanged.") in _log(in8), _log(in8)
+    in8.set_default_parameters()
+
+
+def test_a_block_of_another_version_for_another_instrument_refuses_the_whole_file(
+        in8, saved_file):
+    """The live block is current, but puma's is version 3: the file is refused
+    whole, so a later start on puma cannot rename this block away with it."""
+    in8.set_default_parameters()
+    _write_block(in8, saved_file, lambda block: None)
+    with open(saved_file, "r", encoding="utf-8") as fh:
+        document = json.load(fh)
+    document["puma"] = {"_schema": 3, "omega_var": "5"}
+    with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(document, fh)
+    written = open(saved_file, "rb").read()
+    in8.window.instrument_dock.omega_edit.setText("33.3")
+    in8.on_omega_changed()
+    before = _state(in8)
+
+    in8.window.load_parameters_action.trigger()
+
+    assert _same(before, _state(in8))
+    assert not os.path.exists(saved_file)
+    with open(saved_file + ".bak", "rb") as fh:
+        assert fh.read() == written
+    assert "file version 3; this one reads 4" in _log(in8), _log(in8)
+    in8.set_default_parameters()
+
+
+def test_a_valid_file_without_this_instruments_block_leaves_the_session_alone(in8, saved_file):
+    in8.set_default_parameters()
+    with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump({"puma": {"_schema": 4}}, fh)
+    in8.window.instrument_dock.omega_edit.setText("41.5")
+    in8.on_omega_changed()
+    before = _state(in8)
+
+    in8.window.load_parameters_action.trigger()
+
+    assert _same(before, _state(in8))
+    assert os.path.exists(saved_file) and not os.path.exists(saved_file + ".bak")
+    assert "holds no settings for 'in8'" in _log(in8), _log(in8)
+    in8.set_default_parameters()
+
+
 # --- another version: refused whole ----------------------------------------------------
 
 @pytest.mark.parametrize("version", [3, 5, None], ids=["v3", "v5", "no-version"])

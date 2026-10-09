@@ -119,16 +119,19 @@ exercise.
 `PARAMETERS_SCHEMA_VERSION`). A block keeps `U_described` and the plane under
 `true_mount`, and `R_hidden` only inside the training hash; restore replaces
 the hidden truth in full (no hash: `R_hidden` = I) without touching the saved
-UB. The version is enforced, with no converter. Restore judges the whole block
-first (`TAVIController._saved_parameters_refusal`): its version, every saved
-peak's stage record, and the saved exercise, which must be a mount-only code
-this instrument can still observe, judged on the sample, crystals, fixed
+UB. The version is enforced, with no converter. Restore judges the whole file
+first (`TAVIController._saved_parameters_refusal`): every top-level entry must
+be a block of this version (a flat legacy file, or a block of another version
+beside a current one, refuses the file), then this instrument's block: every
+saved peak's stage record, and the saved exercise, which must be a mount-only
+code this instrument can still observe, judged on the sample, crystals, fixed
 energy and described mount **in the file**, never the live ones. On any
 refusal nothing is applied and the file is renamed `parameters.json.bak`
 (`.bak2`, `.bak3`, ... when one exists; a backup is never overwritten). At
 start-up the defaults load; File > Load Parameters mid-session leaves the
-session exactly as it was. One message-centre line says why and names the
-backup. The file is renamed whole, so the other instruments' blocks go with it
+session exactly as it was, and a valid file with no block for this instrument
+is left in place, changing nothing. One message-centre line says why and names
+the backup. The file is renamed whole, so the other instruments' blocks go with it
 to the backup.
 
 The UB dock's scattering-plane panel is belief too (`get_scattering_plane_info`
