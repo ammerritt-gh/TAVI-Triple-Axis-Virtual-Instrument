@@ -57,12 +57,15 @@ def test_saved_collimation_container_roundtrip():
     assert controller_module.TAVIController._saved_collimation_values({}) == {}
 
 
-def test_saved_slit_values_container_roundtrip():
-    values = controller_module.TAVIController._saved_slit_values(
-        {"slits_mm": {"vbl_hgap": 80.0, "pbl": [90.0, 95.0]}}
-    )
-    assert values == {"vbl_hgap": 80.0, "pbl": (90.0, 95.0)}   # JSON list -> tuple
-    assert controller_module.TAVIController._saved_slit_values({}) == {}
+def test_a_missing_slit_gap_keeps_its_descriptor_default():
+    """Gaps are read one key each; a gap the file lacks takes its own default, the other still loads."""
+    from instruments.registry import get_instrument
+
+    controller = _controller_stub()
+    controller.descriptor = get_instrument("in12").descriptor()
+    defaults = controller._descriptor_slit_defaults()
+    values = controller._saved_slit_values({"slit.pre_sample.horizontal_gap_mm": 45.0})
+    assert values == {"sbl": (45.0, defaults["sbl"][1]), "dbl_hgap": defaults["dbl_hgap"]}
 
 
 def test_empty_block_falls_back_to_full_defaults():
