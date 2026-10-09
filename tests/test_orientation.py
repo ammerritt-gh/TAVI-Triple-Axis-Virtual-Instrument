@@ -263,24 +263,14 @@ def test_peaks_taken_on_the_true_crystal_drive_it_back_to_a_new_hkl(models, name
                        rtol=0.0, atol=1e-9)
 
 
-def test_a_stage_record_taken_under_a_retired_correction_is_refused():
-    """A record saved while psi/kappa existed may carry "corrections". All zero
-    it reads as it is; a nonzero one put the peak in another readout frame and
-    is refused rather than read wrongly."""
+def test_a_stage_record_holds_the_readouts_and_nothing_retired():
     from instruments.descriptor import tas_goniometer
     from tavi.orientation import record_angles
 
     record = stage_record(tas_goniometer(), {"A3": 30.0, "sgl": 2.0, "sgu": -1.0},
                           ki=K, kf=K, sense=1)
     assert set(record) == {"axes", "angles", "ki", "kf", "sense"}
-    zero = {**record, "corrections": {"A3": 0.0, "sgl": 0.0, "sgu": 0.0}}
-    assert record_angles(zero) == record_angles(record) == {"A3": 30.0, "sgl": 2.0, "sgu": -1.0}
-
-    old = {**record, "corrections": {"A3": 1.0, "sgl": 0.0, "sgu": 0.0}}
-    with pytest.raises(ValueError, match="psi/kappa correction"):
-        record_angles(old)
-    with pytest.raises(ValueError, match="psi/kappa correction"):
-        ObservedPeak(hkl=(1, 0, 0), angles=(30.0, 2.0, 40.0), ki=K, kf=K, stage=old).q_mount()
+    assert record_angles(record) == {"A3": 30.0, "sgl": 2.0, "sgu": -1.0}
 
 
 @pytest.mark.parametrize("hkls", [

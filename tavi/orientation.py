@@ -154,17 +154,7 @@ def stage_record(gonio, angles, ki=None, kf=None, sense=None):
 
 
 def record_angles(record):
-    """A recorded setting's readouts, {axis: degrees}.
-
-    A record saved while the psi/kappa corrections existed may carry
-    ``"corrections"``. All zero it is read as it is; a nonzero one put the
-    peak in another readout frame, which cannot be reconstructed, so it is
-    refused (``ValueError``) rather than read wrongly."""
-    taken = record.get("corrections") or {}
-    if any(float(value) != 0.0 for value in taken.values()):
-        raise ValueError("this peak was taken under a psi/kappa correction, which TAVI "
-                         "no longer has, so its stage record cannot be read; take the "
-                         "peak again")
+    """A recorded setting's readouts, {axis: degrees}."""
     return {name: float(value) for name, value in record["angles"].items()}
 
 

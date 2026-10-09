@@ -182,17 +182,16 @@ def _field(edit):
 
 
 def test_saved_arcs_reload_by_the_omega_rule(controller):
-    """The real load path: a saved arc value (a pre-arc save's chi_var reads
-    as sgl) survives exactly where the saved omega does. A save carrying a UB
+    """The real load path: a saved arc value survives exactly where the saved
+    omega does (a block without sgu shows it at 0). A save carrying a UB
     state (every save writes one) re-solves all the angles from the saved Q."""
     idock = controller.window.instrument_dock
     _set_q(controller, 2.0, 0.4, 0.3)          # out of the plane: needs the arcs
 
     def pre_arc(block):
-        block.pop("sgl_var", None)
-        block.pop("sgu_var", None)
-        block["chi_var"] = 3.5
-        block["omega_var"] = 12.5
+        block.pop("sample_upper_arc_deg", None)
+        block["sample_lower_arc_deg"] = 3.5
+        block["sample_rotation_deg"] = 12.5
 
     _reload_with(controller, pre_arc)
     vals = controller.get_gui_values()
@@ -972,7 +971,7 @@ def test_training_session_round_trips_the_ub_and_the_truth_exactly(controller, m
     _reload_with(controller, scramble)
 
     block = blocks[0]
-    assert block["_schema"] == 4
+    assert block["_schema"] == 5
     assert set(block["true_mount"]) == {"U_described", "mount_plane"}
     assert block["ub_training_hash"] == TRAINING_HASH
     assert "misalignment_hash_var" not in block

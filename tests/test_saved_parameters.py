@@ -1,10 +1,11 @@
-"""Saved parameters, version 4: a file this TAVI cannot restore whole is set
+"""Saved parameters, version 5: a file this TAVI cannot restore whole is set
 aside and changes nothing else.
 
 Both entry points: start-up (the defaults load) and File > Load Parameters
 mid-session (the session stays exactly as it is). Refused: another file
-version, a saved peak taken under a retired correction, a Misalignment-dock
-exercise, an exercise code with motor-zero errors, and an exercise the
+version (a version-4 file included: its A2/A4 count the old way), an unreadable
+saved peak, an exercise code with motor-zero errors or from the retired Misalignment
+dock, and an exercise the
 instrument, sample, crystals, energy and described mount IN THE FILE cannot
 observe -- judged on the file's values, never the live ones.
 """
@@ -90,7 +91,7 @@ def _fresh_start(instrument_id="in8"):
 
 # --- the whole document: flat files, other instruments' blocks -------------------------
 
-FLAT_LEGACY = {"monocris_var": "pg002", "omega_var": "33.3", "sgl_var": "1.5"}
+FLAT_LEGACY = {"monocris_var": "pg002", "sample_rotation_deg": "33.3", "sample_lower_arc_deg": "1.5"}
 
 
 def test_a_flat_legacy_file_is_refused_at_start(in8, saved_file):
@@ -107,7 +108,7 @@ def test_a_flat_legacy_file_is_refused_at_start(in8, saved_file):
         with open(saved_file + ".bak", "rb") as fh:
             assert fh.read() == written
         assert ("Saved parameters not restored: it was saved by another TAVI (file version "
-                f"none; this one reads 4). The file was renamed {saved_file}.bak. "
+                f"none; this one reads 5). The file was renamed {saved_file}.bak. "
                 "Defaults loaded.") in _log(fresh), _log(fresh)
     finally:
         generator.close()
@@ -130,7 +131,7 @@ def test_a_flat_legacy_file_is_refused_mid_session_and_changes_nothing(in8, save
     with open(saved_file + ".bak", "rb") as fh:
         assert fh.read() == written
     assert ("Saved parameters not restored: it was saved by another TAVI (file version "
-            f"none; this one reads 4). The file was renamed {saved_file}.bak. "
+            f"none; this one reads 5). The file was renamed {saved_file}.bak. "
             "The current settings are unchanged.") in _log(in8), _log(in8)
     in8.set_default_parameters()
 
@@ -143,7 +144,7 @@ def test_a_block_of_another_version_for_another_instrument_refuses_the_whole_fil
     _write_block(in8, saved_file, lambda block: None)
     with open(saved_file, "r", encoding="utf-8") as fh:
         document = json.load(fh)
-    document["puma"] = {"_schema": 3, "omega_var": "5"}
+    document["puma"] = {"_schema": 3, "sample_rotation_deg": "5"}
     with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(document, fh)
     written = open(saved_file, "rb").read()
@@ -157,14 +158,14 @@ def test_a_block_of_another_version_for_another_instrument_refuses_the_whole_fil
     assert not os.path.exists(saved_file)
     with open(saved_file + ".bak", "rb") as fh:
         assert fh.read() == written
-    assert "file version 3; this one reads 4" in _log(in8), _log(in8)
+    assert "file version 3; this one reads 5" in _log(in8), _log(in8)
     in8.set_default_parameters()
 
 
 def test_a_valid_file_without_this_instruments_block_leaves_the_session_alone(in8, saved_file):
     in8.set_default_parameters()
     with open(saved_file, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump({"puma": {"_schema": 4}}, fh)
+        json.dump({"puma": {"_schema": 5}}, fh)
     in8.window.instrument_dock.omega_edit.setText("41.5")
     in8.on_omega_changed()
     before = _state(in8)
@@ -212,7 +213,7 @@ def test_a_truncated_file_is_set_aside_at_both_entry_points(in8, saved_file, ent
 
 # --- another version: refused whole ----------------------------------------------------
 
-@pytest.mark.parametrize("version", [3, 5, None], ids=["v3", "v5", "no-version"])
+@pytest.mark.parametrize("version", [3, 4, 6, None], ids=["v3", "v4", "v6", "no-version"])
 def test_a_file_of_another_version_is_set_aside_and_the_defaults_load_at_start(
         in8, saved_file, version):
     in8.set_default_parameters()
@@ -235,12 +236,60 @@ def test_a_file_of_another_version_is_set_aside_and_the_defaults_load_at_start(
         log = _log(fresh)
         shown = "none" if version is None else version
         assert (f"Saved parameters not restored: it was saved by another TAVI (file version "
-                f"{shown}; this one reads 4). The file was renamed {saved_file}.bak. "
+                f"{shown}; this one reads 5). The file was renamed {saved_file}.bak. "
                 "Defaults loaded.") in log, log
         assert fresh.window.instrument_dock.omega_edit.text() != "33.3"
         assert fresh._exercise is None
     finally:
         generator.close()
+    in8.set_default_parameters()
+
+
+CANONICAL_KEYS = {
+    "mono_two_theta_deg", "sample_two_theta_deg", "sample_rotation_deg", "analyzer_two_theta_deg",
+    "sample_lower_arc_deg", "sample_upper_arc_deg", "incident_wavevector_inv_angstrom",
+    "final_wavevector_inv_angstrom", "incident_energy_mev", "final_energy_mev",
+    "mono_horizontal_radius_m", "mono_vertical_radius_m", "analyzer_horizontal_radius_m",
+    "analyzer_vertical_radius_m", "q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom",
+    "q_instrument_z_inv_angstrom", "h", "k", "l", "energy_transfer_mev",
+    "lattice_a_angstrom", "lattice_b_angstrom", "lattice_c_angstrom",
+    "lattice_alpha_deg", "lattice_beta_deg", "lattice_gamma_deg",
+}
+
+
+def test_a_saved_block_is_keyed_by_canonical_ids_and_reads_nothing_else(in8, saved_file):
+    """Version 5 saves every physical quantity under its registry ID and a load reads
+    those: an old *_var key beside them is not a value, so a file that mixes the two
+    cannot half-restore."""
+    from tavi.quantities import by_id
+
+    in8.set_default_parameters()
+    in8.save_parameters()
+    with open(saved_file, "r", encoding="utf-8") as fh:
+        block = json.load(fh)["in8"]
+    assert block["_schema"] == 5
+    assert CANONICAL_KEYS <= set(block)
+    assert all(by_id(key) for key in CANONICAL_KEYS)               # each is a registry ID
+    quantity_vars = {key for key in block if key.endswith("_var")
+                     and key[:-4] in {"mtt", "stt", "omega", "sgl", "sgu", "att", "Ki", "Kf", "Ei",
+                                      "Ef", "rhm", "rvm", "rha", "rva", "qx", "qy", "qz", "H", "K",
+                                      "L", "deltaE", "lattice_a", "lattice_b", "lattice_c",
+                                      "lattice_alpha", "lattice_beta", "lattice_gamma"}}
+    assert not quantity_vars, quantity_vars
+
+    def edit(saved):
+        saved["lattice_a_angstrom"] = "4.321"
+        saved["mono_horizontal_radius_m"] = "9.5"
+        saved["analyzer_vertical_radius_m"] = "1.25"
+        saved["lattice_b_var"] = "9.99"                             # an old key: ignored
+
+    _write_block(in8, saved_file, edit)
+    in8.window.sample_dock.lattice_b_edit.setText("4.05")
+    in8.load_parameters(keep_current_on_refusal=True)
+    assert float(in8.window.sample_dock.lattice_a_edit.text()) == pytest.approx(4.321)
+    assert float(in8.window.sample_dock.lattice_b_edit.text()) == pytest.approx(4.05)
+    assert float(in8.window.instrument_dock.rhm_edit.text()) == pytest.approx(9.5)
+    assert float(in8.window.instrument_dock.rva_edit.text()) == pytest.approx(1.25)
     in8.set_default_parameters()
 
 
@@ -264,7 +313,7 @@ def test_a_refused_file_changes_nothing_when_loaded_mid_session(in8, saved_file)
         assert fh.read() == written
     log = _log(in8)
     assert ("Saved parameters not restored: it was saved by another TAVI (file version 3; "
-            f"this one reads 4). The file was renamed {saved_file}.bak. "
+            f"this one reads 5). The file was renamed {saved_file}.bak. "
             "The current settings are unchanged.") in log, log
     in8.set_default_parameters()
 
@@ -280,24 +329,20 @@ def test_a_backup_is_never_overwritten(in8, saved_file):
     omegas = []
     for name in ("", "2", "3"):
         with open(f"{saved_file}.bak{name}", "r", encoding="utf-8") as fh:
-            omegas.append(float(json.load(fh)["in8"]["omega_var"]))
+            omegas.append(float(json.load(fh)["in8"]["sample_rotation_deg"]))
     assert omegas == [30.0, 31.0, 32.0]
     in8.set_default_parameters()
 
 
 # --- the file's own contents: peaks and the exercise -------------------------------------
 
-def _file_with_peak(ctrl, path, corrections):
-    """A v4 file whose first saved peak carries a stage record with ``corrections``."""
+def _file_with_peak(ctrl, path, stage):
+    """A v5 file whose first saved peak carries ``stage`` as its stage record."""
     from tavi.ub_matrix import ObservedPeak
 
     ctrl.set_default_parameters()
-    record = {"axes": [[ax.name, list(ax.axis)] for ax in ctrl.instrument_state.goniometer],
-              "angles": {"A3": 35.0, "sgl": 0.0, "sgu": 0.0}, "ki": 2.66, "kf": 2.66, "sense": 1}
-    if corrections is not None:
-        record["corrections"] = corrections
-    peak = ObservedPeak(hkl=(2, 0, 0), angles=(35.0, 0.0, 71.0), ki=2.66, kf=2.66,
-                        stage=record).to_dict()
+    peak = ObservedPeak(hkl=(2, 0, 0), angles=(35.0, 0.0, 71.0), ki=2.66, kf=2.66).to_dict()
+    peak["stage"] = stage
     ctrl.ub_matrix.peaks = []
 
     def edit(block):
@@ -306,14 +351,14 @@ def _file_with_peak(ctrl, path, corrections):
     return _write_block(ctrl, path, edit)
 
 
-@pytest.mark.parametrize("corrections, refused", [
-    ({"A3": 1.0, "sgl": 0.0, "sgu": 0.0}, True),
-    ({"A3": 0.0, "sgl": 0.0, "sgu": 0.0}, False),
-    (None, False),
-], ids=["nonzero-correction", "zero-correction", "no-correction-key"])
-def test_a_saved_peak_taken_under_a_retired_correction_is_refused(
-        in8, saved_file, corrections, refused):
-    _file_with_peak(in8, saved_file, corrections)
+@pytest.mark.parametrize("readable", [True, False], ids=["readable-stage", "no-angles"])
+def test_a_saved_peak_with_an_unreadable_stage_record_refuses_the_file(
+        in8, saved_file, readable):
+    record = {"axes": [[ax.name, list(ax.axis)] for ax in in8.instrument_state.goniometer],
+              "angles": {"A3": 35.0, "sgl": 0.0, "sgu": 0.0}, "ki": 2.66, "kf": 2.66, "sense": 1}
+    if not readable:
+        del record["angles"]
+    _file_with_peak(in8, saved_file, record)
     in8.window.instrument_dock.omega_edit.setText("33.3")
     in8.on_omega_changed()
     before = _state(in8)
@@ -321,13 +366,13 @@ def test_a_saved_peak_taken_under_a_retired_correction_is_refused(
     in8.window.load_parameters_action.trigger()
 
     log = _log(in8)
-    if refused:
-        assert _same(before, _state(in8))
-        assert "Saved parameters not restored: saved peak 1 cannot be read" in log
-        assert "psi/kappa correction" in log and os.path.exists(saved_file + ".bak")
-    else:
+    if readable:
         assert os.path.exists(saved_file) and not os.path.exists(saved_file + ".bak")
         assert [p.hkl for p in in8.ub_matrix.peaks] == [(2, 0, 0)]
+    else:
+        assert _same(before, _state(in8))
+        assert "Saved parameters not restored: saved peak 1 cannot be read" in log
+        assert os.path.exists(saved_file + ".bak")
     in8.set_default_parameters()
 
 
@@ -346,8 +391,7 @@ RETIRED_DOCK_CODE = base64.urlsafe_b64encode(bytes(
      MOTOR_ZERO_REFUSAL),
     ({"ub_training_hash": RETIRED_DOCK_CODE}, "no longer simulated"),
     ({"ub_training_hash": "garbage"}, "cannot be read"),
-    ({"misalignment_hash_var": RETIRED_DOCK_CODE}, "Misalignment-dock exercise is retired"),
-], ids=["zero-errors", "retired-dock-code", "garbage", "misalignment-key"])
+], ids=["zero-errors", "retired-dock-code", "garbage"])
 def test_a_refused_exercise_in_a_file_applies_nothing_at_start_or_mid_session(
         in8, saved_file, edits, words):
     in8.set_default_parameters()
