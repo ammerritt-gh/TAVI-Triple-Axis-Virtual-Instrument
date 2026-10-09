@@ -2,7 +2,8 @@
 import pytest
 
 from tavi.quantities import (QUANTITIES, Quantity, QuantityRefused, UnknownQuantity, by_id,
-                             index_table, resolve, SLIT_SCAN_REFUSAL)
+                             index_table, normalize_write_names, public_applied_radii,
+                             public_values, resolve, to_internal, to_public, SLIT_SCAN_REFUSAL)
 
 SCAN_AND_WRITE = [
     ("A2", "mono_two_theta_deg"), ("mtt", "mono_two_theta_deg"),
@@ -84,6 +85,14 @@ def test_derived_theta_points_to_two_theta(name, pointer):
         resolve(name, "scan")
     with pytest.raises(QuantityRefused):
         resolve(name, "write")
+
+
+@pytest.mark.parametrize("name, pointer", [("A1", "set A2"), ("mth", "set A2"),
+                                           ("A5", "set A6"), ("ath", "set A6")])
+def test_derived_theta_write_refusal_says_set_not_scan(name, pointer):
+    with pytest.raises(QuantityRefused, match=pointer) as caught:
+        resolve(name, "write")
+    assert "scan" not in str(caught.value)
 
 
 @pytest.mark.parametrize("name", ["applied_mono_horizontal_radius_m", "applied_mono_vertical_radius_m",
@@ -193,3 +202,86 @@ def test_every_angle_names_its_nicos_motor():
     nicos = {q.id: q.nicos for q in QUANTITIES if q.ill or q.id.endswith("_arc_deg")}
     assert all(nicos.values()), nicos
     assert nicos["sample_lower_arc_deg"] == "sgl" and nicos["sample_upper_arc_deg"] == "sgu"
+
+
+# --- the API write boundary: internal names, key resolution, public views -----------------
+
+def test_every_writable_non_slit_quantity_has_an_internal_name_and_back():
+    for q in QUANTITIES:
+        if q.writable and not q.id.startswith("slit."):
+            assert to_public(to_internal(q.id)) == q.id, q.id
+    assert to_internal("sample_two_theta_deg") == "stt"
+    assert to_internal("mono_two_theta_deg") == "mtt"       # not the old "A1"/"A2" arithmetic
+    assert to_public("K") == "k" and to_public("K_fixed") == "K_fixed"
+
+
+ACCEPT = {"mono_two_theta_deg", "sample_two_theta_deg", "sample_rotation_deg", "h",
+          "slit.pre_sample.horizontal_gap_mm", "K_fixed", "scan_command1", "curvature_modes"}
+
+
+def test_names_resolve_to_the_keys_they_write():
+    keys, errors = normalize_write_names(
+        ["A2", "STT", "psi", "H", "pre_sample_hgap", "K_fixed", "scan_command1"], ACCEPT)
+    assert errors == {}
+    assert keys == {"A2": "mono_two_theta_deg", "STT": "sample_two_theta_deg",
+                    "psi": "sample_rotation_deg", "H": "h",
+                    "pre_sample_hgap": "slit.pre_sample.horizontal_gap_mm",
+                    "K_fixed": "K_fixed", "scan_command1": "scan_command1"}
+
+
+@pytest.mark.parametrize("names, bad", [
+    (["stt", "A4"], {"stt", "A4"}),
+    (["A4", "sample_two_theta_deg"], {"A4", "sample_two_theta_deg"}),
+    (["omega", "psi", "sth"], {"omega", "psi", "sth"}),
+    (["A1"], {"A1"}),                                       # derived only
+    (["kappa"], {"kappa"}),                                 # retired
+    (["slits_mm"], {"slits_mm"}),
+    (["lattice_a"], {"lattice_a"}),                         # the old spelling
+    (["nonsense"], {"nonsense"}),
+    (["Ei"], {"Ei"}),                                       # a quantity this caller lacks
+    (["slit.detector.horizontal_gap_mm"], {"slit.detector.horizontal_gap_mm"}),
+])
+def test_a_name_that_cannot_be_written_is_reported_under_its_own_spelling(names, bad):
+    _keys, errors = normalize_write_names(names + ["h"], ACCEPT)
+    assert set(errors) == bad
+
+
+def test_each_refusal_names_what_to_use_instead():
+    _keys, errors = normalize_write_names(
+        ["A1", "slits_mm", "lattice_a", "vbl_hgap", "stt", "A4"], ACCEPT | {"x"})
+    assert "set A2" in errors["A1"]
+    assert "slit.<stable_id>.horizontal_gap_mm" in errors["slits_mm"]
+    assert "lattice_a_angstrom" in errors["lattice_a"]
+    assert "post_mono_hgap" in errors["vbl_hgap"]
+    assert "assigned twice" in errors["stt"] and "assigned twice" in errors["A4"]
+
+
+class _Slit:
+    def __init__(self, id, stable_id, has_height):
+        self.id, self.stable_id, self.has_height = id, stable_id, has_height
+
+
+def test_public_values_renames_quantities_flattens_slits_and_keeps_the_rest():
+    vals = {"mtt": 40.0, "stt": 70.0, "K": 1.0, "Ei": 14.7, "K_fixed": "Kf Fixed",
+            "lattice_a": 3.9, "scan_command1": "A4 1 2 1", "eta_m": 30.0,
+            "curvature_modes": {"rhm": "autofocus", "rva": "held"},
+            "slits_mm": {"pbl": (100.0, 90.0), "dbl_hgap": 50.0, "gone": 1.0}}
+    slits = [_Slit("pbl", "pre_sample", True), _Slit("dbl_hgap", "detector", False)]
+
+    public = public_values(vals, slits)
+
+    assert public == {
+        "mono_two_theta_deg": 40.0, "sample_two_theta_deg": 70.0, "k": 1.0,
+        "incident_energy_mev": 14.7, "K_fixed": "Kf Fixed", "lattice_a_angstrom": 3.9,
+        "scan_command1": "A4 1 2 1", "eta_m": 30.0,
+        "curvature_modes": {"mono_horizontal_radius_m": "autofocus",
+                            "analyzer_vertical_radius_m": "held"},
+        "slit.pre_sample.horizontal_gap_mm": 100.0, "slit.pre_sample.vertical_gap_mm": 90.0,
+        "slit.detector.horizontal_gap_mm": 50.0,
+    }
+    assert "mtt" in vals                                    # the input is not modified
+
+
+def test_applied_radii_take_their_derived_canonical_ids():
+    assert public_applied_radii({"rhm": -3.0, "rva": 0.0}) == {
+        "applied_mono_horizontal_radius_m": -3.0, "applied_analyzer_vertical_radius_m": 0.0}
