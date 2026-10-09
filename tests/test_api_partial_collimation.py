@@ -264,15 +264,35 @@ def test_angle_pairs_that_write_distinct_slots_are_accepted(in8_controller):
         assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], []), (cmd1, cmd2)
 
 
-def test_a_linked_pair_stays_the_operators_call(in8_controller):
-    """Conflicts were overridable before the hard/soft split and remain so.
+@pytest.mark.parametrize("cmd1, cmd2", [
+    ("A3 30 31 1", "omega 40 41 1"),
+    ("A2 30 31 1", "2theta 30 31 1"),
+    ("H 1.99 2.01 0.01", "H 1.99 2.01 0.01"),
+])
+def test_two_commands_writing_one_slot_are_refused_even_forced(in8_controller, cmd1, cmd2):
+    """Both commands write one scan slot, so only one value per point survives.
 
-    A2 and 2theta are one angle; the linked-group check flags the pair
-    advisorily and promoting it to a hard refusal would block real scans.
+    The result axis then reports the command whose values were not run.
     """
-    hard, soft = in8_controller._scan_command_issues("A2 30 31 1", "2theta 30 31 1")
-    assert hard == [], hard
-    assert soft, "the conflict is still flagged, advisorily"
+    dock = in8_controller.window.simulation_dock
+    dock.scan_command_1_edit.setText(cmd1)
+    dock.scan_command_2_edit.setText(cmd2)
+    try:
+        gui_hard, gui_soft = in8_controller._preflight_scan_validation()
+    finally:
+        dock.scan_command_1_edit.setText("")
+        dock.scan_command_2_edit.setText("")
+    assert gui_hard, (cmd1, cmd2)
+    assert gui_soft == [], gui_soft
+
+    hard, soft = in8_controller._scan_command_issues(cmd1, cmd2)
+    assert hard and soft == []
+
+    backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
+    result = backend.submit_validate({
+        "parameters": {"scan_command1": cmd1, "scan_command2": cmd2}, "force": True})
+    assert result["would_queue"] is False
+    assert any(b.startswith("scan_validation") for b in result["blockers"]), result["blockers"]
 
 
 class _SyncBridge:
@@ -306,9 +326,9 @@ def test_api_force_clears_soft_issues_only(in8_controller, monkeypatch):
             backend.submit_scan({"parameters": hard, "force": force})
         assert excinfo.value.code == "scan_validation", force
 
-    # A soft issue -- the same variable on both axes -- stays the operator's
-    # call: blocked by default, cleared by force.
-    soft = {"scan_command1": "rha 1.0 2.0 0.1", "scan_command2": "rha 1.0 2.0 0.1",
+    # A soft issue -- a very long scan -- stays the operator's call: blocked
+    # by default, cleared by force.
+    soft = {"scan_command1": "rha 1.0 2.0 0.0001", "scan_command2": "",
             "anacris": ana}
     blocked = backend.submit_validate({"parameters": soft})["blockers"]
     assert any(b.startswith("scan_validation") for b in blocked), blocked
