@@ -68,29 +68,22 @@ The sign convention is vTAS's: sense +1 puts `−U·B·hkl` on Q_lab, sense −1
 `+U·B·hkl`. The instrument dock shows the readouts A3, `sgl`
 and `sgu`; editing any of them reads Q back through the full stage.
 
-### Corrections and physical angles
+### Readouts
 
-| Offset | Symbol | Corrects | Description |
-|--------|--------|----------|-------------|
-| **ψ** | psi | A3 | Turntable correction |
-| **κ** | kappa | sgl | Lower-arc correction |
-
-The solved angles are **readouts**: the operator's UB lives in the readout
-frame at the corrections in force. The crystal sits at the **physical** angles,
-readout + correction + hidden zero error (`mis_omega` on A3, `mis_chi` on sgl),
-and only the McStas sample arm reads those. Which field corrects an axis and
-which holds its zero error is declared on the axis (`GonioAxis.correction`,
-`GonioAxis.zero_error` in `tas_goniometer`), not in the runtime.
+The solved angles are **readouts**, and the crystal sits exactly at them:
+nothing sits between the dial and the sample. (TAVI once offered two
+corrections, ψ of the turntable and κ of the lower arc, and hid training
+zero errors under them; both are retired, see *Alignment training*.) The
+operator's UB lives in the readout frame, and only the McStas sample arm and
+the analytic engine read where the crystal really is, which is the truth below.
 
 A peak recorded with Take Position carries its stage record: every readout,
-the corrections in force, ki, kf and the sense (`tavi/orientation.py`
-`stage_record`; never a zero error). The UB fit reads each peak at readout +
-(correction at record time − correction now) (`record_angles`), its physical
-dial position in today's readout frame, so changing ψ or κ after a peak was
-taken does not move that peak. A correction is not a mount rotation once the arcs
-move, so a fit across a correction change is exact only where the new
-corrections cancel the zero errors (or the peaks are in the plane); elsewhere
-it is the least-squares U. A peak without a record (a save from before the
+ki, kf and the sense (`tavi/orientation.py` `stage_record`). The UB fit reads
+each peak at its recorded readouts (`record_angles`). A record saved while the
+corrections existed may carry a `"corrections"` entry: all zero it reads as it
+is, but a nonzero one put the peak in another readout frame that cannot be
+reconstructed, so it is refused (a saved file holding one is refused whole, see
+*Saved parameters*). A peak without a record (a save from before the
 goniometer, a TAS_MCP peak) is a **legacy** peak: its (ω, χ, 2θ) triple keeps
 the old meaning, and the UB dock marks it. A stage peak saves that triple too,
 computed from its record (`legacy_triple`: the legacy setting of the same Q),
@@ -106,23 +99,37 @@ instrument state's `sample_mount`). The **truth** is the crystal on the stage:
 described (identity, TAVI's standard setting, or the optional mounting plane:
 `tavi/ub_matrix.py` `u_from_plane` built on the selected sample's own lattice,
 never the lattice fields) and `R_hidden` the rotation of a
-loaded UB training exercise (identity otherwise), together with the hidden
-zero errors. Only the McStas sample arm, the analytic engine's per-point
-HKL (`docs/ANALYTIC_ENGINE.md` *Where the crystal is*) and training grading
-(`tavi/ub_matrix.py` `grade_alignment`) read the truth. The controller writes
-`U_true` through one setter (`TAVIController._set_true_mount`); Calculate UB, a
-manual UB edit, Reset, a lattice edit, Refine Lattice, every API write and a
-sample selection never touch it, so a fitted UB moves the readouts commanded
-for an HKL, never the simulated crystal. The operator's UB starts equal to
-`U_described` and is reset to it by Reset, by loading or clearing an exercise,
-and by Defaults. One exercise at a time owns the zero errors: loading or
-clearing either exercise (a UB training hash or a Misalignment-dock hash)
-while the other is loaded is refused, naming it; Defaults clears whichever is
-loaded. A save (`parameters.json` schema 3) keeps `U_described` and the plane
-under `true_mount` and `R_hidden` only inside the training hash; restore
-replaces the hidden truth in full (no hash: `R_hidden` = I, zero errors 0)
-without touching the saved UB. A block from before schema 3 loads best effort
-with its saved UB taken as `U_described`.
+loaded training exercise (identity otherwise). Only the McStas sample arm, the
+analytic engine's per-point HKL (`docs/ANALYTIC_ENGINE.md` *Where the crystal
+is*) and training grading (`tavi/ub_matrix.py` `grade_alignment`) read the
+truth. The controller writes `U_true` through one setter
+(`TAVIController._set_true_mount`); Calculate UB, a manual UB edit, Reset, a
+lattice edit, Refine Lattice, every API write and a sample selection never
+touch it, so a fitted UB moves the readouts commanded for an HKL, never the
+simulated crystal. The operator's UB starts equal to `U_described` and is reset
+to it by Reset, by loading or clearing an exercise, and by Defaults. Loading or
+clearing the exercise, like applying or clearing a mounting plane, is refused
+while a scattering plane is locked; Defaults releases the lock and clears the
+exercise.
+
+### Saved parameters
+
+`parameters.json` holds one block per instrument, each carrying its
+`_schema` version (4 now; the history is the comment on
+`PARAMETERS_SCHEMA_VERSION`). A block keeps `U_described` and the plane under
+`true_mount`, and `R_hidden` only inside the training hash; restore replaces
+the hidden truth in full (no hash: `R_hidden` = I) without touching the saved
+UB. The version is enforced, with no converter. Restore judges the whole block
+first (`TAVIController._saved_parameters_refusal`): its version, every saved
+peak's stage record, and the saved exercise, which must be a mount-only code
+this instrument can still observe, judged on the sample, crystals, fixed
+energy and described mount **in the file**, never the live ones. On any
+refusal nothing is applied and the file is renamed `parameters.json.bak`
+(`.bak2`, `.bak3`, ... when one exists; a backup is never overwritten). At
+start-up the defaults load; File > Load Parameters mid-session leaves the
+session exactly as it was. One message-centre line says why and names the
+backup. The file is renamed whole, so the other instruments' blocks go with it
+to the backup.
 
 The UB dock's scattering-plane panel is belief too (`get_scattering_plane_info`
 on the operator's U and lattice fields). Its plane normal is the zone axis
@@ -133,35 +140,56 @@ vector `plane_normal_hkl`. A vertical reciprocal vector has no integer (h k l)
 on a non-orthogonal lattice, which is why the panel names the direct
 direction. "c* elevation" (`chi_misalignment_deg`) is c*'s angle above the
 horizontal; "a* azimuth" (`omega_offset_deg`) is a*'s angle from mount x in
-the horizontal plane, a property of the UB, not the turntable correction ψ.
+the horizontal plane, a property of the UB, not of the turntable.
 
 ### The McStas sample chain
 
 One Arm, `sample_mount`, at the sample position relative to `sample_arm` (z
 along ki, y up). Its runtime rotation `sample_rx/ry/rz_param` is
-`(R_stage(physical) · U_true)^T` as McStas Euler angles
+`(R_stage(readouts) · U_true)^T` as McStas Euler angles
 (`tavi/orientation.py` `sample_arm_euler`), because for an Arm
 `R_abs(child) = R_rel · R_abs(parent)` and `v_local = R_abs · v_global`. The
 sample component is emitted relative to it with no rotation of its own.
 
-## Hidden Misalignment Angles (Training Mode)
+## Alignment Training (the Mount-only Exercise)
 
-For training exercises, hidden zero errors can be applied:
+There is one training exercise: a crystal mounted crooked. A hidden rotation
+`R_hidden` of the crystal in its mount, `U_true = R_hidden · U_described`,
+is encoded in a hash that the UB Matrix dock generates, loads, clears and
+checks; the student finds peaks, fits a UB and presses *Check My Alignment*.
+(The Misalignment dock and the hidden motor-zero errors, ψ and κ, are retired:
+a zero error of a turntable or an arc is not a rotation of the crystal once the
+arcs tilt, so a UB fit could not undo it exactly.)
 
-| Angle | Description |
-|-------|-------------|
-| mis_omega | Hidden turntable (A3) zero error, in-plane |
-| mis_chi | Hidden lower-arc (`sgl`) zero error, out-of-plane |
+**What is exact.** The hidden error is always exactly representable by U. From
+correctly indexed reflections, the correct lattice and noiseless peaks, a UB
+fit recovers it exactly, wherever the stage can bring the reflections into the
+plane (the arcs tilted too), and the grade is aligned to rounding. **What is
+graded.** Ordinary measurements (a peak found only to the scan's resolution, a
+slightly wrong lattice field, a mis-indexed peak) are graded against the stated
+tolerance on the checked reflections: `tavi/ub_matrix.py` `grade_alignment`
+takes the worst miss, in degrees, between where each checked reflection of the
+true crystal lies and where the operator's UB and lattice fields drive the
+stage, and reports *aligned* (≤ 0.5°), *close* (≤ 2°) or *not aligned*. The
+checked reflections are the student's peaks plus three reflections of the
+mounting plane (u, v, u+v; without a described plane, the mount's horizontal x
+and z as small (h k l) and their sum, else (1 0 0), (0 1 0), (1 1 0)).
 
-They are encoded in a hash: the Misalignment dock's exercise carries the zero
-errors only, a UB training exercise carries them with `R_hidden` (see *Truth and
-belief*). Both are graded by one check (`tavi/ub_matrix.py` `grade_alignment`),
-which never compares ψ and κ with the hidden offsets: it measures how far the
-true reflections are from where the UB, lattice fields and ψ/κ corrections
-drive. Correcting the offsets with ψ and κ is one way to pass; a UB fitted from
-peaks found on the misaligned crystal is another, since the fit absorbs the
-offset (exactly in the plane, approximately with tilted arcs) and grades aligned
-with ψ = 0.
+**Codes.** The code keeps its 11-float layout, of which the last two (once the
+motor-zero errors) are written 0. A code with a nonzero value there, a retired
+Misalignment-dock code (two floats) or one that does not decode is refused,
+applying nothing: *this exercise was made by an older TAVI and contains
+motor-zero errors, which are no longer simulated; ask for a new code*.
+
+**Observable.** Generation and load both check that the instrument can reach
+at least two non-parallel reference reflections of the sample for the hidden
+rotation: indices up to 2 in size, non-zero structure factor (the sample's
+reflection table, else its space group's centering rule), elastic at the fixed
+energy, each brought into the scattering plane within the arcs' travel by the
+run's own solve (`instruments/tas_runtime.py` `training_reach_error`, over
+`check_point_feasibility`). Generation redraws up to 50 times and otherwise says
+why; load refuses. A restore applies the same check to the instrument, sample,
+crystals, fixed energy and described mount in the file being restored.
 
 ## Energy and Wave Vectors
 
@@ -227,8 +255,8 @@ The instrument can scan any of the following parameters:
 ### Instrument Angles
 - **A1, A2, A3, A4**: Direct angle control (angle mode)
 - **sgl, sgu**: The goniometer arcs (angle mode only; refused beside Q/HKL/ΔE)
-- **ω**: Steps the ψ slot (orientation mode)
-- **ψ, κ**: Corrections of the turntable and the lower arc
+- **ω**: The sample rotation A3 itself (an alias of A3; angle mode)
+- **ψ, κ**: Retired; a scan or an API write naming them is refused
 
 ### Crystal Focusing
 - **rhm, rvm, rha, rva**: Crystal bending radii
@@ -247,12 +275,12 @@ The instrument can scan any of the following parameters:
 
 ### Sample Dock
 - Lattice parameters: a, b, c, α, β, γ
-- **Alignment Offsets**: κ, ψ (set during alignment)
 - Sample selection and properties
+- Mounting plane
 
-### Misalignment Dock
-- Load/check/clear misalignment exercises
-- Alignment feedback during training
+### UB Matrix Dock
+- UB, peaks, scattering-plane lock
+- Alignment training: generate, load, clear and check the mount-only exercise
 
 ## Scan Modes
 
@@ -265,14 +293,9 @@ Scan in momentum space (qx, qy, qz). Direct control of momentum transfer.
 ### Angle Mode
 Directly control instrument angles (A1, A2, A3, A4). Bypass automatic calculation.
 
-### Orientation Mode
-Scan the corrections (ω, ψ, κ) while keeping Q fixed.
-
 ## Key Relationships Summary
 
-1. **ω = A3 (sth)**: Omega displays the calculated sample theta
-2. **Total in-plane rotation**: A3 + ψ + misalignments
-3. **Lower arc, physical**: sgl + κ + misalignments (the upper arc sgu has no correction)
-4. **ΔE = Ei - Ef**: Energy transfer
-5. **Q = Ki - Kf**: Momentum transfer (vector)
-6. **ψ, κ are offsets only**: They don't change with Q, only during alignment
+1. **ω = A3 (sth)**: Omega is the sample rotation, the turntable readout
+2. **The crystal sits at the readouts**: A3, sgl and sgu, with no correction or zero error
+3. **ΔE = Ei - Ef**: Energy transfer
+4. **Q = Ki - Kf**: Momentum transfer (vector)

@@ -88,7 +88,7 @@ legible alignment):
   IN8 (unlimited arcs) and IN12 (±20° arcs), so no test builds a window of its
   own: hidden truth untouched by every belief write, saved state, the lock in
   the GUI, the API and the runtime (a locked point runs at the lock's exact
-  kappa), the plane panel's labels, the residual table and its lifetime,
+  arc settings), the plane panel's labels, the residual table and its lifetime,
   Refine Lattice through its button, a sample swap moving the UB onto the new
   lattice, and grading reflections following the described mount. Two tests
   are the operator's done-test for alignment: the cold path driven through

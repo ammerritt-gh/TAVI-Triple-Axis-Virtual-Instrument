@@ -57,8 +57,8 @@ infeasible at validation time for analytic (`deterministic`) jobs.
 
 The model is evaluated at the (H, K, L) the crystal really presents at each
 executed point, never at the requested HKL. The point's physical stage
-angles (readout + operator correction + the hidden zero error of a training
-exercise), its sample two-theta, Ki, Kf and the sample sense give the
+angles (the stage readouts: the crystal sits exactly at them), its sample
+two-theta, Ki, Kf and the sample sense give the
 mount-frame Q (`tavi.orientation.q_mount_from_stage`), read through the true
 mount: `(U_true · B_true)⁻¹` (`instruments.tas_runtime.true_point_hkl`, which
 only the engine calls). `U_true` is the crystal's real mount
@@ -67,8 +67,9 @@ sample's own lattice (`SampleSpec.lattice`), never the lattice fields, so the
 engine and McStas diffract from the same crystal.
 
 This holds in every scan mode. An rlu point is evaluated where the operator's
-UB actually drove the crystal: a wrong UB, or an uncorrected zero error,
-misses the reflection and the counts drop, as in McStas. A momentum,
+UB actually drove the crystal: a wrong UB (a training exercise's hidden
+mount rotation, left uncorrected, is one) misses the reflection and the
+counts drop, as in McStas. A momentum,
 orientation or angle point is evaluated at the HKL the crystal presents at
 those angles, whatever the UB. With "No sample" there is no crystal, so no
 HKL is derived; the zero model needs none. The true HKL feeds only the model

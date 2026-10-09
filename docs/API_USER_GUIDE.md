@@ -46,7 +46,7 @@ BASE URL: http://127.0.0.1:8642/api/v1   (JSON in, JSON out; add header
 
 KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
-  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...49 keys returned, 45 writable...}, budget}
+  GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...47 keys returned, 43 writable...}, budget}
   PATCH /parameters  body {"Ei":14.7,"H":2.0}  -> {"applied":["Ei","H"],"errors":{}}
   POST /validate  body {"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
   POST /scan  body {"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
@@ -64,7 +64,7 @@ SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them vi
   SYNTAX: "VARIABLE start stop STEP". The 3rd number (last token) is the STEP SIZE, not a point count.
   "H 1.99 2.01 0.01" = 3 points (1.99, 2.00, 2.01). A step larger than the range is an error.
   Two non-empty commands = a 2D scan (points multiply). One command = 1D. None = single point.
-  Scannable variables: H K L, qx qy qz, deltaE, A1 A2 A3 A4, omega, 2theta, sgl sgu (angle mode only; chi is refused), kappa psi, rhm rvm rha rva.
+  Scannable variables: H K L, qx qy qz, deltaE, A1 A2 A3 A4, omega (= A3), 2theta, sgl sgu (angle mode only; chi, psi and kappa are refused), rhm rvm rha rva.
 
 GOLDEN WORKFLOW:
   1. GET /schema  (learn fields, allowed values, and limits for THIS instrument — do this first)
@@ -215,8 +215,8 @@ Liveness probe. No auth required, even when a token is set.
 
 ### GET /state
 Full snapshot: instrument id, access mode, busy flag, the currently running job
-id (or `null`), the list of queued job ids, the complete parameter dict (49
-keys returned, 45 writable — see §6), the configured limits (if any), current budget usage, and the
+id (or `null`), the list of queued job ids, the complete parameter dict (47
+keys returned, 43 writable — see §6), the configured limits (if any), current budget usage, and the
 session's background configuration (the same object `GET /background` returns).
 ```json
 {"instrument": "puma", "mode": "allow", "busy": true, "current_job": "j-0003",
@@ -695,7 +695,7 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
    {"name": "monocris", "type": "string", "allowed": ["pg002", "pg002_test"]},
    {"...": "one entry per writable parameter"}],
  "scan_variables": ["H", "K", "L", "qx", "qy", "qz", "deltaE", "A1", "A2",
-   "A3", "A4", "omega", "2theta", "sgl", "sgu", "kappa", "psi", "rhm", "rvm", "rha", "rva"],
+   "A3", "A4", "omega", "2theta", "sgl", "sgu", "rhm", "rvm", "rha", "rva"],
  "engines": ["mcstas", "deterministic"],
  "scan_body_fields": [
    {"name": "engine", "type": "string", "allowed": ["mcstas", "deterministic"],
@@ -1109,7 +1109,7 @@ Server-Sent Events stream. See §8.
 
 ## 6. Parameter field reference
 
-All 49 keys of `GET /state`'s `parameters` (`GET /parameters` returns the same 48 without `lock_stale`); 45 are writable via `PATCH /parameters`; `curvature_modes`, `mount_plane_u`, `mount_plane_v` and `lock_stale` are read-only.
+All 47 keys of `GET /state`'s `parameters` (`GET /parameters` returns the same 46 without `lock_stale`); 43 are writable via `PATCH /parameters`; `curvature_modes`, `mount_plane_u`, `mount_plane_v` and `lock_stale` are read-only.
 Many are **linked**: writing one triggers the same recompute the GUI does when a
 user presses Enter, so dependent fields update automatically.
 
@@ -1120,7 +1120,7 @@ user presses Enter, so dependent fields update automatically.
 | `omega` | number | degrees | Sample rotation (scan variable `A3`; same physical angle as sample θ). |
 | `sgl` | number | degrees | Lower sample tilt arc readout: turns about the horizontal axis perpendicular to the beam at A3 = 0 (stage x), riding on the turntable. Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. A value outside the arc's travel (PUMA and IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words an angle-mode point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
 | `sgu` | number | degrees | Upper sample tilt arc readout: turns about the beam axis at A3 = 0 (stage z), riding on `sgl`. Same rules as `sgl`. |
-| `orientation_mode` | string | — | `"free"` (the arcs are solved per Q) or `"locked"` (a scattering plane is locked: the arcs and `kappa` stay put and every Q is solved at the locked tilts; a Q out of the plane is refused naming the plane and the angle). Writing `"locked"` locks `lock_plane` from the same request, or the default plane (the mounting plane, else the first two UB peaks, else (1 0 0)/(0 1 0)), where the current UB levels it; a plane the arcs cannot level within travel is refused with the reason. Writing `"free"` releases. While locked, a write of `sgl`, `sgu` or `kappa` is refused, in `PATCH` and in a scan's `parameters` alike (`400`, naming the lock: release first), and a scan starts from the locked arcs and `kappa`; a request combining `orientation_mode` or `lock_plane` with `sgl`, `sgu` or `kappa` is refused whichever way it switches (send two). A lock request (`orientation_mode: "locked"` or `lock_plane`) must stand alone: with any other field (a lattice parameter, say, which would change the UB the lock is computed from) it is a `400` and nothing applies; send two PATCHes instead. Releasing (`"free"`) may carry other fields, except `sgl`, `sgu` and `kappa`; a refused release applies none of them. Not settable in a scan's `parameters`: a scan runs in the session's mode. See the User Guide's *Lock plane*. |
+| `orientation_mode` | string | — | `"free"` (the arcs are solved per Q) or `"locked"` (a scattering plane is locked: the arcs stay put and every Q is solved at the locked tilts; a Q out of the plane is refused naming the plane and the angle). Writing `"locked"` locks `lock_plane` from the same request, or the default plane (the mounting plane, else the first two UB peaks, else (1 0 0)/(0 1 0)), where the current UB levels it; a plane the arcs cannot level within travel is refused with the reason. Writing `"free"` releases. While locked, a write of `sgl` or `sgu` is refused, in `PATCH` and in a scan's `parameters` alike (`400`, naming the lock: release first), and a scan starts from the locked arcs; a request combining `orientation_mode` or `lock_plane` with `sgl` or `sgu` is refused whichever way it switches (send two). A lock request (`orientation_mode: "locked"` or `lock_plane`) must stand alone: with any other field (a lattice parameter, say, which would change the UB the lock is computed from) it is a `400` and nothing applies; send two PATCHes instead. Releasing (`"free"`) may carry other fields, except `sgl` and `sgu`; a refused release applies none of them. Not settable in a scan's `parameters`: a scan runs in the session's mode. See the User Guide's *Lock plane*. |
 | `lock_plane` | object or null | r.l.u. | The locked plane's two vectors, `{"u": [h, k, l], "v": [h, k, l]}`; `null` when free. Writing it alone locks that plane (as `orientation_mode: "locked"` with it); while a different plane is locked it is refused (release first). |
 | `lock_stale` | boolean or null | — | **Read-only, in `GET /state` only** (not `GET /parameters`, not a scan result's `parameters`). `true` when the current UB (U and lattice fields) no longer levels the locked plane at the locked tilts within 0.05°; `null` when free. The UB dock's STALE mark reads the same function. |
 | `att` | number | degrees | Analyzer take-off angle (scan variable `A4`). |
@@ -1143,8 +1143,6 @@ user presses Enter, so dependent fields update automatically.
 | `lattice_alpha` | number | degrees | Lattice angle α. |
 | `lattice_beta` | number | degrees | Lattice angle β. |
 | `lattice_gamma` | number | degrees | Lattice angle γ. |
-| `kappa` | number | degrees | Correction κ of the lower arc `sgl`. Held, like the arcs, while a plane is locked. |
-| `psi` | number | degrees | Correction ψ of the turntable (A3). |
 | `sample` | string | — | Sample id from the shared sample library; the allowed values are the `sample` field's `allowed` list in `GET /schema`. Writable. |
 | `mount_plane_u` | array or null | r.l.u. | **Read-only.** The (h k l) the sample is mounted with along the mount x axis, as described in the Sample dock's optional mounting plane; `null` when the mount is not from a plane (the standard setting, or after a sample change cleared the description). A write returns `400 invalid_parameters` with `"read-only field"`. |
 | `mount_plane_v` | array or null | r.l.u. | **Read-only.** The (h k l) described in the horizontal plane with `mount_plane_u`; `null` with it. |
@@ -1165,7 +1163,9 @@ user presses Enter, so dependent fields update automatically.
 | `scan_command2` | string | — | Second scan command (§7). Both set = 2D scan. |
 | `diagnostic_mode` | boolean | — | Enable per-point diagnostic capture. |
 
-**Removed field.** `chi` is gone. The old `chi` was a tilt fixed to the beam under the turntable, so treating it as an alias of an arc would give different physics under the same name. Writing it, in `PATCH /parameters` or in the `parameters` of `POST /scan` / `POST /validate`, returns `400 invalid_parameters`. The error names the two arcs: `{"errors": {"chi": "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper); 'kappa' is the lower-arc correction"}}`.
+**Removed field.** `chi` is gone. The old `chi` was a tilt fixed to the beam under the turntable, so treating it as an alias of an arc would give different physics under the same name. Writing it, in `PATCH /parameters` or in the `parameters` of `POST /scan` / `POST /validate`, returns `400 invalid_parameters`. The error names the two arcs: `{"errors": {"chi": "removed: the sample arcs are 'sgl' (lower) and 'sgu' (upper)"}}`.
+
+**Retired fields.** `psi` and `kappa`, TAVI's zero corrections of the turntable A3 and the lower arc `sgl`, are gone with the corrections themselves: the crystal sits exactly at the `omega`, `sgl` and `sgu` readouts. Naming either in `PATCH /parameters` or in the `parameters` of `POST /scan` / `POST /validate` returns `400 invalid_parameters` naming the retirement and what to set instead (`{"errors": {"psi": "retired: psi was TAVI's zero correction of the turntable A3 and no longer exists; set the sample rotation 'omega' (A3) itself"}}`), and **nothing else in that request is applied**; they are never ignored. They are not in `/schema` or in the parameter dict, and a scan command naming them is refused. The `orientation` scan mode that scanned them has no scan variable left.
 
 **Dict-valued fields** — when writing these, send an object keyed by slot id.
 Missing keys fall back to instrument defaults.
@@ -1215,10 +1215,10 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 | `qx` `qy` `qz` | Q components (instrument frame) |
 | `deltaE` | energy transfer (meV) |
 | `A1` `A2` `A3` `A4` | raw instrument angles |
-| `omega` | sample rotation (alias of A3) |
+| `omega` | the sample rotation A3 itself (alias of A3, angle mode; `omega 35 36 1` turns the turntable to 35° and 36°) |
 | `2theta` | sample two-theta (alias of A2's index) |
-| `sgl` `sgu` | the goniometer arcs, in angle mode only (with A1-A4 or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. Scan `kappa` there instead. |
-| `kappa` `psi` | the corrections of the lower arc and the turntable |
+| `sgl` `sgu` | the goniometer arcs, in angle mode only (with A1-A4 or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. |
+| `kappa` `psi` | refused: retired, the error says so and names `omega` / `sgl` |
 | `chi` | refused: retired, the error names `sgl`/`sgu` |
 | `rhm` `rvm` `rha` `rva` | crystal bending radii |
 
