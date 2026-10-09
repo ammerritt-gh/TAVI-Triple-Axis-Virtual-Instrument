@@ -75,7 +75,10 @@ def test_a_mount_only_code_decodes_and_every_other_code_is_refused():
     packed = struct.pack("<ff", 1.5, -0.75)
     retired = base64.urlsafe_b64encode(
         bytes(b ^ key[i % len(key)] for i, b in enumerate(packed))).decode("ascii")
-    for code in (retired, "not-a-code", "", "A" * 60):
+    with pytest.raises(ValueError) as dock:
+        decode_mount_exercise(retired)
+    assert str(dock.value) == MOTOR_ZERO_REFUSAL
+    for code in ("not-a-code", "", "A" * 60):
         with pytest.raises(ValueError, match="cannot be read"):
             decode_mount_exercise(code)
 
@@ -236,7 +239,7 @@ def test_a_refused_code_applies_nothing(in8, said):
             before = _hidden(in8)
             said.clear()
             for code, words in ((encode_training(rotation, 1.25, 0.0), "no longer simulated"),
-                                (retired, "cannot be read"), ("garbage", "cannot be read")):
+                                (retired, "no longer simulated"), ("garbage", "cannot be read")):
                 _press_load(in8, code)
                 assert _same(before, _hidden(in8)), code
                 assert any(m.startswith("Exercise refused:") and words in m for m in said), said

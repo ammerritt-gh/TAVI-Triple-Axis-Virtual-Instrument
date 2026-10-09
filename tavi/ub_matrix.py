@@ -866,16 +866,27 @@ MOTOR_ZERO_REFUSAL = ("this exercise was made by an older TAVI and contains moto
                       "errors, which are no longer simulated; ask for a new code")
 
 
+def _is_retired_dock_code(hash_str: str) -> bool:
+    """True when the code decodes to the two floats (8 bytes) the retired Misalignment dock wrote."""
+    try:
+        return len(base64.urlsafe_b64decode(hash_str.encode('ascii'))) == 8
+    except ValueError:
+        return False  # not base64: decode_training's own "cannot be read" reason stands
+
+
 def decode_mount_exercise(hash_str: str) -> np.ndarray:
     """The hidden mount rotation of a mount-only exercise code.
 
     Raises ``ValueError`` with the reason, applying nothing, for a code that
-    does not decode (a retired Misalignment-dock code included) or whose
-    motor-zero values are not 0.
+    does not decode or whose motor-zero values are not 0. A retired
+    Misalignment-dock code (two floats) gets the motor-zero refusal: it was
+    made by an older TAVI that simulated those zeros.
     """
     try:
         rotation, turntable_zero, lower_arc_zero = decode_training(hash_str)
     except ValueError as exc:
+        if _is_retired_dock_code(hash_str):
+            raise ValueError(MOTOR_ZERO_REFUSAL) from exc
         raise ValueError(f"this exercise code cannot be read ({exc}); it may be damaged or "
                          "made by an older TAVI. Ask for a new code") from exc
     if turntable_zero != 0.0 or lower_arc_zero != 0.0:
