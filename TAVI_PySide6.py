@@ -4145,10 +4145,10 @@ class TAVIController(QObject):
         2. Malformed commands (wrong number of parts, invalid numbers)
         3. Suspicious parameters (e.g., > 1000 scan points)
         4. Conflicts between linked parameters (e.g., qx + H)
-        5. Mode conflicts (orientation angles vs momentum/HKL)
+        5. Pair conflicts (an angle beside a Q, HKL or deltaE scan)
         """
         from gui.docks.unified_simulation_dock import (
-            LINKED_PARAMETER_GROUPS, MODE_CONFLICTS, VALID_SCAN_VARIABLES
+            LINKED_PARAMETER_GROUPS, VALID_SCAN_VARIABLES
         )
         
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
@@ -4531,7 +4531,9 @@ class TAVIController(QObject):
         An arc (``sgl``/``sgu``) scanned beside a Q, HKL or energy-transfer
         variable is the same kind of lie: that makes it a Q-mode scan, which
         solves the arcs per point, so the arc command would be silently
-        ignored (A6).
+        ignored (A6). An angle (A1-A4, 2theta, omega) beside a Q, HKL or
+        energy-transfer variable writes the same slot as the Q one, so the
+        measurement is labelled as one quantity while it scans another.
 
         Every other conflict this class detects is a judgement call, so those
         stay overridable.
@@ -4540,7 +4542,8 @@ class TAVIController(QObject):
         hkl_vars = {"h", "k", "l"}
         return ((v1 in q_vars and v2 in hkl_vars)
                 or (v1 in hkl_vars and v2 in q_vars)
-                or TAVIController._is_arc_in_q_mode(v1, v2))
+                or TAVIController._is_arc_in_q_mode(v1, v2)
+                or TAVIController._is_angle_beside_q(v1, v2))
 
     @staticmethod
     def _is_arc_in_q_mode(v1: str, v2: str) -> bool:
@@ -4548,6 +4551,13 @@ class TAVIController(QObject):
         arcs = {"sgl", "sgu"}
         q_mode = {"qx", "qy", "qz", "deltae", "h", "k", "l"}
         return (v1 in arcs and v2 in q_mode) or (v2 in arcs and v1 in q_mode)
+
+    @staticmethod
+    def _is_angle_beside_q(v1: str, v2: str) -> bool:
+        """True when one command scans an angle and the other a Q, HKL or deltaE."""
+        angles = {"a1", "a2", "a3", "a4", "2theta", "omega"}
+        q_mode = {"qx", "qy", "qz", "deltae", "h", "k", "l"}
+        return (v1 in angles and v2 in q_mode) or (v2 in angles and v1 in q_mode)
 
     def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
         """Check if two scan variables conflict with each other.
@@ -4559,8 +4569,8 @@ class TAVIController(QObject):
         Returns:
             str: Conflict warning message, or empty string if no conflict
         """
-        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS, MODE_CONFLICTS
-        
+        from gui.docks.unified_simulation_dock import LINKED_PARAMETER_GROUPS
+
         # Normalize to lowercase for comparison
         v1 = var1.lower()
         v2 = var2.lower()
@@ -4572,6 +4582,10 @@ class TAVIController(QObject):
         if self._is_arc_in_q_mode(v1, v2):
             return ("Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, "
                     "so they cannot be scanned in it; scan the arcs in angle mode")
+        if self._is_angle_beside_q(v1, v2):
+            return ("Conflict: an angle scan cannot be combined with a Q, HKL or "
+                    "energy-transfer scan: both write the same scan slots, so one "
+                    "would be read as the other")
         if self._is_unexecutable_conflict(v1, v2):
             return ("Conflict: Q and HKL scans describe the same target momentum "
                     "under the current sample mount")
@@ -4580,12 +4594,7 @@ class TAVIController(QObject):
         for group_name, group_vars in LINKED_PARAMETER_GROUPS.items():
             if v1 in group_vars and v2 in group_vars:
                 return f"⚠ Conflict: '{var1}' and '{var2}' are linked ({group_name.replace('_', ' ')})"
-        
-        # Check mode conflicts (orientation vs momentum/HKL)
-        for conflict_name, (set1, set2) in MODE_CONFLICTS.items():
-            if (v1 in set1 and v2 in set2) or (v1 in set2 and v2 in set1):
-                return f"⚠ Conflict: orientation angle vs Q/HKL - angles will override calculated positions"
-        
+
         return ""
     
     def _get_current_value_for_variable(self, var_name: str, vals: dict, scan_point_template: list) -> float:

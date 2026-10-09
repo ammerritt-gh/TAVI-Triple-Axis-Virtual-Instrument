@@ -21,13 +21,6 @@ LINKED_PARAMETER_GROUPS = {
     "sample_theta": {"omega", "a3"},
 }
 
-# Define mode conflicts - scanning orientation angles conflicts with momentum/HKL scans
-# (an arc with a Q/HKL variable is refused outright; see TAVIController._is_arc_in_q_mode)
-MODE_CONFLICTS = {
-    # Orientation angles conflict with momentum/HKL because they change the Q-to-angle mapping
-    "orientation_vs_q": ({"omega", "a3"}, {"qx", "qy", "qz", "h", "k", "l"}),
-}
-
 # Known valid scan variables with descriptions
 VALID_SCAN_VARIABLES = {
     "qx", "qy", "qz", "deltae", "h", "k", "l",
