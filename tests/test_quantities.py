@@ -185,3 +185,11 @@ def test_a_name_in_no_row_is_unknown_but_a_refused_one_is_not():
         with pytest.raises(QuantityRefused) as caught:
             resolve(refused, "scan")
         assert not isinstance(caught.value, UnknownQuantity), refused
+
+
+def test_every_angle_names_its_nicos_motor():
+    """The docks' tooltips read the NICOS name from the registry, arcs included."""
+    from tavi.quantities import QUANTITIES
+    nicos = {q.id: q.nicos for q in QUANTITIES if q.ill or q.id.endswith("_arc_deg")}
+    assert all(nicos.values()), nicos
+    assert nicos["sample_lower_arc_deg"] == "sgl" and nicos["sample_upper_arc_deg"] == "sgu"

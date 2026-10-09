@@ -21,6 +21,15 @@ from PySide6.QtCore import Qt
 from gui.docks.base_dock import (BaseDockWidget, CollapsibleGroup, NoScrollComboBox, pack_grid,
                                  COLLIMATION_OPEN_TOOLTIP, collimation_label)
 from instruments.descriptor import ModuleKind
+from tavi import quantities
+
+
+def _half(text):
+    """A 2θ field's text as its θ readout: half the value, same sign; '--' if not a number."""
+    try:
+        return f"{float(text) / 2:g}"
+    except ValueError:
+        return "--"
 
 
 class InstrumentDock(BaseDockWidget):
@@ -46,45 +55,51 @@ class InstrumentDock(BaseDockWidget):
         angles_layout.setSpacing(5)
         angles_group.setLayout(angles_layout)
 
-        # Row 0: Mono 2theta, Sample 2theta
-        angles_layout.addWidget(QLabel("Mono 2θ:"), 0, 0)
-        self.mtt_edit = QLineEdit()
-        self.mtt_edit.setMaximumWidth(70)
-        angles_layout.addWidget(self.mtt_edit, 0, 1)
+        # One angle per row so the registry's long labels fit a block: labels
+        # are the registry's (physical words, ILL number, unit), the NICOS name
+        # is in the tooltip. A1 and A5 are read-only readouts of 2theta/2.
+        # Row order follows the beam: mono, sample, analyzer, then the arcs.
+        def angle_row(row, quantity_id, edit=None, tip=""):
+            q = quantities.by_id(quantity_id)
+            tip = f"{tip} NICOS name: {q.nicos}." if tip else f"NICOS name: {q.nicos}."
+            label = QLabel(q.label)
+            label.setToolTip(tip)
+            if edit is None:
+                edit = QLineEdit()
+            edit.setMaximumWidth(70)
+            edit.setToolTip(tip)
+            angles_layout.addWidget(label, row, 0)
+            angles_layout.addWidget(edit, row, 1)
+            return label, edit
 
-        angles_layout.addWidget(QLabel("Sample 2θ:"), 0, 2)
-        self.stt_edit = QLineEdit()
-        self.stt_edit.setMaximumWidth(70)
-        angles_layout.addWidget(self.stt_edit, 0, 3)
+        self.mtt_label, self.mtt_edit = angle_row(0, "mono_two_theta_deg")
+        self.mono_theta_label, self.mono_theta_edit = angle_row(
+            1, "mono_theta_deg", tip="Derived, read-only: half of the mono 2θ, signed as it.")
+        self.omega_label, self.omega_edit = angle_row(
+            2, "sample_rotation_deg",
+            tip="Sample turntable: in-plane rotation about the vertical. "
+                "Also called omega or psi in scan commands.")
+        self.stt_label, self.stt_edit = angle_row(3, "sample_two_theta_deg")
+        self.att_label, self.att_edit = angle_row(4, "analyzer_two_theta_deg")
+        self.analyzer_theta_label, self.analyzer_theta_edit = angle_row(
+            5, "analyzer_theta_deg",
+            tip="Derived, read-only: half of the analyzer 2θ, signed as it.")
+        for readout, source in ((self.mono_theta_edit, self.mtt_edit),
+                                (self.analyzer_theta_edit, self.att_edit)):
+            readout.setReadOnly(True)
+            readout.setStyleSheet("background-color: #f0f0f0; color: #444;")  # as a locked UB field
+            source.textChanged.connect(lambda text, readout=readout: readout.setText(_half(text)))
 
-        # Row 1: the sample turntable A3 (the API's and saved files' omega),
-        # Analyzer 2theta
-        a3_tip = ("Sample turntable A3: in-plane rotation about the vertical. "
-                  "Called omega in the API, saved files and scan commands.")
-        a3_label = QLabel("A3:")
-        a3_label.setToolTip(a3_tip)
-        angles_layout.addWidget(a3_label, 1, 0)
-        self.omega_edit = QLineEdit()
-        self.omega_edit.setMaximumWidth(70)
-        self.omega_edit.setToolTip(a3_tip)
-        angles_layout.addWidget(self.omega_edit, 1, 1)
-
-        angles_layout.addWidget(QLabel("Ana 2θ:"), 1, 2)
-        self.att_edit = QLineEdit()
-        self.att_edit.setMaximumWidth(70)
-        angles_layout.addWidget(self.att_edit, 1, 3)
-
-        # Row 2: the sample tilt arcs (descriptor goniometer), side by side:
-        # solved from Q/HKL, operator-set for angle-mode scans. Travel from
-        # the descriptor.
+        # Rows 6-7: the sample tilt arcs (descriptor goniometer): solved from
+        # Q/HKL, operator-set for angle-mode scans. Travel from the descriptor.
         travel = {ax.name: ax for ax in self.descriptor.goniometer}
         self.sgl_edit = QLineEdit()
         self.sgu_edit = QLineEdit()
-        for column, name, edit, text in (
-            (0, "sgl", self.sgl_edit,
+        for row, quantity_id, name, edit, text in (
+            (6, "sample_lower_arc_deg", "sgl", self.sgl_edit,
              "Lower sample tilt arc sgl: turns about the horizontal axis "
              "perpendicular to the beam at A3 = 0 (stage x); rides on A3"),
-            (2, "sgu", self.sgu_edit,
+            (7, "sample_upper_arc_deg", "sgu", self.sgu_edit,
              "Upper sample tilt arc sgu: turns about the beam axis at A3 = 0 "
              "(stage z); rides on sgl"),
         ):
@@ -94,20 +109,15 @@ class InstrumentDock(BaseDockWidget):
             else:
                 limits = f"travel {ax.lower:g}° to {ax.upper:g}°"
             tip = f"{text}. Solved from Q/HKL; set it here for angle-mode scans; {limits}."
-            label = QLabel(f"Tilt {name}:")
-            label.setToolTip(tip)
-            edit.setMaximumWidth(70)
-            edit.setToolTip(tip)
-            angles_layout.addWidget(label, 2, column)
-            angles_layout.addWidget(edit, 2, column + 1)
+            setattr(self, f"{name}_label", angle_row(row, quantity_id, edit, tip)[0])
 
-        # Row 3: shown while the angle fields do not match Q/HKL (the stage
+        # Row 8: shown while the angle fields do not match Q/HKL (the stage
         # refused the last Q/HKL edit); the controller sets and clears it.
         self.angles_stale_label = QLabel()
         self.angles_stale_label.setWordWrap(True)
         self.angles_stale_label.setStyleSheet("color: #c1121f;")
         self.angles_stale_label.hide()
-        angles_layout.addWidget(self.angles_stale_label, 3, 0, 1, 4)
+        angles_layout.addWidget(self.angles_stale_label, 8, 0, 1, 2)
 
         pack_grid(angles_layout)
         self.add_block(angles_group)
