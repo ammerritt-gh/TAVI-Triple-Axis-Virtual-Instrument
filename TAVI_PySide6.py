@@ -5689,7 +5689,6 @@ class TAVIController(QObject):
             dock = self.window.ub_matrix_dock
             hash_str = generate_training_exercise(
                 max_ori_angle=dock.max_ori_spin.value(),
-                include_orientation=dock.include_orientation_check.isChecked(),
                 accept=self._live_reach_error,
             )
             dock.training_hash_display.setText(hash_str)

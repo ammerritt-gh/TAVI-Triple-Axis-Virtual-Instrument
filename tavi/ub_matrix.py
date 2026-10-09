@@ -790,16 +790,14 @@ def _random_rotation_matrix(max_angle_deg: float) -> np.ndarray:
 
 
 def generate_training_exercise(max_ori_angle: float = 10.0,
-                               include_orientation: bool = True,
                                accept=None, max_draws: int = 50) -> str:
     """Generate a mount-only training exercise hash: a hidden rotation of the
     crystal in its mount (``U_true = R_hidden @ U_described``). Both motor-zero
     values of the code are written as 0; the code keeps its 11-float layout.
 
     Args:
-        max_ori_angle: Maximum rotation angle (degrees).
-        include_orientation: Whether to include a random rotation (False
-            gives the identity, i.e. no hidden error).
+        max_ori_angle: Maximum rotation angle (degrees); 0 gives the identity,
+            i.e. no hidden error.
         accept: Optional ``accept(R) -> None | str`` called with each drawn
             rotation: None takes it, a string is the reason it is refused and
             the rotation is drawn again, up to ``max_draws`` times.
@@ -812,8 +810,8 @@ def generate_training_exercise(max_ori_angle: float = 10.0,
             reason.
     """
     reason = None
-    for _ in range(max_draws if include_orientation else 1):
-        U = _random_rotation_matrix(max_ori_angle) if include_orientation else np.eye(3)
+    for _ in range(max_draws):
+        U = _random_rotation_matrix(max_ori_angle)
         reason = accept(U) if accept is not None else None
         if reason is None:
             return encode_training(U, 0.0, 0.0)

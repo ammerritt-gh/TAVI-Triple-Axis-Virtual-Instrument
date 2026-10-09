@@ -93,7 +93,8 @@ def test_generation_writes_zero_motor_zeros_and_the_code_keeps_its_layout():
 def test_generation_says_why_when_no_draw_is_accepted():
     with pytest.raises(ValueError, match=r"\(50 tried\): nothing reachable"):
         generate_training_exercise(45.0, accept=lambda rotation: "nothing reachable")
-    assert generate_training_exercise(45.0, include_orientation=False)  # identity needs no draw
+    # The max-angle spin is the only control: 0 hides nothing.
+    assert np.allclose(decode_mount_exercise(generate_training_exercise(0.0)), np.eye(3))
 
 
 @pytest.mark.parametrize("instrument_id, reachable", [("panda", False), ("in8", True)])
