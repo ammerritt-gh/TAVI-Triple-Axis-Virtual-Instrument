@@ -41,7 +41,7 @@ TAVI is software facilities and students rely on: not single-user hobby software
 
 ### Triple-Axis Spectrometer Flow
 
-TAVI models a TAS instrument with source, monochromator, sample, analyzer, and detector stages. Primary angles are A1, A2, A3, and A4; the sample stage is the turntable (A3, omega) carrying two tilt arcs sgl/sgu, with alignment offsets psi/kappa. For physics and geometry details, read `docs/INSTRUMENT_LAYOUT.md`.
+TAVI models a TAS instrument with source, monochromator, sample, analyzer, and detector stages. Primary angles are A1, A2, A3, and A4; the sample stage is the turntable (A3, omega) carrying two tilt arcs sgl/sgu. For physics and geometry details, read `docs/INSTRUMENT_LAYOUT.md`.
 
 ### McStasScript Instrument Generation
 
@@ -79,7 +79,7 @@ Long simulations run in a Python worker thread started by `TAVIController.run_si
 | Instrument plugins, registry, descriptors, IN8, adding an instrument | `docs/CONFIGURABLE_INSTRUMENTS.md`, `docs/INSTRUMENT_AUTHORING.md`, `tests/README.md` |
 | McStas path detection/configuration | `tavi/mcstas_config.py` (its docstring states the resolution order), `config/mcstas_config.json`, `installer/TAVI_Windows_Installer_Uninstaller_Design_Document.md` §10–12 |
 | Reciprocal-space or HKL/Q conversion | `tavi/reciprocal_space.py`, `tavi/ub_matrix.py`, `docs/INSTRUMENT_LAYOUT.md` |
-| UB matrix or training exercises | `tavi/ub_matrix.py`, `gui/docks/ub_matrix_dock.py`, `gui/docks/misalignment_dock.py` |
+| UB matrix or training exercises | `tavi/ub_matrix.py`, `gui/docks/ub_matrix_dock.py` |
 | Runtime estimates | `tavi/runtime_tracker.py`, `config/runtimes.json` behavior |
 | Detector parsing, saved scan files, plotting helpers | `tavi/data_processing.py`, `gui/docks/display_dock.py` |
 | Peak fitting, COM/MAX, "goto CEN" and the Fitting dock | `tavi/scan_fits.py`, `docs/CONTROL_FEATURES_DESIGN.md` §1 (read §1.7 first — it supersedes §1.1–1.6), `gui/docks/fitting_dock.py` |
