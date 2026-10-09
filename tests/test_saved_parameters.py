@@ -398,13 +398,21 @@ def test_the_exercise_is_judged_on_the_files_sample_not_the_live_one(in8, saved_
 
 
 @pytest.mark.parametrize("change", ["fixed energy", "sample"])
-def test_an_exercise_the_saved_values_cannot_observe_is_left_out_of_the_file(
+def test_an_unobservable_exercise_stops_the_save_and_keeps_the_file(
         in8, saved_file, change):
-    """Every Run saves. Lowering the fixed energy (or dropping the sample) after
-    an exercise is loaded must not write a file the next start refuses: the
-    exercise is left out of it, the live one stays, and one line says so, once."""
+    """Every Run saves. Once the fixed energy (or the sample) can no longer
+    observe the loaded exercise, the file on disk stays byte-identical to the
+    last consistent save, so it restores with the exercise and its fitted UB
+    together. One line says why, once; observing it again resumes saving."""
     in8.set_default_parameters()
+    in8._set_true_mount(U_described=mccode_rotation_matrix(0.0, 12.0, 0.0))
+    in8._reset_ub_to_described()
     in8._install_exercise(GOOD_CODE)
+    in8.save_parameters()
+    with open(saved_file, "rb") as fh:
+        consistent = fh.read()
+    expected = _state(in8)
+
     log_before = len(_log(in8))
     if change == "fixed energy":
         in8.window.scattering_dock.fixed_E_edit.setText("4.0")   # closes no Al reflection
@@ -412,14 +420,28 @@ def test_an_exercise_the_saved_values_cannot_observe_is_left_out_of_the_file(
         assert in8.window.sample_dock.set_sample_by_key(None)     # "No sample"
     in8.save_parameters()
     in8.save_parameters()                                       # the next Run
+    with open(saved_file, "rb") as fh:
+        on_disk = fh.read()
+    assert on_disk == consistent
     assert in8._exercise == GOOD_CODE
-    with open(saved_file, "r", encoding="utf-8") as fh:
-        assert json.load(fh)["in8"]["ub_training_hash"] == ""
-    assert _log(in8)[log_before:].count("Loaded exercise not saved") == 1, _log(in8)
+    assert _log(in8)[log_before:].count("Parameters not saved") == 1, _log(in8)
+    assert ("the loaded exercise cannot be observed with the current sample, fixed energy "
+            "or crystals") in _log(in8)
 
-    in8.load_parameters(keep_current_on_refusal=True)           # File > Load Parameters
-    assert in8._exercise is None
+    in8.set_default_parameters()
+    in8.window.load_parameters_action.trigger()                 # the file is restored whole
+    assert _same(expected, _state(in8))
     assert os.path.exists(saved_file) and not os.path.exists(saved_file + ".bak")
+
+    if change == "fixed energy":                                # observable again
+        in8.window.scattering_dock.fixed_E_edit.setText("14.7")
+    else:
+        assert in8.window.sample_dock.set_sample_by_key("Al_bragg")
+    log_before = len(_log(in8))
+    in8.save_parameters()
+    assert "Parameters saved successfully" in _log(in8)[log_before:], _log(in8)
+    with open(saved_file, "r", encoding="utf-8") as fh:
+        assert json.load(fh)["in8"]["ub_training_hash"] == GOOD_CODE
     in8.set_default_parameters()
 
 
