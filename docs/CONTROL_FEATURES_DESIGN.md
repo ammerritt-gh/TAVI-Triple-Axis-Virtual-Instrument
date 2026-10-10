@@ -173,7 +173,7 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 | `analyzer_two_theta_deg` (`A6`, `att`) | same ID | The analyzer 2θ. |
 | `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m` (`rhm`, `rvm`, `rha`) | same ID | Bender curvatures. |
 | `sample_lower_arc_deg`, `sample_upper_arc_deg` (`sgl`, `sgu`) | same ID | The goniometer arcs. Only the direct-motor calculation reads them (an HKL or Q scan solves them per point); an unscanned arc is used as typed in its field, or held by a plane lock. |
-| `analyzer_vertical_radius_m` (`rva`) | same ID | The analyzer vertical radius. A crystal that fixes it (PG(002)) refuses the move, as it refuses a typed value. |
+| `analyzer_vertical_radius_m` (`rva`) | same ID | The analyzer vertical radius. Moves only where the crystal leaves it driven; a fixed one (PG(002)) does not move. |
 
 `A1` and `A5` (the derived Bragg angles) and the retired `chi`, `phi`, `kappa` are not scan variables at all: the registry refuses them, so they never reach this table. A scan point is a mapping of these canonical IDs, built by the launch's point plan (`instruments/rules.py`, `expand`); there is no positional slot layout.
 
