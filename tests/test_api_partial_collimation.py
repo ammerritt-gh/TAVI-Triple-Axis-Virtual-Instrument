@@ -231,21 +231,43 @@ def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
     dock.scan_command_1_edit.setText("")
 
 
-def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller):
-    """This pair does not scan both variables -- it mislabels the data.
+def _run_refusal(controller, cmd1, cmd2, monkeypatch):
+    """Press Run with these commands; return the refusal shown (None if it launched)."""
+    from PySide6.QtWidgets import QMessageBox
 
-    A scan point's first four values live in one slot group that
-    _solve_point_geometry reads as (qx, qy, qz, dE) in momentum mode and as
-    (H, K, L, dE) in rlu mode. Pairing the two means one mode wins and the
-    other command's values are read under the winning mode's units, producing
-    measurements labelled with coordinates they were not taken at. Offering
-    "continue anyway" for that would be offering to corrupt the record.
-    """
-    hard, soft = in8_controller._scan_command_issues(
-        "H 1.99 2.01 0.01", "qx 1.9 2.1 0.1"
-    )
-    assert hard and "same target momentum" in hard[0]
-    assert soft == []
+    dock = controller.window.simulation_dock
+    dialogs, submitted = [], []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kw: dialogs.append(args[2]))
+    monkeypatch.setattr(controller, "submit_scan_job", lambda launch, source: submitted.append(1))
+    dock.scan_command_1_edit.setText(cmd1)
+    dock.scan_command_2_edit.setText(cmd2)
+    try:
+        controller.run_simulation_thread()
+    finally:
+        dock.scan_command_1_edit.setText("")
+        dock.scan_command_2_edit.setText("")
+    assert bool(dialogs) != bool(submitted), (dialogs, submitted)
+    return dialogs[0] if dialogs else None
+
+
+def _api_blockers(controller, cmd1, cmd2):
+    backend = cm.TaviApiBackend(controller, _SyncBridge())
+    result = backend.submit_validate({
+        "parameters": {"scan_command1": cmd1, "scan_command2": cmd2}, "force": True})
+    assert result["would_queue"] is False
+    return result["blockers"]
+
+
+def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller, monkeypatch):
+    """H selects the HKL calculation, which computes Q from it: a Q command
+    beside H would be overwritten at every point, so the plan refuses the pair,
+    on the GUI Run and over the API with force alike. Each command alone is
+    no issue (``_scan_command_issues`` judges commands, the plan pairs)."""
+    cmd1, cmd2 = "H 1.99 2.01 0.01", "qx 1.9 2.1 0.1"
+    assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], [])
+    why = "Q x is calculated from H in the HKL calculation, so it cannot also be scanned."
+    assert _run_refusal(in8_controller, cmd1, cmd2, monkeypatch).startswith(why)
+    assert "scan_validation: " + why in _api_blockers(in8_controller, cmd1, cmd2)
 
 
 @pytest.mark.parametrize("cmd1, cmd2", [
@@ -255,33 +277,20 @@ def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller):
     ("qx 1.9 2.1 0.1", "A4 40 41 1"),
 ])
 def test_an_angle_beside_a_q_hkl_or_energy_scan_is_refused_even_forced(
-        in8_controller, cmd1, cmd2):
-    """Both commands write the same scan slots, so the pair cannot be scanned as
-    written; the GUI Run gate and the API (with force) refuse it alike."""
-    dock = in8_controller.window.simulation_dock
-    dock.scan_command_1_edit.setText(cmd1)
-    dock.scan_command_2_edit.setText(cmd2)
-    try:
-        gui_hard, gui_soft = in8_controller._preflight_scan_validation()
-    finally:
-        dock.scan_command_1_edit.setText("")
-        dock.scan_command_2_edit.setText("")
-    assert gui_hard and "cannot be combined" in gui_hard[0], gui_hard
-    assert "cannot be combined" not in " ".join(gui_soft)
-
-    hard, soft = in8_controller._scan_command_issues(cmd1, cmd2)
-    assert hard and "cannot be combined" in hard[0] and soft == []
-
-    backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
-    result = backend.submit_validate({
-        "parameters": {"scan_command1": cmd1, "scan_command2": cmd2}, "force": True})
-    assert result["would_queue"] is False
-    assert any("cannot be combined" in b for b in result["blockers"]), result["blockers"]
+        in8_controller, cmd1, cmd2, monkeypatch):
+    """The Q-side command selects a calculation that computes the angle, so the
+    pair cannot be scanned as written; the GUI Run and the API (with force)
+    refuse it alike, naming what computes the angle."""
+    refusal = _run_refusal(in8_controller, cmd1, cmd2, monkeypatch)
+    assert refusal and "cannot also be scanned" in refusal, refusal
+    assert any(b.startswith("scan_validation: ") and "cannot also be scanned" in b
+               for b in _api_blockers(in8_controller, cmd1, cmd2))
 
 
 def test_angle_pairs_that_write_distinct_slots_are_accepted(in8_controller):
     for cmd1, cmd2 in (("A3 30 31 1", "A4 40 41 1"), ("omega 30 31 1", "sgl 0 1 1")):
         assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], []), (cmd1, cmd2)
+        assert in8_controller._preview_launch(cmd1, cmd2)[1].calculation == "direct_motors"
 
 
 @pytest.mark.parametrize("cmd1, cmd2", [
@@ -289,30 +298,13 @@ def test_angle_pairs_that_write_distinct_slots_are_accepted(in8_controller):
     ("A4 30 31 1", "2theta 40 41 1"),
     ("H 1.99 2.01 0.01", "H 1.99 2.01 0.01"),
 ])
-def test_two_commands_writing_one_slot_are_refused_even_forced(in8_controller, cmd1, cmd2):
-    """Both commands write one scan slot, so only one value per point survives.
-
-    The result axis then reports the command whose values were not run.
-    """
-    dock = in8_controller.window.simulation_dock
-    dock.scan_command_1_edit.setText(cmd1)
-    dock.scan_command_2_edit.setText(cmd2)
-    try:
-        gui_hard, gui_soft = in8_controller._preflight_scan_validation()
-    finally:
-        dock.scan_command_1_edit.setText("")
-        dock.scan_command_2_edit.setText("")
-    assert gui_hard, (cmd1, cmd2)
-    assert gui_soft == [], gui_soft
-
-    hard, soft = in8_controller._scan_command_issues(cmd1, cmd2)
-    assert hard and soft == []
-
-    backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
-    result = backend.submit_validate({
-        "parameters": {"scan_command1": cmd1, "scan_command2": cmd2}, "force": True})
-    assert result["would_queue"] is False
-    assert any(b.startswith("scan_validation") for b in result["blockers"]), result["blockers"]
+def test_two_commands_scanning_one_quantity_are_refused_even_forced(
+        in8_controller, cmd1, cmd2, monkeypatch):
+    """Two spellings of one quantity: only one value per point could survive."""
+    refusal = _run_refusal(in8_controller, cmd1, cmd2, monkeypatch)
+    assert refusal and "Both commands scan" in refusal and "scan it once" in refusal
+    assert any(b.startswith("scan_validation: Both commands scan")
+               for b in _api_blockers(in8_controller, cmd1, cmd2))
 
 
 class _SyncBridge:

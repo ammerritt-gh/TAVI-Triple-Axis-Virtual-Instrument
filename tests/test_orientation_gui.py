@@ -270,11 +270,15 @@ def test_chi_scan_is_refused_naming_the_arcs(controller):
     assert any("sgl" in b and "sgu" in b for b in result["blockers"])
 
 
-def test_arc_scan_in_a_q_mode_is_refused_naming_angle_mode(controller):
+def test_arc_scan_beside_a_q_side_command_is_refused_naming_the_owner(controller):
+    """An HKL or Q calculation solves the arcs per point: an arc command beside
+    one is refused, naming what calculates the arc."""
     for other in ("H 1.9 2.1 0.1", "qx 2 2.2 0.1", "deltaE 0 2 1"):
-        hard, _soft = controller._scan_command_issues("sgl 0 2 1", other)
-        assert len(hard) == 1 and "scan the arcs in angle mode" in hard[0], (other, hard)
-        assert "kappa" not in hard[0]
+        with pytest.raises(cm.PlanRefused) as refused:
+            controller._preview_launch("sgl 0 2 1", other)
+        message = str(refused.value)
+        assert message.startswith("sgl (lower arc) is calculated from "), (other, message)
+        assert "cannot also be scanned" in message and "kappa" not in message
     # Alone (or with an angle), an arc scan is a direct-motor scan.
     for pair in (("sgu 0 2 1", ""), ("sgl 0 2 1", "A3 30 31 1")):
         assert controller._scan_command_issues(*pair) == ([], [])
