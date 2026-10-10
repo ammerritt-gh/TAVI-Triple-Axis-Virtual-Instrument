@@ -119,6 +119,12 @@ def parse_scan_steps(input_string):
     return variable_name, array_values
 
 
+def scan_point_count(input_string):
+    """len(parse_scan_steps(input_string)[1]), in closed form: no array is built."""
+    start, end, step = (float(word) for word in input_string.split()[1:4])
+    return max(scan_intervals(start, end, step)[0] + 1, 0)
+
+
 def scan_intervals(start, end, step):
     """(intervals, reaches_end): the steps from start toward end, and whether the last lands on end.
 

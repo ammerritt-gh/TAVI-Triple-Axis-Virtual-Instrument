@@ -12,6 +12,7 @@ C:\\Users\\AMM\\AppData\\Local\\Temp\\claude\\tavi-u4) for a visual check.
 """
 import os
 import sys
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -486,6 +487,20 @@ def test_a_half_typed_box_1_still_shows_box_2s_own_refusal(window):
     assert not sim.scan_warning_1_label.isHidden()          # box 1's parse error
     assert "aperture" in sim.scan_warning_2_label.text()    # box 2's own refusal
     assert _run_verdict(window)[0]
+
+
+def test_a_scan_over_the_point_budget_returns_at_once_and_builds_no_run(window):
+    """A3 0 100 0.000001 is 1e8 points: typing it returns at once, with the existing
+    over-budget note, the point count in closed form and the marks from the plan."""
+    sim = window.simulation_dock
+    started = time.perf_counter()
+    _type(window, "A3 0 100 0.000001")
+    QTest.qWait(350)   # the point-count debounce
+    elapsed = time.perf_counter() - started
+    assert elapsed < 2.0, f"typing a 1e8-point scan took {elapsed:.1f} s"
+    assert "⚠ 100000001 points" in sim.scan_warning_1_label.text()
+    assert "100000001 points (validity not checked above 1000)" in sim.point_count_label.text()
+    assert _state(window, A3)[:2] == ("scanned", "1")
 
 
 # ------------------------------------------------------ labels follow the marks

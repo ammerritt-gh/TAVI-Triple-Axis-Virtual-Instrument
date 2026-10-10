@@ -96,9 +96,10 @@ def test_the_plan_compiled_at_launch_is_the_one_executed(monkeypatch, tmp_path):
             ctrl.window.instrument_dock.omega_edit.setText("99")
             launch["vals"]["scan_command1"] = "H 1 2 1"
             launch["relative_mode_1"] = False
-
             def refuse(*_args, **_kwargs):
-                raise AssertionError("the run compiled or parsed a scan command again")
+                # A PlanRefused, not an assertion: the GUI's previews, which compile the box
+                # text, absorb it, and a run that compiled would fail the job (asserted below).
+                raise rules.PlanRefused("the run compiled or parsed a scan command again")
 
             for module, name in ((cm, "build_plan"), (cm, "expand"), (cm, "parse_scan_steps"),
                                  (rules, "build_plan"), (rules, "expand"),
@@ -199,8 +200,8 @@ def test_an_empty_relative_base_field_refuses_the_run_naming_it(monkeypatch):
 
 def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(monkeypatch):
     """Two 10 001-point commands: the live label and the count judge the plan from each
-    command's run, so no point is built (expand raises if it is), and a missing relative
-    base still refuses in the label."""
+    command's run, so no point is built (expand raises if it is). A missing relative base
+    refuses in the label for a scan within the budget."""
     with _controller() as ctrl:
         try:
             ctrl.set_default_parameters()
@@ -216,8 +217,10 @@ def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(m
             ctrl.validate_scan_commands()
             ctrl._update_scan_estimates()
             assert sim.scan_conflict_label.text() == ""
-            assert "validation deferred" in sim.point_count_label.text()
+            assert "validity not checked above 1000" in sim.point_count_label.text()
 
+            # Over the budget the label judges the plan alone; a relative base is judged up to 1000 points.
+            sim.scan_command_1_edit.setText("A3 0 10 1")
             sim.scan_command_2_edit.setText("")
             sim.relative_1_button.click()
             idock.omega_edit.setText("")
