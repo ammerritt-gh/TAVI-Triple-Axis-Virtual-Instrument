@@ -113,6 +113,8 @@ def parse_scan_steps(input_string):
     last_value = end_value if reaches_end else start_value + step_size * intervals
     array_values = np.linspace(start_value, last_value, intervals + 1)
     array_values = np.round(array_values, 3)
+    # Rounding to 3 decimals can push a value past the end (0.0008 -> 0.001 before 0.0016).
+    array_values = np.clip(array_values, min(start_value, end_value), max(start_value, end_value))
 
     return variable_name, array_values
 
