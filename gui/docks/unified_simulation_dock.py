@@ -488,9 +488,9 @@ class UnifiedSimulationDock(BaseDockWidget):
         total = count1 * count2 if count2 > 0 else count1
         
         if count2 == 0:
-            text = f"{total} points (validation deferred - too many points)"
+            text = f"{total} points (validity not checked above 1000)"
         else:
-            text = f"{count1} × {count2} = {total} points (validation deferred)"
+            text = f"{count1} × {count2} = {total} points (validity not checked above 1000)"
         
         self.point_count_label.setText(text)
         self.point_count_label.setStyleSheet("font-weight: bold; color: #cc6600;")

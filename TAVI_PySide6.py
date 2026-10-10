@@ -127,7 +127,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import (parse_scan_steps, incremented_path_writing,
-                            scan_intervals, scan_stop_note)
+                            scan_intervals, scan_point_count, scan_stop_note)
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
                               record_angles, stage_record, stage_rotation)
@@ -4548,6 +4548,17 @@ class TAVIController(QObject):
                 issues.append(error)
         return issues
 
+    @staticmethod
+    def _judge_runs(plan, launch_state):
+        """``scan_axes`` for a scan within the point budget; a larger one is judged by its plan alone.
+
+        A run over the budget is never built: a 1e8-point command froze the window. Its
+        typed inputs and bases go unjudged here, and Run's own compile still refuses them.
+        shortcut: a scan over 1000 points skips the run checks, upgrade if the label must refuse them.
+        """
+        if math.prod(scan_intervals(c.start, c.stop, c.step)[0] + 1 for c in plan.commands) <= 1000:
+            scan_axes(plan, launch_state['snapshot'])
+
     def _judge_boxes(self, launch_state, commands):
         """``(plan, {box: Command}, {box or None: PlanRefused})``: the pair's verdict, as Run judges it.
 
@@ -4564,7 +4575,7 @@ class TAVIController(QObject):
         """
         try:
             plan = self._launch_plan(launch_state, commands)
-            scan_axes(plan, launch_state['snapshot'])
+            self._judge_runs(plan, launch_state)
             return plan, {command.number: command for command in plan.commands}, {}
         except PlanRefused as pair:
             pair_refusal = pair
@@ -4576,7 +4587,7 @@ class TAVIController(QObject):
             alone[number - 1] = (text, relative)
             try:
                 plan = self._launch_plan(launch_state, alone)
-                scan_axes(plan, launch_state['snapshot'])
+                self._judge_runs(plan, launch_state)
             except PlanRefused as refusal:
                 refused[number if refusal.command == number else None] = refusal
                 continue
@@ -4751,15 +4762,13 @@ class TAVIController(QObject):
         
         if cmd1:
             try:
-                _, array1 = parse_scan_steps(cmd1)
-                count1 = len(array1)
+                count1 = scan_point_count(cmd1)
             except Exception:
                 count1 = 0
-        
+
         if cmd2:
             try:
-                _, array2 = parse_scan_steps(cmd2)
-                count2 = len(array2)
+                count2 = scan_point_count(cmd2)
             except Exception:
                 count2 = 0
         
