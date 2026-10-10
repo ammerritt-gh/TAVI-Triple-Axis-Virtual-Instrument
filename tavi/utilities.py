@@ -125,6 +125,21 @@ def scan_point_count(input_string):
     return max(scan_intervals(start, end, step)[0] + 1, 0)
 
 
+def scan_run_values(start, end, step, indices):
+    """The values parse_scan_steps returns at ``indices``, in closed form: no array is built.
+
+    Same arithmetic as parse_scan_steps: linspace's i * step + start with its exact last
+    value, then the 3-decimal rounding and clip.
+    """
+    intervals, reaches_end = scan_intervals(start, end, step)
+    last = end if reaches_end else start + step * intervals
+    delta = (last - start) / intervals if intervals else 0.0
+    lo, hi = min(start, end), max(start, end)
+    return [float(np.clip(np.round(last if i == intervals and intervals else start + i * delta, 3),
+                          lo, hi))
+            for i in indices]
+
+
 def scan_intervals(start, end, step):
     """(intervals, reaches_end): the steps from start toward end, and whether the last lands on end.
 
