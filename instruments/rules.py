@@ -40,6 +40,7 @@ from instruments.tas_runtime import (
     check_point_feasibility,
     curvature_scan_error,
     describe_scan_error_flags,
+    plane_lock_q,
 )
 from tavi.neutron_conversions import energy2k
 from tavi.orientation import locked_plane_text
@@ -604,12 +605,8 @@ def check_point(plan, point, state, axis_limits=None):
                           % ", ".join(axes), "transmission", axes)
     if not locked_q:
         return PointCheck(True)
-    requested = geom["qx"], geom["qy"], geom["qz"]
-    realized, _flags = state.calculate_q_and_deltaE(
-        geom["mtt"], geom["stt"], geom["sth"], geom["sgl"], geom["att"], ctx.fixed_energy_mev,
-        f"{ctx.fixed_side} Fixed", ctx.monocris, ctx.anacris, sgu=geom["sgu"])
-    return PointCheck(True, requested_q=tuple(float(x) for x in requested),
-                      realized_q=tuple(float(x) for x in realized[:3]))
+    requested, realized = plane_lock_q(state, geom, ctx.fixed_side)
+    return PointCheck(True, requested_q=requested, realized_q=realized)
 
 
 # ------------------------------------------------------------------- context

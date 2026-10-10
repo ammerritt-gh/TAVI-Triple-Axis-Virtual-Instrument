@@ -266,3 +266,20 @@ def test_a_scan_selecting_no_geometry_holds_the_motors_as_typed(command, monkeyp
             assert resolved == pytest.approx(typed["sample_rotation_deg"] - 1.5, abs=1e-3)
         finally:
             _reset(ctrl)
+
+
+def test_the_manifest_names_a_locked_points_requested_and_realized_q():
+    """Off the lock's plane by less than its tolerance: the point runs at its projection, and the
+    manifest keeps the Q asked for beside the in-plane Q the stage reaches."""
+    with _controller("puma") as ctrl:
+        ctrl.set_default_parameters()
+        ctrl.window.ub_matrix_dock.lock_u_edit.setText("1 0 0")
+        ctrl.window.ub_matrix_dock.lock_v_edit.setText("0 1 0.2")
+        ctrl.on_lock_plane()
+        assert ctrl.instrument_state.plane_lock is not None
+        launch = ctrl.build_api_launch_state(
+            {"scan_command1": "H 1 1 1", "K": 0.5, "L": 0.1001, "deltaE": 0.0})
+        entry = ctrl.validate_scan_launch_state(launch)["point_manifest"][0]
+    assert entry["feasible"], entry["reason"]
+    requested, realized = entry["requested_q_inv_angstrom"], entry["realized_q_inv_angstrom"]
+    assert 1e-6 < max(abs(a - b) for a, b in zip(requested, realized)) < 5e-4

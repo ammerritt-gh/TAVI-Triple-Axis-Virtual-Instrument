@@ -1159,6 +1159,15 @@ def training_reach_error(state, u_true, b_true, hkls, axis_limits):
             "ones are needed")
 
 
+def plane_lock_q(state, geom, fixed_side):
+    """A plane-locked point's Q asked for, and the in-plane Q the stage reaches (its projection)."""
+    realized, _flags = state.calculate_q_and_deltaE(
+        geom["mtt"], geom["stt"], geom["sth"], geom["sgl"], geom["att"], state.fixed_E,
+        f"{fixed_side} Fixed", state.monocris, state.anacris, sgu=geom["sgu"])
+    requested = (geom["qx"], geom["qy"], geom["qz"])
+    return tuple(float(x) for x in requested), tuple(float(x) for x in realized[:3])
+
+
 def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder,
                           indices=None):
     """Compute the complete runtime snapshot for one point of ``plan``.
@@ -1264,6 +1273,11 @@ def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder
             f"Orientation: {orientation_info}"
         )
 
+    # A plane-locked Q point: the Q asked for beside the in-plane Q the stage realizes.
+    locked_q = plan.context.plane_lock is not None and calculation != MOTORS and not error_flags
+    requested_q, realized_q = (plane_lock_q(point_state, geom, plan.context.fixed_side)
+                               if locked_q else (None, None))
+
     # The command texts as run: a lone command 2 is the scan's first axis.
     texts = [command.text for command in plan.commands]
     metadata = {
@@ -1275,6 +1289,8 @@ def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder
         'qy': qy if q_mode else None,
         'qz': qz if q_mode else None,
         'q_vector': q_vector if q_mode else None,
+        'requested_q_inv_angstrom': requested_q,
+        'realized_q_inv_angstrom': realized_q,
         'H': H,
         'K': K,
         'L': L,
