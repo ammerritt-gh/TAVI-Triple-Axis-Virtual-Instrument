@@ -463,6 +463,25 @@ def test_the_lock_relation_not_travel_refuses_grid_points_off_the_plane(puma):
     assert sum(c.feasible for c in checks) == 2
 
 
+def test_a_locked_point_within_tolerance_records_the_q_asked_and_the_q_realized(puma, tmp_path):
+    """Off the plane by less than the lock tolerance: it runs at its projection, and both the
+    check and the saved point keep the Q asked for beside the in-plane Q the stage reaches."""
+    from instruments.tas_runtime import compute_scan_snapshot
+    from tavi.orientation import LOCKED_PLANE_TOLERANCE_Q
+
+    build, snapshot = puma
+    state, vals, ctx = build(lock=True)
+    plan = build_plan([("H 1 1 1", False), ("", False)], ctx)
+    point = expand(plan, snapshot(vals, K=0.5, L=0.1001, deltaE=0.0)).points[0]
+    check = check_point(plan, point, state)
+    assert check.feasible
+    gap = max(abs(a - b) for a, b in zip(check.requested_q, check.realized_q))
+    assert 1e-6 < gap < LOCKED_PLANE_TOLERANCE_Q
+    metadata = compute_scan_snapshot(plan, point, 0, state, vals, str(tmp_path)).metadata
+    assert metadata["requested_q_inv_angstrom"] == pytest.approx(check.requested_q)
+    assert metadata["realized_q_inv_angstrom"] == pytest.approx(check.realized_q)
+
+
 def test_the_analytic_engine_refuses_a_transmitting_point_mcstas_runs_it(puma):
     build, snapshot = puma
     for engine, feasible in (("mcstas", True), ("deterministic", False)):

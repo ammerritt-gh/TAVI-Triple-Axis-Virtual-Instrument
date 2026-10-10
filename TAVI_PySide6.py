@@ -8049,14 +8049,20 @@ class TAVIController(QObject):
         for index, point in enumerate(expansion.points):
             values = {command.quantity: point[command.quantity] for command in plan.commands}
             axes = ()
+            requested_q = realized_q = None
             try:
                 check = feasibility(scan_config, plan, point)
                 feasible, reason, kind = bool(check.feasible), check.reason, check.kind
                 axes = check.transmission
+                requested_q, realized_q = check.requested_q, check.realized_q
             except Exception as exc:
                 feasible, reason, kind = False, f"angle solve error: {exc}", "geometry_solver_error"
             entry = {"index": index, "values": values, "feasible": feasible,
                      "kind": kind, "reason": reason}
+            if requested_q is not None:
+                # A plane-locked Q point: the Q asked for beside the in-plane Q the stage reaches.
+                entry["requested_q_inv_angstrom"] = list(requested_q)
+                entry["realized_q_inv_angstrom"] = list(realized_q)
             if kind == "transmission":
                 # The axes travel with the entry: a preflight-skipped point
                 # never reaches the run loop, so this is where
