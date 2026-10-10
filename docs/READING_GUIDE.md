@@ -24,3 +24,4 @@ The README is the quick-start surface; this guide is the navigation authority. A
 | Why does the remote Windows install run deterministic mode but fail Monte Carlo, and what should be fixed next? | [Installation handoff: start here](HANDOFF-spaced-profile-install.md#fresh-session-brief), including launcher repair scope and ruled-out causes | live |
 | How do I record a failed Windows Monte Carlo run for offline support? | Read the [handoff's recorder caveat](HANDOFF-spaced-profile-install.md#consequence-for-the-one-transfer-recorder) first, then [Support recorder](../tools/support/README.md) | live |
 | What state is the 1.3.2 installer in, and what is still open on it? | [Installer handoff](HANDOFF-installer-1-3-1.md): shipped in v1.3.2, the cold-install record and what is still open | live |
+| What did the scan-command/naming break change for ISAR and TAS_MCP, and what is left to move? | [Consumer-sweep handoff](HANDOFF-scan-command-consumers.md) | live |

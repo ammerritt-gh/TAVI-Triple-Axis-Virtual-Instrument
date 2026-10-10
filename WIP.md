@@ -78,7 +78,7 @@ output paths through the actual GUI.
 
 **State:** pinned
 
-4 entries remain in the [audit ledger](docs/audits/new-instruments-crystal-bending.md) (9, 11, 12 from the harvest; 14 opened by branch (iv); 15, also opened by branch (iv), cleared by REL-5), each with its evidence and, where it is a defect, an isolated reproducer. Four themed branches have landed; what is left is pinned for a fresh session, which is why this is `pinned` rather than in progress.
+3 entries remain in the [audit ledger](docs/audits/new-instruments-crystal-bending.md) (9, 11, 12 from the harvest; 14 opened by branch (iv) and cleared by U1 of the scan-command programme; 15, also opened by branch (iv), cleared by REL-5), each with its evidence and, where it is a defect, an isolated reproducer. Four themed branches have landed; what is left is pinned for a fresh session, which is why this is `pinned` rather than in progress.
 
 ### What landed
 
@@ -104,7 +104,7 @@ The operator stopped the third branch halfway and asked whether the process was 
 
 **Entry 12 — test isolation of `config/parameters.json`.** The widest blast radius of the three: it changes the starting state of every test that constructs a controller. Discovery established that there is no existing seam for this file (four bare relative literals at `TAVI_PySide6.py:5432`, `:5434`, `:5446`, `:5601`, and `:5446` is where save *creates* the directory); that `tests/test_editable_number_format.py:67` pins one of those literals as *source text* and will break; and that `tests/test_rva_gui_axis_policy.py:301` isolates its own save/load by **changing the working directory**, which an absolute override would silently bypass. A green suite after such a change proves only that it passes with a clean file — the acceptance needs a run against a deliberately hostile `config/parameters.json` (`"rhm_ideal_locked": true` is the measured trigger). `config/instrument_selection.json` is a second saved-state channel through the same mechanism and is not closed by this entry.
 
-**Entry 14 — the analytic engine ignores the hidden misalignment.** Opened by branch (iv) at the operator's prompt. The deterministic engine converts each point's Q to HKL through a sample mount built from the launch values alone (`TAVI_PySide6.py` `_sample_q_to_hkl` → `_build_sample_mount(vals)`), while McStas receives `mis_omega_param`/`mis_chi_param` from the instrument state (`set_misalignment`). In a training exercise with a hidden misalignment the two engines disagree by the hidden offset and the analytic one is the wrong one. Structurally confirmed 2026-09-13, not reproduced: write the reproducer first.
+**Entry 14 — cleared by U1 of job j92f2a0718dc1 (PR #55, 2026-10-09):** the corrections and hidden zero errors are retired, training is mount-only, and a test shows both engines present the same (H, K, L) at the same commanded point; the ledger entry is deleted.
 
 **Entry 15 — cleared by REL-5 (2026-09-13):** `CLAUDE.md` is tracked; see What landed.
 
@@ -198,3 +198,86 @@ headers) and the 980 px height threshold for 3 columns are open to change.
 Done when: the operator has used the new window live on the 27" monitor and the
 12" laptop and the defects he finds are fixed or filed, and the Reciprocal Space
 placement is ruled.
+
+## Scan commands that say what they do (job j92f2a0718dc1)
+
+**State:** landed untested
+
+U1–U4 landed 2026-10-09/10 (PRs #55–#58, main `9c8fbb30`): psi/kappa
+corrections, hidden zero errors and the Misalignment dock retired (training is
+mount-only); one naming registry (`tavi/quantities.py`, ILL A1–A6, NICOS
+aliases), `api_version: 2` required, saved state v5, versioned outputs; one
+point plan (`instruments/rules.py`) compiled at launch, hard pair refusals,
+slit scans, no overshoot (warning), a 100,000-point maximum, plugin contract
+v1; live field marks with legend. A 55-case solver baseline gates the physics;
+the one deliberate change is PUMA's velocity selector. Checked by the suite and
+offscreen Qt only. U5 (ISAR, TAS_MCP) runs as separate jobs:
+[consumer-sweep handoff](docs/HANDOFF-scan-command-consumers.md).
+
+Left for the operator's GUI tuning pass: "fixed Kf" badges on free-side fields;
+radius marks hidden while Crystal Focusing is folded; the legend below the fold
+at 1108×851; a badge's upper-half hover can show a neighbour's tooltip; the
+inline θ readouts show "A1"/"A5" only as tooltip.
+
+Done when: the operator has used the marks and the new names live and the
+defects found are fixed or filed, and U5 has landed.
+
+## ISAR client and parser on TAVI's new contract
+
+**State:** pinned
+
+Since U2 of job j92f2a0718dc1 landed, TAVI main requires `api_version: 2` on
+every write (PATCH /parameters, POST /scan, POST /validate, PUT /background)
+and names every quantity by canonical ID (ILL A1–A6 numbering; per-gap
+`slit.<stable_id>.*_gap_mm`; saved state v5; versioned outputs, pre-break
+folders refused), so ISAR's TAVI client and result parser break against main
+until U5's sweep: `isar/drive/instrument/tavi_client.py`,
+`request_realization.py` (~202-219), `isar/parsers/tavi.py` (missing H/K/L/ΔE
+defaults ~218-225, unknown scan variable → angle axis ~383-400,
+`energy_transfer_mev`), `isar/drive/acquisition/grid_adapters.py:45` (still
+predicts overshoot), their tests, `live` tests, closed-loop callers and
+fixtures. TAS_MCP's published names are the second half of U5.
+
+Done when: U5 (S5.1) has landed in ISAR and its live tests pass against TAVI main.
+
+## Motor-zero calibration exercise
+
+**State:** pinned
+
+U1 retired the hidden motor-zero errors and made UB training mount-only.
+Operator, 2026-10-09: "we pin it for followup in a new session once this one
+lands." A calibration exercise (finding motor zeros) is the follow-up.
+
+Done when: a calibration exercise is designed with the operator and landed, or
+the operator drops it.
+
+## Controller internal keys to canonical IDs
+
+**State:** pinned
+
+The controller's launch keys (`mtt`/`stt`/`omega`/`att`/`rhm`…) and the legacy
+point-metadata keys still use TAVI's old internal names; they are documented in
+plugin contract v1 (`docs/INSTRUMENT_AUTHORING.md`). Operator, 2026-10-10: "7a
+is fine. I'm not worried about breaking saved scans."
+
+Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
+
+## Small API and housekeeping follow-ups
+
+**State:** pinned
+
+- PATCH /parameters on a radius the installed crystal fixes (e.g. rva on PUMA
+  PG(002), fixed 0.8 m) reports applied and silently snaps back; refuse the
+  write naming the hardware (API behaviour change). goto CEN already refuses.
+- `tests/test_documentation.py` skips because the shared doc checker path is
+  stale (`Agentic-Control-Scheme\bin\doc_check.py`), so the doc check never
+  runs in the suite.
+- Bare `except` blocks in `_update_scan_estimates` and `_count_scan_points` set
+  a count of 0 or 1 without logging; a refused >1000-point scan still prints
+  "validation deferred until simulation starts".
+- PUMA's selector frequency in a direct-motor scan with a transmitting
+  monochromator still comes from the typed energy fields.
+- Flake watch: `test_mark_updates_leave_focus_selection_style_and_names_alone`
+  failed once on focus in a combined targeted run.
+
+Done when: each is fixed or dropped by the operator.
