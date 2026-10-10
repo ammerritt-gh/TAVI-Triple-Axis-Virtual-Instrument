@@ -136,3 +136,23 @@ def test_out_of_travel_relative_scan_never_enqueues_but_in_travel_does(monkeypat
         sdock.scan_command_1_edit.setText("rhm 0.5 1.0 0.5")
         ctrl.run_simulation_thread()
         assert len(submitted) == 1, "an in-travel relative scan must enqueue"
+
+
+def test_a_radius_run_that_crosses_zero_is_refused_in_the_gui_and_over_the_api():
+    """A radius is a magnitude: rhm -2 2 2 runs the same bend twice (|-2| = |2|).
+    A run of one sign stays scannable."""
+    with _controller("puma") as ctrl:
+        mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
+        hard, _ = ctrl._scan_command_issues("rhm -2 2 2", "", mono, ana)
+        assert hard and "magnitude" in hard[0], hard
+        hard, _ = ctrl._scan_command_issues("rhm -2.4 -2.0 0.2", "", mono, ana)
+        assert hard == []
+
+        class _SyncBridge:
+            def call_on_gui(self, fn, timeout=5.0):
+                return fn()
+
+        result = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate(
+            {"parameters": {"scan_command1": "rhm -2 2 2"}})
+        assert result["would_queue"] is False
+        assert any("magnitude" in b for b in result["blockers"]), result["blockers"]

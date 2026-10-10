@@ -976,7 +976,8 @@ them up is the single easiest mistake a client can make here:
 - Every field you **send** (`rhm`/`rvm`/`rha`/`rva` in a `PATCH /parameters`
   or `POST /scan` patch) is a **magnitude in metres**. `0` always means FLAT
   and is always legal — a minimum radius bounds how tightly a bender may
-  bend, never whether it may be straight.
+  bend, never whether it may be straight. A scan range may not cross zero (`rhm -2 2 2` would
+  run the same bend twice): it is refused with 400, while `rhm -2.4 -2.0 0.2` is accepted.
 - `result.applied_curvature` (below) is **signed**: which side the crystal
   actually bent toward, under the derived-only IDs `applied_mono_horizontal_radius_m`
   and its three siblings (writing one is refused). Never send a value from

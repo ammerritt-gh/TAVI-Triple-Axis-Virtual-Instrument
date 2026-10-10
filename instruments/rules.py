@@ -38,6 +38,7 @@ from instruments.tas_runtime import (
     STT,
     _solve_point_geometry,
     check_point_feasibility,
+    curvature_run_error,
     curvature_scan_error,
     describe_scan_error_flags,
     plane_lock_q,
@@ -381,11 +382,7 @@ def _curvature_error(cmd, ctx, values=None):
     if values is None:
         return curvature_scan_error(axis, cmd.start, cmd.stop, cmd.step, False, None,
                                     policy.hardware)
-    for value in values:
-        error = curvature_scan_error(axis, value, value, 1.0, False, None, policy.hardware)
-        if error:
-            return error
-    return None
+    return curvature_run_error(axis, values, policy.hardware)
 
 
 def _closure(qid, producer):

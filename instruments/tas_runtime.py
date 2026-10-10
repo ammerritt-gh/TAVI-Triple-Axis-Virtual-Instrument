@@ -166,10 +166,29 @@ def curvature_scan_error(axis, start, end, step, relative, base_value,
     _, values = parse_scan_steps(f"{axis} {start} {end} {step}")
     if relative:
         values = values + base_value
+    return curvature_run_error(axis, values, curvature_axis, crystal_name)
+
+
+def curvature_run_error(axis, values, curvature_axis, crystal_name=None):
+    """First refusal among the radii one scan run holds, or None.
+
+    Each value is checked against the travel, then the run is refused if it
+    holds both signs: a radius is a magnitude, so +r and -r run the same bend
+    twice. The whole run is needed for the sign test, so callers pass every
+    value at once.
+    """
+    where = f" on the {crystal_name}" if crystal_name else ""
+    values = [float(value) for value in values]
     for value in values:
-        error = curvature_command_error(axis, float(value), curvature_axis, crystal_name)
+        error = curvature_command_error(axis, value, curvature_axis, crystal_name)
         if error:
             return error
+    if any(v > 0 for v in values) and any(v < 0 for v in values):
+        return (
+            f"{axis}{where}: a radius is a magnitude, and this run crosses zero "
+            f"({min(values):.4g} to {max(values):.4g} m), so it would run the same bend "
+            "twice. Scan one sign."
+        )
     return None
 
 

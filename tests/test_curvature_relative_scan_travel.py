@@ -93,6 +93,15 @@ def test_a_two_command_scan_checks_each_command_against_its_own_relative_mode():
     assert refused.value.command == 2
 
 
+def test_a_radius_run_that_crosses_zero_is_refused_absolute_and_relative():
+    """A radius is a magnitude, so a run holding +r and -r runs the same bend twice."""
+    with pytest.raises(PlanRefused, match="magnitude"):
+        _expand("rhm -2 2 2")
+    # Base 2.5 m plus offsets -5..5 runs -2.5 m to 7.5 m: both signs.
+    with pytest.raises(PlanRefused, match="magnitude"):
+        _expand("rhm -5 5 5", rel1=True, min_radius_m=0.0)
+
+
 def test_a_two_command_scan_with_an_in_travel_relative_curvature_is_accepted():
     """The same shape, landing inside travel: all nine points run."""
     expansion = _expand("deltaE 0 2 1", cmd2="rhm 0.0 0.4 0.2", rel2=True)
