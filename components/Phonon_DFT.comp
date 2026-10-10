@@ -251,10 +251,10 @@ void pdft_compute_lattice(pdft_lattice *lat,
   else if (a > 0) {
     if (b <= 0) b = a;
     if (c <= 0) c = a;
-    /* Convention: a along x, b in xz-plane, c has y-component.
-       This puts a* and b* in the horizontal scattering plane (xz)
-       and c* along the vertical (y), so the (H,K,0) plane is 
-       directly accessible to a TAS.  Differs from Single_crystal
+    /* Convention: a along x, b in the horizontal xz-plane, c carries the
+       remaining component along y.  So c* is exactly vertical (+y); a* and
+       b* are in general neither along x nor horizontal
+       (tavi/sample_mount.py reciprocal_basis_tas).  Differs from Single_crystal
        which uses b along z, a in yz-plane. */
     sin_cc = sin(cc*DEG2RAD);
     if (fabs(sin_cc) < 1e-10) {
