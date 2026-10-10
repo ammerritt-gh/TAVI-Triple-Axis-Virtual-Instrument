@@ -1259,6 +1259,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
                 curvature_clamped.append(axis)
 
     rhm, rvm, rha, rva = radii["rhm"], radii["rvm"], radii["rha"], radii["rva"]
+    # The magnitudes asked for, read before set_crystal_bending signs and clamps them.
+    requested_radii = {"rhm": abs(rhm), "rvm": abs(rvm), "rha": abs(rha), "rva": abs(rva)}
 
     point_state.set_crystal_bending(rhm=rhm, rvm=rvm, rha=rha, rva=rva)
     # Read the APPLIED values back off the state rather than keep the
@@ -1317,6 +1319,7 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         'rvm': rvm,
         'rha': rha,
         'rva': rva,
+        'requested_radii': requested_radii,
         # Provenance: the policy this point actually ran each axis under, and
         # whether a mechanical limit clipped an autofocus radius -- so a
         # headless campaign client can tell "focused" from "clamped" without

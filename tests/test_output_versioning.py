@@ -104,14 +104,34 @@ def test_scan_data_files_carry_the_version_as_a_comment(tmp_path):
             assert f"# api_version: {API_VERSION}\n" in handle.readlines()[:2], name
 
 
+def test_a_scanned_radius_is_written_as_requested_and_its_applied_sign_apart(tmp_path):
+    """On a negative-branch mono the point keeps the scanned magnitude under its ID, so the
+    Display reload matches it, and the signed take-off radius under applied_*."""
+    from instruments.panda.plugin import PANDAPlugin
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    snapshot = compute_scan_snapshot(
+        ([-80.0, -100.0, 0.0, -80.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1), 1, "angle",
+        PANDAPlugin().default_state(), {"deltaE": 0.0, "chi": 0.0}, str(tmp_path),
+        variable_name1="mono_horizontal_radius_m",
+    )
+    with _controller("panda") as controller:
+        point = controller.point_output_parameters(controller.get_gui_values(), snapshot.metadata, 1, 1000)
+    write_parameters_to_file(str(tmp_path), point)
+    written = read_parameters_from_file(str(tmp_path))
+    assert written["mono_horizontal_radius_m"] == pytest.approx(2.0)
+    assert written["applied_mono_horizontal_radius_m"] < 0
+    assert not {"rhm", "requested_radii"} & set(written)
+
+
 def test_both_scan_parameter_writers_go_through_output_parameters():
     """The McStas path's two writers (the scan, then each point) cannot be run without
     McStas: pin that neither can hand the writer the controller's internal names."""
     with open(os.path.join(os.path.dirname(DATA), "..", "TAVI_PySide6.py"), encoding="utf-8") as handle:
         source = handle.read()
-    calls = re.findall(r"write_parameters_to_file\(([^\n]*)\)", source)
+    calls = re.findall(r"write_parameters_to_file\(([^\n]*)", source)
     assert len(calls) == 2, calls
-    assert all(", self.output_parameters(" in call for call in calls), calls
+    assert all("output_parameters(" in call for call in calls), calls
 
 
 # --- the loading path ------------------------------------------------------------------
