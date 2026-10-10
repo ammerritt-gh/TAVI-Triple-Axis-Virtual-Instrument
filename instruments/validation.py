@@ -118,6 +118,26 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
             errors.append(f"scannable_parameters: duplicate name {p.name!r}")
         seen_params.add(p.name)
 
+    # --- S4b: backend bindings (ParameterSpec.quantity) ----------------------------
+    from tavi.quantities import by_id, slit_gap_id, slit_gap_ids
+    own_slits = {qid for slit in d.slits for qid in slit_gap_ids(slit)}
+    bound = {}
+    for p in d.scannable_parameters:
+        if not p.quantity:
+            continue
+        where = f"scannable_parameters[{p.name!r}]"
+        try:
+            by_id(p.quantity)
+        except KeyError:
+            errors.append(f"{where}: quantity {p.quantity!r} is no canonical ID")
+        if p.quantity.startswith("slit.") and p.quantity not in own_slits:
+            errors.append(f"{where}: {p.quantity!r} is not a gap of this instrument's slits")
+        if p.quantity in bound:
+            errors.append(f"{where}: {p.quantity!r} is already bound to {bound[p.quantity]!r}")
+        bound[p.quantity] = p.name
+        if not _finite(p.scale) or p.scale == 0:
+            errors.append(f"{where}: scale must be finite and non-zero")
+
     # --- S5/S6: detector contract -------------------------------------------------
     if not d.primary_detector:
         errors.append("primary_detector: must name the detector component")
@@ -337,12 +357,11 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
             errors.append(f"{list_name}: runnable instrument needs at least one entry")
 
     # --- R5b: public slit names ---------------------------------------------------------------------
-    from tavi.quantities import by_id
     for slit in d.slits:
         axes = ("horizontal", "vertical") if slit.has_height else ("horizontal",)
         for axis in axes:
             try:
-                by_id(f"slit.{slit.stable_id}.{axis}_gap_mm")
+                by_id(slit_gap_id(slit.stable_id, axis))
             except KeyError:
                 errors.append(
                     f"slits: {slit.id!r} needs a stable_id the quantity registry has "

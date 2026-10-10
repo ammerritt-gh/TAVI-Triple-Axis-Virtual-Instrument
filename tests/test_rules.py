@@ -353,7 +353,7 @@ def puma():
                                "tilts": tilts}
         vals = cases._launch_vals(descriptor, rhm=3.0, rvm=1.0, rha=2.0, rva=1.0, **overrides)
         state = plugin.scan_config(base, vals, None, {}, base.sample_mount)
-        return state, vals, context_from_state(state, vals, engine)
+        return state, vals, context_from_state(state, vals, plugin.capabilities(), engine)
 
     def snapshot(vals, **fields):
         """The launch snapshot as S3.2 will take it: the vals under canonical IDs."""
@@ -423,7 +423,12 @@ def test_context_from_state_reads_the_module_fixing_puma_mono_radii(puma):
     refusal = _refused("rhm 2 3 0.5", ctx=ctx)
     assert str(refusal).startswith("The hardware holds rhm (mono horizontal radius) at 0 m "
                                    "(NMO installed")
-    assert "has no per-point binding" in str(_refused("pre_sample_hgap 10 20 10", ctx=ctx))
+    # Every PUMA aperture is bound (its plugin's ParameterSpec bindings), so it plans.
+    assert ctx.slit_bindings == {"slit.post_mono.horizontal_gap_mm", GAP,
+                                 "slit.pre_sample.vertical_gap_mm",
+                                 "slit.detector.horizontal_gap_mm"}
+    plan = build_plan([("pre_sample_hgap 10 20 10", False), ("", False)], ctx)
+    assert (plan.calculation, plan.provenance[GAP].role) == (MOTORS, SCANNED)
 
 
 def test_the_lock_relation_not_travel_refuses_grid_points_off_the_plane(puma):

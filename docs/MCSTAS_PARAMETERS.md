@@ -110,7 +110,10 @@ the `mtt`/`stt`/`att` edits and the scan-slot layout in
 `instruments/tas_runtime.py` keep TAVI's older numbering internally (A1 the
 monochromator 2θ, A2 the sample 2θ, A3 the sample rotation, A4 the analyzer
 2θ) until U3 removes them. Everything a user sees (GUI labels, scan commands,
-the API, saved settings, output files) uses the ILL numbering:
+the API, saved settings, output files) uses the ILL numbering. Each plugin
+binds its parameters to canonical IDs in its descriptor
+(`ParameterSpec.quantity`, with `scale` converting the unit: McStas value =
+scale × quantity value), and `plugin.capabilities().bindings` collects them:
 
 | McStas parameter | Internal name | Physical quantity | Public ILL number | Canonical ID |
 |---|---|---|---|---|
@@ -147,6 +150,9 @@ These are metres, under the plugin's own slit names. The public name of each
 gap is a key in millimetres: `vbl_hgap_param` is `slit.post_mono.horizontal_gap_mm`,
 `pbl_hgap_param` and `pbl_vgap_param` are `slit.pre_sample.horizontal_gap_mm` and
 `.vertical_gap_mm`, and `dbl_hgap_param` is `slit.detector.horizontal_gap_mm`.
+Each is bound in the descriptor with `scale=1e-3`. Every aperture on all four
+instruments is a runtime parameter, so a slit scan changes it per point without
+recompiling (`tests/test_plugin_bindings.py`).
 
 ### Sample Orientation Parameters
 | Parameter | Description | Used By |
