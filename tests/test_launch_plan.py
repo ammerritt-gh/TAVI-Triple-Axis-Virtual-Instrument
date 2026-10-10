@@ -183,6 +183,39 @@ def test_an_empty_relative_base_field_refuses_the_run_naming_it(monkeypatch):
             _reset(ctrl)
 
 
+def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(monkeypatch):
+    """Two 10 001-point commands: the live label and the count judge the plan from each
+    command's run, so no point is built (expand raises if it is), and a missing relative
+    base still refuses in the label."""
+    with _controller() as ctrl:
+        try:
+            ctrl.set_default_parameters()
+            sim, idock = ctrl.window.simulation_dock, ctrl.window.instrument_dock
+
+            def refuse(*_args, **_kwargs):
+                raise AssertionError("a preview built the point grid")
+
+            monkeypatch.setattr(cm, "expand", refuse)
+            monkeypatch.setattr(rules, "expand", refuse)
+            sim.scan_command_1_edit.setText("A3 0 10000 1")
+            sim.scan_command_2_edit.setText("A4 0 10000 1")
+            ctrl.validate_scan_commands()
+            ctrl._update_scan_estimates()
+            assert sim.scan_conflict_label.text() == ""
+            assert "validation deferred" in sim.point_count_label.text()
+
+            sim.scan_command_2_edit.setText("")
+            sim.relative_1_button.click()
+            idock.omega_edit.setText("")
+            ctrl.validate_scan_commands()
+            assert sim.scan_conflict_label.text().startswith(
+                "Command 1 steps relative to A3 (sample rotation), but its field holds no number "
+                "to step from."), sim.scan_conflict_label.text()
+        finally:
+            monkeypatch.undo()     # the reset restores a small default grid, which may expand
+            _reset(ctrl)
+
+
 # --- Ruling 5: a scan that selects no geometry holds the motors -------------------
 
 MOTOR_FIELDS = {"mono_two_theta_deg": "mtt_edit", "sample_two_theta_deg": "stt_edit",

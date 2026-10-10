@@ -37,6 +37,7 @@ from instruments.rules import (
     context_from_state,
     expand,
     point_plan,
+    scan_axes,
 )
 from instruments.tas_runtime import (
     STAGE_FLAG_PREFIX,
@@ -4277,7 +4278,7 @@ class TAVIController(QObject):
         # setting cannot honour) is the plan's to judge.
         if (var1 or var2) and (var1 or not warning1) and (var2 or not warning2):
             try:
-                self._preview_launch(cmd1, cmd2)
+                self._preview_launch(cmd1, cmd2, points=False)
             except PlanRefused as refused:
                 self.window.simulation_dock.set_scan_conflict_warning(
                     str(refused), refused.command)
@@ -4757,19 +4758,20 @@ class TAVIController(QObject):
         else:
             self.window.simulation_dock.update_total_time_estimate("")
     
-    def _preview_launch(self, cmd1, cmd2):
+    def _preview_launch(self, cmd1, cmd2, points=True):
         """``(launch_state, plan, expansion)`` that pressing Run now would compile.
 
         The launch is collected exactly as Run collects it (dock fields,
         relative flags, engine) with ``cmd1``/``cmd2`` as the commands, then
-        compiled by the one compile-and-expand. Raises ``PlanRefused``.
+        compiled by the one compile-and-expand. ``points=False`` judges the plan
+        alone: the expansion carries no points. Raises ``PlanRefused``.
         """
         launch_state = self._collect_simulation_launch_state()
         if not launch_state:
             raise PlanRefused("A field does not hold a number, so nothing can be planned.")
         launch_state['vals']['scan_command1'] = cmd1
         launch_state['vals']['scan_command2'] = cmd2
-        plan, expansion = self._compile_launch(launch_state)
+        plan, expansion = self._compile_launch(launch_state, points)
         return launch_state, plan, expansion
 
     def _count_valid_scan_points(self, cmd1: str, cmd2: str) -> tuple:
@@ -7987,7 +7989,7 @@ class TAVIController(QObject):
             return npts(c2)
         return npts(c1) * npts(c2)
 
-    def _compile_launch(self, launch_state):
+    def _compile_launch(self, launch_state, points=True):
         """The launch's one compile-and-expand: ``build_plan``, then ``expand``.
 
         Run, the API's ``/scan`` and ``/validate``, the GUI point-count preview
@@ -7995,8 +7997,9 @@ class TAVIController(QObject):
         collection took at the instant of launch (``launch_state['snapshot']``,
         canonical IDs). The plan and its points are stored on the launch state
         (``'plan'``, ``'expansion'``) and ride it into the queued job: nothing
-        downstream re-reads command text or chooses a calculation. Raises
-        ``PlanRefused`` naming why the scan cannot run as written.
+        downstream re-reads command text or chooses a calculation. ``points=False``
+        (the live label only) stores a points-less expansion: never queue that.
+        Raises ``PlanRefused`` naming why the scan cannot run as written.
         """
         vals = launch_state['vals']
         context = context_from_state(launch_state['scan_config'], vals,
@@ -8006,7 +8009,7 @@ class TAVIController(QObject):
             [(vals.get('scan_command1') or "", bool(launch_state.get('relative_mode_1'))),
              (vals.get('scan_command2') or "", bool(launch_state.get('relative_mode_2')))],
             context)
-        expansion = expand(plan, launch_state['snapshot'])
+        expansion = (expand if points else scan_axes)(plan, launch_state['snapshot'])
         launch_state['plan'], launch_state['expansion'] = plan, expansion
         return plan, expansion
 
