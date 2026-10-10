@@ -18,6 +18,7 @@ import matplotlib.patches as mpatches
 from matplotlib.lines import Line2D
 
 from gui.docks.base_dock import BaseDockWidget, collimation_label
+from instruments.rules import RADIUS_CRYSTAL
 from tavi.quantities import QuantityRefused, resolve
 
 
@@ -1435,9 +1436,11 @@ class DisplayDock(BaseDockWidget):
             index = []
             for name, values in axes:
                 value = float(point_params[name])
-                i = int(np.argmin(np.abs(values - value)))
+                # A point publishes a requested radius as its magnitude; the axis keeps the typed sign.
+                axis = np.abs(values) if name in RADIUS_CRYSTAL else values
+                i = int(np.argmin(np.abs(axis - value)))
                 # Half of parse_scan_steps' 1e-3 rounding of a command's values.
-                if not np.isclose(values[i], value, rtol=0, atol=5e-4):
+                if not np.isclose(axis[i], value, rtol=0, atol=5e-4):
                     raise ValueError(
                         f"{folder_name}: {name} = {value:g} lies on none of the scan's axis "
                         f"values; a relative scan saved before TAVI recorded its absolute "
