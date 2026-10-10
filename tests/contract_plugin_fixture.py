@@ -1,9 +1,12 @@
-"""A minimal instrument plugin built only from TAVI's public author contract.
+"""A minimal instrument plugin used by ``tests/test_author_contract.py``.
 
-Imports only ``instruments.contract``, ``instruments.descriptor``, ``instruments.rules``
-(``tas_capabilities`` and the plan's ``PlanContext``) and ``tavi.quantities``, which
-``docs/INSTRUMENT_AUTHORING.md`` names as the author surface. No controller, scan-slot
-or GUI code. Used by ``tests/test_author_contract.py``.
+It implements only ``descriptor`` and ``capabilities``, and imports ``instruments.contract``,
+``instruments.descriptor``, ``instruments.rules`` (``tas_capabilities``) and
+``tavi.quantities``. It exercises descriptor and capability validation, registry load and
+the H plan/expand path. It builds its ``PlanContext`` by hand (``plan_context``), which the
+authoring doc does not name as author surface, and it never goes through the host path
+(``scan_config``, ``context_from_state``, ``compute_snapshot``, ``check_point_feasibility``),
+so a plugin that passes its tests can still fail at its first real launch.
 """
 from instruments.descriptor import (
     CrystalSpec,
