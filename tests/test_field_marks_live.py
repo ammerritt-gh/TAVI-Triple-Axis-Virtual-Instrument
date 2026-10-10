@@ -643,6 +643,16 @@ def test_a_big_relative_radius_scan_out_of_travel_is_refused_by_label_and_prefli
     assert any("mechanical minimum" in issue for issue in hard), hard
 
 
+def test_a_step_too_small_for_its_range_is_a_label_refusal_not_an_exception(window, monkeypatch):
+    """A3 0 1 1e-309 overflows the step count: the label says why, and nothing escapes the timer."""
+    raised = []
+    monkeypatch.setattr(sys, "excepthook", lambda *exc: raised.append(exc))
+    _type(window, "A3 0 1 1e-309")
+    assert "Step (1e-309) is too small for the range 0 to 1." in _warning(window)
+    assert _marks(window) == {}
+    assert raised == []
+
+
 def test_the_mark_refresh_expands_nothing(window, monkeypatch):
     """A field edit refreshes the marks from the verdict alone: the mark path expands no axis."""
     def expanded(*_args, **_kwargs):

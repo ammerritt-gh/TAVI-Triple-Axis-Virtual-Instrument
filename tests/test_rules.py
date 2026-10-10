@@ -290,6 +290,11 @@ def test_zero_wrong_sign_and_too_long_steps_are_refused(cmd):
     assert _refused("", cmd).command == 2
 
 
+def test_a_step_too_small_for_its_range_is_refused_not_overflowed():
+    """(end - start) / step overflows to inf: refused by name before any step count is taken."""
+    assert str(_refused("A3 0 1 1e-309")) == "Step (1e-309) is too small for the range 0 to 1."
+
+
 @pytest.mark.parametrize("c1, c2", [("", ""), ("pre_sample_hgap 10 30 10", ""),
                                     ("", "rhm 2 3 0.5")])
 def test_a_scan_that_selects_no_geometry_holds_the_motors(c1, c2):

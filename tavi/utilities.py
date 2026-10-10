@@ -181,6 +181,9 @@ def scan_range_error(start, end, step):
         return "Step sign doesn't match direction (start → end)."
     if end != start and abs(step) > abs(end - start):
         return f"Step ({step}) is larger than the range ({start} to {end})."
+    # A tiny step overflows (end - start) / step to inf, which round() cannot take.
+    if not math.isfinite((end - start) / step):
+        return f"Step ({step:g}) is too small for the range {start:g} to {end:g}."
     return None
 
 
