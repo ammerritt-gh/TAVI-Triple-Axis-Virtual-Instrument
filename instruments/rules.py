@@ -525,6 +525,12 @@ def build_plan(commands, context):
     return Plan(context, calc, cmds, tuple(rules), inputs, provenance)
 
 
+def typed_sources(plan, qid):
+    """The inputs (canonical IDs) ``qid``'s value follows through the plan's rules."""
+    producer = {out: rule for rule in plan.rules for out in rule.outputs}
+    return _closure(qid, producer)[0]
+
+
 def point_plan(context, calculation):
     """A plan of no command for one point of ``calculation``, for a check that is no scan.
 
