@@ -195,7 +195,10 @@ def test_malformed_commands_are_hard(in8_controller):
 def test_a_step_that_cannot_reach_the_end_is_hard(in8_controller):
     # A zero or wrong-sign step used to come back with its variable and an
     # unmarked message, so it was neither hard nor soft and launched anyway.
-    for cmd in ("A3 0 10 0", "A3 0 10 -1", "A3 10 0 1", "H 1 2 0"):
+    # A step past the whole range would run a point beyond the stated end
+    # ("A3 0 10 15" expands to 0 and 15); the API guide calls it an error.
+    for cmd in ("A3 0 10 0", "A3 0 10 -1", "A3 10 0 1", "H 1 2 0",
+                "A3 0 10 15", "H 1.99 2.01 0.1", "A3 10 0 -15"):
         hard, _ = in8_controller._scan_command_issues(cmd, "")
         assert hard, cmd
 
