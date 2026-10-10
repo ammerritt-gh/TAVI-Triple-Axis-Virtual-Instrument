@@ -219,10 +219,11 @@ def _hkl_snapshot(ctrl, launch, tmp_path):
     return ctrl.instrument.compute_snapshot(plan, point, 0, config, vals, str(tmp_path))
 
 
-@pytest.mark.parametrize("command", ["", "rhm 2 3 0.5"], ids=["no-scan", "curvature-scan"])
+@pytest.mark.parametrize("command", ["", "rhm 2 3 0.5", "pre_sample_hgap 10 30 10"],
+                         ids=["no-scan", "curvature-scan", "slit-scan"])
 def test_a_scan_selecting_no_geometry_holds_the_motors_as_typed(command, monkeypatch,
                                                                 tmp_path):
-    """Ruling 5. With HKL and motors agreeing, a plain Run and a curvature scan
+    """Ruling 5. With HKL and motors agreeing, a plain Run, a curvature or a slit scan
     give the point the old HKL re-solve gave (to the fields' display rounding).
     With A3 rocked by hand, so that they disagree, they keep A3 and the arcs
     exactly as typed; the HKL re-solve would have moved A3 back."""

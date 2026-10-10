@@ -1310,8 +1310,19 @@ def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder
         # leaves both energies known, so deltaE stays recorded.
         metadata['deltaE'] = None
 
+    # A scanned slit gap (mm) reaches McStas through its binding, a runtime
+    # parameter: the launch's slits stay in the state, so nothing is rebuilt.
+    slits = {qid: scan_point[qid] for qid in plan.scanned if qid.startswith("slit.")}
+    metadata.update(slits)
+    params = None if error_flags else point_state.build_point_params(deltaE)
+    if params is not None and slits:
+        bindings = {p.quantity: p for p in point_state.descriptor().scannable_parameters
+                    if p.quantity}
+        for qid, gap in slits.items():
+            params[bindings[qid].name] = bindings[qid].scale * gap
+
     return PointSnapshot(
-        params=None if error_flags else point_state.build_point_params(deltaE),
+        params=params,
         output_folder=output_folder,
         scan_index=scan_index,
         deltaE=deltaE,

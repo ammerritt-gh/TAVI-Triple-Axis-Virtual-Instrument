@@ -132,8 +132,6 @@ def test_relative_angle_scan_starts_from_its_own_field(in8, name, canonical):
     ("mth 0 1 1", "not modelled yet; scan A2"),
     ("A5 0 1 1", "not modelled yet; scan A6"),
     ("ath 0 1 1", "not modelled yet; scan A6"),
-    ("pre_sample_hgap 1 2 0.5", "slit scans arrive with the point plan"),
-    ("detector_vgap 1 2 0.5", "slit scans arrive with the point plan"),
     ("sbl_hgap 1 2 0.5", "pre_sample_vgap"),
     ("vbl_hgap 1 2 0.5", "post_mono_hgap"),
     ("Ei 1 2 1", "cannot be scanned"),
@@ -200,7 +198,7 @@ def test_goto_maps_the_named_quantity_to_its_field(name, field):
     assert plan.ok and plan.field == field, plan
 
 
-@pytest.mark.parametrize("name", ["A1", "A5", "chi", "phi", "pre_sample_hgap"])
+@pytest.mark.parametrize("name", ["A1", "A5", "chi", "phi", "pbl_hgap"])
 def test_goto_refuses_what_a_scan_refuses(name):
     plan = scan_fits.plan_goto(name, 1.0, busy=False)
     assert not plan.ok and plan.field is None

@@ -318,7 +318,8 @@ def test_every_pair_refused_before_the_plan_is_refused_and_nothing_allowed_newly
     angle beside a Q-side command, one quantity twice) are exactly the pairs
     whose second command is a calculation's output or a duplicate.
     """
-    assert SCANNABLE_ORDER == tuple(q.aliases[0] for q in QUANTITIES if q.scannable)
+    assert SCANNABLE_ORDER == tuple(q.aliases[0] for q in QUANTITIES
+                                    if q.scannable and not q.id.startswith("slit."))
     refused = {frozenset((a, b)) for a, row in PRE_PLAN_REFUSED.items() for b in row}
     assert sum(len(row) for row in PRE_PLAN_REFUSED.values()) == len(refused) == 68
     for a, b in itertools.combinations_with_replacement(SCANNABLE_ORDER, 2):
@@ -331,13 +332,11 @@ def test_every_pair_refused_before_the_plan_is_refused_and_nothing_allowed_newly
 
 
 def test_slit_scans_are_the_one_deliberate_difference():
-    """Today the registry refuses every slit scan; the plan runs one where it is bound."""
-    from tavi.quantities import QuantityRefused, resolve
-
-    with pytest.raises(QuantityRefused, match="slit scans arrive with the point plan"):
-        resolve("pre_sample_hgap", "scan")
-    for other in ("H 1 2 1", "A3 1 2 1", "rhm 1 2 1", ""):
+    """Before the plan every slit scan was refused; a bound one now sits beside any command."""
+    for other in ("H 1 2 1", "A3 1 2 1", "rhm 1 2 1", "qx 1 2 1", "A2 1 2 1", ""):
         _plan(other, "pre_sample_hgap 10 30 10")
+    with pytest.raises(PlanRefused, match="pre_sample_hgap"):
+        _plan("pbl_hgap 0.01 0.03 0.01")   # the old metre-valued name, refused with its replacement
 
 
 # --------------------------------------------- against PUMA's solver and state

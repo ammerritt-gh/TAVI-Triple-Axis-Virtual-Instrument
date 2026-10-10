@@ -327,13 +327,7 @@ def _parse(number, text, relative):
     try:
         quantity = resolve(parts[0], "scan")
     except QuantityRefused as refused:
-        # A slit gap is scannable only where an instrument binds it: build_plan decides.
-        try:
-            quantity = resolve(parts[0], "write")
-        except QuantityRefused:
-            raise PlanRefused(str(refused), number) from None
-        if not quantity.id.startswith("slit."):
-            raise PlanRefused(str(refused), number) from None
+        raise PlanRefused(str(refused), number) from None
     try:
         start, stop, step = (float(x) for x in parts[1:])
     except ValueError:

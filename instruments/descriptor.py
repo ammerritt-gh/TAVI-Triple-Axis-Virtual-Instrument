@@ -338,7 +338,7 @@ class SlitSpec:
     default_width_mm: float | None = None
     default_height_mm: float | None = None
     change_impact: ChangeImpact = ChangeImpact.RUNTIME  # slits are McStas parameters
-    stable_id: str = ""                     # the public name: slit.<stable_id>.horizontal_gap_mm
+    stable_id: str = ""                     # the public gap names: tavi.quantities.slit_gap_ids
 
 
 @dataclass(frozen=True, slots=True)
