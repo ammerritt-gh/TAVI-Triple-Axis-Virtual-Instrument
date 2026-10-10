@@ -20,9 +20,12 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QRect  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QRect, QSignalBlocker, Qt  # noqa: E402
+from PySide6.QtGui import QHelpEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QStyle, QStyleOptionGroupBox, QWidget  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication, QLabel, QStyle, QStyleOptionGroupBox, QToolTip, QWidget,
+)
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -448,3 +451,72 @@ def test_mockup_case_moves_nothing_and_clips_nothing(window, size, mode, columns
             assert _marks(window)[A6] == ("set", "fixed Kf")
         else:
             assert _note(window) == NOTE
+
+
+# ------------------------------------------------ the pair's verdict and the labels
+
+def _warning(win):
+    """The command labels' text that is showing: box 1, box 2 and the conflict, joined."""
+    sim = win.simulation_dock
+    labels = (sim.scan_warning_1_label, sim.scan_warning_2_label, sim.scan_conflict_label)
+    return " ".join(label.text() for label in labels if not label.isHidden())
+
+
+def _run_verdict(win):
+    """(hard issues of Run's preflight, hard issues of the API gate) for the window's launch."""
+    ctrl = win.controller
+    hard, _soft = ctrl._preflight_scan_validation()
+    return hard, ctrl._scan_command_issues(ctrl._collect_simulation_launch_state())[0]
+
+
+@pytest.mark.parametrize("cleared, cmd2", [("k", "K 0 0.2 0.1"), (DE, "deltaE 0 2 0.5")])
+def test_a_field_the_pair_scans_need_not_hold_a_number(window, cleared, cmd2):
+    """Box 1 alone reads the cleared field as typed; the pair scans that quantity, so the pair stands."""
+    _fields(window)[cleared].setText("")
+    _type(window, "H 1.9 2.1 0.05", cmd2)
+    assert _warning(window) == ""
+    assert _run_verdict(window) == ([], [])
+    assert _marks(window)["h"] == ("scanned", "1") and _marks(window)[cleared] == ("scanned", "2")
+
+
+def test_a_half_typed_box_1_still_shows_box_2s_own_refusal(window):
+    sim = window.simulation_dock
+    sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("deterministic"))
+    _settle()
+    _type(window, "H 1.9", "pre_sample_hgap 10 20 5")
+    assert not sim.scan_warning_1_label.isHidden()          # box 1's parse error
+    assert "aperture" in sim.scan_warning_2_label.text()    # box 2's own refusal
+    assert _run_verdict(window)[0]
+
+
+# ------------------------------------------------------ labels follow the marks
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ----------------------------------------------------- the badge and the field
+
+def _badge_point(field):
+    """A point inside both the field and its badge, in the field's own coordinates."""
+    badge = mark_for(field)._badge
+    rect = QRect(field.mapFrom(badge.parentWidget(), badge.pos()), badge.size())
+    return rect.intersected(field.rect()).center()
+
+
+
+
+
+
+# ----------------------------------------------------------------- goto on a radius
+
+
+

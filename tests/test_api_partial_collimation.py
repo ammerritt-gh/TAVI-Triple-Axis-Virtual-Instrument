@@ -328,12 +328,12 @@ def _api_blockers(controller, cmd1, cmd2):
 def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller, monkeypatch):
     """H selects the HKL calculation, which computes Q from it: a Q command
     beside H would be overwritten at every point, so the plan refuses the pair,
-    on the GUI Run and over the API with force alike. Each command alone is
-    no issue (``_scan_command_issues`` judges commands, the plan pairs)."""
+    on the GUI Run and over the API with force alike. The gate judges the pair
+    as the labels do, so the conflict is a hard issue there too."""
     cmd1, cmd2 = "H 1.99 2.01 0.01", "qx 1.9 2.1 0.1"
-    assert issues_for(in8_controller, cmd1, cmd2) == ([], [])
     why = ("Q x is calculated from H in the HKL calculation, so it cannot also be scanned. "
            "force does not override a command conflict.")
+    assert issues_for(in8_controller, cmd1, cmd2) == ([why], [])
     assert _run_refusal(in8_controller, cmd1, cmd2, monkeypatch).startswith(why)
     assert "scan_validation: " + why in _api_blockers(in8_controller, cmd1, cmd2)
     backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
