@@ -1360,7 +1360,9 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
   from H, K and L. A request that patches H, K, L, Q or an energy beside such a scan has its
   sample-stage motors (A4, A3, sgl, sgu) and the unnamed crystal 2θ solved from them first,
   under the plane lock if one is set; a position the stage cannot reach is refused with 400
-  `invalid_parameters`. A request that names any stage motor keeps the stage as given.
+  `invalid_parameters`. A request that names any stage motor keeps the stage as given. A patched
+  crystal 2θ (A2 or A6) sets its side's energy, and a named Ei/Ki (or Ef/Kf) that disagrees with
+  it is refused with 400 `invalid_parameters`.
 - **An empty field refuses.** A scan that reads a numeric field (a relative base, or a quantity
   it uses as typed, such as K in an H scan) refuses when the field holds no number, and names
   it. It is never read as 0.

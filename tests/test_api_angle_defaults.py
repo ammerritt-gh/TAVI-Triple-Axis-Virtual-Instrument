@@ -123,8 +123,10 @@ def test_api_energy_patch_rederives_signed_crystal_angle(controller, instrument_
     assert math.isclose(vals['att'], expected, abs_tol=1e-3), (instrument_id, vals['att'], expected)
     assert math.isclose(vals['mtt'], default['mtt'], abs_tol=1e-6)
 
-    vals = ctrl.build_api_launch_state({"Ei": 12, "mtt": 33.0, "scan_command1": "A3 35 36 1"})["vals"]
-    assert vals['mtt'] == 33.0
+    # An angle that names a different energy than the one patched beside it is refused.
+    with pytest.raises(cm.ApiError) as refused:
+        ctrl.build_api_launch_state({"Ei": 12, "mtt": 33.0, "scan_command1": "A3 35 36 1"})
+    assert refused.value.code == "invalid_parameters"
 
     # A patched fixed energy moves BOTH sides (deltaE=0 in the defaults, so
     # Ei = Ef = 12) and therefore both crystal angles, as in the GUI.
