@@ -5,6 +5,7 @@ path turns an exception into a 500."""
 import pytest
 
 from test_rva_gui_axis_policy import _controller
+from test_api_partial_collimation import issues_for
 
 
 @pytest.mark.parametrize("command, expected", [
@@ -15,14 +16,11 @@ def test_step_guards_run_before_the_curvature_expansion(command, expected):
     with _controller("puma") as ctrl:
         mono = ctrl.descriptor.mono_crystals[0].id
         ana = ctrl.descriptor.ana_crystals[0].id
-        # The single-command validator is what textChanged and the preflight
-        # both call; before the fix this raised instead of returning.
-        var, warning = ctrl._validate_single_scan_command(
-            command,
-            curvature_axes=ctrl._curvature_axis_specs(mono, ana),
-        )
-        # No variable: a hard refusal, so neither Run nor the API launches it.
-        assert var is None and expected in (warning or ""), (var, warning)
+        # The plan's per-command verdict is what textChanged and the preflight
+        # both read; before the fix this raised instead of returning.
+        hard, _ = issues_for(ctrl, command, monocris=mono, anacris=ana)
+        # A hard refusal, so neither Run nor the API launches it.
+        assert len(hard) == 1 and expected in hard[0], hard
 
 
 def test_fixed_axis_policy_survives_a_degenerate_take_off_angle():

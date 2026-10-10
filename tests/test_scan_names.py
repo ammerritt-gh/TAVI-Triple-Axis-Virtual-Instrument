@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
+from test_api_partial_collimation import issues_for  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi import scan_fits  # noqa: E402
 
@@ -138,7 +139,7 @@ def test_relative_angle_scan_starts_from_its_own_field(in8, name, canonical):
     ("Ki 1 2 1", "cannot be scanned"),
 ])
 def test_refused_names_are_refused_with_the_registry_message(in8, command, fragment):
-    hard, _soft = in8._scan_command_issues(command, "")
+    hard, _soft = issues_for(in8, command)
     assert len(hard) == 1 and fragment in hard[0], hard
 
     backend = cm.TaviApiBackend(in8, _SyncBridge())
@@ -148,9 +149,9 @@ def test_refused_names_are_refused_with_the_registry_message(in8, command, fragm
 
 
 def test_an_unknown_name_gets_suggestions_from_the_registry(in8):
-    hard, _soft = in8._scan_command_issues("sample_rot 0 1 1", "")
+    hard, _soft = issues_for(in8, "sample_rot 0 1 1")
     assert len(hard) == 1 and "sample_rotation_deg" in hard[0], hard
-    hard, _soft = in8._scan_command_issues("xyz 0 1 1", "")
+    hard, _soft = issues_for(in8, "xyz 0 1 1")
     assert "Unknown variable 'xyz'" in hard[0] and "A4" in hard[0], hard
 
 
@@ -180,7 +181,7 @@ def test_conflicting_pairs_are_refused_under_the_new_names(in8, cmd1, cmd2):
     ("H 1 1.1 0.1", "K 0 0.1 0.1"),
 ])
 def test_independent_pairs_stay_compatible(in8, cmd1, cmd2):
-    assert in8._scan_command_issues(cmd1, cmd2) == ([], [])
+    assert issues_for(in8, cmd1, cmd2) == ([], [])
     plan = in8._preview_launch(cmd1, cmd2)[1]
     assert [c.text for c in plan.commands] == [cmd1, cmd2]
 

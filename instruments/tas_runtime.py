@@ -375,8 +375,8 @@ class TAS_Instrument:
         submission -- an explicitly commanded radius (a HELD value or a scan
         range) is refused before anything runs, via ``curvature_command_error``
         in ``TAVI_PySide6.py``'s ``build_api_launch_state`` (API),
-        ``_held_curvature_issues`` (GUI), and ``_validate_single_scan_command``
-        (both, for a scan range). This method's own clamp remains, deliberately,
+        ``_held_curvature_issues`` (GUI), and the point plan (both, for a scan
+        range: ``rules.build_plan`` and ``rules.scan_axes``). This method's own clamp remains, deliberately,
         as the backstop for the two callers that still cannot be refused: the
         AUTOFOCUS path (nobody chose that number, so there is no command to
         refuse -- see ``ideal_curvature``) and any caller that reaches this

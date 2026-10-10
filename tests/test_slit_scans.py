@@ -178,7 +178,10 @@ def _label(ctrl, cmd1, cmd2, engine="mcstas"):
     sim.scan_command_1_edit.setText(cmd1)
     sim.scan_command_2_edit.setText(cmd2)
     ctrl.validate_scan_commands()
-    shown = sim.scan_conflict_label.text() if not sim.scan_conflict_label.isHidden() else ""
+    # A command's own refusal sits in its box's label, the pair's in the conflict label.
+    shown = "\n".join(label.text() for label in (sim.scan_conflict_label, sim.scan_warning_1_label,
+                                                  sim.scan_warning_2_label)
+                      if not label.isHidden())
     sim.scan_command_1_edit.setText("")
     sim.scan_command_2_edit.setText("")
     sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("mcstas"))
@@ -213,7 +216,9 @@ def test_the_live_label_run_and_validate_accept_a_bound_slit_scan(in8, monkeypat
     import TAVI_PySide6 as cm
 
     cmd1, cmd2 = _h_scan(in8), "pre_sample_hgap 10 20 10"
-    assert in8._scan_command_issues(cmd1, cmd2) == ([], [])
+    from test_api_partial_collimation import issues_for
+
+    assert issues_for(in8, cmd1, cmd2) == ([], [])
     assert _label(in8, cmd1, cmd2) == ""
     assert _label(in8, "pre_sample_hgap 10 20 10", "") == ""
     submitted, dialogs = _press_run(in8, monkeypatch, cmd1, cmd2)
@@ -241,8 +246,8 @@ def test_a_slit_scan_is_refused_on_the_analytic_engine_everywhere(in8, monkeypat
     import TAVI_PySide6 as cm
 
     why = "pre-sample slit horizontal gap cannot be scanned here: the analytic engine has no aperture model."
-    for cmd1, cmd2 in ((_h_scan(in8), "pre_sample_hgap 10 20 10"),
-                       ("pre_sample_hgap 10 20 10", "")):
+    for cmd1, cmd2, box in ((_h_scan(in8), "pre_sample_hgap 10 20 10", 2),
+                            ("pre_sample_hgap 10 20 10", "", 1)):
         assert _label(in8, cmd1, cmd2, engine="deterministic") == why
         submitted, dialogs = _press_run(in8, monkeypatch, cmd1, cmd2, engine="deterministic")
         assert submitted == [] and len(dialogs) == 1 and why in dialogs[0], dialogs
@@ -252,12 +257,12 @@ def test_a_slit_scan_is_refused_on_the_analytic_engine_everywhere(in8, monkeypat
         result = backend.submit_validate({"parameters": params, "engine": "deterministic",
                                           "force": True})
         assert result["would_queue"] is False
-        assert "scan_validation: " + why in result["blockers"], result["blockers"]
+        assert f"scan_validation: Command {box}: {why}" in result["blockers"], result["blockers"]
         with pytest.raises(cm.ApiError) as refused:
             backend.submit_scan({"parameters": params, "engine": "deterministic",
                                  "force": True, "allow_partial": True})
         assert (refused.value.status, refused.value.code) == (400, "scan_validation")
-        assert str(refused.value.message) == why
+        assert str(refused.value.message) == f"Command {box}: {why}"
 
 
 def test_a_relative_slit_scan_with_an_empty_gap_field_refuses_naming_it(in8, monkeypatch):

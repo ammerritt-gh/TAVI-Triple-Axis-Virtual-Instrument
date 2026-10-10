@@ -35,6 +35,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from test_api_partial_collimation import issues_for  # noqa: E402
 
 
 # ---------------------------------------------------------------- unit level
@@ -195,7 +196,7 @@ def test_a_scan_range_out_of_travel_is_rejected_on_both_routes():
         # rhm's declared minimum is 2.0 m; 1.0 is below it.
         cmd = "rhm 1.0 3.0 0.5"
 
-        hard_api, _ = ctrl._scan_command_issues(cmd, "", mono, ana)
+        hard_api, _ = issues_for(ctrl, cmd, monocris=mono, anacris=ana)
         assert hard_api, "an out-of-travel scan endpoint must hard-block"
         assert "rhm" in hard_api[0]
 
@@ -209,7 +210,7 @@ def test_a_scan_range_out_of_travel_is_rejected_on_both_routes():
 
         # A range fully inside travel still launches clean.
         ok_cmd = "rhm 3.0 5.0 0.5"
-        hard_ok, _ = ctrl._scan_command_issues(ok_cmd, "", mono, ana)
+        hard_ok, _ = issues_for(ctrl, ok_cmd, monocris=mono, anacris=ana)
         assert hard_ok == []
 
 
@@ -237,7 +238,7 @@ def test_zero_is_still_accepted_as_a_held_radius_and_as_a_scan_endpoint():
         # A scan range with a 0 endpoint. Every expanded value is checked
         # (not just the endpoints), so both values here (0 and 2.0) must be
         # individually legal -- 0 exempt as FLAT, 2.0 exactly the minimum.
-        hard, _ = ctrl._scan_command_issues("rhm 0 2 2", "", mono, ana)
+        hard, _ = issues_for(ctrl, "rhm 0 2 2", monocris=mono, anacris=ana)
         assert hard == []
 
 
@@ -306,9 +307,8 @@ def test_puma_nmo_refuses_a_scanned_rhm_naming_the_nmo():
 
         # Without the NMO, the identical command is a perfectly legal scan --
         # the refusal is the NMO's doing, not an accident of the axis name.
-        hard_flat, _ = ctrl._scan_command_issues(
-            "rhm 2.5 3.0 0.5", "", mono, ana, {"nmo": "None", "v_selector": False}
-        )
+        hard_flat, _ = issues_for(ctrl, "rhm 2.5 3.0 0.5", monocris=mono, anacris=ana,
+                                  modules={"nmo": "None", "v_selector": False})
         assert hard_flat == []
 
 
@@ -354,9 +354,8 @@ def test_a_non_finite_scan_bound_is_refused_not_raised(cmd):
     numeric conversion, not in the curvature branch.
     """
     with _controller("puma") as ctrl:
-        var, error = ctrl._validate_single_scan_command(cmd)
-        assert error is not None
-        assert "finite" in error
+        hard, _ = issues_for(ctrl, cmd)
+        assert hard and "finite" in hard[0], hard
 
 
 @pytest.mark.parametrize("axis", ["rhm", "rvm", "rha", "rva"])
@@ -440,7 +439,7 @@ def test_instruments_with_no_declared_travel_refuse_nothing(instrument_id):
         ctrl.window.instrument_dock.rhm_edit.setText("1000")
         assert ctrl._held_curvature_issues(mono, ana) == []
 
-        hard, _ = ctrl._scan_command_issues("rhm 0.01 1000.0 10", "", mono, ana)
+        hard, _ = issues_for(ctrl, "rhm 0.01 1000.0 10", monocris=mono, anacris=ana)
         assert hard == []
 
 
