@@ -106,6 +106,23 @@ def test_every_angle_and_arc_name_scans_the_quantity_it_names(controller, instru
         assert differing == {field}, f"{instrument_id}: {canonical} changed {differing}"
 
 
+RELATIVE_BASES = {"mono_two_theta_deg": 11.0, "sample_two_theta_deg": 22.0,
+                  "sample_rotation_deg": 33.0, "analyzer_two_theta_deg": 44.0}
+
+
+@pytest.mark.parametrize("name, canonical", [
+    ("A2", "mono_two_theta_deg"), ("mono_two_theta_deg", "mono_two_theta_deg"),
+    ("A4", "sample_two_theta_deg"), ("sample_two_theta_deg", "sample_two_theta_deg"),
+    ("A3", "sample_rotation_deg"), ("sample_rotation_deg", "sample_rotation_deg"),
+    ("A6", "analyzer_two_theta_deg"), ("analyzer_two_theta_deg", "analyzer_two_theta_deg"),
+])
+def test_relative_angle_scan_starts_from_its_own_field(in8, name, canonical):
+    launch = in8.build_api_launch_state({"scan_command1": f"{name} 1 2 1", **RELATIVE_BASES})
+    launch["relative_mode_1"] = True
+    first = in8.validate_scan_launch_state(launch)["per_command"][0]["values"][0]
+    assert first == pytest.approx(RELATIVE_BASES[canonical] + 1.0), name
+
+
 @pytest.mark.parametrize("command, fragment", [
     ("phi 0 1 1", "does not have"),
     ("kappa 0 1 1", "does not have"),

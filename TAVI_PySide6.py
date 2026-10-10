@@ -4627,41 +4627,12 @@ class TAVIController(QObject):
         """
         var = var_name.lower() if var_name else ""
 
-        # Q-space variables
-        if var == 'q_instrument_x_inv_angstrom':
-            return vals.get('qx', 0)
-        elif var == 'q_instrument_y_inv_angstrom':
-            return vals.get('qy', 0)
-        elif var == 'q_instrument_z_inv_angstrom':
-            return vals.get('qz', 0)
-        elif var == 'energy_transfer_mev':
-            return vals.get('deltaE', 0)
-        # HKL variables
-        elif var == 'h':
-            return vals.get('H', 0)
-        elif var == 'k':
-            return vals.get('K', 0)
-        elif var == 'l':
-            return vals.get('L', 0)
-        # Instrument angles (the fields keep their internal names until U3)
-        elif var == 'mono_two_theta_deg':
-            return vals.get('mtt', 0)
-        elif var == 'sample_two_theta_deg':
-            return vals.get('stt', 0)
-        elif var == 'sample_rotation_deg':
-            return vals.get('omega', 0)
-        elif var == 'analyzer_two_theta_deg':
-            return vals.get('att', 0)
-        # Sample stage slots (arcs)
-        elif var == 'sample_lower_arc_deg':
+        # The arcs' starting values are the point template's slots; every other quantity is a field
+        if var == 'sample_lower_arc_deg':
             return scan_point_template[SLOT_SGL]
         elif var == 'sample_upper_arc_deg':
             return scan_point_template[SLOT_SGU]
-        # Crystal bending
-        elif var in CURVATURE_AXIS_BY_ID:
-            return vals.get(CURVATURE_AXIS_BY_ID[var], 0)
-
-        return 0
+        return vals.get(_to_internal(var), 0)
 
     def _trigger_scan_update(self):
         """Trigger a debounced update of scan estimates."""
@@ -8241,7 +8212,8 @@ class TAVIController(QObject):
         elif scan_mode == "rlu":
             template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
         elif scan_mode == "angle":
-            template[:4] = [vals['mtt'], vals['stt'], vals['omega'], vals['att']]
+            for name in self._SCAN_ANGLES:
+                template[self._SCAN_VARIABLE_TO_INDEX[name]] = vals[_to_internal(name)]
         elif scan_mode == "orientation":
             template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
         # The arc readouts drive angle mode; Q modes solve the arcs instead.
