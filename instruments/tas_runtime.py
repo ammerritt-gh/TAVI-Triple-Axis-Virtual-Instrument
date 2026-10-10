@@ -194,16 +194,16 @@ def curvature_run_error(axis, values, curvature_axis, crystal_name=None):
 
 class TAS_Instrument:
     """The general setup of a triple-axes spectrometer (TAS) instrument, with useful functions for setting the geometries."""
-    def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, A1=0, A2=0, A3=0, A4=0, **kwargs):
+    def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, mono_two_theta_deg=0, sample_two_theta_deg=0, sample_rotation_deg=0, analyzer_two_theta_deg=0, **kwargs):
         self.parameters = kwargs
         self.L1 = L1 # source-mono arm length
         self.L2 = L2 # mono-sample arm length
         self.L3 = L3 # sample-ana arm length
         self.L4 = L4 # ana-det arm length
-        self.A1 = A1 # mono two-theta angle
-        self.A2 = A2 # sample two-theta angle (phi)
-        self.A3 = A3 # sample turntable readout
-        self.A4 = A4 # ana two-theta angle
+        self.mono_two_theta_deg = mono_two_theta_deg # mono two-theta angle
+        self.sample_two_theta_deg = sample_two_theta_deg # sample two-theta angle (phi)
+        self.sample_rotation_deg = sample_rotation_deg # sample turntable readout
+        self.analyzer_two_theta_deg = analyzer_two_theta_deg # ana two-theta angle
         # Goniometer arc readouts (descriptor goniometer): lower arc about x,
         # upper arc about z, both riding on the A3 turntable.
         self.sgl = 0.0
@@ -254,16 +254,16 @@ class TAS_Instrument:
             else:
                 print(f"Parameter '{key}' not found.")
 
-    def set_angles(self, A1=None, A2=None, A3=None, A4=None):
-        """Method to set A1-A4 angles."""
-        if A1 is not None:
-            self.A1 = A1
-        if A2 is not None:
-            self.A2 = A2
-        if A3 is not None:
-            self.A3 = A3
-        if A4 is not None:
-            self.A4 = A4
+    def set_angles(self, mono_two_theta_deg=None, sample_two_theta_deg=None, sample_rotation_deg=None, analyzer_two_theta_deg=None):
+        """Method to set the mono, sample and analyzer angle fields."""
+        if mono_two_theta_deg is not None:
+            self.mono_two_theta_deg = mono_two_theta_deg
+        if sample_two_theta_deg is not None:
+            self.sample_two_theta_deg = sample_two_theta_deg
+        if sample_rotation_deg is not None:
+            self.sample_rotation_deg = sample_rotation_deg
+        if analyzer_two_theta_deg is not None:
+            self.analyzer_two_theta_deg = analyzer_two_theta_deg
 
     @property
     def goniometer(self):
@@ -286,7 +286,9 @@ class TAS_Instrument:
         """The stage angles, {axis name: degrees}: the readout is the state
         attribute named after the axis (validation guarantees A3/sgl/sgu).
         The crystal sits exactly there: no correction, no zero error."""
-        return {ax.name: getattr(self, ax.name) for ax in self.goniometer}
+        # The ILL stage label A3 is the sample_rotation_deg attribute.
+        return {ax.name: getattr(self, "sample_rotation_deg" if ax.name == "A3" else ax.name)
+                for ax in self.goniometer}
 
     def sample_orientation_params(self):
         """Per-point McStas parameters of the sample: the single sample arm's
@@ -402,7 +404,7 @@ class TAS_Instrument:
         }
         # The Bragg angle each axis takes its branch sign from -- rhm/rvm off
         # the monochromator two-theta, rha/rva off the analyser two-theta.
-        mth, ath = crystal_theta(self.A1), crystal_theta(self.A4)
+        mth, ath = crystal_theta(self.mono_two_theta_deg), crystal_theta(self.analyzer_two_theta_deg)
         theta_by_axis = {"rhm": mth, "rvm": mth, "rha": ath, "rva": ath}
 
         for axis, value in supplied.items():
@@ -1055,11 +1057,11 @@ def _solve_point_geometry(point_state, calculation, point, vals):
         )
         if not error_flags:
             mtt, stt, sth, sgl, att, sgu = angles_array
-            point_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+            point_state.set_angles(mono_two_theta_deg=mtt, sample_two_theta_deg=stt, sample_rotation_deg=sth, analyzer_two_theta_deg=att)
             point_state.sgl, point_state.sgu = sgl, sgu
     else:
         mtt, stt, sth, att = (point[qid] for qid in (MTT, STT, STH, ATT))
-        point_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+        point_state.set_angles(mono_two_theta_deg=mtt, sample_two_theta_deg=stt, sample_rotation_deg=sth, analyzer_two_theta_deg=att)
         # The motors are the authority here, not the frozen field.
         angle_energies = point_state.nominal_energies_from_angles(mtt, att)
         point_state._angle_energies = angle_energies
@@ -1287,8 +1289,8 @@ def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder
         )
     else:
         log_message = (
-            f"Scan parameters - {_axis_text('mtt')}: {point_state.A1}, {_axis_text('stt')}: {point_state.A2}, "
-            f"{_axis_text('omega')}: {point_state.A3}, {_axis_text('att')}: {point_state.A4}\n"
+            f"Scan parameters - {_axis_text('mtt')}: {point_state.mono_two_theta_deg}, {_axis_text('stt')}: {point_state.sample_two_theta_deg}, "
+            f"{_axis_text('omega')}: {point_state.sample_rotation_deg}, {_axis_text('att')}: {point_state.analyzer_two_theta_deg}\n"
             f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}\n"
             f"Orientation: {orientation_info}"
         )
@@ -1381,7 +1383,7 @@ def true_point_hkl(state, metadata, B_true):
     result (it would show the hidden truth).
     """
     point = copy.copy(state)
-    point.A3, point.sgl, point.sgu = metadata["sth"], metadata["sgl"], metadata["sgu"]
+    point.sample_rotation_deg, point.sgl, point.sgu = metadata["sth"], metadata["sgl"], metadata["sgu"]
     q_mount = q_mount_from_stage(point.goniometer, point.stage_readouts(),
                                  metadata["stt"], metadata["Ki"], metadata["Kf"],
                                  point.sense_sample)

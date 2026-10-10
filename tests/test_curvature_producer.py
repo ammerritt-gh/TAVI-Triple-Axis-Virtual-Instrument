@@ -73,7 +73,7 @@ def test_set_crystal_bending_overrides_a_supplied_value_on_a_fixed_axis():
     """PUMA's rva is fixed at 0.8 m; a scanned value must not stick."""
     state = PUMA_Instrument()
     state.monocris = state.anacris = "pg002"
-    state.set_angles(A1=41.167, A4=41.167)  # two-theta = 2 * 20.5835
+    state.set_angles(mono_two_theta_deg=41.167, analyzer_two_theta_deg=41.167)  # two-theta = 2 * 20.5835
 
     state.set_crystal_bending(rva=3.0)
     assert state.rva == pytest.approx(0.8)
@@ -153,7 +153,7 @@ def test_a_commanded_flat_radius_is_not_clamped_up_when_it_is_applied():
     state = PUMA_Instrument()
     state.monocris = "pg002"
     state.anacris = "pg002"
-    state.set_angles(A1=41.167, A4=41.167)
+    state.set_angles(mono_two_theta_deg=41.167, analyzer_two_theta_deg=41.167)
 
     state.set_crystal_bending(rhm=0.0, rvm=0.0)
     assert state.rhm == 0.0

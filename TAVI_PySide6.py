@@ -2648,7 +2648,7 @@ class TAVIController(QObject):
             return {"ok": False, "reason": (
                 "direct transmission (sample): the analytic engine makes no claim"
             )}
-        check_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+        check_state.set_angles(mono_two_theta_deg=mtt, sample_two_theta_deg=stt, sample_rotation_deg=sth, analyzer_two_theta_deg=att)
         curvature_modes = vals.get('curvature_modes') or {}
         radii = {}
         autofocus_axes = []
@@ -2856,8 +2856,9 @@ class TAVIController(QObject):
                 details={"errors": errors},
             )
 
-        # The frozen parameters and the plugins keep the internal names (until U3);
-        # slit gaps land in the nested slits_mm each plugin indexes.
+        # The launch dict and point metadata keep the internal names until a follow-up
+        # job renames them (plan amendment 7); slit gaps land in the nested slits_mm
+        # each plugin indexes.
         internal = {_to_internal(n): v for n, v in parsed.items() if not n.startswith("slit.")}
         patched = set(internal)
         vals.update(internal)

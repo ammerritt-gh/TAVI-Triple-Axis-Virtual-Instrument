@@ -174,12 +174,12 @@ def _get_point_energy_metadata(PUMA, deltaE):
 def build_puma_point_params(PUMA, deltaE):
     """Build the runtime parameter snapshot for one instrument point."""
     return {
-        "mono_two_theta_param": PUMA.A1,
-        "sample_two_theta_param": PUMA.A2,
-        "sample_rotation_param": PUMA.A3,
-        "analyzer_two_theta_param": PUMA.A4,
-        "mono_theta_param": crystal_theta(PUMA.A1),
-        "analyzer_theta_param": crystal_theta(PUMA.A4),
+        "mono_two_theta_param": PUMA.mono_two_theta_deg,
+        "sample_two_theta_param": PUMA.sample_two_theta_deg,
+        "sample_rotation_param": PUMA.sample_rotation_deg,
+        "analyzer_two_theta_param": PUMA.analyzer_two_theta_deg,
+        "mono_theta_param": crystal_theta(PUMA.mono_two_theta_deg),
+        "analyzer_theta_param": crystal_theta(PUMA.analyzer_two_theta_deg),
         "E0_param": _get_E0_param_value(PUMA, deltaE),
         "nu_param": _get_v_selector_frequency(PUMA, deltaE),
         "rhm_param": PUMA.rhm,

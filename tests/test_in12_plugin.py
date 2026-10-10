@@ -398,14 +398,14 @@ def test_set_crystal_bending_is_idempotent_on_already_signed_values():
     """A value already signed onto the take-off branch is not flipped back.
 
     Real angles are required now: the base setter derives the branch sign
-    from ``self.A1``/``self.A4``, not from an unconditional instrument-wide
+    from ``self.mono_two_theta_deg``/``self.analyzer_two_theta_deg``, not from an unconditional instrument-wide
     override (see ``instruments/tas_runtime.py::set_crystal_bending``). No
     crystal is selected, so every axis reads as driven/unfixed -- the
     supplied -0.6 m for rva is not IN12's fixed 1.40 m analyser radius.
     """
     pytest.importorskip("mcstasscript")
     state = IN12Plugin().default_state()
-    state.set_angles(A1=-55.834468, A4=-55.834468)  # IN12's negative take-off branch
+    state.set_angles(mono_two_theta_deg=-55.834468, analyzer_two_theta_deg=-55.834468)  # IN12's negative take-off branch
     state.set_crystal_bending(rhm=-4.0, rvm=-1.8, rha=-1.65, rva=-0.6)
     assert (state.rhm, state.rvm, state.rha, state.rva) == (-4.0, -1.8, -1.65, -0.6)
     state.set_crystal_bending(rhm=4.0)
