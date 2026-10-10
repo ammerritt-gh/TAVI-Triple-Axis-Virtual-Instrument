@@ -4371,8 +4371,9 @@ class TAVIController(QObject):
     def _box_verdict(self):
         """The command boxes judged once per refresh, for the labels and the field marks.
 
-        ``(launch_state, plan, accepted, refused)`` as ``_judge_boxes`` gives it, or None
-        when the launch does not collect (a cell the sample mount cannot build, mid-edit).
+        ``(launch_state, plan, accepted, refused)`` as ``_judge_boxes`` gives it. When the
+        launch does not collect (a cell the sample mount cannot build, mid-edit) nothing is
+        planned, and the refusal naming no box says why, so the withdrawn marks have a reason.
         """
         sim = self.window.simulation_dock
         commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
@@ -4381,7 +4382,7 @@ class TAVIController(QObject):
             launch_state = self._collect_simulation_launch_state()
         except ValueError as exc:   # a cell the sample mount cannot build, mid-edit
             log.warning("Scan labels and field marks: the launch does not collect (%s)", exc)
-            return None
+            return None, None, {}, {None: PlanRefused(f"Nothing can be planned: {exc}")}
         return (launch_state, *self._judge_boxes(launch_state, commands))
 
     def _show_scan_verdict(self, verdict):
