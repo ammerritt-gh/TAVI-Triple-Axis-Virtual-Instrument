@@ -142,6 +142,20 @@ def test_a_relative_base_edited_between_preview_and_run_runs_from_the_run_time_b
             _reset(ctrl)
 
 
+@pytest.mark.parametrize("instrument_id", ["puma", "in8", "in12", "panda"])
+def test_every_plugin_input_has_an_empty_field_check(instrument_id):
+    """An input a plugin declares with no dock field (and no fixed-energy or lattice check in
+    _compile_launch) would launch with its empty field read as 0."""
+    with _controller(instrument_id) as ctrl:
+        try:
+            covered = {cm._to_public(key) for key in ctrl._plan_input_edits()}
+            covered |= {"fixed_E", *(q.id for q in cm.QUANTITIES if q.id.startswith("lattice_"))}
+            missing = ctrl.instrument.capabilities().inputs - covered
+            assert not missing, sorted(missing)
+        finally:
+            _reset(ctrl)
+
+
 def test_an_empty_relative_base_field_refuses_the_run_naming_it(monkeypatch):
     """Empty the A3 field under a relative A3 scan and press Run: refused, naming
     the field, nothing queued and no field or instrument readout moved. An empty
