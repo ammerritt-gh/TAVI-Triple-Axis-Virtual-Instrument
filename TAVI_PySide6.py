@@ -112,7 +112,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.utilities import (parse_scan_steps, incremented_path_writing,
-                            normalize_scan_commands)
+                            normalize_scan_commands, scan_range_error)
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
                               record_angles, stage_record, stage_rotation)
@@ -4469,26 +4469,10 @@ class TAVIController(QObject):
         except ValueError:
             return (None, "Invalid numbers. Check start, end, and step values.")
 
-        # float() accepts "nan"/"inf", and every guard below compares
-        # magnitudes -- which are all False against NaN -- so a non-finite
-        # bound would reach parse_scan_steps, whose int() of the step count
-        # raises ValueError/OverflowError. Uncaught, that is a 500 where the
-        # client should have got this structured refusal. Refuse here, beside
-        # the conversion that let it through, so every scanned variable is
-        # covered and not just the curvature axes.
-        if not all(math.isfinite(v) for v in (start, end, step)):
-            return (None, "Start, end, and step must be finite numbers.")
+        range_error = scan_range_error(start, end, step)
+        if range_error:
+            return (None, range_error)
 
-        # Check for zero step
-        if step == 0:
-            return (None, "Step size cannot be zero.")
-        
-        # Check step sign consistency with direction
-        if (end > start and step < 0) or (end < start and step > 0):
-            return (None, "Step sign doesn't match direction (start → end).")
-        if end != start and abs(step) > abs(end - start):
-            return (None, f"Step ({step}) is larger than the range ({start} to {end}).")
-        
         # After the step guards: the expansion below divides by the step and
         # calls parse_scan_steps, so a zero or wrong-sign step must have been
         # refused already -- mid-keystroke text like 'rhm 2 4 0' reaches
