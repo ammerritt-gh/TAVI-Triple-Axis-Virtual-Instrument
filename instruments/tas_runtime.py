@@ -33,7 +33,7 @@ from tavi.orientation import (
     sample_arm_euler,
     solve_stage,
 )
-from tavi.quantities import by_id, to_public
+from tavi.quantities import QUANTITIES, by_id, to_internal, to_public
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     _normalize_deg,
@@ -56,10 +56,8 @@ SLOT_SGL, SLOT_SGU = 8, 9
 SCAN_POINT_LENGTH = 10
 
 # Interim (U3 deletes it): the radius axis a canonical scan quantity drives.
-CURVATURE_AXIS_BY_ID = {
-    "mono_horizontal_radius_m": "rhm", "mono_vertical_radius_m": "rvm",
-    "analyzer_horizontal_radius_m": "rha", "analyzer_vertical_radius_m": "rva",
-}
+CURVATURE_AXIS_BY_ID = {q.id: to_internal(q.id) for q in QUANTITIES
+                        if q.scannable and q.id.endswith("_radius_m")}
 
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):

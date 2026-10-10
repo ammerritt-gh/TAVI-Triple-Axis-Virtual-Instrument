@@ -237,9 +237,6 @@ _INTERNAL = {
     "lattice_beta_deg": "lattice_beta", "lattice_gamma_deg": "lattice_gamma",
 }
 _PUBLIC = {internal: canonical for canonical, internal in _INTERNAL.items()}
-_APPLIED = {"rhm": "applied_mono_horizontal_radius_m", "rvm": "applied_mono_vertical_radius_m",
-            "rha": "applied_analyzer_horizontal_radius_m",
-            "rva": "applied_analyzer_vertical_radius_m"}
 
 
 def to_internal(canonical_id: str) -> str:
@@ -252,7 +249,7 @@ def to_public(internal_name: str) -> str:
 
 def public_applied_radii(applied: dict) -> dict:
     """A point's applied radii ({"rhm": ...}) under their derived-only canonical IDs."""
-    return {_APPLIED[axis]: value for axis, value in applied.items()}
+    return {"applied_" + to_public(axis): value for axis, value in applied.items()}
 
 
 def public_values(vals: dict, slits=()) -> dict:
