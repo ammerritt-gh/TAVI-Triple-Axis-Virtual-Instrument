@@ -162,7 +162,7 @@ class Recorder:
             if event == "call":
                 fields = {k: v for k, v in frame.f_locals.items()
                           if k in ("launch_state", "params_snapshot", "output_folder", "number_neutrons",
-                                   "execution_state", "mpi_count", "message", "scan_item", "vals", "data_folder")}
+                                   "execution_state", "mpi_count", "message", "scan_point", "vals", "data_folder")}
                 # The frozen state includes hidden alignment and the sample mount,
                 # which cannot be reconstructed from the visible GUI values alone.
                 if isinstance(fields.get("launch_state"), dict):

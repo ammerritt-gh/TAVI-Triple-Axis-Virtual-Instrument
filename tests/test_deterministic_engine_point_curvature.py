@@ -49,13 +49,16 @@ def _controller(instrument_id):
 
 
 def _spy_resolution_config(ctrl):
-    """Wrap ``ctrl.instrument.resolution_config`` to record each call's
-    rhm/rvm/rha/rva, still delegating to the real implementation."""
+    """Wrap ``ctrl.instrument.resolution_config`` to record each per-point
+    kernel call's rhm/rvm/rha/rva, still delegating to the real
+    implementation. A per-point call names its point's angles; the launch
+    collection (which the next-run preview also runs) names none."""
     calls = []
     real = ctrl.instrument.resolution_config
 
     def _wrapped(vals, q0, w, point_angles=None):
-        calls.append(tuple(vals[axis] for axis in ("rhm", "rvm", "rha", "rva")))
+        if point_angles is not None:
+            calls.append(tuple(vals[axis] for axis in ("rhm", "rvm", "rha", "rva")))
         return real(vals, q0, w, point_angles=point_angles)
 
     ctrl.instrument.resolution_config = _wrapped
@@ -76,6 +79,7 @@ def test_deterministic_engine_resolution_follows_each_points_own_curvature(tmp_p
         launch["engine"] = "deterministic"
 
         calls = _spy_resolution_config(ctrl)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=None)
 
         assert len(calls) == 3, calls
@@ -111,6 +115,7 @@ def test_deterministic_engine_direct_curvature_scan_changes_the_kernel(tmp_path)
         launch["engine"] = "deterministic"
 
         calls = _spy_resolution_config(ctrl)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=None)
 
         assert len(calls) == 3, calls

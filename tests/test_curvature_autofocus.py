@@ -26,7 +26,11 @@ pytest.importorskip("mcstasscript")
 
 from instruments.in8.plugin import IN8Plugin
 from instruments.puma.model import PUMA_Instrument
-from instruments.tas_runtime import compute_scan_snapshot
+from instruments.puma.plugin import PUMAPlugin
+from instruments.tas_runtime import MOTORS, Q_CALC, compute_scan_snapshot
+from plan_helpers import motors_point, plan_for, q_point
+
+RHA, RVA = "analyzer_horizontal_radius_m", "analyzer_vertical_radius_m"
 
 AUTOFOCUS, HELD, SCANNED = "autofocus", "held", "scanned"
 
@@ -63,9 +67,9 @@ def test_fixed_kf_energy_scan_tracks_the_mono_and_leaves_the_analyser(tmp_path):
     rhm_values = []
     rha_values = []
     for deltaE in (-3.0, 0.0, 3.0):
-        scans = [3.0, 0.0, 0.0, deltaE, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         snapshot = compute_scan_snapshot(
-            (scans, 0), 0, "momentum", state, vals, str(tmp_path),
+            plan_for(PUMAPlugin(), state, vals, Q_CALC), q_point(3.0, 0.0, 0.0, deltaE),
+            0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == [], snapshot.error_flags
         rhm_values.append(snapshot.metadata["rhm"])
@@ -89,9 +93,9 @@ def test_angle_convention_halves_two_theta_exactly_once(tmp_path):
     vals = _autofocus_vals()
     A1, A4 = 41.167, 50.0  # two-theta values, deliberately different from A1
 
-    scans = [A1, 0.0, 0.0, A4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     snapshot = compute_scan_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path),
+        plan_for(PUMAPlugin(), state, vals, MOTORS), motors_point(A1, 0.0, 0.0, A4),
+        0, state, vals, str(tmp_path),
     )
     assert snapshot.error_flags == []
 
@@ -115,9 +119,9 @@ def test_held_axis_does_not_move_across_the_scan(tmp_path):
 
     magnitudes = []
     for A4 in (30.0, 60.0):  # same sign, very different ideal rha
-        scans = [41.18, 0.0, 0.0, A4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         snapshot = compute_scan_snapshot(
-            (scans, 0), 0, "angle", state, vals, str(tmp_path),
+            plan_for(plugin, state, vals, MOTORS), motors_point(41.18, 0.0, 0.0, A4),
+            0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == []
         magnitudes.append(abs(snapshot.metadata["rha"]))
@@ -141,11 +145,10 @@ def test_scanned_axis_follows_its_command(tmp_path):
     }
 
     for rha_command, expected_magnitude in ((1.0, 1.0), (2.5, 2.5)):
-        scans = [41.18, 0.0, 0.0, -41.18, 0.0, 0.0, rha_command, 0.0,
-                 0.0, 0.0, 0.0]
         snapshot = plugin.compute_snapshot(
-            (scans, 0), 0, "angle", state, vals, str(tmp_path),
-            variable_name1="analyzer_horizontal_radius_m",
+            plan_for(plugin, state, vals, MOTORS, scanned=(RHA,)),
+            {**motors_point(41.18, 0.0, 0.0, -41.18), RHA: rha_command},
+            0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == []
         assert snapshot.metadata["curvature_modes"]["rha"] == "scanned"
@@ -160,10 +163,10 @@ def test_fixed_axis_ignores_mode_and_stays_at_its_declared_radius(tmp_path):
     vals = _autofocus_vals()
 
     for A1, A4 in ((41.167, 41.167), (30.0, 50.0)):
-        scans = [A1, 0.0, 0.0, A4, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0]
+        # Even scanned as a bare 3.0 (a plan never accepts it), it must not stick.
         snapshot = compute_scan_snapshot(
-            (scans, 0), 0, "angle", state, vals, str(tmp_path),
-            variable_name1="analyzer_vertical_radius_m",  # even commanded as a bare 3.0, it must not stick
+            plan_for(PUMAPlugin(), state, vals, MOTORS, scanned=(RVA,)),
+            {**motors_point(A1, 0.0, 0.0, A4), RVA: 3.0}, 0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == []
         assert abs(snapshot.metadata["rva"]) == pytest.approx(0.8)
@@ -180,9 +183,9 @@ def test_error_flagged_point_does_not_autofocus_off_stale_angles(tmp_path):
 
     # Zero momentum transfer -> calculate_angles refuses with "zero_q" before
     # any angle is solved.
-    scans = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     snapshot = compute_scan_snapshot(
-        (scans, 0), 0, "momentum", state, vals, str(tmp_path),
+        plan_for(PUMAPlugin(), state, vals, Q_CALC), q_point(0.0, 0.0, 0.0),
+        0, state, vals, str(tmp_path),
     )
     assert snapshot.error_flags == ["zero_q"]
     # Held at the launch-state value, not recomputed off a zero/stale angle.
@@ -201,9 +204,9 @@ def test_metadata_records_mode_and_a_clamped_autofocus_radius_is_flagged(tmp_pat
     state = _puma_state()
     vals = _autofocus_vals()
 
-    scans = [41.167, 0.0, 0.0, 60.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    plan = plan_for(PUMAPlugin(), state, vals, MOTORS)
     snapshot = compute_scan_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path),
+        plan, motors_point(41.167, 0.0, 0.0, 60.0), 0, state, vals, str(tmp_path),
     )
     assert snapshot.error_flags == []
 
@@ -217,8 +220,7 @@ def test_metadata_records_mode_and_a_clamped_autofocus_radius_is_flagged(tmp_pat
     # The ordinary case (nothing clamped) reports an empty list, not the
     # absence of a key -- a client should never need to guess.
     snapshot_ok = compute_scan_snapshot(
-        (scans[:3] + [41.167] + scans[4:], 0), 0, "angle", state, vals,
-        str(tmp_path),
+        plan, motors_point(41.167, 0.0, 0.0, 41.167), 0, state, vals, str(tmp_path),
     )
     assert snapshot_ok.error_flags == []
     assert snapshot_ok.metadata["curvature_clamped"] == []
@@ -248,9 +250,9 @@ def test_autofocus_does_not_bend_a_flat_nmo_monochromator(tmp_path):
 
     mono_values = []
     for deltaE in (-3.0, 0.0, 3.0):
-        scans = [3.0, 0.0, 0.0, deltaE, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         snapshot = compute_scan_snapshot(
-            (scans, 0), 0, "momentum", state, vals, str(tmp_path),
+            plan_for(PUMAPlugin(), state, vals, Q_CALC), q_point(3.0, 0.0, 0.0, deltaE),
+            0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == [], snapshot.error_flags
         mono_values.append((snapshot.metadata["rhm"], snapshot.metadata["rvm"]))

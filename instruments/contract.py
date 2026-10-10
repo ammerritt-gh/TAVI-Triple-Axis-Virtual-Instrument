@@ -29,6 +29,7 @@ from instruments.descriptor import InstrumentDescriptor, ParameterSpec
 if TYPE_CHECKING:  # avoid importing heavy modules just for type hints
     import mcstasscript as ms
 
+    from instruments.rules import Plan, PointCheck
     from tavi.resolution import ResolutionConfig
     from tavi.sample_mount import SampleMount
 
@@ -244,23 +245,24 @@ class InstrumentPlugin(Protocol):
 
     def compute_snapshot(
         self,
-        scan_item: Any,
+        plan: "Plan",
+        scan_point: Mapping[str, float],
         scan_index: int,
-        scan_mode: str,
         config: InstrumentState,
         vals: dict,
         data_folder: str,
         *,
-        is_2d_scan: bool = False,
-        variable_name1: str = "",
-        variable_name2: str = "",
-        scan_command1: str = "",
-        scan_command2: str = "",
+        indices: "dict | None" = None,
     ) -> PointSnapshot:
-        """Compute one scan point's runtime snapshot (a ``PointSnapshot``).
+        """Compute one point's runtime snapshot (a ``PointSnapshot``).
 
-        ``params`` keys are this instrument's ``scannable_parameters`` -- **not** a
-        fixed PUMA set. ``None`` params means the point errored and is skipped.
+        ``plan`` is the launch's accepted point plan (``instruments.rules``):
+        its calculation decides the solve and its commands which quantities
+        are scanned. ``scan_point`` is one of its expanded points, canonical
+        ID -> value (``tavi.quantities``); ``indices`` places it in the
+        result arrays (``{"idx_1d", "idx_x", "idx_y"}``). ``params`` keys are
+        this instrument's ``scannable_parameters`` -- **not** a fixed PUMA
+        set. ``None`` params means the point errored and is skipped.
         """
         ...
 
@@ -283,18 +285,18 @@ class InstrumentPlugin(Protocol):
     def check_point_feasibility(
         self,
         config: InstrumentState,
-        scan_mode: str,
-        scan_point: Any,
-        vals: dict,
-    ) -> tuple[bool, "str | None"]:
-        """Return ``(feasible, reason)`` for one scan point without running it.
+        plan: "Plan",
+        scan_point: Mapping[str, float],
+    ) -> "PointCheck":
+        """Judge one named point of ``plan`` without running it (a ``PointCheck``).
 
         Reuses the same angle/Q solve as ``compute_snapshot`` so an infeasible
-        result is exactly a point the real scan would skip. ``reason`` is a
-        short limiting-constraint string when infeasible, else ``None``. Used by
-        the remote API's always-on scan validation (reject, or skip under
-        ``allow_partial``). Optional for a plugin; the API degrades to
-        "assume feasible" when absent.
+        result is exactly a point the real scan would skip, then the plan's
+        engine and plane-lock guards (``instruments.rules.check_point``).
+        ``reason`` is a short limiting-constraint string when infeasible.
+        Used by scan validation (the API rejects, or skips under
+        ``allow_partial``). A plugin without it cannot have its scans
+        validated: the controller refuses them.
         """
         ...
 

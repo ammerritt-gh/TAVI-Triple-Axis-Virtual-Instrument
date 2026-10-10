@@ -29,6 +29,7 @@ from instruments.in12.plugin import IN12Plugin
 from instruments.panda.model import PANDA_Instrument
 from instruments.panda.plugin import PANDAPlugin
 from instruments.puma.model import PUMA_Instrument
+from plan_helpers import motors_point, scan_plan
 
 INSTRUMENT_CLASSES = [PUMA_Instrument, IN8_Instrument, IN12_Instrument, PANDA_Instrument]
 
@@ -140,13 +141,11 @@ def _panda_autofocus_snapshot(att, tmp_path):
         "deltaE": 0.0, "chi": 0.0,
         "curvature_modes": {axis: "autofocus" for axis in ("rhm", "rvm", "rha", "rva")},
     }
-    scans = [-74.332, 30.0, 0.0, att, 0, 0, 0, 0, 0, 0, 0]
-    feasible, reason = plugin.check_point_feasibility(state, "angle", scans, vals)
-    assert feasible, f"A4={att} was refused: {reason}"
-    snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path), variable_name1="analyzer_two_theta_deg",
-    )
-    return snapshot
+    plan = scan_plan(plugin, state, vals, f"A6 {att} {att} 1")
+    point = motors_point(-74.332, 30.0, 0.0, att)
+    check = plugin.check_point_feasibility(state, plan, point)
+    assert check.feasible, f"A4={att} was refused: {check.reason}"
+    return plugin.compute_snapshot(plan, point, 0, state, vals, str(tmp_path))
 
 
 def test_a4_zero_is_feasible_and_the_snapshot_succeeds_flat(tmp_path):
@@ -201,13 +200,12 @@ def test_a4_zero_held_radius_is_stored_at_its_commanded_magnitude(tmp_path):
             "rhm": "autofocus", "rvm": "autofocus", "rha": "held", "rva": "autofocus",
         },
     }
-    scans = [-74.332, 30.0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 0]
-    feasible, reason = plugin.check_point_feasibility(state, "angle", scans, vals)
-    assert feasible, reason
+    plan = scan_plan(plugin, state, vals, "A6 0 0 1")
+    point = motors_point(-74.332, 30.0, 0.0, 0.0)
+    check = plugin.check_point_feasibility(state, plan, point)
+    assert check.feasible, check.reason
 
-    snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path), variable_name1="analyzer_two_theta_deg",
-    )
+    snapshot = plugin.compute_snapshot(plan, point, 0, state, vals, str(tmp_path))
     assert snapshot.error_flags == []
     assert abs(snapshot.params["rha_param"]) == pytest.approx(1.234)
     assert snapshot.metadata["curvature_modes"]["rha"] == "held"

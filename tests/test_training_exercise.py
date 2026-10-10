@@ -293,9 +293,9 @@ def test_both_engines_present_the_same_hkl_for_a_loaded_mount_only_exercise(
                 {"H": commanded[0], "K": commanded[1], "L": commanded[2], "deltaE": 0.0,
                  "scan_command1": f"H {commanded[0]} {commanded[0]} 1"})
             vals, config = launch["vals"], launch["scan_config"]
-            point = ctrl._build_scan_point_template("rlu", vals)
+            plan, expansion = ctrl._compile_launch(launch)
             snapshot = ctrl.instrument.compute_snapshot(
-                (point, 0), 0, "rlu", config, vals, str(tmp_path))
+                plan, expansion.points[0], 0, config, vals, str(tmp_path))
             assert snapshot.error_flags == [], snapshot.error_flags
             md, params = snapshot.metadata, snapshot.params
             analytic = np.array(true_point_hkl(config, md, b_true))

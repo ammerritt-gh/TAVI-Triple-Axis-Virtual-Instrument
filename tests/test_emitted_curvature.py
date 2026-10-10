@@ -27,6 +27,8 @@ import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from instruments.in8.plugin import IN8Plugin  # noqa: E402
+from instruments.tas_runtime import MOTORS  # noqa: E402
+from plan_helpers import motors_point, plan_for  # noqa: E402
 
 # instrument id, mth (theta, deg), ath (theta, deg), expected (rhm, rvm, rha, rva)
 # -- identical to test_curvature_producer.py's REFERENCE_TABLE. mtt/att (what
@@ -139,13 +141,10 @@ def test_panda_api_hkl_request_emits_expected_signed_curvature(tmp_path):
         scan_config = launch["scan_config"]
         instrument = get_instrument("panda")
 
-        scans = [
-            vals["qx"], vals["qy"], vals["qz"], 0.0,
-            vals["rhm"], vals["rvm"], vals["rha"], vals["rva"],
-            0.0, vals.get("kappa", 0.0), vals.get("psi", 0.0),
-        ]
+        # The launch's own plan: a deltaE scan at the patched (1 0 0), first point 0.
+        plan, expansion = ctrl._compile_launch(launch)
         snapshot = instrument.compute_snapshot(
-            (scans, 0), 0, "momentum", scan_config, vals, str(tmp_path),
+            plan, expansion.points[0], 0, scan_config, vals, str(tmp_path),
         )
         assert snapshot.error_flags == []
         assert snapshot.params is not None
@@ -203,13 +202,9 @@ def test_single_pass_hkl_request_matches_the_two_pass_workaround(tmp_path):
             ))
             vals = launch["vals"]
             scan_config = launch["scan_config"]
-            scans = [
-                vals["qx"], vals["qy"], vals["qz"], 0.0,
-                vals["rhm"], vals["rvm"], vals["rha"], vals["rva"],
-                0.0, vals.get("kappa", 0.0), vals.get("psi", 0.0),
-            ]
+            plan, expansion = ctrl._compile_launch(launch)
             snapshot = instrument.compute_snapshot(
-                (scans, 0), 0, "momentum", scan_config, vals, str(tmp_path),
+                plan, expansion.points[0], 0, scan_config, vals, str(tmp_path),
             )
             assert snapshot.error_flags == []
             return snapshot
@@ -244,13 +239,14 @@ def test_metadata_matches_emitted_params_for_a_scanned_curvature_axis(tmp_path):
     state.K_fixed = "Kf Fixed"
     state.fixed_E = 14.68
 
-    vals = {"deltaE": 0.0, "chi": 0.0}
-    # Angle mode: IN8's positive mono / negative analyzer take-off branch.
+    vals = {"deltaE": 0.0}
+    # Direct motors: IN8's positive mono / negative analyzer take-off branch.
     # rha is the scanned variable, supplied as a bare positive magnitude.
-    scans = [41.18, 0.0, 0.0, -41.18, 0.0, 0.0, 1.75, 0.0, 0.0, 0.0, 0.0]
+    rha = "analyzer_horizontal_radius_m"
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state, vals, str(tmp_path),
-        variable_name1="analyzer_horizontal_radius_m",
+        plan_for(plugin, state, vals, MOTORS, scanned=(rha,)),
+        {**motors_point(41.18, 0.0, 0.0, -41.18), rha: 1.75}, 0, state, vals,
+        str(tmp_path),
     )
     assert snapshot.error_flags == []
     expected_rha = -1.75   # IN8's analyzer take-off is the negative branch

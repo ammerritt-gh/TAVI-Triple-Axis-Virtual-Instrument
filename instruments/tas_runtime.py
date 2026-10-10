@@ -25,15 +25,13 @@ from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
 from tavi.orientation import (
-    LOCKED_PLANE_TOLERANCE_DEG,
     StageUnreachable,
     check_travel,
-    locked_plane_text,
     q_mount_from_stage,
     sample_arm_euler,
     solve_stage,
 )
-from tavi.quantities import QUANTITIES, by_id, to_internal, to_public
+from tavi.quantities import by_id, to_public
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     _normalize_deg,
@@ -45,19 +43,18 @@ from tavi.tas_geometry import (
 
 log = logging.getLogger(__name__)
 
-# A scan point is a list of SCAN_POINT_LENGTH numbers: slots 0-3 are the
-# mode's coordinates (qx qy qz dE, H K L dE, or mono 2theta, sample 2theta,
-# sample rotation, analyzer 2theta), 4-7 the radii rhm rvm rha rva, then the
-# arc slots below. The controller's _SCAN_VARIABLE_TO_INDEX names the slots by
-# canonical quantity ID; U3 deletes both. The arc slots are read in
-# angle mode only; Q modes solve the arcs per point. A point of 9 slots has
-# sgu = 0.
-SLOT_SGL, SLOT_SGU = 8, 9
-SCAN_POINT_LENGTH = 10
+# A scan point is a mapping of canonical quantity IDs (tavi.quantities) to
+# values: the inputs its plan's calculation reads (instruments.rules.expand).
+HKL = ("h", "k", "l")
+Q = ("q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom", "q_instrument_z_inv_angstrom")
+DE = "energy_transfer_mev"
+MTT, STT = "mono_two_theta_deg", "sample_two_theta_deg"
+STH, ATT = "sample_rotation_deg", "analyzer_two_theta_deg"
+SGL, SGU = "sample_lower_arc_deg", "sample_upper_arc_deg"
 
-# Interim (U3 deletes it): the radius axis a canonical scan quantity drives.
-CURVATURE_AXIS_BY_ID = {q.id: to_internal(q.id) for q in QUANTITIES
-                        if q.scannable and q.id.endswith("_radius_m")}
+# The calculations a point plan selects (instruments.rules.build_plan): solve
+# the stage from HKL or from Q, or take the motors as given.
+HKL_CALC, Q_CALC, MOTORS = "hkl", "q", "direct_motors"
 
 # The TAS class is a general tool for any TAS instrument
 def _clamp_curvature_magnitude(magnitude, min_m, max_m):
@@ -1008,31 +1005,34 @@ def is_forward_scattering(stt_deg):
     return abs(float(stt_deg)) <= FORWARD_SCATTERING_TOLERANCE_DEG
 
 
-def _solve_point_geometry(point_state, scan_mode, scans, vals):
+def _solve_point_geometry(point_state, calculation, point, vals):
     """Solve Q and the TAS angles for one scan point (shared core).
 
-    Extracted verbatim from ``compute_scan_snapshot`` so feasibility checks
-    (``check_point_feasibility``) exercise the *exact* angle math the real run
-    uses. For feasible momentum/rlu/orientation points -- and always for
-    ``angle`` mode -- this applies ``point_state.set_angles``; callers that only
-    want the error flags pass a throwaway copy. Returns a dict with keys
+    ``calculation`` is the point's plan's (``HKL_CALC``, ``Q_CALC`` or
+    ``MOTORS``) and ``point`` its named inputs (canonical IDs). Shared by
+    ``compute_scan_snapshot`` and ``check_point_feasibility`` so feasibility
+    exercises the *exact* angle math the real run uses. For feasible HKL/Q
+    points -- and always for direct motors -- this applies
+    ``point_state.set_angles``; callers that only want the error flags pass a
+    throwaway copy. Returns a dict with keys
     ``qx qy qz H K L deltaE mtt stt sth sgl sgu att error_flags``; the arc
     readouts ``sgl``/``sgu`` are also set on ``point_state``.
     """
     error_flags = []
-    angle_energies = None   # angle mode only: (Ei, Ef) from the crystals
+    angle_energies = None   # direct motors only: (Ei, Ef) from the crystals
     qx = qy = qz = None
     H = K = L = None
     deltaE = 0.0
     mtt = stt = sth = att = sgl = sgu = 0.0
 
-    if scan_mode in ("momentum", "orientation", "rlu"):
-        if scan_mode == "rlu":
-            H, K, L, deltaE = scans[:4]
+    if calculation in (HKL_CALC, Q_CALC):
+        deltaE = point[DE]
+        if calculation == HKL_CALC:
+            H, K, L = (point[qid] for qid in HKL)
             q_component = point_state.sample_mount.hkl_to_q(H, K, L)
             qx, qy, qz = component_q_to_instrument_q(np.array(q_component, dtype=float))
         else:
-            qx, qy, qz, deltaE = scans[:4]
+            qx, qy, qz = (point[qid] for qid in Q)
         # A locked plane holds the tilts: one refusal path for feasibility,
         # the GUI count and masks, the API preflight and the run.
         angles_array, error_flags = point_state.calculate_stage_angles(
@@ -1044,31 +1044,22 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
             point_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
             point_state.sgl, point_state.sgu = sgl, sgu
     else:
-        A1, A2, A3, A4 = scans[:4]
-        point_state.set_angles(A1=A1, A2=A2, A3=A3, A4=A4)
-        mtt, stt, sth, att = A1, A2, A3, A4
-        # The scanned angles are the authority here, not the frozen field.
+        mtt, stt, sth, att = (point[qid] for qid in (MTT, STT, STH, ATT))
+        point_state.set_angles(A1=mtt, A2=stt, A3=sth, A4=att)
+        # The motors are the authority here, not the frozen field.
         angle_energies = point_state.nominal_energies_from_angles(mtt, att)
         point_state._angle_energies = angle_energies
         if angle_energies and angle_energies[0] is not None and angle_energies[1] is not None:
             deltaE = angle_energies[0] - angle_energies[1]
         else:
             deltaE = vals['deltaE']
-        # The operator sets the arcs here, through their scan slots.
-        sgl = float(scans[SLOT_SGL])
-        sgu = float(scans[SLOT_SGU]) if len(scans) > SLOT_SGU else 0.0
         lock = point_state.plane_lock
         if lock is not None:
-            # Under a lock the slots must be the lock's tilts (to the GUI
-            # fields' rounding), and the point runs at the lock's exact tilts.
-            differ = [f"{name} = {value:.4g}°" for name, value in (("sgl", sgl), ("sgu", sgu))
-                      if abs(value - lock["tilts"][name]) > LOCKED_PLANE_TOLERANCE_DEG]
-            if differ:
-                error_flags.append(STAGE_FLAG_PREFIX + f"{', '.join(differ)} is not a tilt of "
-                                   + locked_plane_text(lock["tilts"],
-                                                       (lock["hkl_u"], lock["hkl_v"])))
-            else:
-                sgl, sgu = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
+            # The plan takes the arcs from the lock (rules' plane_lock rule).
+            sgl, sgu = lock["tilts"]["sgl"], lock["tilts"]["sgu"]
+        else:
+            # An instrument without an upper arc holds it at 0.
+            sgl, sgu = float(point[SGL]), float(point.get(SGU, 0.0))
         point_state.sgl, point_state.sgu = sgl, sgu
         error_flags.extend(point_state.arc_travel_flags({"sgl": sgl, "sgu": sgu}))
 
@@ -1082,11 +1073,11 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     if not error_flags:
         if angle_energies is not None and angle_energies[0] is None:
             transmission.append("mono")
-        # Angle mode copies the operator's A2 straight into stt: the number is
-        # theirs, so only an exact zero is transmission and 0.000005 deg is an
-        # ordinary (if odd) point. A Q-space solve arrives through
-        # acos(1 - eps) and needs the float-noise tolerance.
-        if (stt == 0) if scan_mode == "angle" else is_forward_scattering(stt):
+        # Direct motors copy the operator's sample 2θ straight into stt: the
+        # number is theirs, so only an exact zero is transmission and
+        # 0.000005 deg is an ordinary (if odd) point. A Q-space solve arrives
+        # through acos(1 - eps) and needs the float-noise tolerance.
+        if (stt == 0) if calculation == MOTORS else is_forward_scattering(stt):
             transmission.append("sample")
         if angle_energies is not None and angle_energies[1] is None:
             transmission.append("ana")
@@ -1107,8 +1098,8 @@ def _axis_text(field_name):
     return by_id(to_public(field_name)).name
 
 
-def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None):
-    """Return ``(feasible: bool, reason: str | None)`` for one scan point.
+def check_point_feasibility(state, calculation, scan_point, vals, axis_limits=None):
+    """Return ``(feasible: bool, reason: str | None)`` for one named scan point.
 
     Reuses ``_solve_point_geometry`` -- the same Q/angle solve
     ``compute_scan_snapshot`` runs per point -- so a point flagged infeasible
@@ -1118,11 +1109,11 @@ def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None
     optional axis-limit mapping excludes a solved or raw readout angle.
 
     ``state`` must be a solved scan-config state (it carries ``fixed_E``,
-    ``K_fixed``, ``monocris``, ``anacris`` and, for rlu mode, ``sample_mount``).
+    ``K_fixed``, ``monocris``, ``anacris`` and, for HKL points, ``sample_mount``).
     A private deep copy is used so the caller's state is never mutated.
     """
     point_state = copy.deepcopy(state)
-    geom = _solve_point_geometry(point_state, scan_mode, scan_point, vals)
+    geom = _solve_point_geometry(point_state, calculation, scan_point, vals)
     error_flags = geom["error_flags"]
     if error_flags:
         return False, describe_scan_error_flags(error_flags)
@@ -1161,7 +1152,7 @@ def training_reach_error(state, u_true, b_true, hkls, axis_limits):
     reached = []
     for hkl in hkls:
         q = component_q_to_instrument_q(u_true @ b_true @ np.asarray(hkl, dtype=float))
-        feasible, _ = check_point_feasibility(free, "momentum", [*q, 0.0], {},
+        feasible, _ = check_point_feasibility(free, Q_CALC, {**dict(zip(Q, q)), DE: 0.0}, {},
                                               axis_limits=axis_limits)
         if feasible:
             reached.append(hkl)
@@ -1173,59 +1164,47 @@ def training_reach_error(state, u_true, b_true, hkls, axis_limits):
             "ones are needed")
 
 
-def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_folder,
-                          is_2d_scan=False, variable_name1="", variable_name2="",
-                          scan_command1="", scan_command2=""):
-    """Compute the complete runtime snapshot for one scan point."""
+def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder,
+                          indices=None):
+    """Compute the complete runtime snapshot for one point of ``plan``.
+
+    ``plan`` is the launch's accepted ``instruments.rules.Plan`` and
+    ``scan_point`` one of its expanded points (canonical ID -> value);
+    ``indices`` is the point's ``{"idx_1d", "idx_x", "idx_y"}`` in the scan's
+    result arrays (default: a 1D point at ``scan_index``). Nothing here reads
+    command text or chooses a calculation: the plan did both at launch.
+    """
     point_state = copy.deepcopy(state)
+    calculation = plan.calculation
+    indices = indices or {'idx_1d': scan_index, 'idx_x': -1, 'idx_y': -1}
 
-    if is_2d_scan:
-        scans, idx_x, idx_y = scan_item
-        idx_1d = -1
-    else:
-        scans, idx_1d = scan_item
-        idx_x, idx_y = -1, -1
-
-    if len(scans) <= SLOT_SGL:
-        raise ValueError(
-            f"Scan item for scan_index {scan_index} in mode {scan_mode} has {len(scans)} values; expected at least {SLOT_SGL + 1}."
-        )
-
-    geom = _solve_point_geometry(point_state, scan_mode, scans, vals)
+    geom = _solve_point_geometry(point_state, calculation, scan_point, vals)
     qx, qy, qz = geom["qx"], geom["qy"], geom["qz"]
     H, K, L = geom["H"], geom["K"], geom["L"]
     deltaE = geom["deltaE"]
     mtt, stt, sth, att = geom["mtt"], geom["stt"], geom["sth"], geom["att"]
     error_flags = geom["error_flags"]
+    q_mode = calculation in (HKL_CALC, Q_CALC)
 
     q_vector = (qx, qy, qz) if qx is not None and qy is not None and qz is not None else None
 
-    rhm, rvm, rha, rva = scans[4], scans[5], scans[6], scans[7]
-    # The arcs this point runs at: solved (Q modes) or its own slots (angle).
+    # The arcs this point runs at: solved (HKL/Q), the lock's, or as given.
     sgl, sgu = geom["sgl"], geom["sgu"]
 
-    if scan_mode == "angle":
-        omega_scan = scans[2]
-    elif scan_mode in ["momentum", "rlu"] and not error_flags:
-        omega_scan = sth
-    elif scan_mode == "orientation":
-        omega_scan = sth if not error_flags else vals.get('omega', 0)
-    else:
-        omega_scan = 0
+    # A Q solve that failed leaves no sample rotation to record.
+    omega_scan = 0 if q_mode and error_flags else sth
 
     # Per-axis curvature policy for THIS point (design record: curvature
-    # follows the measurement). A scanned axis is decided right here, from
-    # the scan variables already in hand -- the operator never declares it.
-    # Everything else defaults to HELD (today's frozen-launch-state
-    # behaviour) unless the launch state names it AUTOFOCUS.
-    radii = {"rhm": rhm, "rvm": rvm, "rha": rha, "rva": rva}
+    # follows the measurement). A scanned axis is the plan's: its command
+    # drives it point by point. Everything else defaults to HELD (today's
+    # frozen-launch-state behaviour) unless the launch state names it AUTOFOCUS.
+    radii = {}
     curvature_modes = vals.get('curvature_modes') or {}
-    scanned_axes = (CURVATURE_AXIS_BY_ID.get(variable_name1),
-                    CURVATURE_AXIS_BY_ID.get(variable_name2))
     effective_modes = {}
     autofocus_axes = []
     for axis in ("rhm", "rvm", "rha", "rva"):
-        if axis in scanned_axes:
+        if to_public(axis) in plan.scanned:
+            radii[axis] = scan_point[to_public(axis)]
             effective_modes[axis] = CurvatureMode.SCANNED
             continue
         radii[axis] = getattr(point_state, axis)
@@ -1270,23 +1249,17 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
 
     output_folder = os.path.join(data_folder, f"scan_{scan_index:04d}")
     orientation_info = f"ω={omega_scan:.2f}, sgl={sgl:.2f}, sgu={sgu:.2f}"
-    if scan_mode == "momentum":
+    if calculation == Q_CALC:
         log_message = (
             f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
             f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
             f"Orientation: {orientation_info}"
         )
-    elif scan_mode == "rlu":
+    elif calculation == HKL_CALC:
         log_message = (
             f"Scan parameters - H: {H}, K: {K}, L: {L}, deltaE: {deltaE}\n"
             f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}\n"
             f"Orientation: {orientation_info}"
-        )
-    elif scan_mode == "orientation":
-        log_message = (
-            f"Scan parameters - qx: {qx}, qy: {qy}, qz: {qz}, deltaE: {deltaE}\n"
-            f"Orientation: {orientation_info}\n"
-            f"mtt: {mtt:.2f}, stt: {stt:.2f}, sth: {sth:.2f}, att: {att:.2f}"
         )
     else:
         log_message = (
@@ -1296,18 +1269,20 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
             f"Orientation: {orientation_info}"
         )
 
+    # The command texts as run: a lone command 2 is the scan's first axis.
+    texts = [command.text for command in plan.commands]
     metadata = {
-        'scan_mode': scan_mode,
-        'scan_command1': scan_command1,
-        'scan_command2': scan_command2,
+        'calculation': calculation,
+        'scan_command1': texts[0] if texts else "",
+        'scan_command2': texts[1] if len(texts) > 1 else "",
         'deltaE': deltaE,
-        'qx': qx if scan_mode in ["momentum", "orientation", "rlu"] else None,
-        'qy': qy if scan_mode in ["momentum", "orientation", "rlu"] else None,
-        'qz': qz if scan_mode in ["momentum", "orientation", "rlu"] else None,
-        'q_vector': q_vector if scan_mode in ["momentum", "orientation", "rlu"] else None,
-        'H': H if scan_mode == "rlu" else None,
-        'K': K if scan_mode == "rlu" else None,
-        'L': L if scan_mode == "rlu" else None,
+        'qx': qx if q_mode else None,
+        'qy': qy if q_mode else None,
+        'qz': qz if q_mode else None,
+        'q_vector': q_vector if q_mode else None,
+        'H': H,
+        'K': K,
+        'L': L,
         'mtt': mtt,
         'stt': stt,
         'sth': sth,
@@ -1347,11 +1322,7 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         deltaE=deltaE,
         error_flags=error_flags,
         metadata=metadata,
-        indices={
-            'idx_1d': idx_1d,
-            'idx_x': idx_x,
-            'idx_y': idx_y,
-        },
+        indices=dict(indices),
         log_message=log_message,
     )
 

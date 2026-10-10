@@ -13,6 +13,8 @@ from instruments.panda.plugin import (
     panda_descriptor,
 )
 from instruments.validation import validate_descriptor
+from instruments.tas_runtime import MOTORS, Q_CALC
+from plan_helpers import motors_point, plan_for, q_point
 
 
 # ---------------------------------------------------------------- light tests
@@ -192,12 +194,11 @@ def test_snapshot_params_match_descriptor(tmp_path):
     state.K_fixed = "Kf Fixed"
     state.fixed_E = 4.978451631466585
 
-    # scans layout: mode-specific[0:4], rhm/rvm/rha/rva[4:8], chi/kappa/psi[8:11]
-    scans = [-74.332, 120.180, 60.090, -74.332, -4.0, -1.8, -1.65, -0.6,
-             0.0, 0.0, 0.0]
+    vals = {"deltaE": 0.0}
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        plan_for(plugin, state, vals, MOTORS),
+        motors_point(-74.332, 120.180, 60.090, -74.332),
+        0, state, vals, str(tmp_path),
     )
 
     assert isinstance(snapshot, PointSnapshot)
@@ -213,14 +214,13 @@ def test_angle_feasibility_enforces_raw_axis_limits():
     pytest.importorskip("mcstasscript")
     plugin = PANDAPlugin()
     state = plugin.default_state()
-    scans = [74.332, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
-
-    feasible, reason = plugin.check_point_feasibility(
-        state, "angle", scans, {"deltaE": 0.0, "chi": 0.0}
+    check = plugin.check_point_feasibility(
+        state, plan_for(plugin, state, {}, MOTORS), motors_point(74.332, 0.0, 0.0, 0.0)
     )
 
-    assert feasible is False
-    assert reason is not None and "A2 (mono 2θ)" in reason and "outside" in reason
+    assert check.feasible is False
+    assert check.reason is not None and "A2 (mono 2θ)" in check.reason
+    assert "outside" in check.reason
 
 
 def test_momentum_feasibility_enforces_the_five_degree_beam_stop():
@@ -231,14 +231,13 @@ def test_momentum_feasibility_enforces_the_five_degree_beam_stop():
     state.monocris = state.anacris = "pg002"
     state.K_fixed = "Kf Fixed"
     state.fixed_E = 4.978451631466585
-    scans = [0.05, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
-
-    feasible, reason = plugin.check_point_feasibility(
-        state, "momentum", scans, {"deltaE": 0.0, "chi": 0.0}
+    check = plugin.check_point_feasibility(
+        state, plan_for(plugin, state, {}, Q_CALC), q_point(0.05, 0.0, 0.0, 0.0)
     )
 
-    assert feasible is False
-    assert reason is not None and "A4 (sample 2θ)" in reason and "outside" in reason
+    assert check.feasible is False
+    assert check.reason is not None and "A4 (sample 2θ)" in check.reason
+    assert "outside" in check.reason
 
 
 def test_crystal_bending_splits_the_monochromator_object_distance():
@@ -329,13 +328,11 @@ def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
     state.fixed_E = 4.978451631466585
 
     # Positive magnitudes in the scans array, exactly as the GUI carries them.
-    scans = [-74.332, 120.180, 60.090, -74.332, 4.0, 1.8, 1.65, 0.6,
-             0.0, 0.0, 0.0]
+    vals = {"deltaE": 0.0}
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
-        variable_name1="mono_horizontal_radius_m",
-        variable_name2="analyzer_horizontal_radius_m",
+        plan_for(plugin, state, vals, MOTORS, scanned=('mono_horizontal_radius_m', 'analyzer_horizontal_radius_m')),
+        {**motors_point(-74.332, 120.180, 60.090, -74.332), "mono_horizontal_radius_m": 4.0, "analyzer_horizontal_radius_m": 1.65},
+        0, state, vals, str(tmp_path),
     )
 
     assert snapshot.error_flags == []

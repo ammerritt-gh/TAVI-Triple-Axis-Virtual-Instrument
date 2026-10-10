@@ -275,10 +275,10 @@ def test_arc_scan_in_a_q_mode_is_refused_naming_angle_mode(controller):
         hard, _soft = controller._scan_command_issues("sgl 0 2 1", other)
         assert len(hard) == 1 and "scan the arcs in angle mode" in hard[0], (other, hard)
         assert "kappa" not in hard[0]
-    # Alone (or with an angle), an arc scan is an angle-mode scan.
+    # Alone (or with an angle), an arc scan is a direct-motor scan.
     for pair in (("sgu 0 2 1", ""), ("sgl 0 2 1", "A3 30 31 1")):
         assert controller._scan_command_issues(*pair) == ([], [])
-        assert controller._determine_scan_mode(*pair) == "angle"
+        assert controller._preview_launch(*pair)[1].calculation == "direct_motors"
 
 
 def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path):
@@ -291,10 +291,10 @@ def test_angle_mode_api_scan_with_arcs_emits_their_rotation(controller, tmp_path
         {"sgl": 3.0, "sgu": -2.0, "scan_command1": "A3 35 36 1"})
     assert controller.validate_scan_launch_state(launch)["infeasible"] == []
     vals, config = launch["vals"], launch["scan_config"]
-    point = controller._build_scan_point_template("angle", vals)
-    point[controller._SCAN_VARIABLE_TO_INDEX["sample_rotation_deg"]] = 35.0
+    point = launch["expansion"].points[0]
+    assert point["sample_rotation_deg"] == 35.0
     snapshot = controller.instrument.compute_snapshot(
-        (point, 0), 0, "angle", config, vals, str(tmp_path))
+        launch["plan"], point, 0, config, vals, str(tmp_path))
     params = snapshot.params
 
     def rot(axis, deg):
@@ -319,7 +319,6 @@ def test_omega_scan_drives_the_sample_rotation_itself(controller, tmp_path, monk
 
     controller.set_default_parameters()
     controller.output_directory = str(tmp_path)
-    assert controller._determine_scan_mode("omega 35 36 1", "") == "angle"
     launch = controller.build_api_launch_state({"scan_command1": "omega 35 36 1"})
     launch["engine"] = "deterministic"
     snapshots, compute = [], controller.instrument.compute_snapshot
@@ -327,6 +326,8 @@ def test_omega_scan_drives_the_sample_rotation_itself(controller, tmp_path, monk
                         lambda *a, **k: snapshots.append(compute(*a, **k)) or snapshots[-1])
     job = ScanJob(job_id="t-omega", source="api", launch_state=launch)
 
+    controller._compile_launch(launch)
+    assert launch["plan"].calculation == "direct_motors"
     controller.run_simulation(launch, job=job)
 
     assert [s.metadata["sth"] for s in snapshots] == [35.0, 36.0]
@@ -606,6 +607,7 @@ def test_angle_mode_point_past_travel_is_invalid_before_the_run(in12, tmp_path):
     in12.scan_initialized.connect(lambda *args: shown.append(args[2]))
     launch["engine"] = "deterministic"
     job = ScanJob(job_id="t-arc-travel", source="api", launch_state=launch)
+    in12._compile_launch(launch)
     in12.run_simulation(launch, job=job)
     assert job.result.valid_mask_1 == [True, True, False]
     assert shown == [[True, True, False]]
@@ -616,6 +618,7 @@ def test_angle_mode_point_past_travel_is_invalid_before_the_run(in12, tmp_path):
         {"scan_command1": "sgl 18 22 2", "scan_command2": "A3 30 31 1"})
     launch["engine"] = "deterministic"
     job = ScanJob(job_id="t-arc-travel-2d", source="api", launch_state=launch)
+    in12._compile_launch(launch)
     in12.run_simulation(launch, job=job)
     assert job.result.valid_mask_2d == [[True, True, False]] * 2
 
@@ -634,6 +637,7 @@ def test_q_scan_is_judged_by_the_solved_arcs(in12, tmp_path):
         launch = in12.build_api_launch_state({"scan_command1": "qx 1.9 2.1 0.05"})
         launch["engine"] = "deterministic"
         job = ScanJob(job_id="t-q-arcs", source="api", launch_state=launch)
+        in12._compile_launch(launch)
         in12.run_simulation(launch, job=job)
         assert job.result.valid_mask_1 == [True] * 5
     finally:
@@ -1032,6 +1036,7 @@ def _one_point_scan(controller, job_id, seed=None):
         {"scan_command1": "H 2 2 1", "K": 0.0, "L": 0.0, "deltaE": 0.0})
     launch.update(engine="deterministic", noiseless=seed is None, seed=seed)
     job = ScanJob(job_id=job_id, source="api", launch_state=launch)
+    controller._compile_launch(launch)
     controller.run_simulation(launch, job=job)
     return job.result
 
@@ -1212,12 +1217,11 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
         gui = controller._collect_simulation_launch_state()
         arcs = []
         for launch in (api, gui):
-            template = controller._build_scan_point_template("rlu", launch["vals"])
-            for index, k in enumerate((-0.1, 0.0, 0.1)):
-                point = template[:]
-                point[controller._SCAN_VARIABLE_TO_INDEX["k"]] = k
+            plan, expansion = controller._compile_launch(launch)
+            assert [point["k"] for point in expansion.points] == [-0.1, 0.0, 0.1]
+            for index, point in enumerate(expansion.points):
                 metadata = controller.instrument.compute_snapshot(
-                    (point, index), index, "rlu", launch["scan_config"], launch["vals"],
+                    plan, point, index, launch["scan_config"], launch["vals"],
                     str(tmp_path)).metadata
                 arcs.append((metadata["sgl"], metadata["sgu"]))
         assert arcs == [(tilts["sgl"], tilts["sgu"])] * 6
@@ -1234,7 +1238,9 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
         assert [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)] == readouts
         assert json.dumps(state.plane_lock) == lock
         assert "out of the locked scattering plane" in controller._angles_stale
-        assert not controller._check_current_point_validity()[0]
+        # Ruling 5: a Run with no command holds the motors where they stand,
+        # so the unreachable HKL the docks show is not what it would run.
+        assert controller._check_current_point_validity()[0]
         resolution = controller.compute_resolution(1, 0, 0)     # GET /resolution
         assert resolution.get("ok") is False, resolution
         assert "out of the locked scattering plane (1 0 1)/(0 1 0)" in resolution["reason"]
@@ -1975,7 +1981,11 @@ def test_cold_operator_finds_two_peaks_fits_locks_and_scans(controller, messages
         if sim.relative_1_button.isChecked():
             sim.relative_1_button.click()
         sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("mcstas"))
+        if controller.instrument_state.plane_lock is not None:
+            controller.on_release_plane()
         controller.set_default_parameters()
+        # Run saved the lock; a later controller of this instrument would load it.
+        controller.save_parameters()
 
 
 def test_after_a_wrong_fit_two_hidden_truths_look_identical(controller, messages):
