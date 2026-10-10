@@ -6997,9 +6997,9 @@ class TAVIController(QObject):
 
         step = 0.01
         n = max(1, int(points))
-        half = step * (n - 1) / 2.0
-        start = center - half
-        end = center + half
+        start = round(center - step * (n - 1) / 2.0, 4)
+        # The end follows the rounded start: rounding both ends separately can shorten the span by a step.
+        end = round(start + step * (n - 1), 4)
         return f"{var} {start:.4f} {end:.4f} {step}"
 
     def run_benchmark(self, plan):
