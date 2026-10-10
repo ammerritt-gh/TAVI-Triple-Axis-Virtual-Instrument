@@ -314,8 +314,8 @@ def _tas(name, axis):
      "must declare the axes A3, sgl, sgu"),
 ], ids=["eulerian-names", "two-axes"])
 def test_runnable_goniometer_must_be_one_the_tas_runtime_drives(axes, expected):
-    """The TAS runtime drives A3/sgl/sgu by name (scan slots, arc fields,
-    McStas parameters), so a runnable stage it cannot drive is refused at
+    """The TAS runtime drives A3/sgl/sgu by name (arc fields, McStas
+    parameters), so a runnable stage it cannot drive is refused at
     validation, not per point. The same stage stays legal as data
     (structural validation)."""
     d = _with_gonio(*axes)
