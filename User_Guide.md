@@ -265,8 +265,8 @@ the range changed since you did, or the fit failed); the tooltip says which.
 
 The goto buttons are also disabled while any scan is queued or running — the
 instrument is not moved out from under a measurement — and for scan variables
-that are not scan variables (anything unrecognised). The analyzer vertical radius `rva` can be moved,
-but a crystal that fixes it (PG(002) on PUMA) refuses the move, as it refuses a typed value.
+that are not scan variables (anything unrecognised). The analyzer vertical radius `rva` moves only where the
+crystal leaves it adjustable; on PUMA's PG(002) analyser it is fixed and does not move.
 
 **Revert** undoes the last goto, restoring the field to the value it had
 beforehand. It is one level deep: one goto, one revert.
