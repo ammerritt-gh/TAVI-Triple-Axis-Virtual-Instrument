@@ -78,7 +78,7 @@ API VERSION 2: every PATCH /parameters, POST /scan, POST /validate and PUT /back
 SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them via
   scan_command1 / scan_command2, e.g. PATCH /parameters {"api_version":2,"scan_command1":"H 1.99 2.01 0.01"}.
   SYNTAX: "VARIABLE start stop STEP". The 3rd number (last token) is the STEP SIZE, not a point count.
-  "H 1.99 2.01 0.01" = 3 points (1.99, 2.00, 2.01). A step larger than the range is an error.
+  "H 1.99 2.01 0.01" = 3 points (1.99, 2.00, 2.01). A step larger than the range is an error; so is a zero step or one whose sign does not match the direction. `force` does not pass any of these.
   Two non-empty commands = a 2D scan (points multiply). One command = 1D. None = single point.
   Scannable variables, by canonical ID [aliases]: h k l [H K L]; q_instrument_x_inv_angstrom q_instrument_y_inv_angstrom
   q_instrument_z_inv_angstrom [qx qy qz]; energy_transfer_mev [deltaE]; mono_two_theta_deg [A2 mtt]; sample_rotation_deg [A3 sth omega psi];
@@ -359,7 +359,8 @@ to submit.
 - Invalid scan command → `400 scan_validation` with a human-readable message.
   Pass `"force": true` in the body to override the *soft* scan-command
   warnings (a very long scan). A hard rejection -- an unknown or refused
-  variable (`A1`, `A5`, `chi`, a slit gap ...), a malformed command, a Q variable
+  variable (`A1`, `A5`, `chi`, a slit gap ...), a malformed command, a zero or
+  wrong-sign step, a step longer than the range, a Q variable
   paired with an HKL one, an angle (`A2`, `A3`, `A4`, `A6`, an arc, or an alias
   such as `mtt`, `omega`, `stt`, `2theta`) paired with a Q, HKL or `deltaE`
   variable, or two commands that write one scan slot (the same variable twice,
@@ -1185,7 +1186,7 @@ Server-Sent Events stream. See §8.
 | 400 | `bad_request` | Malformed JSON body, non-object body, a PATCH field whose value is not a scalar/object, or an unknown query key on `GET /resolution`. |
 | 400 | `api_version_required` | A `PATCH /parameters`, `POST /scan`, `POST /validate` or `PUT /background` body had no `"api_version": 2` (or another value). Nothing was applied, queued or replaced. `details.required_api_version` is `2`; see §15. |
 | 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) named an unknown, retired, derived-only, read-only, absent or duplicate key (the whole request is refused, `applied` is empty), or had a bad value (that field is skipped). `details` lists `applied` and `errors`, keyed by the names you sent. |
-| 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, step larger than range). `"force": true` overrides only the soft warnings; hard rejections stand. |
+| 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, zero or wrong-sign step, step larger than range). `"force": true` overrides only the soft warnings; hard rejections stand. |
 | 400 | `invalid_background` | A background configuration (`PUT /background`, or the `background` field of `POST /scan` / `POST /validate`) failed to resolve — for example a missing/mismatched `catalog_version`, unknown source id or nested field, non-boolean enable, or invalid scale. On `PUT` the stored configuration is untouched; on `POST /scan` `details.background` is the validation background block. Unknown top-level fields are `bad_request`. |
 | 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
 | 401 | `unauthorized` | A token is configured and the `Authorization: Bearer <token>` header is missing or wrong. |
@@ -1335,8 +1336,11 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 > most common mistake. `"H 1.99 2.01 0.01"` produces **3** points: 1.99, 2.00,
 > 2.01. To get N points, use a step of `(stop − start) / (N − 1)`.
 
-- A **step larger than the range** (e.g. `"H 1.99 2.01 0.1"`) is a validation
-  error (`400 scan_validation`).
+- A **step larger than the range** (e.g. `"H 1.99 2.01 0.1"`), a **zero step**, or a
+  step whose **sign does not match** the direction from start to end is a hard
+  refusal (`400 scan_validation`); `"force": true` does not pass it. A step that
+  does not divide the range runs to the point nearest the end, which can lie up to
+  half a step past it (`"A3 0 10 4"` runs 0, 4, 8, 12).
 - **1D scan:** set `scan_command1`, leave `scan_command2` empty (`""`).
 - **2D scan:** set **both** commands. The point count is the product of the two
   (a 3-point × 4-point scan runs 12 points). The 2D result uses `counts_grid`.
