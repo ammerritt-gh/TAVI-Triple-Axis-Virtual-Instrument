@@ -1672,15 +1672,6 @@ class TAVIController(QObject):
         # Connect crystal selection changes
         self.window.instrument_dock.monocris_combo.currentTextChanged.connect(self.update_monocris_info)
         self.window.instrument_dock.anacris_combo.currentTextChanged.connect(self.update_anacris_info)
-        # Which curvature axes are fixed follows the selected crystal, so a
-        # scan command that was valid under one crystal can stop being valid
-        # under another. The launch path re-validates regardless; this keeps
-        # the warning in the dock honest as soon as the selection changes.
-        self.window.instrument_dock.monocris_combo.currentTextChanged.connect(
-            lambda _text: self.validate_scan_commands())
-        self.window.instrument_dock.anacris_combo.currentTextChanged.connect(
-            lambda _text: self.validate_scan_commands())
-
         # Connect NMO selection change to update ideal bending values (instrument-
         # specific coupling; the module widget only exists when declared)
         if getattr(self.window.instrument_dock, "nmo_combo", None) is not None:
@@ -1787,12 +1778,7 @@ class TAVIController(QObject):
         except Exception as exc:
             self.print_to_message_center(f"Reciprocal view: space-group refresh unavailable ({exc})")
         
-        # Scan command validation - check for conflicts and errors on text change and on focus out
-        self.window.simulation_dock.scan_command_1_edit.textChanged.connect(self.validate_scan_commands)
-        self.window.simulation_dock.scan_command_2_edit.textChanged.connect(self.validate_scan_commands)
-        # Also validate when editing is finished (focus lost) to catch final state
-        self.window.simulation_dock.scan_command_1_edit.editingFinished.connect(self.validate_scan_commands)
-        self.window.simulation_dock.scan_command_2_edit.editingFinished.connect(self.validate_scan_commands)
+        # The labels and marks follow _schedule_field_marks (text, crystal and context changes).
         self.window.simulation_dock.scan_command_1_edit.editingFinished.connect(self._trigger_scan_update)
         self.window.simulation_dock.scan_command_2_edit.editingFinished.connect(self._trigger_scan_update)
         

@@ -489,6 +489,15 @@ def test_a_half_typed_box_1_still_shows_box_2s_own_refusal(window):
     assert _run_verdict(window)[0]
 
 
+def test_a_command_edit_judges_the_boxes_once(window, monkeypatch):
+    """One writer for the labels and marks: a command edit reaches the verdict from the mark timer alone."""
+    ctrl = window.controller
+    real, calls = ctrl._box_verdict, []
+    monkeypatch.setattr(ctrl, "_box_verdict", lambda: calls.append(1) or real())
+    _type(window, "H 0.9 1.1 0.02")
+    assert len(calls) == 1
+
+
 def test_a_scan_over_the_point_budget_returns_at_once_and_builds_no_run(window):
     """A3 0 100 0.000001 is 1e8 points: typing it returns at once, with the existing
     over-budget note, the point count in closed form and the marks from the plan."""
