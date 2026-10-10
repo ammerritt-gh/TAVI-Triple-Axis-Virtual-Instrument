@@ -28,7 +28,7 @@ from tavi import quantities
 def _half(text):
     """A 2θ field's text as its θ readout: half the value, same sign; '--' if not a number."""
     try:
-        return f"{float(text) / 2:g}"
+        return f"{quantities.crystal_theta(float(text)):g}"
     except ValueError:
         return "--"
 

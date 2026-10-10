@@ -31,7 +31,7 @@ from tavi.orientation import (
     sample_arm_euler,
     solve_stage,
 )
-from tavi.quantities import by_id, to_public
+from tavi.quantities import by_id, crystal_theta, to_public
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     _normalize_deg,
@@ -381,13 +381,10 @@ class TAS_Instrument:
         crystal_by_axis = {
             "rhm": mono_spec, "rvm": mono_spec, "rha": ana_spec, "rva": ana_spec,
         }
-        # The Bragg angle (already halved) each axis takes its branch sign
-        # from -- rhm/rvm off the monochromator two-theta, rha/rva off the
-        # analyser two-theta.
-        theta_by_axis = {
-            "rhm": self.A1 / 2, "rvm": self.A1 / 2,
-            "rha": self.A4 / 2, "rva": self.A4 / 2,
-        }
+        # The Bragg angle each axis takes its branch sign from -- rhm/rvm off
+        # the monochromator two-theta, rha/rva off the analyser two-theta.
+        mth, ath = crystal_theta(self.A1), crystal_theta(self.A4)
+        theta_by_axis = {"rhm": mth, "rvm": mth, "rha": ath, "rva": ath}
 
         for axis, value in supplied.items():
             if value is None:
@@ -434,9 +431,7 @@ class TAS_Instrument:
                     magnitude = abs(value)
             else:
                 magnitude = abs(value)
-                min_m, max_m = self.curvature_limits(
-                    axis, crystal_spec, self.A1 / 2, self.A4 / 2,
-                )
+                min_m, max_m = self.curvature_limits(axis, crystal_spec, mth, ath)
                 clamped = _clamp_curvature_magnitude(magnitude, min_m, max_m)
                 if clamped != magnitude:
                     log.info(
@@ -1219,13 +1214,13 @@ def compute_scan_snapshot(plan, scan_point, scan_index, state, vals, data_folder
 
     curvature_clamped = []
     if autofocus_axes:
-        # This point's OWN solved two-theta, halved once into theta here --
-        # ideal_curvature takes theta, mtt/att are two-theta. requested_axes
+        # This point's OWN solved two-theta, turned into theta by the one
+        # producer -- ideal_curvature takes theta, mtt/att are two-theta. requested_axes
         # is exactly the AUTOFOCUS set: an unrelated HELD/SCANNED axis with
         # no established focusing model (IN12's Heusler rva) must not refuse
         # an autofocus this point never asked it to compute.
         ideal = point_state.ideal_curvature(
-            point_state.monocris, point_state.anacris, mtt / 2, att / 2,
+            point_state.monocris, point_state.anacris, crystal_theta(mtt), crystal_theta(att),
             requested_axes=autofocus_axes,
         )
         clamped_this_point = set(getattr(point_state, "_last_ideal_clamped_axes", ()))

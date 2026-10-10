@@ -43,7 +43,9 @@ from instruments.tas_runtime import (
 )
 from tavi.neutron_conversions import energy2k
 from tavi.orientation import locked_plane_text
-from tavi.quantities import QuantityRefused, by_id, resolve, slit_gap_ids, to_internal
+from tavi.quantities import (
+    QuantityRefused, by_id, crystal_theta, resolve, slit_gap_ids, to_internal,
+)
 from tavi.tas_geometry import component_q_to_instrument_q
 from tavi.utilities import parse_scan_steps, scan_range_error
 
@@ -214,14 +216,6 @@ def _stage_to_energy(v, ctx, state):
             KI: None if ei is None else float(energy2k(ei)),
             KF: None if ef is None else float(energy2k(ef)),
             DE: None if ei is None or ef is None else ei - ef}
-
-
-def crystal_theta(two_theta):
-    """A crystal's θ from its 2θ (θ = 2θ/2, signed as 2θ): the one producer of A1 and A5.
-
-    The ``crystal_theta`` rule and the four models' McStas crystal rotation both call it.
-    """
-    return two_theta / 2
 
 
 def _crystal_theta(v, ctx, state):

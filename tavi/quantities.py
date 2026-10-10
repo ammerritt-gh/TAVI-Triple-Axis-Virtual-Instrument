@@ -41,6 +41,15 @@ class Quantity:
     name: str = ""                  # the quantity in a message: "A4 (sample 2θ)", "H"
 
 
+def crystal_theta(two_theta):
+    """A crystal's θ from its 2θ (θ = 2θ/2, signed as 2θ): the one producer of A1 and A5.
+
+    The point plan's ``crystal_theta`` rule, the four models' crystal rotation and every
+    curvature branch and autofocus call it; a rocking rule may replace it one day.
+    """
+    return two_theta / 2
+
+
 def slit_gap_id(stable_id: str, axis: str) -> str:
     """The canonical ID of one slit gap; ``axis`` is "horizontal" or "vertical"."""
     return f"slit.{stable_id}.{axis}_gap_mm"
