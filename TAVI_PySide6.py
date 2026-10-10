@@ -14,7 +14,7 @@ import math
 import numpy as np
 import mcstasscript as ms
 
-from PySide6.QtWidgets import QApplication, QFileDialog, QLineEdit
+from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
 
 # Import the instrument contract (the concrete instrument arrives via main())
@@ -30,16 +30,21 @@ from instruments.rules import (
     DE,
     MOTORS,
     Q as Q_IDS,
+    NOT_READ,
     Q_CALC,
     RADIUS_CRYSTAL,
+    SCANNED,
+    SET_PER_POINT,
     PlanRefused,
     build_plan,
     check_point,
     context_from_state,
+    evaluate,
     expand,
     point_plan,
     scan_axes,
     selected_calculation,
+    typed_sources,
 )
 from instruments.tas_runtime import (
     STAGE_FLAG_PREFIX,
@@ -149,6 +154,7 @@ from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
+from tavi.quantities import by_id as quantity_by_id
 from tavi.quantities import crystal_theta, normalize_write_names, resolve as resolve_quantity
 from tavi.quantities import slit_gap_id, slit_gap_ids
 from tavi.quantities import public_values as _public_values, schema_unit
@@ -163,6 +169,7 @@ from tavi.space_groups import generate_allowed_reflections, get_space_group
 
 # Import GUI
 from gui.main_window import TAVIMainWindow
+from gui.field_marks import mark_for, set_group_note
 from gui.dialogs.background_config_dialog import BackgroundConfigDialog
 from gui.dialogs.diagnostic_config_dialog import DiagnosticConfigDialog
 
@@ -218,6 +225,11 @@ def format_editable_number(value: float, places: int = 4) -> str:
     if abs(rounded) < 0.5 * 10 ** (-places):
         rounded = 0.0
     return f"{rounded:.{places}f}".rstrip("0").rstrip(".") or "0"
+
+
+def _with_unit(value, unit):
+    """``value`` as the docks write it, followed by ``unit`` (no space before a degree sign)."""
+    return f"{format_editable_number(value)}{'' if unit == '°' else ' '}{unit}"
 
 
 class _GuiCall:
@@ -1287,6 +1299,11 @@ class TAVIController(QObject):
         self._scan_update_timer.setSingleShot(True)
         self._scan_update_timer.setInterval(300)  # 300ms debounce
         self._scan_update_timer.timeout.connect(self._update_scan_estimates)
+        # The field marks follow every edit; one update per burst (update_field_marks).
+        self._field_marks_timer = QTimer(self)
+        self._field_marks_timer.setSingleShot(True)
+        self._field_marks_timer.setInterval(0)
+        self._field_marks_timer.timeout.connect(self.update_field_marks)
         # Several linked controls can settle from one user gesture.  Publish a
         # single authoritative reciprocal snapshot after that burst, never from
         # the 30 Hz live-drag path (which uses reciprocal_live_result instead).
@@ -1326,6 +1343,7 @@ class TAVIController(QObject):
         # Print initialization message
         self.print_to_message_center("GUI initialized.")
         self.emit_reciprocal_snapshot()
+        self._schedule_field_marks()
 
         # Start the remote API server last, after the message center and job
         # queue are ready (it reports status through print_to_message_center).
@@ -1803,7 +1821,29 @@ class TAVIController(QObject):
             self.window.simulation_dock.number_neutrons_edit.editingFinished.connect(self._trigger_scan_update)
         except Exception:
             pass
-    
+
+        # Scan-field marks: whatever the next Run's plan reads. The plane lock
+        # schedules from its one writer, _set_plane_lock.
+        sim, idock, sample = (self.window.simulation_dock, self.window.instrument_dock,
+                              self.window.sample_dock)
+        edits = (sim.scan_command_1_edit, sim.scan_command_2_edit,
+                 self.window.scattering_dock.fixed_E_edit,
+                 *(field for _qid, field in self._marked_fields()),
+                 sample.lattice_a_edit, sample.lattice_b_edit, sample.lattice_c_edit,
+                 sample.lattice_alpha_edit, sample.lattice_beta_edit, sample.lattice_gamma_edit)
+        for edit in edits:
+            edit.textChanged.connect(self._schedule_field_marks)
+        for button in (sim.relative_1_button, sim.relative_2_button, idock.rhm_ideal_button,
+                       idock.rvm_ideal_button, idock.rha_ideal_button, idock.rva_ideal_button):
+            button.toggled.connect(self._schedule_field_marks)
+        for combo in (self.window.scattering_dock.K_fixed_combo, idock.monocris_combo,
+                      idock.anacris_combo, sim.engine_combo, sample.sample_combo):
+            combo.currentIndexChanged.connect(self._schedule_field_marks)
+        for widget in idock.module_widgets.values():
+            signal = (widget.currentIndexChanged if isinstance(widget, QComboBox)
+                      else widget.toggled)
+            signal.connect(self._schedule_field_marks)
+
     def setup_visual_feedback(self):
         """Set up visual feedback for all input fields to show pending/saved states."""
         # Collect all QLineEdit widgets from all docks
@@ -4919,6 +4959,154 @@ class TAVIController(QObject):
             log.warning("Current point could not be checked: %s", e)
             return (False, str(e))
 
+    # ------------------------------------------------------ scan-field marks
+    # The marks preview the next Run: its plan, from the command boxes and the docks
+    # collected as Run collects them now, never the plan of a scan already running.
+
+    _NOT_USED_NOTE = "not used by this scan"
+
+    def _schedule_field_marks(self, *_args):
+        """One mark update per burst of edits and setting changes."""
+        self._field_marks_timer.start()
+
+    def _marked_fields(self):
+        """[(canonical ID, field)] for every dock field a mark can sit on."""
+        docks = (self.window.instrument_dock, self.window.scattering_dock)
+        return [(q.id, field) for q in QUANTITIES for dock in docks
+                if (field := dock.field_for(q.id)) is not None]
+
+    def update_field_marks(self):
+        """Mark each dock field with what pressing Run now would do to it.
+
+        Builds the plan only (``build_plan``, then ``scan_axes``' base and
+        typed-input checks; no points) from the command boxes and a launch
+        collected exactly as Run collects it. When the pair does not compile,
+        each command that compiles alone in its box keeps its scanned mark and
+        nothing else is marked. Only marks and the group note change: no field's
+        text, style, focus or selection.
+        """
+        sim = self.window.simulation_dock
+        commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
+                    (sim.scan_command_2_edit.text().strip(), sim.relative_2_button.isChecked())]
+        fields = self._marked_fields()
+        launch_state = self._collect_simulation_launch_state()
+        marks, unread = {}, set()
+        try:
+            plan = self._launch_plan(launch_state, commands)
+            expansion = scan_axes(plan, launch_state['snapshot'])
+        except PlanRefused:
+            plan = None
+        if plan is not None:
+            marks = self._plan_marks(plan, expansion, launch_state, fields)
+            if plan.commands:   # a plain Run scans nothing, so no group is "not used by this scan"
+                unread = {qid for qid, p in plan.provenance.items() if p.role == NOT_READ}
+        elif launch_state:
+            for number, (text, relative) in enumerate(commands, start=1):
+                if not text:
+                    continue
+                alone = [("", False), ("", False)]
+                alone[number - 1] = (text, relative)
+                try:
+                    command = self._launch_plan(launch_state, alone).commands[0]
+                except PlanRefused:
+                    continue
+                marks[command.quantity] = self._scanned_mark(command, launch_state['snapshot'])
+        for qid, field in fields:
+            mark_for(field).set_mark(*marks.get(qid, (None,)))
+        for group, ids in self.window.scattering_dock.field_groups():
+            set_group_note(group, self._NOT_USED_NOTE if unread.issuperset(ids) else None)
+
+    def _plan_marks(self, plan, expansion, launch_state, fields):
+        """{canonical ID: ``set_mark`` arguments} for the fields of a compiled plan."""
+        marks, constant = {}, []
+        for qid, field in fields:
+            prov = plan.provenance.get(qid)
+            if prov is None or prov.role not in (SCANNED, SET_PER_POINT):
+                continue
+            if prov.role == SCANNED:
+                command = next(c for c in plan.commands if c.quantity == qid)
+                marks[qid] = self._scanned_mark(command, launch_state['snapshot'])
+            elif prov.commands:
+                which = " and ".join(map(str, prov.commands))
+                plural = "s" if len(prov.commands) > 1 else ""
+                marks[qid] = ("set", "+".join(map(str, prov.commands)), None,
+                              f"Set at each point by command{plural} {which}.")
+            elif prov.policies:
+                setting = ", ".join(prov.policies)
+                marks[qid] = ("set", setting, None, f"Set at each point by the setting: {setting}.")
+            else:
+                constant.append((qid, field))
+        if constant:
+            marks.update(self._stale_display_marks(plan, expansion, launch_state, constant))
+        return marks
+
+    @staticmethod
+    def _scanned_mark(command, snapshot):
+        """``set_mark`` arguments for the field ``command`` scans."""
+        number, unit = command.number, quantity_by_id(command.quantity).unit
+        if not command.relative:
+            return ("scanned", str(number), number,
+                    f"Scanned by command {number}: {_with_unit(command.start, unit)} … "
+                    f"{_with_unit(command.stop, unit)}, step {format_editable_number(command.step)}")
+        try:
+            base = float(snapshot[command.quantity])
+        except (KeyError, TypeError, ValueError):
+            base = math.nan
+        if math.isfinite(base):
+            tooltip = (f"Command {number} steps from the value typed here, {_with_unit(base, unit)}\n"
+                       f"Absolute range: {_with_unit(base + command.start, unit)} … "
+                       f"{_with_unit(base + command.stop, unit)}")
+        else:
+            tooltip = (f"This field is empty, so command {number} has no value to step from: "
+                       "Run will refuse.")
+        return ("scanned", f"{number} +Δ", number, tooltip)
+
+    def _stale_display_marks(self, plan, expansion, launch_state, constant):
+        """Ruling 1: a field the plan sets from typed values alone is the same at every
+        point, so it is marked only when the value Run uses is not the one it shows.
+
+        The plan is evaluated at the typed values (each command at its first value,
+        which these fields do not follow), then once per typed input nudged by half
+        the docks' last decimal: a shown value within the sum of those changes, plus
+        its own rounding, is the same value at display precision, since the inputs
+        it is computed from are shown no finer.
+        """
+        snapshot, state = launch_state['snapshot'], launch_state['scan_config']
+        point = {qid: float(snapshot[qid]) for qid in plan.inputs - plan.scanned}
+        point.update({c.quantity: expansion.values[c.number][0] for c in plan.commands})
+        sources = {qid: typed_sources(plan, qid) for qid, _field in constant}
+        half = 0.5e-4   # the docks write 4 decimals (format_editable_number)
+        slack = dict.fromkeys(sources, half)
+        try:
+            values = evaluate(plan, point, state)
+            for source in set().union(*sources.values()) & point.keys():
+                nudged = evaluate(plan, {**point, source: point[source] + half}, state)
+                for qid in slack:
+                    if values.get(qid) is not None and nudged.get(qid) is not None:
+                        slack[qid] += abs(nudged[qid] - values[qid])
+        except Exception as exc:
+            log.info("Field marks: the typed values do not evaluate (%s); no stale marks", exc)
+            return {}
+        marks = {}
+        for qid, field in constant:
+            value = values.get(qid)
+            if value is None or self._shows(field.text(), value, slack[qid]):
+                continue
+            names = "+".join(q.ill or (q.aliases or (q.id,))[0]
+                             for q in QUANTITIES if q.id in sources[qid])
+            marks[qid] = ("set", f"from {names}", None,
+                          f"Run will use {_with_unit(value, quantity_by_id(qid).unit)}, "
+                          f"computed from {names}, not the value shown here")
+        return marks
+
+    @staticmethod
+    def _shows(text, value, slack):
+        """Whether a field showing ``text`` shows ``value``, to within ``slack``."""
+        try:
+            return abs(float(text) - value) <= slack
+        except ValueError:
+            return False
+
     def on_omega_changed(self):
         """Handle omega (ω) change - sample in-plane rotation."""
         if self.updating:
@@ -5192,6 +5380,7 @@ class TAVIController(QObject):
             edit.setReadOnly(lock is not None)
             edit.setToolTip(held or edit.property("free_tooltip"))
         self._show_plane_lock()
+        self._schedule_field_marks()
 
     def lock_stale(self, vals=None):
         """The one stale function (the UB dock and /state read it): True when
@@ -8123,6 +8312,20 @@ class TAVIController(QObject):
         (the live label only) stores a points-less expansion: never queue that.
         Raises ``PlanRefused`` naming why the scan cannot run as written.
         """
+        plan = self._launch_plan(launch_state)
+        expansion = (expand if points else scan_axes)(plan, launch_state['snapshot'])
+        launch_state['plan'], launch_state['expansion'] = plan, expansion
+        return plan, expansion
+
+    def _launch_plan(self, launch_state, commands=None):
+        """``build_plan`` against the launch's frozen context, without expanding it.
+
+        ``commands`` is ``[(text, relative), (text, relative)]`` for boxes 1 and 2,
+        by default the launch's own. Raises ``PlanRefused``, also for a launch
+        that could not be collected (``None``).
+        """
+        if not launch_state:
+            raise PlanRefused("A field does not hold a number, so nothing can be planned.")
         # The fixed energy and the lattice reach the plan through its context, not the
         # snapshot's inputs: an emptied one refuses here, by name, never as 0 or 1 Å.
         for qid, name in (("fixed_E", "fixed energy"),
@@ -8133,13 +8336,11 @@ class TAVIController(QObject):
         context = context_from_state(launch_state['scan_config'], vals,
                                      self.instrument.capabilities(),
                                      launch_state.get('engine') or 'mcstas')
-        plan = build_plan(
-            [(vals.get('scan_command1') or "", bool(launch_state.get('relative_mode_1'))),
-             (vals.get('scan_command2') or "", bool(launch_state.get('relative_mode_2')))],
-            context)
-        expansion = (expand if points else scan_axes)(plan, launch_state['snapshot'])
-        launch_state['plan'], launch_state['expansion'] = plan, expansion
-        return plan, expansion
+        if commands is None:
+            commands = [
+                (vals.get('scan_command1') or "", bool(launch_state.get('relative_mode_1'))),
+                (vals.get('scan_command2') or "", bool(launch_state.get('relative_mode_2')))]
+        return build_plan(commands, context)
 
     def validate_scan_launch_state(self, launch_state):
         """Check each point of a launch's compiled plan for feasibility.
@@ -8465,6 +8666,7 @@ class TAVIController(QObject):
         if self._shutdown_called:
             return
         self._shutdown_called = True
+        self._field_marks_timer.stop()
 
         # Stop accepting remote requests first (idempotent; closes SSE clients).
         server = getattr(self, "api_server", None)
