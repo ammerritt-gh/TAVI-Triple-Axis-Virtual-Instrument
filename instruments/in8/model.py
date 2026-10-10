@@ -96,10 +96,10 @@ class IN8_Instrument(TAS_Instrument):
         Keys mirror instruments/in8/plugin.py::_IN8_PARAMS exactly.
         """
         return {
-            "A1_param": self.A1,
-            "A2_param": self.A2,
-            "A3_param": self.A3,
-            "A4_param": self.A4,
+            "mono_two_theta_param": self.A1,
+            "sample_two_theta_param": self.A2,
+            "sample_rotation_param": self.A3,
+            "analyzer_two_theta_param": self.A4,
             "E0_param": self.e0_param_value(deltaE),
             "rhm_param": self.rhm,
             "rvm_param": self.rvm,
@@ -121,10 +121,10 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
     instrument.settings(output_path="./output", openacc=False)
 
     ## Add parameters
-    instrument.add_parameter("A1_param", comment="Monochromator 2-theta angle.")
-    instrument.add_parameter("A2_param", comment="Sample 2-theta angle.")
-    instrument.add_parameter("A3_param", comment="Sample phi angle.")
-    instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
+    instrument.add_parameter("mono_two_theta_param", comment="Monochromator 2-theta angle.")
+    instrument.add_parameter("sample_two_theta_param", comment="Sample 2-theta angle.")
+    instrument.add_parameter("sample_rotation_param", comment="Sample rotation (turntable) readout, inspection only.")
+    instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -189,7 +189,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
 
         emit_crystal_assembly(instrument, cradle_name="mono_cradle",
                               crystal_name="monochromator", relative="origin",
-                              distance=IN8.L1, rotation_expr="A1_param/2",
+                              distance=IN8.L1, rotation_expr="mono_two_theta_param/2",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
                               split=2, extend="if(!SCATTERED) ABSORB;")
@@ -197,7 +197,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
         ## sample arm
 
         sample_arm = instrument.add_component("sample_arm", "Arm", AT=[0, 0, IN8.L1],
-                                              RELATIVE="origin", ROTATED=[0, "A1_param", 0])
+                                              RELATIVE="origin", ROTATED=[0, "mono_two_theta_param", 0])
 
         # PLACEHOLDER position/aperture for the alpha_2 Soller (divergence 0 = open).
         emit_collimator(instrument, "sample_collimator", relative="sample_arm",
@@ -239,7 +239,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
         ## analyzer
 
         analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0, 0, IN8.L2],
-                                                ROTATED=[0, "A2_param", 0], RELATIVE="sample_arm")
+                                                ROTATED=[0, "sample_two_theta_param", 0], RELATIVE="sample_arm")
 
         # One 5 cm PG higher-order filter (the 2023 paper describes two;
         # PLACEHOLDER single filter and position).
@@ -256,7 +256,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
 
         emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
                               crystal_name="analyzer", relative="analyzer_arm",
-                              distance=IN8.L3, rotation_expr="A4_param/2",
+                              distance=IN8.L3, rotation_expr="analyzer_two_theta_param/2",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
                               split=5)
@@ -264,7 +264,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
         ## detector
 
         detector_arm = instrument.add_component("detector_arm", "Arm", AT=[0, 0, IN8.L3],
-                                                ROTATED=[0, "A4_param", 0], RELATIVE="analyzer_arm")
+                                                ROTATED=[0, "analyzer_two_theta_param", 0], RELATIVE="analyzer_arm")
 
         emit_collimator(instrument, "detector_collimator", relative="detector_arm",
                         at=(0, 0, 0.3), divergence=IN8.alpha_4, length=0.15,

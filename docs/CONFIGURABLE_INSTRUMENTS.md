@@ -140,7 +140,7 @@ imperative McStasScript that bakes in *everything*:
   (historical PUMA definition lines 1400–1486).
 - ~19 diagnostic monitors, each gated on a `diagnostic_settings` key, at fixed
   positions.
-- The fixed McStas **parameter set** (`A1_param`, `A2_param`, … `dbl_hgap_param`,
+- The fixed McStas **parameter set** (`mono_two_theta_param`, `sample_two_theta_param`, … `dbl_hgap_param`,
   sample-orientation params) defined at `:878` and `:1324`.
 
 **B. Crystal library.** `mono_ana_crystals_setup()`

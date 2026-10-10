@@ -111,10 +111,10 @@ _PANDA_ANA_CURVATURE = {
 # add_parameter() -- the per-point snapshot dict shape. The 13 shared core TAS
 # parameters plus PANDA's bending and its three motorized apertures.
 _PANDA_PARAMS = (
-    ParameterSpec("A1_param", "Monochromator 2-theta angle"),
-    ParameterSpec("A2_param", "Sample 2-theta angle"),
-    ParameterSpec("A3_param", "Sample phi angle"),
-    ParameterSpec("A4_param", "Analyzer 2-theta angle"),
+    ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle"),
+    ParameterSpec("sample_two_theta_param", "Sample 2-theta angle"),
+    ParameterSpec("sample_rotation_param", "Sample rotation (turntable) readout, inspection only"),
+    ParameterSpec("analyzer_two_theta_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending"),
     ParameterSpec("rvm_param", "Monochromator vertical bending"),

@@ -361,7 +361,7 @@ class ParameterSpec:
     stops the framework being PUMA-shaped -- see §12.5.
     """
 
-    name: str                               # e.g. "A1_param"
+    name: str                               # e.g. "mono_two_theta_param"
     comment: str = ""
     default: float | None = None
     unit: str = ""

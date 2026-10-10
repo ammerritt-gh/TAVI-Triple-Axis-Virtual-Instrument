@@ -33,7 +33,7 @@ This is critical for:
 
 ```python
 # Add a parameter with optional default value and comment
-instrument.add_parameter("A1_param", value=0, comment="Monochromator 2-theta angle")
+instrument.add_parameter("mono_two_theta_param", value=0, comment="Monochromator 2-theta angle")
 
 # Parameters default to type 'double' but can be specified
 instrument.add_parameter("int_param", value=5, type="int")
@@ -62,11 +62,11 @@ Parameters can be combined in string expressions:
 sample_arm = instrument.add_component(
     "sample_arm", "Arm", AT=[0, 0, PUMA.L1],  # PUMA.L1: the model state's arm length
     RELATIVE="origin",
-    ROTATED=[0, "A1_param", 0],
+    ROTATED=[0, "mono_two_theta_param", 0],
 )
 
 # Using a parameter in a calculation
-sample_arm.set_ROTATED([0, "A1_param / 2", 0])  # half the internal A1 angle (the mono 2-theta)
+sample_arm.set_ROTATED([0, "mono_two_theta_param / 2", 0])  # half the mono 2-theta
 
 # Combining multiple parameters
 sample_arm.set_AT([0, 0, "L1_param + offset_param"])
@@ -77,8 +77,8 @@ sample_arm.set_AT([0, 0, "L1_param + offset_param"])
 ```python
 # Set parameters before running - NO RECOMPILATION NEEDED
 instrument.set_parameters(
-    A1_param=45.0,
-    A2_param=-30.0,
+    mono_two_theta_param=45.0,
+    sample_two_theta_param=-30.0,
     rhm_param=2.5
 )
 
@@ -89,7 +89,7 @@ data = instrument.backengine()
 # Change parameters and run again - pass force_compile=False or McStasScript
 # recompiles anyway; TAVI does this once the first build has succeeded
 # (instruments/tas_runtime.py, run_tas_point)
-instrument.set_parameters(A1_param=46.0)
+instrument.set_parameters(mono_two_theta_param=46.0)
 data2 = instrument.backengine(force_compile=False)
 ```
 
@@ -100,31 +100,28 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 ### Angle Parameters (Primary Scan Variables)
 | Parameter | Description | Used By |
 |-----------|-------------|---------|
-| `A1_param` | Monochromator 2-theta angle | `mono_cradle` rotation |
-| `A2_param` | Sample 2-theta angle | `analyzer_arm` rotation |
-| `A3_param` | Sample turntable readout | Inspection (the turntable reaches McStas through `sample_r*_param`) |
-| `A4_param` | Analyzer 2-theta angle | `analyzer_cradle`, `detector_arm` rotation |
+| `mono_two_theta_param` | Monochromator 2-theta angle | `mono_cradle` rotation |
+| `sample_two_theta_param` | Sample 2-theta angle | `analyzer_arm` rotation |
+| `sample_rotation_param` | Sample turntable readout | Inspection (the turntable reaches McStas through `sample_r*_param`) |
+| `analyzer_two_theta_param` | Analyzer 2-theta angle | `analyzer_cradle`, `detector_arm` rotation |
 
-**These names are internal, not the public angle names.** The `A*_param`
-McStas parameters (and the `A1`–`A4` attributes, the `mtt`/`stt`/`att` edits
-and the scan-slot layout in `instruments/tas_runtime.py`) keep TAVI's older
-numbering until the internals are renamed (U3): internal A1 is the
+The McStas parameters carry physical names. The `A1`–`A4` state attributes,
+the `mtt`/`stt`/`att` edits and the scan-slot layout in
+`instruments/tas_runtime.py` keep TAVI's older numbering internally (A1 the
 monochromator 2θ, A2 the sample 2θ, A3 the sample rotation, A4 the analyzer
-2θ. Everything a user sees (GUI labels, scan commands, the API, saved
-settings, output files) uses the ILL numbering instead, so the same number can
-mean two axes depending on which side of the boundary you read it. Read this
-table, not the digit:
+2θ) until U3 removes them. Everything a user sees (GUI labels, scan commands,
+the API, saved settings, output files) uses the ILL numbering:
 
 | McStas parameter | Internal name | Physical quantity | Public ILL number | Canonical ID |
 |---|---|---|---|---|
-| `A1_param` | A1, `mtt` | monochromator 2θ | **A2** | `mono_two_theta_deg` |
-| `A2_param` | A2, `stt` | sample 2θ | **A4** | `sample_two_theta_deg` |
-| `A3_param` | A3, `sth`, `omega` | sample rotation (turntable) | A3 | `sample_rotation_deg` |
-| `A4_param` | A4, `att` | analyzer 2θ | **A6** | `analyzer_two_theta_deg` |
+| `mono_two_theta_param` | A1, `mtt` | monochromator 2θ | A2 | `mono_two_theta_deg` |
+| `sample_two_theta_param` | A2, `stt` | sample 2θ | A4 | `sample_two_theta_deg` |
+| `sample_rotation_param` | A3, `sth`, `omega` | sample rotation (turntable) | A3 | `sample_rotation_deg` |
+| `analyzer_two_theta_param` | A4, `att` | analyzer 2θ | A6 | `analyzer_two_theta_deg` |
 | `sgl_param` | `sgl` | lower sample arc | (none) | `sample_lower_arc_deg` |
 | `sgu_param` | `sgu` | upper sample arc | (none) | `sample_upper_arc_deg` |
-| `rhm_param`, `rvm_param` | `rhm`, `rvm` | monochromator radii | (none) | `mono_horizontal_radius_m`, `mono_vertical_radius_m` |
-| `rha_param`, `rva_param` | `rha`, `rva` | analyzer radii | (none) | `analyzer_horizontal_radius_m`, `analyzer_vertical_radius_m` |
+| `rhm_param`, `rvm_param` | `rhm`, `rvm` | applied monochromator radii, signed by the branch | (none) | `applied_mono_horizontal_radius_m`, `applied_mono_vertical_radius_m` |
+| `rha_param`, `rva_param` | `rha`, `rva` | applied analyzer radii, signed by the branch | (none) | `applied_analyzer_horizontal_radius_m`, `applied_analyzer_vertical_radius_m` |
 
 The public A1 (monochromator θ) and A5 (analyzer θ) have no McStas parameter:
 they are half of A2 and A6 and are never inputs. `docs/INSTRUMENT_LAYOUT.md`

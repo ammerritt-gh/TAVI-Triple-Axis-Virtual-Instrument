@@ -25,9 +25,10 @@ Source → Monochromator → Sample → Analyzer → Detector
 TAVI numbers the angles the ILL way: A1–A6, in beam order, with each crystal's
 θ and 2θ as a pair. The table is the contract; `tavi/quantities.py` is the
 code that holds it, and every public surface (GUI labels, scan commands, the
-API, saved settings, output files) takes its names from there. The Python and
-McStas names inside the code (`mtt`, `stt`, `att`, `A1_param` ...) are
-internal and keep TAVI's older numbering until the internals are renamed; see
+API, saved settings, output files) takes its names from there. The Python
+names inside the code (`mtt`, `stt`, `att`, the state's `A1`–`A4`) are
+internal and keep TAVI's older numbering until the internals are renamed; the
+McStas parameters carry physical names (`mono_two_theta_param` ...); see
 `docs/MCSTAS_PARAMETERS.md`.
 
 | ILL | Canonical ID | NICOS | Physical meaning | Sign and zero, as the code behaves |
