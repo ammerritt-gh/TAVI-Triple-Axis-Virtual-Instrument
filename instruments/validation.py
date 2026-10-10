@@ -15,8 +15,9 @@ strings), ``MonitorSpec.id`` (diagnostic-settings display keys), and
 ``SourceType.id`` (the GUI source-type combo strings, e.g. ``"Maxwellian"``).
 Phase 2 revisits these when the GUI binds to the descriptor.
 
-``validate_capabilities(caps, id)`` applies the same quantity rules to a plugin's
-declared inputs, observables and bindings (instrument extras, derived-only inputs).
+``validate_capabilities(caps, id, descriptor)`` applies the same quantity rules to a plugin's
+declared inputs, observables and bindings (instrument extras, derived-only inputs), and
+checks each slit binding against the descriptor's ParameterSpecs, which the runtime reads.
 
 Error messages are human-readable and prefixed with the offending field/id; they
 double as authoring feedback (§11).
@@ -113,11 +114,12 @@ def _quantity_problem(qid: str, instrument_id: str) -> str | None:
     return None
 
 
-def validate_capabilities(capabilities, instrument_id: str) -> list[str]:
+def validate_capabilities(capabilities, instrument_id: str, descriptor) -> list[str]:
     """Problems with a plugin's declared inputs, observables and bindings (empty = valid).
 
     Every declared quantity is a canonical ID or an instrument extra (``_quantity_problem``),
-    and no derived-only quantity is an input: a plugin never takes A1 or A5 as input.
+    no derived-only quantity is an input (a plugin never takes A1 or A5 as input), and every
+    slit binding is carried by a descriptor ParameterSpec, the one the runtime reads.
     """
     qids = {*capabilities.inputs, *capabilities.observables, *capabilities.bindings}
     errors = [p for p in (_quantity_problem(q, instrument_id) for q in sorted(qids)) if p]
@@ -128,12 +130,15 @@ def validate_capabilities(capabilities, instrument_id: str) -> list[str]:
             continue   # an extra or unknown name: reported above
         if derived:
             errors.append(f"{qid!r} is derived and cannot be an input")
+    tagged = {p.quantity for p in descriptor.scannable_parameters}
+    errors += [f"{qid!r} is a slit binding that no descriptor ParameterSpec carries"
+               for qid in sorted(capabilities.slit_bindings - tagged)]
     return errors
 
 
-def assert_valid_capabilities(capabilities, instrument_id: str) -> None:
+def assert_valid_capabilities(capabilities, instrument_id: str, descriptor) -> None:
     """Raise ``DescriptorValidationError`` if a plugin's declared quantities are invalid."""
-    errors = validate_capabilities(capabilities, instrument_id)
+    errors = validate_capabilities(capabilities, instrument_id, descriptor)
     if errors:
         raise DescriptorValidationError(
             f"Instrument {instrument_id!r} declares unusable quantities:\n  - "

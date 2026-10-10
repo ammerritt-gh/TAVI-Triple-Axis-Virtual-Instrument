@@ -16,6 +16,7 @@ from contract_plugin_fixture import (
 import instruments.builtin  # noqa: F401  (registers the four built-in plugins)
 from instruments import registry
 from instruments.contract import Capabilities
+from instruments.descriptor import ParameterSpec
 from instruments.rules import build_plan, expand
 from instruments.validation import (
     assert_valid_capabilities,
@@ -42,7 +43,7 @@ def test_fixture_descriptor_is_structurally_valid():
 def test_h_scan_plans_and_expands_through_the_public_contract():
     registry.register("contract_fixture", "Contract fixture", ContractFixturePlugin)
     plugin = registry.get_instrument("contract_fixture")
-    assert_valid_capabilities(plugin.capabilities(), plugin.id)
+    assert_valid_capabilities(plugin.capabilities(), plugin.id, plugin.descriptor())
 
     plan = build_plan([("H 0.9 1.1 0.02", False), ("", False)], plan_context(plugin))
     assert plan.scanned == {"h"}
@@ -73,7 +74,7 @@ def test_instrument_extras_live_under_the_instrument_namespace():
         Capabilities(inputs=frozenset({"instrument.contract_fixture.cell_gain",
                                        "sample_two_theta_deg"}),
                      observables=frozenset(), bindings={}),
-        "contract_fixture")
+        "contract_fixture", fixture_descriptor())
 
 
 @pytest.mark.parametrize("qid", [
@@ -87,11 +88,21 @@ def test_undeclared_or_derived_quantities_are_refused(qid):
     with pytest.raises(ValueError, match="contract_fixture"):
         assert_valid_capabilities(
             Capabilities(inputs=frozenset({qid}), observables=frozenset(), bindings={}),
-            "contract_fixture")
+            "contract_fixture", fixture_descriptor())
+
+
+def test_a_slit_binding_no_descriptor_parameter_tags_is_refused_at_load():
+    """The runtime reads slit bindings from the descriptor's ParameterSpecs, so a binding they do not carry is refused."""
+    qid = "slit.post_mono.horizontal_gap_mm"   # a registry slit the fixture does not declare
+    binding = ParameterSpec("slit_gap_param", quantity=qid, scale=1e-3)
+    with pytest.raises(ValueError, match="post_mono"):
+        assert_valid_capabilities(
+            Capabilities(inputs=frozenset(), observables=frozenset(), bindings={qid: binding}),
+            "contract_fixture", fixture_descriptor())
 
 
 @pytest.mark.parametrize("instrument_id", [info.id for info in registry.available_instruments()])
 def test_builtin_plugins_declare_version_one_and_valid_capabilities(instrument_id):
     plugin = registry.get_instrument(instrument_id)
     assert plugin.CONTRACT_VERSION == 1
-    assert validate_capabilities(plugin.capabilities(), instrument_id) == []
+    assert validate_capabilities(plugin.capabilities(), instrument_id, plugin.descriptor()) == []

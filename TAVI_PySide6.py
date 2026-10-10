@@ -10278,7 +10278,7 @@ def main():
     # Fail fast, with readable errors, if the registered descriptor is unrunnable.
     from instruments.validation import assert_valid_capabilities, assert_valid_descriptor
     assert_valid_descriptor(instrument.descriptor(), runnable=True)
-    assert_valid_capabilities(instrument.capabilities(), instrument.id)
+    assert_valid_capabilities(instrument.capabilities(), instrument.id, instrument.descriptor())
 
     window = TAVIMainWindow(
         instrument.descriptor(),
