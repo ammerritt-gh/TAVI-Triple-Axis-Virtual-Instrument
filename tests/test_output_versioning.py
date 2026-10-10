@@ -156,11 +156,13 @@ def test_both_scan_parameter_writers_go_through_output_parameters():
 
 # --- the loading path ------------------------------------------------------------------
 
-def _current_folder(controller, tmp_path, relative=False):
+def _current_folder(controller, tmp_path, relative=False, lone_box_2=False):
     """A post-break scan folder: the scan-level file from a real (deterministic) run, then
     the per-point folders as the McStas path writes them, with the old fixture's detector
-    files for their counts. ``relative``: the scan is 'omega -1 1 1' stepped from A3 = 30."""
+    files for their counts. ``relative``: the scan is 'omega -1 1 1' stepped from A3 = 30.
+    ``lone_box_2``: the scan is typed in box 2 only, so scan_command1 is empty."""
     controller.output_directory = str(tmp_path)   # before the launch state names its folder
+    key = "scan_command2" if lone_box_2 else "scan_command1"
     if relative:
         start = 29.0
         launch = controller.build_api_launch_state({
@@ -170,7 +172,7 @@ def _current_folder(controller, tmp_path, relative=False):
     else:
         start = controller.get_gui_values()["omega"]
         launch = controller.build_api_launch_state({
-            "scan_command1": f"omega {start} {start + 2} 1", "number_neutrons": 1000})
+            key: f"omega {start} {start + 2} 1", "number_neutrons": 1000})
     launch["engine"] = "deterministic"
     controller._compile_launch(launch)
     controller.run_simulation(launch, job=ScanJob(job_id="t-output", source="api", launch_state=launch))
@@ -181,7 +183,7 @@ def _current_folder(controller, tmp_path, relative=False):
         point = folder / f"scan_{index:04d}"
         write_parameters_to_file(str(point), controller.output_parameters(
             {**launch["vals"], "omega": value, "sth": value, "scan_index": index,
-             "scan_command1": launch["vals"]["scan_command1"]}))
+             key: launch["vals"][key]}))
         shutil.copy(os.path.join(DATA, "old_omega_scan", f"scan_{index:04d}", "detector.dat"),
                     point / "detector.dat")
     return folder, start
@@ -215,6 +217,20 @@ def test_a_relative_scan_reloads_onto_its_absolute_axis(ctrl, tmp_path):
     assert (list(shown["x"]), shown["n_measured"]) == ([29.0, 30.0, 31.0], 3)
     assert list(shown["counts"]) == [120, 480, 150]
     assert read_parameters_from_file(str(folder))["scan_values_1"] == [29.0, 30.0, 31.0]
+
+
+def test_a_lone_command_2_folder_reloads_on_its_axis(ctrl, tmp_path):
+    """A scan typed only in box 2 leaves scan_command1 empty; command 2 is the folder's axis."""
+    folder, start = _current_folder(ctrl, tmp_path, lone_box_2=True)
+
+    _load(ctrl, folder)
+
+    shown = ctrl.window.display_dock.scan_snapshot()
+    assert "Data loaded into display dock" in _log(ctrl), _log(ctrl)
+    assert shown["variable_name"] == "sample_rotation_deg"
+    assert (list(shown["x"]), shown["n_measured"]) == (
+        pytest.approx([start, start + 1, start + 2], abs=1e-3), 3)
+    assert list(shown["counts"]) == [120, 480, 150]
 
 
 def test_a_relative_folder_without_its_axis_is_refused_not_mislabelled(ctrl, tmp_path):

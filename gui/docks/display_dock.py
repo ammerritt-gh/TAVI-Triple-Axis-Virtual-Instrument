@@ -1404,7 +1404,7 @@ class DisplayDock(BaseDockWidget):
         scan_parameters = read_parameters_from_file(data_folder)
         require_output_version(scan_parameters, data_folder)
 
-        if not scan_command1:
+        if not (scan_command1 or scan_command2):
             self._data_folder = data_folder
             if metadata:
                 self._scan_metadata = metadata.copy()
