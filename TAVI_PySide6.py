@@ -3095,7 +3095,7 @@ class TAVIController(QObject):
             'vals': vals,
             # What the plan reads at this instant (canonical IDs): typed inputs and the
             # relative bases. The one capture for Run, the preview and the benchmark.
-            'snapshot': self.public_values(vals),
+            'snapshot': self._launch_snapshot(vals),
             'save_folder_input': self.window.data_control_dock.save_folder_edit.text(),
             'sample_key': sample_key,
             'engine': engine,
@@ -3113,6 +3113,30 @@ class TAVIController(QObject):
             'background_source': 'config_default',
             'mpi_count': self.mpi_count,
         }
+
+    def _plan_input_edits(self):
+        """{internal field: line edit} for every dock field a point plan can read."""
+        idock, sdock = self.window.instrument_dock, self.window.scattering_dock
+        return {
+            'mtt': idock.mtt_edit, 'stt': idock.stt_edit, 'omega': idock.omega_edit,
+            'att': idock.att_edit, 'sgl': idock.sgl_edit, 'sgu': idock.sgu_edit,
+            'rhm': idock.rhm_edit, 'rvm': idock.rvm_edit, 'rha': idock.rha_edit,
+            'rva': idock.rva_edit,
+            'H': sdock.H_edit, 'K': sdock.K_edit, 'L': sdock.L_edit, 'qx': sdock.qx_edit,
+            'qy': sdock.qy_edit, 'qz': sdock.qz_edit, 'deltaE': sdock.deltaE_edit,
+        }
+
+    def _launch_snapshot(self, vals):
+        """``vals`` under canonical IDs, without the plan inputs whose field is empty.
+
+        ``get_gui_values`` reads an empty field as 0 for the edit handlers; a
+        launch must not, so an empty field is missing here and a plan that reads
+        it (as typed, or as a relative base) refuses naming it (``rules.expand``).
+        """
+        empty = {_to_public(key) for key, edit in self._plan_input_edits().items()
+                 if not edit.text().strip()}
+        return {qid: value for qid, value in self.public_values(vals).items()
+                if qid not in empty}
 
     def _enrich_launch_parameters(self, vals, sample_key):
         """Inject flat resolution/geometry parameters into the frozen ``vals``.
@@ -4400,15 +4424,14 @@ class TAVIController(QObject):
                 continue
             curvature_axis, crystal_name = axis_spec
             try:
-                value = float(edit.text() or 0)
+                value = float(edit.text())
             except ValueError:
                 # A non-numeric radius cannot reach a launch at all:
                 # get_gui_values() returns None for any unparseable field and
-                # _collect_simulation_launch_state bails on that (:2700), so
-                # there is no commanded value here to accept or refuse and
-                # skipping is not a hole. That the operator is not *told* why
-                # the run did nothing is a separate, pre-existing gap in field
-                # validation, not this check's to close.
+                # _collect_simulation_launch_state bails on that, so there is
+                # no commanded value here to accept or refuse and skipping is
+                # not a hole. An empty field is missing, not 0 (flat): the
+                # launch snapshot leaves it out and the plan refuses naming it.
                 continue
             error = curvature_command_error(axis, value, curvature_axis, crystal_name)
             if error:
@@ -7337,9 +7360,9 @@ class TAVIController(QObject):
         values = {}
         for axis, edit in axis_edits.items():
             try:
-                values[axis] = float(edit.text() or 0)
+                values[axis] = float(edit.text())
             except ValueError:
-                values[axis] = None
+                values[axis] = None   # empty or not a number: no base to step from
         return values
 
     def _scan_command_issues(self, cmd1: str, cmd2: str,

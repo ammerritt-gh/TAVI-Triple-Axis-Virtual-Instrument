@@ -140,3 +140,44 @@ def test_a_relative_base_edited_between_preview_and_run_runs_from_the_run_time_b
             assert [point[STH] for point in expansion.points] == pytest.approx([39.0, 40.0, 41.0])
         finally:
             _reset(ctrl)
+
+
+def test_an_empty_relative_base_field_refuses_the_run_naming_it(monkeypatch):
+    """Empty the A3 field under a relative A3 scan and press Run: refused, naming
+    the field, nothing queued and no field or instrument readout moved. An empty
+    field the plan reads as typed (K beside an H scan) refuses the same way;
+    one it does not read (H in an A3 scan) is no issue."""
+    with _controller() as ctrl:
+        try:
+            idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
+            _relative_a3(ctrl, 30.0)
+            idock.omega_edit.setText("")
+            edits = list(ctrl._plan_input_edits().values())
+            texts = [edit.text() for edit in edits]
+            readouts = dict(ctrl.instrument_state.stage_readouts())
+            jobs = len(ctrl._job_registry.all_jobs())
+
+            submitted, dialogs = _press_run(ctrl, monkeypatch)
+
+            assert submitted == [] and len(dialogs) == 1, (submitted, dialogs)
+            assert dialogs[0].startswith("Command 1 steps relative to A3 (sample rotation), "
+                                         "but its field holds no number to step from."), dialogs
+            assert [edit.text() for edit in edits] == texts
+            assert ctrl.instrument_state.stage_readouts() == readouts
+            assert len(ctrl._job_registry.all_jobs()) == jobs
+
+            ctrl.window.simulation_dock.relative_1_button.click()        # absolute from here
+            idock.omega_edit.setText("30")
+            ctrl.window.simulation_dock.scan_command_1_edit.setText("H 1 1.1 0.1")
+            sdock.K_edit.setText("")
+            submitted, dialogs = _press_run(ctrl, monkeypatch)
+            assert submitted == [] and dialogs[0].startswith(
+                "K is used as typed, but the launch state holds no number for it."), dialogs
+
+            sdock.K_edit.setText("0")
+            sdock.H_edit.setText("")
+            ctrl.window.simulation_dock.scan_command_1_edit.setText("A3 29 31 1")
+            submitted, dialogs = _press_run(ctrl, monkeypatch)
+            assert dialogs == [] and len(submitted) == 1
+        finally:
+            _reset(ctrl)
