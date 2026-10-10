@@ -491,10 +491,50 @@ def test_a_half_typed_box_1_still_shows_box_2s_own_refusal(window):
 
 # ------------------------------------------------------ labels follow the marks
 
+def test_labels_follow_the_plane_lock(window):
+    ctrl = window.controller
+    _type(window, "sgl -2 2 0.5")
+    assert _warning(window) == ""
+    ctrl.on_lock_plane()
+    _settle()
+    try:
+        assert _state(window, SGL)[0] is None
+        assert _warning(window), "the mark went and no label says why"
+    finally:
+        ctrl.on_release_plane()
+    _settle()
+    assert _state(window, SGL)[0] == "scanned"
+    assert _warning(window) == ""
 
 
+def test_labels_follow_the_engine(window):
+    sim = window.simulation_dock
+    _type(window, "pre_sample_hgap 10 20 5")
+    assert _warning(window) == ""
+    sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("deterministic"))
+    _settle()
+    assert "aperture" in _warning(window)
+    sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("mcstas"))
+    _settle()
+    assert _warning(window) == ""
 
 
+def test_labels_follow_relative_with_an_empty_base(window):
+    sim, idock = window.simulation_dock, window.instrument_dock
+    base = idock.omega_edit.text()
+    idock.omega_edit.setText("")
+    try:
+        _type(window, "A3 -2 3 0.5")
+        assert _warning(window) == ""
+        sim.relative_1_button.setChecked(True)
+        _settle()
+        assert _warning(window), "Relative with no base is refused, and the label says so"
+        sim.relative_1_button.setChecked(False)
+        _settle()
+        assert _warning(window) == ""
+    finally:
+        idock.omega_edit.setText(base)
+        _settle()
 
 
 def test_the_mark_refresh_expands_nothing(window, monkeypatch):
