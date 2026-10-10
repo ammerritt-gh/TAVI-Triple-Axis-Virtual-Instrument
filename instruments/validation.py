@@ -38,6 +38,12 @@ _C_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _V1_DETECTOR_FILE = "detector.dat"
 _V1_DETECTOR_PARSER = "1d_monitor"
 
+# axis_limits keys: the canonical IDs, and the retired TAVI "A<n>" key each one replaces
+# (TAVI's old numbering: A2 was sample 2theta, not ILL's mono A2).
+_AXIS_LIMIT_KEYS = ("mono_two_theta_deg", "sample_two_theta_deg", "analyzer_two_theta_deg")
+_RETIRED_AXIS_KEYS = {"A1": "mono_two_theta_deg", "A2": "sample_two_theta_deg",
+                      "A4": "analyzer_two_theta_deg"}
+
 # Optional CrystalSpec fields that a *runnable* instrument must fill in.
 _CRYSTAL_REQUIRED_FIELDS = (
     "slab_width", "slab_height", "n_columns", "n_rows",
@@ -241,12 +247,16 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
     # l1_source_mono is exempt structurally (vTAS omits it); checked under R1.
 
     # --- S10: axis limits -------------------------------------------------------------
-    # Keys are the internal numbering: A1 mono 2theta, A2 sample 2theta, A4 analyzer 2theta.
+    # Keys are canonical IDs; a retired "A<n>" key is refused by name, never remapped by its number.
     for axis, lim in d.axis_limits.items():
-        if axis not in ("A1", "A2", "A4"):
+        if axis in _RETIRED_AXIS_KEYS:
             errors.append(
-                f"axis_limits[{axis!r}]: not a TAVI axis key; use 'A1' (mono 2theta, ILL A2), "
-                "'A2' (sample 2theta, ILL A4) or 'A4' (analyzer 2theta, ILL A6)"
+                f"axis_limits[{axis!r}]: retired TAVI numbering; use {_RETIRED_AXIS_KEYS[axis]!r} "
+                f"(the keys are {', '.join(_AXIS_LIMIT_KEYS)})"
+            )
+        elif axis not in _AXIS_LIMIT_KEYS:
+            errors.append(
+                f"axis_limits[{axis!r}]: not a limit key; use {', '.join(_AXIS_LIMIT_KEYS)}"
             )
         if not all(_finite(v) for v in (lim.lower, lim.default, lim.upper)):
             errors.append(f"axis_limits[{axis!r}]: values must be finite")

@@ -1113,7 +1113,8 @@ def check_point_feasibility(state, calculation, scan_point, vals, axis_limits=No
     if error_flags:
         return False, describe_scan_error_flags(error_flags)
 
-    axis_fields = {"A1": "mtt", "A2": "stt", "A4": "att"}
+    axis_fields = {"mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
+                   "analyzer_two_theta_deg": "att"}
     for axis_name, field_name in axis_fields.items():
         limits = (axis_limits or {}).get(axis_name)
         if limits is None:

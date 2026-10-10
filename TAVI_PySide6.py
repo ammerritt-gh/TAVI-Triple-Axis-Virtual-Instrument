@@ -1936,8 +1936,8 @@ class TAVIController(QObject):
                 return math.pi / crystal.d_spacing / math.sin(theta)
             return ReachOverlay(
                 math.pi / mono.d_spacing, math.pi / ana.d_spacing,
-                mechanical_radius(mono, "A1", vals["mtt"]),
-                mechanical_radius(ana, "A4", vals["att"]),
+                mechanical_radius(mono, "mono_two_theta_deg", vals["mtt"]),
+                mechanical_radius(ana, "analyzer_two_theta_deg", vals["att"]),
             )
         except Exception as exc:
             self.print_to_message_center(f"Reciprocal view: reach overlay unavailable ({exc})")

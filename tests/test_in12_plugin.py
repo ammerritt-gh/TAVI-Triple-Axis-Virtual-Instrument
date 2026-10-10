@@ -58,7 +58,7 @@ def test_descriptor_senses_are_the_w_configuration():
 
 def test_monochromator_axis_limits_are_entirely_negative():
     """The signed evidence for sense_mono = -1 lives in the axis limits."""
-    a1 = in12_descriptor().axis_limits["A1"]
+    a1 = in12_descriptor().axis_limits["mono_two_theta_deg"]
     assert (a1.lower, a1.upper) == (-140.0, -10.0)
     assert a1.default < 0
 

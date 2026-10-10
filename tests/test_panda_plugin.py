@@ -69,12 +69,13 @@ def test_cu111_uses_null_reflectivity_sentinel():
 
 
 def test_axis_limits_follow_the_published_ranges():
-    """MLZ publishes A2 and A4 verbatim; A1 is the 2007 PG(002) travel on the
-    negative branch sense_mono = -1 puts the monochromator on."""
+    """MLZ publishes its sample and analyser 2theta verbatim; the mono is the 2007 PG(002) travel
+    on the negative branch sense_mono = -1 puts the monochromator on."""
     limits = panda_descriptor().axis_limits
-    assert (limits["A2"].lower, limits["A2"].upper) == (5.0, 125.0)
-    assert (limits["A4"].lower, limits["A4"].upper) == (-130.0, 100.0)
-    assert (limits["A1"].lower, limits["A1"].upper) == (-132.0, -20.0)
+    assert (limits["sample_two_theta_deg"].lower, limits["sample_two_theta_deg"].upper) == (5.0, 125.0)
+    assert (limits["analyzer_two_theta_deg"].lower,
+            limits["analyzer_two_theta_deg"].upper) == (-130.0, 100.0)
+    assert (limits["mono_two_theta_deg"].lower, limits["mono_two_theta_deg"].upper) == (-132.0, -20.0)
     # Every default is the standard cold elastic setting and must be reachable.
     for axis, lim in limits.items():
         assert lim.lower <= lim.default <= lim.upper, axis
