@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout,
                                 QWidget, QSizePolicy)
 from PySide6.QtCore import Qt
 
+from gui import theme
 from gui.docks.base_dock import BaseDockWidget, pack_grid
 from tavi.quantities import QUANTITIES
 
@@ -19,6 +20,16 @@ _SCANNABLE = [q for q in QUANTITIES if q.scannable]
 VALID_SCAN_VARIABLES = {name.casefold() for q in _SCANNABLE for name in (q.id, *q.aliases)}
 # The spelling shown to the operator: the first alias (A2, qx, H), else the ID.
 SCAN_VARIABLE_SHORT_NAMES = [(q.aliases or (q.id,))[0] for q in _SCANNABLE]
+
+
+def _command_chip(number):
+    """The filled "1" or "2" chip that names a scan command's field marks."""
+    chip = QLabel(str(number))
+    chip.setAlignment(Qt.AlignCenter)
+    chip.setFixedWidth(18)
+    chip.setStyleSheet(f"background-color: {theme.COMMAND_COLORS[number]}; color: white; "
+                       "font-weight: bold; border-radius: 2px;")
+    return chip
 
 
 class UnifiedSimulationDock(BaseDockWidget):
@@ -139,6 +150,8 @@ class UnifiedSimulationDock(BaseDockWidget):
         scan_1_row = QHBoxLayout()
         self.scan_command_1_edit = QLineEdit()
         self.scan_command_1_edit.setPlaceholderText("e.g., qx 2 2.2 0.1")
+        self.scan_chip_1 = _command_chip(1)
+        scan_1_row.addWidget(self.scan_chip_1)
         scan_1_row.addWidget(self.scan_command_1_edit)
         self.relative_1_button = QPushButton("Relative")
         self.relative_1_button.setCheckable(True)
@@ -159,6 +172,8 @@ class UnifiedSimulationDock(BaseDockWidget):
         scan_2_row = QHBoxLayout()
         self.scan_command_2_edit = QLineEdit()
         self.scan_command_2_edit.setPlaceholderText("e.g., deltaE 3 7 0.25")
+        self.scan_chip_2 = _command_chip(2)
+        scan_2_row.addWidget(self.scan_chip_2)
         scan_2_row.addWidget(self.scan_command_2_edit)
         self.relative_2_button = QPushButton("Relative")
         self.relative_2_button.setCheckable(True)
@@ -180,6 +195,15 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.scan_conflict_label.setWordWrap(True)
         self.scan_conflict_label.hide()
         scan_layout.addWidget(self.scan_conflict_label)
+        
+        # Permanent key to the field marks, after the warnings so a warning never covers it
+        self.scan_legend_label = QLabel(
+            "dashed = scanned · darker = set at each point, by command 1/2 or by the named "
+            "setting · +Δ = steps from your value (hover for base and range) · "
+            "previews the next Run")
+        self.scan_legend_label.setWordWrap(True)
+        self.scan_legend_label.setStyleSheet(f"color: {theme.NOTE_TEXT}; font-size: 10px;")
+        scan_layout.addWidget(self.scan_legend_label)
         
         # Help button row
         scan_options_layout = QHBoxLayout()
