@@ -728,6 +728,8 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # Goto mapping
 # --------------------------------------------------------------------------
 
+# Every scannable row is goto-able under its own ID, a slit gap included (a gap scan's
+# CEN drives that gap's field, in mm), except these.
 # rva stays non-goto as before U2; its old reason (no settable field) no longer holds, so lifting it is a separate call.
 _NOT_GOTO = frozenset({"analyzer_vertical_radius_m"})
 

@@ -7823,7 +7823,7 @@ class TAVIController(QObject):
         # way the old reading may be unavailable: the goto still runs, but
         # there is then nothing to revert to.
         current = self.get_gui_values()
-        old_value = current.get(_to_internal(plan.field)) if current else None
+        old_value = self.public_values(current).get(plan.field) if current else None
 
         applied, errors = self.apply_parameters({plan.field: plan.value})
         if errors or plan.field not in applied:
