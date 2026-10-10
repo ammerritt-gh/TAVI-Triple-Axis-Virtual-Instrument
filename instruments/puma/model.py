@@ -8,7 +8,7 @@ import mcstasscript as ms
 
 from instruments.descriptor import CurvatureAxis
 from instruments.paths import COMPONENTS_DIR
-from instruments.rules import crystal_theta
+from tavi.quantities import crystal_theta
 from instruments.tas_runtime import TAS_Instrument
 from tavi.neutron_conversions import energy2lambda
 from tavi.instrument_helpers import (
