@@ -367,7 +367,8 @@ to submit.
   `The hardware holds rva (analyzer vertical radius) at 0.05 m ..., so it cannot be scanned.`
   Neither kind is cleared by `"force": true` or by `allow_partial`. `force` clears only the soft
   warnings: a scan of one point (`start` equal to `stop`) and a scan of more than 1000 points. A
-  scan of 501 to 1000 points is not refused.
+  scan of 501 to 1000 points is not refused. A scan of more than 100,000 points is a hard refusal
+  (`This scan has N points; the maximum is 100,000.`): neither `force` nor `allow_partial` clears it.
 - Any **geometrically infeasible** point → `400 infeasible_points`; the error
   `details` is the full `validation` object (so you can see which points and
   why). To queue anyway and simply **skip** the unreachable points, resubmit
@@ -395,7 +396,7 @@ to submit.
 some infeasible points is still queued: only the feasible points run, and
 `result.skipped_points` lists each omitted point as `{"index", "values",
 "reason"}`. When `false` (the default), a single infeasible point rejects the
-whole submission with `400 infeasible_points`. `allow_partial` skips
+whole submission with `400 infeasible_points`. It never passes the 100,000-point maximum (a refusal above). `allow_partial` skips
 geometrically infeasible points and, for analytic-engine (`deterministic`)
 jobs, direct-transmission points, listed in `skipped_points` with kind
 `transmission`.
