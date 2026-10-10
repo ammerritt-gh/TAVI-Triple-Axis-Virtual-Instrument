@@ -131,6 +131,17 @@ def test_schema_lists_canonical_ids_and_carries_the_version(fresh):
     assert "mono_two_theta_deg" in schema["scan_variables"]
 
 
+def test_schema_scan_variables_hold_only_the_slits_this_instrument_can_scan(fresh):
+    # A slit scans only through a plugin binding; advertising another instrument's gap
+    # invites a request the plan then refuses.
+    controller, call = fresh
+    _status, schema = call("GET", "/schema")
+    slits = {v for v in schema["scan_variables"] if v.startswith("slit.")}
+    bound = {q for q in controller.instrument.capabilities().bindings if q.startswith("slit.")}
+    assert slits == bound and slits
+    assert "slit.sample_exit.vertical_gap_mm" not in slits
+
+
 def test_a4_sets_the_sample_two_theta_and_a2_the_mono_two_theta(fresh):
     """The flip: under the old numbering A2 was the sample 2theta and A4 the analyzer's."""
     controller, call = fresh
