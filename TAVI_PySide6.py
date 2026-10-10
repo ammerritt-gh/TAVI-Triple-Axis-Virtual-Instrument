@@ -4488,6 +4488,12 @@ class TAVIController(QObject):
             return (None, "Step sign doesn't match direction (start → end).")
         if end != start and abs(step) > abs(end - start):
             return (None, f"Step ({step}) is larger than the range ({start} to {end}).")
+        # parse_scan_steps rounds the point count to the nearest integer, so a
+        # step that does not divide the range can put the last point past the end.
+        last = start + step * math.floor((end - start) / step + 0.5)
+        if (last - end) / step > 1e-6:
+            return (None, f"Step ({step}) would put the last point at {last:g}, past "
+                          f"the end ({end:g}). Use a step that divides the range.")
         
         # After the step guards: the expansion below divides by the step and
         # calls parse_scan_steps, so a zero or wrong-sign step must have been

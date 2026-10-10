@@ -198,9 +198,14 @@ def test_a_step_that_cannot_reach_the_end_is_hard(in8_controller):
     # A step past the whole range would run a point beyond the stated end
     # ("A3 0 10 15" expands to 0 and 15); the API guide calls it an error.
     for cmd in ("A3 0 10 0", "A3 0 10 -1", "A3 10 0 1", "H 1 2 0",
-                "A3 0 10 15", "H 1.99 2.01 0.1", "A3 10 0 -15"):
+                "A3 0 10 15", "H 1.99 2.01 0.1", "A3 10 0 -15",
+                "A3 0 10 6", "A3 0 10 4", "A3 10 0 -4"):
         hard, _ = in8_controller._scan_command_issues(cmd, "")
         assert hard, cmd
+    # A step that stops at or short of the end still runs as written.
+    for cmd in ("A3 0 10 3", "H 1.99 2.01 0.01", "A3 10 0 -2.5", "A3 5 5 1"):
+        hard, _ = in8_controller._scan_command_issues(cmd, "")
+        assert not hard, (cmd, hard)
 
 
 def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
