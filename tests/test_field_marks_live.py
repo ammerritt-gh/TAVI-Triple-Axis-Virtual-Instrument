@@ -6,11 +6,12 @@ the event loop run and reads every field's mark (``mark_for(field).state()``).
 Nothing here calls ``update_field_marks`` itself: the marks must follow from
 the controller's own triggers. The last test renders the mockup's case at the
 two reference window sizes, saves the docks as PNGs and checks that the marks
-move no widget and are not clipped.
+move no widget and are not clipped. Its PNGs go to pytest's tmp_path; set
+TAVI_SCREENSHOT_DIR to a folder to keep them (for example
+C:\\Users\\AMM\\AppData\\Local\\Temp\\claude\\tavi-u4) for a visual check.
 """
 import os
 import sys
-import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -43,7 +44,6 @@ RHM, RVM, RVA = "mono_horizontal_radius_m", "mono_vertical_radius_m", "analyzer_
 STAGE = (A3, A4, SGL, SGU)
 MONO, ANALYZER = (A2, A1, EI, KI), (A6, A5, EF, KF)
 FIXED_RVA = {RVA: ("set", "fixed")}   # PUMA's analyzer bends vertically at a fixed 0.8 m
-SHOTS = os.path.join(tempfile.gettempdir(), "claude", "tavi-u4")
 
 
 def _window(instrument_id):
@@ -410,7 +410,7 @@ def _assert_inside(win):
 
 @pytest.mark.parametrize("size, mode, columns", [(LAPTOP, NARROW, 2), (MONITOR, WIDE, 3)],
                          ids=["laptop-2col-narrow", "monitor-3col-wide"])
-def test_mockup_case_moves_nothing_and_clips_nothing(window, size, mode, columns):
+def test_mockup_case_moves_nothing_and_clips_nothing(window, size, mode, columns, tmp_path):
     """H 0.9 1.1 0.02 in box 1, deltaE -1 1 0.25 relative in box 2, fixed Kf; then an A3 scan for the note."""
     _resize(window, size, mode, columns)
     ctrl, idock = window.controller, window.instrument_dock
@@ -418,7 +418,8 @@ def test_mockup_case_moves_nothing_and_clips_nothing(window, size, mode, columns
              "instrument": idock}
     labels = [idock.mtt_label, idock.omega_label, idock.stt_label, idock.att_label,
               idock.sgl_label, idock.sgu_label]
-    os.makedirs(SHOTS, exist_ok=True)
+    shots = os.environ.get("TAVI_SCREENSHOT_DIR") or str(tmp_path)
+    os.makedirs(shots, exist_ok=True)
     tag = f"{size[0]}x{size[1]}"
     for case, (cmd1, cmd2, rel2) in {"mockup": ("H 0.9 1.1 0.02", "deltaE -1 1 0.25", True),
                                      "a3": ("A3 -2 2 0.5", "", False)}.items():
@@ -440,7 +441,7 @@ def test_mockup_case_moves_nothing_and_clips_nothing(window, size, mode, columns
             assert label.isVisible() and label.width() >= label.sizeHint().width(), label.text()
         for name, dock in docks.items():
             suffix = "" if case == "mockup" else "-a3"
-            assert dock.grab().save(os.path.join(SHOTS, f"s42-{tag}-{name}{suffix}.png"))
+            assert dock.grab().save(os.path.join(shots, f"s42-{tag}-{name}{suffix}.png"))
         if case == "mockup":
             assert _marks(window)["h"] == ("scanned", "1")
             assert _marks(window)[DE] == ("scanned", "2 +Δ")
