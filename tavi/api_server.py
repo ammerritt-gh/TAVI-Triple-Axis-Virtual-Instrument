@@ -832,6 +832,9 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
         point = dict.fromkeys(cls._RESOLUTION_QUANTITIES)
         given = {}
         for name in query:
+            if len(query[name]) > 1:
+                raise ApiError(400, "bad_request", "resolution query %r is given %d times; send it once"
+                               % (name, len(query[name])))
             if name == "method":
                 continue
             try:

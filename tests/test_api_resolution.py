@@ -172,6 +172,7 @@ def test_resolution_takes_canonical_ids_and_aliases_alike(server):
     "nonsense=1",                           # unknown
     "Ei=14",                                # a quantity, but not a resolution field
     "kappa=1",                              # retired
+    "h=1&h=2",                              # one name given twice: which value?
 ])
 def test_resolution_refuses_unknown_and_duplicate_names(server, query):
     _srv, base, backend = server
