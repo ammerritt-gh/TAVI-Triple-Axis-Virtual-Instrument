@@ -419,7 +419,7 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
 
     # --- R6: a stage the TAS runtime drives ---------------------------------------------------------
     # Every runnable instrument runs on instruments/tas_runtime.py, which drives
-    # the stage by these axis names (scan slots, arc fields, McStas parameters).
+    # the stage by these axis names (arc fields, McStas parameters).
     # Any other stage is legal as data (structural rules) but refused here, not
     # per point.
     if not d.goniometer:

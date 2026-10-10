@@ -75,9 +75,12 @@ plugins, but built-in packages use the central path.
    stage: `goniometer=tas_goniometer(arc_travel)` with the arcs' travel from
    a cited source, or `tas_goniometer()` (undocumented, unlimited) when none
    exists — say which in `MODEL_STATUS.md`; never invent a limit.
-   `axis_limits` keys use TAVI's internal numbering until U3 versions the
-   author contract: `"A1"` is mono 2theta (ILL A2), `"A2"` sample 2theta
-   (ILL A4), `"A4"` analyzer 2theta (ILL A6); any other key is refused.
+   `axis_limits` keys are TAVI's internal numbering, and this release keeps
+   it (the keys are not renamed): `"A1"` is mono 2theta (ILL A2, registry ID
+   `mono_two_theta_deg`), `"A2"` sample 2theta (ILL A4, `sample_two_theta_deg`),
+   `"A4"` analyzer 2theta (ILL A6, `analyzer_two_theta_deg`); any other key is
+   refused. The feasibility check reads them against the solved mono, sample and
+   analyzer 2theta.
    `descriptor.samples` is the shared library (`tavi/sample_library.py`), not
    a per-package list — every instrument mounts exactly
    `default_sample_library()`; `package_validation.py`'s runtime check
@@ -98,7 +101,8 @@ plugins, but built-in packages use the central path.
    instrument can differ, and pinning a value in `scan_config` without
    declaring it lets a scan silently defeat the pin.
 2. **Validate** — `validate_descriptor(d, runnable=True)` must return `[]`.
-   Startup calls `assert_valid_descriptor(runnable=True)` and exits on
+   Startup calls `assert_valid_descriptor(runnable=True)` and
+   `assert_valid_capabilities(plugin.capabilities(), id)` and exits on
    failure. Run `python -m instruments._descriptor_examples` for a printout.
 3. **State class** — subclass `TAS_Instrument`
    (`instruments/tas_runtime.py`): set L1–L4, the senses, and
@@ -114,10 +118,12 @@ plugins, but built-in packages use the central path.
    category exists there. `add_parameter` names must match the descriptor's
    `scannable_parameters` 1:1 (build-tree test).
 5. **Plugin** — `<ID>Plugin` in `instruments/<id>/plugin.py`, implementing
-   `instruments/contract.py`:
-   `default_state`, `scan_config` (the GUI→state mapping), `crystal_info`,
-   `build_fingerprint`, and function-local delegations for
-   `build`/`compute_snapshot`/`run_point`.
+   `instruments/contract.py`: class attributes `id`, `display_name` and
+   `CONTRACT_VERSION = 1`; methods `descriptor`, `capabilities`, `default_state`,
+   `scan_config` (the GUI→state mapping), `crystal_info`, `build_fingerprint`,
+   `check_point_feasibility`, and function-local delegations for
+   `build`/`compute_snapshot`/`run_point`. The contract is described in
+   [The point contract](#the-point-contract) below.
 6. **Register** — only after the package is runnable-valid, add one
    `register(...)` line in `instruments/builtin.py`. The
    startup picker appears automatically once more than one instrument is
@@ -195,16 +201,69 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
   (`monorh = radius_cm(cfg.rhm) * sm`), so a signed value reaching that
   surface would be signed twice.
 
-## The scans-array contract
+## The point contract
 
-`compute_scan_snapshot` (shared) consumes per-point `scans` lists with a
-fixed layout: indices 0–3 are mode-specific (qx/qy/qz/ΔE, H/K/L/ΔE, or the
-angles: mono 2θ, sample 2θ, sample rotation, analyzer 2θ, which the public
-numbering calls A2, A4, A3, A6), 4–7 are rhm/rvm/rha/rva, then the stage slots `SLOT_SGL` (8) and `SLOT_SGU` (9) from
-`instruments/tas_runtime.py` (`SCAN_POINT_LENGTH` = 10). Angle mode reads the
-arcs from their slots; Q modes solve them per point. A point of 9 slots,
-written before the `sgu` slot existed, runs with `sgu` = 0. Every instrument's
-`build_point_params()` must return exactly the descriptor's parameter names.
+The contract is `CONTRACT_VERSION = 1` (`instruments/contract.py`). Three things
+are kept apart, and an author declares each one separately.
+
+**(a) The scientific quantities: the registry.** `tavi/quantities.py` names every
+public quantity: a canonical ID (what saved state, API output and metadata carry),
+a unit, a convention note, the case-insensitive aliases that scan commands and
+API writes accept, and the flags `scannable`, `writable` and `derived_only`. The
+angle frames, signs and zero conventions are in `docs/INSTRUMENT_LAYOUT.md`
+([Main Rotation Angles](INSTRUMENT_LAYOUT.md#main-rotation-angles) and
+[Conventions](INSTRUMENT_LAYOUT.md#conventions)). A plugin refers to quantities by
+canonical ID and does not define them.
+
+**(b) The plugin's capabilities.** `InstrumentPlugin.capabilities()` returns
+`Capabilities(inputs, observables, bindings)`:
+
+- `inputs`: the quantities the calculation takes as independent inputs. A plan
+  chooses among them and a scan command may drive one.
+- `observables`: the quantities it derives and reports.
+- `bindings`: canonical ID → `ParameterSpec`, for every quantity that has a
+  per-point McStas parameter. A slit gap is scannable only where it has a binding.
+
+The four TAS instruments derive all three from their descriptor with
+`instruments.rules.tas_capabilities(descriptor)`. Crystal θ is an observable only:
+`mono_theta_deg` (A1) and `analyzer_theta_deg` (A5) are produced by the
+`crystal_theta` rule (θ = 2θ/2, signed as 2θ). A plugin never takes them as
+inputs, and `validate_capabilities` refuses one that does.
+
+**(c) The backend bindings.** `ParameterSpec.quantity` names the canonical ID whose
+per-point value the parameter carries, and `ParameterSpec.scale` converts it:
+McStas value = `scale` × quantity value (a slit gap runs in mm and reaches McStas
+in m, so `scale` = 1e-3). The McStas parameter name is plugin-owned.
+`descriptor.scannable_parameters` keeps its meaning, the McStas parameter
+dictionary of the build (the build-tree test checks it). It is **not** the input
+registry: what a scan may drive is `inputs` plus the bindings.
+
+**Instrument extras.** A quantity the registry lacks is named
+`instrument.<instrument_id>.<name>`, with a lower-case slug name. Core IDs and
+aliases cannot be redefined: an extra that collides case-insensitively with a
+registry ID or alias is refused, and so is any other non-registry name. The rule
+applies to the bindings (`validate_descriptor`, beside rule S4b) and to the
+capabilities (`validate_capabilities`). No built-in plugin declares an extra.
+
+**Contract version.** Each plugin class declares `CONTRACT_VERSION`.
+`registry.register()` reads it from the factory class, before any plugin is built,
+and refuses a plugin whose value is missing or differs, for example
+`plugin 'x' (MyPlugin) declares CONTRACT_VERSION 2; TAVI supports CONTRACT_VERSION 1`.
+A refused plugin is not registered; for a built-in, startup stops with that error.
+Bump the version only for an incompatible change to this contract, and update
+every plugin in the same change.
+
+**Points.** The controller compiles the scan commands once into a plan
+(`instruments.rules.build_plan`) and expands it (`expand`) into points, each a
+mapping of canonical ID to value. `compute_snapshot(plan, scan_point, scan_index,
+config, vals, data_folder, *, indices=None)` and
+`check_point_feasibility(config, plan, scan_point)` receive one named point and the
+plan. The plan's calculation decides the solve; its commands decide which
+quantities are scanned. Neither reads a positional scan list or a GUI name. The
+positional scan-slot layout was removed in U3.
+
+A minimal author-side plugin that uses only this surface is
+`tests/contract_plugin_fixture.py`, with its checks in `tests/test_author_contract.py`.
 
 ## What the shared helpers cover vs what stays literal
 
