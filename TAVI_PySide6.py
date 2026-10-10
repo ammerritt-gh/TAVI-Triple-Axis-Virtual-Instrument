@@ -146,7 +146,7 @@ from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
-from tavi.quantities import normalize_write_names, resolve as resolve_quantity
+from tavi.quantities import crystal_theta, normalize_write_names, resolve as resolve_quantity
 from tavi.quantities import public_applied_radii, public_values as _public_values, schema_unit
 from tavi.quantities import to_internal as _to_internal, to_public as _to_public
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
@@ -2642,7 +2642,8 @@ class TAVIController(QObject):
                 # HELD/SCANNED axis with no established focusing model (IN12's
                 # Heusler rva) must not refuse a query that never asked for it.
                 ideal = check_state.ideal_curvature(
-                    check_state.monocris, check_state.anacris, mtt / 2, att / 2,
+                    check_state.monocris, check_state.anacris,
+                    crystal_theta(mtt), crystal_theta(att),
                     requested_axes=autofocus_axes,
                 )
             except ValueError as exc:
@@ -6392,7 +6393,7 @@ class TAVIController(QObject):
         """
         try:
             return _operator_magnitudes(self.instrument_state.ideal_curvature(
-                monocris, anacris, mtt / 2, att / 2, modules=modules,
+                monocris, anacris, crystal_theta(mtt), crystal_theta(att), modules=modules,
                 requested_axes=requested_axes,
             ))
         except ZeroDivisionError:

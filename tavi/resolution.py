@@ -300,7 +300,7 @@ def _popovici_matrix(cfg: ResolutionConfig):
     thetam = math.asin(taum / (2.0 * ki)) * sm
     thetaa = math.asin(taua / (2.0 * kf)) * sa
     s2theta = math.acos(c2t) * ss
-    thetas = s2theta / 2.0
+    thetas = s2theta / 2.0   # the sample's Popovici θ_S, not a crystal's A1/A5: no crystal_theta
     phi = math.atan2(-kf * math.sin(s2theta), ki - kf * math.cos(s2theta))
 
     # arms (cm); L1mon defaults to L1
