@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 from tavi.scan_fits import (
-    SCAN_VARIABLE_TO_FIELD,
     GotoPlan,
     PeakEstimate,
     QuickFitResult,
@@ -461,12 +460,20 @@ def test_peak_max_negative_counts_refused():
 # Goto mapping
 # --------------------------------------------------------------------------
 
-def test_scan_variable_to_field_rows():
+def test_every_scannable_quantity_is_goto_able_under_its_own_name_but_rva():
     # The controller's field map is keyed by canonical ID, so a goto writes the field
     # whose ID it scanned (the rva exception aside).
-    expected = {q.id: q.id for q in QUANTITIES if q.scannable}
-    expected["analyzer_vertical_radius_m"] = None
-    assert SCAN_VARIABLE_TO_FIELD == expected
+    for q in QUANTITIES:
+        if q.scannable:
+            expected = None if q.id == "analyzer_vertical_radius_m" else q.id
+            assert field_for_scan_variable(q.id) == expected, q.id
+
+
+def test_a_scannable_quantity_without_a_table_row_does_not_raise(monkeypatch):
+    monkeypatch.setattr("tavi.scan_fits._canonical_scan_variable",
+                        lambda name: "new_scannable_quantity")
+    assert field_for_scan_variable("x") == "new_scannable_quantity"
+    assert plan_goto("x", 1.0, busy=False).field == "new_scannable_quantity"
 
 
 def test_field_for_scan_variable_lookup():
@@ -592,10 +599,11 @@ def test_format_revert_message_is_stable():
 
 
 def test_plan_goto_field_agrees_with_the_lookup_table():
-    for variable, field in SCAN_VARIABLE_TO_FIELD.items():
-        plan = plan_goto(variable, 1.0, busy=False)
-        assert plan.field == field_for_scan_variable(variable)
-        assert plan.ok is (field is not None)
+    for q in QUANTITIES:
+        if q.scannable:
+            plan = plan_goto(q.id, 1.0, busy=False)
+            assert plan.field == field_for_scan_variable(q.id)
+            assert plan.ok is (plan.field is not None)
 
 
 def _api_field_map_body():
@@ -613,18 +621,18 @@ def _api_field_map_body():
 
 
 def test_every_mapped_field_exists_in_the_controller_field_map():
-    """MAINTAINERS: if ``_api_field_map`` renames a field, update
-    ``SCAN_VARIABLE_TO_FIELD`` in ``tavi/scan_fits.py`` in the same change."""
+    """MAINTAINERS: if ``_api_field_map`` renames or drops a field that a scannable
+    registry quantity goes to, this fails: update ``tavi/quantities.py`` in the same change."""
     body = _api_field_map_body()
     # The literal is keyed by internal name; the map is renamed to canonical IDs at its end.
     keys = {to_public(k) for k in
             re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)':", body, re.MULTILINE)}
     assert "mono_two_theta_deg" in keys, "field-map scan found no keys -- the scan pattern broke"
 
-    missing = sorted({f for f in SCAN_VARIABLE_TO_FIELD.values() if f} - keys)
+    goto = {field_for_scan_variable(q.id) for q in QUANTITIES if q.scannable} - {None}
+    missing = sorted(goto - keys)
     assert not missing, (
-        "scan_fits.SCAN_VARIABLE_TO_FIELD names fields that _api_field_map "
-        "does not define: %s" % missing
+        "goto names fields that _api_field_map does not define: %s" % missing
     )
 
 
@@ -632,7 +640,7 @@ def test_known_api_field_map_keys_are_unchanged():
     """Characterization copy of the controller's settable-field list.
 
     MAINTAINERS: when ``_api_field_map`` gains or loses a key, update this list
-    *and* re-check ``SCAN_VARIABLE_TO_FIELD`` in ``tavi/scan_fits.py``.
+    *and* re-check the scannable rows of ``tavi/quantities.py``.
     """
     known = {
         'orientation_mode', 'lock_plane',

@@ -26,7 +26,7 @@ Public surface:
   background subtraction).
 * :func:`peak_max` -- abscissa of the highest count bin.
 * :func:`fit_peak` -- pseudo-Voigt + flat background quick fit.
-* :data:`SCAN_VARIABLE_TO_FIELD` / :func:`field_for_scan_variable` -- which
+* :func:`field_for_scan_variable` -- which
   settable GUI parameter field a scan variable maps to, for a later "goto".
 * :func:`plan_goto` / :func:`format_goto_message` /
   :func:`format_revert_message` -- the refusal policy and wording for the
@@ -728,25 +728,8 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # Goto mapping
 # --------------------------------------------------------------------------
 
-# Canonical scan quantity ID -> settable GUI parameter field
-# (TAVI_PySide6.TAVIController._api_field_map, itself keyed by canonical ID, so a
-# goto from A2/mtt, A4/stt/2theta, A6/att or A3/sth/omega/psi writes the quantity
-# the scan named). 'analyzer_vertical_radius_m' is None: it is known but not
-# goto-able.
-SCAN_VARIABLE_TO_FIELD = {
-    "h": "h", "k": "k", "l": "l", "energy_transfer_mev": "energy_transfer_mev",
-    "q_instrument_x_inv_angstrom": "q_instrument_x_inv_angstrom",
-    "q_instrument_y_inv_angstrom": "q_instrument_y_inv_angstrom",
-    "q_instrument_z_inv_angstrom": "q_instrument_z_inv_angstrom",
-    "mono_two_theta_deg": "mono_two_theta_deg", "sample_two_theta_deg": "sample_two_theta_deg",
-    "sample_rotation_deg": "sample_rotation_deg",
-    "analyzer_two_theta_deg": "analyzer_two_theta_deg",
-    "sample_lower_arc_deg": "sample_lower_arc_deg", "sample_upper_arc_deg": "sample_upper_arc_deg",
-    "mono_horizontal_radius_m": "mono_horizontal_radius_m",
-    "mono_vertical_radius_m": "mono_vertical_radius_m",
-    "analyzer_horizontal_radius_m": "analyzer_horizontal_radius_m",
-    "analyzer_vertical_radius_m": None,
-}
+# rva stays non-goto as before U2: its settability depends on the crystal; lifting it is a separate call.
+_NOT_GOTO = frozenset({"analyzer_vertical_radius_m"})
 
 
 def _canonical_scan_variable(name) -> Optional[str]:
@@ -754,8 +737,8 @@ def _canonical_scan_variable(name) -> Optional[str]:
     the registry refuses it as a scan command.
 
     Knowing *that* a variable exists is separate from knowing whether it is
-    goto-able: ``analyzer_vertical_radius_m`` is a known row whose field is
-    ``None``, and the two cases must produce different refusals.
+    goto-able: ``analyzer_vertical_radius_m`` is a known row that is not
+    goto-able, and the two cases must produce different refusals.
     """
     if not isinstance(name, str):
         return None
@@ -772,9 +755,7 @@ def field_for_scan_variable(name: str) -> Optional[str]:
     refuses as a scan command returns ``None``.
     """
     canonical = _canonical_scan_variable(name)
-    if canonical is None:
-        return None
-    return SCAN_VARIABLE_TO_FIELD[canonical]
+    return None if canonical in _NOT_GOTO else canonical
 
 
 # --------------------------------------------------------------------------
@@ -821,7 +802,7 @@ def plan_goto(variable, value, *, busy: bool) -> GotoPlan:
     if canonical is None:
         return GotoPlan(ok=False, reason="unknown scan variable '%s'" % name,
                         variable=name, field=None, value=None)
-    field = SCAN_VARIABLE_TO_FIELD[canonical]
+    field = None if canonical in _NOT_GOTO else canonical
     if field is None:
         return GotoPlan(ok=False, reason="'%s' is not goto-able" % name,
                         variable=name, field=None, value=None)
