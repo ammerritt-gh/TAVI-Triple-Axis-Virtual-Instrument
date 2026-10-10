@@ -29,6 +29,14 @@ def test_a_step_rounded_to_six_digits_still_reaches_its_end():
     assert scan_stop_note(10.0, 0.0, -0.0502513) is None
 
 
+def test_rounding_to_three_decimals_never_passes_the_end():
+    _, values = parse_scan_steps("A3 0 0.0016 0.0008")
+    assert values[-1] <= 0.0016 and max(values) <= 0.0016
+
+    _, descending = parse_scan_steps("A3 0.0016 0 -0.0008")
+    assert descending[-1] >= 0.0 and min(descending) >= 0.0
+
+
 def test_descending_ranges_stop_short_with_a_note():
     _, values = parse_scan_steps("A3 10 0 -4")
     assert list(values) == [10.0, 6.0, 2.0]
