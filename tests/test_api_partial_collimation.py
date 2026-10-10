@@ -268,6 +268,12 @@ def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller, monkeypatc
     why = "Q x is calculated from H in the HKL calculation, so it cannot also be scanned."
     assert _run_refusal(in8_controller, cmd1, cmd2, monkeypatch).startswith(why)
     assert "scan_validation: " + why in _api_blockers(in8_controller, cmd1, cmd2)
+    backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
+    with pytest.raises(cm.ApiError) as refused:
+        backend.submit_scan({"parameters": {"scan_command1": cmd1, "scan_command2": cmd2},
+                             "force": True, "allow_partial": True})
+    assert (refused.value.status, refused.value.code) == (400, "scan_validation")
+    assert str(refused.value.message) == why
 
 
 @pytest.mark.parametrize("cmd1, cmd2", [

@@ -29,7 +29,7 @@ pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 import TAVI_PySide6 as controller_module
-from instruments.rules import PlanContext, PointCheck, build_plan, expand
+from instruments.rules import PlanContext, PlanRefused, PointCheck, build_plan, expand
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob, BudgetLimits
 
 ApiError = controller_module.ApiError
@@ -235,3 +235,22 @@ def test_isolated_4657_solver_error_is_masked_not_scan_fatal():
         "kind": "geometry_solver_error",
         "reason": "angle solve error: [Errno 22] Invalid argument",
     }]
+
+
+def test_an_instrument_that_cannot_judge_feasibility_is_refused_not_assumed_feasible():
+    """The old escape route ("assume feasible" when a plugin has no feasibility
+    check) is a refusal naming the instrument: a scan that cannot be checked
+    is never queued as if every point were reachable."""
+    q = ("q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom",
+         "q_instrument_z_inv_angstrom")
+    context = PlanContext(engine="mcstas", fixed_side="Kf", fixed_energy_mev=14.7,
+                          monocris="pg002", anacris="pg002", plane_lock=None, curvature={},
+                          inputs=frozenset({*q, "energy_transfer_mev"}),
+                          observables=frozenset())
+    plan = build_plan([("deltaE 0 1 1", False), ("", False)], context)
+    controller = SimpleNamespace(instrument=object(),
+                                 descriptor=SimpleNamespace(display_name="Stub TAS"))
+    launch_state = {"plan": plan, "expansion": expand(plan, dict(zip(q, (2.0, 0.0, 0.0)))),
+                    "scan_config": object()}
+    with pytest.raises(PlanRefused, match="^Stub TAS cannot check point feasibility"):
+        controller_module.TAVIController.validate_scan_launch_state(controller, launch_state)
