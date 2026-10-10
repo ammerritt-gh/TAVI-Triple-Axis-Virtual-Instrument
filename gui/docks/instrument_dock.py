@@ -411,8 +411,31 @@ class InstrumentDock(BaseDockWidget):
         self.source_dE_edit.textChanged.connect(self._refresh_source_summary)
         self._refresh_source_summary()
 
+        # Canonical ID -> the field that shows it, for the scan-field marks.
+        self._quantity_fields = {
+            "mono_two_theta_deg": self.mtt_edit, "mono_theta_deg": self.mono_theta_edit,
+            "sample_rotation_deg": self.omega_edit, "sample_two_theta_deg": self.stt_edit,
+            "analyzer_two_theta_deg": self.att_edit,
+            "analyzer_theta_deg": self.analyzer_theta_edit,
+            "sample_lower_arc_deg": self.sgl_edit, "sample_upper_arc_deg": self.sgu_edit,
+            "incident_wavevector_inv_angstrom": self.Ki_edit,
+            "incident_energy_mev": self.Ei_edit,
+            "final_wavevector_inv_angstrom": self.Kf_edit, "final_energy_mev": self.Ef_edit,
+            "mono_horizontal_radius_m": self.rhm_edit, "mono_vertical_radius_m": self.rvm_edit,
+            "analyzer_horizontal_radius_m": self.rha_edit,
+            "analyzer_vertical_radius_m": self.rva_edit,
+        }
+        for slit in descriptor.slits:
+            widgets = self.slit_widgets[slit.id]
+            for qid, key in zip(quantities.slit_gap_ids(slit), ("width", "height")):
+                self._quantity_fields[qid] = widgets[key]
+
 
     # ------------------------------------------------------------- accessors
+
+    def field_for(self, quantity_id):
+        """The field that shows ``quantity_id`` (a canonical ID, slit gaps included), or None."""
+        return self._quantity_fields.get(quantity_id)
 
     def selected_mono_id(self):
         return self.monocris_combo.currentData()
