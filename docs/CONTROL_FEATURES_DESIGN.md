@@ -149,7 +149,7 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 
 | Module | Role |
 |---|---|
-| `tavi/scan_fits.py` (new) | `com`, `peak_max`, `fit_peak`, `SCAN_VARIABLE_TO_FIELD` / `field_for_scan_variable`, `plan_goto`, `format_goto_message` / `format_revert_message`. Qt-free, controller-free, never raises. |
+| `tavi/scan_fits.py` (new) | `com`, `peak_max`, `fit_peak`, `field_for_scan_variable`, `plan_goto`, `format_goto_message` / `format_revert_message`. Qt-free, controller-free, never raises. |
 | `TAVI_PySide6.py` | `TAVIController.goto_scan_variable(variable, value, label)`, `revert_last_goto()`, `can_revert_goto()`, `_scan_busy()`. Thin adapters onto the existing `apply_parameters` path; all policy is in `scan_fits`. |
 | `gui/docks/fitting_dock.py` (new) | The operator surface: range selection, Fit, COM/MAX readouts, the results grid, and the goto/revert row. |
 | `gui/docks/display_dock.py` | `scan_snapshot()` (the one public read accessor) plus the `scan_data_reset` / `scan_data_finished` lifecycle signals. |
@@ -161,7 +161,7 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 
 #### The scan-variable → field table
 
-`SCAN_VARIABLE_TO_FIELD` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes. Since API version 2 both sides are canonical IDs (`tavi/quantities.py`): the scan name is resolved through the registry first, so every spelling of a quantity (an ILL number, a NICOS name, an alias) drives the same field. A `None` means *known variable, not goto-able*, which is a different refusal from *unknown variable*.
+`field_for_scan_variable` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes: the field is the scanned canonical ID, except for `_NOT_GOTO`. Since API version 2 the scan name is resolved through the registry (`tavi/quantities.py`) first, so every spelling of a quantity (an ILL number, a NICOS name, an alias) drives the same field. A `None` means *known variable, not goto-able*, which is a different refusal from *unknown variable*.
 
 | Scan variable (canonical ID; aliases) | Field | Note |
 |---|---|---|
@@ -173,7 +173,7 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 | `analyzer_two_theta_deg` (`A6`, `att`) | same ID | The analyzer 2θ. |
 | `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m` (`rhm`, `rvm`, `rha`) | same ID | Bender curvatures. |
 | `sample_lower_arc_deg`, `sample_upper_arc_deg` (`sgl`, `sgu`) | same ID | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 9) are seeded from these fields. |
-| `analyzer_vertical_radius_m` (`rva`) | `None` | No settable field exists in `_api_field_map`. |
+| `analyzer_vertical_radius_m` (`rva`) | `None` | Not goto-able: its settability depends on the crystal (fixed on PG(002)). |
 
 `A1` and `A5` (the derived Bragg angles) and the retired `chi`, `phi`, `kappa` are not scan variables at all: the registry refuses them, so they never reach this table. The angle-mode template slots the controller still uses are `[mtt, stt, omega, att]` (internal names, kept until the slot layout is removed); the explicit table that maps each canonical ID to its slot is `_SCAN_VARIABLE_TO_INDEX` in `TAVI_PySide6.py`.
 
