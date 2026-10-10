@@ -72,6 +72,19 @@ def test_instrument_dock_angle_labels_are_the_registry_labels(app, instrument_id
 
 
 @pytest.mark.parametrize("instrument_id", INSTRUMENTS)
+def test_editable_angle_fields_are_named_and_buddied_by_their_labels(app, instrument_id):
+    dock, _descriptor = _standalone_instrument_dock(instrument_id)
+    try:
+        for attribute, quantity_id in LABELS.items():
+            label, edit = getattr(dock, attribute), getattr(dock, attribute.replace("_label", "_edit"))
+            assert edit.accessibleName() == quantities.by_id(quantity_id).label, attribute
+            assert label.buddy() is edit, attribute
+    finally:
+        dock.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.parametrize("instrument_id", INSTRUMENTS)
 def test_theta_readouts_follow_their_two_theta_fields(app, instrument_id):
     dock, _descriptor = _standalone_instrument_dock(instrument_id)
     try:

@@ -71,6 +71,8 @@ class InstrumentDock(BaseDockWidget):
                 edit = QLineEdit()
             edit.setMaximumWidth(metrics.ANGLE_FIELD_WIDTH)
             edit.setToolTip(tip)
+            edit.setAccessibleName(q.label)
+            label.setBuddy(edit)
             angles_layout.addWidget(label, row, 0)
             if theta is None:
                 angles_layout.addWidget(edit, row, 1)
