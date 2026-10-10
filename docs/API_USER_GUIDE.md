@@ -82,7 +82,7 @@ SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them vi
   Two non-empty commands = a 2D scan (points multiply). One command = 1D. None = single point.
   Scannable variables, by canonical ID [aliases]: h k l [H K L]; q_instrument_x_inv_angstrom q_instrument_y_inv_angstrom
   q_instrument_z_inv_angstrom [qx qy qz]; energy_transfer_mev [deltaE]; mono_two_theta_deg [A2 mtt]; sample_rotation_deg [A3 sth omega psi];
-  sample_two_theta_deg [A4 stt 2theta]; analyzer_two_theta_deg [A6 att]; sample_lower_arc_deg [sgl] and sample_upper_arc_deg [sgu] (angle mode only);
+  sample_two_theta_deg [A4 stt 2theta]; analyzer_two_theta_deg [A6 att]; sample_lower_arc_deg [sgl] and sample_upper_arc_deg [sgu] (direct-motor scans; refused beside any Q, HKL or deltaE command);
   mono_horizontal_radius_m mono_vertical_radius_m analyzer_horizontal_radius_m analyzer_vertical_radius_m [rhm rvm rha rva].
   slit.<stable_id>.horizontal_gap_mm / .vertical_gap_mm [<stable_id>_hgap <stable_id>_vgap], in mm, this instrument's own; refused on engine "deterministic".
   A1 and A5 are derived Bragg angles (refused; scan A2 or A6). chi, phi, kappa are refused.
@@ -357,17 +357,17 @@ parsing (explicit point values per command), budget/cost, per-point geometric
 ETA. The GUI Run button is **never** subject to this — humans are always allowed
 to submit.
 
-- Invalid scan command → `400 scan_validation` with a human-readable message.
-  Pass `"force": true` in the body to override the *soft* scan-command
-  warnings (a very long scan). A hard rejection -- an unknown or refused
-  variable (`A1`, `A5`, `chi`, a slit gap ...), a malformed command, a zero or
-  wrong-sign step, a step longer than the range, a Q variable
-  paired with an HKL one, an angle (`A2`, `A3`, `A4`, `A6`, an arc, or an alias
-  such as `mtt`, `omega`, `stt`, `2theta`) paired with a Q, HKL or `deltaE`
-  variable, or two commands that write one scan slot (the same variable twice,
-  or two spellings of one quantity: `A3` with `omega`, `A4` with `stt`, `A2`
-  with `mtt`) -- is refused regardless, exactly as the GUI Run
-  button refuses it. `A3` beside `A4` is two different slots and is accepted.
+- Invalid scan command → `400 scan_validation` with a human-readable message. There are two
+  kinds. A **command issue** is one command that cannot run as written: an unknown or refused
+  variable (`A1`, `A5`, `chi`, a slit gap the instrument does not have), a malformed command, a
+  zero or wrong-sign step, or a step longer than the range. A **plan refusal** is a pair, or a
+  command, that the calculation cannot honour, and its message names what owns each quantity:
+  `A4 (sample 2θ) is calculated from H in the HKL calculation, so it cannot also be scanned.
+  force does not override a command conflict.`; `The plane lock holds sgl (lower arc): ...`;
+  `The hardware holds rva (analyzer vertical radius) at 0.05 m ..., so it cannot be scanned.`
+  Neither kind is cleared by `"force": true` or by `allow_partial`. `force` clears only the soft
+  warnings: a scan of one point (`start` equal to `stop`) and a scan of more than 1000 points. A
+  scan of 501 to 1000 points is not refused.
 - Any **geometrically infeasible** point → `400 infeasible_points`; the error
   `details` is the full `validation` object (so you can see which points and
   why). To queue anyway and simply **skip** the unreachable points, resubmit
@@ -1187,7 +1187,7 @@ Server-Sent Events stream. See §8.
 | 400 | `bad_request` | Malformed JSON body, non-object body, a PATCH field whose value is not a scalar/object, or an unknown query key on `GET /resolution`. |
 | 400 | `api_version_required` | A `PATCH /parameters`, `POST /scan`, `POST /validate` or `PUT /background` body had no `"api_version": 2` (or another value). Nothing was applied, queued or replaced. `details.required_api_version` is `2`; see §15. |
 | 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) named an unknown, retired, derived-only, read-only, absent or duplicate key (the whole request is refused, `applied` is empty), or had a bad value (that field is skipped). `details` lists `applied` and `errors`, keyed by the names you sent. |
-| 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, zero or wrong-sign step, step larger than range). `"force": true` overrides only the soft warnings; hard rejections stand. |
+| 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, zero or wrong-sign step, step larger than range). `"force": true` clears only the soft warnings (a one-point scan, or one over 1000 points); command issues and plan refusals stand. |
 | 400 | `invalid_background` | A background configuration (`PUT /background`, or the `background` field of `POST /scan` / `POST /validate`) failed to resolve — for example a missing/mismatched `catalog_version`, unknown source id or nested field, non-boolean enable, or invalid scale. On `PUT` the stored configuration is untouched; on `POST /scan` `details.background` is the validation background block. Unknown top-level fields are `bad_request`. |
 | 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
 | 401 | `unauthorized` | A token is configured and the `Authorization: Bearer <token>` header is missing or wrong. |
@@ -1236,7 +1236,7 @@ user presses Enter, so dependent fields update automatically.
 | `sample_rotation_deg` | `A3`, `sth`, `omega`, `psi` | number | degrees | Sample rotation about the vertical axis, the turntable (ILL **A3**, NICOS `sth`); not a Bragg angle. `omega` and `psi` name this one field. |
 | `sample_two_theta_deg` | `A4`, `stt`, `2theta` | number | degrees | Sample scattering angle 2θ (ILL **A4**, NICOS `stt`). Signed by the instrument's sample sense. |
 | `analyzer_two_theta_deg` | `A6`, `att` | number | degrees | Analyzer scattering angle 2θ (ILL **A6**, NICOS `att`). Signed by the instrument's analyzer sense. |
-| `sample_lower_arc_deg` | `sgl` | number | degrees | Lower sample tilt arc readout: turns about the horizontal axis perpendicular to the beam at A3 = 0 (stage x), riding on the turntable. Solved from Q/HKL; set it for angle-mode scans. Writing it reads Q back through both arcs. A value outside the arc's travel (PUMA and IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words an angle-mode point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
+| `sample_lower_arc_deg` | `sgl` | number | degrees | Lower sample tilt arc readout: turns about the horizontal axis perpendicular to the beam at A3 = 0 (stage x), riding on the turntable. Solved from Q/HKL; set it for direct-motor scans. Writing it reads Q back through both arcs. A value outside the arc's travel (PUMA and IN12 ±20°, PANDA ±15°) returns `400 invalid_parameters` naming the arc, the angle and its travel, the words a direct-motor point past travel is refused with. A non-finite value (`inf`, `nan`) returns the same 400 on every instrument (`sgl must be a finite angle, not inf`). |
 | `sample_upper_arc_deg` | `sgu` | number | degrees | Upper sample tilt arc readout: turns about the beam axis at A3 = 0 (stage z), riding on `sgl`. Same rules as `sgl`. |
 | `incident_wavevector_inv_angstrom` | `Ki` | number | Å⁻¹ | Incident wavevector. Linked with `incident_energy_mev`. |
 | `incident_energy_mev` | `Ei` | number | meV | Incident energy. Linked with `incident_wavevector_inv_angstrom`. |
@@ -1350,6 +1350,15 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 - **Single point:** leave both commands empty. The scan runs one point at the
   current parameter values.
 
+- **A scan that selects no geometry holds the motors.** A plain Run, a curvature scan and a
+  slit scan calculate no angles: the angles stay as the parameters set them, not re-solved
+  from H, K and L.
+- **An empty field refuses.** A scan that reads a numeric field (a relative base, or a quantity
+  it uses as typed, such as K in an H scan) refuses when the field holds no number, and names
+  it. It is never read as 0.
+- **Slit scans** (`pre_sample_hgap 10 30 10`) run on all four instruments, in millimetres, on
+  the McStas engine. The analytic engine has no aperture model and refuses them.
+
 **Scannable variable names** (case-insensitive; a canonical ID or any alias
 works, and the name is resolved to the canonical ID on submit):
 
@@ -1358,11 +1367,11 @@ works, and the name is resolved to the canonical ID on submit):
 | `h` `k` `l` | `H` `K` `L` | Miller indices (reciprocal-lattice units) |
 | `q_instrument_x_inv_angstrom` `q_instrument_y_inv_angstrom` `q_instrument_z_inv_angstrom` | `qx` `qy` `qz` | Q components (public instrument frame, z vertical) |
 | `energy_transfer_mev` | `deltaE` | energy transfer (meV) |
-| `mono_two_theta_deg` | `A2` `mtt` | monochromator 2θ (angle mode) |
-| `sample_rotation_deg` | `A3` `sth` `omega` `psi` | the sample rotation, the turntable itself (angle mode; `omega 35 36 1` turns it to 35° and 36°) |
-| `sample_two_theta_deg` | `A4` `stt` `2theta` | sample 2θ (angle mode) |
-| `analyzer_two_theta_deg` | `A6` `att` | analyzer 2θ (angle mode) |
-| `sample_lower_arc_deg` `sample_upper_arc_deg` | `sgl` `sgu` | the goniometer arcs, in angle mode only (with the angles above or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. |
+| `mono_two_theta_deg` | `A2` `mtt` | monochromator 2θ (direct-motor calculation) |
+| `sample_rotation_deg` | `A3` `sth` `omega` `psi` | the sample rotation, the turntable itself (direct-motor calculation; `omega 35 36 1` turns it to 35° and 36°) |
+| `sample_two_theta_deg` | `A4` `stt` `2theta` | sample 2θ (direct-motor calculation) |
+| `analyzer_two_theta_deg` | `A6` `att` | analyzer 2θ (direct-motor calculation) |
+| `sample_lower_arc_deg` `sample_upper_arc_deg` | `sgl` `sgu` | the goniometer arcs, in a direct-motor calculation (with the angles above or alone). Beside a Q, HKL or `deltaE` command they are refused: that calculation solves the arcs at every point. |
 | `mono_horizontal_radius_m` `mono_vertical_radius_m` `analyzer_horizontal_radius_m` `analyzer_vertical_radius_m` | `rhm` `rvm` `rha` `rva` | crystal bending radii |
 | `slit.<stable_id>.horizontal_gap_mm` `slit.<stable_id>.vertical_gap_mm` | `<stable_id>_hgap` `<stable_id>_vgap` | a slit gap in millimetres, the instrument's own only; refused with `engine: "deterministic"` (no aperture model) |
 | *refused* | `A1` `A5` (`mono_theta_deg`, `analyzer_theta_deg`) | derived Bragg angles: the error says `independent crystal rocking is not modelled yet; scan A2 (mono 2θ)` (or A6) |
@@ -1378,8 +1387,8 @@ command uses, replies name the canonical ID: `per_command[].variable`,
 The grammar did not change. The numbering did: **`A2` is the monochromator 2θ,
 `A4` the sample 2θ and `A6` the analyzer 2θ** (before API version 2, `A2` was
 the sample 2θ and `A4` the analyzer 2θ: §15). Two commands on one quantity
-(`A4` with `stt`, `A3` with `omega`, `A2` with `mtt`), and an angle beside a Q,
-HKL or `deltaE` command, are refused; `force` clears neither.
+(`A4` with `stt`, `A3` with `omega`, `A2` with `mtt`), and any other pair the plan
+refuses (§5 *POST /scan*), are refused; `force` clears neither.
 
 Examples:
 ```json
@@ -1391,7 +1400,7 @@ Examples:
 {"scan_command1": "A2 40 44 1", "scan_command2": "A6 40 44 1"}  // mono 2θ × analyzer 2θ map
 {"scan_command1": "", "scan_command2": ""}                 // single point at current settings
 ```
-The angle examples are angle-mode scans: they move the named axes and hold the
+The angle examples are direct-motor scans: they move the named axes and hold the
 rest, so the scattering triangle is whatever those angles make it.
 
 ---
@@ -1919,6 +1928,24 @@ guessed: an old client is **refused**, never reinterpreted.
    folder; the folder itself is never modified.
 8. **`psi`** is no longer a retired name: it is an alias of
    `sample_rotation_deg`, the turntable. The ψ and κ corrections stay gone.
+9. **Command conflicts are hard, and `force` no longer clears them.** Two scan commands that
+   the calculation cannot take as independent inputs (`H` beside `A4`, `qx` beside `H`, `A3`
+   beside `omega`) are refused with `400 scan_validation`, naming what owns each quantity.
+   Before this version `force` cleared some of these pairs; it now clears none.
+10. **Slit scans run.** A slit gap is scannable in millimetres on all four instruments, on the
+    McStas engine (`slit.<stable_id>.horizontal_gap_mm`, alias `<stable_id>_hgap`). The analytic
+    engine refuses it.
+11. **A scan that selects no geometry holds the motors.** A plain Run, a curvature scan and a
+    slit scan keep the angles the parameters set, instead of re-solving them from H, K and L.
+    They agree whenever the HKL fields and the angles were consistent, so the point is the same.
+12. **An empty field the scan reads refuses.** It is no longer read as 0 or as the default.
+13. **Under a plane lock a direct-motor point runs at the lock's tilts.** A typed arc that
+    disagrees with the lock no longer makes the point infeasible.
+14. **McStas parameter names are physical.** The angle parameters are `mono_two_theta_param`,
+    `sample_two_theta_param` and `analyzer_two_theta_param`, with the new `mono_theta_param` and
+    `analyzer_theta_param` for the derived Bragg angles; they show in the `detector.dat` headers.
+15. **PUMA's velocity selector follows the incident energy** of each point in a direct-motor
+    scan, instead of being re-derived from the fixed energy and ΔE.
 
 ### Old to new: the angles
 
