@@ -185,9 +185,8 @@ def test_relative_a3_shows_its_base_and_range_and_the_unread_group(window):
 
     idock.omega_edit.setText("")
     _settle()
-    style, badge, _command, tooltip = _state(window, A3)
-    assert (style, badge) == ("scanned", "1 +Δ")
-    assert "empty" in tooltip and "Run will refuse" in tooltip
+    assert A3 not in _marks(window)   # the verdict refuses the empty base: no mark claims a run
+    assert _warning(window)           # and the label says why
     assert _note(window) is None   # the scan does not compile: nothing else is claimed
 
 
@@ -435,7 +434,7 @@ def test_mockup_case_moves_nothing_and_clips_nothing(window, size, mode, columns
         _settle()
         skip = _overlay_widgets(window)
         before = _geometries(window, docks.values(), skip)
-        ctrl.update_field_marks()
+        ctrl.update_field_marks(ctrl._box_verdict())
         _settle()
         assert _overlay_widgets(window) == skip   # no new widget appeared
         assert _geometries(window, docks.values(), skip) == before, "a mark moved a widget"
@@ -537,17 +536,32 @@ def test_labels_follow_relative_with_an_empty_base(window):
         _settle()
 
 
+def test_a_relative_radius_out_of_travel_is_refused_and_marks_nothing(window):
+    """A relative curvature step whose range leaves the bender's travel: the label refuses
+    the box, so no mark shows; the base moved back inside travel restores the marks."""
+    sim, idock = window.simulation_dock, window.instrument_dock
+    idock.rhm_edit.setText("2.5")   # PUMA's rhm minimum is 2.0 m: 2.5 - 2.4 = 0.1 m is out
+    _type(window, "rhm -2.4 -2.0 0.2", rel1=True)
+    assert not sim.scan_warning_1_label.isHidden() and sim.scan_warning_1_label.text()
+    assert _marks(window) == {}
+    idock.rhm_edit.setText("4.5")   # 4.5 - 2.4 .. 4.5 - 2.0 = 2.1 .. 2.5 m: in travel
+    _settle()
+    assert _warning(window) == ""
+    assert _state(window, RHM)[:3] == ("scanned", "1 +Δ", 1)
+
+
 def test_the_mark_refresh_expands_nothing(window, monkeypatch):
-    """A field edit refreshes the marks from the plan alone: no axis is expanded."""
+    """A field edit refreshes the marks from the verdict alone: the mark path expands no axis."""
     def expanded(*_args, **_kwargs):
         raise AssertionError("the mark refresh expanded a scan")
-    monkeypatch.setattr(cm, "scan_axes", expanded)
-    monkeypatch.setattr(cm, "expand", expanded)
     sim = window.simulation_dock
     with QSignalBlocker(sim.scan_command_1_edit), QSignalBlocker(sim.relative_1_button):
         sim.scan_command_1_edit.setText("A3 -2 3 0.5")
         sim.relative_1_button.setChecked(True)
-    window.controller.update_field_marks()
+    verdict = window.controller._box_verdict()   # the labels' judgement, made before the patch
+    monkeypatch.setattr(cm, "scan_axes", expanded)
+    monkeypatch.setattr(cm, "expand", expanded)
+    window.controller.update_field_marks(verdict)
     assert _state(window, A3)[:2] == ("scanned", "1 +Δ")
     assert "Absolute range" in _state(window, A3)[3]   # the +Δ range needs no expansion
 
@@ -560,11 +574,11 @@ def test_a_degenerate_cell_withdraws_the_marks_without_raising(window):
     try:
         sample.lattice_gamma_edit.setText("120")
         sample.lattice_alpha_edit.setText("1")
-        window.controller.update_field_marks()
+        window.controller.update_field_marks(window.controller._box_verdict())
         window.controller.validate_scan_commands()
         assert _marks(window) == {} and _note(window) is None
         sample.lattice_alpha_edit.setText(alpha)
-        window.controller.update_field_marks()
+        window.controller.update_field_marks(window.controller._box_verdict())
         assert _marks(window)[A3] == ("set", "1")
     finally:
         sample.lattice_gamma_edit.setText(gamma)

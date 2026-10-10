@@ -109,7 +109,7 @@ def test_a_fixed_curvature_axis_is_refused_by_the_plan(in8_controller, monkeypat
     for cmd, expected in (("rha 1.0 2.0 0.1", "analyzer_horizontal_radius_m"),
                           ("rhm 3.0 5.0 0.5", "mono_horizontal_radius_m")):
         launch = launch_for(ctrl, cmd, anacris=d.ana_crystals[0].id)
-        accepted, refused = ctrl._judge_boxes(launch, [(cmd, False), ("", False)])
+        _plan, accepted, refused = ctrl._judge_boxes(launch, [(cmd, False), ("", False)])
         assert accepted[1].quantity == expected and refused == {}
         assert ctrl._scan_command_issues(launch) == ([], [])
 

@@ -4360,25 +4360,43 @@ class TAVIController(QObject):
         self.update_all_variables()
     
     def validate_scan_commands(self):
-        """Show the plan's verdict on the command boxes, as Run would judge them now.
+        """Show the plan's verdict on the command boxes, as Run would judge them now."""
+        self._show_scan_verdict(self._box_verdict() if self._scan_typed() else None)
 
-        The verdict is ``_judge_boxes``'s: a refusal of one box goes in that box's
-        warning label, its point-count or stop note in the same label when it stands;
-        a refusal that names no box, or a conflict of the pair, goes in the conflict
-        label, styling the box it names. A launch that cannot be planned says so there.
+    def _scan_typed(self):
+        """Whether a command box holds text; an empty pair is never judged for its labels."""
+        sim = self.window.simulation_dock
+        return bool(sim.scan_command_1_edit.text().strip() or sim.scan_command_2_edit.text().strip())
+
+    def _box_verdict(self):
+        """The command boxes judged once per refresh, for the labels and the field marks.
+
+        ``(launch_state, plan, accepted, refused)`` as ``_judge_boxes`` gives it, or None
+        when the launch does not collect (a cell the sample mount cannot build, mid-edit).
         """
         sim = self.window.simulation_dock
         commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
                     (sim.scan_command_2_edit.text().strip(), sim.relative_2_button.isChecked())]
-        sim.clear_all_scan_warnings()
-        if not any(text for text, _relative in commands):
-            return
         try:
             launch_state = self._collect_simulation_launch_state()
         except ValueError as exc:   # a cell the sample mount cannot build, mid-edit
-            log.warning("Scan labels: the launch does not collect (%s); no verdict shown", exc)
+            log.warning("Scan labels and field marks: the launch does not collect (%s)", exc)
+            return None
+        return (launch_state, *self._judge_boxes(launch_state, commands))
+
+    def _show_scan_verdict(self, verdict):
+        """Show a ``_box_verdict`` on the command boxes.
+
+        A refusal of one box goes in that box's warning label, its point-count or stop note
+        in the same label when it stands; a refusal that names no box, or a conflict of the
+        pair, goes in the conflict label, styling the box it names. A launch that cannot be
+        planned says so there.
+        """
+        sim = self.window.simulation_dock
+        sim.clear_all_scan_warnings()
+        if verdict is None:
             return
-        accepted, refused = self._judge_boxes(launch_state, commands)
+        _launch_state, _plan, accepted, refused = verdict
         if None in refused:
             sim.set_scan_conflict_warning(str(refused[None]), refused[None].command)
             return
@@ -4530,7 +4548,7 @@ class TAVIController(QObject):
         return issues
 
     def _judge_boxes(self, launch_state, commands):
-        """``({box: Command}, {box or None: PlanRefused})``: the pair's verdict, as Run judges it.
+        """``(plan, {box: Command}, {box or None: PlanRefused})``: the pair's verdict, as Run judges it.
 
         ``commands`` is ``[(text, relative), (text, relative)]``. The pair is compiled
         and scanned as Run does (``build_plan``, then ``scan_axes``: the parse, the
@@ -4540,12 +4558,13 @@ class TAVIController(QObject):
         compiled alone with the other empty, so each box's own refusal shows and a
         half-typed box does not hide the other's. A refusal that names no box (the
         launch itself, or a pair conflict no box explains) is keyed None. The one
-        per-command verdict of the command labels, Run's preflight and the API's.
+        per-command verdict of the command labels, Run's preflight and the API's. The pair's
+        plan comes back with it when the pair passes (None otherwise), for the field marks.
         """
         try:
             plan = self._launch_plan(launch_state, commands)
             scan_axes(plan, launch_state['snapshot'])
-            return {command.number: command for command in plan.commands}, {}
+            return plan, {command.number: command for command in plan.commands}, {}
         except PlanRefused as pair:
             pair_refusal = pair
         accepted, refused = {}, {}
@@ -4561,7 +4580,7 @@ class TAVIController(QObject):
                 refused[number if refusal.command == number else None] = refusal
                 continue
             accepted[number] = plan.commands[0]
-        return accepted, refused or {None: pair_refusal}
+        return None, accepted, refused or {None: pair_refusal}
 
     @staticmethod
     def _scan_command_note(command):
@@ -4871,8 +4890,9 @@ class TAVIController(QObject):
 
     def _refresh_scan_feedback(self):
         """The labels and the marks, judged on the one trigger, so a context change moves both."""
-        self.validate_scan_commands()
-        self.update_field_marks()
+        verdict = self._box_verdict()
+        self._show_scan_verdict(verdict if self._scan_typed() else None)
+        self.update_field_marks(verdict)
 
     def _marked_fields(self):
         """[(canonical ID, field)] for every dock field a mark can sit on."""
@@ -4880,41 +4900,25 @@ class TAVIController(QObject):
         return [(q.id, field) for q in QUANTITIES for dock in docks
                 if (field := dock.field_for(q.id)) is not None]
 
-    def update_field_marks(self):
+    def update_field_marks(self, verdict):
         """Mark each dock field with what pressing Run now would do to it.
 
-        Builds the plan only (``build_plan``; no axis is expanded, so an edit
-        costs no scan) from the command boxes and a launch collected exactly as
-        Run collects it. When the pair does not compile, each command that compiles
-        alone in its box keeps its scanned mark and nothing else is marked. Only
-        marks and the group note change: no field's text, style, focus or selection.
+        Reads ``verdict`` (``_box_verdict``: the labels' own judgement, so marks and labels
+        cannot disagree) and expands no axis. When the pair does not compile, the set-per-point
+        marks and the group notes are withdrawn and each box the verdict accepts alone keeps
+        its scanned mark. Only marks and the group note change: no field's text, style, focus
+        or selection.
         """
-        sim = self.window.simulation_dock
-        commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
-                    (sim.scan_command_2_edit.text().strip(), sim.relative_2_button.isChecked())]
+        launch_state, plan, accepted = (None, None, {}) if verdict is None else verdict[:3]
         fields = self._marked_fields()
-        try:
-            launch_state = self._collect_simulation_launch_state()
-        except ValueError as exc:   # a cell the sample mount cannot build, mid-edit
-            log.warning("Field marks: the launch does not collect (%s); every mark withdrawn", exc)
-            launch_state = None
         marks, unread = {}, set()
-        plan = self._marking_plan(launch_state, commands)
         if plan is not None:
             marks = self._plan_marks(plan, launch_state, fields)
             if plan.commands:   # a plain Run scans nothing, so no group is "not used by this scan"
                 unread = {qid for qid, p in plan.provenance.items() if p.role == NOT_READ}
-        elif launch_state:
-            for number, (text, relative) in enumerate(commands, start=1):
-                if not text:
-                    continue
-                alone = [("", False), ("", False)]
-                alone[number - 1] = (text, relative)
-                try:
-                    command = self._launch_plan(launch_state, alone).commands[0]
-                except PlanRefused:
-                    continue
-                marks[command.quantity] = self._scanned_mark(command, launch_state['snapshot'])
+        else:
+            marks = {c.quantity: self._scanned_mark(c, launch_state['snapshot'])
+                     for c in accepted.values()}
         for qid, field in fields:
             mark_for(field).set_mark(*marks.get(qid, (None,)))
         for group, ids in self.window.scattering_dock.field_groups():
@@ -4952,19 +4956,6 @@ class TAVIController(QObject):
         except (KeyError, TypeError, ValueError):
             return math.nan
 
-    def _marking_plan(self, launch_state, commands):
-        """The plan the marks show, or None where Run would refuse it: ``build_plan``, and
-        a launch holding no number for a typed input or a relative base, checked in closed
-        form (no axis is expanded)."""
-        try:
-            plan = self._launch_plan(launch_state, commands)
-        except PlanRefused:
-            return None
-        snapshot = launch_state['snapshot']
-        held = [self._held_number(snapshot, qid) for qid in plan.inputs - plan.scanned]
-        held += [self._held_number(snapshot, c.quantity) for c in plan.commands if c.relative]
-        return plan if all(map(math.isfinite, held)) else None
-
     @staticmethod
     def _scanned_mark(command, snapshot):
         """``set_mark`` arguments for the field ``command`` scans."""
@@ -4973,15 +4964,11 @@ class TAVIController(QObject):
             return ("scanned", str(number), number,
                     f"Scanned by command {number}: {_with_unit(command.start, unit)} … "
                     f"{_with_unit(command.stop, unit)}, step {format_editable_number(command.step)}")
-        base = TAVIController._held_number(snapshot, command.quantity)
-        if math.isfinite(base):
-            tooltip = (f"Command {number} steps from the value typed here, {_with_unit(base, unit)}\n"
-                       f"Absolute range: {_with_unit(base + command.start, unit)} … "
-                       f"{_with_unit(base + command.stop, unit)}")
-        else:
-            tooltip = (f"This field is empty, so command {number} has no value to step from: "
-                       "Run will refuse.")
-        return ("scanned", f"{number} +Δ", number, tooltip)
+        base = TAVIController._held_number(snapshot, command.quantity)   # the verdict refuses a missing base
+        return ("scanned", f"{number} +Δ", number,
+                f"Command {number} steps from the value typed here, {_with_unit(base, unit)}\n"
+                f"Absolute range: {_with_unit(base + command.start, unit)} … "
+                f"{_with_unit(base + command.stop, unit)}")
 
     def _stale_display_marks(self, plan, launch_state, constant):
         """Ruling 1: a field the plan sets from typed values alone is the same at every
@@ -7530,7 +7517,7 @@ class TAVIController(QObject):
         unless it already names its box; soft a "⚠" note, the operator's call. Reads no
         widgets: the GUI passes its collected launch, the API its frozen one.
         """
-        accepted, refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
+        _plan, accepted, refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
         hard = [str(refused[None])] if None in refused else []
         for number in (1, 2):
             text = str(refused.get(number, ""))
@@ -7548,7 +7535,7 @@ class TAVIController(QObject):
         Advisory only, so ``force`` does not touch them; a soft count note appears
         here and in the soft issues alike.
         """
-        accepted, _refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
+        _plan, accepted, _refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
         return [f"Command {number}: {note}" for number, command in sorted(accepted.items())
                 if (note := self._scan_command_note(command))]
 
