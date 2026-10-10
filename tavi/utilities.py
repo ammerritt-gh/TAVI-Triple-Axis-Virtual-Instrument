@@ -107,24 +107,45 @@ def parse_scan_steps(input_string):
     end_value = float(words[2])
     step_size = float(words[3])
 
-    # Create an array of scan values.
-    # Compute the number of steps in a way that is robust to floating-point
-    # rounding, then generate the sequence using np.linspace instead of
-    # np.arange with a floating step.
-    num_steps = int(np.floor((end_value - start_value) / step_size + 0.5)) + 1
-    last_value = start_value + step_size * (num_steps - 1)
-    array_values = np.linspace(start_value, last_value, num_steps)
+    # Points never pass the end: a step that does not divide the range stops at
+    # the last whole step inside it (scan_stop_note says where).
+    intervals, reaches_end = scan_intervals(start_value, end_value, step_size)
+    last_value = end_value if reaches_end else start_value + step_size * intervals
+    array_values = np.linspace(start_value, last_value, intervals + 1)
     array_values = np.round(array_values, 3)
 
     return variable_name, array_values
 
 
+def scan_intervals(start, end, step):
+    """(intervals, reaches_end): the steps from start toward end, and whether the last lands on end.
+
+    The one expansion rule: parse_scan_steps, the point count and scan_stop_note
+    all call it, so they cannot disagree.
+    """
+    ratio = (end - start) / step
+    k = round(ratio)
+    # A step a client rounded to 6 significant digits (ISAR's %g) is off by up to
+    # 5e-6 relative, so the ratio drifts by k * 5e-6: the tolerance scales with k.
+    if abs(ratio - k) <= 1e-5 * max(1, abs(k)):
+        return k, True
+    return math.floor(ratio), False
+
+
+def scan_stop_note(start, end, step):
+    """The warning for a step that stops short of the end, or None when it divides the range."""
+    intervals, reaches_end = scan_intervals(start, end, step)
+    if reaches_end:
+        return None
+    last = round(start + step * intervals, 3)
+    return f"Step {abs(step):g} does not divide {start:g} to {end:g}; the scan stops at {last:g}."
+
+
 def scan_range_error(start, end, step):
     """Why a scan range cannot run as written, or None; the hard step refusals.
 
-    A step that does not divide the range is not refused: parse_scan_steps runs
-    it to the point nearest the end, up to half a step past it ("A3 0 10 4" is
-    0, 4, 8, 12).
+    A step that does not divide the range is not refused: parse_scan_steps stops
+    at the last whole step inside it ("A3 0 10 4" runs 0, 4, 8).
     """
     # float() accepts "nan"/"inf", and every guard below compares magnitudes --
     # all False against NaN -- so a non-finite bound would reach

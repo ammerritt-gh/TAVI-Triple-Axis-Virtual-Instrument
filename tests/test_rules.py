@@ -21,6 +21,7 @@ from instruments.rules import (
     PlanContext, PlanRefused, build_plan, check_point, context_from_state, evaluate, expand,
 )
 from tavi.quantities import QUANTITIES, public_values
+from tavi.utilities import scan_stop_note
 
 RADII = tuple(rules.RADIUS_CRYSTAL)
 RHM, RVA = "mono_horizontal_radius_m", "analyzer_vertical_radius_m"
@@ -276,9 +277,10 @@ def test_a_lone_command_2_is_the_only_axis_and_keeps_its_number():
     assert [p[STH] for p in expansion.points] == [0.0, 1.0, 2.0]
 
 
-def test_an_overshooting_step_runs_to_the_nearest_point_past_the_end():
+def test_a_step_that_does_not_divide_the_range_stops_short_of_the_end():
     expansion = expand(_plan("A3 0 10 4"), _snapshot())
-    assert expansion.values == {1: (0.0, 4.0, 8.0, 12.0)}
+    assert expansion.values == {1: (0.0, 4.0, 8.0)}
+    assert "stops at 8" in scan_stop_note(0.0, 10.0, 4.0)
 
 
 @pytest.mark.parametrize("cmd", ["A3 0 10 0", "A3 0 10 -1", "A3 10 0 1", "A3 0 10 15",
