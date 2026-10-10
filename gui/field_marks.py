@@ -13,7 +13,7 @@ from gui import theme
 # Outline sits this far outside the field, in px; 1 keeps rows 3 px apart visibly separate.
 _OUTLINE_GAP = 1
 # Badge takes the window colour so it reads as a legend set in the outline's gap.
-_BADGE_STYLE = "font-size: 9px; padding: 0 2px; background: palette(window);"
+_BADGE_STYLE = "font-size: 9px; padding: 1px 2px; background: palette(window);"
 _FIELD_EVENTS = (QEvent.Move, QEvent.Resize, QEvent.Show, QEvent.Hide)
 _NOTE_MARGIN = 8
 _STYLES = (None, "scanned", "set")
@@ -91,6 +91,7 @@ class FieldMark:
         self._badge.setText(badge)
         self._badge.setStyleSheet(f"color: {colour}; font-weight: {weight}; {_BADGE_STYLE}")
         self._badge.setToolTip(tooltip)
+        self._badge.ensurePolished()  # the 9 px stylesheet font must apply before the size is taken
         self._badge.adjustSize()
         self._place()
 
