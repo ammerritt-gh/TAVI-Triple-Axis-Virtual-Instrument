@@ -197,6 +197,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.scan_legend_label = QLabel(
             "dashed = scanned · darker = set at each point, by command 1/2 or by the named "
             "setting · +Δ = steps from your value (hover for base and range) · "
+            "from A2 = the run recomputes it from that field · unmarked = used as typed · "
             "previews the next Run")
         self.scan_legend_label.setWordWrap(True)
         self.scan_legend_label.setStyleSheet(f"color: {theme.NOTE_TEXT}; font-size: 10px;")
