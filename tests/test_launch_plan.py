@@ -181,3 +181,87 @@ def test_an_empty_relative_base_field_refuses_the_run_naming_it(monkeypatch):
             assert dialogs == [] and len(submitted) == 1
         finally:
             _reset(ctrl)
+
+
+# --- Ruling 5: a scan that selects no geometry holds the motors -------------------
+
+MOTOR_FIELDS = {"mono_two_theta_deg": "mtt_edit", "sample_two_theta_deg": "stt_edit",
+                "sample_rotation_deg": "omega_edit", "analyzer_two_theta_deg": "att_edit",
+                "sample_lower_arc_deg": "sgl_edit", "sample_upper_arc_deg": "sgu_edit"}
+MOTOR_META = {"mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
+              "sample_rotation_deg": "sth", "analyzer_two_theta_deg": "att",
+              "sample_lower_arc_deg": "sgl", "sample_upper_arc_deg": "sgu"}
+
+
+def _run_snapshots(ctrl, monkeypatch, tmp_path, command=""):
+    """Press Run with ``command`` in box 1; the launch's plan and its points' snapshots."""
+    sim = ctrl.window.simulation_dock
+    if sim.relative_1_button.isChecked():
+        sim.relative_1_button.click()
+    sim.scan_command_1_edit.setText(command)
+    submitted, dialogs = _press_run(ctrl, monkeypatch)
+    assert dialogs == [] and len(submitted) == 1, dialogs
+    launch = submitted[0]
+    plan = launch["plan"]
+    return plan, [ctrl.instrument.compute_snapshot(plan, point, i, launch["scan_config"],
+                                                   launch["vals"], str(tmp_path))
+                  for i, point in enumerate(launch["expansion"].points)], launch
+
+
+def _hkl_snapshot(ctrl, launch, tmp_path):
+    """The point the pre-plan no-scan Run ran: the HKL fields, re-solved."""
+    from instruments.rules import HKL_CALC, context_from_state, point_plan
+
+    config, vals = launch["scan_config"], launch["vals"]
+    plan = point_plan(context_from_state(config, vals, ctrl.instrument.capabilities()), HKL_CALC)
+    point = {"h": vals["H"], "k": vals["K"], "l": vals["L"],
+             "energy_transfer_mev": vals["deltaE"]}
+    return ctrl.instrument.compute_snapshot(plan, point, 0, config, vals, str(tmp_path))
+
+
+@pytest.mark.parametrize("command", ["", "rhm 2 3 0.5"], ids=["no-scan", "curvature-scan"])
+def test_a_scan_selecting_no_geometry_holds_the_motors_as_typed(command, monkeypatch,
+                                                                tmp_path):
+    """Ruling 5. With HKL and motors agreeing, a plain Run and a curvature scan
+    give the point the old HKL re-solve gave (to the fields' display rounding).
+    With A3 rocked by hand, so that they disagree, they keep A3 and the arcs
+    exactly as typed; the HKL re-solve would have moved A3 back."""
+    with _controller() as ctrl:
+        try:
+            ctrl.set_default_parameters()
+            idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
+            # The motors follow the HKL fields, as the HKL handler sets them.
+            hkl = (2.0, 0.0, 0.2)
+            for edit, value in zip((sdock.H_edit, sdock.K_edit, sdock.L_edit), hkl):
+                edit.setText(repr(value))
+            q = ctrl._hkl_to_sample_q(*hkl, ctrl.get_gui_values())
+            for edit, value in zip((sdock.qx_edit, sdock.qy_edit, sdock.qz_edit), q):
+                edit.setText(repr(float(value)))
+            ctrl.update_angles_from_q()
+            assert abs(float(idock.sgl_edit.text())) + abs(float(idock.sgu_edit.text())) > 1.0
+
+            plan, snaps, launch = _run_snapshots(ctrl, monkeypatch, tmp_path, command)
+            assert plan.calculation == "direct_motors"
+            today = _hkl_snapshot(ctrl, launch, tmp_path)
+            for snap in snaps:
+                assert snap.error_flags == []
+                for qid, key in MOTOR_META.items():
+                    assert snap.metadata[key] == pytest.approx(today.metadata[key], abs=1e-3), key
+                for name in ("mono_two_theta_param", "sample_two_theta_param",
+                             "analyzer_two_theta_param", "sample_rx_param", "sample_ry_param",
+                             "sample_rz_param", "E0_param"):
+                    assert snap.params[name] == pytest.approx(today.params[name], abs=1e-3), name
+
+            # Rock A3 by hand (no handler: HKL stays where it was).
+            typed = {qid: float(getattr(idock, edit).text()) for qid, edit in MOTOR_FIELDS.items()}
+            typed["sample_rotation_deg"] += 1.5
+            idock.omega_edit.setText(repr(typed["sample_rotation_deg"]))
+            plan, snaps, launch = _run_snapshots(ctrl, monkeypatch, tmp_path, command)
+            assert len(snaps) == (1 if not command else 3)
+            for snap in snaps:
+                for qid, key in MOTOR_META.items():
+                    assert snap.metadata[key] == typed[qid], key
+            resolved = _hkl_snapshot(ctrl, launch, tmp_path).metadata["sth"]
+            assert resolved == pytest.approx(typed["sample_rotation_deg"] - 1.5, abs=1e-3)
+        finally:
+            _reset(ctrl)
