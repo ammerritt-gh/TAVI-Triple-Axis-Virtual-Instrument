@@ -2,6 +2,15 @@
  "source_commit": "4547acb69d0117839ba7d2b96e20fc43ab594c3d",
  "generator": "tests/data/make_solver_baseline.py",
  "tolerance": 1e-09,
+ "amendments": [
+  {
+   "case": "PUMA/angle_ana_step",
+   "name": "nu_param",
+   "old": 1074.9799299409626,
+   "new": 1041.8524972941125,
+   "reason": "S3.0: PUMA velocity selector reads the incident energy the point uses (operator yes, 2026-10-09)"
+  }
+ ],
  "cases": {
   "IN12/angle_110": {
    "note": "",
@@ -8913,7 +8922,7 @@
     {
      "name": "nu_param",
      "role": "nu_param",
-     "value": 1074.9799299409626
+     "value": 1041.8524972941125
     },
     {
      "name": "pbl_hgap_param",
