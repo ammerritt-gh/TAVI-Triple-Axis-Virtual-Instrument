@@ -530,15 +530,8 @@ def _snapshot_value(snapshot, qid, refusal, command=None):
     return value
 
 
-def expand(plan, launch_snapshot):
-    """The plan's points as named mappings, from one frozen snapshot (canonical ID -> value).
-
-    Every input not scanned is read from the snapshot as typed, and a relative
-    command's base once from its own quantity there: never from another point,
-    another command's output or a later edit. A missing or non-finite value
-    refuses, never reads as 0. Command 2 is the outer loop; a lone command 2
-    is the only axis and keeps its number.
-    """
+def _runs(plan, launch_snapshot):
+    """The typed inputs and each command's run, from one snapshot: every refusal, no points."""
     typed = {}
     for qid in sorted(plan.inputs - plan.scanned):
         typed[qid] = _snapshot_value(
@@ -558,11 +551,34 @@ def expand(plan, launch_snapshot):
             if error:
                 raise PlanRefused(error, cmd.number, cmd.quantity)
         values[cmd.number] = tuple(run)
+    return typed, values, bases
+
+
+def expand(plan, launch_snapshot):
+    """The plan's points as named mappings, from one frozen snapshot (canonical ID -> value).
+
+    Every input not scanned is read from the snapshot as typed, and a relative
+    command's base once from its own quantity there: never from another point,
+    another command's output or a later edit. A missing or non-finite value
+    refuses, never reads as 0. Command 2 is the outer loop; a lone command 2
+    is the only axis and keeps its number.
+    """
+    typed, values, bases = _runs(plan, launch_snapshot)
     axes = [(c.quantity, values[c.number]) for c in plan.commands]
     points = [dict(typed)]
     for qid, run in axes:   # each later axis is outer to the ones before it
         points = [{**point, qid: value} for value in run for point in points]
     return Expansion(tuple(points), values, bases)
+
+
+def scan_axes(plan, launch_snapshot):
+    """What ``expand`` refuses and each command's run, with no points: the live label's judgement.
+
+    The point count is the product of the runs' lengths, so a preview that shows only the plan
+    never builds the grid (``expand`` materialises every point).
+    """
+    _typed, values, bases = _runs(plan, launch_snapshot)
+    return Expansion((), values, bases)
 
 
 # ---------------------------------------------------------------- evaluation
