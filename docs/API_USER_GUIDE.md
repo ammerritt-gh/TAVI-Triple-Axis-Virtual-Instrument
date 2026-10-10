@@ -57,8 +57,8 @@ KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /schema              -> live self-description: fields, allowed values, limits, grammar, examples
   GET  /state               -> {instrument, mode, busy, current_job, queue:[ids], parameters:{...canonical IDs; 49-51 keys depending on the instrument...}, budget}
   PATCH /parameters  body {"api_version":2,"incident_energy_mev":14.7,"h":2.0}  -> {"applied":["incident_energy_mev","h"],"errors":{}}
-  POST /validate  body {"api_version":2,"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
-  POST /scan  body {"api_version":2,"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation}
+  POST /validate  body {"api_version":2,"parameters":{...},"force":bool,"background":{...},"engine":...,"seed":int,"noiseless":bool} -> validation + {"would_queue":bool,"blockers":[...],"warnings":[...]}  (never queues, never mutates; pass the same engine you will POST /scan with -- a direct-transmission point is infeasible for "deterministic" only)
+  POST /scan  body {"api_version":2,"parameters":{...},"isolated":bool,"allow_partial":bool,"engine":"mcstas"|"deterministic","seed":int,"noiseless":bool,"background":{...}} -> 202 {job_id, state, position, eta, validation, warnings}
               engine "deterministic" = fast analytic S(Q,w) x resolution + seeded Poisson (validator); check result.metadata.cn_valid
               "background" = complete tavi.background/2 source config; REPLACES the session config for this job (never merges)
   GET/PUT /background       -> read/replace the session background config {"spec":...,"resolved":...}; PUT needs write access and "api_version":2
@@ -557,6 +557,9 @@ Returns the `validation` object (§5 *Validation object*) plus two extra fields:
 - `blockers` — a list of human strings for each reason it would be rejected
   (empty when `would_queue` is `true`), e.g. `"infeasible_points: 2 point(s)
   unreachable"` or `"scan_validation: ..."` or `"limit_exceeded: ..."`.
+- `warnings` — non-blocking scan-command messages, each `Command N: `-prefixed (empty
+  when there are none): the stop note for a step that does not divide its range,
+  and the point-count notes over 500 and 1000 points. `force` does not change them.
 ```json
 {"points": 5, "per_command": [{"variable": "h", "count": 5,
   "values": [1.9, 1.95, 2.0, 2.05, 2.1]}],
@@ -895,8 +898,8 @@ response (and returned by `POST /validate`) has:
 names a point that is geometrically unreachable and why (e.g. `"scattering
 triangle does not close"`, `"analyzer angle out of range"`). It also carries a
 `background` block (see `POST /validate`) describing the profile this job will
-plant. `POST /validate` adds `would_queue` (bool) and `blockers` (list of
-strings).
+plant. `POST /validate` adds `would_queue` (bool), `blockers` (list of
+strings) and `warnings` (list of strings, `Command N: `-prefixed; the stop note and the count notes, never a refusal).
 
 **Long-poll — `?wait=N`.** Add `?wait=N` (seconds, float allowed, clamped to 120)
 to block until the job reaches a terminal state (`done`/`failed`/`stopped`/
@@ -1342,8 +1345,10 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 - A **step larger than the range** (e.g. `"H 1.99 2.01 0.1"`), a **zero step**, or a
   step whose **sign does not match** the direction from start to end is a hard
   refusal (`400 scan_validation`); `"force": true` does not pass it. A step that
-  does not divide the range runs to the point nearest the end, which can lie up to
-  half a step past it (`"A3 0 10 4"` runs 0, 4, 8, 12).
+  does not divide the range stops at the last point inside it (`"A3 0 10 4"` runs
+  0, 4, 8). That is not a refusal: `POST /validate` and `POST /scan` return a
+  `warnings` list naming where it stops, and it needs no `force`. A step a client
+  rounded to six significant digits still reaches its end point.
 - **1D scan:** set `scan_command1`, leave `scan_command2` empty (`""`).
 - **2D scan:** set **both** commands. The point count is the product of the two
   (a 3-point × 4-point scan runs 12 points). The 2D result uses `counts_grid`.
