@@ -231,3 +231,31 @@ def test_reuse_still_refused_on_fingerprint_mismatch():
     fn = controller_module.TAVIController._can_reuse_binary
     cache = {"fingerprint": "fp", "execution_state": _FakeExecState()}
     assert fn(cache, "different", False) is False
+
+
+class _BenchmarkStub:
+    """The three controller methods _benchmark_scan_command reads, at H = ``centre``."""
+
+    def __init__(self, centre):
+        self.centre = centre
+
+    def get_gui_values(self):
+        return {"scan_command1": ""}
+
+    def normalize_scan_variable(self, name):
+        return name
+
+    def public_values(self, vals):
+        return {"h": self.centre}
+
+
+@qt_required
+def test_benchmark_scan_expands_to_the_points_it_asks_for():
+    # The two roundings of start and end can fall apart (1.23155 rounds to a 0.0299 span).
+    from tavi.utilities import parse_scan_steps
+
+    fn = controller_module.TAVIController._benchmark_scan_command
+    for centre in (1.23155, 1.23455):
+        for points in (3, 4, 5, 6):
+            _, values = parse_scan_steps(fn(_BenchmarkStub(centre), points))
+            assert len(values) == points, (centre, points, values)
