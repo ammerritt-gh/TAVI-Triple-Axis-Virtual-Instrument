@@ -288,33 +288,46 @@ def test_a_relative_radius_range_is_checked_against_travel_from_its_base():
     assert "mechanical minimum" in str(_refused("rhm 1 2 0.5", ctx=_context({RHM: driven})))
 
 
-# ---------------------------------------------------- today's pair judgements
+# ------------------------------------------------- the pre-plan pair judgements
 
-def _today_conflict():
-    pytest.importorskip("PySide6")
-    pytest.importorskip("mcstasscript")
-    from TAVI_PySide6 import TAVIController
+# The 68 pairs (of 153) the controller's hand pair rules refused before the plan
+# replaced them (_check_scan_parameter_conflict, deleted in S3.2b), recorded from
+# those rules as a table: one row per first command, by its first alias. Every
+# other pair of these 17 scannable quantities they allowed.
+SCANNABLE_ORDER = ("A2", "A3", "A4", "A6", "sgl", "sgu", "H", "K", "L", "qx", "qy", "qz",
+                   "deltaE", "rhm", "rvm", "rha", "rva")
+PRE_PLAN_REFUSED = {
+    "A2": ("A2", "H", "K", "L", "qx", "qy", "qz", "deltaE"),
+    "A3": ("A3", "H", "K", "L", "qx", "qy", "qz", "deltaE"),
+    "A4": ("A4", "H", "K", "L", "qx", "qy", "qz", "deltaE"),
+    "A6": ("A6", "H", "K", "L", "qx", "qy", "qz", "deltaE"),
+    "sgl": ("sgl", "H", "K", "L", "qx", "qy", "qz", "deltaE"),
+    "sgu": ("sgu", "H", "K", "L", "qx", "qy", "qz", "deltaE"),
+    "H": ("H", "qx", "qy", "qz"),
+    "K": ("K", "qx", "qy", "qz"),
+    "L": ("L", "qx", "qy", "qz"),
+    "qx": ("qx",), "qy": ("qy",), "qz": ("qz",), "deltaE": ("deltaE",),
+    "rhm": ("rhm",), "rvm": ("rvm",), "rha": ("rha",), "rva": ("rva",),
+}
 
-    return lambda a, b: TAVIController._check_scan_parameter_conflict(TAVIController, a, b)
 
+def test_every_pair_refused_before_the_plan_is_refused_and_nothing_allowed_newly_is():
+    """Every scannable pair through build_plan, against the pre-plan verdicts.
 
-def test_every_pair_today_refuses_is_refused_and_nothing_it_allows_is_newly_refused():
-    """Every scannable pair, through today's pair rules and through build_plan.
-
-    No deliberate difference: the slot conflicts of today (Q with HKL, an arc
-    or an angle beside a Q-mode variable, one quantity twice) are exactly the
-    pairs whose second command is a calculation's output or a duplicate.
+    No deliberate difference: the old slot conflicts (Q with HKL, an arc or an
+    angle beside a Q-side command, one quantity twice) are exactly the pairs
+    whose second command is a calculation's output or a duplicate.
     """
-    today = _today_conflict()
-    scannable = [q for q in QUANTITIES if q.scannable]
-    for a, b in itertools.combinations_with_replacement(scannable, 2):
-        old = today(a.id, b.id)
+    assert SCANNABLE_ORDER == tuple(q.aliases[0] for q in QUANTITIES if q.scannable)
+    refused = {frozenset((a, b)) for a, row in PRE_PLAN_REFUSED.items() for b in row}
+    assert sum(len(row) for row in PRE_PLAN_REFUSED.values()) == len(refused) == 68
+    for a, b in itertools.combinations_with_replacement(SCANNABLE_ORDER, 2):
         try:
-            _plan(f"{a.aliases[0]} 1 2 1", f"{b.aliases[0]} 1 2 1")
+            _plan(f"{a} 1 2 1", f"{b} 1 2 1")
             new = None
-        except PlanRefused as refused:
-            new = str(refused)
-        assert bool(old) == bool(new), (a.id, b.id, old, new)
+        except PlanRefused as refusal:
+            new = str(refusal)
+        assert (frozenset((a, b)) in refused) == bool(new), (a, b, new)
 
 
 def test_slit_scans_are_the_one_deliberate_difference():

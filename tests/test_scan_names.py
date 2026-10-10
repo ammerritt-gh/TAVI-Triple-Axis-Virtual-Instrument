@@ -167,8 +167,8 @@ def test_an_unknown_name_gets_suggestions_from_the_registry(in8):
     ("sgu 0 1 1", "H 1 1.1 0.1"),
 ])
 def test_conflicting_pairs_are_refused_under_the_new_names(in8, cmd1, cmd2):
-    hard, _soft = in8._scan_command_issues(cmd1, cmd2)
-    assert len(hard) == 1, (cmd1, cmd2, hard)
+    with pytest.raises(cm.PlanRefused):
+        in8._preview_launch(cmd1, cmd2)
     backend = cm.TaviApiBackend(in8, _SyncBridge())
     result = backend.submit_validate(
         {"parameters": {"scan_command1": cmd1, "scan_command2": cmd2}, "force": True})
@@ -182,8 +182,9 @@ def test_conflicting_pairs_are_refused_under_the_new_names(in8, cmd1, cmd2):
     ("H 1 1.1 0.1", "K 0 0.1 0.1"),
 ])
 def test_independent_pairs_stay_compatible(in8, cmd1, cmd2):
-    hard, _soft = in8._scan_command_issues(cmd1, cmd2)
-    assert [h for h in hard if "Conflict" in h or "Both commands" in h] == [], hard
+    assert in8._scan_command_issues(cmd1, cmd2) == ([], [])
+    plan = in8._preview_launch(cmd1, cmd2)[1]
+    assert [c.text for c in plan.commands] == [cmd1, cmd2]
 
 
 @pytest.mark.parametrize("name, field", [

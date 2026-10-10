@@ -27,6 +27,7 @@ from instruments.contract import (
     RunExecutionState,
 )
 from instruments.rules import (
+    ARCS,
     DE,
     Q as Q_IDS,
     Q_CALC,
@@ -950,8 +951,8 @@ class TaviApiBackend:
         what the GUI Run button offers as a choice: the soft issues (a very
         long scan). A hard issue -- the command does not describe a scan that
         can run as written: an unknown or refused variable, a malformed
-        command, Q paired with HKL, two commands on one scan slot -- blocks
-        whatever the caller says. Forcing through one of those ran a scan that
+        command -- blocks whatever the caller says, and so does the plan's
+        refusal of the pair when the launch compiles (``_compile_launch``). Forcing through one of those ran a scan that
         silently overwrote the radius a crystal pins, or labelled points with
         coordinates they were not taken at (ruling 2026-09-10).
         """
@@ -4205,8 +4206,9 @@ class TAVIController(QObject):
         1. Unknown/invalid variable names (typos)
         2. Malformed commands (wrong number of parts, invalid numbers)
         3. Suspicious parameters (e.g., > 1000 scan points)
-        4. Conflicts between linked parameters (e.g., qx + H)
-        5. Pair conflicts (an angle beside a Q, HKL or deltaE scan)
+        4. Whether the pair compiles: the plan Run would build now refuses a
+           command its calculation computes or another setting holds, in the
+           plan's own words (``rules.build_plan``)
         """
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
@@ -4238,11 +4240,12 @@ class TAVIController(QObject):
         if warning2:
             self.window.simulation_dock.set_scan_command_warning(2, warning2)
         
-        # If both commands have variables, check for conflicts
+        # Both commands read alone: the pair is the plan's to judge.
         if var1 and var2:
-            conflict = self._check_scan_parameter_conflict(var1, var2)
-            if conflict:
-                self.window.simulation_dock.set_scan_conflict_warning(conflict)
+            try:
+                self._preview_launch(cmd1, cmd2)
+            except PlanRefused as refused:
+                self.window.simulation_dock.set_scan_conflict_warning(str(refused))
     
     def _fixed_curvature_axes(self, monocris, anacris, modules=None):
         """{axis: crystal display name} for the two named crystals, RIGHT NOW.
@@ -4478,7 +4481,7 @@ class TAVIController(QObject):
             return (None, str(refused))
 
         # A locked plane holds the arcs.
-        if var_id in self._SCAN_ARCS and self._lock_text():
+        if var_id in ARCS and self._lock_text():
             return (None, f"'{var_name}' cannot be scanned: {self._lock_text()} holds "
                           "it. Release the lock first.")
 
@@ -4551,88 +4554,6 @@ class TAVIController(QObject):
     
     # A requested-radius quantity -> the curvature axis (state field) it drives.
     _RADIUS_AXES = {qid: _to_internal(qid) for qid in RADIUS_CRYSTAL}
-
-    # Interim (U3 replaces the conflict rules): scan quantities by canonical ID.
-    _SCAN_ARCS = frozenset({"sample_lower_arc_deg", "sample_upper_arc_deg"})
-    _SCAN_ANGLES = frozenset({"mono_two_theta_deg", "sample_two_theta_deg",
-                              "sample_rotation_deg", "analyzer_two_theta_deg"})
-    _SCAN_Q_VARS = frozenset({"q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom",
-                              "q_instrument_z_inv_angstrom"})
-    _SCAN_HKL_VARS = frozenset({"h", "k", "l"})
-    _SCAN_Q_MODE = _SCAN_Q_VARS | _SCAN_HKL_VARS | {"energy_transfer_mev"}
-
-    @staticmethod
-    def _is_unexecutable_conflict(v1: str, v2: str) -> bool:
-        """True when two scan variables (canonical IDs) cannot both be honoured as written.
-
-        A scan point stores its first four values in one slot group that
-        ``_solve_point_geometry`` reads as (qx, qy, qz, dE) in momentum mode and
-        as (H, K, L, dE) in rlu mode -- the SAME slots. Pairing a Q variable
-        with an HKL one therefore does not scan both: one mode wins, the other
-        command overwrites its slot, and the overwritten values are then read
-        under the winning mode's units. The result is measurements labelled with
-        coordinates they were not taken at, which is worse than a refusal.
-
-        An arc (``sgl``/``sgu``) scanned beside a Q, HKL or energy-transfer
-        variable is the same kind of lie: that makes it a Q-mode scan, which
-        solves the arcs per point, so the arc command would be silently
-        ignored (A6). An angle (A2, A3, A4, A6) beside a Q, HKL or
-        energy-transfer variable writes the same slot as the Q one, so the
-        measurement is labelled as one quantity while it scans another.
-
-        Two commands that write one scan slot cannot both be honoured: the same
-        quantity twice, under any two spellings (A3 with omega, A4 with stt),
-        since the second overwrites the first's values while the axis still
-        reports it.
-        """
-        return (v1 == v2
-                or (v1 in TAVIController._SCAN_Q_VARS and v2 in TAVIController._SCAN_HKL_VARS)
-                or (v1 in TAVIController._SCAN_HKL_VARS and v2 in TAVIController._SCAN_Q_VARS)
-                or TAVIController._is_arc_in_q_mode(v1, v2)
-                or TAVIController._is_angle_beside_q(v1, v2))
-
-    @staticmethod
-    def _is_arc_in_q_mode(v1: str, v2: str) -> bool:
-        """True when one command scans an arc and the other makes it a Q mode."""
-        arcs, q_mode = TAVIController._SCAN_ARCS, TAVIController._SCAN_Q_MODE
-        return (v1 in arcs and v2 in q_mode) or (v2 in arcs and v1 in q_mode)
-
-    @staticmethod
-    def _is_angle_beside_q(v1: str, v2: str) -> bool:
-        """True when one command scans an angle and the other a Q, HKL or deltaE."""
-        angles, q_mode = TAVIController._SCAN_ANGLES, TAVIController._SCAN_Q_MODE
-        return (v1 in angles and v2 in q_mode) or (v2 in angles and v1 in q_mode)
-
-    def _check_scan_parameter_conflict(self, var1: str, var2: str) -> str:
-        """Check if two scan variables conflict with each other.
-
-        Args:
-            var1: First variable's canonical ID
-            var2: Second variable's canonical ID
-
-        Returns:
-            str: Conflict warning message, or empty string if no conflict
-        """
-        v1 = var1.lower()
-        v2 = var2.lower()
-
-        # Same quantity (under any spellings) - definitely a conflict
-        if v1 == v2:
-            return f"⚠ Both commands scan '{v1}' - use different parameters"
-
-        if self._is_arc_in_q_mode(v1, v2):
-            return ("Conflict: a Q/HKL scan solves the arcs sgl/sgu at every point, "
-                    "so they cannot be scanned in it; scan the arcs in angle mode")
-        if self._is_angle_beside_q(v1, v2):
-            return ("Conflict: an angle scan cannot be combined with a Q, HKL or "
-                    "energy-transfer scan: both write the same scan slots, so one "
-                    "would be read as the other")
-
-        if self._is_unexecutable_conflict(v1, v2):
-            return ("Conflict: Q and HKL scans describe the same target momentum "
-                    "under the current sample mount")
-
-        return ""
 
     def _trigger_scan_update(self):
         """Trigger a debounced update of scan estimates."""
@@ -7428,9 +7349,10 @@ class TAVIController(QObject):
         """(hard, soft) issue lists for two scan-command strings.
 
         Hard means the command cannot run as written -- an unknown or
-        refused variable, a malformed command, a conflict between the two.
-        Soft means it can run but probably should not, which is the
-        operator's call.
+        refused variable, a malformed command. Soft means it can run but
+        probably should not, which is the operator's call. Whether the two
+        commands can run together is the plan's judgement, made when the
+        launch compiles (``_compile_launch``), never here.
 
         Parameterized on strings only -- reads no widgets -- so both the GUI
         Run button and the remote API can call it. ``monocris``/``anacris`` name
@@ -7459,7 +7381,6 @@ class TAVIController(QObject):
 
         hard = []
         soft = []
-        variables = []
 
         for label, cmd, relative in (
             ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
@@ -7468,7 +7389,6 @@ class TAVIController(QObject):
                 cmd, fixed_axes, curvature_axes, relative=relative,
                 current_values=current_values,
             )
-            variables.append(var)
             if not warning:
                 continue
             # var is None -> the command cannot run as written, whatever the
@@ -7478,15 +7398,6 @@ class TAVIController(QObject):
                 hard.append(f"{label}: {warning}")
             elif "⚠" in warning:
                 soft.append(f"{label}: {warning}")
-
-        var1, var2 = variables
-
-        # A pair is a conflict only when its two commands cannot both run as
-        # written, so every conflict is hard: no force clears it.
-        if var1 and var2:
-            conflict = self._check_scan_parameter_conflict(var1, var2)
-            if conflict:
-                hard.append(conflict)
 
         return hard, soft
 
