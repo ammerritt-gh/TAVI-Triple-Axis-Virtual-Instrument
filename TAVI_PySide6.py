@@ -140,7 +140,7 @@ from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
 from tavi.quantities import normalize_write_names, resolve as resolve_quantity
-from tavi.quantities import public_values as _public_values
+from tavi.quantities import public_applied_radii, public_values as _public_values
 from tavi.quantities import to_internal as _to_internal, to_public as _to_public
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection,
@@ -2458,6 +2458,15 @@ class TAVIController(QObject):
         """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only."""
         out = self.public_values(params)
         out.pop('sth', None)   # the stage readout of sample_rotation_deg, which 'omega' already records
+        return out
+
+    def point_output_parameters(self, vals, metadata, scan_index, number_neutrons):
+        """One scan point's scan_parameters.txt: requested radii under their IDs, applied under applied_*."""
+        point = {key: value for key, value in metadata.items() if key != 'requested_radii'}
+        full_params = {**vals, **point, **metadata['requested_radii'],
+                       'scan_index': scan_index, 'number_neutrons': number_neutrons}
+        out = self.output_parameters(full_params)
+        out.update(public_applied_radii({axis: metadata[axis] for axis in ('rhm', 'rvm', 'rha', 'rva')}))
         return out
 
     def api_parameters(self):
@@ -10004,14 +10013,8 @@ class TAVIController(QObject):
                     # marked point) -- not the numeric McStas input -- so the
                     # saved record and the API result cannot disagree with
                     # each other about what was determined.
-                    scan_point_params = {
-                        **metadata,
-                        'scan_index': i,
-                        'number_neutrons': number_neutrons,
-                    }
-                    # Merge with full GUI vals for completeness; scan_point_params overrides stale vals
-                    full_params = {**vals, **scan_point_params}
-                    write_parameters_to_file(scan_folder, self.output_parameters(full_params))
+                    write_parameters_to_file(scan_folder, self.point_output_parameters(
+                        vals, metadata, i, number_neutrons))
 
                     if metadata.get('transmission'):
                         self.message_printed.emit(
