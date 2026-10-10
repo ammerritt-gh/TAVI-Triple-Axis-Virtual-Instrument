@@ -535,7 +535,8 @@ def test_a_scan_over_the_point_budget_returns_at_once_and_builds_no_run(window):
     sim = window.simulation_dock
     started = time.perf_counter()
     _type(window, "A3 0 100 0.000001")
-    QTest.qWait(350)   # the point-count debounce
+    while "100000001" not in sim.point_count_label.text() and time.perf_counter() - started < 5:
+        QTest.qWait(10)   # the point-count debounce
     elapsed = time.perf_counter() - started
     assert elapsed < 2.0, f"typing a 1e8-point scan took {elapsed:.1f} s"
     assert "⚠ 100000001 points" in sim.scan_warning_1_label.text()
