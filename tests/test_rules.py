@@ -515,6 +515,27 @@ def test_a_locked_point_within_tolerance_records_the_q_asked_and_the_q_realized(
     assert metadata["realized_q_inv_angstrom"] == pytest.approx(check.realized_q)
 
 
+def test_check_point_solves_a_locked_point_once(puma, monkeypatch):
+    """Feasibility and the lock's realized Q come from one solve of the point's geometry."""
+    from instruments import tas_runtime
+
+    build, snapshot = puma
+    state, vals, ctx = build(lock=True)
+    plan = build_plan([("H 1 1 1", False), ("", False)], ctx)
+    point = expand(plan, snapshot(vals, K=0.5, L=0.1, deltaE=0.0)).points[0]
+    solves = []
+    real = tas_runtime._solve_point_geometry
+
+    def counting(*args, **kwargs):
+        solves.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(tas_runtime, "_solve_point_geometry", counting)
+    monkeypatch.setattr(rules, "_solve_point_geometry", counting)
+    assert check_point(plan, point, state).feasible
+    assert len(solves) == 1, len(solves)
+
+
 def test_the_analytic_engine_refuses_a_transmitting_point_mcstas_runs_it(puma):
     build, snapshot = puma
     for engine, feasible in (("mcstas", True), ("deterministic", False)):

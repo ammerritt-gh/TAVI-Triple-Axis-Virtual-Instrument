@@ -37,10 +37,10 @@ from instruments.tas_runtime import (
     STH,
     STT,
     _solve_point_geometry,
-    check_point_feasibility,
     curvature_run_error,
     curvature_scan_error,
     describe_scan_error_flags,
+    judge_point_geometry,
     plane_lock_q,
 )
 from tavi.neutron_conversions import energy2k
@@ -624,14 +624,14 @@ def check_point(plan, point, state, axis_limits=None):
     """
     calculation = plan.calculation
     vals = {"deltaE": math.nan}   # only fills a transmitting point's record, never judged
-    feasible, reason = check_point_feasibility(state, calculation, point, vals, axis_limits)
+    geom = _solve_point_geometry(copy.deepcopy(state), calculation, point, vals)
+    feasible, reason = judge_point_geometry(state, geom, axis_limits)
     if not feasible:
         return PointCheck(False, reason, "physical_infeasible")
     ctx = plan.context
     locked_q = ctx.plane_lock is not None and calculation != MOTORS
     if ctx.engine != "deterministic" and not locked_q:
         return PointCheck(True)
-    geom = _solve_point_geometry(copy.deepcopy(state), calculation, point, vals)
     if ctx.engine == "deterministic" and geom["transmission"]:
         axes = tuple(geom["transmission"])
         return PointCheck(False, "direct transmission (%s): the analytic engine makes no claim"
