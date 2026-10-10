@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QApplication, QGridLayout, QGroupBox, QHBoxLayout
 from gui import theme  # noqa: E402
 from gui.docks.unified_simulation_dock import UnifiedSimulationDock  # noqa: E402
 from gui.field_marks import mark_for, set_group_note  # noqa: E402
+from test_compact_layout import INSTRUMENTS, _standalone_instrument_dock  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -129,6 +130,29 @@ def test_field_in_tight_cell_keeps_its_outline(app):
     # The row just above the field carries the outline colour, not the group's background.
     above = group.grab().toImage().pixelColor(field_rect.center().x(), field_rect.top() - 1)
     assert above == QColor(theme.DERIVED_OUTLINE)
+
+
+ANGLE_IDS = ("mono_two_theta_deg", "mono_theta_deg", "sample_rotation_deg", "sample_two_theta_deg",
+             "analyzer_two_theta_deg", "analyzer_theta_deg")
+ARC_IDS = ("sample_lower_arc_deg", "sample_upper_arc_deg")
+ENERGY_IDS = ("incident_energy_mev", "final_energy_mev", "incident_wavevector_inv_angstrom",
+              "final_wavevector_inv_angstrom")
+RADIUS_IDS = ("mono_horizontal_radius_m", "mono_vertical_radius_m", "analyzer_horizontal_radius_m",
+              "analyzer_vertical_radius_m")
+
+
+@pytest.mark.parametrize("instrument_id", INSTRUMENTS)
+def test_every_declared_quantity_has_its_own_field(instrument_id):
+    from tavi.quantities import slit_gap_ids
+    dock, descriptor = _standalone_instrument_dock(instrument_id)
+    try:
+        gaps = [gap for slit in descriptor.slits for gap in slit_gap_ids(slit)]
+        ids = [*ANGLE_IDS, *ARC_IDS, *ENERGY_IDS, *RADIUS_IDS, *gaps]
+        fields = [dock.field_for(qid) for qid in ids]
+        assert all(field is not None for field in fields), [q for q, f in zip(ids, fields) if f is None]
+        assert len(set(fields)) == len(ids)
+    finally:
+        dock.deleteLater()
 
 
 def test_command_chip_text_colour_comes_from_the_theme(app):
