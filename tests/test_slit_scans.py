@@ -272,3 +272,16 @@ def test_a_relative_slit_scan_with_an_empty_gap_field_refuses_naming_it(in8, mon
         assert edit.text() == ""
     finally:
         edit.setText(typed)
+
+
+def test_goto_drives_a_slit_gap_field_and_reverts_it(in8):
+    """A slit scan's CEN is a gap: goto sets that field (mm) and revert restores it."""
+    edit = in8.window.instrument_dock.slit_widgets["sbl"]["width"]
+    typed = float(edit.text())
+    ok, message = in8.goto_scan_variable("pre_sample_hgap", typed + 7.0, label="goto CEN")
+    assert ok, message
+    assert float(edit.text()) == typed + 7.0
+    assert in8.can_revert_goto()
+    ok, message = in8.revert_last_goto()
+    assert ok, message
+    assert float(edit.text()) == typed

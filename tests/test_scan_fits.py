@@ -469,6 +469,18 @@ def test_every_scannable_quantity_is_goto_able_under_its_own_name_but_rva():
             assert field_for_scan_variable(q.id) == expected, q.id
 
 
+def test_a_scannable_row_with_no_goto_is_none_and_never_raises(monkeypatch):
+    monkeypatch.setattr("tavi.scan_fits._NOT_GOTO",
+                        frozenset({"analyzer_vertical_radius_m", "slit.pre_sample.vertical_gap_mm"}))
+    for q in QUANTITIES:
+        if q.scannable and q.id in ("analyzer_vertical_radius_m",
+                                    "slit.pre_sample.vertical_gap_mm"):
+            for name in (q.id, *q.aliases):
+                assert field_for_scan_variable(name) is None, name
+                plan = plan_goto(name, 1.0, busy=False)
+                assert not plan.ok and plan.reason == "'%s' is not goto-able" % name
+
+
 def test_a_scannable_quantity_without_a_table_row_does_not_raise(monkeypatch):
     monkeypatch.setattr("tavi.scan_fits._canonical_scan_variable",
                         lambda name: "new_scannable_quantity")
