@@ -1104,8 +1104,7 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
 
 def _axis_text(field_name):
     """An internal angle field's name in messages, under the new numbering: 'A4 (sample 2θ)'."""
-    quantity = by_id(to_public(field_name))
-    return f"{quantity.ill} ({quantity.label.split(' — ')[0].lower()})"
+    return by_id(to_public(field_name)).name
 
 
 def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None):

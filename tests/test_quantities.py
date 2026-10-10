@@ -158,6 +158,14 @@ def test_angle_labels_use_registry_wording():
     assert "sample θ" not in by_id("sample_rotation_deg").label.casefold()
 
 
+def test_every_quantity_has_a_message_name_and_angles_carry_their_ill_number():
+    assert all(q.name for q in QUANTITIES)
+    for q in QUANTITIES:
+        if q.ill:
+            assert q.name.startswith(q.ill + " (")
+    assert by_id("sample_two_theta_deg").name == "A4 (sample 2θ)"
+
+
 def _q(name, *aliases, **flags):
     return Quantity(name, "", "", "", "", aliases=aliases, **flags)
 
