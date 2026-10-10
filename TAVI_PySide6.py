@@ -4878,8 +4878,6 @@ class TAVIController(QObject):
     # The marks preview the next Run: its plan, from the command boxes and the docks
     # collected as Run collects them now, never the plan of a scan already running.
 
-    _NOT_USED_NOTE = "Q and HKL not used by this scan"   # ΔE shares the group and may be set
-
     def _schedule_field_marks(self, *_args):
         """One mark update per burst of edits and setting changes."""
         self._field_marks_timer.start()
@@ -4917,8 +4915,9 @@ class TAVIController(QObject):
                      for c in accepted.values()}
         for qid, field in fields:
             mark_for(field).set_mark(*marks.get(qid, (None,)))
-        for group, ids in self.window.scattering_dock.field_groups():
-            set_group_note(group, self._NOT_USED_NOTE if unread.issuperset(ids) else None)
+        for group, parts in self.window.scattering_dock.field_groups():
+            names = " and ".join(name for name, ids in parts if unread.issuperset(ids))
+            set_group_note(group, f"{names} not used by this scan" if names else None)
 
     def _plan_marks(self, plan, launch_state, fields):
         """{canonical ID: ``set_mark`` arguments} for the fields of a compiled plan."""
