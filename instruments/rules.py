@@ -50,7 +50,7 @@ from tavi.quantities import (
     to_internal,
 )
 from tavi.tas_geometry import component_q_to_instrument_q
-from tavi.utilities import parse_scan_steps, scan_range_error
+from tavi.utilities import parse_scan_steps, scan_point_count, scan_range_error
 
 MTH, ATH = "mono_theta_deg", "analyzer_theta_deg"
 ARCS = (SGL, SGU)
@@ -68,6 +68,8 @@ USED_AS_TYPED, NOT_READ = "used_as_typed", "not_read"
 
 
 CONFLICT_NOTE = "force does not override a command conflict."
+# Operator ruling 2026-10-10: a scan over this is refused before any run is built; no flag clears it.
+MAX_SCAN_POINTS = 100_000
 
 
 class PlanRefused(ValueError):
@@ -340,6 +342,10 @@ def _unknown_variable(name):
             f"{', '.join((q.aliases or (q.id,))[0] for q in scannable)}")
 
 
+def _too_many(count):
+    return f"This scan has {count:,} points; the maximum is {MAX_SCAN_POINTS:,}."
+
+
 def _parse(number, text, relative):
     parts = text.split()
     if len(parts) < 4:
@@ -475,7 +481,8 @@ def build_plan(commands, context):
     resolve as inputs; (3) a command promotes the quantity it drives to scanned
     before any ownership check, so an overridden autofocus rule does not run;
     (4) every remaining output gets exactly one producer and no cycle, and every
-    command must be a distinct independent input of the calculation.
+    command must be a distinct independent input of the calculation. A scan over
+    MAX_SCAN_POINTS is refused before any of that, from the commands' closed-form counts.
     """
     cmds = tuple(_parse(number, text.strip(), relative)
                  for number, (text, relative) in enumerate(commands, start=1)
@@ -484,6 +491,13 @@ def build_plan(commands, context):
         first, second = (c.text.split()[0] for c in cmds)
         raise PlanRefused(f"Both commands scan {_name(cmds[0].quantity)}, as {first!r} and as "
                           f"{second!r}; scan it once.", quantity=cmds[0].quantity, conflict=True)
+    # The maximum, from the closed-form counts: nothing below expands a scan over it.
+    counts = [scan_point_count(c.text) for c in cmds]
+    for cmd, count in zip(cmds, counts):
+        if count > MAX_SCAN_POINTS:
+            raise PlanRefused(_too_many(count), cmd.number, cmd.quantity)
+    if math.prod(counts) > MAX_SCAN_POINTS:
+        raise PlanRefused(_too_many(math.prod(counts)))
     scanned = frozenset(c.quantity for c in cmds)
 
     # (1) The calculation; ruling 5: a scan that selects none never re-solves from HKL.

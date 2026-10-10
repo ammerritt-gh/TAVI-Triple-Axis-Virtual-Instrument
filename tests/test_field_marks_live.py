@@ -529,19 +529,29 @@ def test_a_command_edit_judges_the_boxes_once(window, monkeypatch):
     assert len(calls) == 1
 
 
-def test_a_scan_over_the_point_budget_returns_at_once_and_builds_no_run(window):
-    """A3 0 100 0.000001 is 1e8 points: typing it returns at once, with the existing
-    over-budget note, the point count in closed form and the marks from the plan."""
+def test_a_scan_over_the_maximum_is_refused_at_once_and_marks_nothing(window):
+    """A3 0 100 0.000001 is 1e8 points, over the maximum: box 1 says so at once, no mark
+    is drawn, and Run's preflight lists it as a hard issue."""
     sim = window.simulation_dock
     started = time.perf_counter()
     _type(window, "A3 0 100 0.000001")
-    while "100000001" not in sim.point_count_label.text() and time.perf_counter() - started < 5:
-        QTest.qWait(10)   # the point-count debounce
+    while "maximum is 100,000" not in sim.scan_warning_1_label.text() and time.perf_counter() - started < 5:
+        QTest.qWait(10)
     elapsed = time.perf_counter() - started
     assert elapsed < 2.0, f"typing a 1e8-point scan took {elapsed:.1f} s"
-    assert "⚠ 100000001 points" in sim.scan_warning_1_label.text()
-    assert "100000001 points (validity not checked above 1000)" in sim.point_count_label.text()
+    assert sim.scan_warning_1_label.text().endswith(
+        "This scan has 100,000,001 points; the maximum is 100,000."), sim.scan_warning_1_label.text()
+    assert _marks(window) == {}
+    hard, _gate = _run_verdict(window)
+    assert any(issue.endswith("This scan has 100,000,001 points; the maximum is 100,000.")
+               for issue in hard), hard
+
+
+def test_a_scan_over_1000_points_below_the_maximum_keeps_its_note_and_marks(window):
+    _type(window, "A3 0 100 0.01")   # 10,001 points
+    assert "⚠ 10001 points" in window.simulation_dock.scan_warning_1_label.text()
     assert _state(window, A3)[:2] == ("scanned", "1")
+    assert _run_verdict(window)[0] == []
 
 
 # ------------------------------------------------------ labels follow the marks

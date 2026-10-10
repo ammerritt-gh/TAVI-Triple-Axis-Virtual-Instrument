@@ -126,8 +126,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file, require_output_version,
                                    write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.utilities import (parse_scan_steps, incremented_path_writing,
-                            scan_intervals, scan_point_count, scan_stop_note)
+from tavi.utilities import incremented_path_writing, scan_point_count, scan_stop_note
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
                               record_angles, stage_record, stage_rotation)
@@ -4542,7 +4541,7 @@ class TAVIController(QObject):
         typed inputs and bases go unjudged here, and Run's own compile still refuses them.
         shortcut: a scan over 1000 points skips the run checks, upgrade if the label must refuse them.
         """
-        if math.prod(scan_intervals(c.start, c.stop, c.step)[0] + 1 for c in plan.commands) <= 1000:
+        if math.prod(scan_point_count(c.text) for c in plan.commands) <= 1000:
             scan_axes(plan, launch_state['snapshot'])
 
     def _judge_boxes(self, launch_state, commands):
@@ -4589,7 +4588,7 @@ class TAVIController(QObject):
         """
         start, end, step = command.start, command.stop, command.step
         # Count and stop note both come from the one expansion rule (tavi/utilities.py).
-        num_points = scan_intervals(start, end, step)[0] + 1
+        num_points = scan_point_count(command.text)
         if num_points > 1000:
             message = f"⚠ {num_points} points - this may take a very long time!"
         elif num_points > 500:
@@ -8121,8 +8120,7 @@ class TAVIController(QObject):
         c2 = (scan_command2 or "").strip()
 
         def npts(cmd):
-            _, values = parse_scan_steps(cmd)
-            return len(values)
+            return scan_point_count(cmd)
 
         if not c1 and not c2:
             return 1

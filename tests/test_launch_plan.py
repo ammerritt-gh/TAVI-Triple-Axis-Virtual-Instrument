@@ -101,7 +101,7 @@ def test_the_plan_compiled_at_launch_is_the_one_executed(monkeypatch, tmp_path):
                 # text, absorb it, and a run that compiled would fail the job (asserted below).
                 raise rules.PlanRefused("the run compiled or parsed a scan command again")
 
-            for module, name in ((cm, "build_plan"), (cm, "expand"), (cm, "parse_scan_steps"),
+            for module, name in ((cm, "build_plan"), (cm, "expand"),
                                  (rules, "build_plan"), (rules, "expand"),
                                  (rules, "parse_scan_steps"), (utilities, "parse_scan_steps")):
                 monkeypatch.setattr(module, name, refuse)
@@ -199,9 +199,9 @@ def test_an_empty_relative_base_field_refuses_the_run_naming_it(monkeypatch):
 
 
 def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(monkeypatch):
-    """Two 10 001-point commands: the live label and the count judge the plan from each
-    command's run, so no point is built (expand raises if it is). A missing relative base
-    refuses in the label for a scan within the budget."""
+    """Two 301-point commands (90,601 points, under the maximum): the live label and the count
+    judge the plan from each command's run, so no point is built (expand raises if it is). A
+    missing relative base refuses in the label for a scan within the budget."""
     with _controller() as ctrl:
         try:
             ctrl.set_default_parameters()
@@ -212,8 +212,8 @@ def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(m
 
             monkeypatch.setattr(cm, "expand", refuse)
             monkeypatch.setattr(rules, "expand", refuse)
-            sim.scan_command_1_edit.setText("A3 0 10000 1")
-            sim.scan_command_2_edit.setText("A4 0 10000 1")
+            sim.scan_command_1_edit.setText("A3 0 300 1")
+            sim.scan_command_2_edit.setText("A4 0 300 1")
             ctrl.validate_scan_commands()
             ctrl._update_scan_estimates()
             assert sim.scan_conflict_label.text() == ""
