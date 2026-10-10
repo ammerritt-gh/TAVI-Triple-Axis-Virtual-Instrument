@@ -613,5 +613,24 @@ def test_the_badge_tooltip_shows_over_the_badge_only(window):
 
 # ----------------------------------------------------------------- goto on a radius
 
+def test_goto_refuses_a_radius_the_crystal_fixes(window):
+    """PUMA's PG(002) analyser holds rva at 0.8 m: the goto says so and records no revert."""
+    ctrl = window.controller
+    ok, message = ctrl.goto_scan_variable("rva", 0.5)
+    assert not ok and "refused" in message
+    assert "is fixed at 0.8 m" in message and "0.5 m" in message, message
+    assert float(_fields(window)[RVA].text()) == pytest.approx(0.8)
+    assert not ctrl.can_revert_goto()
 
 
+def test_goto_moves_a_driven_radius():
+    """IN12's Heusler analyser bends its rva, so a goto there lands on the value asked for."""
+    win = _window("in12")
+    try:
+        win.instrument_dock.set_ana_id("heusler111")
+        _settle()
+        ok, message = win.controller.goto_scan_variable("rva", 1.0)
+        assert ok, message
+        assert float(_fields(win)[RVA].text()) == pytest.approx(1.0)
+    finally:
+        _close(win)
