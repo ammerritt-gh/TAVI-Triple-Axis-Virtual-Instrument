@@ -7931,6 +7931,20 @@ class TAVIController(QObject):
             self.print_to_message_center(message)
             return False, message
 
+        # The write is accepted even where the crystal holds the radius (a fixed analyser
+        # snaps it back), so the field is read back: a goto that did not land is a refusal.
+        landed = self.public_values(self.get_gui_values() or {}).get(plan.field)
+        if landed is None:
+            message = f"{label} failed: {plan.variable} could not be read back after the write."
+            self.print_to_message_center(message)
+            return False, message
+        if format_editable_number(landed) != format_editable_number(plan.value):
+            unit = quantity_by_id(plan.field).unit
+            message = (f"{label} refused: {plan.variable} is fixed at {_with_unit(landed, unit)}, "
+                       f"not {_with_unit(plan.value, unit)}.")
+            self.print_to_message_center(message)
+            return False, message
+
         self._last_goto = {
             "field": plan.field,
             "old_value": old_value,
