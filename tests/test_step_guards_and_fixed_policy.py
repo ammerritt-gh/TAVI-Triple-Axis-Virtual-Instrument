@@ -18,7 +18,7 @@ def test_step_guards_run_before_the_curvature_expansion(command, expected):
         # The single-command validator is what textChanged and the preflight
         # both call; before the fix this raised instead of returning.
         var, warning = ctrl._validate_single_scan_command(
-            command, fixed_axes=None,
+            command,
             curvature_axes=ctrl._curvature_axis_specs(mono, ana),
         )
         # No variable: a hard refusal, so neither Run nor the API launches it.

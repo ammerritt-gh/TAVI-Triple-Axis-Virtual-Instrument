@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QTabBar  # noqa: E402
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from instruments.rules import PlanRefused  # noqa: E402
 from tavi.api_server import ApiError  # noqa: E402
 from tavi.local_state import config_path  # noqa: E402
 from tavi.orientation import axis_rotation  # noqa: E402
@@ -1232,8 +1233,9 @@ def test_a_lock_rides_every_scan_path_and_a_refusal_moves_nothing(controller, tm
         assert controller._count_valid_scan_points("K -0.1 0.1 0.1", "") == (3, 0)
 
         for variable in ("sgl", "sgu"):
-            hard, _soft = controller._scan_command_issues(f"{variable} 0 1 1", "")
-            assert len(hard) == 1 and "locked scattering plane (1 0 1)/(0 1 0)" in hard[0], hard
+            # The plan refuses a lock-held arc; Run and the API compile the same plan.
+            with pytest.raises(PlanRefused, match=r"locked scattering plane \(1 0 1\)/\(0 1 0\)"):
+                controller._preview_launch(f"{variable} 0 1 1", "")
 
         readouts = [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)]
         lock = json.dumps(state.plane_lock)

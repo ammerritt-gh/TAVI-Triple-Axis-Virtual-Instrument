@@ -175,7 +175,8 @@ def test_a2_with_a6_takes_both_energies_from_the_crystals():
 def test_two_spellings_of_one_quantity_are_refused(c1, c2, name):
     first, second = c1.split()[0], c2.split()[0]
     assert str(_refused(c1, c2)) == (f"Both commands scan {name}, as {first!r} and as "
-                                     f"{second!r}; scan it once.")
+                                     f"{second!r}; scan it once. "
+                                     "force does not override a command conflict.")
 
 
 def test_an_arc_scan_under_a_plane_lock_is_refused():
@@ -189,14 +190,15 @@ def test_an_arc_scan_under_a_plane_lock_is_refused():
 def test_h_with_a4_is_refused_naming_the_ownership():
     refusal = _refused("H 0.9 1.1 0.1", "A4 40 42 1")
     assert str(refusal) == ("A4 (sample 2θ) is calculated from H in the HKL calculation, "
-                            "so it cannot also be scanned.")
+                            "so it cannot also be scanned. "
+                            "force does not override a command conflict.")
     assert (refusal.command, refusal.quantity) == (2, STT)
 
 
 def test_a_command_on_the_fixed_side_names_the_setting():
     assert str(_refused("H 0.9 1.1 0.1", "A6 40 42 1")) == (
         "A6 (analyzer 2θ) is set by fixed Kf in the HKL calculation, so it cannot also "
-        "be scanned.")
+        "be scanned. force does not override a command conflict.")
 
 
 def test_derived_theta_is_never_an_input():

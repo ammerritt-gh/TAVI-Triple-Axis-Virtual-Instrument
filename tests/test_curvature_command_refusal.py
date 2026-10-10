@@ -296,20 +296,13 @@ def test_puma_nmo_refuses_a_scanned_rhm_naming_the_nmo():
         mono, ana = d.mono_crystals[0].id, d.ana_crystals[0].id
         modules = {"nmo": "Vertical", "v_selector": False}
 
-        hard, _ = ctrl._scan_command_issues(
-            "rhm 2.5 3.0 0.5", "", mono, ana, modules
-        )
-        assert hard, "a scan over an NMO-fixed rhm must hard-block"
-        assert "rhm" in hard[0] and "fixed" in hard[0]
-
         ctrl.window.instrument_dock.set_mono_id(mono)
         ctrl.window.instrument_dock.set_ana_id(ana)
         ctrl.window.instrument_dock.set_module_values(modules)
-        ctrl.window.simulation_dock.scan_command_1_edit.setText("rhm 2.5 3.0 0.5")
-        ctrl.window.simulation_dock.scan_command_2_edit.setText("")
-        hard_gui, _ = ctrl._preflight_scan_validation()
-        assert hard_gui, "the GUI Run gate must refuse the identical scan"
-        assert "rhm" in hard_gui[0]
+        # The plan refuses it; the GUI Run and the API both compile that plan.
+        from instruments.rules import PlanRefused
+        with pytest.raises(PlanRefused, match="The hardware holds rhm"):
+            ctrl._preview_launch("rhm 2.5 3.0 0.5", "")
 
         # Without the NMO, the identical command is a perfectly legal scan --
         # the refusal is the NMO's doing, not an accident of the axis name.

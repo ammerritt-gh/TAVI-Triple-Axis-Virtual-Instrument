@@ -78,19 +78,20 @@ def _pin_rva(ctrl, monkeypatch):
                                                     provenance="test fixture")})
             for c in ctrl.descriptor.ana_crystals))
     monkeypatch.setattr(ctrl, "descriptor", pinned, raising=False)
+    monkeypatch.setattr(ctrl.instrument_state, "descriptor", lambda: pinned)
     return pinned
 
 
-def test_a_fixed_curvature_axis_is_refused_as_a_scan_variable(in8_controller,
-                                                              monkeypatch):
+def test_a_fixed_curvature_axis_is_refused_by_the_plan(in8_controller, monkeypatch):
+    """The per-command gate leaves a fixed axis to the plan, which names the hardware."""
     ctrl = in8_controller
     d = _pin_rva(ctrl, monkeypatch)
-    axes = ctrl._fixed_curvature_axes("pg002", d.ana_crystals[0].id)
-
-    var, warning = ctrl._validate_single_scan_command("rva 0.3 0.6 0.05", axes)
-    assert var is None
-    assert "fixed on" in warning and "cannot be scanned" in warning
-    assert "analyser" in warning          # names the crystal, not the instrument
+    axes = ctrl._curvature_axis_specs("pg002", d.ana_crystals[0].id)
+    result = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate({"parameters": {
+        "scan_command1": "rva 0.3 0.6 0.05", "anacris": d.ana_crystals[0].id}})
+    assert result["would_queue"] is False
+    assert any(b.startswith("scan_validation: The hardware holds rva (analyzer vertical radius)")
+               for b in result["blockers"]), result["blockers"]
 
     # The radii that side really does drive stay scannable.
     for cmd, expected in (("rha 1.0 2.0 0.1", "analyzer_horizontal_radius_m"),
@@ -112,9 +113,10 @@ def test_the_refusal_actually_blocks_the_launch(in8_controller, monkeypatch):
     d = _pin_rva(ctrl, monkeypatch)
     ana = d.ana_crystals[0].id
 
-    msg = ctrl._validate_scan_commands_text("rva 0.3 0.6 0.05", "", "pg002", ana)
-    assert msg, "a refused scan variable must block the launch"
-    assert "cannot be scanned" in msg
+    result = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate(
+        {"parameters": {"scan_command1": "rva 0.3 0.6 0.05", "anacris": ana}})
+    assert any("cannot be scanned" in b for b in result["blockers"]), (
+        "a refused radius must block the launch")
 
     # A scannable axis still launches.
     assert ctrl._validate_scan_commands_text("rha 1.0 2.0 0.1", "", "pg002", ana) == ""
@@ -142,19 +144,15 @@ def test_the_pin_follows_the_crystal_the_caller_names(in8_controller, monkeypatc
     pinned = dataclasses.replace(
         ana, curvature={"rva": CurvatureAxis(driven=False, fixed_radius_m=0.05,
                                               provenance="test fixture")})
-    monkeypatch.setattr(
-        ctrl, "descriptor",
-        dataclasses.replace(ctrl.descriptor, ana_crystals=(pinned, other)),
-        raising=False)
+    both = dataclasses.replace(ctrl.descriptor, ana_crystals=(pinned, other))
+    monkeypatch.setattr(ctrl, "descriptor", both, raising=False)
+    monkeypatch.setattr(ctrl.instrument_state, "descriptor", lambda: both)
 
-    assert ctrl._fixed_curvature_axes("pg002", pinned.id)
-    assert ctrl._fixed_curvature_axes("pg002", "other") == {}
-    assert ctrl._fixed_curvature_axes("pg002", None) == {}
-
-    # ...and that difference reaches the launch gate.
-    cmd = "rva 0.3 0.6 0.05"
-    assert ctrl._validate_scan_commands_text(cmd, "", "pg002", pinned.id)
-    assert ctrl._validate_scan_commands_text(cmd, "", "pg002", "other") == ""
+    # ...and that difference reaches the launch: the plan refuses the pinned
+    # crystal's radius, because the request names that crystal.
+    blockers = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate({"parameters": {
+        "scan_command1": "rva 0.3 0.6 0.05", "anacris": pinned.id}})["blockers"]
+    assert any(b.startswith("scan_validation: The hardware holds rva") for b in blockers)
 
 
 def test_nothing_is_refused_when_no_crystal_pins_anything(in8_controller):
@@ -176,9 +174,9 @@ def test_a_hard_rejection_is_not_offered_as_a_choice(in8_controller, monkeypatch
     d = _pin_rva(ctrl, monkeypatch)
     ana = d.ana_crystals[0].id
 
+    # The pinned radius is the plan's refusal, not a command issue to offer as a choice.
     hard, soft = ctrl._scan_command_issues("rva 0.3 0.6 0.05", "", "pg002", ana)
-    assert hard and "cannot be scanned" in hard[0]
-    assert soft == [], "a refused axis is not the operator's judgement call"
+    assert (hard, soft) == ([], [])
 
     # A very long scan is the operator's call, and stays overridable.
     hard, soft = ctrl._scan_command_issues("rha 1.0 2.0 0.0001", "", "pg002", ana)
@@ -265,7 +263,8 @@ def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller, monkeypatc
     no issue (``_scan_command_issues`` judges commands, the plan pairs)."""
     cmd1, cmd2 = "H 1.99 2.01 0.01", "qx 1.9 2.1 0.1"
     assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], [])
-    why = "Q x is calculated from H in the HKL calculation, so it cannot also be scanned."
+    why = ("Q x is calculated from H in the HKL calculation, so it cannot also be scanned. "
+           "force does not override a command conflict.")
     assert _run_refusal(in8_controller, cmd1, cmd2, monkeypatch).startswith(why)
     assert "scan_validation: " + why in _api_blockers(in8_controller, cmd1, cmd2)
     backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
@@ -352,3 +351,98 @@ def test_api_force_clears_soft_issues_only(in8_controller, monkeypatch):
     assert any(b.startswith("scan_validation") for b in blocked), blocked
     forced = backend.submit_validate({"parameters": soft, "force": True})["blockers"]
     assert not any(b.startswith("scan_validation") for b in forced), forced
+
+
+def test_h_with_a4_is_refused_in_the_gui_and_over_the_api_even_forced(in8_controller,
+                                                                    monkeypatch):
+    """Ownership wording and the force sentence on the conflict label, the Run
+    dialog, /validate and /scan; the box that drives the conflict is styled."""
+    ctrl = in8_controller
+    sim = ctrl.window.simulation_dock
+    cmd1, cmd2 = "H 0.9 1.1 0.1", "A4 40 42 1"
+    why = ("A4 (sample 2θ) is calculated from H in the HKL calculation, so it cannot also be "
+           "scanned. force does not override a command conflict.")
+    sim.scan_command_1_edit.setText(cmd1)
+    sim.scan_command_2_edit.setText(cmd2)
+    try:
+        assert sim.scan_conflict_label.text() == why
+        assert not sim.scan_conflict_label.isHidden()
+        assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
+        assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_NORMAL
+    finally:
+        sim.scan_command_1_edit.setText("")
+        sim.scan_command_2_edit.setText("")
+    assert _run_refusal(ctrl, cmd1, cmd2, monkeypatch).startswith(why)
+
+    backend = cm.TaviApiBackend(ctrl, _SyncBridge())
+    parameters = {"scan_command1": cmd1, "scan_command2": cmd2}
+    assert "scan_validation: " + why in backend.submit_validate(
+        {"parameters": parameters, "force": True})["blockers"]
+    with pytest.raises(cm.ApiError) as refused:
+        backend.submit_scan({"parameters": parameters, "force": True, "allow_partial": True})
+    assert (refused.value.status, refused.value.code,
+            str(refused.value.message)) == (400, "scan_validation", why)
+
+
+def test_an_arc_under_a_plane_lock_shows_the_plans_wording(in8_controller):
+    ctrl = in8_controller
+    sim = ctrl.window.simulation_dock
+    ctrl.instrument_state.plane_lock = {"hkl_u": [1.0, 0.0, 0.0], "hkl_v": [0.0, 1.0, 0.2],
+                                        "tilts": {"sgl": 11.31, "sgu": 0.0}}
+    try:
+        sim.scan_command_1_edit.setText("sgl 0 2 1")
+        assert sim.scan_conflict_label.text().startswith(
+            "The plane lock holds sgl (lower arc): the locked scattering plane (1 0 0)/(0 1 0.2)")
+        assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_WARNING
+        blockers = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate(
+            {"parameters": {"scan_command1": "sgl 0 2 1"}})["blockers"]
+        assert any(b.startswith("scan_validation: The plane lock holds sgl (lower arc)")
+                   for b in blockers), blockers
+    finally:
+        ctrl.instrument_state.plane_lock = None
+        sim.scan_command_1_edit.setText("")
+
+
+def test_a_radius_scan_on_a_fixed_assembly_shows_the_plans_wording(in8_controller,
+                                                                  monkeypatch):
+    ctrl = in8_controller
+    sim = ctrl.window.simulation_dock
+    d = _pin_rva(ctrl, monkeypatch)
+    dock = ctrl.window.instrument_dock
+    previous = dock.selected_ana_id()
+    dock.set_ana_id(d.ana_crystals[0].id)
+    try:
+        sim.scan_command_1_edit.setText("rva 0.3 0.6 0.05")
+        assert sim.scan_conflict_label.text().startswith(
+            "The hardware holds rva (analyzer vertical radius) at 0.05 m")
+        assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_WARNING
+    finally:
+        sim.scan_command_1_edit.setText("")
+        dock.set_ana_id(previous)
+
+
+def test_an_arc_or_radius_beside_h_is_refused_by_the_plan(in8_controller, monkeypatch):
+    """Paired with H, the same two refusals come from the plan, in box 2."""
+    ctrl = in8_controller
+    sim = ctrl.window.simulation_dock
+    d = _pin_rva(ctrl, monkeypatch)
+    dock = ctrl.window.instrument_dock
+    previous = dock.selected_ana_id()
+    dock.set_ana_id(d.ana_crystals[0].id)
+    ctrl.instrument_state.plane_lock = {"hkl_u": [1.0, 0.0, 0.0], "hkl_v": [0.0, 1.0, 0.2],
+                                        "tilts": {"sgl": 11.31, "sgu": 0.0}}
+    try:
+        sim.scan_command_1_edit.setText("H 0.9 1.1 0.1")
+        sim.scan_command_2_edit.setText("sgl 0 2 1")
+        assert sim.scan_conflict_label.text().startswith("The plane lock holds sgl (lower arc)")
+        assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
+        assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_NORMAL
+        sim.scan_command_2_edit.setText("rva 0.3 0.6 0.05")
+        assert sim.scan_conflict_label.text().startswith(
+            "The hardware holds rva (analyzer vertical radius) at 0.05 m")
+        assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
+    finally:
+        ctrl.instrument_state.plane_lock = None
+        sim.scan_command_1_edit.setText("")
+        sim.scan_command_2_edit.setText("")
+        dock.set_ana_id(previous)

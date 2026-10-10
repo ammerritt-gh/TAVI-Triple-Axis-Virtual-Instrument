@@ -283,13 +283,18 @@ class UnifiedSimulationDock(BaseDockWidget):
             label.setText("")
             label.hide()
     
-    def set_scan_conflict_warning(self, message: str):
+    def set_scan_conflict_warning(self, message: str, command=None):
         """Set or clear the conflict warning between commands.
         
         Args:
             message: Conflict message, or empty string to clear
+            command: 1 or 2 for the box the refusal names, styled as a hard
+                per-command issue; None styles neither box
         """
         if message:
+            if command in (1, 2):
+                edit = self.scan_command_1_edit if command == 1 else self.scan_command_2_edit
+                edit.setStyleSheet(self.STYLE_WARNING)
             self.scan_conflict_label.setText(message)
             self.scan_conflict_label.show()
         else:
