@@ -4883,7 +4883,7 @@ class TAVIController(QObject):
     # The marks preview the next Run: its plan, from the command boxes and the docks
     # collected as Run collects them now, never the plan of a scan already running.
 
-    _NOT_USED_NOTE = "not used by this scan"
+    _NOT_USED_NOTE = "Q and HKL not used by this scan"   # ΔE shares the group and may be set
 
     def _schedule_field_marks(self, *_args):
         """One mark update per burst of edits and setting changes."""
