@@ -21,7 +21,7 @@ import os
 import mcstasscript as ms
 
 from instruments.paths import COMPONENTS_DIR
-from instruments.rules import crystal_theta
+from tavi.quantities import crystal_theta
 from instruments.tas_runtime import (
     TAS_Instrument,
     compute_scan_snapshot,  # noqa: F401  (re-export: the IN8 plugin's snapshot path)
