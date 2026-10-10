@@ -153,3 +153,11 @@ def test_simulation_dock_keeps_warnings_and_gains_chips_and_legend(app):
     assert at(dock.scan_legend_label).y() < at(dock.show_commands_button).y()
     dock.deleteLater()
     app.processEvents()
+
+
+def test_the_legend_keys_the_ruling_1_badge_and_the_unmarked_fields(app):
+    dock = UnifiedSimulationDock()
+    text = dock.scan_legend_label.text()
+    dock.deleteLater()
+    assert "from A2 = the run recomputes it from that field" in text
+    assert "unmarked = used as typed" in text
