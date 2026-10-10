@@ -252,7 +252,7 @@ def test_angle_feasibility_rejects_a_positive_monochromator_angle():
     )
 
     assert feasible is False
-    assert reason is not None and "A1" in reason and "outside" in reason
+    assert reason is not None and "A2 (mono 2θ)" in reason and "outside" in reason
 
 
 def test_momentum_feasibility_enforces_solved_axis_limits():
@@ -271,7 +271,7 @@ def test_momentum_feasibility_enforces_solved_axis_limits():
     )
 
     assert feasible is False
-    assert reason is not None and "A2" in reason and "outside" in reason
+    assert reason is not None and "A4 (sample 2θ)" in reason and "outside" in reason
 
 
 def test_crystal_bending_is_rowland_matched_and_branch_signed():
