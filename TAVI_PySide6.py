@@ -4486,6 +4486,8 @@ class TAVIController(QObject):
         # Check step sign consistency with direction
         if (end > start and step < 0) or (end < start and step > 0):
             return (None, "Step sign doesn't match direction (start → end).")
+        if end != start and abs(step) > abs(end - start):
+            return (None, f"Step ({step}) is larger than the range ({start} to {end}).")
         
         # After the step guards: the expansion below divides by the step and
         # calls parse_scan_steps, so a zero or wrong-sign step must have been
