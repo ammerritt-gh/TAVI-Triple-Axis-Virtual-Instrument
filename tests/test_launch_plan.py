@@ -274,6 +274,24 @@ def _hkl_snapshot(ctrl, launch, tmp_path):
     return ctrl.instrument.compute_snapshot(plan, point, 0, config, vals, str(tmp_path))
 
 
+def test_a_held_radius_typed_in_the_dock_is_the_value_the_point_emits(monkeypatch, tmp_path):
+    """A radius no command scans is held at the number in its dock field, and each executed point
+    emits that number: the held inputs come from the one launch collection."""
+    from tavi.quantities import public_values
+
+    with _controller() as ctrl:
+        try:
+            ctrl.set_default_parameters()
+            assert float(ctrl.window.instrument_dock.rhm_edit.text()) != 2.5   # not the default
+            ctrl.window.instrument_dock.rhm_edit.setText("2.5")
+            _plan, snaps, _launch = _run_snapshots(ctrl, monkeypatch, tmp_path, "A3 29 31 1")
+            assert len(snaps) == 3
+            for snap in snaps:
+                assert public_values(snap.metadata)["mono_horizontal_radius_m"] == pytest.approx(2.5)
+        finally:
+            _reset(ctrl)
+
+
 @pytest.mark.parametrize("command", ["", "rhm 2 3 0.5", "pre_sample_hgap 10 30 10"],
                          ids=["no-scan", "curvature-scan", "slit-scan"])
 def test_a_scan_selecting_no_geometry_holds_the_motors_as_typed(command, monkeypatch,
