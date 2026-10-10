@@ -343,9 +343,9 @@ The instrument can scan any of the following parameters:
 - **ΔE**: Energy transfer (meV; `energy_transfer_mev`, alias `deltaE`)
 
 ### Instrument Angles
-- **A2, A3, A4, A6**: Direct angle control (angle mode): mono 2θ, sample rotation, sample 2θ, analyzer 2θ. Their NICOS names `mtt`, `sth`, `stt`, `att` and the aliases `omega`, `psi` (= A3) and `2theta` (= A4) name the same quantities
+- **A2, A3, A4, A6**: Direct angle control (direct-motor calculation): mono 2θ, sample rotation, sample 2θ, analyzer 2θ. Their NICOS names `mtt`, `sth`, `stt`, `att` and the aliases `omega`, `psi` (= A3) and `2theta` (= A4) name the same quantities
 - **A1, A5**: Derived Bragg angles; refused as scan variables (scan A2 or A6)
-- **sgl, sgu**: The goniometer arcs (angle mode only; refused beside Q/HKL/ΔE)
+- **sgl, sgu**: The goniometer arcs (direct-motor scans only; refused beside Q/HKL/ΔE, and under a plane lock, which holds them)
 - **κ, χ, φ**: Retired or not modelled; a scan or an API write naming them is refused
 
 ### Crystal Focusing
