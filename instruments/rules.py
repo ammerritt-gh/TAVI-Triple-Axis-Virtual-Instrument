@@ -430,6 +430,27 @@ def _ordered(rules, producer):
     return order
 
 
+def _selected_calculation(scanned):
+    if scanned & set(HKL):
+        return HKL_CALC
+    return Q_CALC if scanned & {*Q, DE} else MOTORS
+
+
+def selected_calculation(commands):
+    """The calculation ``commands`` (as ``build_plan`` takes them) select, or None.
+
+    None when there is no command or one does not parse: ``build_plan`` refuses it later,
+    so a caller that only wants to know whether the motors are held has nothing to do.
+    """
+    try:
+        cmds = [_parse(number, text.strip(), relative)
+                for number, (text, relative) in enumerate(commands, start=1)
+                if text and text.strip()]
+    except PlanRefused:
+        return None
+    return _selected_calculation({c.quantity for c in cmds}) if cmds else None
+
+
 def build_plan(commands, context):
     """Compile two scan commands into one supported calculation, or refuse.
 
@@ -453,12 +474,7 @@ def build_plan(commands, context):
     scanned = frozenset(c.quantity for c in cmds)
 
     # (1) The calculation; ruling 5: a scan that selects none never re-solves from HKL.
-    if scanned & set(HKL):
-        calc = HKL_CALC
-    elif scanned & {*Q, DE}:
-        calc = Q_CALC
-    else:
-        calc = MOTORS
+    calc = _selected_calculation(scanned)
 
     # (2) Hard constraints, then (3) the commands' range checks against the hardware.
     for cmd in cmds:

@@ -28,6 +28,7 @@ from instruments.contract import (
 )
 from instruments.rules import (
     DE,
+    MOTORS,
     Q as Q_IDS,
     Q_CALC,
     RADIUS_CRYSTAL,
@@ -38,6 +39,7 @@ from instruments.rules import (
     expand,
     point_plan,
     scan_axes,
+    selected_calculation,
 )
 from instruments.tas_runtime import (
     STAGE_FLAG_PREFIX,
@@ -2979,6 +2981,43 @@ class TAVIController(QObject):
             vals['H'], vals['K'], vals['L'] = self._sample_q_to_hkl(
                 vals['qx'], vals['qy'], vals['qz'], vals
             )
+
+        # A scan that selects no geometry holds the motors (rules.build_plan), so a
+        # patched position or energy must reach them here or the result would echo
+        # an H the stage never ran at. Solve the stage as the GUI does for typed Q
+        # (update_angles_from_q: the same solve, the plane lock owning the arcs).
+        # A caller who names any stage motor keeps the whole stage: the others
+        # would be solved for a 2-theta they did not choose.
+        energy_names = ('Ei', 'Ki', 'Ef', 'Kf', 'fixed_E', 'K_fixed')
+        geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE')
+                          + energy_names + lattice_keys)
+        if (patched.intersection(geometry_names)
+                and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
+                and selected_calculation([(vals.get('scan_command1') or "", False),
+                                          (vals.get('scan_command2') or "", False)]) == MOTORS):
+            if patched.intersection(energy_names):   # the energies the block above derived
+                fixed_E = vals['Ei'] if vals['K_fixed'] == "Ki Fixed" else vals['Ef']
+                solve_dE = vals['Ei'] - vals['Ef']
+            else:
+                fixed_E, solve_dE = vals['fixed_E'], vals['deltaE']
+            angles, flags = self.instrument_state.calculate_stage_angles(
+                vals['qx'], vals['qy'], vals['qz'], solve_dE, fixed_E, vals['K_fixed'],
+                vals['monocris'], vals['anacris'], locked=self.instrument_state.plane_lock,
+            )
+            if flags:
+                raise ApiError(
+                    400, "invalid_parameters",
+                    "the patched position cannot be reached by the instrument: %s"
+                    % describe_scan_error_flags(flags),
+                )
+            mtt, stt, sth, sgl, att, sgu = angles
+            vals.update(stt=stt, omega=sth, sgl=sgl, sgu=sgu)
+            if 'mtt' not in patched:
+                vals['mtt'] = mtt
+                patched.add('mtt')
+            if 'att' not in patched:
+                vals['att'] = att
+                patched.add('att')
 
         # Refresh the AUTOFOCUS radii's starting numbers when mtt/att/modules/
         # monocris/anacris were patched, so a submitted request already
