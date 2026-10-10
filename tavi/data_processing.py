@@ -226,6 +226,7 @@ def write_1D_scan(x_values, data_values, data_folder, file_name, x_label: str = 
     with open(file_path, 'w') as f:
         # Header: column names
         f.write(f"# {x_label} {y_label}\n")
+        f.write(f"# api_version: {API_VERSION}\n")
         # Write X-axis values and data points in two columns
         for x, data in zip(x_values, data_values):
             f.write(f"{x} {data}\n")
@@ -253,6 +254,7 @@ def write_2D_scan(x_values, y_values, nan_grid, data_folder, file_name, x_label:
     with open(file_path, 'w') as f:
         # Header: describe scan axes and measurement
         f.write(f"# {x_label} vs {y_label}  (values arranged as rows: {y_label} then counts...)\n")
+        f.write(f"# api_version: {API_VERSION}\n")
         # Write the first spacer for the 0,0 position
         f.write('00 ')
         # Write X-axis values in the first row

@@ -25,7 +25,8 @@ import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi.data_processing import (OutputVersionError, read_parameters_from_file,  # noqa: E402
-                                  require_output_version, write_parameters_to_file)
+                                  require_output_version, write_1D_scan, write_2D_scan,
+                                  write_parameters_to_file)
 from tavi.quantities import API_VERSION  # noqa: E402
 from tavi.scan_jobs import ScanJob  # noqa: E402
 
@@ -91,6 +92,16 @@ def test_scan_parameters_are_canonical_and_start_with_the_version(ctrl, tmp_path
     assert "slit.post_mono.horizontal_gap_mm" in written
     assert written["scan_index"] == 3
     require_output_version(written, str(tmp_path))
+
+
+def test_scan_data_files_carry_the_version_as_a_comment(tmp_path):
+    """The column files a consumer may receive apart from scan_parameters.txt name their version too."""
+    write_1D_scan([1.0, 2.0], [10.0, 20.0], str(tmp_path), "1D_scan_data.txt",
+                  x_label="sample_rotation_deg")
+    write_2D_scan([1.0], [2.0], [[3.0]], str(tmp_path), "2D_scan_data.txt", x_label="h", y_label="k")
+    for name in ("1D_scan_data.txt", "2D_scan_data.txt"):
+        with open(tmp_path / name, encoding="utf-8") as handle:
+            assert f"# api_version: {API_VERSION}\n" in handle.readlines()[:2], name
 
 
 def test_both_scan_parameter_writers_go_through_output_parameters():
