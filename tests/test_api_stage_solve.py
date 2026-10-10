@@ -23,6 +23,7 @@ import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from instruments.tas_runtime import compute_scan_snapshot  # noqa: E402
+from tavi.neutron_conversions import angle2k, k2energy  # noqa: E402
 
 INSTRUMENT_IDS = [info.id for info in available_instruments()]
 STAGE = ("mtt", "stt", "sth", "sgl", "sgu", "att")
@@ -124,6 +125,40 @@ def test_a_position_beside_an_hkl_scan_is_left_to_the_points(ctrl):
     held = ctrl.build_api_launch_state({"scan_command1": "K 0 0.5 0.5"})["vals"]
     vals = ctrl.build_api_launch_state({"H": 1.2, "scan_command1": "K 0 0.5 0.5"})["vals"]
     assert (vals["stt"], vals["omega"]) == (held["stt"], held["omega"])
+
+
+def test_a_patched_mono_two_theta_sets_the_energy_the_stage_solves_at(ctrl):
+    vals = ctrl._default_parameter_values()
+    mono_info, _ = ctrl.instrument.crystal_info(vals["monocris"], vals["anacris"])
+    sense = ctrl.instrument_state.sense_mono   # the readout's sign convention: 40 degrees is 40*sense
+    ei = k2energy(angle2k(40.0 / 2, mono_info["dm"]))
+    # Kf is fixed by default: the point solve reads fixed_E and deltaE, so Ei = ei is deltaE here.
+    reference = _run(ctrl, {"K": 0.0, "L": 0.0, "deltaE": ei - vals["fixed_E"]}, "H 1.2 1.2 1")[0]
+    points = _run(ctrl, {"H": 1.2, "K": 0.0, "L": 0.0, "A2": 40.0 * sense}, "rhm 2 3 1")
+    assert len(points) == 2
+    for metadata in points:
+        _assert_stage(metadata, reference)
+        assert metadata["mtt"] == pytest.approx(40.0 * sense)
+
+
+def test_a_patched_analyser_two_theta_sets_the_energy_transfer_for_the_stage(ctrl):
+    vals = ctrl._default_parameter_values()
+    _, ana_info = ctrl.instrument.crystal_info(vals["monocris"], vals["anacris"])
+    sense = ctrl.instrument_state.sense_ana
+    ef = k2energy(angle2k(40.0 / 2, ana_info["da"]))
+    fixed = {"K": 0.0, "L": 0.0, "K_fixed": "Ki Fixed"}
+    reference = _run(ctrl, {**fixed, "deltaE": vals["fixed_E"] - ef}, "H 1.2 1.2 1")[0]
+    for metadata in _run(ctrl, {**fixed, "H": 1.2, "A6": 40.0 * sense}, "rhm 2 3 1"):
+        _assert_stage(metadata, reference)
+        assert metadata["att"] == pytest.approx(40.0 * sense)
+
+
+def test_a_two_theta_that_names_another_energy_is_refused(ctrl):
+    with pytest.raises(cm.ApiError) as refused:
+        ctrl.build_api_launch_state({"A2": 40.0, "Ei": 10.0, "scan_command1": "rhm 2 3 1"})
+    assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
+    assert "mono_two_theta_deg" in refused.value.message
+    assert "incident_energy_mev" in refused.value.message
 
 
 def test_a_plane_lock_owns_the_solved_arcs(ctrl):

@@ -2938,23 +2938,61 @@ class TAVIController(QObject):
         # Energy -> crystal angle, the API twin of the GUI's Ei/Ki/Ef/Kf
         # handlers: a patched energy side re-derives its own take-off angle
         # on the instrument's signed branch unless the caller named that
-        # angle explicitly (an explicit A1/A4 is authoritative, as in the
-        # GUI). Without this a direct-motor scan patched with Ei=12 kept the
+        # angle explicitly; a named angle sets its energy and an energy named
+        # beside it must agree (crystal-angle block below). Without this a
+        # direct-motor scan patched with Ei=12 kept the
         # reference-state A1 and ran near the reference energy. A
         # non-positive energy is refused here: direct motors take A1/A4 as
         # raw authority and never reaches calculate_angles' own Ei/Ef > 0
         # guard, and a NaN angle passes every limit comparison.
         energy_keys = ('fixed_E', 'K_fixed', 'monocris', 'anacris')
-        if any(k in patched for k in energy_keys + ('Ei', 'Ki', 'Ef', 'Kf')):
+        if any(k in patched for k in energy_keys + ('Ei', 'Ki', 'Ef', 'Kf', 'mtt', 'att')):
+            mono_info, ana_info = self.instrument.crystal_info(
+                vals['monocris'], vals['anacris']
+            )
+            # A patched crystal 2theta sets its own side's energy, the one
+            # calculate_q_and_deltaE reads back. An energy named on that side must
+            # agree with the angle, or the stage and the crystals disagree.
+            ki_fixed = vals['K_fixed'] == "Ki Fixed"
+            sides = (
+                ('mtt', 'Ei', 'Ki', ki_fixed, self.instrument_state.sense_mono, mono_info['dm']),
+                ('att', 'Ef', 'Kf', not ki_fixed, self.instrument_state.sense_ana, ana_info['da']),
+            )
+            for angle, energy, wavevector, fixed_side, sense, d in sides:
+                if angle not in patched:
+                    continue
+                named = patched & ({energy, wavevector} | ({'fixed_E', 'K_fixed'} if fixed_side else set()))
+                from_angle = k2energy(angle2k(vals[angle] / (2 * sense), d))
+                if named and abs(from_angle - vals[energy]) > 1e-3:   # meV
+                    raise ApiError(
+                        400, "invalid_parameters",
+                        "%s and %s disagree: %s selects %.4g meV, not %.4g meV"
+                        % (_to_public(angle), ", ".join(sorted(_to_public(n) for n in named)),
+                           _to_public(angle), from_angle, vals[energy]),
+                    )
+                vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
+                vals[energy] = k2energy(vals[wavevector])
+            if 'mtt' in patched or 'att' in patched:
+                # The side the angles did not set follows K_fixed and deltaE, as the energy block does.
+                if ki_fixed:
+                    if 'att' in patched:
+                        vals['deltaE'] = vals['Ei'] - vals['Ef']
+                    else:
+                        vals['Ef'] = vals['Ei'] - vals['deltaE']
+                    vals['fixed_E'] = vals['Ei']
+                else:
+                    if 'mtt' in patched:
+                        vals['deltaE'] = vals['Ei'] - vals['Ef']
+                    else:
+                        vals['Ei'] = vals['Ef'] + vals['deltaE']
+                    vals['fixed_E'] = vals['Ef']
+                vals['Ki'], vals['Kf'] = energy2k(vals['Ei']), energy2k(vals['Ef'])
             if not (vals['Ei'] > 0 and vals['Ef'] > 0):
                 raise ApiError(
                     400, "invalid_parameters",
                     "energy transfer %s leaves Ei=%s, Ef=%s; both must be positive"
                     % (vals['deltaE'], vals['Ei'], vals['Ef']),
                 )
-            mono_info, ana_info = self.instrument.crystal_info(
-                vals['monocris'], vals['anacris']
-            )
             if 'mtt' not in patched and any(
                     k in patched for k in energy_keys + ('Ei', 'Ki')):
                 vals['mtt'] = (self.instrument_state.sense_mono * 2
@@ -2989,7 +3027,7 @@ class TAVIController(QObject):
         # A caller who names any stage motor keeps the whole stage: the others
         # would be solved for a 2-theta they did not choose.
         energy_names = ('Ei', 'Ki', 'Ef', 'Kf', 'fixed_E', 'K_fixed')
-        geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE')
+        geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE', 'mtt', 'att')
                           + energy_names + lattice_keys)
         if (patched.intersection(geometry_names)
                 and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
