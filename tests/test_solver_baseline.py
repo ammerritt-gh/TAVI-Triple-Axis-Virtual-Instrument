@@ -70,3 +70,11 @@ def test_roles_follow_the_table():
             assert entry["role"] == cases.param_role(entry["name"]), key
         for entry in case["metadata"]:
             assert entry["role"] == cases.meta_role(entry["name"]), key
+
+
+def test_amendments_match_the_recorded_values():
+    for amendment in BASELINE["amendments"]:
+        case = BASELINE["cases"][amendment["case"]]
+        recorded = [entry["value"] for entry in case["params"] + case["metadata"]
+                    if entry["name"] == amendment["name"]]
+        assert recorded == [amendment["new"]], amendment

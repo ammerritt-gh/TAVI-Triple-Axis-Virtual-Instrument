@@ -152,10 +152,14 @@ def _get_v_selector_frequency(PUMA, deltaE):
     """Return the runtime velocity-selector frequency for the current point."""
     selector_alpha_rad = math.radians(48.3)
     selector_length = 0.25
-    if PUMA.K_fixed == "Ki Fixed":
-        selector_energy = PUMA.fixed_E
-    else:
-        selector_energy = PUMA.fixed_E + deltaE
+    # The mono's Ei, as the point records it: fixed_E + deltaE would follow the analyser in angle mode.
+    selector_energy = PUMA.point_energy_metadata(deltaE)["Ei"]
+    if selector_energy is None:
+        # Fallback: the mono transmits, so no crystal selects Ei; K_fixed arithmetic.
+        if PUMA.K_fixed == "Ki Fixed":
+            selector_energy = PUMA.fixed_E
+        else:
+            selector_energy = PUMA.fixed_E + deltaE
 
     selector_energy = max(selector_energy, 1e-9)
     return 3956 * selector_alpha_rad / 2 / math.pi / selector_length / energy2lambda(selector_energy)
