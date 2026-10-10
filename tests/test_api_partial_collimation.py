@@ -192,6 +192,14 @@ def test_malformed_commands_are_hard(in8_controller):
         assert hard, cmd
 
 
+def test_a_step_that_cannot_reach_the_end_is_hard(in8_controller):
+    # A zero or wrong-sign step used to come back with its variable and an
+    # unmarked message, so it was neither hard nor soft and launched anyway.
+    for cmd in ("A3 0 10 0", "A3 0 10 -1", "A3 10 0 1", "H 1 2 0"):
+        hard, _ = in8_controller._scan_command_issues(cmd, "")
+        assert hard, cmd
+
+
 def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
     """The Run path does `hard, soft = self._preflight_scan_validation()`.
 
