@@ -1291,7 +1291,8 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, state, vals, data_fo
         )
     else:
         log_message = (
-            f"Scan parameters - A1: {point_state.A1}, A2: {point_state.A2}, A3: {point_state.A3}, A4: {point_state.A4}\n"
+            f"Scan parameters - {_axis_text('mtt')}: {point_state.A1}, {_axis_text('stt')}: {point_state.A2}, "
+            f"{_axis_text('omega')}: {point_state.A3}, {_axis_text('att')}: {point_state.A4}\n"
             f"rhm: {rhm:.2f}, rvm: {rvm:.2f}, rha: {rha:.2f}, rva: {rva:.2f}\n"
             f"Orientation: {orientation_info}"
         )

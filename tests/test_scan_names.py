@@ -200,3 +200,19 @@ def test_goto_from_a_scan_drives_the_field_of_the_quantity_it_scanned(in8, name,
         assert float(widget.text()) == pytest.approx(target)
     finally:
         in8.set_default_parameters()
+
+
+def test_angle_scan_message_names_each_angle_as_the_dock_labels_it(tmp_path):
+    """The per-point message reads each angle under its dock label's number, not the internal A1..A4."""
+    from instruments.in8.plugin import IN8Plugin
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    snapshot = compute_scan_snapshot(
+        ([40.0, 44.0, 22.0, 80.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0), 0, "angle",
+        IN8Plugin().default_state(), {"deltaE": 0.0, "chi": 0.0}, str(tmp_path),
+        variable_name1="mono_two_theta_deg",
+    )
+    line = snapshot.log_message.splitlines()[0]
+    for part in ("A2 (mono 2θ): 40", "A4 (sample 2θ): 44", "A3 (sample rotation): 22",
+                 "A6 (analyzer 2θ): 80"):
+        assert part in line, line
