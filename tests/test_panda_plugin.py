@@ -220,7 +220,7 @@ def test_angle_feasibility_enforces_raw_axis_limits():
     )
 
     assert feasible is False
-    assert reason is not None and "A1" in reason and "outside" in reason
+    assert reason is not None and "A2 (mono 2θ)" in reason and "outside" in reason
 
 
 def test_momentum_feasibility_enforces_the_five_degree_beam_stop():
@@ -238,7 +238,7 @@ def test_momentum_feasibility_enforces_the_five_degree_beam_stop():
     )
 
     assert feasible is False
-    assert reason is not None and "A2" in reason and "outside" in reason
+    assert reason is not None and "A4 (sample 2θ)" in reason and "outside" in reason
 
 
 def test_crystal_bending_splits_the_monochromator_object_distance():
