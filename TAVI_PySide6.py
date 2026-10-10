@@ -2962,13 +2962,13 @@ class TAVIController(QObject):
                 if angle not in patched:
                     continue
                 named = patched & ({energy, wavevector} | ({'fixed_E', 'K_fixed'} if fixed_side else set()))
-                from_angle = k2energy(angle2k(vals[angle] / (2 * sense), d))
-                if named and abs(from_angle - vals[energy]) > 1e-3:   # meV
+                implied = sense * 2 * k2angle(vals[wavevector], d)
+                if named and abs(implied - vals[angle]) > 0.01:   # the readout's rounding
                     raise ApiError(
                         400, "invalid_parameters",
-                        "%s and %s disagree: %s selects %.4g meV, not %.4g meV"
+                        "%s and %s disagree: %s = %g meV gives %.4f deg, not %g deg"
                         % (_to_public(angle), ", ".join(sorted(_to_public(n) for n in named)),
-                           _to_public(angle), from_angle, vals[energy]),
+                           _to_public(energy), vals[energy], implied, vals[angle]),
                     )
                 vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
                 vals[energy] = k2energy(vals[wavevector])
