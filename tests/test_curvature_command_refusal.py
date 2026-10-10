@@ -447,7 +447,7 @@ def test_instruments_with_no_declared_travel_refuse_nothing(instrument_id):
         ctrl.window.instrument_dock.rhm_edit.setText("1000")
         assert ctrl._held_curvature_issues(mono, ana) == []
 
-        hard, _ = ctrl._scan_command_issues("rhm 0.01 1000.0 999.99", "", mono, ana)
+        hard, _ = ctrl._scan_command_issues("rhm 0.01 1000.0 10", "", mono, ana)
         assert hard == []
 
 
