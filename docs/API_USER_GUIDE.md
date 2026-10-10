@@ -1357,7 +1357,10 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 
 - **A scan that selects no geometry holds the motors.** A plain Run, a curvature scan and a
   slit scan calculate no angles: the angles stay as the parameters set them, not re-solved
-  from H, K and L.
+  from H, K and L. A request that patches H, K, L, Q or an energy beside such a scan has its
+  sample-stage motors (A4, A3, sgl, sgu) and the unnamed crystal 2θ solved from them first,
+  under the plane lock if one is set; a position the stage cannot reach is refused with 400
+  `invalid_parameters`. A request that names any stage motor keeps the stage as given.
 - **An empty field refuses.** A scan that reads a numeric field (a relative base, or a quantity
   it uses as typed, such as K in an H scan) refuses when the field holds no number, and names
   it. It is never read as 0.
@@ -1943,6 +1946,8 @@ guessed: an old client is **refused**, never reinterpreted.
 11. **A scan that selects no geometry holds the motors.** A plain Run, a curvature scan and a
     slit scan keep the angles the parameters set, instead of re-solving them from H, K and L.
     They agree whenever the HKL fields and the angles were consistent, so the point is the same.
+    An API request that patches H, K, L, Q or an energy beside such a scan has its stage motors
+    solved from them first (an explicitly patched stage motor is kept, and then the whole stage).
 12. **An empty field the scan reads refuses.** It is no longer read as 0 or as the default.
 13. **Under a plane lock a direct-motor point runs at the lock's tilts.** A typed arc that
     disagrees with the lock no longer makes the point infeasible.
