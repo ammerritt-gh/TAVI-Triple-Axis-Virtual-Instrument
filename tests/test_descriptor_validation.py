@@ -16,7 +16,7 @@ from instruments.descriptor import AxisLimits, CurvatureAxis, GonioAxis
 from instruments.in8.plugin import IN8Plugin
 from instruments.in12.plugin import IN12Plugin
 from instruments.panda.plugin import PANDAPlugin, panda_descriptor
-from instruments.puma.plugin import puma_descriptor
+from instruments.puma.plugin import PUMAPlugin, puma_descriptor
 from instruments.tas_runtime import ATT, MOTORS, MTT, STT
 from instruments.validation import (
     DescriptorValidationError,
@@ -357,3 +357,17 @@ def test_an_axis_limit_bounds_the_physical_axis_it_names(plugin_cls, key, axis_n
         motors_point(angles[MTT], angles[STT], state.sample_rotation_deg, angles[ATT]))
     assert check.feasible is False
     assert axis_name in check.reason and "outside" in check.reason, check.reason
+
+
+def test_a_declared_axis_limit_binds_a_caller_that_passes_none():
+    """PUMA's plugin passes no axis_limits; the state's descriptor limit still refuses the point."""
+    pytest.importorskip("mcstasscript")
+    plugin = PUMAPlugin()
+    state = plugin.default_state()
+    state.descriptor = lambda: dataclasses.replace(
+        puma_descriptor(), axis_limits={MTT: AxisLimits(-120.0, 0.0, 40.0)})
+    check = plugin.check_point_feasibility(
+        state, plan_for(plugin, state, {}, MOTORS),
+        motors_point(60.0, state.sample_two_theta_deg, state.sample_rotation_deg,
+                     state.analyzer_two_theta_deg))
+    assert check.feasible is False and "outside" in check.reason, check.reason

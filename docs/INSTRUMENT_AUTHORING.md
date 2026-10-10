@@ -79,8 +79,9 @@ plugins, but built-in packages use the central path.
    `sample_two_theta_deg` (sample 2theta), `analyzer_two_theta_deg` (analyzer
    2theta); any other key is refused. The retired TAVI keys `"A1"`, `"A2"` and
    `"A4"` are refused by name: they used TAVI's old numbering, so do not map them
-   by their ILL numbers. The feasibility check reads them against the solved
-   mono, sample and analyzer 2theta.
+   by their ILL numbers. The feasibility check enforces them at every point
+   against the solved mono, sample and analyzer 2theta; a plugin that passes
+   its own `axis_limits=` overrides them.
    `descriptor.samples` is the shared library (`tavi/sample_library.py`), not
    a per-package list — every instrument mounts exactly
    `default_sample_library()`; `package_validation.py`'s runtime check
