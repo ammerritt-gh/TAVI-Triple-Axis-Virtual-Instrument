@@ -140,7 +140,7 @@ from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
 from tavi.quantities import normalize_write_names, resolve as resolve_quantity
-from tavi.quantities import public_applied_radii, public_values as _public_values
+from tavi.quantities import public_applied_radii, public_values as _public_values, schema_unit
 from tavi.quantities import to_internal as _to_internal, to_public as _to_public
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection,
@@ -8428,29 +8428,13 @@ class TAVIController(QObject):
         # drift from what apply_parameters actually accepts.
         field_names = list(self._api_field_map().keys())
 
-        # Static type/units metadata (the only hand-kept part); every live field
-        # gets an entry, unknowns default to number/None.
+        # Static type/units metadata for the settings only; a registry quantity takes its
+        # type and unit from tavi/quantities.py. Unknowns default to number/None.
         meta = {_to_public(name): spec for name, spec in {
             'orientation_mode': ('string', None), 'lock_plane': ('object', 'r.l.u.'),
-            'mtt': ('number', 'degrees'), 'stt': ('number', 'degrees'),
-            'omega': ('number', 'degrees'), 'sgl': ('number', 'degrees'),
-            'sgu': ('number', 'degrees'), 'att': ('number', 'degrees'),
-            'Ki': ('number', 'angstrom^-1'), 'Ei': ('number', 'meV'),
-            'Kf': ('number', 'angstrom^-1'), 'Ef': ('number', 'meV'),
             'K_fixed': ('string', None), 'fixed_E': ('number', 'meV'),
-            'qx': ('number', 'angstrom^-1'), 'qy': ('number', 'angstrom^-1'),
-            'qz': ('number', 'angstrom^-1'),
-            'H': ('number', 'r.l.u.'), 'K': ('number', 'r.l.u.'),
-            'L': ('number', 'r.l.u.'), 'deltaE': ('number', 'meV'),
-            'lattice_a': ('number', 'angstrom'), 'lattice_b': ('number', 'angstrom'),
-            'lattice_c': ('number', 'angstrom'),
-            'lattice_alpha': ('number', 'degrees'),
-            'lattice_beta': ('number', 'degrees'),
-            'lattice_gamma': ('number', 'degrees'),
             'sample': ('string', None),
             'monocris': ('string', None), 'anacris': ('string', None),
-            'rhm': ('number', None), 'rvm': ('number', None), 'rha': ('number', None),
-            'rva': ('number', None),
             'source_type': ('string', None), 'source_dE': ('number', 'meV'),
             'modules': ('object', None), 'collimation': ('object', None),
             'number_neutrons': ('integer', 'count'),
@@ -8473,6 +8457,7 @@ class TAVIController(QObject):
         fields = []
         for name in field_names:
             ftype, units = meta.get(name, ('number', 'mm' if name.startswith("slit.") else None))
+            units = schema_unit(name) or units
             entry = {"name": name, "type": ftype}
             if units is not None:
                 entry["units"] = units

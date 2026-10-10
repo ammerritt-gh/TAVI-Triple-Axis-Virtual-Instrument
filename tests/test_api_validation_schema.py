@@ -19,6 +19,8 @@ import time
 import urllib.error
 import urllib.request
 
+import pytest
+
 from tavi.api_server import ApiError, TaviApiServer, API_PREFIX
 from api_helpers import with_version
 from tavi.sample_library import default_sample_library
@@ -575,3 +577,19 @@ def test_scan_unknown_sample_400():
         assert backend.registry.recent() == []
     finally:
         srv.stop()
+
+
+def test_schema_units_of_registry_quantities_come_from_the_registry():
+    """Every schema field that names a registry quantity publishes that quantity's unit."""
+    pytest.importorskip("mcstasscript")
+    pytest.importorskip("PySide6")
+    from test_rva_gui_axis_policy import _controller
+    from tavi.quantities import QUANTITIES
+
+    spelling = {"°": "degrees", "Å⁻¹": "angstrom^-1", "Å": "angstrom"}
+    with _controller("in8") as ctrl:
+        fields = {f["name"]: f for f in ctrl.build_api_schema()["fields"]}
+    checked = [q for q in QUANTITIES if q.id in fields]
+    assert len(checked) >= 25, len(checked)
+    for q in checked:
+        assert fields[q.id].get("units") == spelling.get(q.unit, q.unit), q.id
