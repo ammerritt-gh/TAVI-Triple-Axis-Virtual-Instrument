@@ -21,7 +21,7 @@ from typing import Callable, Mapping
 
 import numpy as np
 
-from instruments.contract import CurvatureMode
+from instruments.contract import Capabilities, CurvatureMode
 from instruments.descriptor import CurvatureAxis
 from instruments.tas_runtime import (
     _solve_point_geometry,
@@ -31,7 +31,7 @@ from instruments.tas_runtime import (
 )
 from tavi.neutron_conversions import energy2k
 from tavi.orientation import locked_plane_text
-from tavi.quantities import QuantityRefused, by_id, resolve, to_internal
+from tavi.quantities import QuantityRefused, by_id, resolve, slit_gap_ids, to_internal
 from tavi.tas_geometry import component_q_to_instrument_q
 from tavi.utilities import parse_scan_steps, scan_range_error
 
@@ -611,19 +611,40 @@ def check_point(plan, point, state, axis_limits=None):
 
 # ------------------------------------------------------------------- context
 
-def context_from_state(state, vals, engine="mcstas"):
-    """Today's frozen context from a scan-config state (``plugin.scan_config``) and its vals.
+_STAGE = {"A3": STH, "sgl": SGL, "sgu": SGU}
 
-    Interim: ``slit_bindings`` stays empty; S3.2's plugin declarations name them.
+
+def tas_capabilities(descriptor):
+    """A TAS instrument's capabilities, derived from its descriptor.
+
+    Inputs: HKL, Q, the transfer, the three 2θ, the goniometer's axes, the four
+    requested radii and every slit gap the descriptor has. Observables: the
+    crystal θ, both energies and wavevectors, the applied radii. Bindings: the
+    ``ParameterSpec`` entries that name a quantity.
     """
-    descriptor = state.descriptor()
+    slits = {qid for slit in descriptor.slits for qid in slit_gap_ids(slit)}
+    stage = {_STAGE[ax.name] for ax in descriptor.goniometer if ax.name in _STAGE}
+    return Capabilities(
+        inputs=frozenset({*HKL, *Q, DE, MTT, STT, ATT, *RADIUS_CRYSTAL, *slits, *stage}),
+        observables=frozenset({MTH, ATH, EI, EF, KI, KF,
+                               *(f"applied_{qid}" for qid in RADIUS_CRYSTAL)}),
+        bindings={p.quantity: p for p in descriptor.scannable_parameters if p.quantity})
+
+
+def context_from_state(state, vals, capabilities, engine="mcstas"):
+    """The frozen context from a scan-config state (``plugin.scan_config``), its vals and
+    the plugin's ``capabilities()``.
+
+    A requested radius whose crystal is not selected is no input, and its applied
+    radius no observable.
+    """
     specs = dict(zip(("mono", "analyzer"), state._named_crystal_specs()))
     modes = vals.get("curvature_modes") or {}
     curvature = {}
     for qid, crystal in RADIUS_CRYSTAL.items():
         side = "mono" if crystal == MTT else "analyzer"
         spec = specs[side]
-        if spec is None:
+        if spec is None or qid not in capabilities.inputs:
             continue
         axis = to_internal(qid)
         hardware = state.effective_curvature_axis(axis, spec, modules=vals.get("modules"))
@@ -633,16 +654,11 @@ def context_from_state(state, vals, engine="mcstas"):
             holder = hardware.provenance.rstrip(".") or "fixed by an installed module"
         curvature[qid] = AxisPolicy(CurvatureMode(modes.get(axis, CurvatureMode.HELD)),
                                     hardware, holder)
-    stage = {"A3": STH, "sgl": SGL, "sgu": SGU}
-    slits = set()
-    for slit in descriptor.slits:
-        slits.add(f"slit.{slit.stable_id}.horizontal_gap_mm")
-        if slit.has_height:
-            slits.add(f"slit.{slit.stable_id}.vertical_gap_mm")
-    inputs = frozenset({*HKL, *Q, DE, MTT, STT, ATT, *curvature, *slits,
-                        *(stage[ax.name] for ax in descriptor.goniometer if ax.name in stage)})
-    observables = frozenset({MTH, ATH, EI, EF, KI, KF, *(f"applied_{qid}" for qid in curvature)})
+    unselected = RADIUS_CRYSTAL.keys() - curvature.keys()
     return PlanContext(
         engine=engine, fixed_side="Kf" if state.K_fixed == "Kf Fixed" else "Ki",
         fixed_energy_mev=float(state.fixed_E), monocris=state.monocris, anacris=state.anacris,
-        plane_lock=state.plane_lock, curvature=curvature, inputs=inputs, observables=observables)
+        plane_lock=state.plane_lock, curvature=curvature,
+        inputs=capabilities.inputs - unselected,
+        observables=capabilities.observables - {f"applied_{qid}" for qid in unselected},
+        slit_bindings=capabilities.slit_bindings)

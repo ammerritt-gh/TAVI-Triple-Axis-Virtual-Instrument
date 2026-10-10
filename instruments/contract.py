@@ -19,11 +19,12 @@ Targets Python 3.11 syntax.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from instruments.descriptor import InstrumentDescriptor
+from instruments.descriptor import InstrumentDescriptor, ParameterSpec
 
 if TYPE_CHECKING:  # avoid importing heavy modules just for type hints
     import mcstasscript as ms
@@ -109,6 +110,27 @@ class PointSnapshot:
     timing: dict = field(default_factory=dict)  # controller-stamped stage timings
 
 
+@dataclass(frozen=True)
+class Capabilities:
+    """What a plugin's calculation takes and offers, by canonical ID (``tavi.quantities``).
+
+    ``inputs`` are the quantities it takes as independent inputs (a plan
+    chooses among them; a scan command may drive one), ``observables`` the
+    ones it derives and reports. ``bindings`` maps a canonical ID to the
+    descriptor ``ParameterSpec`` that carries its per-point value into
+    McStas (``McStas value = spec.scale * value``); the parameter names stay
+    plugin-owned. A slit gap is scannable only where it has a binding.
+    """
+
+    inputs: frozenset
+    observables: frozenset
+    bindings: Mapping[str, ParameterSpec]
+
+    @property
+    def slit_bindings(self) -> frozenset:
+        return frozenset(qid for qid in self.bindings if qid.startswith("slit."))
+
+
 @dataclass(frozen=True, slots=True)
 class PrepFailure:
     """Sentinel the prep thread queues when ``compute_snapshot`` raises.
@@ -138,6 +160,15 @@ class InstrumentPlugin(Protocol):
 
     def descriptor(self) -> InstrumentDescriptor:
         """Return the static GUI-facing description (libraries, modules, params)."""
+        ...
+
+    def capabilities(self) -> Capabilities:
+        """Return what this instrument's calculation takes, offers and binds.
+
+        The four TAS instruments derive it from their descriptor
+        (``instruments.rules.tas_capabilities``): goniometer axes, curvature
+        axes, slits, and the ``ParameterSpec.quantity`` bindings.
+        """
         ...
 
     def default_state(self) -> InstrumentState:

@@ -50,6 +50,7 @@ from instruments.descriptor import (
     SourceType,
     tas_goniometer,
 )
+from tavi.quantities import slit_gap_id
 from tavi.sample_library import default_sample_library
 
 PANDA_ID = "panda"
@@ -111,23 +112,38 @@ _PANDA_ANA_CURVATURE = {
 # add_parameter() -- the per-point snapshot dict shape. The 13 shared core TAS
 # parameters plus PANDA's bending and its three motorized apertures.
 _PANDA_PARAMS = (
-    ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle"),
-    ParameterSpec("sample_two_theta_param", "Sample 2-theta angle"),
-    ParameterSpec("sample_rotation_param", "Sample rotation (turntable) readout, inspection only"),
-    ParameterSpec("analyzer_two_theta_param", "Analyzer 2-theta angle"),
+    ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle",
+                  quantity="mono_two_theta_deg"),
+    ParameterSpec("sample_two_theta_param", "Sample 2-theta angle",
+                  quantity="sample_two_theta_deg"),
+    ParameterSpec("sample_rotation_param", "Sample rotation (turntable) readout, inspection only",
+                  quantity="sample_rotation_deg"),
+    ParameterSpec("analyzer_two_theta_param", "Analyzer 2-theta angle",
+                  quantity="analyzer_two_theta_deg"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
-    ParameterSpec("rhm_param", "Monochromator horizontal bending"),
-    ParameterSpec("rvm_param", "Monochromator vertical bending"),
-    ParameterSpec("rha_param", "Analyzer horizontal bending"),
-    ParameterSpec("rva_param", "Analyzer vertical bending"),
-    ParameterSpec("ms1_wgap_param", "Horizontal virtual source width", unit="m"),
-    ParameterSpec("ss1_wgap_param", "Pre-sample slit horizontal gap", unit="m"),
-    ParameterSpec("ss1_hgap_param", "Pre-sample slit vertical gap", unit="m"),
-    ParameterSpec("ss2_wgap_param", "Sample exit slit horizontal gap", unit="m"),
-    ParameterSpec("ss2_hgap_param", "Sample exit slit vertical gap", unit="m"),
+    ParameterSpec("rhm_param", "Monochromator horizontal bending",
+                  quantity="applied_mono_horizontal_radius_m"),
+    ParameterSpec("rvm_param", "Monochromator vertical bending",
+                  quantity="applied_mono_vertical_radius_m"),
+    ParameterSpec("rha_param", "Analyzer horizontal bending",
+                  quantity="applied_analyzer_horizontal_radius_m"),
+    ParameterSpec("rva_param", "Analyzer vertical bending",
+                  quantity="applied_analyzer_vertical_radius_m"),
+    ParameterSpec("ms1_wgap_param", "Horizontal virtual source width", unit="m",
+                  quantity=slit_gap_id("virtual_source", "horizontal"), scale=1e-3),
+    ParameterSpec("ss1_wgap_param", "Pre-sample slit horizontal gap", unit="m",
+                  quantity=slit_gap_id("pre_sample", "horizontal"), scale=1e-3),
+    ParameterSpec("ss1_hgap_param", "Pre-sample slit vertical gap", unit="m",
+                  quantity=slit_gap_id("pre_sample", "vertical"), scale=1e-3),
+    ParameterSpec("ss2_wgap_param", "Sample exit slit horizontal gap", unit="m",
+                  quantity=slit_gap_id("sample_exit", "horizontal"), scale=1e-3),
+    ParameterSpec("ss2_hgap_param", "Sample exit slit vertical gap", unit="m",
+                  quantity=slit_gap_id("sample_exit", "vertical"), scale=1e-3),
     # Sample orientation: the single sample arm (generic TAS; shared with PUMA/IN8).
-    ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0),
-    ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0),
+    ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0,
+                  quantity="sample_lower_arc_deg"),
+    ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0,
+                  quantity="sample_upper_arc_deg"),
     ParameterSpec("sample_rx_param", "Sample arm rotation about x (stage and mount)", default=0.0),
     ParameterSpec("sample_ry_param", "Sample arm rotation about y (stage and mount)", default=0.0),
     ParameterSpec("sample_rz_param", "Sample arm rotation about z (stage and mount)", default=0.0),
@@ -313,6 +329,12 @@ class PANDAPlugin:
 
     def descriptor(self):
         return panda_descriptor()
+
+    def capabilities(self):
+        """Derived from the descriptor (``instruments.rules.tas_capabilities``)."""
+        from instruments.rules import tas_capabilities
+
+        return tas_capabilities(self.descriptor())
 
     def default_state(self):
         """Fresh ``PANDA_Instrument`` with PANDA's defaults."""

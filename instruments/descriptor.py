@@ -365,6 +365,11 @@ class ParameterSpec:
     comment: str = ""
     default: float | None = None
     unit: str = ""
+    # The backend binding: the canonical ID (tavi.quantities) whose per-point
+    # value this parameter carries, "" for a plugin-internal parameter, and
+    # the conversion: McStas value = scale * the quantity's value (mm -> m: 1e-3).
+    quantity: str = ""
+    scale: float = 1.0
 
 
 @dataclass(frozen=True, slots=True)

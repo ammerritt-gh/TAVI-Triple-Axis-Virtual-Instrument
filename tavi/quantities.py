@@ -41,10 +41,21 @@ class Quantity:
     name: str = ""                  # the quantity in a message: "A4 (sample 2θ)", "H"
 
 
+def slit_gap_id(stable_id: str, axis: str) -> str:
+    """The canonical ID of one slit gap; ``axis`` is "horizontal" or "vertical"."""
+    return f"slit.{stable_id}.{axis}_gap_mm"
+
+
+def slit_gap_ids(slit) -> tuple[str, ...]:
+    """A descriptor SlitSpec's gap IDs: horizontal, and vertical where it has a height."""
+    axes = ("horizontal", "vertical") if slit.has_height else ("horizontal",)
+    return tuple(slit_gap_id(slit.stable_id, axis) for axis in axes)
+
+
 _SLITS = (("post_mono", "Post-mono"), ("pre_sample", "Pre-sample"), ("detector", "Detector"),
           ("virtual_source", "Virtual source"), ("sample_exit", "Sample-exit"))
 _SLIT_ROWS = tuple(
-    Quantity(f"slit.{sid}.{axis}_gap_mm", "mm", f"{name} slit {axis} gap (mm)",
+    Quantity(slit_gap_id(sid, axis), "mm", f"{name} slit {axis} gap (mm)",
              f"{axis} gap of the {name.lower()} slit", "full gap width, millimetres",
              aliases=(f"{sid}_{short}gap",), writable=True, refusal=SLIT_SCAN_REFUSAL,
              name=f"{name.lower()} slit {axis} gap")
@@ -288,10 +299,8 @@ def public_values(vals: dict, slits=()) -> dict:
                 if slit.id not in value:
                     continue
                 gaps = value[slit.id]
-                width, height = gaps if slit.has_height else (gaps, None)
-                out[f"slit.{slit.stable_id}.horizontal_gap_mm"] = width
-                if slit.has_height:
-                    out[f"slit.{slit.stable_id}.vertical_gap_mm"] = height
+                out.update(zip(slit_gap_ids(slit), gaps if slit.has_height else (gaps,),
+                               strict=True))
         elif key == "curvature_modes":
             out[key] = {to_public(axis): mode for axis, mode in value.items()}
         elif key == "curvature_clamped":
