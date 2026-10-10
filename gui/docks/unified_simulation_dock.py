@@ -24,7 +24,7 @@ def _command_chip(number):
     chip = QLabel(str(number))
     chip.setAlignment(Qt.AlignCenter)
     chip.setFixedWidth(18)
-    chip.setStyleSheet(f"background-color: {theme.COMMAND_COLORS[number]}; color: white; "
+    chip.setStyleSheet(f"background-color: {theme.COMMAND_COLORS[number]}; color: {theme.CHIP_TEXT}; "
                        "font-weight: bold; border-radius: 2px;")
     return chip
 
