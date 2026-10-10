@@ -9055,8 +9055,11 @@ class TAVIController(QObject):
 
         self.actual_output_folder_updated.emit(data_folder)
         
-        # Write parameters to file
-        write_parameters_to_file(data_folder, self.output_parameters(vals))
+        # Write parameters to file, with each command's absolute axis: a relative command's
+        # text holds offsets, and the Display reload places points on these values.
+        write_parameters_to_file(data_folder, self.output_parameters({
+            **vals, **{f"scan_values_{c.number}": [float(v) for v in expansion.values[c.number]]
+                       for c in plan.commands}}))
         
         # The plan's axes: command 1 inner, command 2 outer; a lone command
         # (in either box) is the only axis.

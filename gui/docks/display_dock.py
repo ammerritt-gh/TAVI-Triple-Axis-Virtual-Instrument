@@ -1401,81 +1401,77 @@ class DisplayDock(BaseDockWidget):
 
         # Before any name is resolved or any state changes: an old folder's A2/A4
         # are other axes than the canonical IDs they would match.
-        require_output_version(read_parameters_from_file(data_folder), data_folder)
-        
-        # Store data folder and metadata
-        self._data_folder = data_folder
-        if metadata:
-            self._scan_metadata = metadata.copy()
-        
+        scan_parameters = read_parameters_from_file(data_folder)
+        require_output_version(scan_parameters, data_folder)
+
         if not scan_command1:
+            self._data_folder = data_folder
+            if metadata:
+                self._scan_metadata = metadata.copy()
             self._show_empty_plot()
             self.status_label.setText("No scan commands found in data")
             return
-        
-        # Parse scan commands
-        var_name_1, values_1 = parse_scan_steps(scan_command1)
-        var_name_1 = self._normalize_variable_name(var_name_1)
-        
-        if scan_command2:
-            # 2D scan
-            var_name_2, values_2 = parse_scan_steps(scan_command2)
-            var_name_2 = self._normalize_variable_name(var_name_2)
-            
+
+        # Each axis: the absolute values the run recorded, else (a folder written before
+        # they were) the command's own, which for a relative command are offsets.
+        axes = []
+        for number, command in ((1, scan_command1), (2, scan_command2)):
+            if command:
+                name, values = parse_scan_steps(command)
+                recorded = scan_parameters.get(f"scan_values_{number}")
+                axes.append((self._normalize_variable_name(name),
+                             np.asarray(values if recorded is None else recorded, dtype=float)))
+
+        # Every point is placed before anything is shown: one that lies on no axis value
+        # refuses the folder rather than pile its counts into the nearest bin.
+        placed = []
+        for folder_name in sorted(os.listdir(data_folder)):
+            full_path = os.path.join(data_folder, folder_name)
+            if not (os.path.isdir(full_path) and folder_name.startswith('scan_')):
+                continue
+            point_params = read_parameters_from_file(full_path)
+            if not point_params or any(name not in point_params for name, _ in axes):
+                continue
+            index = []
+            for name, values in axes:
+                value = float(point_params[name])
+                i = int(np.argmin(np.abs(values - value)))
+                # Half of parse_scan_steps' 1e-3 rounding of a command's values.
+                if not np.isclose(values[i], value, rtol=0, atol=5e-4):
+                    raise ValueError(
+                        f"{folder_name}: {name} = {value:g} lies on none of the scan's axis "
+                        f"values; a relative scan saved before TAVI recorded its absolute "
+                        f"axis cannot be reloaded. The folder is left untouched.")
+                index.append(i)
+            _, _, counts = read_1Ddetector_file(full_path)
+            if counts is not None:
+                placed.append((tuple(index), counts))
+
+        self._data_folder = data_folder
+        if metadata:
+            self._scan_metadata = metadata.copy()
+        (var_name_1, values_1), *rest = axes
+        if rest:
+            var_name_2, values_2 = rest[0]
             # Initialize with all points valid (we'll mark measured as we find data)
             valid_mask_2d = np.ones((len(values_2), len(values_1)), dtype=bool)
-            self.initialize_scan('2D', list(values_1), [], var_name_1, 
-                               var_name_2, list(values_2), valid_mask_2d)
-            
-            # Load data from folders
-            for folder_name in os.listdir(data_folder):
-                full_path = os.path.join(data_folder, folder_name)
-                if os.path.isdir(full_path) and folder_name.startswith('scan_'):
-                    point_params = read_parameters_from_file(full_path)
-                    if point_params and var_name_1 in point_params and var_name_2 in point_params:
-                        x_val = float(point_params.get(var_name_1, 0))
-                        y_val = float(point_params.get(var_name_2, 0))
-                        
-                        # Find indices
-                        idx_x = np.argmin(np.abs(self._scan_values_1 - x_val))
-                        idx_y = np.argmin(np.abs(self._scan_values_2 - y_val))
-                        
-                        # Read counts
-                        _, _, counts = read_1Ddetector_file(full_path)
-                        if counts is not None:
-                            self._counts[idx_y, idx_x] = counts
-                            self._measured_mask[idx_y, idx_x] = True
-            
+            self.initialize_scan('2D', list(values_1), [], var_name_1,
+                                 var_name_2, list(values_2), valid_mask_2d)
+            for (idx_x, idx_y), counts in placed:
+                self._counts[idx_y, idx_x] = counts
+                self._measured_mask[idx_y, idx_x] = True
             # Mark points without data as impossible (they failed during scan)
             self._valid_mask = self._measured_mask.copy()
             self._update_2d_display()
         else:
-            # 1D scan
-            # Initialize with all points valid
-            valid_mask_1 = [True] * len(values_1)
-            self.initialize_scan('1D', list(values_1), valid_mask_1, var_name_1)
-            
-            # Load data from folders
-            for folder_name in os.listdir(data_folder):
-                full_path = os.path.join(data_folder, folder_name)
-                if os.path.isdir(full_path) and folder_name.startswith('scan_'):
-                    point_params = read_parameters_from_file(full_path)
-                    if point_params and var_name_1 in point_params:
-                        x_val = float(point_params.get(var_name_1, 0))
-                        
-                        # Find index
-                        idx = np.argmin(np.abs(self._scan_values_1 - x_val))
-                        
-                        # Read counts
-                        _, _, counts = read_1Ddetector_file(full_path)
-                        if counts is not None:
-                            self._counts[idx] = counts
-                            self._measured_mask[idx] = True
-            
+            self.initialize_scan('1D', list(values_1), [True] * len(values_1), var_name_1)
+            for (idx,), counts in placed:
+                self._counts[idx] = counts
+                self._measured_mask[idx] = True
             # Mark points without data as impossible
             self._valid_mask = self._measured_mask.copy()
             self._update_1d_display()
-        
+
         self.scan_complete()
     
     def _normalize_variable_name(self, name):
