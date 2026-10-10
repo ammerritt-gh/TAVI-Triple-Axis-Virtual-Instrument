@@ -205,6 +205,16 @@ def by_id(canonical_id: str) -> Quantity:
     return _BY_ID[canonical_id]
 
 
+# GET /schema publishes ASCII unit spellings; the registry keeps the typographic ones.
+_SCHEMA_UNIT = {"°": "degrees", "Å⁻¹": "angstrom^-1", "Å": "angstrom"}
+
+
+def schema_unit(canonical_id: str):
+    """A registry quantity's unit in the schema's spelling; None when no row has this ID."""
+    q = _BY_ID.get(canonical_id)
+    return None if q is None else _SCHEMA_UNIT.get(q.unit, q.unit)
+
+
 def resolve(name: str, context: str) -> Quantity:
     """Return the quantity a name means as a scan command ("scan") or API write ("write")."""
     key = name.casefold()
