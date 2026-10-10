@@ -4362,11 +4362,10 @@ class TAVIController(QObject):
     def validate_scan_commands(self):
         """Show the plan's verdict on the command boxes, as Run would judge them now.
 
-        Each typed command is compiled alone in its box (``_judge_boxes``): its own
-        refusal, or else its point-count or stop note, goes in that box's warning
-        label. When both stand alone the pair is compiled, and the plan's refusal
-        of the pair goes in the conflict label, styling the box it names. A launch
-        that cannot be planned at all says so in the conflict label.
+        The verdict is ``_judge_boxes``'s: a refusal of one box goes in that box's
+        warning label, its point-count or stop note in the same label when it stands;
+        a refusal that names no box, or a conflict of the pair, goes in the conflict
+        label, styling the box it names. A launch that cannot be planned says so there.
         """
         sim = self.window.simulation_dock
         commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
@@ -4377,7 +4376,7 @@ class TAVIController(QObject):
         launch_state = self._collect_simulation_launch_state()
         accepted, refused = self._judge_boxes(launch_state, commands)
         if None in refused:
-            sim.set_scan_conflict_warning(str(refused[None]))
+            sim.set_scan_conflict_warning(str(refused[None]), refused[None].command)
             return
         for number in (1, 2):
             if number in refused:
@@ -4386,12 +4385,6 @@ class TAVIController(QObject):
                 note = self._scan_command_note(accepted[number])
                 if note:
                     sim.set_scan_command_warning(number, note)
-        if refused:
-            return
-        try:
-            scan_axes(self._launch_plan(launch_state, commands), launch_state['snapshot'])
-        except PlanRefused as pair:
-            sim.set_scan_conflict_warning(str(pair), pair.command)
 
     def _curvature_axis_specs(self, monocris, anacris, modules=None):
         """{axis: (CurvatureAxis, crystal display name)} for the two named
@@ -4533,16 +4526,24 @@ class TAVIController(QObject):
         return issues
 
     def _judge_boxes(self, launch_state, commands):
-        """``({box: Command}, {box or None: PlanRefused})``: each typed command alone.
+        """``({box: Command}, {box or None: PlanRefused})``: the pair's verdict, as Run judges it.
 
-        ``commands`` is ``[(text, relative), (text, relative)]``. Each command is
-        compiled in its own box with the other empty, exactly as Run compiles
-        (``build_plan``, then ``scan_axes``: the parse, the registry, the range, the
-        settings and hardware that hold a quantity, a relative base), so a refusal
-        here is that box's own; the pair is judged apart. A refusal that names no
-        box (the launch itself cannot be planned) is keyed None. The one per-command
-        verdict of the command labels, Run's preflight and the API's.
+        ``commands`` is ``[(text, relative), (text, relative)]``. The pair is compiled
+        and scanned as Run does (``build_plan``, then ``scan_axes``: the parse, the
+        registry, the range, the settings and hardware that hold a quantity, a relative
+        base), and when it passes that verdict stands: a box is never refused for a
+        quantity the other box scans. When the pair does not pass, each filled box is
+        compiled alone with the other empty, so each box's own refusal shows and a
+        half-typed box does not hide the other's. A refusal that names no box (the
+        launch itself, or a pair conflict no box explains) is keyed None. The one
+        per-command verdict of the command labels, Run's preflight and the API's.
         """
+        try:
+            plan = self._launch_plan(launch_state, commands)
+            scan_axes(plan, launch_state['snapshot'])
+            return {command.number: command for command in plan.commands}, {}
+        except PlanRefused as pair:
+            pair_refusal = pair
         accepted, refused = {}, {}
         for number, (text, relative) in enumerate(commands, start=1):
             if not (text or "").strip():
@@ -4556,7 +4557,7 @@ class TAVIController(QObject):
                 refused[number if refusal.command == number else None] = refusal
                 continue
             accepted[number] = plan.commands[0]
-        return accepted, refused
+        return accepted, refused or {None: pair_refusal}
 
     @staticmethod
     def _scan_command_note(command):
@@ -7487,13 +7488,12 @@ class TAVIController(QObject):
         return hard, soft
 
     def _scan_command_issues(self, launch_state):
-        """(hard, soft) issue lists for a launch's two scan commands, each judged alone.
+        """(hard, soft) issue lists for a launch's two scan commands.
 
-        Hard is the plan's refusal of a command in its own box (``_judge_boxes``),
-        ``Command N: ``-prefixed unless it already names its box; soft a "⚠" note,
-        the operator's call. The pair is the plan's to judge when the launch
-        compiles (``_compile_launch``), never here. Reads no widgets: the GUI
-        passes its collected launch, the API its frozen one.
+        Hard is the plan's refusal of the pair or of a command in its own box
+        (``_judge_boxes``, the same verdict the command labels show), ``Command N: ``-prefixed
+        unless it already names its box; soft a "⚠" note, the operator's call. Reads no
+        widgets: the GUI passes its collected launch, the API its frozen one.
         """
         accepted, refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
         hard = [str(refused[None])] if None in refused else []
