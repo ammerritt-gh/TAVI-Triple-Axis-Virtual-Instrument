@@ -728,7 +728,7 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # Goto mapping
 # --------------------------------------------------------------------------
 
-# rva stays non-goto as before U2: its settability depends on the crystal; lifting it is a separate call.
+# rva stays non-goto as before U2; its old reason (no settable field) no longer holds, so lifting it is a separate call.
 _NOT_GOTO = frozenset({"analyzer_vertical_radius_m"})
 
 
