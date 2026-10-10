@@ -3036,8 +3036,8 @@ class TAVIController(QObject):
             if error:
                 raise ApiError(400, "curvature_out_of_travel", error)
 
-        # At least one non-empty scan command is required (a lone command 2 is
-        # swapped into command 1 downstream, so either satisfies the check).
+        # At least one non-empty scan command is required (a lone command 2 keeps
+        # its box number, so either box satisfies the check).
         cmd1 = (vals.get('scan_command1') or "").strip()
         cmd2 = (vals.get('scan_command2') or "").strip()
         if not cmd1 and not cmd2:
