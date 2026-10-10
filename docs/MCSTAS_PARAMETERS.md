@@ -100,10 +100,12 @@ The following values are implemented as McStas parameters in `instruments/puma/m
 ### Angle Parameters (Primary Scan Variables)
 | Parameter | Description | Used By |
 |-----------|-------------|---------|
-| `mono_two_theta_param` | Monochromator 2-theta angle | `mono_cradle` rotation |
+| `mono_two_theta_param` | Monochromator 2-theta angle | `sample_arm` rotation |
+| `mono_theta_param` | Monochromator crystal θ | `mono_cradle` rotation |
 | `sample_two_theta_param` | Sample 2-theta angle | `analyzer_arm` rotation |
 | `sample_rotation_param` | Sample turntable readout | Inspection (the turntable reaches McStas through `sample_r*_param`) |
-| `analyzer_two_theta_param` | Analyzer 2-theta angle | `analyzer_cradle`, `detector_arm` rotation |
+| `analyzer_two_theta_param` | Analyzer 2-theta angle | `detector_arm` rotation |
+| `analyzer_theta_param` | Analyzer crystal θ | `analyzer_cradle` rotation |
 
 The McStas parameters carry physical names. The `A1`–`A4` state attributes,
 the `mtt`/`stt`/`att` edits and the scan-slot layout in
@@ -121,14 +123,19 @@ scale × quantity value), and `plugin.capabilities().bindings` collects them:
 | `sample_two_theta_param` | A2, `stt` | sample 2θ | A4 | `sample_two_theta_deg` |
 | `sample_rotation_param` | A3, `sth`, `omega` | sample rotation (turntable) | A3 | `sample_rotation_deg` |
 | `analyzer_two_theta_param` | A4, `att` | analyzer 2θ | A6 | `analyzer_two_theta_deg` |
+| `mono_theta_param` | (none) | monochromator θ | A1 | `mono_theta_deg` |
+| `analyzer_theta_param` | (none) | analyzer θ | A5 | `analyzer_theta_deg` |
 | `sgl_param` | `sgl` | lower sample arc | (none) | `sample_lower_arc_deg` |
 | `sgu_param` | `sgu` | upper sample arc | (none) | `sample_upper_arc_deg` |
 | `rhm_param`, `rvm_param` | `rhm`, `rvm` | applied monochromator radii, signed by the branch | (none) | `applied_mono_horizontal_radius_m`, `applied_mono_vertical_radius_m` |
 | `rha_param`, `rva_param` | `rha`, `rva` | applied analyzer radii, signed by the branch | (none) | `applied_analyzer_horizontal_radius_m`, `applied_analyzer_vertical_radius_m` |
 
-The public A1 (monochromator θ) and A5 (analyzer θ) have no McStas parameter:
-they are half of A2 and A6 and are never inputs. `docs/INSTRUMENT_LAYOUT.md`
-holds the public angle table.
+The public A1 (monochromator θ) and A5 (analyzer θ) are derived, never inputs:
+half of A2 and A6, signed as them, produced by one function
+(`instruments.rules.crystal_theta`, the `crystal_theta` rule's evaluator). The
+models emit them as `mono_theta_param` and `analyzer_theta_param`, and the
+crystal cradles rotate by those, so a later rocking rule can drive θ without
+changing the tree. `docs/INSTRUMENT_LAYOUT.md` holds the public angle table.
 
 ### Crystal Bending Parameters
 | Parameter | Description | Used By |

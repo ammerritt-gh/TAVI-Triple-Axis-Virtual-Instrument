@@ -113,6 +113,7 @@ Build-time (affect component tree / require recompilation):
 
 Per-point (McStas parameters, set via `set_parameters()`):
 - mono_two_theta_param, sample_two_theta_param, sample_rotation_param, analyzer_two_theta_param
+- mono_theta_param, analyzer_theta_param (the crystal cradles' rotation)
 - E0_param
 - rhm_param, rvm_param, rha_param, rva_param
 - vbl_hgap_param, pbl_hgap_param, pbl_vgap_param, dbl_hgap_param
@@ -343,6 +344,8 @@ snapshot = {
         'sample_two_theta_param': float,
         'sample_rotation_param': float,
         'analyzer_two_theta_param': float,
+        'mono_theta_param': float,
+        'analyzer_theta_param': float,
         'E0_param': float,
         'rhm_param': float,
         'rvm_param': float,

@@ -8,6 +8,7 @@ import mcstasscript as ms
 
 from instruments.descriptor import CurvatureAxis
 from instruments.paths import COMPONENTS_DIR
+from instruments.rules import crystal_theta
 from instruments.tas_runtime import TAS_Instrument
 from tavi.neutron_conversions import energy2lambda
 from tavi.instrument_helpers import (
@@ -177,6 +178,8 @@ def build_puma_point_params(PUMA, deltaE):
         "sample_two_theta_param": PUMA.A2,
         "sample_rotation_param": PUMA.A3,
         "analyzer_two_theta_param": PUMA.A4,
+        "mono_theta_param": crystal_theta(PUMA.A1),
+        "analyzer_theta_param": crystal_theta(PUMA.A4),
         "E0_param": _get_E0_param_value(PUMA, deltaE),
         "nu_param": _get_v_selector_frequency(PUMA, deltaE),
         "rhm_param": PUMA.rhm,
@@ -218,6 +221,8 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     instrument.add_parameter("sample_two_theta_param", comment="Sample 2-theta angle.")
     instrument.add_parameter("sample_rotation_param", comment="Sample rotation (turntable) readout, inspection only.")
     instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
+    instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
+    instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
     instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
@@ -324,7 +329,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_crystal_assembly(instrument, cradle_name="mono_cradle",
                               crystal_name="monochromator", relative="origin",
-                              distance=PUMA.L1, rotation_expr="mono_two_theta_param/2",
+                              distance=PUMA.L1, rotation_expr="mono_theta_param",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
                               split=2, extend="if(!SCATTERED) ABSORB;")
@@ -597,7 +602,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
                               crystal_name="analyzer", relative="analyzer_arm",
-                              distance=PUMA.L3, rotation_expr="analyzer_two_theta_param/2",
+                              distance=PUMA.L3, rotation_expr="analyzer_theta_param",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
                               split=5)
