@@ -512,6 +512,24 @@ def test_the_mark_refresh_expands_nothing(window, monkeypatch):
     assert "Absolute range" in _state(window, A3)[3]   # the +Δ range needs no expansion
 
 
+def test_a_degenerate_cell_withdraws_the_marks_without_raising(window):
+    """gamma 120 with alpha 1 gives a negative c_y^2 on the way to alpha 90: no mark survives it."""
+    sample = window.sample_dock
+    alpha, gamma = sample.lattice_alpha_edit.text(), sample.lattice_gamma_edit.text()
+    _type(window, "H 1.9 2.1 0.05")
+    try:
+        sample.lattice_gamma_edit.setText("120")
+        sample.lattice_alpha_edit.setText("1")
+        window.controller.update_field_marks()
+        window.controller.validate_scan_commands()
+        assert _marks(window) == {} and _note(window) is None
+        sample.lattice_alpha_edit.setText(alpha)
+        window.controller.update_field_marks()
+        assert _marks(window)[A3] == ("set", "1")
+    finally:
+        sample.lattice_gamma_edit.setText(gamma)
+        sample.lattice_alpha_edit.setText(alpha)
+        _settle()
 
 
 
