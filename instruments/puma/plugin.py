@@ -341,6 +341,7 @@ class PUMAPlugin:
 
     id = PUMA_ID
     display_name = PUMA_DISPLAY_NAME
+    CONTRACT_VERSION = 1
 
     def descriptor(self):
         return puma_descriptor()

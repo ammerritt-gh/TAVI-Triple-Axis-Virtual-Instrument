@@ -278,6 +278,7 @@ class IN8Plugin:
 
     id = IN8_ID
     display_name = IN8_DISPLAY_NAME
+    CONTRACT_VERSION = 1
 
     def descriptor(self):
         return in8_descriptor()

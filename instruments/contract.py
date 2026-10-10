@@ -48,6 +48,10 @@ InstrumentState = Any
 # core-count-aware default.
 DEFAULT_MPI_COUNT = 4
 
+# The plugin contract's version. A plugin declares the version it targets as a class
+# attribute CONTRACT_VERSION; the registry refuses any other value when it registers it.
+CONTRACT_VERSION = 1
+
 
 class CurvatureMode(str, Enum):
     """Per-axis curvature policy, carried in launch-state ``vals['curvature_modes']``.
@@ -158,6 +162,7 @@ class InstrumentPlugin(Protocol):
 
     id: str
     display_name: str
+    CONTRACT_VERSION: int
 
     def descriptor(self) -> InstrumentDescriptor:
         """Return the static GUI-facing description (libraries, modules, params)."""

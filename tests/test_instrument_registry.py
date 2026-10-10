@@ -41,6 +41,7 @@ def _registry_snapshot():
 class _DummyPlugin:
     id = "dummy"
     display_name = "Dummy"
+    CONTRACT_VERSION = 1
 
 
 def test_register_and_get_roundtrip():
