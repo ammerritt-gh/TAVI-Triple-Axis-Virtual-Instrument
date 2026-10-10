@@ -4481,11 +4481,11 @@ class TAVIController(QObject):
 
         # Check for zero step
         if step == 0:
-            return (var_id, "Step size cannot be zero.")
+            return (None, "Step size cannot be zero.")
         
         # Check step sign consistency with direction
         if (end > start and step < 0) or (end < start and step > 0):
-            return (var_id, "Step sign doesn't match direction (start → end).")
+            return (None, "Step sign doesn't match direction (start → end).")
         
         # After the step guards: the expansion below divides by the step and
         # calls parse_scan_steps, so a zero or wrong-sign step must have been
@@ -4527,7 +4527,7 @@ class TAVIController(QObject):
         elif num_points == 1:
             return (var_id, f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end}).")
         elif num_points <= 0:
-            return (var_id, "Invalid range: no points would be generated.")
+            return (None, "Invalid range: no points would be generated.")
         
         return (var_id, None)
     
