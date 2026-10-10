@@ -349,6 +349,10 @@ def _hard_constraint(cmd, ctx):
     """Why a setting or the hardware owns what ``cmd`` drives, or None."""
     qid, name = cmd.quantity, _name(cmd.quantity)
     if qid not in ctx.inputs:
+        if qid in RADIUS_CRYSTAL:   # context_from_state drops a radius whose crystal resolves to nothing
+            side = "mono" if RADIUS_CRYSTAL[qid] == MTT else "analyzer"
+            return (f"No {side} crystal this instrument installs is selected, "
+                    f"so there is no {name} to scan.")
         return f"This instrument has no {name}."
     if qid in ARCS and ctx.plane_lock is not None:
         lock = ctx.plane_lock
