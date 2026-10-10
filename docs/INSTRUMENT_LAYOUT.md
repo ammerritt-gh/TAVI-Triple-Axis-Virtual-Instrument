@@ -348,7 +348,7 @@ The instrument can scan any of the following parameters:
 - **κ, χ, φ**: Retired or not modelled; a scan or an API write naming them is refused
 
 ### Crystal Focusing
-- **rhm, rvm, rha, rva**: Crystal bending radii (requested magnitude; the canonical IDs are in the table above)
+- **rhm, rvm, rha, rva**: Crystal bending radii, requested magnitude: `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m`, `analyzer_vertical_radius_m`
 
 ## GUI Organization
 
