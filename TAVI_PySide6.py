@@ -3121,6 +3121,7 @@ class TAVIController(QObject):
     def _plan_input_edits(self):
         """{internal field: line edit} for every dock field a point plan can read."""
         idock, sdock = self.window.instrument_dock, self.window.scattering_dock
+        lattice = self.window.sample_dock
         return {
             'mtt': idock.mtt_edit, 'stt': idock.stt_edit, 'omega': idock.omega_edit,
             'att': idock.att_edit, 'sgl': idock.sgl_edit, 'sgu': idock.sgu_edit,
@@ -3128,6 +3129,10 @@ class TAVIController(QObject):
             'rva': idock.rva_edit,
             'H': sdock.H_edit, 'K': sdock.K_edit, 'L': sdock.L_edit, 'qx': sdock.qx_edit,
             'qy': sdock.qy_edit, 'qz': sdock.qz_edit, 'deltaE': sdock.deltaE_edit,
+            'fixed_E': sdock.fixed_E_edit,
+            'lattice_a': lattice.lattice_a_edit, 'lattice_b': lattice.lattice_b_edit,
+            'lattice_c': lattice.lattice_c_edit, 'lattice_alpha': lattice.lattice_alpha_edit,
+            'lattice_beta': lattice.lattice_beta_edit, 'lattice_gamma': lattice.lattice_gamma_edit,
             **self._slit_gap_edits(),
         }
 
@@ -8001,6 +8006,12 @@ class TAVIController(QObject):
         (the live label only) stores a points-less expansion: never queue that.
         Raises ``PlanRefused`` naming why the scan cannot run as written.
         """
+        # The fixed energy and the lattice reach the plan through its context, not the
+        # snapshot's inputs: an emptied one refuses here, by name, never as 0 or 1 Å.
+        for qid, name in (("fixed_E", "fixed energy"),
+                          *((q.id, q.name) for q in QUANTITIES if q.id.startswith("lattice_"))):
+            if qid not in launch_state['snapshot']:
+                raise PlanRefused(f"{name} holds no number, so the scan cannot be planned.")
         vals = launch_state['vals']
         context = context_from_state(launch_state['scan_config'], vals,
                                      self.instrument.capabilities(),

@@ -216,6 +216,28 @@ def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(m
             _reset(ctrl)
 
 
+@pytest.mark.parametrize("dock, field, name", [
+    ("scattering_dock", "fixed_E_edit", "fixed energy"),
+    ("sample_dock", "lattice_a_edit", "lattice a"),
+])
+def test_an_empty_fixed_energy_or_lattice_field_refuses_the_run_naming_it(
+        dock, field, name, monkeypatch):
+    """Every plan reads the fixed energy and the lattice outside the snapshot: an emptied one
+    refuses Run, naming it, with nothing queued, instead of reading as 0 or 1 Å."""
+    with _controller() as ctrl:
+        try:
+            ctrl.set_default_parameters()
+            ctrl.window.simulation_dock.scan_command_1_edit.setText("A3 29 31 1")
+            getattr(getattr(ctrl.window, dock), field).setText("")
+
+            submitted, dialogs = _press_run(ctrl, monkeypatch)
+
+            assert submitted == [] and len(dialogs) == 1, (submitted, dialogs)
+            assert dialogs[0].startswith(f"{name} holds no number"), dialogs
+        finally:
+            _reset(ctrl)
+
+
 # --- Ruling 5: a scan that selects no geometry holds the motors -------------------
 
 MOTOR_FIELDS = {"mono_two_theta_deg": "mtt_edit", "sample_two_theta_deg": "stt_edit",
