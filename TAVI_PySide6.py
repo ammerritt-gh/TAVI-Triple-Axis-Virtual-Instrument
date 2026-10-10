@@ -1290,7 +1290,7 @@ class TAVIController(QObject):
         self._field_marks_timer = QTimer(self)
         self._field_marks_timer.setSingleShot(True)
         self._field_marks_timer.setInterval(0)
-        self._field_marks_timer.timeout.connect(self.update_field_marks)
+        self._field_marks_timer.timeout.connect(self._refresh_scan_feedback)
         # Several linked controls can settle from one user gesture.  Publish a
         # single authoritative reciprocal snapshot after that burst, never from
         # the 30 Hz live-drag path (which uses reciprocal_live_result instead).
@@ -4868,6 +4868,11 @@ class TAVIController(QObject):
     def _schedule_field_marks(self, *_args):
         """One mark update per burst of edits and setting changes."""
         self._field_marks_timer.start()
+
+    def _refresh_scan_feedback(self):
+        """The labels and the marks, judged on the one trigger, so a context change moves both."""
+        self.validate_scan_commands()
+        self.update_field_marks()
 
     def _marked_fields(self):
         """[(canonical ID, field)] for every dock field a mark can sit on."""
