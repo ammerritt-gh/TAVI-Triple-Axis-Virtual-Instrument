@@ -25,6 +25,12 @@ from instruments.descriptor import CurvatureAxis  # noqa: E402
 from instruments.registry import get_instrument  # noqa: E402
 
 
+def _settle():
+    """The labels and marks follow the mark timer: let it run before a label is read."""
+    for _ in range(3):
+        QApplication.processEvents()
+
+
 @pytest.fixture(scope="module")
 def in8_controller():
     app = QApplication.instance() or QApplication([sys.argv[0]])
@@ -241,11 +247,13 @@ def test_the_scan_command_label_shows_the_stop_note_without_blocking(in8_control
     dock = in8_controller.window.simulation_dock
     try:
         dock.scan_command_1_edit.setText("A3 0 10 4")
+        _settle()
         assert not dock.scan_warning_1_label.isHidden()
         assert "stops at 8" in dock.scan_warning_1_label.text()
         assert in8_controller._preflight_scan_validation() == ([], [])
 
         dock.scan_command_1_edit.setText("A3 0 10 2")
+        _settle()
         assert dock.scan_warning_1_label.isHidden()
     finally:
         dock.scan_command_1_edit.setText("")
@@ -433,6 +441,7 @@ def test_h_with_a4_is_refused_in_the_gui_and_over_the_api_even_forced(in8_contro
            "scanned. force does not override a command conflict.")
     sim.scan_command_1_edit.setText(cmd1)
     sim.scan_command_2_edit.setText(cmd2)
+    _settle()
     try:
         assert sim.scan_conflict_label.text() == why
         assert not sim.scan_conflict_label.isHidden()
@@ -460,6 +469,7 @@ def test_an_arc_under_a_plane_lock_shows_the_plans_wording(in8_controller):
                                         "tilts": {"sgl": 11.31, "sgu": 0.0}}
     try:
         sim.scan_command_1_edit.setText("sgl 0 2 1")
+        _settle()
         assert sim.scan_warning_1_label.text().startswith(
             "The plane lock holds sgl (lower arc): the locked scattering plane (1 0 0)/(0 1 0.2)")
         assert sim.scan_conflict_label.isHidden()
@@ -483,6 +493,7 @@ def test_a_radius_scan_on_a_fixed_assembly_shows_the_plans_wording(in8_controlle
     dock.set_ana_id(d.ana_crystals[0].id)
     try:
         sim.scan_command_1_edit.setText("rva 0.3 0.6 0.05")
+        _settle()
         assert sim.scan_warning_1_label.text().startswith(
             "The hardware holds rva (analyzer vertical radius) at 0.05 m")
         assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_WARNING
@@ -504,10 +515,12 @@ def test_an_arc_or_radius_beside_h_is_refused_by_the_plan(in8_controller, monkey
     try:
         sim.scan_command_1_edit.setText("H 0.9 1.1 0.1")
         sim.scan_command_2_edit.setText("sgl 0 2 1")
+        _settle()
         assert sim.scan_warning_2_label.text().startswith("The plane lock holds sgl (lower arc)")
         assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
         assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_NORMAL
         sim.scan_command_2_edit.setText("rva 0.3 0.6 0.05")
+        _settle()
         assert sim.scan_warning_2_label.text().startswith(
             "The hardware holds rva (analyzer vertical radius) at 0.05 m")
         assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
