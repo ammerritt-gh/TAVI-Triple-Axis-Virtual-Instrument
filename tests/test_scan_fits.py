@@ -629,8 +629,10 @@ def test_every_mapped_field_exists_in_the_controller_field_map():
             re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)':", body, re.MULTILINE)}
     assert "mono_two_theta_deg" in keys, "field-map scan found no keys -- the scan pattern broke"
 
+    # Slit gaps join the map per instrument, after the literal: the instrument's own only.
+    assert "self._slit_gap_edits()" in body
     goto = {field_for_scan_variable(q.id) for q in QUANTITIES if q.scannable} - {None}
-    missing = sorted(goto - keys)
+    missing = sorted(g for g in goto - keys if not g.startswith("slit."))
     assert not missing, (
         "goto names fields that _api_field_map does not define: %s" % missing
     )

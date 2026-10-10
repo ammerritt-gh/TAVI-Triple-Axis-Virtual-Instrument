@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import Sequence
 
 API_VERSION = 2   # every mutating API request names it; it marks the A2/A4/A6 renumbering
-SLIT_SCAN_REFUSAL = "slit scans arrive with the point plan"
 LATTICE_REFUSAL = "lattice parameters are set over the API, never scanned"
 APPLIED_REFUSAL = "applied radii are derived by the take-off branch; no input sets them"
 
@@ -66,7 +65,7 @@ _SLITS = (("post_mono", "Post-mono"), ("pre_sample", "Pre-sample"), ("detector",
 _SLIT_ROWS = tuple(
     Quantity(slit_gap_id(sid, axis), "mm", f"{name} slit {axis} gap (mm)",
              f"{axis} gap of the {name.lower()} slit", "full gap width, millimetres",
-             aliases=(f"{sid}_{short}gap",), writable=True, refusal=SLIT_SCAN_REFUSAL,
+             aliases=(f"{sid}_{short}gap",), scannable=True, writable=True,
              name=f"{name.lower()} slit {axis} gap")
     for sid, name in _SLITS
     for axis, short in (("horizontal", "h"), ("vertical", "v"))

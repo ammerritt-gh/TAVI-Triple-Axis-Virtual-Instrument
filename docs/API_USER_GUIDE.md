@@ -84,7 +84,8 @@ SCAN COMMANDS live in the parameters, NOT in the POST body directly. Set them vi
   q_instrument_z_inv_angstrom [qx qy qz]; energy_transfer_mev [deltaE]; mono_two_theta_deg [A2 mtt]; sample_rotation_deg [A3 sth omega psi];
   sample_two_theta_deg [A4 stt 2theta]; analyzer_two_theta_deg [A6 att]; sample_lower_arc_deg [sgl] and sample_upper_arc_deg [sgu] (angle mode only);
   mono_horizontal_radius_m mono_vertical_radius_m analyzer_horizontal_radius_m analyzer_vertical_radius_m [rhm rvm rha rva].
-  A1 and A5 are derived Bragg angles (refused; scan A2 or A6). chi, phi, kappa are refused. Slit gaps cannot be scanned.
+  slit.<stable_id>.horizontal_gap_mm / .vertical_gap_mm [<stable_id>_hgap <stable_id>_vgap], in mm, this instrument's own; refused on engine "deterministic".
+  A1 and A5 are derived Bragg angles (refused; scan A2 or A6). chi, phi, kappa are refused.
 
 GOLDEN WORKFLOW:
   1. GET /schema  (learn fields, allowed values, and limits for THIS instrument — do this first)
@@ -1288,8 +1289,10 @@ always in millimetres, and only the active instrument's own appear in `GET`,
 | IN8, IN12 | `pre_sample`, `detector` | `pre_sample` |
 | PANDA | `virtual_source`, `pre_sample`, `sample_exit` | `pre_sample`, `sample_exit` |
 
-A slit gap is a settable parameter, not a scan variable: a scan command naming
-one is refused with `slit scans arrive with the point plan`.
+A slit gap is also a scan variable, in millimetres (`pre_sample_hgap 10 30 5`):
+each point sets the aperture's McStas parameter, with no recompile. A gap the
+instrument lacks is refused, and so is any slit scan with `engine:
+"deterministic"`: the analytic engine has no aperture model.
 
 **Retired and refused names.** These are refused as request keys (`400
 invalid_parameters`, the whole request, nothing applied) with a message that
@@ -1361,9 +1364,9 @@ works, and the name is resolved to the canonical ID on submit):
 | `analyzer_two_theta_deg` | `A6` `att` | analyzer 2θ (angle mode) |
 | `sample_lower_arc_deg` `sample_upper_arc_deg` | `sgl` `sgu` | the goniometer arcs, in angle mode only (with the angles above or alone). Beside a Q, HKL or `deltaE` command they are refused: a Q/HKL scan solves the arcs at every point. |
 | `mono_horizontal_radius_m` `mono_vertical_radius_m` `analyzer_horizontal_radius_m` `analyzer_vertical_radius_m` | `rhm` `rvm` `rha` `rva` | crystal bending radii |
+| `slit.<stable_id>.horizontal_gap_mm` `slit.<stable_id>.vertical_gap_mm` | `<stable_id>_hgap` `<stable_id>_vgap` | a slit gap in millimetres, the instrument's own only; refused with `engine: "deterministic"` (no aperture model) |
 | *refused* | `A1` `A5` (`mono_theta_deg`, `analyzer_theta_deg`) | derived Bragg angles: the error says `independent crystal rocking is not modelled yet; scan A2 (mono 2θ)` (or A6) |
 | *refused* | `chi` `phi` `kappa` | TAVI has no such axes; the error names the arcs `sgl`/`sgu` where that is the answer |
-| *refused* | `slit.<stable_id>.<axis>_gap_mm` | `slit scans arrive with the point plan` |
 | *refused* | `Ei` `Ki` `Ef` `Kf`, `a` ... `gamma`, `applied_*_radius_m` | settable or derived, but not scannable |
 
 An unknown name is refused with the list of valid ones. Whatever spelling a

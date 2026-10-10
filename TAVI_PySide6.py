@@ -147,6 +147,7 @@ from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
 from tavi.quantities import crystal_theta, normalize_write_names, resolve as resolve_quantity
+from tavi.quantities import slit_gap_id, slit_gap_ids
 from tavi.quantities import public_applied_radii, public_values as _public_values, schema_unit
 from tavi.quantities import to_internal as _to_internal, to_public as _to_public
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
@@ -2842,8 +2843,8 @@ class TAVIController(QObject):
         patched = set(internal)
         vals.update(internal)
         for slit in self.descriptor.slits:
-            width = parsed.get(f"slit.{slit.stable_id}.horizontal_gap_mm")
-            height = parsed.get(f"slit.{slit.stable_id}.vertical_gap_mm")
+            width = parsed.get(slit_gap_id(slit.stable_id, "horizontal"))
+            height = parsed.get(slit_gap_id(slit.stable_id, "vertical"))
             if slit.has_height:
                 old_width, old_height = vals['slits_mm'][slit.id]
                 if width is not None or height is not None:
@@ -3125,7 +3126,14 @@ class TAVIController(QObject):
             'rva': idock.rva_edit,
             'H': sdock.H_edit, 'K': sdock.K_edit, 'L': sdock.L_edit, 'qx': sdock.qx_edit,
             'qy': sdock.qy_edit, 'qz': sdock.qz_edit, 'deltaE': sdock.deltaE_edit,
+            **self._slit_gap_edits(),
         }
+
+    def _slit_gap_edits(self):
+        """{gap ID: line edit} for this instrument's own slit gaps, in mm."""
+        widgets = self.window.instrument_dock.slit_widgets
+        return {qid: widgets[slit.id][widget] for slit in self.descriptor.slits
+                for qid, widget in zip(slit_gap_ids(slit), ("width", "height"))}
 
     def _launch_snapshot(self, vals):
         """``vals`` under canonical IDs, without the plan inputs whose field is empty.
@@ -4265,8 +4273,9 @@ class TAVIController(QObject):
         if warning2:
             self.window.simulation_dock.set_scan_command_warning(2, warning2)
         
-        # Both commands read alone: the pair is the plan's to judge.
-        if var1 and var2:
+        # Each command read alone: the scan (a pair, or a lone command an engine or a
+        # setting cannot honour) is the plan's to judge.
+        if (var1 or var2) and (var1 or not warning1) and (var2 or not warning2):
             try:
                 self._preview_launch(cmd1, cmd2)
             except PlanRefused as refused:
@@ -4501,7 +4510,7 @@ class TAVIController(QObject):
             return (None, f"Unknown variable '{var_name}'. Valid: "
                           f"{', '.join(SCAN_VARIABLE_SHORT_NAMES)}")
         except QuantityRefused as refused:
-            # Derived angles, retired names, old slit names, slit scans: the registry's words.
+            # Derived angles, retired names, old slit names: the registry's words.
             return (None, str(refused))
 
         # A locked plane holds the arcs.
@@ -7697,11 +7706,8 @@ class TAVIController(QObject):
         }
         fields = {_to_public(name): spec for name, spec in fields.items()}
         # Slit gaps: only this instrument's own apertures, one key per gap, in mm.
-        for slit in self.descriptor.slits:
-            for axis, widget in (("horizontal", "width"), ("vertical", "height")):
-                edit = idock.slit_widgets[slit.id].get(widget)
-                if edit is not None:
-                    fields[f"slit.{slit.stable_id}.{axis}_gap_mm"] = (p_float, set_text(edit), None)
+        for qid, edit in self._slit_gap_edits().items():
+            fields[qid] = (p_float, set_text(edit), None)
         return fields
 
     def _api_resolve_patch(self, patch, field_map):

@@ -3,7 +3,7 @@ import pytest
 
 from tavi.quantities import (QUANTITIES, Quantity, QuantityRefused, UnknownQuantity, by_id,
                              index_table, normalize_write_names, public_applied_radii,
-                             public_values, resolve, to_internal, to_public, SLIT_SCAN_REFUSAL)
+                             public_values, resolve, to_internal, to_public)
 
 SCAN_AND_WRITE = [
     ("A2", "mono_two_theta_deg"), ("mtt", "mono_two_theta_deg"),
@@ -18,10 +18,7 @@ SCAN_AND_WRITE = [
     ("deltaE", "energy_transfer_mev"),
     ("rhm", "mono_horizontal_radius_m"), ("rvm", "mono_vertical_radius_m"),
     ("rha", "analyzer_horizontal_radius_m"), ("rva", "analyzer_vertical_radius_m"),
-]
-WRITE_ONLY = [
-    ("Ei", "incident_energy_mev"), ("Ef", "final_energy_mev"),
-    ("Ki", "incident_wavevector_inv_angstrom"), ("Kf", "final_wavevector_inv_angstrom"),
+    # A slit gap is a scan command; build_plan decides where an instrument binds it.
     ("post_mono_hgap", "slit.post_mono.horizontal_gap_mm"),
     ("post_mono_vgap", "slit.post_mono.vertical_gap_mm"),
     ("pre_sample_hgap", "slit.pre_sample.horizontal_gap_mm"),
@@ -32,10 +29,13 @@ WRITE_ONLY = [
     ("virtual_source_vgap", "slit.virtual_source.vertical_gap_mm"),
     ("sample_exit_hgap", "slit.sample_exit.horizontal_gap_mm"),
     ("sample_exit_vgap", "slit.sample_exit.vertical_gap_mm"),
+]
+WRITE_ONLY = [
+    ("Ei", "incident_energy_mev"), ("Ef", "final_energy_mev"),
+    ("Ki", "incident_wavevector_inv_angstrom"), ("Kf", "final_wavevector_inv_angstrom"),
     ("a", "lattice_a_angstrom"), ("B", "lattice_b_angstrom"), ("c", "lattice_c_angstrom"),
     ("Alpha", "lattice_alpha_deg"), ("beta", "lattice_beta_deg"), ("gamma", "lattice_gamma_deg"),
 ]
-SLIT_NAMES = [name for name, canonical in WRITE_ONLY if canonical.startswith("slit.")]
 OLD_SLITS = [
     ("vbl_hgap", "post_mono_hgap"), ("pbl_hgap", "pre_sample_hgap"), ("pbl_vgap", "pre_sample_vgap"),
     ("dbl_hgap", "detector_hgap"), ("sbl_wgap", "pre_sample_hgap"), ("sbl_hgap", "pre_sample_vgap"),
@@ -125,13 +125,6 @@ def test_in8_sbl_hgap_names_pre_sample_vgap():
         resolve("sbl_hgap", "write")
 
 
-@pytest.mark.parametrize("name", SLIT_NAMES)
-def test_slit_scan_refused_with_point_plan_message(name):
-    with pytest.raises(QuantityRefused) as info:
-        resolve(name, "scan")
-    assert str(info.value) == SLIT_SCAN_REFUSAL
-
-
 @pytest.mark.parametrize("name", ["Ei", "Ki"])
 def test_fixed_energy_and_wavevector_writable_not_scannable(name):
     assert resolve(name, "write").writable
@@ -198,7 +191,7 @@ def test_a_name_in_no_row_is_unknown_but_a_refused_one_is_not():
     """The GUI suggests spellings for an unknown name and quotes the registry for a refused one."""
     with pytest.raises(UnknownQuantity):
         resolve("xyz", "scan")
-    for refused in ("chi", "A1", "pre_sample_hgap", "Ei"):
+    for refused in ("chi", "A1", "pbl_hgap", "Ei"):
         with pytest.raises(QuantityRefused) as caught:
             resolve(refused, "scan")
         assert not isinstance(caught.value, UnknownQuantity), refused

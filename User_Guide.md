@@ -153,7 +153,7 @@ The angles are numbered the ILL way: **A2 is the monochromator 2θ, A3 the sampl
 
 Before the ILL numbering, TAVI called the monochromator 2θ A1, the sample 2θ A2 and the analyzer 2θ A4. A scan command, note or script that still uses those numbers now means a different axis (an old `A2` is the sample 2θ, and the new `A2` is the monochromator's), so rewrite them rather than reuse them.
 
-The goniometer arcs `sgl` and `sgu` can be scanned in angle mode: on their own, or with the angles above. Beside a Q, HKL or ΔE command they are refused, because such a scan solves the arcs at every point. `A3 35 36 1` (or `omega 35 36 1`) turns the turntable to 35° and 36°. The `kappa`, `chi` and `phi` scan variables are refused with a message saying so, and the slit gaps cannot be scanned yet. A scan folder written before this change cannot be loaded: TAVI refuses it with a message and leaves it untouched.
+The goniometer arcs `sgl` and `sgu` can be scanned in angle mode: on their own, or with the angles above. Beside a Q, HKL or ΔE command they are refused, because such a scan solves the arcs at every point. `A3 35 36 1` (or `omega 35 36 1`) turns the turntable to 35° and 36°. The `kappa`, `chi` and `phi` scan variables are refused with a message saying so. A slit gap scans in millimetres (`pre_sample_hgap 10 30 5`), alone (the motors held as typed) or beside any other command; the analytic (deterministic) engine refuses a slit scan, as it has no aperture model. A scan folder written before this change cannot be loaded: TAVI refuses it with a message and leaves it untouched.
 
 TAVI tries to inform you if you use the wrong commands, the wrong format, or if something looks off, but it will not catch everything.
 
