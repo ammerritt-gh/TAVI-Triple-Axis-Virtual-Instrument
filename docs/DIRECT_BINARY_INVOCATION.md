@@ -50,7 +50,7 @@ Keep `InstrumentPlugin.run_point()` as the controller-facing execution seam. PUM
 Confirmed from `mccode.sim` output and `mccode.py` source:
 
 ```
-<mpi-launcher> -np <mpi_count> PUMA_McScript.exe --ncount=1000000 --dir=C:\path\to\scan_0001 A1_param=45.0 A2_param=-30.0 sample_ry_param=12.5 ...
+<mpi-launcher> -np <mpi_count> PUMA_McScript.exe --ncount=1000000 --dir=C:\path\to\scan_0001 mono_two_theta_param=45.0 sample_two_theta_param=-30.0 sample_ry_param=12.5 ...
 ```
 
 The params snapshot dict already carries the exact McStas runtime parameter names needed for CLI `name=value` arguments. The `--dir` flag specifies the output directory for detector files. McStas creates the directory if it doesn't exist.
@@ -76,7 +76,7 @@ Key details:
 
 1. `TAVIController.run_simulation()` calls the active plugin's `run_point()` once per snapshot; TAS plugins delegate to `run_tas_point()`, and the direct path remains behind that seam.
 2. The first executed point still needs `instrument.set_parameters()` + `instrument.backengine()` to materialize the executable and preserve the retained diagnostic `McStasData`.
-3. Later points can reuse `params_snapshot['params']` directly as CLI args because those keys (for example `A1_param`, `rhm_param`) are already the correct McStas parameter names.
+3. Later points can reuse `params_snapshot['params']` directly as CLI args because those keys (for example `mono_two_theta_param`, `rhm_param`) are already the correct McStas parameter names.
 
 ## Post-run Data Loading
 

@@ -56,6 +56,15 @@ PARAM_ROLE = {
     "ss2_wgap_param": "slit.sample_exit.horizontal_gap",
     "ss2_hgap_param": "slit.sample_exit.vertical_gap",
 }
+# McStas parameters renamed since the baseline was recorded: recorded name -> emitted name.
+# The JSON keeps the recorded names; the test translates them, never the numbers.
+RENAMED_PARAMS = {
+    "A1_param": "mono_two_theta_param",
+    "A2_param": "sample_two_theta_param",
+    "A3_param": "sample_rotation_param",
+    "A4_param": "analyzer_two_theta_param",
+}
+PARAM_ROLE.update({new: PARAM_ROLE[old] for old, new in RENAMED_PARAMS.items()})
 META_ROLE = {
     "mtt": "mono_two_theta_deg",
     "stt": "sample_two_theta_deg",
@@ -86,6 +95,11 @@ META_NAMES = ("mtt", "stt", "sth", "att", "sgl", "sgu", "omega", "H", "K", "L",
 
 def param_role(name):
     return PARAM_ROLE.get(name, name)
+
+
+def emitted_name(recorded):
+    """The name today's code emits for a parameter the baseline recorded."""
+    return RENAMED_PARAMS.get(recorded, recorded)
 
 
 def meta_role(name):

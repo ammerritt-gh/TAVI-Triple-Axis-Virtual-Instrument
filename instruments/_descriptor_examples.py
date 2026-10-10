@@ -31,10 +31,10 @@ from instruments.puma.plugin import puma_descriptor  # noqa: F401  (re-export)
 # parameters are part of the core because every TAVI instrument emits the same
 # single sample arm (the stage at its readout angles and the crystal mount).
 _CORE_PARAMS = (
-    ParameterSpec("A1_param", "Monochromator 2-theta angle"),
-    ParameterSpec("A2_param", "Sample 2-theta angle"),
-    ParameterSpec("A3_param", "Sample theta (phi) angle"),
-    ParameterSpec("A4_param", "Analyzer 2-theta angle"),
+    ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle"),
+    ParameterSpec("sample_two_theta_param", "Sample 2-theta angle"),
+    ParameterSpec("sample_rotation_param", "Sample rotation (turntable) readout, inspection only"),
+    ParameterSpec("analyzer_two_theta_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0),
     ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0),

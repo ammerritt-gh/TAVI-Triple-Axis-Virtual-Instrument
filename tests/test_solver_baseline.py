@@ -50,16 +50,17 @@ def test_case_matches_baseline(key, recomputed):
     snap = recomputed[key]
     assert snap.params is not None and not snap.error_flags, snap.error_flags
     for entry in recorded["params"]:
-        assert entry["name"] in snap.params, f"{key}: {entry['name']} no longer emitted"
-        assert _same(snap.params[entry["name"]], entry["value"]), (
-            f"{key}: {entry['name']} ({entry['role']}) = {snap.params[entry['name']]!r}, "
+        name = cases.emitted_name(entry["name"])
+        assert name in snap.params, f"{key}: {name} no longer emitted"
+        assert _same(snap.params[name], entry["value"]), (
+            f"{key}: {name} ({entry['role']}) = {snap.params[name]!r}, "
             f"baseline {entry['value']!r}")
     for entry in recorded["metadata"]:
         assert entry["name"] in snap.metadata, f"{key}: metadata {entry['name']} missing"
         assert _same(snap.metadata[entry["name"]], entry["value"]), (
             f"{key}: metadata {entry['name']} ({entry['role']}) = "
             f"{snap.metadata[entry['name']]!r}, baseline {entry['value']!r}")
-    recorded_names = {entry["name"] for entry in recorded["params"]}
+    recorded_names = {cases.emitted_name(entry["name"]) for entry in recorded["params"]}
     unrecorded = set(snap.params) - recorded_names
     assert not unrecorded, f"{key}: emitted but not in the baseline: {sorted(unrecorded)}"
 

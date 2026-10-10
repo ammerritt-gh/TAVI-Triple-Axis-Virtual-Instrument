@@ -173,10 +173,10 @@ def _get_point_energy_metadata(PUMA, deltaE):
 def build_puma_point_params(PUMA, deltaE):
     """Build the runtime parameter snapshot for one instrument point."""
     return {
-        "A1_param": PUMA.A1,
-        "A2_param": PUMA.A2,
-        "A3_param": PUMA.A3,
-        "A4_param": PUMA.A4,
+        "mono_two_theta_param": PUMA.A1,
+        "sample_two_theta_param": PUMA.A2,
+        "sample_rotation_param": PUMA.A3,
+        "analyzer_two_theta_param": PUMA.A4,
         "E0_param": _get_E0_param_value(PUMA, deltaE),
         "nu_param": _get_v_selector_frequency(PUMA, deltaE),
         "rhm_param": PUMA.rhm,
@@ -214,10 +214,10 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     instrument.settings(output_path="./output", openacc=False) #uses nvc, must be set up on linux
     
     ## Add parameters
-    instrument.add_parameter("A1_param", comment="Monochromator 2-theta angle.")
-    instrument.add_parameter("A2_param", comment="Sample 2-theta angle.")
-    instrument.add_parameter("A3_param", comment="Sample phi angle.")
-    instrument.add_parameter("A4_param", comment="Analyzer 2-theta angle.")
+    instrument.add_parameter("mono_two_theta_param", comment="Monochromator 2-theta angle.")
+    instrument.add_parameter("sample_two_theta_param", comment="Sample 2-theta angle.")
+    instrument.add_parameter("sample_rotation_param", comment="Sample rotation (turntable) readout, inspection only.")
+    instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
     instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
@@ -324,14 +324,14 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_crystal_assembly(instrument, cradle_name="mono_cradle",
                               crystal_name="monochromator", relative="origin",
-                              distance=PUMA.L1, rotation_expr="A1_param/2",
+                              distance=PUMA.L1, rotation_expr="mono_two_theta_param/2",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
                               split=2, extend="if(!SCATTERED) ABSORB;")
 
         ## sample arm
 
-        sample_arm = instrument.add_component("sample_arm", "Arm", AT=[0,0,PUMA.L1], RELATIVE="origin", ROTATED=[0,"A1_param",0])
+        sample_arm = instrument.add_component("sample_arm", "Arm", AT=[0,0,PUMA.L1], RELATIVE="origin", ROTATED=[0,"mono_two_theta_param",0])
 
         emit_monitor_group(instrument, 'Postmono Emonitor')
 
@@ -580,7 +580,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         ## analyzer
 
-        analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0,0,PUMA.L2], ROTATED=[0,"A2_param",0], RELATIVE="sample_arm")
+        analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0,0,PUMA.L2], ROTATED=[0,"sample_two_theta_param",0], RELATIVE="sample_arm")
         
         emit_monitor_group(instrument, 'Pre-analyzer collimation PSD')
 
@@ -597,14 +597,14 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
 
         emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
                               crystal_name="analyzer", relative="analyzer_arm",
-                              distance=PUMA.L3, rotation_expr="A4_param/2",
+                              distance=PUMA.L3, rotation_expr="analyzer_two_theta_param/2",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
                               split=5)
 
         ## detector
 
-        detector_arm = instrument.add_component("detector_arm", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"A4_param",0], RELATIVE="analyzer_arm")
+        detector_arm = instrument.add_component("detector_arm", "Arm", AT=[0,0,PUMA.L3], ROTATED=[0,"analyzer_two_theta_param",0], RELATIVE="analyzer_arm")
 
         emit_monitor_group(instrument, 'Post-analyzer EMonitor', 'Post-analyzer PSD')
 

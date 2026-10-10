@@ -173,10 +173,10 @@ _GUIDE_EXIT_W, _GUIDE_EXIT_H = 0.020, 0.140
 # add_parameter() -- the per-point snapshot dict shape. Identical in shape to
 # IN8's: IN12 has no velocity selector or NMO inside the model boundary.
 _IN12_PARAMS = (
-    ParameterSpec("A1_param", "Monochromator 2-theta angle"),
-    ParameterSpec("A2_param", "Sample 2-theta angle"),
-    ParameterSpec("A3_param", "Sample phi angle"),
-    ParameterSpec("A4_param", "Analyzer 2-theta angle"),
+    ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle"),
+    ParameterSpec("sample_two_theta_param", "Sample 2-theta angle"),
+    ParameterSpec("sample_rotation_param", "Sample rotation (turntable) readout, inspection only"),
+    ParameterSpec("analyzer_two_theta_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending"),
     ParameterSpec("rvm_param", "Monochromator vertical bending"),

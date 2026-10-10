@@ -112,7 +112,7 @@ Build-time (affect component tree / require recompilation):
 - diagnostic_mode, diagnostic_settings — control which monitor components are added
 
 Per-point (McStas parameters, set via `set_parameters()`):
-- A1_param, A2_param, A3_param, A4_param
+- mono_two_theta_param, sample_two_theta_param, sample_rotation_param, analyzer_two_theta_param
 - E0_param
 - rhm_param, rvm_param, rha_param, rva_param
 - vbl_hgap_param, pbl_hgap_param, pbl_vgap_param, dbl_hgap_param
@@ -339,10 +339,10 @@ Scan complete → emit scan_completed, record timing
 snapshot = {
     # For instrument.set_parameters()
     'params': {
-        'A1_param': float,
-        'A2_param': float,
-        'A3_param': float,
-        'A4_param': float,
+        'mono_two_theta_param': float,
+        'sample_two_theta_param': float,
+        'sample_rotation_param': float,
+        'analyzer_two_theta_param': float,
         'E0_param': float,
         'rhm_param': float,
         'rvm_param': float,

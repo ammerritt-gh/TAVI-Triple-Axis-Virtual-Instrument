@@ -51,10 +51,10 @@ PUMA_MCSTAS_NAME = "PUMA_McScript"
 # puma/model.py (asserted by
 # tests/test_descriptor_validation.py::test_puma_build_declares_descriptor_params).
 _PUMA_PARAMS = (
-    ParameterSpec("A1_param", "Monochromator 2-theta angle"),
-    ParameterSpec("A2_param", "Sample 2-theta angle"),
-    ParameterSpec("A3_param", "Sample phi angle"),
-    ParameterSpec("A4_param", "Analyzer 2-theta angle"),
+    ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle"),
+    ParameterSpec("sample_two_theta_param", "Sample 2-theta angle"),
+    ParameterSpec("sample_rotation_param", "Sample rotation (turntable) readout, inspection only"),
+    ParameterSpec("analyzer_two_theta_param", "Analyzer 2-theta angle"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
     ParameterSpec("nu_param", "Velocity selector frequency"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending"),
