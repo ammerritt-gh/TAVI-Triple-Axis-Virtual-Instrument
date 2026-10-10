@@ -3,6 +3,7 @@
 This module contains helper functions for file operations, string encoding,
 and scan parameter parsing.
 """
+import math
 import os
 import pathlib
 import re
@@ -116,6 +117,27 @@ def parse_scan_steps(input_string):
     array_values = np.round(array_values, 3)
 
     return variable_name, array_values
+
+
+def scan_range_error(start, end, step):
+    """Why a scan range cannot run as written, or None; the hard step refusals.
+
+    A step that does not divide the range is not refused: parse_scan_steps runs
+    it to the point nearest the end, up to half a step past it ("A3 0 10 4" is
+    0, 4, 8, 12).
+    """
+    # float() accepts "nan"/"inf", and every guard below compares magnitudes --
+    # all False against NaN -- so a non-finite bound would reach
+    # parse_scan_steps, whose int() of the step count raises.
+    if not all(math.isfinite(v) for v in (start, end, step)):
+        return "Start, end, and step must be finite numbers."
+    if step == 0:
+        return "Step size cannot be zero."
+    if (end > start and step < 0) or (end < start and step > 0):
+        return "Step sign doesn't match direction (start → end)."
+    if end != start and abs(step) > abs(end - start):
+        return f"Step ({step}) is larger than the range ({start} to {end})."
+    return None
 
 
 def normalize_scan_commands(cmd1, cmd2, relative_mode_1, relative_mode_2,
