@@ -21,7 +21,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         # not H outside the standard setting, so each sub-column carries its
         # own header and labels, and nothing pairs a Q row with an HKL row.
         # Grid columns: 0-1 Q, 2 the gap (ΔE's unit sits in it), 3-4 HKL.
-        point_group = QGroupBox("Q, HKL and ΔE")
+        point_group = self.point_group = QGroupBox("Q, HKL and ΔE")
         point_layout = QGridLayout()
         point_layout.setSpacing(5)
         point_group.setLayout(point_layout)
@@ -78,3 +78,23 @@ class UnifiedScatteringDock(BaseDockWidget):
                  self.L_edit, self.deltaE_edit, self.K_fixed_combo, self.fixed_E_edit)
         for first, second in zip(chain, chain[1:]):
             QWidget.setTabOrder(first, second)
+
+        # Canonical ID -> the field that shows it, for the scan-field marks. Fixed E
+        # is the fixed-side setting itself, not a quantity a scan sets: unmapped.
+        self._quantity_fields = {
+            "q_instrument_x_inv_angstrom": self.qx_edit,
+            "q_instrument_y_inv_angstrom": self.qy_edit,
+            "q_instrument_z_inv_angstrom": self.qz_edit,
+            "h": self.H_edit, "k": self.K_edit, "l": self.L_edit,
+            "energy_transfer_mev": self.deltaE_edit,
+        }
+
+    def field_for(self, quantity_id):
+        """The field that shows ``quantity_id`` (a canonical ID), or None."""
+        return self._quantity_fields.get(quantity_id)
+
+    def field_groups(self):
+        """[(group box, canonical IDs)] that one "not used by this scan" note covers: HKL and Q."""
+        return [(self.point_group, ("h", "k", "l", "q_instrument_x_inv_angstrom",
+                                    "q_instrument_y_inv_angstrom",
+                                    "q_instrument_z_inv_angstrom"))]
