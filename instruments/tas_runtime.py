@@ -1131,6 +1131,11 @@ def check_point_feasibility(state, calculation, scan_point, vals, axis_limits=No
     """
     point_state = copy.deepcopy(state)
     geom = _solve_point_geometry(point_state, calculation, scan_point, vals)
+    return judge_point_geometry(state, geom, axis_limits)
+
+
+def judge_point_geometry(state, geom, axis_limits=None):
+    """``check_point_feasibility``'s verdict on an already-solved point (``_solve_point_geometry``)."""
     error_flags = geom["error_flags"]
     if error_flags:
         return False, describe_scan_error_flags(error_flags)
