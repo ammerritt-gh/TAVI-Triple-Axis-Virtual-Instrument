@@ -62,3 +62,17 @@ def test_a_scan_at_the_maximum_clears_the_gate(in8):
     here: that expands every point on the GUI thread."""
     hard, _soft = issues_for(in8, "A3 0 99999 1")
     assert hard == []
+
+
+def test_a_step_too_small_for_its_range_is_a_400_not_a_500(in8):
+    """A3 0 1 1e-309 overflows the step count: /validate and /scan refuse it by name."""
+    params = {"scan_command1": "A3 0 1 1e-309"}
+    backend = cm.TaviApiBackend(in8, _SyncBridge())
+    message = "Step (1e-309) is too small for the range 0 to 1."
+
+    result = backend.submit_validate({"parameters": params})
+    assert result["would_queue"] is False
+    assert f"scan_validation: Command 1: {message}" in result["blockers"], result["blockers"]
+    with pytest.raises(cm.ApiError) as refused:
+        backend.submit_scan({"parameters": params})
+    assert (refused.value.status, refused.value.code) == (400, "scan_validation")
