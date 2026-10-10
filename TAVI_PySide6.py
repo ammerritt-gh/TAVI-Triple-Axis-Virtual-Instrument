@@ -4989,14 +4989,15 @@ class TAVIController(QObject):
 
         The plan is evaluated at the typed values, each command at its start (stepped
         from its base when relative: these fields never follow a command, so any point
-        serves), then once per typed input nudged by half the docks' last decimal: a
-        shown value within the sum of those changes, plus its own rounding, is the same
-        value at display precision, since the inputs it is computed from are shown no finer.
+        serves), then once per typed input nudged by half a unit in the last decimal its
+        field shows: a shown value within the sum of those changes, plus its own
+        rounding, is the same value at display precision, since the inputs it is
+        computed from are shown no finer.
         """
         snapshot, state = launch_state['snapshot'], launch_state['scan_config']
         sources = {qid: typed_sources(plan, qid) for qid, _field in constant}
-        half = 0.5e-4   # the docks write 4 decimals (format_editable_number)
-        slack = dict.fromkeys(sources, half)
+        shown = dict(self._marked_fields())
+        slack = {qid: self._shown_half_unit(field.text()) for qid, field in constant}
         try:
             point = {qid: float(snapshot[qid]) for qid in plan.inputs - plan.scanned}
             for c in plan.commands:
@@ -5004,7 +5005,8 @@ class TAVIController(QObject):
                 point[c.quantity] = c.start + base
             values = evaluate(plan, point, state)
             for source in set().union(*sources.values()) & point.keys():
-                nudged = evaluate(plan, {**point, source: point[source] + half}, state)
+                step = self._shown_half_unit(shown[source].text()) if source in shown else 0.5e-4
+                nudged = evaluate(plan, {**point, source: point[source] + step}, state)
                 for qid in slack:
                     if values.get(qid) is not None and nudged.get(qid) is not None:
                         slack[qid] += abs(nudged[qid] - values[qid])
@@ -5022,6 +5024,11 @@ class TAVIController(QObject):
                           f"Run will use {_with_unit(value, quantity_by_id(qid).unit)}, "
                           f"computed from {names}, not the value shown here")
         return marks
+
+    @staticmethod
+    def _shown_half_unit(text):
+        """Half a unit in the last decimal ``text`` shows; a whole number shows none, so the docks' 4."""
+        return 0.5 * 10 ** -(len(text.strip().partition(".")[2]) or 4)
 
     @staticmethod
     def _shows(text, value, slack):

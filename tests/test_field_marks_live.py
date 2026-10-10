@@ -572,6 +572,11 @@ def test_a_degenerate_cell_withdraws_the_marks_without_raising(window):
         _settle()
 
 
+def test_a_literal_ei_is_judged_at_the_decimals_it_shows(window):
+    """Defaults set Ei from the text "14.7"; A2 typed as 41.17 gives 14.678, which that text shows."""
+    window.instrument_dock.mtt_edit.setText("41.17")
+    _type(window, "A3 0 2 1")
+    assert EI not in _marks(window)
 
 
 # ----------------------------------------------------- the badge and the field
