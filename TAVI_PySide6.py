@@ -148,7 +148,7 @@ from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
 from tavi.quantities import crystal_theta, normalize_write_names, resolve as resolve_quantity
 from tavi.quantities import slit_gap_id, slit_gap_ids
-from tavi.quantities import public_applied_radii, public_values as _public_values, schema_unit
+from tavi.quantities import public_values as _public_values, schema_unit
 from tavi.quantities import to_internal as _to_internal, to_public as _to_public
 from tavi.reflection_catalog import (load_reflections, plane_filtered_unique,
                                      primitive_miller, ProjectedReflection,
@@ -2486,18 +2486,13 @@ class TAVIController(QObject):
 
     def output_parameters(self, params):
         """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only."""
-        out = self.public_values(params)
-        out.pop('sth', None)   # the stage readout of sample_rotation_deg, which 'omega' already records
-        return out
+        return self.public_values(params)
 
     def point_output_parameters(self, vals, metadata, scan_index, number_neutrons):
-        """One scan point's scan_parameters.txt: requested radii under their IDs, applied under applied_*."""
-        point = {key: value for key, value in metadata.items() if key != 'requested_radii'}
-        full_params = {**vals, **point, **metadata['requested_radii'],
-                       'scan_index': scan_index, 'number_neutrons': number_neutrons}
-        out = self.output_parameters(full_params)
-        out.update(public_applied_radii({axis: metadata[axis] for axis in ('rhm', 'rvm', 'rha', 'rva')}))
-        return out
+        """One scan point's scan_parameters.txt: the launch values overlaid by the point's own
+        (``public_values`` puts requested radii under their IDs, applied under applied_*)."""
+        return self.output_parameters({**vals, **metadata, 'scan_index': scan_index,
+                                       'number_neutrons': number_neutrons})
 
     def api_parameters(self):
         """GET /parameters: the GUI values under canonical IDs, or None when a field will not parse."""

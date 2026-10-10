@@ -104,19 +104,37 @@ def test_scan_data_files_carry_the_version_as_a_comment(tmp_path):
             assert f"# api_version: {API_VERSION}\n" in handle.readlines()[:2], name
 
 
-def test_a_scanned_radius_is_written_as_requested_and_its_applied_sign_apart(tmp_path):
-    """On a negative-branch mono the point keeps the scanned magnitude under its ID, so the
-    Display reload matches it, and the signed take-off radius under applied_*."""
+def _negative_branch_radius_point(tmp_path):
+    """A PANDA point scanning rhm to 2.0 m on a negative-branch mono."""
     from instruments.panda.plugin import PANDAPlugin
     from instruments.tas_runtime import MOTORS, compute_scan_snapshot
     from plan_helpers import motors_point, plan_for
 
     plugin, vals, rhm = PANDAPlugin(), {"deltaE": 0.0}, "mono_horizontal_radius_m"
     state = plugin.default_state()
-    snapshot = compute_scan_snapshot(
+    return compute_scan_snapshot(
         plan_for(plugin, state, vals, MOTORS, scanned=(rhm,)),
         {**motors_point(-80.0, -100.0, 0.0, -80.0), rhm: 2.0}, 1, state, vals, str(tmp_path),
     )
+
+
+def test_public_values_of_a_point_publishes_requested_and_applied_radii_apart(tmp_path):
+    """Every publishing path inherits it: the requested magnitude under the radius ID, the
+    signed applied radius under applied_*, and no internal sth or requested_radii."""
+    from tavi.quantities import public_values
+
+    metadata = _negative_branch_radius_point(tmp_path).metadata
+    published = public_values(metadata)
+    assert published["mono_horizontal_radius_m"] == pytest.approx(2.0)
+    assert published["applied_mono_horizontal_radius_m"] == metadata["rhm"] < 0
+    assert published["sample_rotation_deg"] == metadata["omega"]
+    assert not {"rhm", "sth", "requested_radii"} & set(published)
+
+
+def test_a_scanned_radius_is_written_as_requested_and_its_applied_sign_apart(tmp_path):
+    """On a negative-branch mono the point keeps the scanned magnitude under its ID, so the
+    Display reload matches it, and the signed take-off radius under applied_*."""
+    snapshot = _negative_branch_radius_point(tmp_path)
     with _controller("panda") as controller:
         point = controller.point_output_parameters(controller.get_gui_values(), snapshot.metadata, 1, 1000)
     write_parameters_to_file(str(tmp_path), point)
