@@ -207,6 +207,7 @@ def test_goto_refuses_what_a_scan_refuses(name):
 
 @pytest.mark.parametrize("name, edit", [
     ("A2", "mtt_edit"), ("A4", "stt_edit"), ("A6", "att_edit"), ("psi", "omega_edit"),
+    ("rva", "rva_edit"),
 ])
 def test_goto_from_a_scan_drives_the_field_of_the_quantity_it_scanned(in8, name, edit):
     in8.set_default_parameters()

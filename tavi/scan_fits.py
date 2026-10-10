@@ -728,19 +728,13 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
 # Goto mapping
 # --------------------------------------------------------------------------
 
-# Every scannable row is goto-able under its own ID, a slit gap included (a gap scan's
-# CEN drives that gap's field, in mm), except these.
-# rva stays non-goto as before U2; its old reason (no settable field) no longer holds, so lifting it is a separate call.
-_NOT_GOTO = frozenset({"analyzer_vertical_radius_m"})
+# Every scan variable is goto-able under its own canonical ID, a slit gap included
+# (a gap scan's CEN drives that gap's field, in mm).
 
 
 def _canonical_scan_variable(name) -> Optional[str]:
     """Canonical ID of a scan variable (any registry spelling), or ``None`` if
     the registry refuses it as a scan command.
-
-    Knowing *that* a variable exists is separate from knowing whether it is
-    goto-able: ``analyzer_vertical_radius_m`` is a known row that is not
-    goto-able, and the two cases must produce different refusals.
     """
     if not isinstance(name, str):
         return None
@@ -751,13 +745,12 @@ def _canonical_scan_variable(name) -> Optional[str]:
 
 
 def field_for_scan_variable(name: str) -> Optional[str]:
-    """Settable parameter field for a scan variable; ``None`` = not goto-able.
+    """Settable parameter field for a scan variable; ``None`` = not a scan variable.
 
     Any registry spelling (ID, alias, any case) resolves. A name the registry
     refuses as a scan command returns ``None``.
     """
-    canonical = _canonical_scan_variable(name)
-    return None if canonical in _NOT_GOTO else canonical
+    return _canonical_scan_variable(name)
 
 
 # --------------------------------------------------------------------------
@@ -787,7 +780,7 @@ def plan_goto(variable, value, *, busy: bool) -> GotoPlan:
     meaningful once the earlier one passed:
 
     1. ``busy`` -- a scan is running or queued, so nothing may be moved;
-    2. the variable is unknown, or known but not goto-able;
+    2. the variable is unknown to the registry;
     3. the target value is not a real finite number.
 
     Booleans are rejected explicitly (``np.bool_`` included, since a reduction
@@ -804,10 +797,6 @@ def plan_goto(variable, value, *, busy: bool) -> GotoPlan:
     if canonical is None:
         return GotoPlan(ok=False, reason="unknown scan variable '%s'" % name,
                         variable=name, field=None, value=None)
-    field = None if canonical in _NOT_GOTO else canonical
-    if field is None:
-        return GotoPlan(ok=False, reason="'%s' is not goto-able" % name,
-                        variable=name, field=None, value=None)
 
     if isinstance(value, (bool, np.bool_)):
         return GotoPlan(ok=False, reason="target value is not finite",
@@ -822,7 +811,7 @@ def plan_goto(variable, value, *, busy: bool) -> GotoPlan:
         return GotoPlan(ok=False, reason="target value is not finite",
                         variable=name, field=None, value=None)
 
-    return GotoPlan(ok=True, reason="", variable=name, field=field, value=target)
+    return GotoPlan(ok=True, reason="", variable=name, field=canonical, value=target)
 
 
 def _fmt_value(value) -> str:

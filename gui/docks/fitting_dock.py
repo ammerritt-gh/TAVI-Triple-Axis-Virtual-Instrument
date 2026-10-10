@@ -782,7 +782,7 @@ class FittingDock(BaseDockWidget):
         if not is_1d:
             goto_reason = "no 1D scan is displayed"
         elif field is None:
-            goto_reason = "scan variable '%s' is not goto-able" % variable
+            goto_reason = "scan variable '%s' is unknown" % variable
         elif not idle:
             goto_reason = "a scan is running or queued"
         can_goto = not goto_reason
