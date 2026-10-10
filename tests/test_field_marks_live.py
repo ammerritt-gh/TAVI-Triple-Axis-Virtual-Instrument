@@ -577,6 +577,8 @@ def test_a_degenerate_cell_withdraws_the_marks_without_raising(window):
         window.controller.update_field_marks(window.controller._box_verdict())
         window.controller.validate_scan_commands()
         assert _marks(window) == {} and _note(window) is None
+        conflict = window.simulation_dock.scan_conflict_label
+        assert not conflict.isHidden() and conflict.text().startswith("Nothing can be planned")
         sample.lattice_alpha_edit.setText(alpha)
         window.controller.update_field_marks(window.controller._box_verdict())
         assert _marks(window)[A3] == ("set", "1")
