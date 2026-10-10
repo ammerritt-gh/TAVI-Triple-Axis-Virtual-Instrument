@@ -378,9 +378,9 @@ class InstrumentDescriptor:
     """Everything the GUI needs to render itself for one instrument.
 
     Required fields first; everything optional defaults to empty so a minimal
-    instrument is easy to declare. ``axis_limits`` is keyed by TAVI angle name
-    ("A1" = mono 2theta, "A2" = sample 2theta, "A4" = analyser 2theta); note vTAS
-    names the same axes a2/a4/a6.
+    instrument is easy to declare. ``axis_limits`` is keyed by canonical ID
+    (``mono_two_theta_deg``, ``sample_two_theta_deg``, ``analyzer_two_theta_deg``);
+    the retired "A1"/"A2"/"A4" keys are refused by validation.
     """
 
     id: str

@@ -382,9 +382,9 @@ def in12_descriptor() -> InstrumentDescriptor:
         # standard elastic Al (2,0,0) configuration at k = 2.0 A^-1 (E = 8.29
         # meV), the wavevector the 2016 flux figures are quoted at.
         axis_limits={
-            "A1": AxisLimits(-140.0, -55.834469, -10.0),
-            "A2": AxisLimits(-120.0, 101.737423, 120.0),
-            "A4": AxisLimits(-140.0, -55.834469, 140.0),
+            "mono_two_theta_deg": AxisLimits(-140.0, -55.834469, -10.0),
+            "sample_two_theta_deg": AxisLimits(-120.0, 101.737423, 120.0),
+            "analyzer_two_theta_deg": AxisLimits(-140.0, -55.834469, 140.0),
         },
         # Sample goniometer +/-20 deg: ILL characteristics (MODEL_STATUS.md).
         goniometer=tas_goniometer(20.0),

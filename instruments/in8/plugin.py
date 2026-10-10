@@ -258,9 +258,9 @@ def in8_descriptor() -> InstrumentDescriptor:
         # the looser historical reading rather than averaged into a guess.
         # sense_mono = +1, so the signed readout is the take-off angle itself.
         axis_limits={
-            "A1": AxisLimits(11.0, 41.19, 90.0),
-            "A2": AxisLimits(-120.0, 71.30, 120.0),
-            "A4": AxisLimits(-120.0, -41.19, 120.0),
+            "mono_two_theta_deg": AxisLimits(11.0, 41.19, 90.0),
+            "sample_two_theta_deg": AxisLimits(-120.0, 71.30, 120.0),
+            "analyzer_two_theta_deg": AxisLimits(-120.0, -41.19, 120.0),
         },
         # Sample stage: no source documents IN8's arc travel, so it is
         # undocumented (unlimited); MODEL_STATUS.md says so.

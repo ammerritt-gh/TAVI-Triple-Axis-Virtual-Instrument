@@ -315,9 +315,9 @@ def panda_descriptor() -> InstrumentDescriptor:
         # PG(002) (A1 = A4 = -74.332 deg, matching vPANDA's own mtt/att
         # defaults) and Al (1,1,1) at the sample.
         axis_limits={
-            "A1": AxisLimits(-132.0, -74.332, -20.0),
-            "A2": AxisLimits(5.0, 120.180, 125.0),
-            "A4": AxisLimits(-130.0, -74.332, 100.0),
+            "mono_two_theta_deg": AxisLimits(-132.0, -74.332, -20.0),
+            "sample_two_theta_deg": AxisLimits(5.0, 120.180, 125.0),
+            "analyzer_two_theta_deg": AxisLimits(-130.0, -74.332, 100.0),
         },
         # Sample goniometer about +/-15 deg: MLZ teaching notes, via the
         # 2026-07-18 research dossier (MODEL_STATUS.md).

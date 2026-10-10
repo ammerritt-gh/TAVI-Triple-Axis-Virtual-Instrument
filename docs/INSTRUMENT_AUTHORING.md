@@ -75,12 +75,12 @@ plugins, but built-in packages use the central path.
    stage: `goniometer=tas_goniometer(arc_travel)` with the arcs' travel from
    a cited source, or `tas_goniometer()` (undocumented, unlimited) when none
    exists — say which in `MODEL_STATUS.md`; never invent a limit.
-   `axis_limits` keys are TAVI's internal numbering, and this release keeps
-   it (the keys are not renamed): `"A1"` is mono 2theta (ILL A2, registry ID
-   `mono_two_theta_deg`), `"A2"` sample 2theta (ILL A4, `sample_two_theta_deg`),
-   `"A4"` analyzer 2theta (ILL A6, `analyzer_two_theta_deg`); any other key is
-   refused. The feasibility check reads them against the solved mono, sample and
-   analyzer 2theta.
+   `axis_limits` keys are the canonical IDs: `mono_two_theta_deg` (mono 2theta),
+   `sample_two_theta_deg` (sample 2theta), `analyzer_two_theta_deg` (analyzer
+   2theta); any other key is refused. The retired TAVI keys `"A1"`, `"A2"` and
+   `"A4"` are refused by name: they used TAVI's old numbering, so do not map them
+   by their ILL numbers. The feasibility check reads them against the solved
+   mono, sample and analyzer 2theta.
    `descriptor.samples` is the shared library (`tavi/sample_library.py`), not
    a per-package list — every instrument mounts exactly
    `default_sample_library()`; `package_validation.py`'s runtime check

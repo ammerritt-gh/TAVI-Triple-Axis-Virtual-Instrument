@@ -13,13 +13,17 @@ import pytest
 
 from instruments._descriptor_examples import in8_descriptor, in12_descriptor
 from instruments.descriptor import AxisLimits, CurvatureAxis, GonioAxis
-from instruments.panda.plugin import panda_descriptor
+from instruments.in8.plugin import IN8Plugin
+from instruments.in12.plugin import IN12Plugin
+from instruments.panda.plugin import PANDAPlugin, panda_descriptor
 from instruments.puma.plugin import puma_descriptor
+from instruments.tas_runtime import ATT, MOTORS, MTT, STT
 from instruments.validation import (
     DescriptorValidationError,
     assert_valid_descriptor,
     validate_descriptor,
 )
+from plan_helpers import motors_point, plan_for
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PUMA_MODULE_PATH = os.path.join(REPO_ROOT, "instruments", "puma", "model.py")
@@ -109,13 +113,18 @@ def _replace(d, **kwargs):
             "l2_mono_sample",
         ),
         (
-            lambda d: _replace(d, axis_limits={"A1": AxisLimits(10.0, 20.0, 0.0)}),
+            lambda d: _replace(d, axis_limits={"mono_two_theta_deg": AxisLimits(10.0, 20.0, 0.0)}),
             "lower <= default <= upper",
         ),
         (
             # An author who follows the ILL numbering writes A6 for the analyser 2theta.
             lambda d: _replace(d, axis_limits={"A6": AxisLimits(-120.0, 0.0, 120.0)}),
-            "mono 2theta, ILL A2",
+            "not a limit key; use mono_two_theta_deg",
+        ),
+        (
+            # The retired key is refused by name: under the old numbering A2 was sample 2theta.
+            lambda d: _replace(d, axis_limits={"A2": AxisLimits(-120.0, 0.0, 120.0)}),
+            "retired TAVI numbering; use 'sample_two_theta_deg'",
         ),
     ],
 )
@@ -328,3 +337,23 @@ def test_runnable_requires_a_goniometer():
     bare = _with_gonio()
     assert validate_descriptor(bare) == []          # structurally fine
     assert any("goniometer" in e for e in validate_descriptor(bare, runnable=True))
+
+
+@pytest.mark.parametrize("plugin_cls", [IN8Plugin, IN12Plugin, PANDAPlugin])
+@pytest.mark.parametrize("key, axis_name", [
+    (MTT, "A2 (mono 2θ)"), (STT, "A4 (sample 2θ)"), (ATT, "A6 (analyzer 2θ)"),
+])
+def test_an_axis_limit_bounds_the_physical_axis_it_names(plugin_cls, key, axis_name):
+    """Each canonical limit bounds the axis the retired key bounded: a point past its upper limit
+    is refused on that axis, and only that one."""
+    pytest.importorskip("mcstasscript")
+    plugin = plugin_cls()
+    state = plugin.default_state()
+    limits = plugin.descriptor().axis_limits
+    angles = {name: limits[name].default for name in (MTT, STT, ATT)}
+    angles[key] = limits[key].upper + 5.0
+    check = plugin.check_point_feasibility(
+        state, plan_for(plugin, state, {}, MOTORS),
+        motors_point(angles[MTT], angles[STT], state.A3, angles[ATT]))
+    assert check.feasible is False
+    assert axis_name in check.reason and "outside" in check.reason, check.reason
