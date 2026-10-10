@@ -233,6 +233,44 @@ def test_a_lone_command_2_folder_reloads_on_its_axis(ctrl, tmp_path):
     assert list(shown["counts"]) == [120, 480, 150]
 
 
+def _radius_folder(controller, tmp_path):
+    """A deterministic run of 'rhm -2.4 -2.0 0.2' and its point folders, each written from
+    the point's own snapshot metadata as the run writes it (requested magnitude under the ID)."""
+    from instruments.tas_runtime import compute_scan_snapshot
+
+    controller.output_directory = str(tmp_path)
+    launch = controller.build_api_launch_state({
+        "scan_command1": "rhm -2.4 -2.0 0.2", "number_neutrons": 1000})
+    launch["engine"] = "deterministic"
+    plan, expansion = controller._compile_launch(launch)
+    controller.run_simulation(launch, job=ScanJob(job_id="t-radius", source="api", launch_state=launch))
+    folder = next(p for p in tmp_path.iterdir() if (p / "scan_parameters.txt").exists())
+    for index, point in enumerate(expansion.points):
+        snapshot = compute_scan_snapshot(plan, point, index, launch["scan_config"],
+                                         launch["vals"], str(folder))
+        target = folder / f"scan_{index:04d}"
+        write_parameters_to_file(str(target), controller.point_output_parameters(
+            launch["vals"], snapshot.metadata, index, 1000))
+        shutil.copy(os.path.join(DATA, "old_omega_scan", f"scan_{index:04d}", "detector.dat"),
+                    target / "detector.dat")
+    return folder
+
+
+def test_a_negative_radius_scan_reloads_on_the_typed_axis(ctrl, tmp_path):
+    """The axis keeps the signs typed; each point publishes the radius magnitude it asked for,
+    so the reload matches by magnitude instead of rejecting every point."""
+    folder = _radius_folder(ctrl, tmp_path)
+    assert read_parameters_from_file(str(folder))["scan_values_1"] == pytest.approx(
+        [-2.4, -2.2, -2.0])
+
+    _load(ctrl, folder)
+
+    shown = ctrl.window.display_dock.scan_snapshot()
+    assert "Data loaded into display dock" in _log(ctrl), _log(ctrl)
+    assert (list(shown["x"]), shown["n_measured"]) == (pytest.approx([-2.4, -2.2, -2.0]), 3)
+    assert list(shown["counts"]) == [120, 480, 150]
+
+
 def test_a_relative_folder_without_its_axis_is_refused_not_mislabelled(ctrl, tmp_path):
     """A folder written before the axis was recorded: its points lie on none of the command's
     offsets, so it is refused with a message instead of piling counts into one bin."""
