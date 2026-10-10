@@ -59,6 +59,18 @@ def test_register_duplicate_id_raises():
         register("dummy", "Dummy again", _DummyPlugin)
 
 
+def test_a_lambda_factory_registers_by_the_version_its_plugin_declares():
+    register("dummy", "Dummy", lambda: _DummyPlugin())
+    assert isinstance(get_instrument("dummy"), _DummyPlugin)
+
+
+def test_a_lambda_factory_whose_plugin_declares_another_version_is_refused():
+    class _WrongPlugin(_DummyPlugin):
+        CONTRACT_VERSION = 2
+    with pytest.raises(ValueError, match="CONTRACT_VERSION 2"):
+        register("dummy", "Dummy", lambda: _WrongPlugin())
+
+
 def test_get_unknown_id_error_lists_available():
     register("dummy", "Dummy", _DummyPlugin)
     with pytest.raises(KeyError) as excinfo:

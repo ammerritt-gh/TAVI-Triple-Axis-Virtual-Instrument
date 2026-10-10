@@ -40,12 +40,15 @@ def register(
 ) -> None:
     """Register an instrument by id. ``factory`` returns a fresh ``InstrumentPlugin``.
 
-    The factory class's ``CONTRACT_VERSION`` is read here, before any plugin is built, so a
-    plugin written against another contract version is refused at load.
+    The factory's ``CONTRACT_VERSION`` is read here; a factory without one (a lambda or
+    partial) is asked for the plugin it builds, so a plugin written against another
+    contract version is refused at load.
     """
     if instrument_id in _FACTORIES:
         raise ValueError(f"Instrument id already registered: {instrument_id!r}")
     declared = getattr(factory, "CONTRACT_VERSION", None)
+    if declared is None:
+        declared = getattr(factory(), "CONTRACT_VERSION", None)
     if declared != CONTRACT_VERSION:
         found = ("declares no CONTRACT_VERSION" if declared is None
                  else f"declares CONTRACT_VERSION {declared!r}")
