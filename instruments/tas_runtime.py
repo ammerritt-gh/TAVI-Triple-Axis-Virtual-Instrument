@@ -1122,7 +1122,8 @@ def check_point_feasibility(state, calculation, scan_point, vals, axis_limits=No
     here is exactly a point the real scan would skip. A point is infeasible
     when ``calculate_angles`` emits any error flag (scattering triangle cannot
     close, Bragg condition unreachable, zero Q, unknown crystal), or when an
-    optional axis-limit mapping excludes a solved or raw readout angle.
+    axis-limit mapping excludes a solved or raw readout angle. The mapping is
+    the caller's ``axis_limits``, else the state's descriptor limits.
 
     ``state`` must be a solved scan-config state (it carries ``fixed_E``,
     ``K_fixed``, ``monocris``, ``anacris`` and, for HKL points, ``sample_mount``).
@@ -1134,10 +1135,12 @@ def check_point_feasibility(state, calculation, scan_point, vals, axis_limits=No
     if error_flags:
         return False, describe_scan_error_flags(error_flags)
 
+    if axis_limits is None:
+        axis_limits = state.descriptor().axis_limits
     axis_fields = {"mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt",
                    "analyzer_two_theta_deg": "att"}
     for axis_name, field_name in axis_fields.items():
-        limits = (axis_limits or {}).get(axis_name)
+        limits = axis_limits.get(axis_name)
         if limits is None:
             continue
         value = float(geom[field_name])
