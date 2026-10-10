@@ -131,6 +131,13 @@ def test_field_in_tight_cell_keeps_its_outline(app):
     assert above == QColor(theme.DERIVED_OUTLINE)
 
 
+def test_command_chip_text_colour_comes_from_the_theme(app):
+    dock = UnifiedSimulationDock()
+    assert theme.CHIP_TEXT in dock.scan_chip_1.styleSheet()
+    assert theme.CHIP_TEXT in dock.scan_chip_2.styleSheet()
+    dock.deleteLater()
+
+
 def test_simulation_dock_keeps_warnings_and_gains_chips_and_legend(app):
     dock = UnifiedSimulationDock()
     assert dock.scan_warning_1_label is not None
