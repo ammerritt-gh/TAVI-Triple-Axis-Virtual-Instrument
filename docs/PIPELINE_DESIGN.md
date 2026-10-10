@@ -130,7 +130,7 @@ A shared function in `instruments/tas_runtime.py`, exposed by each plugin throug
 `compute_snapshot`, that takes the current scan point data and returns a snapshot:
 
 ```python
-def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_folder, ...):
+def compute_scan_snapshot(plan, scan_point, scan_index, puma, vals, data_folder, indices=None):
     """Compute the complete params snapshot for one scan point.
     
     Returns:
@@ -140,7 +140,7 @@ def compute_scan_snapshot(scan_item, scan_index, scan_mode, puma, vals, data_fol
             'deltaE': float — energy transfer for this point
             'scan_index': int — position in the filtered scan list
             'error_flags': list — from calculate_angles(), empty if OK
-            'metadata': dict — scan_mode, qx/qy/qz or H/K/L, angles, 
+            'metadata': dict — calculation, qx/qy/qz or H/K/L, angles, 
                                 bending, orientation values for logging
                                 and scan_parameters.txt (internal names;
                                 the file is written under canonical IDs)
@@ -190,7 +190,7 @@ run_simulation(launch_state):
     # --- NEW: Start prep thread ---
     prep_thread = threading.Thread(
         target=self._prep_worker,
-        args=(scan_parameter_input, scan_mode, scan_config, vals,
+        args=(scan_parameter_input, plan, scan_config, vals,
               data_folder, snapshot_queue, stop_event),
         daemon=True
     )
@@ -234,15 +234,15 @@ run_simulation(launch_state):
 The prep worker:
 
 ```
-def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, vals,
+def _prep_worker(self, scan_parameter_input, plan, scan_config, vals,
                  data_folder, snapshot_queue, stop_event):
     """Prep thread: compute snapshots and feed the queue."""
-    for i, scan_item in enumerate(scan_parameter_input):
+    for i, (point, indices) in enumerate(scan_parameter_input):
         if stop_event.is_set():
             break
         
         snapshot = instrument_plugin.compute_snapshot(
-            scan_item, i, scan_mode, scan_config, vals, data_folder
+            plan, point, i, scan_config, vals, data_folder, indices=indices
         )
         
         # The queue is unbounded, so this never blocks on a full queue; it
@@ -323,7 +323,7 @@ Scan start
 │
 │   Prep thread                          Simulation thread
 │   ───────────                          ─────────────────
-│   for each scan_item:                  for i in range(total_scans):
+│   for each point:                      for i in range(total_scans):
 │     snapshot = compute_scan_snapshot()    snapshot = queue.get()  ◄── blocks until ready
 │     queue.put(snapshot)  ──────────►     plugin.run_point(instrument, snapshot)
 │                                         postprocess(snapshot, data)
@@ -371,7 +371,7 @@ snapshot = {
     # For postprocessing / logging (internal names, kept until U3; written to
     # scan_parameters.txt under canonical IDs by output_parameters())
     'metadata': {
-        'scan_mode': str,       # 'momentum', 'rlu', 'angle', 'orientation'
+        'calculation': str,     # the plan's: 'hkl', 'q' or 'direct_motors'
         'qx': float | None,
         'qy': float | None,
         'qz': float | None,
