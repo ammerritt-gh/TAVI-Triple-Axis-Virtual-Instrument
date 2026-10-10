@@ -825,7 +825,8 @@ known), and `allowed` (the permitted values for choice fields — crystal ids,
 speaks (§1). `scan_variables` lists canonical IDs; the aliases accepted in a
 scan command (§7) are not repeated there. The slit gaps appear as
 `slit.<stable_id>.horizontal_gap_mm` / `.vertical_gap_mm` fields, only for the
-active instrument's own slits.
+active instrument's own slits; `scan_variables` lists only the gaps the active
+instrument can scan.
 `engines` is the list of execution backends selectable via the `POST /scan`
 `engine` body field; `scan_body_fields` documents the optional top-level scan
 body fields (`engine`, `seed`, `noiseless`, `background`) beyond `parameters`.

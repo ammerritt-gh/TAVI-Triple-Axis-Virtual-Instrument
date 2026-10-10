@@ -8337,7 +8337,9 @@ class TAVIController(QObject):
                                 "configured profile wholesale (never merges). "
                                 "See the top-level 'background' block."},
             ],
-            "scan_variables": [q.id for q in QUANTITIES if q.scannable],
+            "scan_variables": [q.id for q in QUANTITIES if q.scannable and (
+                not q.id.startswith("slit.")   # a slit scans only through a binding
+                or q.id in self.instrument.capabilities().bindings)],
             "scan_command_grammar": (
                 "VARIABLE start stop STEP. The third number (the last token) is "
                 "the STEP SIZE, not the number of points. "
