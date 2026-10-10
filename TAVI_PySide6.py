@@ -4373,7 +4373,11 @@ class TAVIController(QObject):
         sim.clear_all_scan_warnings()
         if not any(text for text, _relative in commands):
             return
-        launch_state = self._collect_simulation_launch_state()
+        try:
+            launch_state = self._collect_simulation_launch_state()
+        except ValueError as exc:   # a cell the sample mount cannot build, mid-edit
+            log.warning("Scan labels: the launch does not collect (%s); no verdict shown", exc)
+            return
         accepted, refused = self._judge_boxes(launch_state, commands)
         if None in refused:
             sim.set_scan_conflict_warning(str(refused[None]), refused[None].command)
@@ -4884,7 +4888,11 @@ class TAVIController(QObject):
         commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
                     (sim.scan_command_2_edit.text().strip(), sim.relative_2_button.isChecked())]
         fields = self._marked_fields()
-        launch_state = self._collect_simulation_launch_state()
+        try:
+            launch_state = self._collect_simulation_launch_state()
+        except ValueError as exc:   # a cell the sample mount cannot build, mid-edit
+            log.warning("Field marks: the launch does not collect (%s); every mark withdrawn", exc)
+            launch_state = None
         marks, unread = {}, set()
         plan = self._marking_plan(launch_state, commands)
         if plan is not None:
