@@ -172,10 +172,10 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 | `sample_rotation_deg` (`A3`, `sth`, `omega`, `psi`) | same ID | The turntable itself. The old ψ correction that `omega` once moved is retired; `psi` is now just a spelling of this quantity. |
 | `analyzer_two_theta_deg` (`A6`, `att`) | same ID | The analyzer 2θ. |
 | `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m` (`rhm`, `rvm`, `rha`) | same ID | Bender curvatures. |
-| `sample_lower_arc_deg`, `sample_upper_arc_deg` (`sgl`, `sgu`) | same ID | The goniometer arcs. They are scanned in angle mode only, and their template slots (8 and 9) are seeded from these fields. |
+| `sample_lower_arc_deg`, `sample_upper_arc_deg` (`sgl`, `sgu`) | same ID | The goniometer arcs. Only the direct-motor calculation reads them (an HKL or Q scan solves them per point); an unscanned arc is used as typed in its field, or held by a plane lock. |
 | `analyzer_vertical_radius_m` (`rva`) | `None` | Not goto-able: its settability depends on the crystal (fixed on PG(002)). |
 
-`A1` and `A5` (the derived Bragg angles) and the retired `chi`, `phi`, `kappa` are not scan variables at all: the registry refuses them, so they never reach this table. The angle-mode template slots the controller still uses are `[mtt, stt, omega, att]` (internal names, kept until the slot layout is removed); the explicit table that maps each canonical ID to its slot is `_SCAN_VARIABLE_TO_INDEX` in `TAVI_PySide6.py`.
+`A1` and `A5` (the derived Bragg angles) and the retired `chi`, `phi`, `kappa` are not scan variables at all: the registry refuses them, so they never reach this table. A scan point is a mapping of these canonical IDs, built by the launch's point plan (`instruments/rules.py`, `expand`); there is no positional slot layout.
 
 An unknown variable also returns `None`. The GUI disables all three goto buttons with the reason in their tooltip.
 
@@ -187,7 +187,7 @@ An unknown variable also returns `None`. The GUI disables all three goto buttons
 
 ### 2.1 The gap
 
-A scan command varies **exactly one** index of the 12-element `scan_point_template` (`TAVI_PySide6.py` ~:4116; the `variable_to_index` map ~:4109). So a straight line in reciprocal space where **H and K change together** — any zone/dispersion direction that is not axis-aligned, e.g. `(1,0,0)→(1,1,0)` or an off-axis `(0.5,0.5,0)→(1.5,1.5,0)` — is **inexpressible today**. The operator can only fake it with a coarse 2D grid and discard the off-diagonal points. Constant-energy cuts along an arbitrary Q-line, the bread-and-butter of dispersion mapping, cannot be scanned in one command.
+A scan command varies **exactly one** quantity of the named scan point (`instruments/rules.py`, `expand`). So a straight line in reciprocal space where **H and K change together** — any zone/dispersion direction that is not axis-aligned, e.g. `(1,0,0)→(1,1,0)` or an off-axis `(0.5,0.5,0)→(1.5,1.5,0)` — is **inexpressible today**. The operator can only fake it with a coarse 2D grid and discard the off-diagonal points. Constant-energy cuts along an arbitrary Q-line, the bread-and-butter of dispersion mapping, cannot be scanned in one command.
 
 ### 2.2 Motivation
 
@@ -196,7 +196,7 @@ A scan command varies **exactly one** index of the 12-element `scan_point_templa
 
 ### 2.3 Design — a first-class scan mode, new point-generator only
 
-A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(scan_item, …)` in `instruments/tas_runtime.py` already accepts a fully-populated 12-element `scan_point` and computes angles from `scan_point[:4]`. It does not care whether one index varies or four do. **The path scan only changes how the `scan_parameter_input` list of `(scan_point, idx)` tuples is built** (`TAVI_PySide6.py` ~:4159–4174).
+A path scan is a **new point-generator, not new physics.** The per-point machinery is untouched: `compute_scan_snapshot(plan, scan_point, …)` in `instruments/tas_runtime.py` already accepts a fully-populated named `scan_point` and solves the angles from the HKL (or Q) and ΔE it carries. It does not care whether one quantity varies or four do. **The path scan only changes how the plan's points are built** (`rules.expand`, compiled once at launch by `TAVIController._compile_launch`).
 
 Definition of a path scan:
 
@@ -246,7 +246,7 @@ POST /api/v1/scans/... (or POST /scan)
 
 ### 2.5 Validation, output, and plotting
 
-- **Validation:** budget point-count uses `N` directly (no `parse_scan_steps` needed). Per-point feasibility runs along the path as above; with `allow_partial=false` an infeasible point rejects the submission, listing the first infeasible fraction. The existing conflict checks (`_check_scan_parameter_conflict`) do not apply (there is one synthetic variable).
+- **Validation:** budget point-count uses `N` directly (no `parse_scan_steps` needed). Per-point feasibility runs along the path as above; with `allow_partial=false` an infeasible point rejects the submission, listing the first infeasible fraction. The plan's pair judgement (`rules.build_plan`) does not apply (there is one synthetic variable).
 - **Output / `ScanResult`:** a path scan is a **1D** result (`mode='1D'`, `variable_1='path'`). `scan_values_1` is the path fraction array `[0 … 1]` (or `|q|`, below). Everything downstream — `counts`, `valid_mask_1`, SSE `scan_initialized`/`point` events — is unchanged.
 - **Plotting / files:** `write_1D_scan` (`TAVI_PySide6.py:4904`) sorts by x via `argsort`. Path fraction is monotonic, so sorting is a no-op and correct. `display_dock._get_axis_label` (:672) has **no case for `"path"`** and would fall through to the raw name — a small addition is needed so the axis reads "Path fraction" or, better, `|Q| (Å⁻¹)` computed as cumulative `‖p_i − p_0‖` in reciprocal-space units. **Open question:** default x-axis — path fraction (simple, unit-free) vs. `|q|` (physically meaningful but requires the metric from `ub_matrix`/`reciprocal_space`). Lean: store both in `ScanResult.metadata`, plot `|q|` when the sample mount is available, fall back to fraction.
 
