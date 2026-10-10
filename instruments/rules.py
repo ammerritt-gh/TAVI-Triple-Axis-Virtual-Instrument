@@ -295,7 +295,8 @@ def _rules(calc, ctx, scanned):
         # By design (amendment 2) a direct-motor point follows the lock's arcs and a typed
         # arc that disagrees is not refused: a future input path that admits one chooses so.
         rules.append(Rule("plane_lock", {SGL: (), SGU: ()}, _lock_tilts, "plane lock"))
-    # The one producer of A1/A5; a rocking rule may replace it without renaming them.
+    # The producer of A1/A5. A rocking rule must also replace the crystal_theta call sites
+    # (models, autofocus, controller), not only this rule.
     rules.append(Rule("crystal_theta", {MTH: (MTT,), ATH: (ATT,)}, _crystal_theta))
     for qid, policy in ctx.curvature.items():
         theta = MTH if RADIUS_CRYSTAL[qid] == MTT else ATH

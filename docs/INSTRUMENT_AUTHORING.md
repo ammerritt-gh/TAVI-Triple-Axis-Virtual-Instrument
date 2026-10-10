@@ -108,7 +108,10 @@ plugins, but built-in packages use the central path.
 3. **State class** — subclass `TAS_Instrument`
    (`instruments/tas_runtime.py`): set L1–L4, the senses, and
    instrument fields in `__init__`; implement `crystal_info()` and
-   `build_point_params()`. Crystal bending is shared policy, not something
+   `build_point_params()`. The angle fields are the canonical IDs
+   (`mono_two_theta_deg`, `sample_two_theta_deg`, `sample_rotation_deg`,
+   `analyzer_two_theta_deg`), not the ILL labels A2, A4, A3 and A6 they stand for.
+   Crystal bending is shared policy, not something
    each instrument implements: `TAS_Instrument.ideal_curvature` is the one
    producer, and an instrument overrides `curvature_object_distances` only
    when its optics are not the default point-source (L_in, L_out) pair — or
@@ -229,12 +232,16 @@ The four TAS instruments derive all three from their descriptor with
 `instruments.rules.tas_capabilities(descriptor)`. Crystal θ is an observable only:
 `mono_theta_deg` (A1) and `analyzer_theta_deg` (A5) are produced by the
 `crystal_theta` rule (θ = 2θ/2, signed as 2θ). A plugin never takes them as
-inputs, and `validate_capabilities` refuses one that does.
+inputs, and `validate_capabilities` refuses one that does. The McStas θ parameters,
+autofocus and the controller call `tavi.quantities.crystal_theta` directly, so a rule
+that replaces it (a rocking model) must replace those call sites too, not only the rule.
 
 **(c) The backend bindings.** `ParameterSpec.quantity` names the canonical ID whose
 per-point value the parameter carries, and `ParameterSpec.scale` converts it:
 McStas value = `scale` × quantity value (a slit gap runs in mm and reaches McStas
-in m, so `scale` = 1e-3). The McStas parameter name is plugin-owned.
+in m, so `scale` = 1e-3). The McStas parameter name is plugin-owned. The runtime
+applies only slit bindings, per point. Any other binding is a declaration in v1: the
+McStas value is whatever `build_point_params` writes, and its `scale` does not convert it.
 `descriptor.scannable_parameters` keeps its meaning, the McStas parameter
 dictionary of the build (the build-tree test checks it). It is **not** the input
 registry: what a scan may drive is `inputs` plus the bindings.
@@ -244,7 +251,9 @@ registry: what a scan may drive is `inputs` plus the bindings.
 aliases cannot be redefined: an extra that collides case-insensitively with a
 registry ID or alias is refused, and so is any other non-registry name. The rule
 applies to the bindings (`validate_descriptor`, beside rule S4b) and to the
-capabilities (`validate_capabilities`). No built-in plugin declares an extra.
+capabilities (`validate_capabilities`). No built-in plugin declares an extra. Extras are
+declaration-only in v1: `tavi.quantities.resolve` does not know them, so they cannot be
+scanned or written, and the runtime ignores them.
 
 **Contract version.** Each plugin class declares `CONTRACT_VERSION`.
 `registry.register()` reads it from the factory class (or, for a lambda or partial
@@ -261,8 +270,21 @@ mapping of canonical ID to value. `compute_snapshot(plan, scan_point, scan_index
 config, vals, data_folder, *, indices=None)` and
 `check_point_feasibility(config, plan, scan_point)` receive one named point and the
 plan. The plan's calculation decides the solve; its commands decide which
-quantities are scanned. Neither reads a positional scan list or a GUI name. The
-positional scan-slot layout was removed in U3.
+quantities are scanned. `scan_point` is keyed by canonical ID. The point methods also
+read `vals`, the launch's value dict (`gui_values` in `scan_config`, `vals` in
+`compute_snapshot` and `resolution_config`). Its keys are the internal names that
+`tavi/quantities.py` maps to canonical IDs (`_INTERNAL`: `mtt`, `stt`, `omega`, `att`,
+`H`, `K`, `L`, `rhm`..`rva`, the lattice fields), plus `K_fixed`, `fixed_E`, `monocris`,
+`anacris`, `slits_mm`, `collimation`, `source_type`, `source_dE`, `modules` and
+`curvature_modes`. That shape is part of contract v1: changing it bumps
+`CONTRACT_VERSION`. The positional scan-slot layout was removed in U3.
+
+**Point metadata.** `PointSnapshot.metadata` is spread into `scan_parameters.txt`. The
+controller and `tas_runtime` read these keys back: `Ei`, `Ki`, `Ef`, `Kf`, `deltaE`,
+`transmission`, `qx`, `qy`, `qz`, `H`, `K`, `L`, `mtt`, `stt`, `att`, `sth`, `omega`,
+`sgl`, `sgu`, `rhm`, `rvm`, `rha`, `rva`. The angle, stage and radius keys keep the
+internal names beside the canonical slit keys (`slit.<stable_id>.horizontal_gap_mm`,
+`.vertical_gap_mm`), so a plugin that writes its own metadata must write them all.
 
 A minimal author-side plugin that uses only this surface is
 `tests/contract_plugin_fixture.py`, with its checks in `tests/test_author_contract.py`.
