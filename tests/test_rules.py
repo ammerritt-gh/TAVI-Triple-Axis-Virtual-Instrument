@@ -8,6 +8,7 @@ import dataclasses
 import importlib.util
 import itertools
 import math
+import time
 from pathlib import Path
 
 import pytest
@@ -546,3 +547,30 @@ def test_the_analytic_engine_refuses_a_transmitting_point_mcstas_runs_it(puma):
         assert check.feasible is feasible, engine
         if not feasible:
             assert check.kind == "transmission" and check.transmission == ("sample",)
+
+
+def test_a_scan_at_the_maximum_plans_without_expanding(monkeypatch):
+    """100,000 points is the largest plan: built from the commands' closed-form counts, never run."""
+    def no_run(*_args):
+        raise AssertionError("a plan at the maximum built its run")
+
+    monkeypatch.setattr(rules, "parse_scan_steps", no_run)
+    assert _plan("A3 0 999 1", "A4 0 99 1").calculation == MOTORS      # 1000 x 100
+    assert _plan("A3 0 99999 1").calculation == MOTORS                 # 100,000 alone
+
+
+def test_a_scan_over_the_maximum_is_refused_naming_the_count_before_any_run(monkeypatch):
+    def no_run(*_args):
+        raise AssertionError("a refused scan built its run")
+
+    monkeypatch.setattr(rules, "parse_scan_steps", no_run)
+    started = time.perf_counter()
+    single = _refused("A3 0 100 0.000001")
+    assert time.perf_counter() - started < 1.0
+    assert str(single) == "This scan has 100,000,001 points; the maximum is 100,000."
+    assert single.command == 1 and single.quantity == "sample_rotation_deg"
+    assert _refused("", "A3 0 100000 1").command == 2
+    assert str(_refused("A3 0 100000 1")) == "This scan has 100,001 points; the maximum is 100,000."
+    product = _refused("A3 0 999 1", "A4 0 100 1")                     # 1000 x 101, each command under
+    assert product.command is None
+    assert str(product) == "This scan has 101,000 points; the maximum is 100,000."
