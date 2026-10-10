@@ -35,7 +35,7 @@ from instruments.registry import available_instruments, get_instrument  # noqa: 
 from tavi.quantities import QUANTITIES  # noqa: E402
 from test_compact_layout import LAPTOP, MONITOR, _resize, _use_windows_ui_font  # noqa: E402
 
-NOTE = "not used by this scan"
+NOTE = "Q and HKL not used by this scan"
 A2, A1, A3, A4, A6, A5 = ("mono_two_theta_deg", "mono_theta_deg", "sample_rotation_deg",
                           "sample_two_theta_deg", "analyzer_two_theta_deg", "analyzer_theta_deg")
 SGL, SGU = "sample_lower_arc_deg", "sample_upper_arc_deg"
