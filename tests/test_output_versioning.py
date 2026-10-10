@@ -156,14 +156,21 @@ def test_both_scan_parameter_writers_go_through_output_parameters():
 
 # --- the loading path ------------------------------------------------------------------
 
-def _current_folder(controller, tmp_path):
+def _current_folder(controller, tmp_path, relative=False):
     """A post-break scan folder: the scan-level file from a real (deterministic) run, then
     the per-point folders as the McStas path writes them, with the old fixture's detector
-    files for their counts."""
+    files for their counts. ``relative``: the scan is 'omega -1 1 1' stepped from A3 = 30."""
     controller.output_directory = str(tmp_path)   # before the launch state names its folder
-    start = controller.get_gui_values()["omega"]
-    launch = controller.build_api_launch_state({
-        "scan_command1": f"omega {start} {start + 2} 1", "number_neutrons": 1000})
+    if relative:
+        start = 29.0
+        launch = controller.build_api_launch_state({
+            "scan_command1": "omega -1 1 1", "sample_rotation_deg": 30.0,
+            "number_neutrons": 1000})
+        launch["relative_mode_1"] = True
+    else:
+        start = controller.get_gui_values()["omega"]
+        launch = controller.build_api_launch_state({
+            "scan_command1": f"omega {start} {start + 2} 1", "number_neutrons": 1000})
     launch["engine"] = "deterministic"
     controller._compile_launch(launch)
     controller.run_simulation(launch, job=ScanJob(job_id="t-output", source="api", launch_state=launch))
@@ -194,6 +201,41 @@ def test_a_current_folder_loads_and_shows_its_counts(ctrl, tmp_path):
     assert list(shown["counts"]) == [120, 480, 150]
     assert list(shown["x"]) == pytest.approx([start, start + 1, start + 2], abs=1e-3)
     assert "Data loaded into display dock" in _log(ctrl)
+
+
+def test_a_relative_scan_reloads_onto_its_absolute_axis(ctrl, tmp_path):
+    """'omega -1 1 1' stepped from A3 = 30 ran 29, 30, 31: the folder records that axis and
+    the reload puts each point's counts on it, not on the command's offsets."""
+    folder, start = _current_folder(ctrl, tmp_path, relative=True)
+
+    _load(ctrl, folder)
+
+    shown = ctrl.window.display_dock.scan_snapshot()
+    assert "Data loaded into display dock" in _log(ctrl)
+    assert (list(shown["x"]), shown["n_measured"]) == ([29.0, 30.0, 31.0], 3)
+    assert list(shown["counts"]) == [120, 480, 150]
+    assert read_parameters_from_file(str(folder))["scan_values_1"] == [29.0, 30.0, 31.0]
+
+
+def test_a_relative_folder_without_its_axis_is_refused_not_mislabelled(ctrl, tmp_path):
+    """A folder written before the axis was recorded: its points lie on none of the command's
+    offsets, so it is refused with a message instead of piling counts into one bin."""
+    folder, _start = _current_folder(ctrl, tmp_path, relative=True)
+    path = folder / "scan_parameters.txt"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    path.write_text("".join(l for l in lines if not l.startswith("scan_values_")),
+                    encoding="utf-8")
+    ctrl.window.display_dock.initialize_scan("1D", [1.0, 2.0], [True, True], "h")
+    before = ctrl.window.display_dock.scan_snapshot()
+
+    _load(ctrl, folder)
+
+    log = _log(ctrl)
+    assert "Data loaded into display dock" not in log
+    assert "sample_rotation_deg = 29 lies on none of the scan's axis values" in log, log
+    shown = ctrl.window.display_dock.scan_snapshot()
+    assert shown["variable_name"] == before["variable_name"] == "h"
+    assert list(shown["x"]) == list(before["x"])
 
 
 @pytest.mark.parametrize("fixture", ["old_omega_scan", "old_a2_scan"])
