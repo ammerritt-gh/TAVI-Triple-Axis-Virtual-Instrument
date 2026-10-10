@@ -1,15 +1,9 @@
 """Ledger entry 4: a scan entered only in command box 2 must preview like
 the same text in command box 1.
 
-``tavi.utilities.normalize_scan_commands`` is one extraction of the
-lone-command-2 swap rule that already existed, written out identically,
-at ``validate_scan_launch_state`` (API manifest expansion) and
-``run_simulation`` (execution). This file pins the extracted helper's own
-semantics and the headline preview/execution agreement it restores; the two
-existing call sites' behavior is unchanged and covered by the existing
-suite (see ``tests/test_relative_mode_swap.py`` for ``run_simulation``'s
-swap, and ``tests/test_curvature_relative_scan_travel.py`` for
-``validate_scan_launch_state``'s untouched 2-D and cmd1-only paths).
+The point plan keeps a lone command 2 as the scan's only axis
+(``instruments.rules.expand``; ``tests/test_rules.py`` and
+``tests/test_relative_mode_swap.py`` pin it); this pins the preview label.
 """
 import contextlib
 import os
@@ -27,55 +21,6 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
-from tavi.utilities import normalize_scan_commands  # noqa: E402
-
-
-# ---------------------------------------------------------------- unit level
-
-def test_normalize_swaps_only_a_lone_command_2():
-    """cmd2 non-empty, cmd1 empty: cmd2 is promoted to slot 1 and the two
-    relative-mode flags move with it (the promoted command keeps ITS OWN
-    relative setting, not command 1's)."""
-    cmd1, cmd2, rel1, rel2 = normalize_scan_commands(
-        "", "rva 1 1.2 0.1", False, True,
-    )
-    assert (cmd1, cmd2, rel1, rel2) == ("rva 1 1.2 0.1", "", True, False)
-
-
-def test_normalize_empty2_marker_is_caller_chosen():
-    """The vacated second slot takes whatever empty marker the caller
-    supplies -- run_simulation needs ``None``, validate_scan_launch_state
-    needs ``""``; this is the one place they differ."""
-    _, cmd2_default, _, _ = normalize_scan_commands(
-        "", "rva 1 1.2 0.1", False, False,
-    )
-    assert cmd2_default == ""
-
-    _, cmd2_none, _, _ = normalize_scan_commands(
-        "", "rva 1 1.2 0.1", False, False, empty2=None,
-    )
-    assert cmd2_none is None
-
-
-def test_normalize_leaves_a_genuine_2d_pair_alone():
-    cmd1, cmd2, rel1, rel2 = normalize_scan_commands(
-        "H 1 2 0.5", "rva 1 1.2 0.1", True, True,
-    )
-    assert (cmd1, cmd2, rel1, rel2) == ("H 1 2 0.5", "rva 1 1.2 0.1", True, True)
-
-
-def test_normalize_leaves_both_empty_alone():
-    cmd1, cmd2, rel1, rel2 = normalize_scan_commands(
-        "", "", False, False,
-    )
-    assert (cmd1, cmd2, rel1, rel2) == ("", "", False, False)
-
-
-def test_normalize_leaves_a_lone_command_1_alone():
-    cmd1, cmd2, rel1, rel2 = normalize_scan_commands(
-        "rva 1 1.2 0.1", "", True, False,
-    )
-    assert (cmd1, cmd2, rel1, rel2) == ("rva 1 1.2 0.1", "", True, False)
 
 
 # ------------------------------------------------------------- widget level

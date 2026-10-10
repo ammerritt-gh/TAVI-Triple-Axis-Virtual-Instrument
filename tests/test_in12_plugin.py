@@ -19,7 +19,9 @@ from instruments.in12.plugin import (
     IN12Plugin,
     in12_descriptor,
 )
+from instruments.tas_runtime import MOTORS, Q_CALC
 from instruments.validation import validate_descriptor
+from plan_helpers import motors_point, plan_for, q_point
 
 
 # ---------------------------------------------------------------- light tests
@@ -223,12 +225,11 @@ def test_snapshot_params_match_descriptor(tmp_path):
     state.K_fixed = "Kf Fixed"
     state.fixed_E = 8.288785
 
-    # scans layout: mode-specific[0:4], rhm/rvm/rha/rva[4:8], chi/kappa/psi[8:11]
-    scans = [-55.834469, 101.737423, 50.868712, -55.834469,
-             -3.84, -0.84, -1.98, 0.0, 0.0, 0.0, 0.0]
+    vals = {"deltaE": 0.0}
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        plan_for(plugin, state, vals, MOTORS),
+        motors_point(-55.834469, 101.737423, 50.868712, -55.834469), 0, state,
+        vals, str(tmp_path),
     )
 
     assert isinstance(snapshot, PointSnapshot)
@@ -245,14 +246,13 @@ def test_angle_feasibility_rejects_a_positive_monochromator_angle():
     pytest.importorskip("mcstasscript")
     plugin = IN12Plugin()
     state = plugin.default_state()
-    scans = [+55.834469, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
-
-    feasible, reason = plugin.check_point_feasibility(
-        state, "angle", scans, {"deltaE": 0.0, "chi": 0.0}
+    check = plugin.check_point_feasibility(
+        state, plan_for(plugin, state, {}, MOTORS), motors_point(+55.834469, 0.0, 0.0, 0.0)
     )
 
-    assert feasible is False
-    assert reason is not None and "A2 (mono 2θ)" in reason and "outside" in reason
+    assert check.feasible is False
+    assert check.reason is not None and "A2 (mono 2θ)" in check.reason
+    assert "outside" in check.reason
 
 
 def test_momentum_feasibility_enforces_solved_axis_limits():
@@ -264,14 +264,13 @@ def test_momentum_feasibility_enforces_solved_axis_limits():
     state.fixed_E = 8.288785
     # |Q| = 3.95 A^-1 needs a sample two-theta past the +-120 deg travel at
     # ki = kf = 2.0 A^-1.
-    scans = [3.95, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
-
-    feasible, reason = plugin.check_point_feasibility(
-        state, "momentum", scans, {"deltaE": 0.0, "chi": 0.0}
+    check = plugin.check_point_feasibility(
+        state, plan_for(plugin, state, {}, Q_CALC), q_point(3.95, 0.0, 0.0)
     )
 
-    assert feasible is False
-    assert reason is not None and "A4 (sample 2θ)" in reason and "outside" in reason
+    assert check.feasible is False
+    assert check.reason is not None and "A4 (sample 2θ)" in check.reason
+    assert "outside" in check.reason
 
 
 def test_crystal_bending_is_rowland_matched_and_branch_signed():
@@ -381,14 +380,13 @@ def test_scanned_radius_still_lands_on_the_take_off_branch(tmp_path):
     state.K_fixed = "Kf Fixed"
     state.fixed_E = 4.978451631466585
 
-    # Positive magnitudes in the scans array, exactly as the GUI carries them.
-    scans = [-74.332, 120.180, 60.090, -74.332, 4.0, 1.8, 1.65, 0.6,
-             0.0, 0.0, 0.0]
+    # Positive magnitudes in the scanned points, exactly as the GUI carries them.
+    vals = {"deltaE": 0.0}
+    rhm, rha = "mono_horizontal_radius_m", "analyzer_horizontal_radius_m"
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
-        variable_name1="mono_horizontal_radius_m",
-        variable_name2="analyzer_horizontal_radius_m",
+        plan_for(plugin, state, vals, MOTORS, scanned=(rhm, rha)),
+        {**motors_point(-74.332, 120.180, 60.090, -74.332), rhm: 4.0, rha: 1.65},
+        0, state, vals, str(tmp_path),
     )
 
     assert snapshot.error_flags == []
@@ -533,9 +531,9 @@ def test_heusler_rva_held_does_not_block_an_unrelated_rhm_autofocus(tmp_path):
     rhm_values = []
     rva_magnitudes = []
     for A1 in (-55.834469, -50.0):
-        scans = [A1, 0.0, 0.0, -55.834469, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         snapshot = compute_scan_snapshot(
-            (scans, 0), 0, "angle", state, vals, str(tmp_path),
+            plan_for(IN12Plugin(), state, vals, MOTORS),
+            motors_point(A1, 0.0, 0.0, -55.834469), 0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == [], snapshot.error_flags
         assert snapshot.metadata["curvature_modes"]["rhm"] == "autofocus"
@@ -572,10 +570,10 @@ def test_heusler_rva_autofocus_is_still_refused_naming_rva(tmp_path):
             "rhm": "held", "rvm": "held", "rha": "held", "rva": "autofocus",
         },
     }
-    scans = [-55.834469, 0.0, 0.0, -55.834469, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-
     with pytest.raises(ValueError, match="rva") as excinfo:
-        compute_scan_snapshot((scans, 0), 0, "angle", state, vals, str(tmp_path))
+        compute_scan_snapshot(plan_for(IN12Plugin(), state, vals, MOTORS),
+                              motors_point(-55.834469, 0.0, 0.0, -55.834469), 0, state,
+                              vals, str(tmp_path))
     assert "focusing_known" in str(excinfo.value)
 
 

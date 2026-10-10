@@ -24,6 +24,8 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from instruments.tas_runtime import MOTORS  # noqa: E402
+from plan_helpers import motors_point, plan_for  # noqa: E402
 from tavi.scan_jobs import JobState  # noqa: E402
 
 
@@ -98,15 +100,12 @@ def test_gui_and_api_launch_states_agree_at_the_snapshot_level(tmp_path):
             "scan_command1": "deltaE 0 1 0.5",
         })
 
-        scans = [41.167, 0.0, 0.0, 41.167, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        gui_snapshot = ctrl.instrument.compute_snapshot(
-            (scans, 0), 0, "angle", gui_launch["scan_config"], gui_launch["vals"],
-            str(tmp_path),
-        )
-        api_snapshot = ctrl.instrument.compute_snapshot(
-            (scans, 0), 0, "angle", api_launch["scan_config"], api_launch["vals"],
-            str(tmp_path),
-        )
+        point = motors_point(41.167, 0.0, 0.0, 41.167)
+        gui_snapshot, api_snapshot = (
+            ctrl.instrument.compute_snapshot(
+                plan_for(ctrl.instrument, launch["scan_config"], launch["vals"], MOTORS),
+                point, 0, launch["scan_config"], launch["vals"], str(tmp_path))
+            for launch in (gui_launch, api_launch))
         assert gui_snapshot.error_flags == api_snapshot.error_flags == []
         # abs=5e-4: the GUI's rhm/rvm/rha widgets round-trip through a
         # display-precision text field (a handful of decimals), while the

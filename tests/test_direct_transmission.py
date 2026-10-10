@@ -33,7 +33,9 @@ import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.in8.plugin import IN8Plugin
 from instruments.registry import get_instrument  # noqa: E402
-from instruments.tas_runtime import compute_scan_snapshot
+from instruments.rules import PointCheck, build_plan, expand  # noqa: E402
+from instruments.tas_runtime import MOTORS, Q_CALC, compute_scan_snapshot  # noqa: E402
+from plan_helpers import context, motors_point, plan_for, q_point  # noqa: E402
 from tavi.api_server import TaviApiServer, API_PREFIX, VALIDATE_BODY_KEYS  # noqa: E402
 from tavi.data_processing import read_parameters_from_file  # noqa: E402
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
@@ -68,9 +70,8 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field=0.0, stt=-71.25
     vals = _base_vals(k_fixed, source_type, deltaE_field)
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
-    # A1 A2 A3 A4 | rhm rvm rha rva | chi kappa psi
-    scans = [mtt, stt, -35.63, att, 3.0, 1.2, 1.5, 0.31, 0.0, 0.0, 0.0]
-    return compute_scan_snapshot((scans, 0), 0, "angle", config, vals,
+    return compute_scan_snapshot(plan_for(plugin, config, vals, MOTORS),
+                                 motors_point(mtt, stt, -35.63, att), 0, config, vals,
                                  data_folder=".")
 
 
@@ -80,8 +81,8 @@ def _momentum_snapshot(k_fixed, source_type, qx, qy, qz, deltaE, fixed_E=_FIXED_
     vals["fixed_E"] = fixed_E
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
-    scans = [qx, qy, qz, deltaE, 3.0, 1.2, 1.5, 0.31, 0.0, 0.0, 0.0]
-    return compute_scan_snapshot((scans, 0), 0, "momentum", config, vals,
+    return compute_scan_snapshot(plan_for(plugin, config, vals, Q_CALC),
+                                 q_point(qx, qy, qz, deltaE), 0, config, vals,
                                  data_folder=".")
 
 
@@ -335,6 +336,7 @@ def test_deterministic_engine_a4_scan_skips_only_the_transmission_point(tmp_path
             "scan_command1": "A6 -1 1 1",
         })
         launch["engine"] = "deterministic"
+        ctrl._compile_launch(launch)
 
         job = ScanJob(job_id="t-transmission-a4", source="api", launch_state=launch)
         ctrl.run_simulation(launch, job=job)
@@ -368,6 +370,7 @@ def test_deterministic_engine_stt_scan_skips_forward_scattering_point(tmp_path):
             "scan_command1": "A4 -1 1 1",
         })
         launch["engine"] = "deterministic"
+        ctrl._compile_launch(launch)
 
         job = ScanJob(job_id="t-transmission-stt", source="api", launch_state=launch)
         ctrl.run_simulation(launch, job=job)
@@ -440,29 +443,18 @@ def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, 
         assert clean["infeasible"] == []
 
 
+_DEAD = "scattering triangle cannot close for this (Q, E) and fixed-k setup"
+
+
 class _DeadTransferInstrument:
-    def check_point_feasibility(self, scan_config, scan_mode, point, vals):
-        return False, "scattering triangle cannot close for this (Q, E) and fixed-k setup"
+    def check_point_feasibility(self, scan_config, plan, point):
+        return PointCheck(False, _DEAD, "physical_infeasible")
 
 
 class _DeadTransferManifestController:
-    """Duck-typed stub, same shape as
-    ``tests/test_api_over_limit_latch.py``'s ``_ManifestController`` -- the
-    direct ``validate_scan_launch_state`` call shape, no real controller."""
-    _SCAN_VARIABLE_TO_INDEX = {"deltaE": 3}
+    """Duck-typed stub: the direct ``validate_scan_launch_state`` call shape on
+    a launch already compiled, no real controller."""
     instrument = _DeadTransferInstrument()
-
-    def _determine_scan_mode(self, cmd1, cmd2):
-        return "momentum"
-
-    def _build_scan_point_template(self, scan_mode, vals):
-        return [2.0, 0.0, 0.5, 0.0]
-
-    def normalize_scan_variable(self, variable):
-        return variable
-
-    def _curvature_axis_specs(self, monocris, anacris, modules=None):
-        return {}
 
     def print_to_message_center(self, message):
         raise AssertionError("unexpected message: %s" % message)
@@ -472,20 +464,27 @@ def test_deterministic_engine_never_relabels_an_already_infeasible_point():
     """A point infeasible for its OWN reason keeps that kind/reason under a
     deterministic launch state -- never relabelled ``transmission`` (the
     plan-verifier's second-pass blocker)."""
-    launch_state = {
-        "vals": {"scan_command1": "deltaE 3.0 3.0 1.0", "scan_command2": ""},
-        "scan_config": object(),
-        "relative_mode_1": False,
-        "relative_mode_2": False,
-        "engine": "deterministic",
-    }
+    plugin = IN8Plugin()
+    vals = _base_vals("Kf Fixed", "Maxwellian")
+    state = plugin.default_state()
+    config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
+    plan = build_plan([("deltaE 3.0 3.0 1.0", False), ("", False)],
+                      context(plugin, config, vals, "deterministic"))
+    snapshot = {**q_point(2.0, 0.0, 0.5), "mono_horizontal_radius_m": 3.0,
+                "mono_vertical_radius_m": 1.2, "analyzer_horizontal_radius_m": 1.5,
+                "analyzer_vertical_radius_m": 0.31,
+                "slit.pre_sample.horizontal_gap_mm": 40.0,
+                "slit.pre_sample.vertical_gap_mm": 100.0,
+                "slit.detector.horizontal_gap_mm": 40.0}
+    launch_state = {"plan": plan, "expansion": expand(plan, snapshot),
+                    "scan_config": config, "engine": "deterministic"}
     result = cm.TAVIController.validate_scan_launch_state(
         _DeadTransferManifestController(), launch_state)
     assert result["infeasible"] == [{
         "index": 0,
-        "values": {"deltaE": pytest.approx(3.0)},
+        "values": {"energy_transfer_mev": pytest.approx(3.0)},
         "kind": "physical_infeasible",
-        "reason": "scattering triangle cannot close for this (Q, E) and fixed-k setup",
+        "reason": _DEAD,
     }]
 
 

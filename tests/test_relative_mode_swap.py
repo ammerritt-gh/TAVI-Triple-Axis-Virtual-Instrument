@@ -1,14 +1,11 @@
-"""D20: the relative-mode flag must move with a promoted lone command 2.
+"""D20: a lone command 2 runs under its own relative flag.
 
-``run_simulation``'s single-command swap ("only command 2 given -> it
-becomes command 1") moved the scan TEXT into command 1's slot but left
-``relative_mode_1``/``relative_mode_2`` untouched, so a promoted command ran
-under command 1's flag (default False) instead of its own.
-``validate_scan_launch_state`` already swapped both; this pins that
-``run_simulation`` does the identical swap, through the deterministic
-engine (fast: no McStas compile/run) so the actual per-point radius
-delivered to snapshot preparation can be read back from
-``ScanResult.applied_curvature``.
+The old single-command swap ("only command 2 given -> it becomes command 1")
+once moved the scan text but not the flag, so the command ran under command
+1's. The point plan keeps the command in its own box with its own flag
+(``rules.build_plan``) and runs it as the scan's only axis. This pins it
+end to end through the deterministic engine (fast: no McStas compile/run),
+reading the per-point radius back from ``ScanResult.applied_curvature``.
 """
 import contextlib
 import os
@@ -79,6 +76,7 @@ def test_d20_relative_flag_moves_with_a_promoted_lone_command_2(tmp_path):
 
             job = ScanJob(job_id=f"t-d20-rel1-{relative_1}", source="api",
                            launch_state=launch)
+            ctrl._compile_launch(launch)
             ctrl.run_simulation(launch, job=job)
 
             result = job.result

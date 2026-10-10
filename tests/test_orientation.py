@@ -16,6 +16,8 @@ import math
 import numpy as np
 import pytest
 
+from instruments.tas_runtime import HKL_CALC, MOTORS, Q_CALC
+from plan_helpers import context, hkl_point, motors_point, plan_for, q_point
 from tavi.neutron_conversions import energy2k, k2energy
 from tavi.orientation import (
     StageAxis,
@@ -687,7 +689,7 @@ def test_unreachable_elevation_is_refused_identically_everywhere(tmp_path, name,
     vals = _in12_vals(slits_mm=slits_mm)
     plugin, config = _plugin_config(vals, name)
     q = 2.5 * np.array([math.cos(math.radians(45)), 0.0, math.sin(math.radians(45))])
-    scan_point = [*q, 0.0, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0, 0.0]
+    scan_point = q_point(*q)
     assert 45 > 2 * travel
     assert not _arcs_can_level(config.goniometer, instrument_q_to_component_q(q))
 
@@ -698,18 +700,17 @@ def test_unreachable_elevation_is_refused_identically_everywhere(tmp_path, name,
     assert reason.split()[0] in ("sgl", "sgu")
     assert f"travel is [-{travel}, {travel}]°" in reason
 
-    feasible, feasibility_reason = plugin.check_point_feasibility(
-        config, "momentum", scan_point, vals)
-    snapshot = plugin.compute_snapshot((scan_point, 0), 0, "momentum", config, vals,
-                                       str(tmp_path))
-    assert (feasible, feasibility_reason) == (False, reason)
+    plan = plan_for(plugin, config, vals, Q_CALC)
+    check = plugin.check_point_feasibility(config, plan, scan_point)
+    snapshot = plugin.compute_snapshot(plan, scan_point, 0, config, vals, str(tmp_path))
+    assert (check.feasible, check.reason) == (False, reason)
     assert snapshot.params is None
     assert describe_scan_error_flags(snapshot.error_flags) == reason
 
 
-def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
+def test_direct_motors_read_the_arcs_from_the_point_and_check_travel(tmp_path):
     from instruments import tas_runtime
-    from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
+    from instruments.tas_runtime import SGU
 
     plugin, config = _plugin_config(_in12_vals())
     angles, flags = copy.deepcopy(config).calculate_stage_angles(
@@ -717,30 +718,29 @@ def test_angle_mode_reads_the_arcs_from_their_slots_and_checks_travel(tmp_path):
     assert flags == []
 
     def point(sgl, sgu):
-        scan_point = [0.0] * SCAN_POINT_LENGTH
-        scan_point[:8] = [angles[0], angles[1], angles[2], angles[4], 3.84, 0.84, 1.98, 1.40]
-        scan_point[SLOT_SGL], scan_point[SLOT_SGU] = sgl, sgu
-        return scan_point
+        return motors_point(angles[0], angles[1], angles[2], angles[4], sgl, sgu)
 
     geom = tas_runtime._solve_point_geometry(
-        copy.deepcopy(config), "angle", point(3.0, -2.0), _in12_vals())
+        copy.deepcopy(config), MOTORS, point(3.0, -2.0), _in12_vals())
     assert geom["error_flags"] == []
     assert (geom["sgl"], geom["sgu"]) == (3.0, -2.0)
 
     # The per-point record carries the arcs, not the retired chi.
-    snapshot = plugin.compute_snapshot((point(3.0, -2.0), 0), 0, "angle", config,
+    plan = plan_for(plugin, config, _in12_vals(), MOTORS)
+    snapshot = plugin.compute_snapshot(plan, point(3.0, -2.0), 0, config,
                                        _in12_vals(), str(tmp_path))
     assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (3.0, -2.0)
     assert "chi" not in snapshot.metadata
     assert (snapshot.params["sgl_param"], snapshot.params["sgu_param"]) == (3.0, -2.0)
 
-    # A 9-slot point (written before the sgu slot) runs with sgu = 0.
+    # An instrument without an upper arc has no sgu in its points: it runs at 0.
+    no_upper = {qid: v for qid, v in point(3.0, -2.0).items() if qid != SGU}
     geom = tas_runtime._solve_point_geometry(
-        copy.deepcopy(config), "angle", point(3.0, -2.0)[:9], _in12_vals())
+        copy.deepcopy(config), MOTORS, no_upper, _in12_vals())
     assert (geom["sgl"], geom["sgu"]) == (3.0, 0.0)
 
     feasible, reason = tas_runtime.check_point_feasibility(
-        config, "angle", point(25.0, 0.0), _in12_vals())
+        config, MOTORS, point(25.0, 0.0), _in12_vals())
     assert not feasible
     # The solver's own refusal words (one formatter for every travel refusal).
     assert reason == "sgl needs 25° but its travel is [-20, 20]°"
@@ -851,7 +851,7 @@ def _locked_in12(u):
 
 
 def _rlu_point(hkl):
-    return [*hkl, 0.0, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0]
+    return hkl_point(*hkl)
 
 
 def test_a_lock_refuses_an_out_of_plane_point_naming_the_plane_and_the_angle(tmp_path):
@@ -870,11 +870,13 @@ def test_a_lock_refuses_an_out_of_plane_point_naming_the_plane_and_the_angle(tmp
     up = np.asarray(config.goniometer[0].axis, dtype=float)
     out = math.degrees(math.asin(up @ stage_rotation(config.goniometer[1:], tilts) @ signed
                                  / np.linalg.norm(q)))
-    feasible, reason = check_point_feasibility(config, "rlu", _rlu_point((1, 0, 1)), _in12_vals())
+    feasible, reason = check_point_feasibility(config, HKL_CALC, _rlu_point((1, 0, 1)),
+                                               _in12_vals())
     assert not feasible
     assert reason == f"Q is {out:+.4g}° out of " + locked_plane_text(tilts, PLANE_001)
 
-    snapshot = plugin.compute_snapshot((_rlu_point((2, 1, 0)), 0), 0, "rlu", config,
+    snapshot = plugin.compute_snapshot(plan_for(plugin, config, _in12_vals(), HKL_CALC),
+                                       _rlu_point((2, 1, 0)), 0, config,
                                        _in12_vals(), str(tmp_path))
     assert snapshot.error_flags == []
     assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (tilts["sgl"], tilts["sgu"])
@@ -906,43 +908,54 @@ def test_an_in_plane_scan_in_locked_mode_matches_free_mode(tmp_path):
     free.plane_lock = None
     for hkl in ((2, 0, 0), (1, 1, 0), (1, 2, 0)):
         locked_md, free_md = (
-            plugin.compute_snapshot((_rlu_point(hkl), 0), 0, "rlu", state, _in12_vals(),
+            plugin.compute_snapshot(plan_for(plugin, state, _in12_vals(), HKL_CALC),
+                                    _rlu_point(hkl), 0, state, _in12_vals(),
                                     str(tmp_path)).metadata for state in (config, free))
         for key in ("mtt", "stt", "sth", "att", "sgl", "sgu"):
             assert locked_md[key] == pytest.approx(free_md[key], abs=1e-9), (hkl, key)
 
 
-def test_an_angle_mode_point_runs_at_the_lock_or_is_refused(tmp_path):
-    """Angle mode under a lock: arc slots that match the lock (to the GUI
-    fields' four-decimal rounding) run at the lock's exact tilts; a slot that
-    differs is refused by feasibility, before anything runs."""
-    from instruments import tas_runtime
-    from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
-    from tavi.orientation import locked_plane_text
+def test_a_direct_motor_point_under_a_lock_runs_at_the_lock_tilts(tmp_path):
+    """Amendment 2 (kept, provisional): under a lock a direct-motor point takes
+    the arcs from the lock. Typed arcs that disagree are followed by the lock,
+    not refused: the plan reads no arc as an input, gives both the "plane lock"
+    provenance, and the point runs and is emitted at the lock's exact tilts."""
+    from instruments.rules import SET_PER_POINT, build_plan, expand
+    from instruments.tas_runtime import SGL, SGU
+    from tavi.quantities import public_values
 
     plugin, config = _locked_in12(_rot((1, 0, 0), 3.0) @ _rot((0, 0, 1), -2.0))
     tilts = config.plane_lock["tilts"]
+    assert max(abs(v) for v in tilts.values()) > 1.0
     angles, flags = copy.deepcopy(config).calculate_stage_angles(
         2.0, 0.0, 0.0, 0.0, IN12_E, "Kf Fixed", "pg002", "pg002")
     assert flags == []
 
-    def point(sgl, sgu):
-        scan_point = [0.0] * SCAN_POINT_LENGTH
-        scan_point[:8] = [angles[0], angles[1], angles[2], angles[4], 3.84, 0.84, 1.98, 1.40]
-        scan_point[SLOT_SGL], scan_point[SLOT_SGU] = sgl, sgu
-        return scan_point
+    vals = _in12_vals(mtt=angles[0], stt=angles[1], omega=angles[2], att=angles[4],
+                      sgl=tilts["sgl"] + 0.5, sgu=tilts["sgu"] - 0.7, H=0.0, K=0.0, L=0.0,
+                      qx=2.0, qy=0.0, qz=0.0)
+    plan = build_plan([("A3 %r %r 1" % (angles[2], angles[2]), False), ("", False)],
+                      context(plugin, config, vals))
+    for arc in (SGL, SGU):
+        assert (plan.provenance[arc].role, plan.provenance[arc].policies) == (
+            SET_PER_POINT, ("plane lock",)), arc
+        assert arc not in plan.inputs
+    point = expand(plan, public_values(vals, plugin.descriptor().slits)).points[0]
+    assert SGL not in point and SGU not in point
 
-    shown = (round(tilts["sgl"], 4), round(tilts["sgu"], 4))
-    snapshot = plugin.compute_snapshot((point(*shown), 0), 0, "angle", config,
-                                       _in12_vals(), str(tmp_path))
+    check = plugin.check_point_feasibility(config, plan, point)
+    assert check.feasible, check.reason
+    snapshot = plugin.compute_snapshot(plan, point, 0, config, vals, str(tmp_path))
     assert snapshot.error_flags == []
     assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (tilts["sgl"], tilts["sgu"])
+    assert (snapshot.params["sgl_param"], snapshot.params["sgu_param"]) == (
+        tilts["sgl"], tilts["sgu"])
 
-    feasible, reason = tas_runtime.check_point_feasibility(
-        config, "angle", point(shown[0] + 0.5, shown[1]), _in12_vals())
-    assert not feasible
-    assert reason == (f"sgl = {shown[0] + 0.5:.4g}° is not a tilt of "
-                      + locked_plane_text(tilts, PLANE_001))
+    # A point handed over with disagreeing arcs anyway still runs at the lock.
+    typed = motors_point(angles[0], angles[1], angles[2], angles[4],
+                         tilts["sgl"] + 0.5, tilts["sgu"] - 0.7)
+    snapshot = plugin.compute_snapshot(plan, typed, 0, config, vals, str(tmp_path))
+    assert (snapshot.metadata["sgl"], snapshot.metadata["sgu"]) == (tilts["sgl"], tilts["sgu"])
 
 
 # --- the stage readouts reach McStas as axis rotations -------------------------------
@@ -1063,14 +1076,15 @@ def test_a_plane_that_spans_nothing_is_refused_with_the_reason(hkl_u, hkl_v, rea
 Q_200 = component_q_to_instrument_q(CUBIC_B @ np.array([2.0, 0.0, 0.0]))
 
 
-def _engine_point(config, mode, coords, tmp_path, sgl=0.0, sgu=0.0):
+def _engine_point(config, calculation, coords, tmp_path, sgl=0.0, sgu=0.0):
     """One IN8 scan point through the shared snapshot, and the engine's HKL."""
-    from instruments.tas_runtime import SLOT_SGL, SLOT_SGU, true_point_hkl
+    from instruments.tas_runtime import true_point_hkl
 
-    point = [*coords, 3.84, 0.84, 1.98, 1.40, 0.0, 0.0]
-    point[SLOT_SGL], point[SLOT_SGU] = sgl, sgu
+    point = {HKL_CALC: hkl_point, Q_CALC: q_point}.get(calculation)
+    point = (motors_point(*coords, sgl, sgu) if calculation == MOTORS else point(*coords))
     plugin, _ = _plugin_config(_in12_vals(), "in8")
-    snapshot = plugin.compute_snapshot((point, 0), 0, mode, config, _in12_vals(), str(tmp_path))
+    plan = plan_for(plugin, config, _in12_vals(), calculation)
+    snapshot = plugin.compute_snapshot(plan, point, 0, config, _in12_vals(), str(tmp_path))
     assert snapshot.error_flags == []
     return snapshot, np.array(true_point_hkl(config, snapshot.metadata, CUBIC_B))
 
@@ -1094,23 +1108,23 @@ def test_engine_hkl_through_a_wrong_ub_misses_the_reflection(tmp_path, sense):
     """An rlu point at (2 0 0) with the operator's UB on the truth evaluates
     on the reflection; with the UB 3 deg off about the vertical the crystal
     presents (2 0 0) turned by 3 deg."""
-    _, on = _engine_point(_in8_config(sense), "rlu", (2, 0, 0, 0), tmp_path)
+    _, on = _engine_point(_in8_config(sense), HKL_CALC, (2, 0, 0, 0), tmp_path)
     assert on == pytest.approx([2.0, 0.0, 0.0], abs=1e-9)
 
     wrong = _in8_config(sense, u_operator=_rot((0, 1, 0), 3.0))
-    _, off = _engine_point(wrong, "rlu", (2, 0, 0, 0), tmp_path)
+    _, off = _engine_point(wrong, HKL_CALC, (2, 0, 0, 0), tmp_path)
     assert np.linalg.norm(off) == pytest.approx(2.0, abs=1e-9)
     assert _miss_deg(off, np.array([2.0, 0.0, 0.0])) == pytest.approx(3.0, abs=1e-6)
 
 
-@pytest.mark.parametrize("mode", ["rlu", "momentum", "orientation", "angle"])
+@pytest.mark.parametrize("mode", [HKL_CALC, Q_CALC, MOTORS])
 def test_a_hidden_mount_rotation_reaches_the_engine_in_every_mode(tmp_path, mode):
     """A hidden 3 deg turn of the crystal in its mount takes it off (2 0 0)
-    in every mode, by exactly that turn."""
-    coords = (2, 0, 0, 0) if mode == "rlu" else (*Q_200, 0.0)
+    in every calculation, by exactly that turn."""
+    coords = (2, 0, 0, 0) if mode == HKL_CALC else (*Q_200, 0.0)
     sgl = sgu = 0.0
-    if mode == "angle":
-        reference, _ = _engine_point(_in8_config(-1), "rlu", (2, 0, 0, 0), tmp_path)
+    if mode == MOTORS:
+        reference, _ = _engine_point(_in8_config(-1), HKL_CALC, (2, 0, 0, 0), tmp_path)
         coords, sgl, sgu = _angle_coords(reference)
     hkls = {}
     for turn in (0.0, 3.0):
@@ -1121,18 +1135,17 @@ def test_a_hidden_mount_rotation_reaches_the_engine_in_every_mode(tmp_path, mode
 
 
 @pytest.mark.parametrize("sense", [-1, 1])
-@pytest.mark.parametrize("mode", ["rlu", "momentum", "orientation", "angle"])
+@pytest.mark.parametrize("mode", [HKL_CALC, Q_CALC, MOTORS])
 def test_engine_hkl_is_the_emitted_arm_on_lab_q_and_ignores_the_ub(tmp_path, mode, sense):
     """At tilted arcs, B_true @ hkl is the emitted sample arm's rotation
     applied to the lab Q (signed per sense): the engine sees the crystal McStas
-    builds. In the Q and angle modes the operator's UB does not move it."""
+    builds. In the Q and direct-motor calculations the operator's UB does not move it."""
     u_true = _rot((1, 2, 0), 6.0) @ U_IN_PLANE
-    coords = {"rlu": (2, 1, 0.5, 0.0), "momentum": (2.4, 0.6, 0.5, 0.0),
-              "orientation": (2.4, 0.6, 0.5, 0.0)}.get(mode)
+    coords = {HKL_CALC: (2, 1, 0.5, 0.0), Q_CALC: (2.4, 0.6, 0.5, 0.0)}.get(mode)
     sgl = sgu = 0.0
-    if mode == "angle":
+    if mode == MOTORS:
         reference, _ = _engine_point(_in8_config(sense, u_true, _rot((1, 0, 0), 5.0)),
-                                     "rlu", (2, 1, 0.5, 0.0), tmp_path)
+                                     HKL_CALC, (2, 1, 0.5, 0.0), tmp_path)
         coords, _sgl, _sgu = _angle_coords(reference)
         sgl, sgu = 4.0, -6.0
     found = []
@@ -1147,7 +1160,7 @@ def test_engine_hkl_is_the_emitted_arm_on_lab_q_and_ignores_the_ub(tmp_path, mod
         signed = -1.0 if sense > 0 else 1.0
         assert np.allclose(CUBIC_B @ hkl, signed * arm @ lab_q, rtol=0.0, atol=1e-9)
         found.append(hkl)
-    if mode != "rlu":
+    if mode != HKL_CALC:
         assert np.array_equal(found[0], found[1])
 
 

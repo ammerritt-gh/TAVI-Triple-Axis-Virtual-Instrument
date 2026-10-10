@@ -10,6 +10,8 @@ import pytest
 
 from instruments.contract import InstrumentPlugin, RunExecutionState
 from instruments.puma.plugin import PUMA_MCSTAS_NAME, PUMAPlugin, puma_descriptor
+from instruments.tas_runtime import MOTORS
+from plan_helpers import motors_point, plan_for
 
 
 # ---------------------------------------------------------------- light tests
@@ -145,10 +147,11 @@ def test_nmo_fitted_flattens_the_scan_config_launch_snapshot_too(tmp_path):
     )
     assert config.rhm == 2.5 and config.rvm == 1.2  # scan_config leaves them alone
 
-    scans = [41.0, -84.0, -42.0, 83.0, 2.5, 1.2, 2.5, 0.8, 0.0, 0.0, 0.0]
+    vals = {"deltaE": 0.0}
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", config,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        plan_for(plugin, config, vals, MOTORS),
+        motors_point(41.0, -84.0, -42.0, 83.0),
+        0, config, vals, str(tmp_path),
     )
     assert snapshot.error_flags == []
     assert snapshot.metadata["rhm"] == 0.0 and snapshot.metadata["rvm"] == 0.0, (
@@ -169,11 +172,11 @@ def test_snapshot_params_match_descriptor(tmp_path):
     state.K_fixed = "Ki Fixed"
     state.fixed_E = 14.7
 
-    # scans layout: mode-specific[0:4], rhm/rvm/rha/rva[4:8], chi/kappa/psi[8:11]
-    scans = [41.0, -84.0, -42.0, 83.0, 2.5, 1.2, 2.5, 0.8, 0.0, 0.0, 0.0]
+    vals = {"deltaE": 0.0}
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        plan_for(plugin, state, vals, MOTORS),
+        motors_point(41.0, -84.0, -42.0, 83.0),
+        0, state, vals, str(tmp_path),
     )
 
     from instruments.contract import PointSnapshot

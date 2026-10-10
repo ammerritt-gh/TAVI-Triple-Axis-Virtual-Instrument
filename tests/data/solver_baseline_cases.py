@@ -11,7 +11,10 @@ import math
 import numbers
 
 from instruments.contract import CurvatureMode
-from instruments.tas_runtime import compute_scan_snapshot
+from instruments.rules import context_from_state, point_plan
+from instruments.tas_runtime import (
+    ATT, DE, HKL, HKL_CALC, MOTORS, MTT, Q, Q_CALC, SGL, SGU, STH, STT, compute_scan_snapshot,
+)
 from tavi.orientation import lock_plane
 from tavi.sample_mount import SampleMount
 
@@ -140,9 +143,16 @@ def _fixed_axis(descriptor):
     return None
 
 
-def _point(head, vals, sgl=0.0, sgu=0.0):
-    """A 10-slot scan point: the mode's four coordinates, the radii, then sgl sgu."""
-    return [*head, vals["rhm"], vals["rvm"], vals["rha"], vals["rva"], sgl, sgu]
+# Each calculation's named inputs, in the order the cases list them.
+_HEAD = {HKL_CALC: (*HKL, DE), Q_CALC: (*Q, DE), MOTORS: (MTT, STT, STH, ATT)}
+
+
+def _point(calculation, head, sgl=0.0, sgu=0.0):
+    """A named scan point: the calculation's four coordinates, plus the arcs it reads."""
+    point = dict(zip(_HEAD[calculation], head))
+    if calculation == MOTORS:
+        point.update({SGL: sgl, SGU: sgu})
+    return point
 
 
 def build_cases(label):
@@ -158,9 +168,10 @@ def build_cases(label):
     base.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
     results = {}
 
-    def solve(name, mode, scans, vals, note="", state=base):
+    def solve(name, calculation, point, vals, note="", state=base):
         config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
-        snap = compute_scan_snapshot((scans, 0), 0, mode, config, vals, data_folder=".")
+        plan = point_plan(context_from_state(config, vals, plugin.capabilities()), calculation)
+        snap = compute_scan_snapshot(plan, point, 0, config, vals, data_folder=".")
         if snap.params is None or snap.error_flags:
             raise RuntimeError(f"{label}/{name} does not solve: {snap.error_flags}")
         results[name] = (note, snap)
@@ -169,33 +180,33 @@ def build_cases(label):
     for name, hkl, d_e, side in RLU_CASES:
         vals = _launch_vals(descriptor, K_fixed=side, deltaE=d_e)
         note = "arcs tilt about 11.3 deg to level (1,0,0.2)" if name == "rlu_100p2_arcs" else ""
-        solve(name, "rlu", _point([*hkl, d_e], vals), vals, note)
+        solve(name, HKL_CALC, _point(HKL_CALC, [*hkl, d_e]), vals, note)
 
     for name, _, d_e, side in RLU_CASES:
         meta = results[name][1].metadata
         vals = _launch_vals(descriptor, K_fixed=side, deltaE=d_e)
-        solve("q_" + name[len("rlu_"):], "momentum",
-              _point([meta["qx"], meta["qy"], meta["qz"], d_e], vals), vals)
+        solve("q_" + name[len("rlu_"):], Q_CALC,
+              _point(Q_CALC, [meta["qx"], meta["qy"], meta["qz"], d_e]), vals)
 
     vals = _launch_vals(descriptor, K_fixed="Kf Fixed", deltaE=5.0)
     meta = results["rlu_110_dE+5_kf"][1].metadata
     head = [meta["mtt"], meta["stt"], meta["sth"], meta["att"]]
-    solve("angle_110", "angle", _point(head, vals, meta["sgl"], meta["sgu"]), vals)
+    solve("angle_110", MOTORS, _point(MOTORS, head, meta["sgl"], meta["sgu"]), vals)
     stepped = head[:3] + [head[3] + math.copysign(2.0, head[3])]
-    solve("angle_ana_step", "angle", _point(stepped, vals, meta["sgl"], meta["sgu"]), vals,
+    solve("angle_ana_step", MOTORS, _point(MOTORS, stepped, meta["sgl"], meta["sgu"]), vals,
           "analyser 2theta moved by 2 deg, mono held")
 
     fixed = _fixed_axis(descriptor)
     hkl_point = [1.0, 0.0, 0.0, 0.0]
     vals = _launch_vals(descriptor, curvature_modes=_modes(rhm=CurvatureMode.AUTOFOCUS))
-    solve("curv_autofocus", "rlu", _point(hkl_point, vals), vals,
+    solve("curv_autofocus", HKL_CALC, _point(HKL_CALC, hkl_point), vals,
           "rhm autofocused from the solved two-theta at this point")
     vals = _launch_vals(descriptor, rhm=3.0)
-    solve("curv_held", "rlu", _point(hkl_point, vals), vals,
+    solve("curv_held", HKL_CALC, _point(HKL_CALC, hkl_point), vals,
           "" if fixed else "no driven=False axis on the default crystals: curv_fixed omitted")
     if fixed:
         vals = _launch_vals(descriptor, **{fixed: 0.31})
-        solve("curv_fixed", "rlu", _point(hkl_point, vals), vals,
+        solve("curv_fixed", HKL_CALC, _point(HKL_CALC, hkl_point), vals,
               f"{fixed} is driven=False: the requested 0.31 m is pinned to its declared radius")
 
     locked = copy.deepcopy(base)
@@ -204,7 +215,7 @@ def build_cases(label):
     locked.plane_lock = {"hkl_u": [1.0, 0.0, 0.0], "hkl_v": [0.0, 1.0, 0.2],
                          "tilts": tilts}
     vals = _launch_vals(descriptor)
-    solve("plane_lock_01p2", "rlu", _point([0.0, 1.0, 0.2, 0.0], vals), vals,
+    solve("plane_lock_01p2", HKL_CALC, _point(HKL_CALC, [0.0, 1.0, 0.2, 0.0]), vals,
           "plane (1,0,0)/(0,1,0.2) held by lock_plane", state=locked)
     return results
 
@@ -227,16 +238,16 @@ def _plain(label, value):
     raise TypeError(f"{label}: unsupported type {type(value).__name__}")
 
 
-def _absent_in_mode(name, mode):
-    return ((name in ("H", "K", "L") and mode != "rlu")
-            or (name in ("qx", "qy", "qz") and mode == "angle"))
+def _absent_in_mode(name, calculation):
+    return ((name in ("H", "K", "L") and calculation != HKL_CALC)
+            or (name in ("qx", "qy", "qz") and calculation == MOTORS))
 
 
 def record(snap):
     """The JSON body (``params``, ``metadata``) for one successful snapshot."""
     if snap.params is None or snap.error_flags:
         raise ValueError("refusing to record a point that did not solve")
-    mode = snap.metadata["scan_mode"]
+    mode = snap.metadata["calculation"]
     params = [{"name": name, "role": param_role(name),
                "value": _plain(f"param {name}", snap.params[name])}
               for name in sorted(snap.params)]

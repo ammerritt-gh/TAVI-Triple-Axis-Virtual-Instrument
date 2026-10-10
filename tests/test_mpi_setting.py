@@ -192,6 +192,7 @@ def test_scan_runs_at_the_count_frozen_at_launch(config_dir, monkeypatch):
         ctrl.mpi_count = 9  # changed after submission: must not leak in
         calls = _spy_estimates(monkeypatch, ctrl)
         job = ScanJob(job_id="t-mpi-frozen", source="api", launch_state=launch)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=job)
 
         assert len(seen) >= 2 and all(n == 7 for n in seen), seen

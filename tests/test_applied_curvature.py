@@ -75,6 +75,7 @@ def test_deterministic_engine_applied_curvature_tracks_each_point(tmp_path):
 
         job = ScanJob(job_id="t-applied-curvature-det", source="api",
                        launch_state=launch)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=job)
 
         result = job.result
@@ -149,6 +150,7 @@ def test_deterministic_engine_leaves_skipped_point_as_none(tmp_path):
 
         job = ScanJob(job_id="t-applied-curvature-skip", source="api",
                        launch_state=launch)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=job)
 
         result = job.result
@@ -218,6 +220,7 @@ def test_a_2d_scan_indexes_applied_curvature_the_same_way_as_its_counts(tmp_path
 
         job = ScanJob(job_id="t-applied-curvature-2d", source="api",
                        launch_state=launch)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=job)
 
         result = job.result
@@ -285,6 +288,7 @@ def test_mcstas_job_result_applied_curvature_is_filled_from_point_metadata(
 
         job = ScanJob(job_id="t-applied-curvature-mcstas", source="api",
                        launch_state=launch)
+        ctrl._compile_launch(launch)
         ctrl.run_simulation(launch, job=job)
 
         result = job.result

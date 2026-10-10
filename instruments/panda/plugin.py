@@ -425,19 +425,12 @@ class PANDAPlugin:
             config, diagnostic_mode, diagnostic_settings, number_neutrons
         )
 
-    def compute_snapshot(self, scan_item, scan_index, scan_mode, config, vals,
-                         data_folder, *, is_2d_scan=False, variable_name1="",
-                         variable_name2="", scan_command1="", scan_command2=""):
+    def compute_snapshot(self, plan, scan_point, scan_index, config, vals, data_folder,
+                         *, indices=None):
         from instruments.tas_runtime import compute_scan_snapshot
 
-        return compute_scan_snapshot(
-            scan_item, scan_index, scan_mode, config, vals, data_folder,
-            is_2d_scan=is_2d_scan,
-            variable_name1=variable_name1,
-            variable_name2=variable_name2,
-            scan_command1=scan_command1,
-            scan_command2=scan_command2,
-        )
+        return compute_scan_snapshot(plan, scan_point, scan_index, config, vals, data_folder,
+                                     indices=indices)
 
     def run_point(self, instrument, snapshot, output_folder, number_neutrons,
                   execution_state, mpi_count=DEFAULT_MPI_COUNT):
@@ -448,14 +441,11 @@ class PANDAPlugin:
             execution_state, mpi_count,
         )
 
-    def check_point_feasibility(self, config, scan_mode, scan_point, vals):
-        """Return ``(feasible, reason)`` for one scan point (see contract)."""
-        from instruments.tas_runtime import check_point_feasibility
+    def check_point_feasibility(self, config, plan, scan_point):
+        """One named point of ``plan`` through its guards (see contract)."""
+        from instruments.rules import check_point
 
-        return check_point_feasibility(
-            config, scan_mode, scan_point, vals,
-            axis_limits=panda_descriptor().axis_limits,
-        )
+        return check_point(plan, scan_point, config, axis_limits=panda_descriptor().axis_limits)
 
     def resolution_config(self, vals, q0, w, point_angles=None):
         """Build a theoretical-resolution config for PANDA (see contract).

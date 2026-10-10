@@ -108,12 +108,14 @@ def test_a_scanned_radius_is_written_as_requested_and_its_applied_sign_apart(tmp
     """On a negative-branch mono the point keeps the scanned magnitude under its ID, so the
     Display reload matches it, and the signed take-off radius under applied_*."""
     from instruments.panda.plugin import PANDAPlugin
-    from instruments.tas_runtime import compute_scan_snapshot
+    from instruments.tas_runtime import MOTORS, compute_scan_snapshot
+    from plan_helpers import motors_point, plan_for
 
+    plugin, vals, rhm = PANDAPlugin(), {"deltaE": 0.0}, "mono_horizontal_radius_m"
+    state = plugin.default_state()
     snapshot = compute_scan_snapshot(
-        ([-80.0, -100.0, 0.0, -80.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0], 1), 1, "angle",
-        PANDAPlugin().default_state(), {"deltaE": 0.0, "chi": 0.0}, str(tmp_path),
-        variable_name1="mono_horizontal_radius_m",
+        plan_for(plugin, state, vals, MOTORS, scanned=(rhm,)),
+        {**motors_point(-80.0, -100.0, 0.0, -80.0), rhm: 2.0}, 1, state, vals, str(tmp_path),
     )
     with _controller("panda") as controller:
         point = controller.point_output_parameters(controller.get_gui_values(), snapshot.metadata, 1, 1000)
@@ -145,6 +147,7 @@ def _current_folder(controller, tmp_path):
     launch = controller.build_api_launch_state({
         "scan_command1": f"omega {start} {start + 2} 1", "number_neutrons": 1000})
     launch["engine"] = "deterministic"
+    controller._compile_launch(launch)
     controller.run_simulation(launch, job=ScanJob(job_id="t-output", source="api", launch_state=launch))
     folders = [p for p in tmp_path.iterdir() if (p / "scan_parameters.txt").exists()]
     assert len(folders) == 1, folders

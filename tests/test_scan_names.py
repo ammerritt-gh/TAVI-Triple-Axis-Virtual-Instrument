@@ -2,7 +2,8 @@
 
 TAVI's old A2 was the sample 2theta and its old A4 the analyzer 2theta, so a name that reads
 the same now drives a different axis. These tests run the names through the real controller
-paths that build scan points (template, slot table, expansion) and check which quantity moves.
+paths that build scan points (the launch's compiled plan and its points) and check which
+quantity moves.
 """
 import os
 import sys
@@ -19,21 +20,20 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
-from instruments.tas_runtime import SLOT_SGL, SLOT_SGU  # noqa: E402
 from tavi import scan_fits  # noqa: E402
 
 INSTRUMENT_IDS = [info.id for info in available_instruments()]
 
-# canonical ID -> (internal field, scan-point slot, spellings that must all mean it)
+# canonical ID -> (internal field, spellings that must all mean it)
 ANGLES = {
-    "mono_two_theta_deg": ("mtt", 0, ["A2", "a2", "mtt", "MTT", "mono_two_theta_deg"]),
-    "sample_two_theta_deg": ("stt", 1, ["A4", "stt", "2theta", "2THETA", "Sample_Two_Theta_Deg"]),
-    "sample_rotation_deg": ("omega", 2, ["A3", "omega", "Omega", "psi", "sth"]),
-    "analyzer_two_theta_deg": ("att", 3, ["A6", "att", "ATT"]),
-    "sample_lower_arc_deg": ("sgl", SLOT_SGL, ["sgl", "SGL"]),
-    "sample_upper_arc_deg": ("sgu", SLOT_SGU, ["sgu"]),
+    "mono_two_theta_deg": ("mtt", ["A2", "a2", "mtt", "MTT", "mono_two_theta_deg"]),
+    "sample_two_theta_deg": ("stt", ["A4", "stt", "2theta", "2THETA", "Sample_Two_Theta_Deg"]),
+    "sample_rotation_deg": ("omega", ["A3", "omega", "Omega", "psi", "sth"]),
+    "analyzer_two_theta_deg": ("att", ["A6", "att", "ATT"]),
+    "sample_lower_arc_deg": ("sgl", ["sgl", "SGL"]),
+    "sample_upper_arc_deg": ("sgu", ["sgu"]),
 }
-FIELDS = [field for field, _slot, _names in ANGLES.values()]
+FIELDS = [field for field, _names in ANGLES.values()]
 
 
 class _SyncBridge:
@@ -75,13 +75,13 @@ def test_every_angle_and_arc_name_scans_the_quantity_it_names(controller, instru
     seen = []
     real = ctrl.instrument.check_point_feasibility
 
-    def spy(scan_config, scan_mode, scan_point, vals):
-        seen.append((scan_mode, list(scan_point)))
-        return real(scan_config, scan_mode, scan_point, vals)
+    def spy(scan_config, plan, scan_point):
+        seen.append((plan, dict(scan_point)))
+        return real(scan_config, plan, scan_point)
 
     monkeypatch.setattr(ctrl.instrument, "check_point_feasibility", spy)
 
-    for canonical, (field, slot, names) in ANGLES.items():
+    for canonical, (field, names) in ANGLES.items():
         start = float(defaults[field])
         for name in names:
             seen.clear()
@@ -89,17 +89,18 @@ def test_every_angle_and_arc_name_scans_the_quantity_it_names(controller, instru
                 {"scan_command1": f"{name} {start:.3f} {start + 0.5:.3f} 0.5"})
             result = ctrl.validate_scan_launch_state(launch)
             assert result["per_command"][0]["variable"] == canonical, (instrument_id, name)
-            assert [mode for mode, _ in seen] == ["angle", "angle"], (instrument_id, name)
+            assert [plan.calculation for plan, _ in seen] == ["direct_motors"] * 2, (
+                instrument_id, name)
 
-            template = ctrl._build_scan_point_template("angle", launch["vals"])
-            moved = {i for i, (a, b) in enumerate(zip(template, seen[1][1])) if a != b}
-            assert moved == {slot}, f"{instrument_id}: '{name}' moved slots {moved}, wanted {slot}"
+            typed = launch["snapshot"]
+            moved = {qid for qid, value in seen[1][1].items() if value != typed[qid]}
+            assert moved == {canonical}, f"{instrument_id}: '{name}' moved {moved}"
 
-        # The slot is read as the quantity it names: only that one angle differs in the metadata.
+        # The point is read as the quantity it names: only that one angle differs in the metadata.
         snapshots = [
-            ctrl.instrument.compute_snapshot((point, i), i, "angle", launch["scan_config"],
+            ctrl.instrument.compute_snapshot(plan, point, i, launch["scan_config"],
                                              launch["vals"], str(tmp_path)).metadata
-            for i, (_mode, point) in enumerate(seen)
+            for i, (plan, point) in enumerate(seen)
         ]
         # `launch` is the last name's, which is a spelling of this same quantity.
         differing = {f for f in FIELDS if snapshots[0][f] != snapshots[1][f]}
@@ -222,12 +223,14 @@ def test_goto_from_a_scan_drives_the_field_of_the_quantity_it_scanned(in8, name,
 def test_angle_scan_message_names_each_angle_as_the_dock_labels_it(tmp_path):
     """The per-point message reads each angle under its dock label's number, not the internal A1..A4."""
     from instruments.in8.plugin import IN8Plugin
-    from instruments.tas_runtime import compute_scan_snapshot
+    from instruments.tas_runtime import MOTORS, compute_scan_snapshot
+    from plan_helpers import motors_point, plan_for
 
+    plugin, vals = IN8Plugin(), {"deltaE": 0.0}
+    state = plugin.default_state()
     snapshot = compute_scan_snapshot(
-        ([40.0, 44.0, 22.0, 80.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 0), 0, "angle",
-        IN8Plugin().default_state(), {"deltaE": 0.0, "chi": 0.0}, str(tmp_path),
-        variable_name1="mono_two_theta_deg",
+        plan_for(plugin, state, vals, MOTORS, scanned=("mono_two_theta_deg",)),
+        motors_point(40.0, 44.0, 22.0, 80.0), 0, state, vals, str(tmp_path),
     )
     line = snapshot.log_message.splitlines()[0]
     for part in ("A2 (mono 2θ): 40", "A4 (sample 2θ): 44", "A3 (sample rotation): 22",

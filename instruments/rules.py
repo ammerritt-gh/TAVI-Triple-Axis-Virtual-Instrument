@@ -24,6 +24,18 @@ import numpy as np
 from instruments.contract import Capabilities, CurvatureMode
 from instruments.descriptor import CurvatureAxis
 from instruments.tas_runtime import (
+    ATT,
+    DE,
+    HKL,
+    HKL_CALC,
+    MOTORS,
+    MTT,
+    Q,
+    Q_CALC,
+    SGL,
+    SGU,
+    STH,
+    STT,
     _solve_point_geometry,
     check_point_feasibility,
     curvature_scan_error,
@@ -35,13 +47,7 @@ from tavi.quantities import QuantityRefused, by_id, resolve, slit_gap_ids, to_in
 from tavi.tas_geometry import component_q_to_instrument_q
 from tavi.utilities import parse_scan_steps, scan_range_error
 
-HKL = ("h", "k", "l")
-Q = ("q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom", "q_instrument_z_inv_angstrom")
-DE = "energy_transfer_mev"
-MTT, STT = "mono_two_theta_deg", "sample_two_theta_deg"
-STH, ATT = "sample_rotation_deg", "analyzer_two_theta_deg"
 MTH, ATH = "mono_theta_deg", "analyzer_theta_deg"
-SGL, SGU = "sample_lower_arc_deg", "sample_upper_arc_deg"
 ARCS = (SGL, SGU)
 EI, EF = "incident_energy_mev", "final_energy_mev"
 KI, KF = "incident_wavevector_inv_angstrom", "final_wavevector_inv_angstrom"
@@ -49,7 +55,6 @@ KI, KF = "incident_wavevector_inv_angstrom", "final_wavevector_inv_angstrom"
 RADIUS_CRYSTAL = {"mono_horizontal_radius_m": MTT, "mono_vertical_radius_m": MTT,
                   "analyzer_horizontal_radius_m": ATT, "analyzer_vertical_radius_m": ATT}
 
-HKL_CALC, Q_CALC, MOTORS = "hkl", "q", "direct_motors"
 CALCULATION_LABEL = {HKL_CALC: "HKL calculation", Q_CALC: "Q calculation",
                      MOTORS: "direct-motor calculation"}
 
@@ -285,6 +290,8 @@ def _rules(calc, ctx, scanned):
                           {EI: (MTT,), KI: (MTT,), EF: (ATT,), KF: (ATT,), DE: (MTT, ATT)},
                           _stage_to_energy))
     if ctx.plane_lock is not None:
+        # By design (amendment 2) a direct-motor point follows the lock's arcs and a typed
+        # arc that disagrees is not refused: a future input path that admits one chooses so.
         rules.append(Rule("plane_lock", {SGL: (), SGU: ()}, _lock_tilts, "plane lock"))
     # The one producer of A1/A5; a rocking rule may replace it without renaming them.
     rules.append(Rule("crystal_theta", {MTH: (MTT,), ATH: (ATT,)}, _crystal_theta))
@@ -505,6 +512,16 @@ def build_plan(commands, context):
     return Plan(context, calc, cmds, tuple(rules), inputs, provenance)
 
 
+def point_plan(context, calculation):
+    """A plan of no command for one point of ``calculation``, for a check that is no scan.
+
+    The live reciprocal-space advisory judges a Q point; no command selects a calculation
+    there, so its caller names it. Feasibility and snapshots read only the calculation and
+    the context; nothing here is expanded or evaluated.
+    """
+    return Plan(context, calculation, (), (), frozenset())
+
+
 # -------------------------------------------------------------------- expand
 
 def _snapshot_value(snapshot, qid, refusal, command=None):
@@ -568,22 +585,6 @@ def evaluate(plan, point, state):
     return values
 
 
-# Interim (S3.2 removes it with the slots): today's scan mode for each calculation.
-_SCAN_MODE = {HKL_CALC: "rlu", Q_CALC: "momentum", MOTORS: "angle"}
-
-
-def _slot_point(plan, point):
-    """Interim (S3.2 removes it with the slots): a named point in today's slot layout."""
-    head = {HKL_CALC: (*HKL, DE), Q_CALC: (*Q, DE), MOTORS: (MTT, STT, STH, ATT)}[plan.calculation]
-    lock = plan.context.plane_lock
-    if lock is not None:
-        arcs = (lock["tilts"]["sgl"], lock["tilts"]["sgu"])
-    else:
-        arcs = (point.get(SGL, 0.0), point.get(SGU, 0.0))   # Q modes solve them instead
-    # The solve never reads the radius slots 4-7.
-    return [*(point[qid] for qid in head), 0.0, 0.0, 0.0, 0.0, *arcs]
-
-
 def check_point(plan, point, state, axis_limits=None):
     """One expanded point through the plan's guards: today's feasibility, then the engine's.
 
@@ -593,16 +594,16 @@ def check_point(plan, point, state, axis_limits=None):
     which makes no claim there. Under a plane lock a Q point records the Q
     requested and the in-plane Q the stage realizes.
     """
-    mode, slots = _SCAN_MODE[plan.calculation], _slot_point(plan, point)
+    calculation = plan.calculation
     vals = {"deltaE": math.nan}   # only fills a transmitting point's record, never judged
-    feasible, reason = check_point_feasibility(state, mode, slots, vals, axis_limits)
+    feasible, reason = check_point_feasibility(state, calculation, point, vals, axis_limits)
     if not feasible:
         return PointCheck(False, reason, "physical_infeasible")
     ctx = plan.context
-    locked_q = ctx.plane_lock is not None and plan.calculation != MOTORS
+    locked_q = ctx.plane_lock is not None and calculation != MOTORS
     if ctx.engine != "deterministic" and not locked_q:
         return PointCheck(True)
-    geom = _solve_point_geometry(copy.deepcopy(state), mode, slots, vals)
+    geom = _solve_point_geometry(copy.deepcopy(state), calculation, point, vals)
     if ctx.engine == "deterministic" and geom["transmission"]:
         axes = tuple(geom["transmission"])
         return PointCheck(False, "direct transmission (%s): the analytic engine makes no claim"

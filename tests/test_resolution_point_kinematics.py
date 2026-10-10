@@ -20,6 +20,8 @@ import pytest
 
 from instruments.contract import PointSnapshot
 from instruments.panda.plugin import PANDAPlugin
+from instruments.tas_runtime import MOTORS
+from plan_helpers import motors_point, plan_for
 from tavi.neutron_conversions import energy2k
 
 
@@ -50,10 +52,10 @@ def _angle_snapshot(plugin, mtt, stt, sth, att, tmp_path, K_fixed="Kf Fixed"):
     state.monocris = state.anacris = "pg002"
     state.K_fixed = K_fixed
     state.fixed_E = 4.978451631466585
-    scans = [mtt, stt, sth, att, 4.0, 1.8, 1.65, 0.60, 0.0, 0.0, 0.0]
+    vals = {"deltaE": 0.0}
     snapshot = plugin.compute_snapshot(
-        (scans, 0), 0, "angle", state,
-        {"deltaE": 0.0, "chi": 0.0, "omega": 0.0}, str(tmp_path),
+        plan_for(plugin, state, vals, MOTORS), motors_point(mtt, stt, sth, att), 0, state,
+        vals, str(tmp_path),
     )
     assert isinstance(snapshot, PointSnapshot)
     assert snapshot.error_flags == [], snapshot.error_flags

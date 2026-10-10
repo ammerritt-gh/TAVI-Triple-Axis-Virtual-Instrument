@@ -29,6 +29,7 @@ pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 import TAVI_PySide6 as controller_module
+from instruments.rules import PlanContext, PointCheck, build_plan, expand
 from tavi.scan_jobs import JobRegistry, JobState, ScanJob, BudgetLimits
 
 ApiError = controller_module.ApiError
@@ -85,6 +86,10 @@ class _StubController:
 
     def _count_scan_points(self, c1, c2):
         return self._npoints  # cheap, mirrors production
+
+    def _compile_launch(self, launch_state):
+        # The stub's validation reads neither; production compiles here.
+        launch_state["plan"] = launch_state["expansion"] = None
 
     # -- the expensive expansion the fix must skip when over limit -------
     def validate_scan_launch_state(self, launch_state):
@@ -190,43 +195,31 @@ def test_at_limit_boundary_is_allowed():
 class _ExplodingInstrument:
     """Reproduce the isolated angle-solver exception seen at 4.657 meV."""
 
-    def check_point_feasibility(self, scan_config, scan_mode, point, vals):
-        if abs(float(point[3]) - 4.657) < 1e-9:
+    def check_point_feasibility(self, scan_config, plan, point):
+        if abs(float(point["energy_transfer_mev"]) - 4.657) < 1e-9:
             raise OSError(22, "Invalid argument")
-        return True, None
+        return PointCheck(True)
 
 
 class _ManifestController:
-    _SCAN_VARIABLE_TO_INDEX = {"deltaE": 3}
     instrument = _ExplodingInstrument()
-
-    def _determine_scan_mode(self, cmd1, cmd2):
-        return "rlu"
-
-    def _build_scan_point_template(self, scan_mode, vals):
-        return [2.0, 0.0, 0.0, 0.0]
-
-    def normalize_scan_variable(self, variable):
-        return variable
-
-    def _curvature_axis_specs(self, monocris, anacris, modules=None):
-        # No curvature axis in this scan's command (deltaE) -- an empty
-        # mapping is exactly what a non-curvature scan gets in production.
-        return {}
 
     def print_to_message_center(self, message):
         raise AssertionError("manifest expansion unexpectedly failed: %s" % message)
 
 
 def test_isolated_4657_solver_error_is_masked_not_scan_fatal():
+    q = ("q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom",
+         "q_instrument_z_inv_angstrom")
+    context = PlanContext(engine="mcstas", fixed_side="Kf", fixed_energy_mev=14.7,
+                          monocris="pg002", anacris="pg002", plane_lock=None, curvature={},
+                          inputs=frozenset({*q, "energy_transfer_mev"}),
+                          observables=frozenset())
+    plan = build_plan([("deltaE 4.557 4.757 0.1", False), ("", False)], context)
     launch_state = {
-        "vals": {
-            "scan_command1": "deltaE 4.557 4.757 0.1",
-            "scan_command2": "",
-        },
+        "plan": plan,
+        "expansion": expand(plan, dict(zip(q, (2.0, 0.0, 0.0)))),
         "scan_config": object(),
-        "relative_mode_1": False,
-        "relative_mode_2": False,
     }
 
     result = controller_module.TAVIController.validate_scan_launch_state(
@@ -238,7 +231,7 @@ def test_isolated_4657_solver_error_is_masked_not_scan_fatal():
     assert result["planned_feasible_mask"] == [True, False, True]
     assert result["infeasible"] == [{
         "index": 1,
-        "values": {"deltaE": pytest.approx(4.657)},
+        "values": {"energy_transfer_mev": pytest.approx(4.657)},
         "kind": "geometry_solver_error",
         "reason": "angle solve error: [Errno 22] Invalid argument",
     }]

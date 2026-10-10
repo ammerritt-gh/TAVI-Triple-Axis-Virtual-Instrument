@@ -26,13 +26,20 @@ from instruments.contract import (
     PrepFailure,
     RunExecutionState,
 )
+from instruments.rules import (
+    DE,
+    Q as Q_IDS,
+    Q_CALC,
+    RADIUS_CRYSTAL,
+    PlanRefused,
+    build_plan,
+    check_point,
+    context_from_state,
+    expand,
+    point_plan,
+)
 from instruments.tas_runtime import (
-    CURVATURE_AXIS_BY_ID,
-    SCAN_POINT_LENGTH,
-    SLOT_SGL,
-    SLOT_SGU,
     STAGE_FLAG_PREFIX,
-    check_point_feasibility,
     describe_scan_error_flags,
     training_reach_error,
 )
@@ -111,8 +118,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file, require_output_version,
                                    write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.utilities import (parse_scan_steps, incremented_path_writing,
-                            normalize_scan_commands, scan_range_error)
+from tavi.utilities import parse_scan_steps, incremented_path_writing, scan_range_error
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
                               record_angles, stage_record, stage_rotation)
@@ -478,16 +484,13 @@ class TaviApiBackend:
             total = job.progress_total
             launch = job.launch_state if isinstance(job.launch_state, dict) else {}
         vals = launch.get("vals", {}) if isinstance(launch, dict) else {}
-        cmd1 = vals.get("scan_command1", "") or ""
-        cmd2 = vals.get("scan_command2", "") or ""
         try:
             ncount = int(float(vals.get("number_neutrons") or 0))
         except (TypeError, ValueError):
             ncount = 0
-        try:
-            points = self._controller._count_scan_points(cmd1, cmd2)
-        except Exception:
-            points = total if total else 1
+        # The points the job's compiled plan runs (every queued job carries one).
+        expansion = launch.get("expansion")
+        points = len(expansion.points) if expansion is not None else (total or 1)
 
         needs_compile = True
         if state == JobState.RUNNING:
@@ -840,13 +843,19 @@ class TaviApiBackend:
                 details={"usage": self._budget_usage()},
             )
 
-        # 4. Always-on feasibility validation (API path only). Build the
-        #    validation block (per-command points + per-point feasibility +
-        #    cost + eta). Partial feasibility is opt-in; by default any
-        #    infeasible point rejects the whole submission.
-        validation = self._build_validation(
-            controller, launch_state, points, neutrons
-        )
+        # 4. The one compile-and-expand, then always-on feasibility validation
+        #    (API path only): the validation block (per-command points +
+        #    per-point feasibility + cost + eta). Partial feasibility is
+        #    opt-in; by default any infeasible point rejects the whole
+        #    submission. A refused plan, or one that cannot be checked, is a
+        #    hard refusal that neither force nor allow_partial clears.
+        try:
+            controller._compile_launch(launch_state)
+            validation = self._build_validation(
+                controller, launch_state, points, neutrons
+            )
+        except PlanRefused as refused:
+            raise ApiError(400, "scan_validation", str(refused))
         validation["background"] = background_block
         infeasible = validation.get("infeasible", [])
         feasible_points = int(validation.get("feasible_points", points))
@@ -1030,11 +1039,29 @@ class TaviApiBackend:
                 "blockers": blockers,
             }
 
-        validation = self._build_validation(
-            controller, launch_state, points, neutrons
-        )
+        try:
+            controller._compile_launch(launch_state)
+            validation = self._build_validation(
+                controller, launch_state, points, neutrons
+            )
+            judged = True
+        except PlanRefused as refused:
+            # Validation stops at the refusal: no plan, no points to judge. A
+            # command issue reported above already says why.
+            judged = False
+            if not scan_issues:
+                blockers.append("scan_validation: %s" % refused)
+            validation = {
+                "requested_points": points, "feasible_points": 0, "partial": False,
+                "planned_feasible_mask": [], "feasible_segments": [],
+                "point_manifest": [], "per_command": [], "infeasible": [],
+                "cost": dict(self._budget_usage(), requested_points=points,
+                             feasible_points=0, neutrons_per_point=neutrons,
+                             job_neutrons=0),
+                "eta": {"estimated_seconds": None, "confidence": "none", "samples": 0},
+            }
         feasible_points = int(validation.get("feasible_points", points))
-        if feasible_points <= 0:
+        if feasible_points <= 0 and judged:
             blockers.append(
                 "all_points_infeasible: no requested point is reachable"
             )
@@ -2051,10 +2078,11 @@ class TAVIController(QObject):
                 self.instrument_state, candidate_vals, sample_key,
                 self.diagnostic_settings, self._build_sample_mount(candidate_vals),
             )
-            feasible, reason = self.instrument.check_point_feasibility(
-                config, "momentum", [candidate_vals["qx"], candidate_vals["qy"], candidate_vals["qz"], delta_e], candidate_vals,
-            )
-            return bool(feasible), reason
+            context = context_from_state(config, candidate_vals, self.instrument.capabilities())
+            point = {**{qid: candidate_vals[_to_internal(qid)] for qid in Q_IDS}, DE: delta_e}
+            check = self.instrument.check_point_feasibility(
+                config, point_plan(context, Q_CALC), point)
+            return bool(check.feasible), check.reason
         except Exception as exc:
             return None, f"feasibility check unavailable ({exc})"
 
@@ -2643,7 +2671,7 @@ class TAVIController(QObject):
             for axis in ("rhm", "rvm", "rha", "rva")
         }
         # This request's own energies, built the identical way the snapshot
-        # builds them (point_energy_metadata): HKL/momentum mode never sets
+        # builds them (point_energy_metadata): an HKL or Q point never sets
         # _angle_energies, so this follows K_fixed + deltaE exactly like
         # compute_scan_snapshot's equivalent point would.
         point_state.update(check_state.point_energy_metadata(deltaE))
@@ -2889,9 +2917,9 @@ class TAVIController(QObject):
         # handlers: a patched energy side re-derives its own take-off angle
         # on the instrument's signed branch unless the caller named that
         # angle explicitly (an explicit A1/A4 is authoritative, as in the
-        # GUI). Without this an angle-mode scan patched with Ei=12 kept the
+        # GUI). Without this a direct-motor scan patched with Ei=12 kept the
         # reference-state A1 and ran near the reference energy. A
-        # non-positive energy is refused here: angle mode takes A1/A4 as
+        # non-positive energy is refused here: direct motors take A1/A4 as
         # raw authority and never reaches calculate_angles' own Ei/Ef > 0
         # guard, and a NaN angle passes every limit comparison.
         energy_keys = ('fixed_E', 'K_fixed', 'monocris', 'anacris')
@@ -2919,7 +2947,7 @@ class TAVIController(QObject):
         # HKL<->Q under the (possibly sample-adopted) lattice. HKL is
         # authoritative when position was patched via HKL/lattice/sample; Q is
         # authoritative when patched via qx/qy/qz. LOAD-BEARING: ISAR sends
-        # H/K/L and the momentum-mode scan template reads vals qx/qy/qz.
+        # H/K/L and a Q scan's points read qx/qy/qz from the launch snapshot.
         q_keys = ('qx', 'qy', 'qz')
         hkl_trigger = ('H', 'K', 'L') + lattice_keys + ('sample',)
         if (any(k in patched for k in hkl_trigger)
@@ -3020,6 +3048,7 @@ class TAVIController(QObject):
         diagnostic_settings = copy.deepcopy(self.diagnostic_settings)
         return {
             'vals': vals,
+            'snapshot': self.public_values(vals),
             'save_folder_input': os.path.join(self.output_directory, "api_scans"),
             'sample_key': sample_key,
             'engine': 'mcstas',
@@ -3063,6 +3092,9 @@ class TAVIController(QObject):
 
         return {
             'vals': vals,
+            # What the plan reads at this instant (canonical IDs): typed inputs and the
+            # relative bases. The one capture for Run, the preview and the benchmark.
+            'snapshot': self.public_values(vals),
             'save_folder_input': self.window.data_control_dock.save_folder_edit.text(),
             'sample_key': sample_key,
             'engine': engine,
@@ -4322,7 +4354,7 @@ class TAVIController(QObject):
             cmd = (cmd or "").strip()
             if not cmd:
                 continue
-            axis = CURVATURE_AXIS_BY_ID.get(self.normalize_scan_variable(cmd.split()[0]))
+            axis = self._RADIUS_AXES.get(self.normalize_scan_variable(cmd.split()[0]))
             if axis:
                 named.add(axis)
         return named
@@ -4455,7 +4487,7 @@ class TAVIController(QObject):
         # reads scans[4:8] and would otherwise let the scan override the pin,
         # so a scan that looked accepted would either do nothing or quietly
         # defeat the fixed value.
-        axis = CURVATURE_AXIS_BY_ID.get(var_id)
+        axis = self._RADIUS_AXES.get(var_id)
         fixed_by = fixed_axes or {}
         if axis in fixed_by:
             return (None, f"'{var_name}' is fixed on the {fixed_by[axis]} "
@@ -4517,6 +4549,9 @@ class TAVIController(QObject):
         
         return (var_id, None)
     
+    # A requested-radius quantity -> the curvature axis (state field) it drives.
+    _RADIUS_AXES = {qid: _to_internal(qid) for qid in RADIUS_CRYSTAL}
+
     # Interim (U3 replaces the conflict rules): scan quantities by canonical ID.
     _SCAN_ARCS = frozenset({"sample_lower_arc_deg", "sample_upper_arc_deg"})
     _SCAN_ANGLES = frozenset({"mono_two_theta_deg", "sample_two_theta_deg",
@@ -4598,27 +4633,6 @@ class TAVIController(QObject):
                     "under the current sample mount")
 
         return ""
-
-    def _get_current_value_for_variable(self, var_name: str, vals: dict, scan_point_template: list) -> float:
-        """Get the current value for a scan variable to use as relative base.
-        
-        Args:
-            var_name: Canonical quantity ID (e.g., 'q_instrument_x_inv_angstrom', 'h',
-                'sample_rotation_deg')
-            vals: Dictionary of GUI values
-            scan_point_template: Template array with current values
-
-        Returns:
-            float: Current value for the variable
-        """
-        var = var_name.lower() if var_name else ""
-
-        # The arcs' starting values are the point template's slots; every other quantity is a field
-        if var == 'sample_lower_arc_deg':
-            return scan_point_template[SLOT_SGL]
-        elif var == 'sample_upper_arc_deg':
-            return scan_point_template[SLOT_SGU]
-        return vals.get(_to_internal(var), 0)
 
     def _trigger_scan_update(self):
         """Trigger a debounced update of scan estimates."""
@@ -4716,10 +4730,11 @@ class TAVIController(QObject):
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
 
-        # A lone command 2 must preview exactly like the same text in command 1
-        # (see run_simulation's identical swap); the preview never consults
-        # relative-mode flags, so the two returned here are discarded.
-        cmd1, cmd2, _, _ = normalize_scan_commands(cmd1, cmd2, False, False)
+        # The plan compiles the boxes as typed (a lone command 2 keeps its box
+        # and its relative flag); the counts shown put a lone command first.
+        boxes = (cmd1, cmd2)
+        if cmd2 and not cmd1:
+            cmd1, cmd2 = cmd2, ""
 
         # Get instrument name
         instrument_name = self.instrument.id
@@ -4798,7 +4813,7 @@ class TAVIController(QObject):
         
         # Calculate valid/invalid counts
         if count1 > 0 or count2 > 0:
-            valid_count, invalid_count = self._count_valid_scan_points(cmd1, cmd2)
+            valid_count, invalid_count = self._count_valid_scan_points(*boxes)
         else:
             # Single point mode - check if current position is valid
             valid, _ = self._check_current_point_validity()
@@ -4830,159 +4845,63 @@ class TAVIController(QObject):
         else:
             self.window.simulation_dock.update_total_time_estimate("")
     
+    def _preview_launch(self, cmd1, cmd2):
+        """``(launch_state, plan, expansion)`` that pressing Run now would compile.
+
+        The launch is collected exactly as Run collects it (dock fields,
+        relative flags, engine) with ``cmd1``/``cmd2`` as the commands, then
+        compiled by the one compile-and-expand. Raises ``PlanRefused``.
+        """
+        launch_state = self._collect_simulation_launch_state()
+        if not launch_state:
+            raise PlanRefused("A field does not hold a number, so nothing can be planned.")
+        launch_state['vals']['scan_command1'] = cmd1
+        launch_state['vals']['scan_command2'] = cmd2
+        plan, expansion = self._compile_launch(launch_state)
+        return launch_state, plan, expansion
+
     def _count_valid_scan_points(self, cmd1: str, cmd2: str) -> tuple:
-        """Count valid and invalid scan points for given scan commands.
-        
-        Args:
-            cmd1: First scan command
-            cmd2: Second scan command (may be empty)
-            
-        Returns:
-            tuple: (valid_count, invalid_count)
+        """``(valid, invalid)`` points of the scan Run would compile now.
+
+        A command the plan refuses counts nothing: ``(0, 0)``.
         """
-        import numpy as np
-
-        # A lone command 2 must be counted exactly like the same text in
-        # command 1 (see run_simulation's identical swap); this function does
-        # not take relative-mode flags, so the two returned here are discarded.
-        cmd1, cmd2, _, _ = normalize_scan_commands(cmd1, cmd2, False, False)
-
-        # Get current GUI values for validation
-        vals = self.get_gui_values()
-
-        # Determine scan mode, and the same template and slot map the run uses
-        scan_mode = self._determine_scan_mode(cmd1, cmd2)
-        scan_point_template = self._build_scan_point_template(scan_mode, vals)
-        variable_to_index = self._SCAN_VARIABLE_TO_INDEX
-        check_state = self._validation_state(vals)
-
-        valid_count = 0
-        invalid_count = 0
-        
         try:
-            variable_name1, array_values1 = parse_scan_steps(cmd1) if cmd1 else (None, [])
-            variable_name2, array_values2 = parse_scan_steps(cmd2) if cmd2 else (None, [])
-            
-            if variable_name1:
-                variable_name1 = self.normalize_scan_variable(variable_name1)
-            if variable_name2:
-                variable_name2 = self.normalize_scan_variable(variable_name2)
-
-            # 1D scan
-            if cmd1 and not cmd2:
-                for value1 in array_values1:
-                    scan_point = scan_point_template[:]
-                    if variable_name1 in variable_to_index:
-                        scan_point[variable_to_index[variable_name1]] = value1
-                    
-                    valid = self._validate_scan_point(scan_point, scan_mode, vals, check_state)
-                    if valid:
-                        valid_count += 1
-                    else:
-                        invalid_count += 1
-            
-            # 2D scan
-            elif cmd1 and cmd2:
-                for value2 in array_values2:
-                    for value1 in array_values1:
-                        scan_point = scan_point_template[:]
-                        if variable_name1 in variable_to_index:
-                            scan_point[variable_to_index[variable_name1]] = value1
-                        if variable_name2 in variable_to_index:
-                            scan_point[variable_to_index[variable_name2]] = value2
-                        
-                        valid = self._validate_scan_point(scan_point, scan_mode, vals, check_state)
-                        if valid:
-                            valid_count += 1
-                        else:
-                            invalid_count += 1
-        except Exception as e:
-            # If parsing fails, return 0 valid points
+            launch_state, plan, expansion = self._preview_launch(cmd1, cmd2)
+        except PlanRefused:
             return (0, 0)
-        
-        return (valid_count, invalid_count)
+        state = launch_state['scan_config']
+        valid = sum(self._point_runs(plan, point, state) for point in expansion.points)
+        return (valid, len(expansion.points) - valid)
 
-    def _validation_state(self, vals):
-        """A throwaway instrument state for the GUI point count, from the GUI
-        values (the live state may not be updated until run_simulation), with
-        the mount and the plane lock the run uses."""
-        check_state = self.instrument.default_state()
-        check_state.monocris = vals.get('monocris', self.descriptor.mono_crystals[0].id)
-        check_state.anacris = vals.get('anacris', self.descriptor.ana_crystals[0].id)
-        check_state.K_fixed = vals.get('K_fixed', 'Kf Fixed')
-        check_state.fixed_E = vals.get('fixed_E', 14.7)
-        check_state.sample_mount = self._build_sample_mount(vals)
-        check_state.plane_lock = self.instrument_state.plane_lock
-        return check_state
-
-    def _validate_scan_point(self, scan_point: list, scan_mode: str, vals: dict, check_state) -> bool:
-        """True when the run would execute this point: the one validity rule
-        of the GUI point count, the time estimate and the run's 1D/2D valid
-        masks. It is the shared feasibility path
-        (``tas_runtime.check_point_feasibility``, the run's own per-point
-        solve on a private copy of ``check_state``), so every mode is judged
-        as the run judges it: Q and orientation modes by the arcs solved from
-        Q, angle mode by the arc slots. No axis limits are applied, as the
-        GUI Run applies none (the API validation adds them).
+    def _point_runs(self, plan, point, state) -> bool:
+        """True when the run would execute this point: the one validity rule of
+        the GUI point count, the time estimate and the run's 1D/2D valid masks.
+        It is the plan's own guard (``rules.check_point``: the run's per-point
+        solve on a private copy of ``state``, then the engine's), so every
+        calculation is judged as the run judges it. No axis limits are applied,
+        as the GUI Run applies none (the API validation adds them).
         """
         try:
-            feasible, _reason = check_point_feasibility(
-                check_state, scan_mode, scan_point, vals)
+            return check_point(plan, point, state).feasible
         except Exception as exc:
             log.warning("Scan point %s (%s) could not be checked: %s",
-                        scan_point[:4], scan_mode, exc)
+                        point, plan.calculation, exc)
             return False
-        return feasible
-    
-    def _determine_scan_mode(self, cmd1: str, cmd2: str) -> str:
-        """Determine the scan mode based on scan command variables.
-        
-        Args:
-            cmd1: First scan command
-            cmd2: Second scan command
-            
-        Returns:
-            str: One of 'momentum', 'rlu', 'angle'. (The runtime still has an
-            'orientation' mode; no scan variable selects it.)
-        """
-        momentum_vars = self._SCAN_Q_VARS | {'energy_transfer_mev'}
-        rlu_vars = self._SCAN_HKL_VARS
-        angle_vars = self._SCAN_ANGLES | self._SCAN_ARCS
 
-        vars_used = set()
-        for cmd in [cmd1, cmd2]:
-            if cmd:
-                parts = cmd.split()
-                if parts:
-                    vars_used.add(self.normalize_scan_variable(parts[0]))
-        
-        if vars_used & rlu_vars:
-            return "rlu"
-        elif vars_used & momentum_vars:
-            return "momentum"
-        elif vars_used & angle_vars:
-            return "angle"
-        else:
-            # Default to rlu mode if no specific scan variables
-            return "rlu"
-    
     def _check_current_point_validity(self) -> tuple:
-        """Check if the current single point (no scan) is valid: the point
-        the run builds with no scan commands, judged as the scan count judges
-        its points (``_validate_scan_point``, mount and lock included).
+        """Whether the point a Run with no scan command would run is valid: that
+        plan's one point (ruling 5: the motors as the docks show them), judged
+        as the scan count judges its points (``_point_runs``).
 
         Returns:
             tuple: (is_valid, error_message)
         """
         try:
-            vals = self.get_gui_values()
-            if not vals:
-                return (False, "Could not get GUI values")
-            scan_mode = self._determine_scan_mode("", "")
-            point = self._build_scan_point_template(scan_mode, vals)
-            feasible, reason = check_point_feasibility(
-                self._validation_state(vals), scan_mode, point, vals)
-            return (feasible, reason or "")
+            launch_state, plan, expansion = self._preview_launch("", "")
+            check = check_point(plan, expansion.points[0], launch_state['scan_config'])
+            return (check.feasible, check.reason or "")
+        except PlanRefused as refused:
+            return (False, str(refused))
         except Exception as e:
             log.warning("Current point could not be checked: %s", e)
             return (False, str(e))
@@ -6846,8 +6765,21 @@ class TAVIController(QObject):
                 self.print_to_message_center("Simulation cancelled due to scan command issues")
                 return
         
+        launch_state = self._collect_simulation_launch_state()
+        if not launch_state:
+            self.print_to_message_center("Error: Could not get GUI values")
+            return
+        # The one compile-and-expand, from what the docks hold at this instant.
+        try:
+            self._compile_launch(launch_state)
+        except PlanRefused as refused:
+            QMessageBox.critical(self.window, "Scan Command Rejected",
+                                 f"{refused}\n\nFix the scan and try again.")
+            self.print_to_message_center(f"Simulation refused: {refused}")
+            return
+
         self.stop_event.clear()
-        
+
         # Reset progress bar and show initializing state
         self.window.simulation_dock.progress_bar.setValue(0)
         self.window.simulation_dock.progress_label.setText("Initializing...")
@@ -6855,10 +6787,6 @@ class TAVIController(QObject):
         self.pre_scan_estimate_updated.emit("")
 
         self.save_parameters()
-        launch_state = self._collect_simulation_launch_state()
-        if not launch_state:
-            self.print_to_message_center("Error: Could not get GUI values")
-            return
         self.window.display_dock.set_scan_metadata(self._build_scan_metadata(launch_state['vals']))
 
         # Route the GUI Run through the shared job queue instead of spawning a
@@ -7040,33 +6968,19 @@ class TAVIController(QObject):
     def _benchmark_scan_command(self, points):
         """Build a tiny centred scan command around the current GUI position.
 
-        Picks the scan variable from the current scan command (falling back to a
-        mode-appropriate default) and centres a ``points``-point sweep on that
-        variable's current value with a small fixed step. The result is a valid
+        Picks the scan variable from the first current scan command (H when
+        there is none) and centres a ``points``-point sweep on that variable's
+        current field value with a small fixed step. The result is a valid
         absolute scan command; ``run_benchmark`` runs it with relative mode off
         and feasibility filtering, so no point is ever driven out of range.
         """
         vals = self.get_gui_values() or {}
-        cmd1 = (vals.get("scan_command1") or "").strip()
-        cmd2 = (vals.get("scan_command2") or "").strip()
-
-        var = None
-        if cmd1:
-            parts = cmd1.split()
-            if parts:
-                var = self.normalize_scan_variable(parts[0])
-        if not var:
-            mode = self._determine_scan_mode(cmd1, cmd2)
-            var = {"rlu": "h", "momentum": "q_instrument_x_inv_angstrom",
-                   "angle": "sample_rotation_deg",
-                   "orientation": "sample_rotation_deg"}.get(mode, "h")
-
-        template = self._build_scan_point_template(
-            self._determine_scan_mode(var, ""), vals
-        )
+        commands = [(vals.get(key) or "").strip() for key in ("scan_command1", "scan_command2")]
+        first = next((cmd for cmd in commands if cmd), "")
+        var = self.normalize_scan_variable(first.split()[0]) if first else "h"
         try:
-            center = float(self._get_current_value_for_variable(var, vals, template))
-        except Exception:
+            center = float(self.public_values(vals).get(var, 0.0))
+        except (TypeError, ValueError):
             center = 0.0
 
         step = 0.01
@@ -7121,7 +7035,7 @@ class TAVIController(QObject):
         flag, tags it ``source="benchmark"``, pre-filters infeasible points, and
         submits it through the job worker. Appends the new job id to
         ``_benchmark_job_ids``. Returns the submitted job, or ``None`` when the
-        GUI launch state could not be read.
+        GUI launch state could not be read or its plan was refused.
         """
         launch_state = self._collect_simulation_launch_state()
         if not launch_state:
@@ -7152,13 +7066,15 @@ class TAVIController(QObject):
         # Pre-filter infeasible points so a tiny scan near an edge geometry
         # skips rather than fails (reuses the API allow_partial machinery).
         try:
+            self._compile_launch(launch_state)
             validation = self.validate_scan_launch_state(launch_state)
-            infeasible = validation.get("infeasible", [])
-            if infeasible:
-                launch_state["skipped_indices"] = [e["index"] for e in infeasible]
-                launch_state["skipped_points"] = infeasible
-        except Exception:
-            pass
+        except PlanRefused as refused:
+            self.print_to_message_center(f"Benchmark: stage {index + 1} refused: {refused}")
+            return None
+        infeasible = validation.get("infeasible", [])
+        if infeasible:
+            launch_state["skipped_indices"] = [e["index"] for e in infeasible]
+            launch_state["skipped_points"] = infeasible
 
         job = self.submit_scan_job(launch_state, "benchmark")
         self._benchmark_job_ids.append(job.job_id)
@@ -8173,220 +8089,87 @@ class TAVIController(QObject):
             return npts(c2)
         return npts(c1) * npts(c2)
 
-    # Interim (U3 deletes the slots): canonical quantity ID -> scan-point index, the
-    # one map the GUI point count, the API validation expansion and run_simulation
-    # all use (slot layout in instruments.tas_runtime). The angle slots are the
-    # trap: slot 0 holds the mono 2theta (ILL A2), slot 1 the sample 2theta (A4),
-    # slot 2 the sample rotation (A3), slot 3 the analyzer 2theta (A6) -- the
-    # order of the old TAVI A1..A4, not of the ILL numbers. Q and HKL share 0-2.
-    _SCAN_VARIABLE_TO_INDEX = {
-        'q_instrument_x_inv_angstrom': 0, 'q_instrument_y_inv_angstrom': 1,
-        'q_instrument_z_inv_angstrom': 2, 'energy_transfer_mev': 3,
-        'h': 0, 'k': 1, 'l': 2,
-        'mono_two_theta_deg': 0, 'sample_two_theta_deg': 1,
-        'sample_rotation_deg': 2, 'analyzer_two_theta_deg': 3,
-        'mono_horizontal_radius_m': 4, 'mono_vertical_radius_m': 5,
-        'analyzer_horizontal_radius_m': 6, 'analyzer_vertical_radius_m': 7,
-        'sample_lower_arc_deg': SLOT_SGL, 'sample_upper_arc_deg': SLOT_SGU,
-    }
+    def _compile_launch(self, launch_state):
+        """The launch's one compile-and-expand: ``build_plan``, then ``expand``.
 
-    def _build_scan_point_template(self, scan_mode, vals):
-        """The scan-point template every scan path expands from."""
-        template = [0] * SCAN_POINT_LENGTH
-        if scan_mode == "momentum":
-            template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        elif scan_mode == "rlu":
-            template[:4] = [vals['H'], vals['K'], vals['L'], vals['deltaE']]
-        elif scan_mode == "angle":
-            for name in self._SCAN_ANGLES:
-                template[self._SCAN_VARIABLE_TO_INDEX[name]] = vals[_to_internal(name)]
-        elif scan_mode == "orientation":
-            template[:4] = [vals['qx'], vals['qy'], vals['qz'], vals['deltaE']]
-        # The arc readouts drive angle mode; Q modes solve the arcs instead.
-        template[SLOT_SGL] = vals['sgl']
-        template[SLOT_SGU] = vals['sgu']
-        return template
-
-    def validate_scan_launch_state(self, launch_state):
-        """Expand a frozen launch state's scan and check each point's feasibility.
-
-        Mirrors ``run_simulation``'s point expansion (template + variable index,
-        per-command ``parse_scan_steps``, relative offsets, the single-command
-        swap) WITHOUT touching the GUI, then evaluates each concrete point with
-        the instrument's ``check_point_feasibility`` (the same angle math the run
-        uses). API-side only -- the GUI Run path never calls this.
-
-        Returns a point-level feasibility manifest where ``per_command``
-        is a list of ``{"variable", "count", "values"}`` and ``infeasible`` is a
-        list of ``{"index", "values", "kind", "reason"}`` in run order (the linear index
-        matches ``run_simulation``'s ``scan_parameter_input`` order, so the
-        skip-filter can drop exactly those points).
+        Run, the API's ``/scan`` and ``/validate``, the GUI point-count preview
+        and the benchmark all compile here, each from the snapshot its own
+        collection took at the instant of launch (``launch_state['snapshot']``,
+        canonical IDs). The plan and its points are stored on the launch state
+        (``'plan'``, ``'expansion'``) and ride it into the queued job: nothing
+        downstream re-reads command text or chooses a calculation. Raises
+        ``PlanRefused`` naming why the scan cannot run as written.
         """
         vals = launch_state['vals']
+        context = context_from_state(launch_state['scan_config'], vals,
+                                     self.instrument.capabilities(),
+                                     launch_state.get('engine') or 'mcstas')
+        plan = build_plan(
+            [(vals.get('scan_command1') or "", bool(launch_state.get('relative_mode_1'))),
+             (vals.get('scan_command2') or "", bool(launch_state.get('relative_mode_2')))],
+            context)
+        expansion = expand(plan, launch_state['snapshot'])
+        launch_state['plan'], launch_state['expansion'] = plan, expansion
+        return plan, expansion
+
+    def validate_scan_launch_state(self, launch_state):
+        """Check each point of a launch's compiled plan for feasibility.
+
+        Reads the plan and points of the launch's one compile-and-expand
+        (``_compile_launch``, run here when the caller has not yet) and judges
+        each point with the instrument's ``check_point_feasibility``: the run's
+        own solve, then the plan's engine and plane-lock guards. Never touches
+        the GUI.
+
+        Returns a point-level feasibility manifest where ``per_command`` is a
+        list of ``{"variable", "count", "values"}`` and ``infeasible`` a list
+        of ``{"index", "values", "kind", "reason"}`` in run order (the linear
+        index is ``run_simulation``'s point order, so the skip-filter drops
+        exactly those points). Raises ``PlanRefused`` when the plan does not
+        compile or the instrument cannot judge feasibility: a scan that cannot
+        be checked is refused, never assumed feasible.
+        """
+        if 'plan' not in launch_state:
+            self._compile_launch(launch_state)
+        plan, expansion = launch_state['plan'], launch_state['expansion']
         scan_config = launch_state['scan_config']
-        cmd1 = (vals.get('scan_command1') or "").strip()
-        cmd2 = (vals.get('scan_command2') or "").strip()
-        relative_mode_1 = launch_state.get('relative_mode_1', False)
-        relative_mode_2 = launch_state.get('relative_mode_2', False)
+        feasibility = getattr(self.instrument, "check_point_feasibility", None)
+        if not callable(feasibility):
+            raise PlanRefused(f"{self.descriptor.display_name} cannot check point feasibility, "
+                              "so its scans cannot be validated.")
 
-        # ``values`` here is one point's already-expanded values (``_expand``
-        # below has already added the current radius for a relative command),
-        # so each is checked as a single-value "range" (start == end) through
-        # the same ``curvature_scan_error`` ``_validate_single_scan_command``
-        # calls on the whole command text -- one shared primitive for both,
-        # rather than a second copy of the travel comparison here.
-        from instruments.tas_runtime import curvature_scan_error
-        from instruments import tas_runtime as _tas_runtime
-
-        is_deterministic = launch_state.get('engine') == 'deterministic'
-
-        curvature_axes = self._curvature_axis_specs(
-            vals.get('monocris'), vals.get('anacris'), modules=vals.get('modules')
-        )
-
-        def _curvature_violation(values):
-            for var, val in values.items():
-                axis = CURVATURE_AXIS_BY_ID.get(var)
-                axis_spec = curvature_axes.get(axis)
-                if axis_spec is None:
-                    continue
-                curvature_axis, crystal_name = axis_spec
-                error = curvature_scan_error(
-                    axis, val, val, 1.0, False, None, curvature_axis, crystal_name,
-                )
-                if error:
-                    return error
-            return None
-
-        result = {"requested_points": 0, "per_command": [], "infeasible": [],
-                  "point_manifest": []}
-
-        # Single-command swap matches run_simulation (a lone command 2 becomes 1).
-        cmd1, cmd2, relative_mode_1, relative_mode_2 = normalize_scan_commands(
-            cmd1, cmd2, relative_mode_1, relative_mode_2, empty2=""
-        )
-
-        scan_mode = self._determine_scan_mode(cmd1, cmd2)
-        template = self._build_scan_point_template(scan_mode, vals)
-        vi = self._SCAN_VARIABLE_TO_INDEX
-
-        # A plugin may not implement feasibility (older instruments); degrade to
-        # "assume feasible" rather than blocking submission.
-        feas_fn = getattr(self.instrument, "check_point_feasibility", None)
-
-        def _feasible(scan_point):
-            if not callable(feas_fn):
-                return True, None, None
+        result = {
+            "requested_points": len(expansion.points),
+            "per_command": [
+                {"variable": command.quantity, "count": len(expansion.values[command.number]),
+                 "values": list(expansion.values[command.number])}
+                for command in plan.commands
+            ],
+            "infeasible": [],
+            "point_manifest": [],
+        }
+        for index, point in enumerate(expansion.points):
+            values = {command.quantity: point[command.quantity] for command in plan.commands}
+            axes = ()
             try:
-                feasible, reason = feas_fn(scan_config, scan_mode, scan_point, vals)
-                kind = None if feasible else "physical_infeasible"
-                return bool(feasible), reason, kind
+                check = feasibility(scan_config, plan, point)
+                feasible, reason, kind = bool(check.feasible), check.reason, check.kind
+                axes = check.transmission
             except Exception as exc:
-                return False, f"angle solve error: {exc}", "geometry_solver_error"
-
-        def _record(index, values, scan_point):
-            curvature_error = _curvature_violation(values)
-            if curvature_error:
-                feasible, reason, kind = False, curvature_error, "curvature_out_of_travel"
-            else:
-                feasible, reason, kind = _feasible(scan_point)
-            # The analytic engine assumes every crystal reflects and enforces
-            # it (ruling 3): re-solve a point that PASSED feasibility and, if
-            # it is a direct-transmission geometry, report it infeasible for
-            # this (deterministic-only) job -- never relabel a point already
-            # infeasible for its own reason. Only reached with a real
-            # scan_config/engine, both of which only a deterministic launch
-            # state guarantees (several existing callers pass engine-less
-            # states and an object() stand-in for scan_config).
-            if feasible and is_deterministic:
-                point_state = copy.deepcopy(scan_config)
-                geom = _tas_runtime._solve_point_geometry(
-                    point_state, scan_mode, scan_point, vals
-                )
-                if geom["transmission"]:
-                    feasible = False
-                    kind = "transmission"
-                    axes = list(geom["transmission"])
-                    reason = (
-                        "direct transmission (%s): the analytic engine makes "
-                        "no claim" % ", ".join(axes)
-                    )
+                feasible, reason, kind = False, f"angle solve error: {exc}", "geometry_solver_error"
             entry = {"index": index, "values": values, "feasible": feasible,
                      "kind": kind, "reason": reason}
             if kind == "transmission":
                 # The axes travel with the entry: a preflight-skipped point
                 # never reaches the run loop, so this is where
                 # ScanResult.transmission_points learns about it.
-                entry["axes"] = axes
+                entry["axes"] = list(axes)
             result["point_manifest"].append(entry)
             if not feasible:
-                skipped = {
-                    "index": index, "values": values, "kind": kind,
-                    "reason": reason,
-                }
-                if kind == "transmission":
-                    skipped["axes"] = axes
-                result["infeasible"].append(skipped)
+                result["infeasible"].append({key: value for key, value in entry.items()
+                                             if key != "feasible"})
 
-        def _expand(cmd, relative):
-            var, values = parse_scan_steps(cmd)
-            var = self.normalize_scan_variable(var)
-            if relative:
-                base = self._get_current_value_for_variable(var, vals, template)
-                values = values + base
-            return var, [float(v) for v in values]
-
-        try:
-            if cmd1 and not cmd2:
-                var1, values1 = _expand(cmd1, relative_mode_1)
-                result["per_command"].append(
-                    {"variable": var1, "count": len(values1), "values": values1}
-                )
-                for idx, value1 in enumerate(values1):
-                    scan_point = template[:]
-                    scan_point[vi[var1]] = value1
-                    _record(idx, {var1: value1}, scan_point)
-                result["requested_points"] = len(values1)
-            elif cmd1 and cmd2:
-                var1, values1 = _expand(cmd1, relative_mode_1)
-                var2, values2 = _expand(cmd2, relative_mode_2)
-                result["per_command"].append(
-                    {"variable": var1, "count": len(values1), "values": values1}
-                )
-                result["per_command"].append(
-                    {"variable": var2, "count": len(values2), "values": values2}
-                )
-                linear = 0
-                for value2 in values2:
-                    for value1 in values1:
-                        scan_point = template[:]
-                        scan_point[vi[var1]] = value1
-                        scan_point[vi[var2]] = value2
-                        _record(linear, {var1: value1, var2: value2}, scan_point)
-                        linear += 1
-                result["requested_points"] = len(values1) * len(values2)
-            else:
-                # Single point at current settings.
-                _record(0, {}, template[:])
-                result["requested_points"] = 1
-        except Exception as exc:
-            # Unparseable command (e.g. force-submitted): cannot expand, so report
-            # no infeasible points and a best-effort count. run_simulation will
-            # surface any downstream failure normally.
-            self.print_to_message_center(f"Scan validation expansion failed: {exc}")
-            try:
-                result["requested_points"] = self._count_scan_points(cmd1, cmd2)
-            except Exception:
-                result["requested_points"] = 1
-            result["per_command"] = []
-            result["infeasible"] = []
-            result["point_manifest"] = []
-
-        requested = int(result["requested_points"])
-        if result["point_manifest"]:
-            mask = [bool(entry["feasible"]) for entry in result["point_manifest"]]
-        else:
-            mask = [True] * requested
+        mask = [bool(entry["feasible"]) for entry in result["point_manifest"]]
         segments = []
         start = None
         for index, feasible in enumerate(mask + [False]):
@@ -8397,7 +8180,7 @@ class TAVIController(QObject):
                 start = None
         result["planned_feasible_mask"] = mask
         result["feasible_points"] = sum(mask)
-        result["partial"] = 0 < result["feasible_points"] < requested
+        result["partial"] = 0 < result["feasible_points"] < result["requested_points"]
         result["feasible_segments"] = segments
 
         return result
@@ -8666,28 +8449,18 @@ class TAVIController(QObject):
         if self._job_worker is not None:
             self._job_worker.join(timeout=2)
 
-    def _prep_worker(self, scan_parameter_input, scan_mode, scan_config, is_2d_scan,
-                     variable_name1, variable_name2, vals, data_folder,
-                     scan_command1, scan_command2, snapshot_queue, stop_event):
-        """Compute per-point snapshots ahead of the simulation thread."""
+    def _prep_worker(self, scan_parameter_input, plan, scan_config, vals, data_folder,
+                     snapshot_queue, stop_event):
+        """Compute per-point snapshots of the plan's points ahead of the simulation thread."""
         try:
-            for scan_index, scan_item in enumerate(scan_parameter_input):
+            for scan_index, (point, indices) in enumerate(scan_parameter_input):
                 if stop_event.is_set():
                     break
 
                 prep_stage_start = time.perf_counter()
                 snapshot = self.instrument.compute_snapshot(
-                    scan_item,
-                    scan_index,
-                    scan_mode,
-                    scan_config,
-                    vals,
-                    data_folder,
-                    is_2d_scan=is_2d_scan,
-                    variable_name1=variable_name1,
-                    variable_name2=variable_name2,
-                    scan_command1=scan_command1,
-                    scan_command2=scan_command2,
+                    plan, point, scan_index, scan_config, vals, data_folder,
+                    indices=indices,
                 )
                 prep_compute_duration = time.perf_counter() - prep_stage_start
                 queue_wait_start = time.perf_counter()
@@ -8769,7 +8542,7 @@ class TAVIController(QObject):
         return {}
 
     def _run_scan_deterministic(self, launch_state, job, scan_parameter_input,
-                                scan_mode, scan_config, is_2d_scan,
+                                plan, scan_config, is_2d_scan,
                                 is_single_point_scan, variable_name1,
                                 variable_name2, array_values1, array_values2,
                                 vals, data_folder, number_neutrons, start_time):
@@ -8933,29 +8706,17 @@ class TAVIController(QObject):
             scan_x_values = []
             scan_counts = []
 
-        cmd1 = vals.get('scan_command1', "")
-        cmd2 = vals.get('scan_command2', "")
-
         try:
-            for i, scan_item in enumerate(scan_parameter_input):
+            for i, (point, indices) in enumerate(scan_parameter_input):
                 if self.stop_event.is_set():
                     simulation_stopped = True
                     break
 
-                if is_2d_scan:
-                    _, idx_x, idx_y = scan_item
-                    idx_1d = -1
-                else:
-                    _, idx_1d = scan_item
-                    idx_x = idx_y = -1
+                idx_1d, idx_x, idx_y = indices['idx_1d'], indices['idx_x'], indices['idx_y']
 
                 # REUSE the exact per-point Q/angle solve + feasibility flags.
                 snapshot = self.instrument.compute_snapshot(
-                    scan_item, i, scan_mode, scan_config, vals, data_folder,
-                    is_2d_scan=is_2d_scan,
-                    variable_name1=variable_name1,
-                    variable_name2=variable_name2,
-                    scan_command1=cmd1, scan_command2=cmd2,
+                    plan, point, i, scan_config, vals, data_folder, indices=indices,
                 )
                 md = snapshot.metadata
                 error_flags = list(snapshot.error_flags)
@@ -9343,12 +9104,13 @@ class TAVIController(QObject):
         scan_config = launch_state['scan_config']
         diagnostic_settings = launch_state['diagnostic_settings']
         number_neutrons = vals['number_neutrons']
-        scan_command1 = vals['scan_command1']
-        scan_command2 = vals['scan_command2']
         diagnostic_mode = vals['diagnostic_mode']
-        relative_mode_1 = launch_state['relative_mode_1']
-        relative_mode_2 = launch_state['relative_mode_2']
         compact_save_enabled = launch_state['compact_save_enabled']
+        # The plan and points compiled at launch (_compile_launch): the only
+        # description of what runs. No command text is read from here on.
+        if 'plan' not in launch_state:
+            raise RuntimeError("the launch state carries no compiled plan")
+        plan, expansion = launch_state['plan'], launch_state['expansion']
 
         data_folder = launch_state['save_folder_input']
         # If the folder already exists, increment instead
@@ -9360,63 +9122,40 @@ class TAVIController(QObject):
         # Write parameters to file
         write_parameters_to_file(data_folder, self.output_parameters(vals))
         
-        # Initialize scan arrays
+        # The plan's axes: command 1 inner, command 2 outer; a lone command
+        # (in either box) is the only axis.
+        commands = plan.commands
+        is_single_point_scan = not commands
+        is_2d_scan = len(commands) == 2
+        variable_name1 = commands[0].quantity if commands else ""
+        variable_name2 = commands[1].quantity if is_2d_scan else ""
+        array_values1 = list(expansion.values[commands[0].number]) if commands else []
+        array_values2 = list(expansion.values[commands[1].number]) if is_2d_scan else []
+        for command in commands:
+            if command.relative:
+                self.message_printed.emit(
+                    f"Relative scan {command.number}: {command.quantity} base = "
+                    f"{expansion.bases[command.number]}")
+
+        # (point, indices) in run order; the indices place a point in the result arrays.
         scan_parameter_input = []
-        
-        scan_mode = self._determine_scan_mode(scan_command1, scan_command2)
-        
-        # The one slot map and template (instruments.tas_runtime slot layout).
-        variable_to_index = self._SCAN_VARIABLE_TO_INDEX
-        scan_point_template = self._build_scan_point_template(scan_mode, vals)
-        
-        # Track if this is a single-point scan (no scan commands)
-        is_single_point_scan = not scan_command1 and not scan_command2
-        
-        # Handle no scan commands (single point simulation)
-        if not scan_command1 and not scan_command2:
-            # Store as tuple (scan_point, idx_1d) for consistency
-            scan_parameter_input.append((scan_point_template[:], 0))
-        
-        # Swap if only second command provided. The relative-mode flags move
-        # with the text -- a lone command 2 becomes command 1 and must keep
-        # ITS OWN relative setting, not silently pick up command 1's (empty)
-        # one, exactly like validate_scan_launch_state's identical swap.
-        scan_command1, scan_command2, relative_mode_1, relative_mode_2 = (
-            normalize_scan_commands(
-                scan_command1, scan_command2, relative_mode_1, relative_mode_2,
-                empty2=None,
-            )
-        )
-        
-        variable_name1 = ""
-        variable_name2 = ""
-        
+        for linear, point in enumerate(expansion.points):
+            if is_2d_scan:
+                indices = {'idx_1d': -1, 'idx_x': linear % len(array_values1),
+                           'idx_y': linear // len(array_values1)}
+            else:
+                indices = {'idx_1d': 0 if is_single_point_scan else linear,
+                           'idx_x': -1, 'idx_y': -1}
+            scan_parameter_input.append((point, indices))
+
         # Arrays to track requested scan geometry for display
         valid_mask_1d = []
         valid_mask_2d = None
-        array_values1 = []
-        array_values2 = []
 
         # Single scan command
-        if scan_command1 and not scan_command2:
-            variable_name1, array_values1 = parse_scan_steps(scan_command1)
-            variable_name1 = self.normalize_scan_variable(variable_name1)
-            
-            # Apply relative offset if enabled for command 1
-            if relative_mode_1:
-                base_value = self._get_current_value_for_variable(variable_name1, vals, scan_point_template)
-                array_values1 = array_values1 + base_value
-                self.message_printed.emit(f"Relative scan: {variable_name1} base value = {base_value}")
-            
-            valid_mask_1d = [False] * len(array_values1)
-            
-            for idx, value1 in enumerate(array_values1):
-                scan_point = scan_point_template[:]
-                scan_point[variable_to_index[variable_name1]] = value1
-                scan_parameter_input.append((scan_point, idx))
-                valid_mask_1d[idx] = self._validate_scan_point(
-                    scan_point, scan_mode, vals, scan_config)
-            
+        if commands and not is_2d_scan:
+            valid_mask_1d = [self._point_runs(plan, point, scan_config)
+                             for point, _ in scan_parameter_input]
             # Initialize display dock for 1D scan
             self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d,
                                        variable_name1, "", [], [])
@@ -9456,34 +9195,13 @@ class TAVIController(QObject):
                 })
 
         # Double scan command
-        if scan_command2 and scan_command1:
-            variable_name1, array_values1 = parse_scan_steps(scan_command1)
-            variable_name2, array_values2 = parse_scan_steps(scan_command2)
-            variable_name1 = self.normalize_scan_variable(variable_name1)
-            variable_name2 = self.normalize_scan_variable(variable_name2)
-            
-            # Apply relative offset if enabled for each command independently
-            if relative_mode_1:
-                base_value1 = self._get_current_value_for_variable(variable_name1, vals, scan_point_template)
-                array_values1 = array_values1 + base_value1
-                self.message_printed.emit(f"Relative scan 1: {variable_name1} base = {base_value1}")
-            if relative_mode_2:
-                base_value2 = self._get_current_value_for_variable(variable_name2, vals, scan_point_template)
-                array_values2 = array_values2 + base_value2
-                self.message_printed.emit(f"Relative scan 2: {variable_name2} base = {base_value2}")
-            
+        if is_2d_scan:
             # Build a full validity mask for display, but still enqueue every requested point.
-            valid_mask_2d = [[False] * len(array_values1) for _ in range(len(array_values2))]
-            
-            for idx_y, value2 in enumerate(array_values2):
-                for idx_x, value1 in enumerate(array_values1):
-                    scan_point = scan_point_template[:]
-                    scan_point[variable_to_index[variable_name1]] = value1
-                    scan_point[variable_to_index[variable_name2]] = value2
-                    scan_parameter_input.append((scan_point, idx_x, idx_y))
-                    valid_mask_2d[idx_y][idx_x] = self._validate_scan_point(
-                        scan_point, scan_mode, vals, scan_config)
-            
+            valid = [self._point_runs(plan, point, scan_config)
+                     for point, _ in scan_parameter_input]
+            width = len(array_values1)
+            valid_mask_2d = [valid[row * width:(row + 1) * width]
+                             for row in range(len(array_values2))]
             # Initialize display dock for 2D scan
             self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
                                        variable_name2, list(array_values2), valid_mask_2d)
@@ -9523,9 +9241,6 @@ class TAVIController(QObject):
                     'valid_mask_1': [],
                     'valid_mask_2d': valid_mask_2d_list,
                 })
-
-        # Track if this is a 2D scan
-        is_2d_scan = scan_command2 and scan_command1
 
         if job is not None and job.result is None:
             # Neither the 1D nor 2D branch ran -> single-point scan.
@@ -9610,7 +9325,7 @@ class TAVIController(QObject):
         # point. seed/noiseless come from the POST /scan body via launch_state.
         if launch_state.get('engine') == 'deterministic':
             return self._run_scan_deterministic(
-                launch_state, job, scan_parameter_input, scan_mode, scan_config,
+                launch_state, job, scan_parameter_input, plan, scan_config,
                 is_2d_scan, is_single_point_scan, variable_name1, variable_name2,
                 array_values1, array_values2, vals, data_folder, number_neutrons,
                 start_time=time.time(),
@@ -9756,15 +9471,10 @@ class TAVIController(QObject):
             target=self._prep_worker,
             args=(
                 scan_parameter_input,
-                scan_mode,
+                plan,
                 scan_config,
-                is_2d_scan,
-                variable_name1,
-                variable_name2,
                 vals,
                 data_folder,
-                scan_command1,
-                scan_command2,
                 snapshot_queue,
                 self.stop_event,
             ),

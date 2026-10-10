@@ -34,6 +34,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from instruments.rules import PlanRefused  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -114,14 +115,11 @@ def test_8_the_branch_original_worked_example_is_refused_by_the_preflight_too():
         # pose, so the flag is set the way a relative request would set it.
         launch_state["relative_mode_1"] = True
 
-        result = ctrl.validate_scan_launch_state(launch_state)
-
-        assert result["feasible_points"] == 0, result
-        assert result["infeasible"], "the worked example must still be refused"
-        assert all(
-            e["kind"] == "curvature_out_of_travel" for e in result["infeasible"]
-        ), result["infeasible"]
-        assert "rhm" in result["infeasible"][0]["reason"]
+        # The plan's expansion refuses it outright, from the launch's own base:
+        # an out-of-travel radius is never a point to skip.
+        with pytest.raises(PlanRefused, match="mechanical minimum") as refused:
+            ctrl.validate_scan_launch_state(launch_state)
+        assert "rhm" in str(refused.value)
 
         # The preflight itself now refuses the same command, given the
         # current radius -- it is no longer blind to the relative case.

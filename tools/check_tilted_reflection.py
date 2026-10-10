@@ -16,8 +16,8 @@ above the plane at 45 deg azimuth on the stage and levelling it needs both
 arcs (about 2.8 deg each). The operator's UB is the truth. The setting is
 solved through the real runtime (``calculate_stage_angles`` ->
 ``tavi.orientation.solve_stage``); the scans go through IN8's own
-``scan_config``, ``build``, ``compute_snapshot`` (angle mode, arcs in the
-point's ``sgl``/``sgu`` slots) and ``run_point``, exactly the path the
+``scan_config``, ``build``, ``compute_snapshot`` (direct motors, the arcs
+named in the point) and ``run_point``, exactly the path the
 application uses.
 
 Scans: 13 A3 points around the predicted A3 at the solved arcs, then the same
@@ -70,13 +70,17 @@ IN8_VALS = {
 
 
 def _angle_point(mtt, stt, a3, att, sgl, sgu):
-    """An angle-mode scan point, the arcs in their own slots."""
-    from instruments.tas_runtime import SCAN_POINT_LENGTH, SLOT_SGL, SLOT_SGU
+    """A direct-motor scan point, named by canonical quantity ID."""
+    from instruments.tas_runtime import ATT, MTT, SGL, SGU, STH, STT
 
-    point = [0.0] * SCAN_POINT_LENGTH
-    point[:4] = [mtt, stt, a3, att]
-    point[SLOT_SGL], point[SLOT_SGU] = sgl, sgu
-    return point
+    return {MTT: mtt, STT: stt, STH: a3, ATT: att, SGL: sgl, SGU: sgu}
+
+
+def _motor_plan(plugin, config, vals):
+    """The plan the points run under: direct motors, as an A3 scan's are."""
+    from instruments.rules import MOTORS, context_from_state, point_plan
+
+    return point_plan(context_from_state(config, vals, plugin.capabilities()), MOTORS)
 
 
 def _hygiene():
@@ -177,9 +181,10 @@ def main():
     scans = {"tilted": (sgl, sgu), "arcs zeroed": (0.0, 0.0)}
     print(f"Planned: {POINTS} points per scan, A3 = "
           + ", ".join(f"{v:.3f}" for v in a3_points))
+    plan = _motor_plan(plugin, config, vals)
     for label, (arc_l, arc_u) in scans.items():
         snapshot = plugin.compute_snapshot(
-            (_angle_point(mtt, stt, a3, att, arc_l, arc_u), 0), 0, "angle",
+            plan, _angle_point(mtt, stt, a3, att, arc_l, arc_u), 0,
             config, vals, str(root / "plan"))
         p = snapshot.params
         print(f"  {label:12s} sgl = {arc_l:8.4f}  sgu = {arc_u:8.4f}  centre-point sample arm "
@@ -202,8 +207,8 @@ def main():
         folder.mkdir(parents=True, exist_ok=True)   # McStasScript needs the parent to exist
         for index, a3_value in enumerate(a3_points):
             snapshot = plugin.compute_snapshot(
-                (_angle_point(mtt, stt, float(a3_value), att, arc_l, arc_u), index),
-                index, "angle", config, vals, str(folder))
+                plan, _angle_point(mtt, stt, float(a3_value), att, arc_l, arc_u),
+                index, config, vals, str(folder))
             started = time.perf_counter()
             _data, run_flags, info = plugin.run_point(
                 instrument, snapshot, snapshot.output_folder, ncount, execution,

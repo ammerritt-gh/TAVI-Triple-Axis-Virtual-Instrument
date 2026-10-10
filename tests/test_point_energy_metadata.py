@@ -17,11 +17,9 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 from instruments.in8.plugin import IN8Plugin
-from instruments.tas_runtime import compute_scan_snapshot
+from instruments.tas_runtime import MOTORS, Q_CALC, compute_scan_snapshot
+from plan_helpers import motors_point, plan_for, q_point
 from tavi.neutron_conversions import angle2k, k2energy
-
-# qx qy qz dE | rhm rvm rha rva | chi kappa psi
-_SCAN_POINT = ([2.0, 0.0, 0.5, None, 3.0, 1.2, 1.5, 0.31, 0.0, 0.0, 0.0], 0)
 
 _FIXED_E = 14.68  # meV, the standard IN8 kf = 2.662 setting
 
@@ -42,10 +40,8 @@ def _snapshot(k_fixed, source_type, deltaE):
     }
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
-    scans, idx = _SCAN_POINT
-    scans = list(scans)
-    scans[3] = deltaE
-    return compute_scan_snapshot((scans, idx), 0, "momentum", config, vals,
+    return compute_scan_snapshot(plan_for(plugin, config, vals, Q_CALC),
+                                 q_point(2.0, 0.0, 0.5, deltaE), 0, config, vals,
                                  data_folder=".")
 
 
@@ -107,9 +103,8 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
     }
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
-    # A1 A2 A3 A4 | rhm rvm rha rva | chi kappa psi
-    scans = [mtt, -71.25, -35.63, att, 3.0, 1.2, 1.5, 0.31, 0.0, 0.0, 0.0]
-    return compute_scan_snapshot((scans, 0), 0, "angle", config, vals,
+    return compute_scan_snapshot(plan_for(plugin, config, vals, MOTORS),
+                                 motors_point(mtt, -71.25, -35.63, att), 0, config, vals,
                                  data_folder=".")
 
 
@@ -222,10 +217,8 @@ def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
     }
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
-    scans = list(_SCAN_POINT[0])
-    scans[3] = _FIXED_E + 3.0
     feasible, reason = check_point_feasibility(
-        config, "momentum", scans, vals,
+        config, Q_CALC, q_point(2.0, 0.0, 0.5, _FIXED_E + 3.0), vals,
         axis_limits=plugin.descriptor().axis_limits,
     )
     assert feasible is False
