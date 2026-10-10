@@ -32,6 +32,7 @@ import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from gui.docks.base_dock import NARROW, WIDE  # noqa: E402
 from gui.field_marks import mark_for  # noqa: E402
+from instruments.rules import NOT_READ  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi.quantities import QUANTITIES  # noqa: E402
 from test_compact_layout import LAPTOP, MONITOR, _resize, _use_windows_ui_font  # noqa: E402
@@ -189,6 +190,19 @@ def test_relative_a3_shows_its_base_and_range_and_the_unread_group(window):
     assert A3 not in _marks(window)   # the verdict refuses the empty base: no mark claims a run
     assert _warning(window)           # and the label says why
     assert _note(window) is None   # the scan does not compile: nothing else is claimed
+
+
+def test_the_group_note_names_the_sub_group_the_plan_leaves_unread(window):
+    _type(window, "qx 2 2.2 0.1")
+    assert _note(window) == "HKL not used by this scan"
+    _type(window, "A3 0 1 0.5")
+    assert _note(window) == NOTE
+    _type(window, "H 0.9 1.1 0.1")
+    unread = {qid for qid, prov in window.controller._box_verdict()[1].provenance.items()
+              if prov.role == NOT_READ}
+    hkl, q = {"h", "k", "l"}, {QX, QY, QZ}
+    names = [name for name, ids in (("Q", q), ("HKL", hkl)) if unread >= ids]
+    assert _note(window) == (f"{' and '.join(names)} not used by this scan" if names else None)
 
 
 def test_a2_scan_sets_ei_at_each_point(window):

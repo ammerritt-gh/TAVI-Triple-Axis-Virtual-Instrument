@@ -94,7 +94,9 @@ class UnifiedScatteringDock(BaseDockWidget):
         return self._quantity_fields.get(quantity_id)
 
     def field_groups(self):
-        """[(group box, canonical IDs)] that one "not used by this scan" note covers: HKL and Q."""
-        return [(self.point_group, ("h", "k", "l", "q_instrument_x_inv_angstrom",
-                                    "q_instrument_y_inv_angstrom",
-                                    "q_instrument_z_inv_angstrom"))]
+        """[(group box, [(name, canonical IDs)])]: the sub-groups its "not used by this scan" note names."""
+        return [(self.point_group, [
+            ("Q", ("q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom",
+                   "q_instrument_z_inv_angstrom")),
+            ("HKL", ("h", "k", "l")),
+        ])]
