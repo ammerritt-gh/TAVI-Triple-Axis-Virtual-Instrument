@@ -460,25 +460,12 @@ def test_peak_max_negative_counts_refused():
 # Goto mapping
 # --------------------------------------------------------------------------
 
-def test_every_scannable_quantity_is_goto_able_under_its_own_name_but_rva():
+def test_every_scannable_quantity_is_goto_able_under_its_own_name():
     # The controller's field map is keyed by canonical ID, so a goto writes the field
-    # whose ID it scanned (the rva exception aside).
+    # whose ID it scanned.
     for q in QUANTITIES:
         if q.scannable:
-            expected = None if q.id == "analyzer_vertical_radius_m" else q.id
-            assert field_for_scan_variable(q.id) == expected, q.id
-
-
-def test_a_scannable_row_with_no_goto_is_none_and_never_raises(monkeypatch):
-    monkeypatch.setattr("tavi.scan_fits._NOT_GOTO",
-                        frozenset({"analyzer_vertical_radius_m", "slit.pre_sample.vertical_gap_mm"}))
-    for q in QUANTITIES:
-        if q.scannable and q.id in ("analyzer_vertical_radius_m",
-                                    "slit.pre_sample.vertical_gap_mm"):
-            for name in (q.id, *q.aliases):
-                assert field_for_scan_variable(name) is None, name
-                plan = plan_goto(name, 1.0, busy=False)
-                assert not plan.ok and plan.reason == "'%s' is not goto-able" % name
+            assert field_for_scan_variable(q.id) == q.id, q.id
 
 
 def test_a_scannable_quantity_without_a_table_row_does_not_raise(monkeypatch):
@@ -499,12 +486,12 @@ def test_field_for_scan_variable_lookup():
     assert field_for_scan_variable("psi") == "sample_rotation_deg"
     assert field_for_scan_variable("kappa") is None
     assert field_for_scan_variable("chi") is None
-    assert field_for_scan_variable("rva") is None
+    assert field_for_scan_variable("rva") == "analyzer_vertical_radius_m"
     # The registry resolves any case and the full ID.
     assert field_for_scan_variable("a4") == "sample_two_theta_deg"
     assert field_for_scan_variable("sample_two_theta_deg") == "sample_two_theta_deg"
     assert field_for_scan_variable("DELTAE") == "energy_transfer_mev"
-    # Unknowns and non-strings are simply not goto-able.
+    # Unknowns and non-strings are not scan variables.
     assert field_for_scan_variable("nonsense") is None
     assert field_for_scan_variable("") is None
     assert field_for_scan_variable(None) is None
@@ -550,16 +537,17 @@ def test_plan_goto_refuses_when_busy_before_anything_else():
     assert plan.value is None
 
 
-def test_plan_goto_distinguishes_not_gotoable_from_unknown():
-    known = plan_goto("rva", 1.0, busy=False)
-    assert known.ok is False
-    assert known.reason == "'rva' is not goto-able"
+def test_plan_goto_drives_the_analyzer_vertical_radius_field():
+    for name in ("rva", "analyzer_vertical_radius_m"):
+        plan = plan_goto(name, 0.3, busy=False)
+        assert plan.ok and plan.field == "analyzer_vertical_radius_m", name
+        assert plan.value == 0.3
 
+
+def test_plan_goto_refuses_unknown_and_retired_names():
     retired = plan_goto("chi", 1.0, busy=False)
+    assert retired.ok is False
     assert retired.reason == "unknown scan variable 'chi'"
-
-    also_known = plan_goto("rva", 1.0, busy=False)
-    assert also_known.reason == "'rva' is not goto-able"
 
     unknown = plan_goto("wibble", 1.0, busy=False)
     assert unknown.ok is False

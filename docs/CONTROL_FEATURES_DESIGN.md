@@ -161,7 +161,7 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 
 #### The scan-variable → field table
 
-`field_for_scan_variable` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes: the field is the scanned canonical ID, except for `_NOT_GOTO`. Since API version 2 the scan name is resolved through the registry (`tavi/quantities.py`) first, so every spelling of a quantity (an ILL number, a NICOS name, an alias) drives the same field. A `None` means *known variable, not goto-able*, which is a different refusal from *unknown variable*.
+`field_for_scan_variable` (in `tavi/scan_fits.py`) is the single mapping from a scan variable to the settable GUI parameter field a goto writes: the field is the scanned canonical ID, for every scan variable. Since API version 2 the scan name is resolved through the registry (`tavi/quantities.py`) first, so every spelling of a quantity (an ILL number, a NICOS name, an alias) drives the same field. A `None` means *not a scan variable*; the refusal names it as unknown.
 
 | Scan variable (canonical ID; aliases) | Field | Note |
 |---|---|---|
@@ -173,11 +173,11 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 | `analyzer_two_theta_deg` (`A6`, `att`) | same ID | The analyzer 2θ. |
 | `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m` (`rhm`, `rvm`, `rha`) | same ID | Bender curvatures. |
 | `sample_lower_arc_deg`, `sample_upper_arc_deg` (`sgl`, `sgu`) | same ID | The goniometer arcs. Only the direct-motor calculation reads them (an HKL or Q scan solves them per point); an unscanned arc is used as typed in its field, or held by a plane lock. |
-| `analyzer_vertical_radius_m` (`rva`) | `None` | Not goto-able: its settability depends on the crystal (fixed on PG(002)). |
+| `analyzer_vertical_radius_m` (`rva`) | same ID | The analyzer vertical radius. A crystal that fixes it (PG(002)) refuses the move, as it refuses a typed value. |
 
 `A1` and `A5` (the derived Bragg angles) and the retired `chi`, `phi`, `kappa` are not scan variables at all: the registry refuses them, so they never reach this table. A scan point is a mapping of these canonical IDs, built by the launch's point plan (`instruments/rules.py`, `expand`); there is no positional slot layout.
 
-An unknown variable also returns `None`. The GUI disables all three goto buttons with the reason in their tooltip.
+An unknown variable also returns `None`, and the GUI disables all three goto buttons with the reason in their tooltip.
 
 **Verification.** `tavi/scan_fits.py` is unit-tested in `tests/test_scan_fits.py`. The controller adapters and the dock boundary are guarded by source-scan tests (`tests/test_goto_controller.py`, `tests/test_fitting_dock.py`) because this suite does not import Qt.
 
