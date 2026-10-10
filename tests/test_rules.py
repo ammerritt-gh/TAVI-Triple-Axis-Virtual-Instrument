@@ -309,6 +309,38 @@ def test_a_relative_radius_range_is_checked_against_travel_from_its_base():
     assert "mechanical minimum" in str(_refused("rhm 1 2 0.5", ctx=_context({RHM: driven})))
 
 
+def test_check_runs_judges_a_relative_run_from_its_base_and_ends_without_building_it(monkeypatch):
+    """A 10,001-point relative run is refused, or passed, from its base and ends: no run is built."""
+    def no_run(*_args):
+        raise AssertionError("check_runs built the run")
+
+    monkeypatch.setattr(rules, "parse_scan_steps", no_run)
+    empty = _snapshot()
+    del empty[STH]
+    with pytest.raises(PlanRefused, match="steps relative to A3") as caught:
+        rules.check_runs(_plan("A3 0 100 0.01", rel1=True), empty)
+    assert caught.value.command == 1
+    driven = AxisPolicy(CurvatureMode.HELD, CurvatureAxis(min_radius_m=1.5, max_radius_m=5.0))
+    with pytest.raises(PlanRefused, match="mechanical minimum"):
+        rules.check_runs(_plan("rhm -1 9 0.001", ctx=_context({RHM: driven}), rel1=True),
+                         _snapshot(**{RHM: 2.0}))
+    rules.check_runs(_plan("rhm -1 1 0.5", ctx=_context({RHM: driven}), rel1=True),
+                     _snapshot(**{RHM: 3.0}))   # 2.0 .. 4.0 m: inside the travel
+
+
+def test_check_runs_judges_the_value_beside_zero_as_expand_does():
+    """A run starting at zero exempts zero itself, not the nonzero values beside it."""
+    driven = AxisPolicy(CurvatureMode.HELD, CurvatureAxis(min_radius_m=1.5, max_radius_m=5.0))
+    plan = _plan("rhm -2 3 0.001", ctx=_context({RHM: driven}), rel1=True)
+    snapshot = _snapshot(**{RHM: 2.0})
+    with pytest.raises(PlanRefused) as judged:
+        rules.check_runs(plan, snapshot)
+    with pytest.raises(PlanRefused) as ran:
+        expand(plan, snapshot)
+    assert str(judged.value) == str(ran.value)
+    assert "0.001 m is tighter than the mechanical minimum of 1.5 m" in str(judged.value)
+
+
 # ------------------------------------------------- the pre-plan pair judgements
 
 # The 68 pairs (of 153) the controller's hand pair rules refused before the plan

@@ -38,6 +38,7 @@ from instruments.rules import (
     PlanRefused,
     build_plan,
     check_point,
+    check_runs,
     context_from_state,
     evaluate,
     expand,
@@ -4535,12 +4536,12 @@ class TAVIController(QObject):
 
     @staticmethod
     def _judge_runs(plan, launch_state):
-        """``scan_axes`` for a scan within the point budget; a larger one is judged by its plan alone.
+        """``check_runs`` for every scan; ``scan_axes`` (every value of the run) within the point budget.
 
-        A run over the budget is never built: a 1e8-point command froze the window. Its
-        typed inputs and bases go unjudged here, and Run's own compile still refuses them.
-        shortcut: a scan over 1000 points skips the run checks, upgrade if the label must refuse them.
+        A run over the budget is never built: its typed inputs, bases and travel are judged
+        from its ends, and Run's own compile checks every value.
         """
+        check_runs(plan, launch_state['snapshot'])
         if math.prod(scan_point_count(c.text) for c in plan.commands) <= 1000:
             scan_axes(plan, launch_state['snapshot'])
 

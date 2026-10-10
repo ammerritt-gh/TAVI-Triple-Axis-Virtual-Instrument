@@ -3,7 +3,9 @@
 The last point never passes the end. A step a client rounded to six significant
 digits (ISAR sends %g) still reaches its end point exactly.
 """
-from tavi.utilities import parse_scan_steps, scan_stop_note
+import pytest
+
+from tavi.utilities import parse_scan_steps, scan_run_values, scan_stop_note
 
 
 def test_a_step_that_does_not_divide_stops_at_the_last_point_inside_the_range():
@@ -45,3 +47,15 @@ def test_descending_ranges_stop_short_with_a_note():
     _, values = parse_scan_steps("A3 10 0 -2.5")
     assert values[-1] == 0.0
     assert scan_stop_note(10.0, 0.0, -2.5) is None
+
+
+@pytest.mark.parametrize("command", [
+    "A3 0 10 4", "A3 0 10 2.5", "deltaE 0 10 0.0502513", "deltaE 10 0 -0.0502513",
+    "A3 0 0.0016 0.0008", "A3 10 0 -4", "A3 -2 3 0.001", "A3 0.1234 9.8765 0.0371",
+    "A3 0 1e-12 1", "A3 2 2 1",
+])
+def test_the_closed_form_values_are_the_run_values(command):
+    """scan_run_values at every index is parse_scan_steps' array, so the travel check judges the run."""
+    _, values = parse_scan_steps(command)
+    start, end, step = map(float, command.split()[1:])
+    assert scan_run_values(start, end, step, range(len(values))) == list(values)

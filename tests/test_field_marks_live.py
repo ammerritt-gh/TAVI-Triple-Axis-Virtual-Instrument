@@ -616,6 +616,33 @@ def test_a_relative_radius_out_of_travel_is_refused_and_marks_nothing(window):
     assert _state(window, RHM)[:3] == ("scanned", "1 +Δ", 1)
 
 
+def test_a_big_relative_scan_with_an_empty_base_is_refused_by_label_and_preflight(window):
+    """10,001 points, relative, A3 field empty: the label and Run's preflight refuse it alike,
+    and box 1 draws no mark. The scan is judged from its ends; nothing is run."""
+    idock = window.instrument_dock
+    base = idock.omega_edit.text()
+    idock.omega_edit.setText("")
+    try:
+        _type(window, "A3 0 100 0.01", rel1=True)
+        assert "steps relative to" in _warning(window), _warning(window)
+        assert _marks(window) == {}
+        hard, _gate = _run_verdict(window)
+        assert any("steps relative to" in issue for issue in hard), hard
+    finally:
+        idock.omega_edit.setText(base)
+        _settle()
+
+
+def test_a_big_relative_radius_scan_out_of_travel_is_refused_by_label_and_preflight(window):
+    """10,001 points stepping rhm from 2.5 m to 0.1 .. 2.1 m: PUMA's 2.0 m minimum is out."""
+    window.instrument_dock.rhm_edit.setText("2.5")
+    _type(window, "rhm -2.4 -0.4 0.0002", rel1=True)
+    assert "mechanical minimum" in _warning(window), _warning(window)
+    assert _marks(window) == {}
+    hard, _gate = _run_verdict(window)
+    assert any("mechanical minimum" in issue for issue in hard), hard
+
+
 def test_the_mark_refresh_expands_nothing(window, monkeypatch):
     """A field edit refreshes the marks from the verdict alone: the mark path expands no axis."""
     def expanded(*_args, **_kwargs):

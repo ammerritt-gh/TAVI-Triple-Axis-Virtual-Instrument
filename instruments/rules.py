@@ -50,7 +50,7 @@ from tavi.quantities import (
     to_internal,
 )
 from tavi.tas_geometry import component_q_to_instrument_q
-from tavi.utilities import parse_scan_steps, scan_point_count, scan_range_error
+from tavi.utilities import parse_scan_steps, scan_point_count, scan_range_error, scan_run_values
 
 MTH, ATH = "mono_theta_deg", "analyzer_theta_deg"
 ARCS = (SGL, SGU)
@@ -583,23 +583,54 @@ def _snapshot_value(snapshot, qid, refusal, command=None):
     return value
 
 
-def _runs(plan, launch_snapshot):
-    """The typed inputs and each command's run, from one snapshot: every refusal, no points."""
+def _end_values(cmd):
+    """A command's first and last values and the values beside each end, in closed form.
+
+    The travel is {0} and an interval, so the nearest nonzero values to zero sit beside a
+    zero end: the ends and their neighbours are what a travel check needs.
+    shortcut: 3-decimal rounding can hide those neighbours (steps under 1e-3 from zero), so
+    the label passes them and Run's full check refuses; upgrade if the label must match it.
+    """
+    last = scan_point_count(cmd.text) - 1
+    return scan_run_values(cmd.start, cmd.stop, cmd.step,
+                           sorted({0, min(1, last), max(last - 1, 0), last}))
+
+
+def check_runs(plan, launch_snapshot):
+    """Every refusal a run makes, judged without building one; ``_runs`` calls it first.
+
+    The typed inputs, each relative command's base and a relative radius run's travel,
+    from its ends and their neighbours. Returns ``(typed, bases)``: the snapshot's values
+    for the typed inputs and each relative command's base, read once.
+    """
     typed = {}
     for qid in sorted(plan.inputs - plan.scanned):
         typed[qid] = _snapshot_value(
             launch_snapshot, qid, f"{_name(qid)} is used as typed, but the launch state holds "
                                   "no number for it.")
-    values, bases = {}, {}
+    bases = {}
     for cmd in plan.commands:
-        run = [float(v) for v in parse_scan_steps(cmd.text)[1]]
         if cmd.relative:
             base = _snapshot_value(
                 launch_snapshot, cmd.quantity,
                 f"Command {cmd.number} steps relative to {_name(cmd.quantity)}, but its field "
                 "holds no number to step from.", cmd.number)
-            run = [v + base for v in run]
             bases[cmd.number] = base
+            error = _curvature_error(cmd, plan.context, [v + base for v in _end_values(cmd)])
+            if error:
+                raise PlanRefused(error, cmd.number, cmd.quantity)
+    return typed, bases
+
+
+def _runs(plan, launch_snapshot):
+    """The typed inputs and each command's run, from one snapshot: every refusal, no points."""
+    typed, bases = check_runs(plan, launch_snapshot)
+    values = {}
+    for cmd in plan.commands:
+        run = [float(v) for v in parse_scan_steps(cmd.text)[1]]
+        if cmd.relative:
+            run = [v + bases[cmd.number] for v in run]
+            # Every value of the run, where check_runs judged the ends and their neighbours.
             error = _curvature_error(cmd, plan.context, run)
             if error:
                 raise PlanRefused(error, cmd.number, cmd.quantity)
