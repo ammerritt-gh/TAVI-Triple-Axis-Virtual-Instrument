@@ -586,10 +586,10 @@ def _snapshot_value(snapshot, qid, refusal, command=None):
 def _end_values(cmd):
     """A command's first and last values and the values beside each end, in closed form.
 
-    The travel is {0} and an interval, so the nearest nonzero values to zero sit beside a
-    zero end: the ends and their neighbours are what a travel check needs.
-    shortcut: 3-decimal rounding can hide those neighbours (steps under 1e-3 from zero), so
-    the label passes them and Run's full check refuses; upgrade if the label must match it.
+    The travel is {0} or an interval, so the nonzero values nearest zero sit beside a zero
+    end: the ends and their neighbours are what a travel check needs.
+    shortcut: 3-decimal rounding can hide those neighbours (steps under 1e-3 from zero), so a
+    scan over 1000 points passes the label and Run's full check refuses; upgrade if they must agree.
     """
     last = scan_point_count(cmd.text) - 1
     return scan_run_values(cmd.start, cmd.stop, cmd.step,
