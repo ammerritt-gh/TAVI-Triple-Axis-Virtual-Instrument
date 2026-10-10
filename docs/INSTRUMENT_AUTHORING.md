@@ -75,6 +75,9 @@ plugins, but built-in packages use the central path.
    stage: `goniometer=tas_goniometer(arc_travel)` with the arcs' travel from
    a cited source, or `tas_goniometer()` (undocumented, unlimited) when none
    exists — say which in `MODEL_STATUS.md`; never invent a limit.
+   `axis_limits` keys use TAVI's internal numbering until U3 versions the
+   author contract: `"A1"` is mono 2theta (ILL A2), `"A2"` sample 2theta
+   (ILL A4), `"A4"` analyzer 2theta (ILL A6); any other key is refused.
    `descriptor.samples` is the shared library (`tavi/sample_library.py`), not
    a per-package list — every instrument mounts exactly
    `default_sample_library()`; `package_validation.py`'s runtime check

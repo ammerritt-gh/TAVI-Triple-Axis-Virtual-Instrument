@@ -172,7 +172,13 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
     # l1_source_mono is exempt structurally (vTAS omits it); checked under R1.
 
     # --- S10: axis limits -------------------------------------------------------------
+    # Keys are TAVI's internal numbering until U3 versions the author contract.
     for axis, lim in d.axis_limits.items():
+        if axis not in ("A1", "A2", "A4"):
+            errors.append(
+                f"axis_limits[{axis!r}]: not a TAVI axis key; use 'A1' (mono 2theta, ILL A2), "
+                "'A2' (sample 2theta, ILL A4) or 'A4' (analyzer 2theta, ILL A6)"
+            )
         if not all(_finite(v) for v in (lim.lower, lim.default, lim.upper)):
             errors.append(f"axis_limits[{axis!r}]: values must be finite")
         elif not (lim.lower <= lim.default <= lim.upper):

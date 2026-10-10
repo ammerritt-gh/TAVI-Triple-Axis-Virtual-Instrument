@@ -112,6 +112,11 @@ def _replace(d, **kwargs):
             lambda d: _replace(d, axis_limits={"A1": AxisLimits(10.0, 20.0, 0.0)}),
             "lower <= default <= upper",
         ),
+        (
+            # An author who follows the ILL numbering writes A6 for the analyser 2theta.
+            lambda d: _replace(d, axis_limits={"A6": AxisLimits(-120.0, 0.0, 120.0)}),
+            "mono 2theta, ILL A2",
+        ),
     ],
 )
 def test_structural_negative_cases(mutate, expected_substring):
