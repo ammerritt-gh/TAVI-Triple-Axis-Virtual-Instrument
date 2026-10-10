@@ -203,6 +203,14 @@ def test_a_step_that_cannot_reach_the_end_is_hard(in8_controller):
         assert hard, cmd
 
 
+def test_a_step_that_overshoots_the_end_is_not_refused(in8_controller):
+    # Pinned: "A3 0 10 4" runs 0, 4, 8, 12 as written. A step that does not
+    # divide the range runs to the point nearest the end, so nobody re-adds an
+    # overshoot refusal (it would reject ISAR's %g-rounded steps).
+    hard, _ = in8_controller._scan_command_issues("A3 0 10 4", "")
+    assert not hard
+
+
 def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
     """The Run path does `hard, soft = self._preflight_scan_validation()`.
 
