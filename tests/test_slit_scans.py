@@ -221,6 +221,12 @@ def test_the_live_label_run_and_validate_accept_a_bound_slit_scan(in8, monkeypat
     expansion = submitted[0]["expansion"]
     assert expansion.values[2] == (10.0, 20.0)
     assert {p["slit.pre_sample.horizontal_gap_mm"] for p in expansion.points} == {10.0, 20.0}
+    launch = submitted[0]
+    for i, point in enumerate(expansion.points):   # each point folder records its own gap
+        snap = in8.instrument.compute_snapshot(launch["plan"], point, i, launch["scan_config"],
+                                               launch["vals"], ".")
+        written = in8.point_output_parameters(launch["vals"], snap.metadata, i, 1000)
+        assert written["slit.pre_sample.horizontal_gap_mm"] == point["slit.pre_sample.horizontal_gap_mm"]
 
     backend = cm.TaviApiBackend(in8, _SyncBridge())
     for c1, c2 in ((cmd1, cmd2), ("pre_sample_hgap 10 20 10", "")):

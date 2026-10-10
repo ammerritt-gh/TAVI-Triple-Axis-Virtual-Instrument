@@ -298,8 +298,14 @@ def public_values(vals: dict, slits=()) -> dict:
     """An internal parameter dict under canonical IDs; names that are no quantity pass through.
 
     ``slits`` are the active descriptor's SlitSpecs (id, stable_id, has_height): the nested
-    ``slits_mm`` becomes one flat key per gap, and only this instrument's own appear.
+    ``slits_mm`` becomes one flat key per gap, and only this instrument's own appear; a gap
+    given under its own ID (a point's scanned gap) wins over it.
+
+    A scan point's metadata (``requested_radii`` present) publishes each requested radius
+    magnitude under its ID and the point's own, signed radius under ``applied_*``; ``sth``,
+    the stage readout ``omega`` already records, is never published.
     """
+    requested = vals.get("requested_radii") or {}
     out = {}
     for key, value in vals.items():
         if key == "slits_mm":
@@ -307,8 +313,15 @@ def public_values(vals: dict, slits=()) -> dict:
                 if slit.id not in value:
                     continue
                 gaps = value[slit.id]
-                out.update(zip(slit_gap_ids(slit), gaps if slit.has_height else (gaps,),
-                               strict=True))
+                for qid, gap in zip(slit_gap_ids(slit), gaps if slit.has_height else (gaps,),
+                                    strict=True):
+                    out.setdefault(qid, gap)
+        elif key == "requested_radii":
+            out.update({to_public(axis): magnitude for axis, magnitude in value.items()})
+        elif key in requested:
+            out.update(public_applied_radii({key: value}))
+        elif key == "sth":
+            continue
         elif key == "curvature_modes":
             out[key] = {to_public(axis): mode for axis, mode in value.items()}
         elif key == "curvature_clamped":
