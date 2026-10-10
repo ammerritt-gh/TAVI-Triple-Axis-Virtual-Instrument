@@ -15,6 +15,9 @@ strings), ``MonitorSpec.id`` (diagnostic-settings display keys), and
 ``SourceType.id`` (the GUI source-type combo strings, e.g. ``"Maxwellian"``).
 Phase 2 revisits these when the GUI binds to the descriptor.
 
+``validate_capabilities(caps, id)`` applies the same quantity rules to a plugin's
+declared inputs, observables and bindings (instrument extras, derived-only inputs).
+
 Error messages are human-readable and prefixed with the offending field/id; they
 double as authoring feedback (§11).
 """
@@ -25,6 +28,7 @@ import os
 import re
 
 from instruments.descriptor import InstrumentDescriptor, ModuleKind, Sense
+from tavi.quantities import QUANTITIES, by_id, slit_gap_id, slit_gap_ids
 
 _SLUG_RE = re.compile(r"^[a-z0-9_]+$")
 _C_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -84,6 +88,53 @@ _MONO_CURVATURE = frozenset({"rhm", "rvm"})
 _ANA_CURVATURE = frozenset({"rha", "rva"})
 
 
+def _quantity_problem(qid: str, instrument_id: str) -> str | None:
+    """Why a quantity an instrument declares is unusable, or None.
+
+    A registry canonical ID is always usable. Any other ID is an instrument extra: it must
+    be ``instrument.<instrument_id>.<name>`` and collide with no registry ID or alias.
+    """
+    try:
+        by_id(qid)
+        return None
+    except KeyError:
+        pass
+    if qid.casefold() in {n.casefold() for q in QUANTITIES for n in (q.id, *q.aliases)}:
+        return f"{qid!r} collides with a registry ID or alias"
+    prefix = f"instrument.{instrument_id}."
+    if not qid.startswith(prefix) or not _SLUG_RE.match(qid[len(prefix):]):
+        return f"{qid!r} is no canonical ID; an instrument extra must be named {prefix}<name>"
+    return None
+
+
+def validate_capabilities(capabilities, instrument_id: str) -> list[str]:
+    """Problems with a plugin's declared inputs, observables and bindings (empty = valid).
+
+    Every declared quantity is a canonical ID or an instrument extra (``_quantity_problem``),
+    and no derived-only quantity is an input: a plugin never takes A1 or A5 as input.
+    """
+    qids = {*capabilities.inputs, *capabilities.observables, *capabilities.bindings}
+    errors = [p for p in (_quantity_problem(q, instrument_id) for q in sorted(qids)) if p]
+    for qid in sorted(capabilities.inputs):
+        try:
+            derived = by_id(qid).derived_only
+        except KeyError:
+            continue   # an extra or unknown name: reported above
+        if derived:
+            errors.append(f"{qid!r} is derived and cannot be an input")
+    return errors
+
+
+def assert_valid_capabilities(capabilities, instrument_id: str) -> None:
+    """Raise ``DescriptorValidationError`` if a plugin's declared quantities are invalid."""
+    errors = validate_capabilities(capabilities, instrument_id)
+    if errors:
+        raise DescriptorValidationError(
+            f"Instrument {instrument_id!r} declares unusable quantities:\n  - "
+            + "\n  - ".join(errors)
+        )
+
+
 def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> list[str]:
     """Return a list of problems (empty = valid).
 
@@ -119,17 +170,15 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
         seen_params.add(p.name)
 
     # --- S4b: backend bindings (ParameterSpec.quantity) ----------------------------
-    from tavi.quantities import by_id, slit_gap_id, slit_gap_ids
     own_slits = {qid for slit in d.slits for qid in slit_gap_ids(slit)}
     bound = {}
     for p in d.scannable_parameters:
         if not p.quantity:
             continue
         where = f"scannable_parameters[{p.name!r}]"
-        try:
-            by_id(p.quantity)
-        except KeyError:
-            errors.append(f"{where}: quantity {p.quantity!r} is no canonical ID")
+        problem = _quantity_problem(p.quantity, d.id)
+        if problem:
+            errors.append(f"{where}: {problem}")
         if p.quantity.startswith("slit.") and p.quantity not in own_slits:
             errors.append(f"{where}: {p.quantity!r} is not a gap of this instrument's slits")
         if p.quantity in bound:
@@ -192,7 +241,7 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
     # l1_source_mono is exempt structurally (vTAS omits it); checked under R1.
 
     # --- S10: axis limits -------------------------------------------------------------
-    # Keys are TAVI's internal numbering until U3 versions the author contract.
+    # Keys are the internal numbering: A1 mono 2theta, A2 sample 2theta, A4 analyzer 2theta.
     for axis, lim in d.axis_limits.items():
         if axis not in ("A1", "A2", "A4"):
             errors.append(

@@ -399,6 +399,7 @@ class IN12Plugin:
 
     id = IN12_ID
     display_name = IN12_DISPLAY_NAME
+    CONTRACT_VERSION = 1
 
     def descriptor(self):
         return in12_descriptor()

@@ -330,6 +330,7 @@ class PANDAPlugin:
 
     id = PANDA_ID
     display_name = PANDA_DISPLAY_NAME
+    CONTRACT_VERSION = 1
 
     def descriptor(self):
         return panda_descriptor()

@@ -1,8 +1,9 @@
 """Phase-0 DRAFT: declarative description of a TAS instrument's GUI-facing knobs.
 
 This is a design sketch for the configurable-instruments effort
-(see ``docs/CONFIGURABLE_INSTRUMENTS.md`` §4-§5). **Nothing imports it yet and it
-changes no runtime behavior.**
+(see ``docs/CONFIGURABLE_INSTRUMENTS.md`` §4-§5). Every registered instrument builds its
+descriptor from these types, and ``instruments/validation.py`` checks it. The module
+itself does no McStas or GUI work.
 
 The descriptor is the *only* part of an instrument the GUI binds to: crystals,
 samples, monitors, optional modules, collimation, slits, source types, scannable

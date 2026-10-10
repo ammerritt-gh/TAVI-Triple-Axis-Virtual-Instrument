@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-from instruments.contract import InstrumentPlugin
+from instruments.contract import CONTRACT_VERSION, InstrumentPlugin
 from tavi.local_state import config_path as local_config_path
 
 
@@ -38,9 +38,20 @@ def register(
     display_name: str,
     factory: Callable[[], InstrumentPlugin],
 ) -> None:
-    """Register an instrument by id. ``factory`` returns a fresh ``InstrumentPlugin``."""
+    """Register an instrument by id. ``factory`` returns a fresh ``InstrumentPlugin``.
+
+    The factory class's ``CONTRACT_VERSION`` is read here, before any plugin is built, so a
+    plugin written against another contract version is refused at load.
+    """
     if instrument_id in _FACTORIES:
         raise ValueError(f"Instrument id already registered: {instrument_id!r}")
+    declared = getattr(factory, "CONTRACT_VERSION", None)
+    if declared != CONTRACT_VERSION:
+        found = ("declares no CONTRACT_VERSION" if declared is None
+                 else f"declares CONTRACT_VERSION {declared!r}")
+        name = getattr(factory, "__qualname__", repr(factory))
+        raise ValueError(f"plugin {instrument_id!r} ({name}) {found}; "
+                         f"TAVI supports CONTRACT_VERSION {CONTRACT_VERSION}")
     _FACTORIES[instrument_id] = factory
     _DISPLAY_NAMES[instrument_id] = display_name
 
