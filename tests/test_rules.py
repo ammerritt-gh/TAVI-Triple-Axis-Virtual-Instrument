@@ -4,6 +4,7 @@ Most tests build the frozen context by hand and need no instrument. Those
 marked with the ``puma`` fixture solve on PUMA's real state (cubic a = 4.05 A,
 14.7 meV fixed energy), so they check the rule model against the solver.
 """
+import dataclasses
 import importlib.util
 import itertools
 import math
@@ -141,6 +142,21 @@ def test_h_with_a_bound_slit_is_compatible_and_an_unbound_one_refused():
                        _context(slit_bindings=frozenset()))
     assert "has no per-point binding" in str(refusal) and refusal.command == 2
     assert "has no post-mono" in str(_refused("post_mono_hgap 10 30 10"))
+
+
+@pytest.mark.parametrize("cmd, qid, side, name", [
+    ("rhm 2 3 0.5", RHM, "mono", "rhm (mono horizontal radius)"),
+    ("rva 2 3 0.5", RVA, "analyzer", "rva (analyzer vertical radius)"),
+])
+def test_a_radius_on_an_unselected_crystal_names_the_missing_crystal(cmd, qid, side, name):
+    """context_from_state drops such a radius: the refusal says no crystal is selected, not
+    that the instrument has no radius."""
+    ctx = _context()
+    unselected = dataclasses.replace(
+        ctx, inputs=ctx.inputs - {qid},
+        curvature={q: p for q, p in ctx.curvature.items() if q != qid})
+    assert str(_refused(cmd, ctx=unselected)) == (
+        f"No {side} crystal this instrument installs is selected, so there is no {name} to scan.")
 
 
 def test_a_slit_scan_is_refused_on_the_analytic_engine():
