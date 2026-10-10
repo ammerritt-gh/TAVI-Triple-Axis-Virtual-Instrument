@@ -119,7 +119,8 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file, require_output_version,
                                    write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.utilities import parse_scan_steps, incremented_path_writing, scan_range_error
+from tavi.utilities import (parse_scan_steps, incremented_path_writing, scan_range_error,
+                            scan_intervals, scan_stop_note)
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
                               record_angles, stage_record, stage_rotation)
@@ -804,6 +805,7 @@ class TaviApiBackend:
         issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
         if issues:
             raise ApiError(400, "scan_validation", "\n".join(issues))
+        warnings = self._scan_warnings(controller, vals, cmd1, cmd2)
 
         # 2a. Resolve the background against this scan's sample -- the same
         #     check /validate runs, so a body that validates cannot be rejected
@@ -916,6 +918,7 @@ class TaviApiBackend:
             "isolated": bool(isolated),
             "eta": self._eta_for_job(job),
             "validation": validation,
+            "warnings": warnings,
         }
 
     def submit_validate(self, body):
@@ -970,6 +973,15 @@ class TaviApiBackend:
         )
         return hard if force else hard + soft
 
+    @staticmethod
+    def _scan_warnings(controller, vals, cmd1, cmd2):
+        """The non-blocking scan-command messages a request returns as ``warnings``."""
+        current_values = {axis: vals.get(axis) for axis in ("rhm", "rvm", "rha", "rva")}
+        return controller._scan_command_warnings(
+            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules"),
+            current_values=current_values,
+        )
+
     def _validate_scan_on_gui(self, patch, force, background=None,
                               engine="mcstas", seed=None, noiseless=False):
         """Non-mutating validation body -- runs on the GUI thread via the bridge.
@@ -1001,6 +1013,7 @@ class TaviApiBackend:
         scan_issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
         if scan_issues:
             blockers.append("scan_validation: %s" % "\n".join(scan_issues))
+        warnings = self._scan_warnings(controller, vals, cmd1, cmd2)
 
         try:
             points = controller._count_scan_points(cmd1, cmd2)
@@ -1039,6 +1052,7 @@ class TaviApiBackend:
                 "background": background_block,
                 "would_queue": False,
                 "blockers": blockers,
+                "warnings": warnings,
             }
 
         try:
@@ -1080,6 +1094,7 @@ class TaviApiBackend:
         validation["background"] = background_block
         validation["would_queue"] = not blockers
         validation["blockers"] = blockers
+        validation["warnings"] = warnings
         return validation
 
     def get_resolution(self, query):
@@ -4534,20 +4549,21 @@ class TAVIController(QObject):
             if error:
                 return (None, error)
 
-        # Calculate number of points and warn if too many or too few
-        import numpy as np
-        num_points = int(np.floor(abs(end - start) / abs(step) + 0.5)) + 1
-        
+        # Count and stop note both come from the one expansion rule (tavi/utilities.py).
+        num_points = scan_intervals(start, end, step)[0] + 1
+        note = scan_stop_note(start, end, step)
         if num_points > 1000:
-            return (var_id, f"⚠ {num_points} points - this may take a very long time!")
+            message = f"⚠ {num_points} points - this may take a very long time!"
         elif num_points > 500:
-            return (var_id, f"Warning: {num_points} scan points. Consider fewer steps.")
+            message = f"Warning: {num_points} scan points. Consider fewer steps."
         elif num_points == 1:
-            return (var_id, f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end}).")
+            message = f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end})."
         elif num_points <= 0:
             return (None, "Invalid range: no points would be generated.")
-        
-        return (var_id, None)
+        else:
+            message = None
+
+        return (var_id, " ".join(m for m in (message, note) if m) or None)
     
     # A requested-radius quantity -> the curvature axis (state field) it drives.
     _RADIUS_AXES = {qid: _to_internal(qid) for qid in RADIUS_CRYSTAL}
@@ -7398,6 +7414,29 @@ class TAVIController(QObject):
 
         return hard, soft
 
+    def _scan_command_warnings(self, cmd1: str, cmd2: str,
+                               monocris=None, anacris=None, modules=None,
+                               relative_1=False, relative_2=False,
+                               current_values=None):
+        """``Command N: ``-prefixed messages for the API's ``warnings`` list.
+
+        Every message a command returns that is not a refusal: the stop note and
+        the point-count notes. Advisory only, so ``force`` does not touch them; a
+        soft count note appears here and in the soft issues alike.
+        """
+        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
+        warnings = []
+        for label, cmd, relative in (
+            ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
+        ):
+            var, warning = self._validate_single_scan_command(
+                (cmd or "").strip(), curvature_axes, relative=relative,
+                current_values=current_values,
+            )
+            if warning and var is not None:
+                warnings.append(f"{label}: {warning}")
+        return warnings
+
     def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
                                      monocris=None, anacris=None,
                                      modules=None) -> str:
@@ -8225,6 +8264,8 @@ class TAVIController(QObject):
                 "VARIABLE start stop STEP. The third number (the last token) is "
                 "the STEP SIZE, not the number of points. "
                 "'H 1.99 2.01 0.01' produces 3 points (1.99, 2.00, 2.01). A step "
+                "that does not divide the range stops at the last point inside it "
+                "with a warning ('A3 0 10 4' produces 0, 4, 8). A step "
                 "larger than the range is a validation error. Two non-empty "
                 "commands make a 2D scan (point counts multiply); one command is "
                 "1D; none is a single point at the current settings."

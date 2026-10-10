@@ -201,12 +201,66 @@ def test_a_step_that_cannot_reach_the_end_is_hard(in8_controller):
         assert hard, cmd
 
 
-def test_a_step_that_overshoots_the_end_is_not_refused(in8_controller):
-    # Pinned: "A3 0 10 4" runs 0, 4, 8, 12 as written. A step that does not
-    # divide the range runs to the point nearest the end, so nobody re-adds an
-    # overshoot refusal (it would reject ISAR's %g-rounded steps).
-    hard, _ = in8_controller._scan_command_issues("A3 0 10 4", "")
-    assert not hard
+def test_a_step_that_does_not_divide_the_range_is_a_note_not_a_refusal(in8_controller):
+    # "A3 0 10 4" stops at 8 and says so; the note blocks nothing and needs no force.
+    assert in8_controller._scan_command_issues("A3 0 10 4", "") == ([], [])
+    _, warning = in8_controller._validate_single_scan_command("A3 0 10 4")
+    assert warning == "Step 4 does not divide 0 to 10; the scan stops at 8."
+    _, warning = in8_controller._validate_single_scan_command("A3 0 10 2")
+    assert warning is None
+
+
+def test_the_count_warning_counts_the_points_the_truncated_scan_runs(in8_controller):
+    # The old count rounded 502.5 steps up to 504 points; the scan runs 503.
+    _, warning = in8_controller._validate_single_scan_command("A3 0 1000 1.99")
+    assert warning.startswith("Warning: 503 scan points.")
+    assert in8_controller._count_scan_points("A3 0 1000 1.99", "") == 503
+
+    # Over 1000 points the warning is soft, and the stop note rides in the same text.
+    hard, soft = in8_controller._scan_command_issues("A3 0 1000 0.9", "")
+    assert hard == [] and len(soft) == 1
+    assert "1112 points" in soft[0] and "stops at 999.9" in soft[0]
+
+
+def test_the_scan_command_label_shows_the_stop_note_without_blocking(in8_controller):
+    dock = in8_controller.window.simulation_dock
+    try:
+        dock.scan_command_1_edit.setText("A3 0 10 4")
+        assert not dock.scan_warning_1_label.isHidden()
+        assert "stops at 8" in dock.scan_warning_1_label.text()
+        assert in8_controller._preflight_scan_validation() == ([], [])
+
+        dock.scan_command_1_edit.setText("A3 0 10 2")
+        assert dock.scan_warning_1_label.isHidden()
+    finally:
+        dock.scan_command_1_edit.setText("")
+
+
+def test_the_api_warns_on_an_undivided_step_without_blocking(in8_controller):
+    backend = cm.TaviApiBackend(in8_controller, _SyncBridge())
+    result = backend.submit_validate({"parameters": {"scan_command1": "A3 0 10 4"}})
+    assert result["would_queue"] is True, result["blockers"]
+    assert result["blockers"] == []
+    assert result["warnings"] == [
+        "Command 1: Step 4 does not divide 0 to 10; the scan stops at 8."]
+
+    result = backend.submit_validate({"parameters": {"scan_command1": "A3 0 10 2"}})
+    assert result["warnings"] == []
+
+
+def test_a_queued_undivided_step_carries_the_same_warning(in8_controller, monkeypatch):
+    from tavi.scan_jobs import ScanJob
+
+    def submit(launch_state, source):
+        job = ScanJob(job_id="j-stop-note", source=source, launch_state=launch_state)
+        in8_controller._job_registry.add(job)
+        return job
+
+    monkeypatch.setattr(in8_controller, "submit_scan_job", submit)
+    body = cm.TaviApiBackend(in8_controller, _SyncBridge()).submit_scan(
+        {"parameters": {"scan_command1": "A3 0 10 4"}})
+    assert body["warnings"] == [
+        "Command 1: Step 4 does not divide 0 to 10; the scan stops at 8."]
 
 
 def test_the_gui_preflight_returns_the_pair_run_unpacks(in8_controller):
