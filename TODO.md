@@ -135,6 +135,9 @@ Roadmap order per CONTROL_FEATURES §9:
 
 - 2026-10-08 · gui/main_window.py layout presets · one module-level PRESETS table per column count read by `_setup_dock_layout`, `_split_columns`/`_split_display_column` and the lost-dock homing, instead of four places that must change together · revisit: the first on-sight preset revision; if it touches more than one method, build the table first · j199268729c39 ab7426198a833-3
 - 2026-10-08 · tools/ui_snapshots.py · drop the windows11 style probe (always falls back offscreen) and set Fusion with the platform palette directly, about 25 lines less · revisit: the probe slows or hangs a snapshot run, or a Qt upgrade · j199268729c39 ab7426198a833-4
+- 2026-10-10 · TAVI_PySide6.py parameters set-aside (~6104) and gui/main_window.py layout set-aside (~934) · one backup rule for both saved-state files (name, overwrite, copy-when-move-fails) instead of `.bak`/`.bak2` for parameters and `.v<N>.bak` for layout · revisit: when either file's restore is next touched · j92f2a0718dc1 abf66766d0266-8
+- 2026-10-10 · TAVI_PySide6.py `compute_scan_snapshot` point metadata (~2457) · build a point's public view through the registry's `public_values` instead of controller special cases, and drop the internal `rhm`..`rva` = applied-radius name inversion · revisit: with the controller-internal-keys rename on WIP.md · j0db04ee4343c ae60539244f76-4
+- 2026-10-10 · instruments/tas_runtime.py slit bindings (~1355) · read the plugin's declared `Capabilities` bindings instead of re-deriving the quantity → ParameterSpec map from `scannable_parameters` (a load-time check now keeps them equal) · revisit: the next plugin-contract version bump · j2a2021bab8fc ab8e9292170ae-6
 
 ## Housekeeping
 
