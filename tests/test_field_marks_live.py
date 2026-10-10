@@ -35,6 +35,7 @@ from gui.field_marks import mark_for  # noqa: E402
 from instruments.rules import NOT_READ  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from tavi.quantities import QUANTITIES  # noqa: E402
+from tavi.scan_jobs import JobState, ScanJob  # noqa: E402
 from test_compact_layout import LAPTOP, MONITOR, _resize, _use_windows_ui_font  # noqa: E402
 
 NOTE = "Q and HKL not used by this scan"
@@ -203,6 +204,22 @@ def test_the_group_note_names_the_sub_group_the_plan_leaves_unread(window):
     hkl, q = {"h", "k", "l"}, {QX, QY, QZ}
     names = [name for name, ids in (("Q", q), ("HKL", hkl)) if unread >= ids]
     assert _note(window) == (f"{' and '.join(names)} not used by this scan" if names else None)
+
+
+def test_the_marks_preview_the_next_run_while_a_scan_is_in_flight(window):
+    """A scan in flight is not what the marks show: they preview the next Run from the boxes as typed now."""
+    ctrl = window.controller
+    _type(window, "A3 0 1 0.5")
+    running = ScanJob(job_id="t-in-flight", source="gui",
+                      launch_state=ctrl._collect_simulation_launch_state())
+    ctrl._job_registry.add(running)   # queued in the registry, not handed to the worker
+    try:
+        assert ctrl._scan_busy()
+        _type(window, "H 1.9 2.1 0.05")
+        assert _marks(window)["h"] == ("scanned", "1")
+        assert _state(window, A3)[0] == "set"
+    finally:
+        running.state = JobState.DONE
 
 
 def test_a2_scan_sets_ei_at_each_point(window):
