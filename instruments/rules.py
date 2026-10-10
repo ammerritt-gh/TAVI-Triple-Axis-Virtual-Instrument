@@ -64,15 +64,21 @@ SCANNED, SET_PER_POINT = "scanned", "set_per_point"
 USED_AS_TYPED, NOT_READ = "used_as_typed", "not_read"
 
 
+CONFLICT_NOTE = "force does not override a command conflict."
+
+
 class PlanRefused(ValueError):
     """A scan that cannot run as written; str() is the message a physicist reads.
 
     ``command`` is the box at fault (1 or 2), or None when the pair or the
     launch state is; ``quantity`` the canonical ID the refusal is about.
+    ``conflict`` marks a refusal of the pair (or of a command the calculation
+    cannot take), which every surface must refuse: its message says so here,
+    the one place every surface's text comes from.
     """
 
-    def __init__(self, message, command=None, quantity=None):
-        super().__init__(message)
+    def __init__(self, message, command=None, quantity=None, conflict=False):
+        super().__init__(f"{message} {CONFLICT_NOTE}" if conflict else message)
         self.command = command
         self.quantity = quantity
 
@@ -438,7 +444,7 @@ def build_plan(commands, context):
     if len(cmds) == 2 and cmds[0].quantity == cmds[1].quantity:
         first, second = (c.text.split()[0] for c in cmds)
         raise PlanRefused(f"Both commands scan {_name(cmds[0].quantity)}, as {first!r} and as "
-                          f"{second!r}; scan it once.", quantity=cmds[0].quantity)
+                          f"{second!r}; scan it once.", quantity=cmds[0].quantity, conflict=True)
     scanned = frozenset(c.quantity for c in cmds)
 
     # (1) The calculation; ruling 5: a scan that selects none never re-solves from HKL.
@@ -478,10 +484,10 @@ def build_plan(commands, context):
                 sources = [_name(i) for i in sorted(reached)] + policies
                 why = ("calculated from " if reached else "set by ") + " and ".join(sources)
             raise PlanRefused(f"{_name(cmd.quantity)} is {why} in the {label}, so it cannot "
-                              "also be scanned.", cmd.number, cmd.quantity)
+                              "also be scanned.", cmd.number, cmd.quantity, conflict=True)
         if cmd.quantity not in inputs:
             raise PlanRefused(f"{_name(cmd.quantity)} is not read by the {label}, so it "
-                              "cannot be scanned in it.", cmd.number, cmd.quantity)
+                              "cannot be scanned in it.", cmd.number, cmd.quantity, conflict=True)
 
     provenance = {}
     for qid in sorted(context.inputs | context.observables | producer.keys()):

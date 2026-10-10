@@ -564,7 +564,7 @@ class TAS_Instrument:
 
         Crystals are named by the caller, never read from live state: the
         GUI's live selection and a frozen API request can name different
-        ones -- the same argument ``_fixed_curvature_axes``
+        ones -- the same argument ``_curvature_axis_specs``
         (``TAVI_PySide6.py``) already makes.
 
         Per axis: ``effective_curvature_axis`` resolves the crystal's own

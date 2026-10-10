@@ -214,7 +214,7 @@ class CrystalSpec:
         """Axes this assembly holds fixed -- derived from ``curvature``.
 
         A convenience view for tests and reports. Production policy readers
-        (``_fixed_curvature_axes``, the scan-command validator) resolve through
+        (``rules.context_from_state``, the scan-command plan) resolve through
         ``TAS_Instrument.effective_curvature_axis`` instead, which folds in
         module state; this raw property does not.
 
