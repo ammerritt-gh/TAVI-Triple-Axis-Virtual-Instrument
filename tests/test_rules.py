@@ -359,10 +359,11 @@ def test_slit_scans_are_the_one_deliberate_difference():
 
 # --------------------------------------------- against PUMA's solver and state
 
-@pytest.fixture(scope="module")
-def puma():
+def _solver(instrument_id):
+    """(build, snapshot) for one instrument's real solver: the state, vals and context of a launch."""
     pytest.importorskip("mcstasscript")
-    from instruments.puma.plugin import PUMAPlugin
+    import instruments.builtin  # noqa: F401  (registers the built-in instruments)
+    from instruments.registry import get_instrument
     from tavi.orientation import lock_plane
     from tavi.sample_mount import SampleMount
 
@@ -370,7 +371,7 @@ def puma():
         "solver_baseline_cases", Path(__file__).resolve().parent / "data" / "solver_baseline_cases.py")
     cases = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cases)
-    plugin = PUMAPlugin()
+    plugin = get_instrument(instrument_id)
     descriptor = plugin.descriptor()
 
     def build(lock=False, engine="mcstas", **overrides):
@@ -395,6 +396,16 @@ def puma():
     return build, snapshot
 
 
+@pytest.fixture(scope="module")
+def puma():
+    return _solver("puma")
+
+
+@pytest.fixture(scope="module", params=["puma", "in8", "in12", "panda"])
+def solver(request):
+    return _solver(request.param)
+
+
 def _reached(plan, qid):
     producer = {out: rule for rule in plan.rules for out in rule.outputs}
     return {out for out in producer if qid in rules._closure(out, producer)[0]}
@@ -415,9 +426,10 @@ def _bump(qid):
                                                   "rha": CurvatureMode.AUTOFOCUS}}),
     (("A3 19 21 1", "A6 40 42 2"), {}),
 ])
-def test_declared_dependencies_hold_on_the_real_solver(puma, cmds, overrides):
-    """Moving one input changes only the outputs whose declared dependencies reach it."""
-    build, snapshot = puma
+def test_declared_dependencies_hold_on_the_real_solver(solver, cmds, overrides):
+    """Moving one input changes only the outputs whose declared dependencies reach it, and
+    moves at least one of them."""
+    build, snapshot = solver
     state, vals, ctx = build(**overrides)
     plan = build_plan([(cmds[0], False), (cmds[1], False)], ctx)
     point = expand(plan, snapshot(vals)).points[0]
@@ -427,7 +439,10 @@ def test_declared_dependencies_hold_on_the_real_solver(puma, cmds, overrides):
         after = evaluate(plan, {**point, qid: point[qid] + _bump(qid)}, state)
         moved = {out for out in outputs
                  if not math.isclose(after[out], before[out], rel_tol=1e-9, abs_tol=1e-9)}
-        assert moved <= _reached(plan, qid), (qid, moved - _reached(plan, qid))
+        reached = _reached(plan, qid)
+        assert moved <= reached, (qid, moved - reached)
+        if reached:
+            assert moved, (qid, "reaches outputs it does not move")
 
 
 def test_arcs_follow_q_alone_and_the_fixed_side_holds_its_crystal(puma):
