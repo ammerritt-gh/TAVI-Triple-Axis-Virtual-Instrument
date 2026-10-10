@@ -33,6 +33,7 @@ from tavi.orientation import (
     sample_arm_euler,
     solve_stage,
 )
+from tavi.quantities import by_id, to_public
 from tavi.sample_mount import SampleMount
 from tavi.tas_geometry import (
     _normalize_deg,
@@ -1103,6 +1104,12 @@ def _solve_point_geometry(point_state, scan_mode, scans, vals):
     }
 
 
+def _axis_text(field_name):
+    """An internal angle field's name in messages, under the new numbering: 'A4 (sample 2θ)'."""
+    quantity = by_id(to_public(field_name))
+    return f"{quantity.ill} ({quantity.label.split(' — ')[0].lower()})"
+
+
 def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None):
     """Return ``(feasible: bool, reason: str | None)`` for one scan point.
 
@@ -1131,7 +1138,7 @@ def check_point_feasibility(state, scan_mode, scan_point, vals, axis_limits=None
         value = float(geom[field_name])
         if value < limits.lower or value > limits.upper:
             return False, (
-                f"{axis_name} ({field_name}) {value:.4g}° is outside "
+                f"{_axis_text(field_name)} {value:.4g}° is outside "
                 f"[{limits.lower:.4g}, {limits.upper:.4g}]°"
             )
     return True, None
