@@ -247,8 +247,9 @@ applies to the bindings (`validate_descriptor`, beside rule S4b) and to the
 capabilities (`validate_capabilities`). No built-in plugin declares an extra.
 
 **Contract version.** Each plugin class declares `CONTRACT_VERSION`.
-`registry.register()` reads it from the factory class, before any plugin is built,
-and refuses a plugin whose value is missing or differs, for example
+`registry.register()` reads it from the factory class (or, for a lambda or partial
+without one, from the plugin it builds) and refuses a plugin whose value is missing
+or differs, for example
 `plugin 'x' (MyPlugin) declares CONTRACT_VERSION 2; TAVI supports CONTRACT_VERSION 1`.
 A refused plugin is not registered; for a built-in, startup stops with that error.
 Bump the version only for an incompatible change to this contract, and update
