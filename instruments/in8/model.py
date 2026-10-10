@@ -21,6 +21,7 @@ import os
 import mcstasscript as ms
 
 from instruments.paths import COMPONENTS_DIR
+from instruments.rules import crystal_theta
 from instruments.tas_runtime import (
     TAS_Instrument,
     compute_scan_snapshot,  # noqa: F401  (re-export: the IN8 plugin's snapshot path)
@@ -100,6 +101,8 @@ class IN8_Instrument(TAS_Instrument):
             "sample_two_theta_param": self.A2,
             "sample_rotation_param": self.A3,
             "analyzer_two_theta_param": self.A4,
+            "mono_theta_param": crystal_theta(self.A1),
+            "analyzer_theta_param": crystal_theta(self.A4),
             "E0_param": self.e0_param_value(deltaE),
             "rhm_param": self.rhm,
             "rvm_param": self.rvm,
@@ -125,6 +128,8 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
     instrument.add_parameter("sample_two_theta_param", comment="Sample 2-theta angle.")
     instrument.add_parameter("sample_rotation_param", comment="Sample rotation (turntable) readout, inspection only.")
     instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
+    instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
+    instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -189,7 +194,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
 
         emit_crystal_assembly(instrument, cradle_name="mono_cradle",
                               crystal_name="monochromator", relative="origin",
-                              distance=IN8.L1, rotation_expr="mono_two_theta_param/2",
+                              distance=IN8.L1, rotation_expr="mono_theta_param",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
                               split=2, extend="if(!SCATTERED) ABSORB;")
@@ -256,7 +261,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
 
         emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
                               crystal_name="analyzer", relative="analyzer_arm",
-                              distance=IN8.L3, rotation_expr="analyzer_two_theta_param/2",
+                              distance=IN8.L3, rotation_expr="analyzer_theta_param",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
                               split=5)

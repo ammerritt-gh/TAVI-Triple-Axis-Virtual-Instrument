@@ -65,6 +65,9 @@ RENAMED_PARAMS = {
     "A4_param": "analyzer_two_theta_param",
 }
 PARAM_ROLE.update({new: PARAM_ROLE[old] for old, new in RENAMED_PARAMS.items()})
+# Emitted since the baseline was recorded: the crystal θ the cradles now rotate by, each
+# held to half its recorded 2θ, which is the rotation the cradle had (McStas "2θ/2").
+THETA_PARAMS = {"mono_theta_param": "A1_param", "analyzer_theta_param": "A4_param"}
 META_ROLE = {
     "mtt": "mono_two_theta_deg",
     "stt": "sample_two_theta_deg",

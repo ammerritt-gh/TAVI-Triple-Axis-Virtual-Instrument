@@ -2,7 +2,8 @@
 
 Numbers agree to 1e-9 (relative or absolute); enums, strings and lists compare by
 ==. Each case must also emit no parameter the baseline does not record, so a new
-emitted parameter is added on purpose. Later units translate names through the
+emitted parameter is added on purpose (the crystal θ parameters are held to half
+their recorded 2θ). Later units translate names through the
 role column and the tables in tests/data/solver_baseline_cases.py, never the numbers.
 """
 import importlib.util
@@ -60,8 +61,13 @@ def test_case_matches_baseline(key, recomputed):
         assert _same(snap.metadata[entry["name"]], entry["value"]), (
             f"{key}: metadata {entry['name']} ({entry['role']}) = "
             f"{snap.metadata[entry['name']]!r}, baseline {entry['value']!r}")
+    recorded_value = {entry["name"]: entry["value"] for entry in recorded["params"]}
+    for name, two_theta in cases.THETA_PARAMS.items():
+        assert _same(snap.params[name], recorded_value[two_theta] / 2), (
+            f"{key}: {name} = {snap.params[name]!r}, half of the baseline "
+            f"{two_theta} {recorded_value[two_theta]!r}")
     recorded_names = {cases.emitted_name(entry["name"]) for entry in recorded["params"]}
-    unrecorded = set(snap.params) - recorded_names
+    unrecorded = set(snap.params) - recorded_names - cases.THETA_PARAMS.keys()
     assert not unrecorded, f"{key}: emitted but not in the baseline: {sorted(unrecorded)}"
 
 

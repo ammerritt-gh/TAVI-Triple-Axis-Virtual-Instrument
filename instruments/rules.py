@@ -211,8 +211,16 @@ def _stage_to_energy(v, ctx, state):
             DE: None if ei is None or ef is None else ei - ef}
 
 
+def crystal_theta(two_theta):
+    """A crystal's θ from its 2θ (θ = 2θ/2, signed as 2θ): the one producer of A1 and A5.
+
+    The ``crystal_theta`` rule and the four models' McStas crystal rotation both call it.
+    """
+    return two_theta / 2
+
+
 def _crystal_theta(v, ctx, state):
-    return {MTH: v[MTT] / 2, ATH: v[ATT] / 2}
+    return {MTH: crystal_theta(v[MTT]), ATH: crystal_theta(v[ATT])}
 
 
 def _lock_tilts(v, ctx, state):
