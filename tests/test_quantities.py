@@ -285,3 +285,9 @@ def test_public_values_renames_quantities_flattens_slits_and_keeps_the_rest():
 def test_applied_radii_take_their_derived_canonical_ids():
     assert public_applied_radii({"rhm": -3.0, "rva": 0.0}) == {
         "applied_mono_horizontal_radius_m": -3.0, "applied_analyzer_vertical_radius_m": 0.0}
+
+
+def test_clamped_axes_take_the_canonical_radius_ids_of_their_modes():
+    public = public_values({"curvature_modes": {"rhm": "scanned"}, "curvature_clamped": ["rhm"]})
+    assert public["curvature_clamped"] == ["mono_horizontal_radius_m"]
+    assert public["curvature_modes"] == {"mono_horizontal_radius_m": "scanned"}

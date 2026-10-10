@@ -274,6 +274,8 @@ def public_values(vals: dict, slits=()) -> dict:
                     out[f"slit.{slit.stable_id}.vertical_gap_mm"] = height
         elif key == "curvature_modes":
             out[key] = {to_public(axis): mode for axis, mode in value.items()}
+        elif key == "curvature_clamped":
+            out[key] = [to_public(axis) for axis in value]
         else:
             out[to_public(key)] = value
     return out
