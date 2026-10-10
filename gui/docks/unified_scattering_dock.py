@@ -21,7 +21,7 @@ class UnifiedScatteringDock(BaseDockWidget):
         # not H outside the standard setting, so each sub-column carries its
         # own header and labels, and nothing pairs a Q row with an HKL row.
         # Grid columns: 0-1 Q, 2 the gap (ΔE's unit sits in it), 3-4 HKL.
-        point_group = QGroupBox("Scattering Vector and Energy Transfer")
+        point_group = QGroupBox("Q, HKL and ΔE")
         point_layout = QGridLayout()
         point_layout.setSpacing(5)
         point_group.setLayout(point_layout)
