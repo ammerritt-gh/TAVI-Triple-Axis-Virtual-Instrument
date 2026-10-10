@@ -1332,7 +1332,7 @@ def _orientation_snapshot(ctrl):
     state, idock = ctrl.instrument_state, ctrl.window.instrument_dock
     return json.dumps({
         "readouts": [e.text() for e in (idock.omega_edit, idock.sgl_edit, idock.sgu_edit)],
-        "state": [state.A3, state.sgl, state.sgu],
+        "state": [state.sample_rotation_deg, state.sgl, state.sgu],
         "ub": ctrl.ub_matrix.UB.tolist(), "U_true": state.U_true.tolist(),
         "plane_lock": state.plane_lock,
     })

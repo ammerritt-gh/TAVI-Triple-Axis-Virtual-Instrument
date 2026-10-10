@@ -256,7 +256,7 @@ def test_peaks_taken_on_the_true_crystal_drive_it_back_to_a_new_hkl(models, name
     ub.calculate_U_from_peaks()
     target = np.array((1, -1, 0), dtype=float)
     _mtt, stt, a3, sgl, _att, sgu = solve(ub.UB @ target)
-    model.A3, model.sgl, model.sgu = a3, sgl, sgu
+    model.sample_rotation_deg, model.sgl, model.sgu = a3, sgl, sgu
     params = model.build_point_params(0.0)
     arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
                                  params["sample_rz_param"])      # (R_stage U_true)^T
@@ -416,7 +416,7 @@ def test_stage_round_trip_puts_hkl_on_q_lab_and_fits_back(models, name, sense, l
             assert np.linalg.norm(v_lab - sign * q_lab) < 1e-9 * np.linalg.norm(q_lab)
 
             # The emitted single arm: build_point_params -> sample_r*_param.
-            model.A3, model.sgl, model.sgu = sth, sgl, sgu
+            model.sample_rotation_deg, model.sgl, model.sgu = sth, sgl, sgu
             params = model.build_point_params(0.0)
             arm = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
                                          params["sample_rz_param"])
@@ -464,7 +464,7 @@ def test_calculate_ub_moves_the_readouts_never_the_crystal(models, name, sense):
         angles, flags = model.calculate_stage_angles(
             qx, qy, qz, 0.0, E_K, "Kf Fixed", "pg002", "pg002")
         assert flags == []
-        model.A3, model.sgl, model.sgu = 30.0, 1.5, -2.0     # the same physical angles
+        model.sample_rotation_deg, model.sgl, model.sgu = 30.0, 1.5, -2.0     # the same physical angles
         params = model.build_point_params(0.0)
         arm = tuple(params[f"sample_r{axis}_param"] for axis in "xyz")
         return arm, _stage_readouts(angles)
@@ -498,7 +498,7 @@ def test_in_plane_matches_legacy_solve_and_old_four_arm_chain(models, name):
             assert (sgl, sgu) == (0.0, 0.0)
             assert (sth, stt) == (legacy.sth, legacy.stt)
 
-            model.A3, model.sgl, model.sgu = sth, sgl, sgu
+            model.sample_rotation_deg, model.sgl, model.sgu = sth, sgl, sgu
             params = model.build_point_params(0.0)
             new = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
                                          params["sample_rz_param"])
@@ -965,11 +965,12 @@ def test_a_readout_changes_the_emitted_rotation_by_that_axis_rotation(models, ax
     model = copy.deepcopy(models["in8"])
     u = _rot((2, -1, 1), 6.0)
     model.U_true = u                       # the arm reads the true mount
-    model.A3, model.sgl, model.sgu = 37.0, 4.0, -6.0
+    model.sample_rotation_deg, model.sgl, model.sgu = 37.0, 4.0, -6.0
     assert model.stage_readouts() == {"A3": 37.0, "sgl": 4.0, "sgu": -6.0}
     before = mccode_rotation_matrix(*sample_arm_euler(
         model.goniometer, model.stage_readouts(), u)).T
-    setattr(model, axis_name, getattr(model, axis_name) + 1.75)
+    attr = "sample_rotation_deg" if axis_name == "A3" else axis_name
+    setattr(model, attr, getattr(model, attr) + 1.75)
     params = model.build_point_params(0.0)
     emitted = mccode_rotation_matrix(params["sample_rx_param"], params["sample_ry_param"],
                                      params["sample_rz_param"]).T

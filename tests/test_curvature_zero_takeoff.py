@@ -100,12 +100,12 @@ def test_applier_stores_a_positive_magnitude_at_zero_takeoff_instead_of_the_stal
     state = IN8_Instrument()
     state.monocris = state.anacris = "pg002"
 
-    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=41.167)
+    state.set_angles(mono_two_theta_deg=41.167, sample_two_theta_deg=0.0, sample_rotation_deg=0.0, analyzer_two_theta_deg=41.167)
     state.set_crystal_bending(rha=9.999)
     previous = state.rha
     assert math.isfinite(previous) and previous != 0.0
 
-    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=0.0)  # ana take-off now zero
+    state.set_angles(mono_two_theta_deg=41.167, sample_two_theta_deg=0.0, sample_rotation_deg=0.0, analyzer_two_theta_deg=0.0)  # ana take-off now zero
     state.set_crystal_bending(rha=1.234)
     assert state.rha == pytest.approx(1.234), (
         "a zero-take-off point must store the newly commanded magnitude, "
@@ -122,11 +122,11 @@ def test_applier_flattens_an_autofocus_magnitude_of_zero_at_zero_takeoff():
     state = PUMA_Instrument()
     state.monocris = state.anacris = "pg002"
 
-    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=41.167)
+    state.set_angles(mono_two_theta_deg=41.167, sample_two_theta_deg=0.0, sample_rotation_deg=0.0, analyzer_two_theta_deg=41.167)
     state.set_crystal_bending(rha=9.999)
     assert state.rha != 0.0
 
-    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=0.0)
+    state.set_angles(mono_two_theta_deg=41.167, sample_two_theta_deg=0.0, sample_rotation_deg=0.0, analyzer_two_theta_deg=0.0)
     state.set_crystal_bending(rha=0.0)
     assert state.rha == 0.0
 

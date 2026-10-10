@@ -354,6 +354,6 @@ def test_an_axis_limit_bounds_the_physical_axis_it_names(plugin_cls, key, axis_n
     angles[key] = limits[key].upper + 5.0
     check = plugin.check_point_feasibility(
         state, plan_for(plugin, state, {}, MOTORS),
-        motors_point(angles[MTT], angles[STT], state.A3, angles[ATT]))
+        motors_point(angles[MTT], angles[STT], state.sample_rotation_deg, angles[ATT]))
     assert check.feasible is False
     assert axis_name in check.reason and "outside" in check.reason, check.reason

@@ -261,8 +261,9 @@ def resolve(name: str, context: str) -> Quantity:
     return q
 
 
-# Interim (U3 deletes the internal names): the field the controller, the plugins and the
-# frozen parameter dict still use for each public quantity. Slit gaps are not here: their
+# The field the controller, the plugins and the frozen parameter dict use for each public
+# quantity; the launch dict and point metadata keep these internal names until a follow-up
+# job renames them (plan amendment 7). Slit gaps are not here: their
 # internal form is the nested slits_mm dict, flattened by public_values().
 _INTERNAL = {
     "mono_two_theta_deg": "mtt", "sample_two_theta_deg": "stt", "sample_rotation_deg": "omega",

@@ -97,12 +97,12 @@ class IN8_Instrument(TAS_Instrument):
         Keys mirror instruments/in8/plugin.py::_IN8_PARAMS exactly.
         """
         return {
-            "mono_two_theta_param": self.A1,
-            "sample_two_theta_param": self.A2,
-            "sample_rotation_param": self.A3,
-            "analyzer_two_theta_param": self.A4,
-            "mono_theta_param": crystal_theta(self.A1),
-            "analyzer_theta_param": crystal_theta(self.A4),
+            "mono_two_theta_param": self.mono_two_theta_deg,
+            "sample_two_theta_param": self.sample_two_theta_deg,
+            "sample_rotation_param": self.sample_rotation_deg,
+            "analyzer_two_theta_param": self.analyzer_two_theta_deg,
+            "mono_theta_param": crystal_theta(self.mono_two_theta_deg),
+            "analyzer_theta_param": crystal_theta(self.analyzer_two_theta_deg),
             "E0_param": self.e0_param_value(deltaE),
             "rhm_param": self.rhm,
             "rvm_param": self.rvm,

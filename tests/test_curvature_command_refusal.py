@@ -463,7 +463,7 @@ def test_the_applier_refuses_a_non_finite_radius_too(instrument_id, bad):
     state = instrument.default_state()
     state.monocris = d.mono_crystals[0].id
     state.anacris = d.ana_crystals[0].id
-    state.set_angles(A1=41.167, A2=0.0, A3=0.0, A4=41.167)
+    state.set_angles(mono_two_theta_deg=41.167, sample_two_theta_deg=0.0, sample_rotation_deg=0.0, analyzer_two_theta_deg=41.167)
 
     state.set_crystal_bending(rhm=5.0)
     kept = state.rhm

@@ -252,7 +252,7 @@ def _hardware_radius(qid):
 
 def _radius_binding(v, ctx, state):
     point = copy.copy(state)
-    point.A1, point.A4 = v[MTT], v[ATT]   # the state's take-off fields: mono and analyzer 2θ
+    point.mono_two_theta_deg, point.analyzer_two_theta_deg = v[MTT], v[ATT]   # the state's take-off fields: mono and analyzer 2θ
     point.set_crystal_bending(**{to_internal(qid): v[qid] for qid in ctx.curvature})
     return {f"applied_{qid}": getattr(point, to_internal(qid)) for qid in ctx.curvature}
 
