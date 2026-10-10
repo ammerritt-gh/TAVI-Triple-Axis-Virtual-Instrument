@@ -4874,12 +4874,11 @@ class TAVIController(QObject):
     def update_field_marks(self):
         """Mark each dock field with what pressing Run now would do to it.
 
-        Builds the plan only (``build_plan``, then ``scan_axes``' base and
-        typed-input checks; no points) from the command boxes and a launch
-        collected exactly as Run collects it. When the pair does not compile,
-        each command that compiles alone in its box keeps its scanned mark and
-        nothing else is marked. Only marks and the group note change: no field's
-        text, style, focus or selection.
+        Builds the plan only (``build_plan``; no axis is expanded, so an edit
+        costs no scan) from the command boxes and a launch collected exactly as
+        Run collects it. When the pair does not compile, each command that compiles
+        alone in its box keeps its scanned mark and nothing else is marked. Only
+        marks and the group note change: no field's text, style, focus or selection.
         """
         sim = self.window.simulation_dock
         commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
@@ -4887,13 +4886,9 @@ class TAVIController(QObject):
         fields = self._marked_fields()
         launch_state = self._collect_simulation_launch_state()
         marks, unread = {}, set()
-        try:
-            plan = self._launch_plan(launch_state, commands)
-            expansion = scan_axes(plan, launch_state['snapshot'])
-        except PlanRefused:
-            plan = None
+        plan = self._marking_plan(launch_state, commands)
         if plan is not None:
-            marks = self._plan_marks(plan, expansion, launch_state, fields)
+            marks = self._plan_marks(plan, launch_state, fields)
             if plan.commands:   # a plain Run scans nothing, so no group is "not used by this scan"
                 unread = {qid for qid, p in plan.provenance.items() if p.role == NOT_READ}
         elif launch_state:
@@ -4912,7 +4907,7 @@ class TAVIController(QObject):
         for group, ids in self.window.scattering_dock.field_groups():
             set_group_note(group, self._NOT_USED_NOTE if unread.issuperset(ids) else None)
 
-    def _plan_marks(self, plan, expansion, launch_state, fields):
+    def _plan_marks(self, plan, launch_state, fields):
         """{canonical ID: ``set_mark`` arguments} for the fields of a compiled plan."""
         marks, constant = {}, []
         for qid, field in fields:
@@ -4933,8 +4928,29 @@ class TAVIController(QObject):
             else:
                 constant.append((qid, field))
         if constant:
-            marks.update(self._stale_display_marks(plan, expansion, launch_state, constant))
+            marks.update(self._stale_display_marks(plan, launch_state, constant))
         return marks
+
+    @staticmethod
+    def _held_number(snapshot, qid):
+        """The number the launch holds for ``qid``, or NaN when it holds none."""
+        try:
+            return float(snapshot[qid])
+        except (KeyError, TypeError, ValueError):
+            return math.nan
+
+    def _marking_plan(self, launch_state, commands):
+        """The plan the marks show, or None where Run would refuse it: ``build_plan``, and
+        a launch holding no number for a typed input or a relative base, checked in closed
+        form (no axis is expanded)."""
+        try:
+            plan = self._launch_plan(launch_state, commands)
+        except PlanRefused:
+            return None
+        snapshot = launch_state['snapshot']
+        held = [self._held_number(snapshot, qid) for qid in plan.inputs - plan.scanned]
+        held += [self._held_number(snapshot, c.quantity) for c in plan.commands if c.relative]
+        return plan if all(map(math.isfinite, held)) else None
 
     @staticmethod
     def _scanned_mark(command, snapshot):
@@ -4944,10 +4960,7 @@ class TAVIController(QObject):
             return ("scanned", str(number), number,
                     f"Scanned by command {number}: {_with_unit(command.start, unit)} … "
                     f"{_with_unit(command.stop, unit)}, step {format_editable_number(command.step)}")
-        try:
-            base = float(snapshot[command.quantity])
-        except (KeyError, TypeError, ValueError):
-            base = math.nan
+        base = TAVIController._held_number(snapshot, command.quantity)
         if math.isfinite(base):
             tooltip = (f"Command {number} steps from the value typed here, {_with_unit(base, unit)}\n"
                        f"Absolute range: {_with_unit(base + command.start, unit)} … "
@@ -4957,23 +4970,25 @@ class TAVIController(QObject):
                        "Run will refuse.")
         return ("scanned", f"{number} +Δ", number, tooltip)
 
-    def _stale_display_marks(self, plan, expansion, launch_state, constant):
+    def _stale_display_marks(self, plan, launch_state, constant):
         """Ruling 1: a field the plan sets from typed values alone is the same at every
         point, so it is marked only when the value Run uses is not the one it shows.
 
-        The plan is evaluated at the typed values (each command at its first value,
-        which these fields do not follow), then once per typed input nudged by half
-        the docks' last decimal: a shown value within the sum of those changes, plus
-        its own rounding, is the same value at display precision, since the inputs
-        it is computed from are shown no finer.
+        The plan is evaluated at the typed values, each command at its start (stepped
+        from its base when relative: these fields never follow a command, so any point
+        serves), then once per typed input nudged by half the docks' last decimal: a
+        shown value within the sum of those changes, plus its own rounding, is the same
+        value at display precision, since the inputs it is computed from are shown no finer.
         """
         snapshot, state = launch_state['snapshot'], launch_state['scan_config']
-        point = {qid: float(snapshot[qid]) for qid in plan.inputs - plan.scanned}
-        point.update({c.quantity: expansion.values[c.number][0] for c in plan.commands})
         sources = {qid: typed_sources(plan, qid) for qid, _field in constant}
         half = 0.5e-4   # the docks write 4 decimals (format_editable_number)
         slack = dict.fromkeys(sources, half)
         try:
+            point = {qid: float(snapshot[qid]) for qid in plan.inputs - plan.scanned}
+            for c in plan.commands:
+                base = self._held_number(snapshot, c.quantity) if c.relative else 0.0
+                point[c.quantity] = c.start + base
             values = evaluate(plan, point, state)
             for source in set().union(*sources.values()) & point.keys():
                 nudged = evaluate(plan, {**point, source: point[source] + half}, state)

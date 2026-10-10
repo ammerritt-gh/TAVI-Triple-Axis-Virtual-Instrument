@@ -3,8 +3,8 @@
 Each test drives the window the way an operator does -- typing in the command
 boxes, toggling Relative, changing the docks' combos and fields -- then lets
 the event loop run and reads every field's mark (``mark_for(field).state()``).
-Nothing here calls ``update_field_marks`` itself: the marks must follow from
-the controller's own triggers. The last test renders the mockup's case at the
+The marks must follow from the controller's own triggers; the one test that calls
+``update_field_marks`` does so to show that the refresh alone expands no scan. The last test renders the mockup's case at the
 two reference window sizes, saves the docks as PNGs and checks that the marks
 move no widget and are not clipped. Its PNGs go to pytest's tmp_path; set
 TAVI_SCREENSHOT_DIR to a folder to keep them (for example
@@ -497,6 +497,19 @@ def test_a_half_typed_box_1_still_shows_box_2s_own_refusal(window):
 
 
 
+def test_the_mark_refresh_expands_nothing(window, monkeypatch):
+    """A field edit refreshes the marks from the plan alone: no axis is expanded."""
+    def expanded(*_args, **_kwargs):
+        raise AssertionError("the mark refresh expanded a scan")
+    monkeypatch.setattr(cm, "scan_axes", expanded)
+    monkeypatch.setattr(cm, "expand", expanded)
+    sim = window.simulation_dock
+    with QSignalBlocker(sim.scan_command_1_edit), QSignalBlocker(sim.relative_1_button):
+        sim.scan_command_1_edit.setText("A3 -2 3 0.5")
+        sim.relative_1_button.setChecked(True)
+    window.controller.update_field_marks()
+    assert _state(window, A3)[:2] == ("scanned", "1 +Δ")
+    assert "Absolute range" in _state(window, A3)[3]   # the +Δ range needs no expansion
 
 
 
