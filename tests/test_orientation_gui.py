@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QTabBar  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
+from test_api_partial_collimation import issues_for  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 from instruments.rules import PlanRefused  # noqa: E402
 from tavi.api_server import ApiError  # noqa: E402
@@ -263,7 +264,7 @@ def test_api_arcs_are_writable_fields_in_the_schema(controller):
 # --- 1.8 (A6): the arcs as scan variables -------------------------------------------
 
 def test_chi_scan_is_refused_naming_the_arcs(controller):
-    hard, _soft = controller._scan_command_issues("chi 0 2 1", "")
+    hard, _soft = issues_for(controller, "chi 0 2 1")
     assert len(hard) == 1 and "sgl" in hard[0] and "sgu" in hard[0]
     backend = cm.TaviApiBackend(controller, _SyncBridge())
     result = backend.submit_validate({"parameters": {"scan_command1": "chi 0 2 1"}})
@@ -282,7 +283,7 @@ def test_arc_scan_beside_a_q_side_command_is_refused_naming_the_owner(controller
         assert "cannot also be scanned" in message and "kappa" not in message
     # Alone (or with an angle), an arc scan is a direct-motor scan.
     for pair in (("sgu 0 2 1", ""), ("sgl 0 2 1", "A3 30 31 1")):
-        assert controller._scan_command_issues(*pair) == ([], [])
+        assert issues_for(controller, *pair) == ([], [])
         assert controller._preview_launch(*pair)[1].calculation == "direct_motors"
 
 
@@ -395,10 +396,9 @@ def test_the_retired_correction_is_refused_wherever_an_api_client_can_reach_it(
     assert controller.get_gui_values() == before            # H was not applied either
 
     # As a scan command kappa is not modelled either.
-    hard, _soft = controller._scan_command_issues(f"{name} 0 1 1", "")
-    assert len(hard) == 1 and "does not have" in hard[0], hard
     for variable in (name, name.upper()):
-        assert controller._validate_scan_commands_text(f"{variable} 0 1 1", "")
+        hard, _soft = issues_for(controller, f"{variable} 0 1 1")
+        assert len(hard) == 1 and "does not have" in hard[0], hard
 
     schema = controller.build_api_schema()
     assert name not in [f["name"] for f in schema["fields"]]

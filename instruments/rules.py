@@ -46,7 +46,8 @@ from instruments.tas_runtime import (
 from tavi.neutron_conversions import energy2k
 from tavi.orientation import locked_plane_text
 from tavi.quantities import (
-    QuantityRefused, by_id, crystal_theta, resolve, slit_gap_ids, to_internal,
+    QUANTITIES, QuantityRefused, UnknownQuantity, by_id, crystal_theta, resolve, slit_gap_ids,
+    to_internal,
 )
 from tavi.tas_geometry import component_q_to_instrument_q
 from tavi.utilities import parse_scan_steps, scan_range_error
@@ -327,6 +328,18 @@ def _calculation_inputs(calc, ctx):
 
 # ---------------------------------------------------------------- build_plan
 
+def _unknown_variable(name):
+    """The refusal of a name no quantity has: the scan names it is close to, else them all."""
+    scannable = [q for q in QUANTITIES if q.scannable]
+    typed = name.casefold()
+    near = sorted({alias.casefold() for q in scannable for alias in (q.id, *q.aliases)
+                   if typed in alias.casefold() or alias.casefold() in typed})
+    if near:
+        return f"Unknown variable '{name}'. Did you mean: {', '.join(near)}?"
+    return (f"Unknown variable '{name}'. Valid: "
+            f"{', '.join((q.aliases or (q.id,))[0] for q in scannable)}")
+
+
 def _parse(number, text, relative):
     parts = text.split()
     if len(parts) < 4:
@@ -335,6 +348,8 @@ def _parse(number, text, relative):
         raise PlanRefused("Too many parts: use 'variable start end step'", number)
     try:
         quantity = resolve(parts[0], "scan")
+    except UnknownQuantity:
+        raise PlanRefused(_unknown_variable(parts[0]), number) from None
     except QuantityRefused as refused:
         raise PlanRefused(str(refused), number) from None
     try:

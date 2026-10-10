@@ -82,28 +82,42 @@ def _pin_rva(ctrl, monkeypatch):
     return pinned
 
 
+def launch_for(ctrl, cmd1, cmd2="", relative=(False, False), **patch):
+    """A launch built as the API builds one, each box's relative flag set as given."""
+    launch = ctrl.build_api_launch_state({"scan_command1": cmd1, "scan_command2": cmd2, **patch})
+    launch["relative_mode_1"], launch["relative_mode_2"] = relative
+    return launch
+
+
+def issues_for(ctrl, cmd1, cmd2="", relative=(False, False), **patch):
+    """Run's and the API's per-command gate, ``(hard, soft)``, on that launch."""
+    return ctrl._scan_command_issues(launch_for(ctrl, cmd1, cmd2, relative, **patch))
+
+
 def test_a_fixed_curvature_axis_is_refused_by_the_plan(in8_controller, monkeypatch):
     """The per-command gate leaves a fixed axis to the plan, which names the hardware."""
     ctrl = in8_controller
     d = _pin_rva(ctrl, monkeypatch)
-    axes = ctrl._curvature_axis_specs("pg002", d.ana_crystals[0].id)
     result = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate({"parameters": {
         "scan_command1": "rva 0.3 0.6 0.05", "anacris": d.ana_crystals[0].id}})
     assert result["would_queue"] is False
-    assert any(b.startswith("scan_validation: The hardware holds rva (analyzer vertical radius)")
+    assert any(b.startswith("scan_validation: Command 1: The hardware holds rva "
+                            "(analyzer vertical radius)")
                for b in result["blockers"]), result["blockers"]
 
     # The radii that side really does drive stay scannable.
     for cmd, expected in (("rha 1.0 2.0 0.1", "analyzer_horizontal_radius_m"),
                           ("rhm 3.0 5.0 0.5", "mono_horizontal_radius_m")):
-        var, warning = ctrl._validate_single_scan_command(cmd, axes)
-        assert var == expected and warning is None
+        launch = launch_for(ctrl, cmd, anacris=d.ana_crystals[0].id)
+        accepted, refused = ctrl._judge_boxes(launch, [(cmd, False), ("", False)])
+        assert accepted[1].quantity == expected and refused == {}
+        assert ctrl._scan_command_issues(launch) == ([], [])
 
 
 def test_the_refusal_actually_blocks_the_launch(in8_controller, monkeypatch):
     """The gate is worthless if it only annotates a widget.
 
-    `_validate_scan_commands_text` is what the GUI Run button and the API
+    `_scan_command_issues` is what the GUI Run button and the API
     launch path both consult. It used to escalate only messages containing a
     warning marker or the word "Unknown", so this refusal was shown and then
     launched anyway -- and so was every other hard rejection whose wording
@@ -119,14 +133,14 @@ def test_the_refusal_actually_blocks_the_launch(in8_controller, monkeypatch):
         "a refused radius must block the launch")
 
     # A scannable axis still launches.
-    assert ctrl._validate_scan_commands_text("rha 1.0 2.0 0.1", "", "pg002", ana) == ""
+    assert issues_for(ctrl, "rha 1.0 2.0 0.1", monocris="pg002", anacris=ana) == ([], [])
 
 
 def test_other_hard_rejections_also_block(in8_controller):
     """The same hole covered these; none of their wordings carry the marker."""
     ctrl = in8_controller
     for cmd in ("rhm 1.0 2.0", "rhm 1.0 2.0 0.1 0.2", "rhm a b c"):
-        assert ctrl._validate_scan_commands_text(cmd, ""), cmd
+        assert issues_for(ctrl, cmd)[0], cmd
 
 
 def test_the_pin_follows_the_crystal_the_caller_names(in8_controller, monkeypatch):
@@ -152,14 +166,15 @@ def test_the_pin_follows_the_crystal_the_caller_names(in8_controller, monkeypatc
     # crystal's radius, because the request names that crystal.
     blockers = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate({"parameters": {
         "scan_command1": "rva 0.3 0.6 0.05", "anacris": pinned.id}})["blockers"]
-    assert any(b.startswith("scan_validation: The hardware holds rva") for b in blockers)
+    assert any(b.startswith("scan_validation: Command 1: The hardware holds rva")
+               for b in blockers)
 
 
 def test_nothing_is_refused_when_no_crystal_pins_anything(in8_controller):
     for spec in in8_controller.descriptor.ana_crystals:
         assert spec.fixed_curvature == ()
-    assert in8_controller._validate_scan_commands_text(
-        "rva 0.3 0.6 0.05", "", "pg002", "pg002") == ""
+    assert issues_for(in8_controller, "rva 0.3 0.6 0.05",
+                      monocris="pg002", anacris="pg002") == ([], [])
 
 
 def test_a_hard_rejection_is_not_offered_as_a_choice(in8_controller, monkeypatch):
@@ -174,19 +189,20 @@ def test_a_hard_rejection_is_not_offered_as_a_choice(in8_controller, monkeypatch
     d = _pin_rva(ctrl, monkeypatch)
     ana = d.ana_crystals[0].id
 
-    # The pinned radius is the plan's refusal, not a command issue to offer as a choice.
-    hard, soft = ctrl._scan_command_issues("rva 0.3 0.6 0.05", "", "pg002", ana)
-    assert (hard, soft) == ([], [])
+    # The pinned radius is the plan's refusal of that command: hard, never offered as a choice.
+    hard, soft = issues_for(ctrl, "rva 0.3 0.6 0.05", monocris="pg002", anacris=ana)
+    assert len(hard) == 1 and hard[0].startswith("Command 1: The hardware holds rva"), hard
+    assert soft == []
 
     # A very long scan is the operator's call, and stays overridable.
-    hard, soft = ctrl._scan_command_issues("rha 1.0 2.0 0.0001", "", "pg002", ana)
+    hard, soft = issues_for(ctrl, "rha 1.0 2.0 0.0001", monocris="pg002", anacris=ana)
     assert hard == []
     assert soft and "⚠" in soft[0]
 
 
 def test_malformed_commands_are_hard(in8_controller):
     for cmd in ("rhm 1.0 2.0", "rhm 1.0 2.0 0.1 0.2", "rhm a b c", "nope 1 2 3"):
-        hard, _ = in8_controller._scan_command_issues(cmd, "")
+        hard, _ = issues_for(in8_controller, cmd)
         assert hard, cmd
 
 
@@ -197,27 +213,26 @@ def test_a_step_that_cannot_reach_the_end_is_hard(in8_controller):
     # ("A3 0 10 15" expands to 0 and 15); the API guide calls it an error.
     for cmd in ("A3 0 10 0", "A3 0 10 -1", "A3 10 0 1", "H 1 2 0",
                 "A3 0 10 15", "H 1.99 2.01 0.1", "A3 10 0 -15"):
-        hard, _ = in8_controller._scan_command_issues(cmd, "")
+        hard, _ = issues_for(in8_controller, cmd)
         assert hard, cmd
 
 
 def test_a_step_that_does_not_divide_the_range_is_a_note_not_a_refusal(in8_controller):
     # "A3 0 10 4" stops at 8 and says so; the note blocks nothing and needs no force.
-    assert in8_controller._scan_command_issues("A3 0 10 4", "") == ([], [])
-    _, warning = in8_controller._validate_single_scan_command("A3 0 10 4")
-    assert warning == "Step 4 does not divide 0 to 10; the scan stops at 8."
-    _, warning = in8_controller._validate_single_scan_command("A3 0 10 2")
-    assert warning is None
+    assert issues_for(in8_controller, "A3 0 10 4") == ([], [])
+    assert in8_controller._scan_command_warnings(launch_for(in8_controller, "A3 0 10 4")) == [
+        "Command 1: Step 4 does not divide 0 to 10; the scan stops at 8."]
+    assert in8_controller._scan_command_warnings(launch_for(in8_controller, "A3 0 10 2")) == []
 
 
 def test_the_count_warning_counts_the_points_the_truncated_scan_runs(in8_controller):
     # The old count rounded 502.5 steps up to 504 points; the scan runs 503.
-    _, warning = in8_controller._validate_single_scan_command("A3 0 1000 1.99")
-    assert warning.startswith("Warning: 503 scan points.")
+    warning, = in8_controller._scan_command_warnings(launch_for(in8_controller, "A3 0 1000 1.99"))
+    assert warning.startswith("Command 1: Warning: 503 scan points.")
     assert in8_controller._count_scan_points("A3 0 1000 1.99", "") == 503
 
     # Over 1000 points the warning is soft, and the stop note rides in the same text.
-    hard, soft = in8_controller._scan_command_issues("A3 0 1000 0.9", "")
+    hard, soft = issues_for(in8_controller, "A3 0 1000 0.9")
     assert hard == [] and len(soft) == 1
     assert "1112 points" in soft[0] and "stops at 999.9" in soft[0]
 
@@ -316,7 +331,7 @@ def test_a_q_versus_hkl_conflict_cannot_be_overridden(in8_controller, monkeypatc
     on the GUI Run and over the API with force alike. Each command alone is
     no issue (``_scan_command_issues`` judges commands, the plan pairs)."""
     cmd1, cmd2 = "H 1.99 2.01 0.01", "qx 1.9 2.1 0.1"
-    assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], [])
+    assert issues_for(in8_controller, cmd1, cmd2) == ([], [])
     why = ("Q x is calculated from H in the HKL calculation, so it cannot also be scanned. "
            "force does not override a command conflict.")
     assert _run_refusal(in8_controller, cmd1, cmd2, monkeypatch).startswith(why)
@@ -348,7 +363,7 @@ def test_an_angle_beside_a_q_hkl_or_energy_scan_is_refused_even_forced(
 
 def test_angle_pairs_that_write_distinct_slots_are_accepted(in8_controller):
     for cmd1, cmd2 in (("A3 30 31 1", "A4 40 41 1"), ("omega 30 31 1", "sgl 0 1 1")):
-        assert in8_controller._scan_command_issues(cmd1, cmd2) == ([], []), (cmd1, cmd2)
+        assert issues_for(in8_controller, cmd1, cmd2) == ([], []), (cmd1, cmd2)
         assert in8_controller._preview_launch(cmd1, cmd2)[1].calculation == "direct_motors"
 
 
@@ -445,12 +460,13 @@ def test_an_arc_under_a_plane_lock_shows_the_plans_wording(in8_controller):
                                         "tilts": {"sgl": 11.31, "sgu": 0.0}}
     try:
         sim.scan_command_1_edit.setText("sgl 0 2 1")
-        assert sim.scan_conflict_label.text().startswith(
+        assert sim.scan_warning_1_label.text().startswith(
             "The plane lock holds sgl (lower arc): the locked scattering plane (1 0 0)/(0 1 0.2)")
+        assert sim.scan_conflict_label.isHidden()
         assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_WARNING
         blockers = cm.TaviApiBackend(ctrl, _SyncBridge()).submit_validate(
             {"parameters": {"scan_command1": "sgl 0 2 1"}})["blockers"]
-        assert any(b.startswith("scan_validation: The plane lock holds sgl (lower arc)")
+        assert any(b.startswith("scan_validation: Command 1: The plane lock holds sgl (lower arc)")
                    for b in blockers), blockers
     finally:
         ctrl.instrument_state.plane_lock = None
@@ -467,7 +483,7 @@ def test_a_radius_scan_on_a_fixed_assembly_shows_the_plans_wording(in8_controlle
     dock.set_ana_id(d.ana_crystals[0].id)
     try:
         sim.scan_command_1_edit.setText("rva 0.3 0.6 0.05")
-        assert sim.scan_conflict_label.text().startswith(
+        assert sim.scan_warning_1_label.text().startswith(
             "The hardware holds rva (analyzer vertical radius) at 0.05 m")
         assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_WARNING
     finally:
@@ -476,7 +492,7 @@ def test_a_radius_scan_on_a_fixed_assembly_shows_the_plans_wording(in8_controlle
 
 
 def test_an_arc_or_radius_beside_h_is_refused_by_the_plan(in8_controller, monkeypatch):
-    """Paired with H, the same two refusals come from the plan, in box 2."""
+    """Paired with H, the same two refusals come from the plan, in box 2's label."""
     ctrl = in8_controller
     sim = ctrl.window.simulation_dock
     d = _pin_rva(ctrl, monkeypatch)
@@ -488,11 +504,11 @@ def test_an_arc_or_radius_beside_h_is_refused_by_the_plan(in8_controller, monkey
     try:
         sim.scan_command_1_edit.setText("H 0.9 1.1 0.1")
         sim.scan_command_2_edit.setText("sgl 0 2 1")
-        assert sim.scan_conflict_label.text().startswith("The plane lock holds sgl (lower arc)")
+        assert sim.scan_warning_2_label.text().startswith("The plane lock holds sgl (lower arc)")
         assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
         assert sim.scan_command_1_edit.styleSheet() == sim.STYLE_NORMAL
         sim.scan_command_2_edit.setText("rva 0.3 0.6 0.05")
-        assert sim.scan_conflict_label.text().startswith(
+        assert sim.scan_warning_2_label.text().startswith(
             "The hardware holds rva (analyzer vertical radius) at 0.05 m")
         assert sim.scan_command_2_edit.styleSheet() == sim.STYLE_WARNING
     finally:

@@ -15,11 +15,8 @@ from tavi.quantities import QUANTITIES
 
 
 # Scan commands name a scannable quantity of the registry (tavi/quantities.py)
-# by its canonical ID or any alias, in any case; this is the one list of them.
+# by its canonical ID or any alias, in any case (the plan's parse resolves them).
 _SCANNABLE = [q for q in QUANTITIES if q.scannable]
-VALID_SCAN_VARIABLES = {name.casefold() for q in _SCANNABLE for name in (q.id, *q.aliases)}
-# The spelling shown to the operator: the first alias (A2, qx, H), else the ID.
-SCAN_VARIABLE_SHORT_NAMES = [(q.aliases or (q.id,))[0] for q in _SCANNABLE]
 
 
 def _command_chip(number):

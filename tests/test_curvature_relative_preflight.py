@@ -13,9 +13,9 @@ saw the literal numbers could not tell these apart and used to skip relative
 commands entirely (D22), leaving the second case unblocked on the GUI Run
 path.
 
-These tests exercise the REAL preflight gate (``_scan_command_issues`` /
-``_validate_single_scan_command``), shared verbatim by the GUI Run button and
-the remote API, through the real PUMA controller and descriptor -- not a
+These tests exercise the REAL preflight gate (``_scan_command_issues``, the
+plan's verdict on each command alone), shared verbatim by the GUI Run button
+and the remote API, through the real PUMA controller and descriptor -- not a
 manifest-level unit stub.
 """
 import contextlib
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from test_api_partial_collimation import issues_for  # noqa: E402
 from instruments.rules import PlanRefused  # noqa: E402
 
 
@@ -68,10 +69,8 @@ def test_6_relative_command_that_expands_in_travel_is_accepted_by_the_real_prefl
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
 
-        hard, _ = ctrl._scan_command_issues(
-            _RELATIVE_CMD_IN_TRAVEL, "", mono, ana, relative_1=True,
-            current_values={"rhm": _CURRENT_RHM},
-        )
+        hard, _ = issues_for(ctrl, _RELATIVE_CMD_IN_TRAVEL, relative=(True, False),
+                             monocris=mono, anacris=ana, rhm=_CURRENT_RHM)
         assert hard == [], (
             f"a relative command whose real expansion (3.0-3.5 m off "
             f"rhm={_CURRENT_RHM}) is well inside PUMA's 2.0 m minimum must "
@@ -86,9 +85,7 @@ def test_7_the_same_command_absolute_is_still_refused_on_its_literal_values():
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
 
-        hard, _ = ctrl._scan_command_issues(
-            _RELATIVE_CMD_IN_TRAVEL, "", mono, ana, relative_1=False,
-        )
+        hard, _ = issues_for(ctrl, _RELATIVE_CMD_IN_TRAVEL, monocris=mono, anacris=ana)
         assert hard, "an absolute rhm 0.5..1.0 m must still be hard-blocked"
         assert "rhm" in hard[0]
 
@@ -123,10 +120,8 @@ def test_8_the_branch_original_worked_example_is_refused_by_the_preflight_too():
 
         # The preflight itself now refuses the same command, given the
         # current radius -- it is no longer blind to the relative case.
-        hard, _ = ctrl._scan_command_issues(
-            _RELATIVE_CMD_OUT_OF_TRAVEL, "", mono, ana, relative_1=True,
-            current_values={"rhm": _CURRENT_RHM},
-        )
+        hard, _ = issues_for(ctrl, _RELATIVE_CMD_OUT_OF_TRAVEL, relative=(True, False),
+                             monocris=mono, anacris=ana, rhm=_CURRENT_RHM)
         assert hard, (
             "the real preflight must refuse a relative command whose "
             "expansion is out of travel, not defer entirely to the manifest"

@@ -222,9 +222,9 @@ def test_a_pair_of_big_grids_is_judged_by_its_plan_without_building_its_points(m
             sim.relative_1_button.click()
             idock.omega_edit.setText("")
             ctrl.validate_scan_commands()
-            assert sim.scan_conflict_label.text().startswith(
+            assert sim.scan_warning_1_label.text().startswith(
                 "Command 1 steps relative to A3 (sample rotation), but its field holds no number "
-                "to step from."), sim.scan_conflict_label.text()
+                "to step from."), sim.scan_warning_1_label.text()
         finally:
             monkeypatch.undo()     # the reset restores a small default grid, which may expand
             _reset(ctrl)

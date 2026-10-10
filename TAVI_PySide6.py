@@ -126,7 +126,7 @@ from tavi.data_processing import (read_1Ddetector_file, write_parameters_to_file
                                    read_parameters_from_file, require_output_version,
                                    write_1D_scan, write_2D_scan)
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
-from tavi.utilities import (parse_scan_steps, incremented_path_writing, scan_range_error,
+from tavi.utilities import (parse_scan_steps, incremented_path_writing,
                             scan_intervals, scan_stop_note)
 from tavi.sample_mount import SampleMount
 from tavi.orientation import (check_travel, lock_plane, locked_plane_text, plane_text,
@@ -153,7 +153,7 @@ from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
 from tavi import background as _background
 from tavi.journal import SessionJournal
 from tavi import scan_fits
-from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused, UnknownQuantity
+from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused
 from tavi.quantities import by_id as quantity_by_id
 from tavi.quantities import crystal_theta, normalize_write_names, resolve as resolve_quantity
 from tavi.quantities import slit_gap_id, slit_gap_ids
@@ -816,10 +816,10 @@ class TaviApiBackend:
 
         # 2. Validate scan commands. ``force`` clears the soft issues only;
         #    a hard one is refused whatever the caller says.
-        issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
+        issues = self._blocking_scan_issues(controller, launch_state, force)
         if issues:
             raise ApiError(400, "scan_validation", "\n".join(issues))
-        warnings = self._scan_warnings(controller, vals, cmd1, cmd2)
+        warnings = self._scan_warnings(controller, launch_state)
 
         # 2a. Resolve the background against this scan's sample -- the same
         #     check /validate runs, so a body that validates cannot be rejected
@@ -962,39 +962,26 @@ class TaviApiBackend:
         )
 
     @staticmethod
-    def _blocking_scan_issues(controller, vals, cmd1, cmd2, force):
+    def _blocking_scan_issues(controller, launch_state, force):
         """The scan-command issues that block this request.
 
         ``force`` is the operator's deliberate override, so it clears exactly
         what the GUI Run button offers as a choice: the soft issues (a very
-        long scan). A hard issue -- the command does not describe a scan that
-        can run as written: an unknown or refused variable, a malformed
-        command -- blocks whatever the caller says, and so does the plan's
-        refusal of the pair when the launch compiles (``_compile_launch``). Forcing through one of those ran a scan that
+        long scan). A hard issue -- the plan refuses a command in its own box:
+        an unknown or refused variable, a malformed command, a quantity a
+        setting or the hardware holds -- blocks whatever the caller says, and so
+        does the plan's refusal of the pair when the launch compiles
+        (``_compile_launch``). Forcing through one of those ran a scan that
         silently overwrote the radius a crystal pins, or labelled points with
         coordinates they were not taken at (ruling 2026-09-10).
         """
-        # API scan commands are always absolute (build_api_launch_state hard-codes
-        # relative_mode_1/2 False, unlike the GUI-collected launch state) --
-        # relative_1/relative_2 default False here for that reason, not omission.
-        # current_values still passes vals' curvature radii through: a future
-        # relative API request would need them, and there is no separate
-        # "widget-free" reading to diverge from the GUI's.
-        current_values = {axis: vals.get(axis) for axis in ("rhm", "rvm", "rha", "rva")}
-        hard, soft = controller._scan_command_issues(
-            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules"),
-            current_values=current_values,
-        )
+        hard, soft = controller._scan_command_issues(launch_state)
         return hard if force else hard + soft
 
     @staticmethod
-    def _scan_warnings(controller, vals, cmd1, cmd2):
+    def _scan_warnings(controller, launch_state):
         """The non-blocking scan-command messages a request returns as ``warnings``."""
-        current_values = {axis: vals.get(axis) for axis in ("rhm", "rvm", "rha", "rva")}
-        return controller._scan_command_warnings(
-            cmd1, cmd2, vals.get("monocris"), vals.get("anacris"), vals.get("modules"),
-            current_values=current_values,
-        )
+        return controller._scan_command_warnings(launch_state)
 
     def _validate_scan_on_gui(self, patch, force, background=None,
                               engine="mcstas", seed=None, noiseless=False):
@@ -1024,10 +1011,10 @@ class TaviApiBackend:
         )
         if background_blocker is not None:
             blockers.append(background_blocker)
-        scan_issues = self._blocking_scan_issues(controller, vals, cmd1, cmd2, force)
+        scan_issues = self._blocking_scan_issues(controller, launch_state, force)
         if scan_issues:
             blockers.append("scan_validation: %s" % "\n".join(scan_issues))
-        warnings = self._scan_warnings(controller, vals, cmd1, cmd2)
+        warnings = self._scan_warnings(controller, launch_state)
 
         try:
             points = controller._count_scan_points(cmd1, cmd2)
@@ -4373,54 +4360,39 @@ class TAVIController(QObject):
         self.update_all_variables()
     
     def validate_scan_commands(self):
-        """Validate scan commands for errors, typos, and parameter conflicts.
-        
-        This checks:
-        1. Unknown/invalid variable names (typos)
-        2. Malformed commands (wrong number of parts, invalid numbers)
-        3. Suspicious parameters (e.g., > 1000 scan points)
-        4. Whether the pair compiles: the plan Run would build now refuses a
-           command its calculation computes or another setting holds, in the
-           plan's own words (``rules.build_plan``)
-        """
-        cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
-        cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
-        
-        # Clear all previous warnings
-        self.window.simulation_dock.clear_all_scan_warnings()
-        
-        # Validate each command individually, against the crystals the dock
-        # currently shows -- this path exists to annotate those widgets.
-        dock = self.window.instrument_dock
-        monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
-        modules = dock.module_values()
-        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
-        relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
-        relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
-        current_values = self._current_curvature_field_values()
-        var1, warning1 = self._validate_single_scan_command(
-            cmd1, curvature_axes, relative=relative_1,
-            current_values=current_values,
-        )
-        var2, warning2 = self._validate_single_scan_command(
-            cmd2, curvature_axes, relative=relative_2,
-            current_values=current_values,
-        )
+        """Show the plan's verdict on the command boxes, as Run would judge them now.
 
-        if warning1:
-            self.window.simulation_dock.set_scan_command_warning(1, warning1)
-        if warning2:
-            self.window.simulation_dock.set_scan_command_warning(2, warning2)
-        
-        # Each command read alone: the scan (a pair, or a lone command an engine or a
-        # setting cannot honour) is the plan's to judge.
-        if (var1 or var2) and (var1 or not warning1) and (var2 or not warning2):
-            try:
-                self._preview_launch(cmd1, cmd2, points=False)
-            except PlanRefused as refused:
-                self.window.simulation_dock.set_scan_conflict_warning(
-                    str(refused), refused.command)
-    
+        Each typed command is compiled alone in its box (``_judge_boxes``): its own
+        refusal, or else its point-count or stop note, goes in that box's warning
+        label. When both stand alone the pair is compiled, and the plan's refusal
+        of the pair goes in the conflict label, styling the box it names. A launch
+        that cannot be planned at all says so in the conflict label.
+        """
+        sim = self.window.simulation_dock
+        commands = [(sim.scan_command_1_edit.text().strip(), sim.relative_1_button.isChecked()),
+                    (sim.scan_command_2_edit.text().strip(), sim.relative_2_button.isChecked())]
+        sim.clear_all_scan_warnings()
+        if not any(text for text, _relative in commands):
+            return
+        launch_state = self._collect_simulation_launch_state()
+        accepted, refused = self._judge_boxes(launch_state, commands)
+        if None in refused:
+            sim.set_scan_conflict_warning(str(refused[None]))
+            return
+        for number in (1, 2):
+            if number in refused:
+                sim.set_scan_command_warning(number, str(refused[number]))
+            elif number in accepted:
+                note = self._scan_command_note(accepted[number])
+                if note:
+                    sim.set_scan_command_warning(number, note)
+        if refused:
+            return
+        try:
+            scan_axes(self._launch_plan(launch_state, commands), launch_state['snapshot'])
+        except PlanRefused as pair:
+            sim.set_scan_conflict_warning(str(pair), pair.command)
+
     def _curvature_axis_specs(self, monocris, anacris, modules=None):
         """{axis: (CurvatureAxis, crystal display name)} for the two named
         crystals, resolved against the current (or supplied) module state.
@@ -4560,129 +4532,52 @@ class TAVIController(QObject):
                 issues.append(error)
         return issues
 
-    def _validate_single_scan_command(self, command: str, curvature_axes=None,
-                                      relative=False, current_values=None) -> tuple:
-        """Validate a single scan command and return (variable_name, warning_message).
+    def _judge_boxes(self, launch_state, commands):
+        """``({box: Command}, {box or None: PlanRefused})``: each typed command alone.
 
-        ``curvature_axes`` is the {axis: (CurvatureAxis, crystal)} mapping from
-        ``_curvature_axis_specs`` for the crystals this scan will actually run
-        with; omitted means no scan range is checked against mechanical travel.
-        A fixed axis is not checked here: the plan refuses it, naming the
-        hardware. A commanded scan endpoint
-        outside a driven axis's declared travel is refused the same as a HELD
-        value would be, via ``curvature_scan_error`` -- the operator asked for
-        the whole range, so every value it expands to is checked, not just the
-        two endpoints (an absolute ``"rhm 0 2 1"`` on an axis with a 2.0 m
-        declared minimum has legal endpoints and an illegal interior point at
-        1.0 m).
-
-        ``relative`` is THIS command's own relative-mode flag (a 2D scan's two
-        commands set it independently). For a relative command the literal
-        start/end are offsets from the current radius, not the requested radii
-        themselves; ``current_values`` (an {axis: float-or-None} mapping of the
-        launch's current curvature values, from the GUI's instrument-dock
-        fields or the API's frozen ``vals``) supplies the base a relative
-        command is expanded against. A relative command on an axis whose
-        current value is missing or non-numeric is a hard issue naming the
-        field -- there is no base to expand the offsets against.
-
-        A returned variable of ``None`` alongside a warning is a *hard*
-        rejection -- the command cannot run as written. Callers must treat it
-        as blocking; see ``_validate_scan_commands_text``.
-
-        Returns:
-            tuple: (normalized_variable_name or None, warning_message or None)
+        ``commands`` is ``[(text, relative), (text, relative)]``. Each command is
+        compiled in its own box with the other empty, exactly as Run compiles
+        (``build_plan``, then ``scan_axes``: the parse, the registry, the range, the
+        settings and hardware that hold a quantity, a relative base), so a refusal
+        here is that box's own; the pair is judged apart. A refusal that names no
+        box (the launch itself cannot be planned) is keyed None. The one per-command
+        verdict of the command labels, Run's preflight and the API's.
         """
-        from gui.docks.unified_simulation_dock import (
-            SCAN_VARIABLE_SHORT_NAMES, VALID_SCAN_VARIABLES)
+        accepted, refused = {}, {}
+        for number, (text, relative) in enumerate(commands, start=1):
+            if not (text or "").strip():
+                continue
+            alone = [("", False), ("", False)]
+            alone[number - 1] = (text, relative)
+            try:
+                plan = self._launch_plan(launch_state, alone)
+                scan_axes(plan, launch_state['snapshot'])
+            except PlanRefused as refusal:
+                refused[number if refusal.command == number else None] = refusal
+                continue
+            accepted[number] = plan.commands[0]
+        return accepted, refused
 
-        if not command:
-            return (None, None)
-        
-        parts = command.split()
-        
-        # Check for minimum parts (variable, start, end, step)
-        if len(parts) < 4:
-            return (None, "Incomplete: needs 'variable start end step'")
-        
-        if len(parts) > 4:
-            return (None, "Too many parts: use 'variable start end step'")
-        
-        var_name = parts[0]
-        try:
-            var_id = resolve_quantity(var_name, "scan").id
-        except UnknownQuantity:
-            var_lower = var_name.lower()
-            suggestions = [v for v in sorted(VALID_SCAN_VARIABLES)
-                           if var_lower in v or v in var_lower]
-            if suggestions:
-                return (None, f"Unknown variable '{var_name}'. Did you mean: {', '.join(suggestions)}?")
-            return (None, f"Unknown variable '{var_name}'. Valid: "
-                          f"{', '.join(SCAN_VARIABLE_SHORT_NAMES)}")
-        except QuantityRefused as refused:
-            # Derived angles, retired names, old slit names: the registry's words.
-            return (None, str(refused))
+    @staticmethod
+    def _scan_command_note(command):
+        """The advice on an accepted command that the plan does not judge, or None.
 
-        axis = self._RADIUS_AXES.get(var_id)
-
-        # Validate numeric parts
-        try:
-            start = float(parts[1])
-            end = float(parts[2])
-            step = float(parts[3])
-        except ValueError:
-            return (None, "Invalid numbers. Check start, end, and step values.")
-
-        range_error = scan_range_error(start, end, step)
-        if range_error:
-            return (None, range_error)
-
-        # After the step guards: the expansion below divides by the step and
-        # calls parse_scan_steps, so a zero or wrong-sign step must have been
-        # refused already -- mid-keystroke text like 'rhm 2 4 0' reaches
-        # this validator from textChanged.
-        # A commanded scan range on a driven curvature axis is refused, not
-        # clamped, when any value it expands to falls outside its declared
-        # mechanical travel -- the operator wrote the range deliberately.
-        # Absolute and relative commands are both checked here now: a
-        # relative command's real requested radii are the current value plus
-        # every offset ``parse_scan_steps`` would produce, which needs a base
-        # value from ``current_values``.
-        axis_spec = (curvature_axes or {}).get(axis)
-        # A fixed axis is the plan's refusal (it names the hardware), not a travel check.
-        if axis_spec is not None and axis_spec[0].driven:
-            curvature_axis, crystal_name = axis_spec
-            base_value = None
-            if relative:
-                base_value = (current_values or {}).get(axis)
-                if base_value is None:
-                    return (None, f"'{var_name}' is a relative curvature scan "
-                                  f"but its current value is not numeric.")
-            from instruments.tas_runtime import curvature_scan_error
-
-            error = curvature_scan_error(
-                axis, start, end, step, relative, base_value,
-                curvature_axis, crystal_name,
-            )
-            if error:
-                return (None, error)
-
+        The point-count notes, and the note when the step does not divide the
+        range (``0 10 4`` runs 0, 4, 8). A note marked "⚠" is the operator's call.
+        """
+        start, end, step = command.start, command.stop, command.step
         # Count and stop note both come from the one expansion rule (tavi/utilities.py).
         num_points = scan_intervals(start, end, step)[0] + 1
-        note = scan_stop_note(start, end, step)
         if num_points > 1000:
             message = f"⚠ {num_points} points - this may take a very long time!"
         elif num_points > 500:
             message = f"Warning: {num_points} scan points. Consider fewer steps."
         elif num_points == 1:
             message = f"⚠ Only 1 scan point! Step ({step}) larger than range ({start} to {end})."
-        elif num_points <= 0:
-            return (None, "Invalid range: no points would be generated.")
         else:
             message = None
+        return " ".join(m for m in (message, scan_stop_note(start, end, step)) if m) or None
 
-        return (var_id, " ".join(m for m in (message, note) if m) or None)
-    
     # A requested-radius quantity -> the curvature axis (state field) it drives.
     _RADIUS_AXES = {qid: _to_internal(qid) for qid in RADIUS_CRYSTAL}
 
@@ -7570,16 +7465,10 @@ class TAVIController(QObject):
     def _preflight_scan_validation(self):
         """Check scan commands before running simulation (GUI wrapper).
 
-        Reads the scan-command widgets and delegates to the pure
-        ``_scan_command_issues`` so the GUI Run path and the API path share
-        one validation implementation.
-
-        Also folds in ``_held_curvature_issues`` (a HELD radius outside its
-        declared travel, or off a fixed axis's declared radius): that check
-        has no scan-command text to attach to, so it belongs beside this
-        wrapper's other pre-launch gate rather than inside
-        ``_scan_command_issues``, which is parameterized on command strings
-        alone.
+        Collects the launch as Run does and hands it to ``_scan_command_issues``,
+        the API's gate too. Also folds in ``_held_curvature_issues`` (a HELD
+        radius outside its declared travel, or off a fixed axis's declared
+        radius), which has no command to attach to.
 
         Returns:
             tuple: (hard, soft) issue lists. Hard cannot be overridden --
@@ -7589,132 +7478,44 @@ class TAVIController(QObject):
         cmd1 = self.window.simulation_dock.scan_command_1_edit.text().strip()
         cmd2 = self.window.simulation_dock.scan_command_2_edit.text().strip()
         dock = self.window.instrument_dock
-        monocris, anacris = dock.selected_mono_id(), dock.selected_ana_id()
-        modules = dock.module_values()
-        relative_1 = self.window.simulation_dock.relative_1_button.isChecked()
-        relative_2 = self.window.simulation_dock.relative_2_button.isChecked()
-        hard, soft = self._scan_command_issues(
-            cmd1, cmd2, monocris, anacris, modules,
-            relative_1=relative_1, relative_2=relative_2,
-            current_values=self._current_curvature_field_values(),
-        )
-        scan_named_axes = self._scan_named_curvature_axes(cmd1, cmd2)
+        launch_state = self._collect_simulation_launch_state()
+        # No launch: Run itself says the fields do not read as numbers.
+        hard, soft = self._scan_command_issues(launch_state) if launch_state else ([], [])
         hard = hard + self._held_curvature_issues(
-            monocris, anacris, scan_named_axes=scan_named_axes
-        )
+            dock.selected_mono_id(), dock.selected_ana_id(),
+            scan_named_axes=self._scan_named_curvature_axes(cmd1, cmd2))
         return hard, soft
 
-    def _current_curvature_field_values(self):
-        """{axis: float-or-None} read straight from the instrument-dock
-        curvature fields -- the base a relative scan command expands
-        against. ``None`` for a field that does not parse as a number,
-        matching ``_held_curvature_issues``'s own read of the same widgets.
+    def _scan_command_issues(self, launch_state):
+        """(hard, soft) issue lists for a launch's two scan commands, each judged alone.
+
+        Hard is the plan's refusal of a command in its own box (``_judge_boxes``),
+        ``Command N: ``-prefixed unless it already names its box; soft a "⚠" note,
+        the operator's call. The pair is the plan's to judge when the launch
+        compiles (``_compile_launch``), never here. Reads no widgets: the GUI
+        passes its collected launch, the API its frozen one.
         """
-        idock = self.window.instrument_dock
-        axis_edits = {
-            "rhm": idock.rhm_edit, "rvm": idock.rvm_edit,
-            "rha": idock.rha_edit, "rva": idock.rva_edit,
-        }
-        values = {}
-        for axis, edit in axis_edits.items():
-            try:
-                values[axis] = float(edit.text())
-            except ValueError:
-                values[axis] = None   # empty or not a number: no base to step from
-        return values
-
-    def _scan_command_issues(self, cmd1: str, cmd2: str,
-                             monocris=None, anacris=None, modules=None,
-                             relative_1=False, relative_2=False,
-                             current_values=None):
-        """(hard, soft) issue lists for two scan-command strings.
-
-        Hard means the command cannot run as written -- an unknown or
-        refused variable, a malformed command. Soft means it can run but
-        probably should not, which is the operator's call. Whether the two
-        commands can run together is the plan's judgement, made when the
-        launch compiles (``_compile_launch``), never here.
-
-        Parameterized on strings only -- reads no widgets -- so both the GUI
-        Run button and the remote API can call it. ``monocris``/``anacris`` name
-        the crystals the scan will run with, and ``modules`` the module state
-        (e.g. a nested mirror optic combo), which together decide whether a
-        curvature axis is refused; the API passes the frozen request's, not
-        the GUI's. ``relative_1``/``relative_2`` are each command's own
-        relative-mode flag (independent per command, exactly like a 2D scan's
-        two commands run under independent modes); ``current_values`` is the
-        {axis: float-or-None} mapping of the launch's current curvature
-        values a relative command expands against -- see
-        ``_validate_single_scan_command``.
-        Returns an empty string when the commands are acceptable, or a
-        newline-joined description of the blocking issues.
-
-        A command that came back with no variable is a hard rejection and
-        always blocks. Sniffing the message text for a warning marker used to
-        decide this, so every rejection whose wording lacked the marker --
-        an incomplete command, unparseable numbers, a refused fixed curvature
-        axis -- was reported to the operator and then launched anyway.
-        """
-        cmd1 = (cmd1 or "").strip()
-        cmd2 = (cmd2 or "").strip()
-        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
-
-        hard = []
-        soft = []
-
-        for label, cmd, relative in (
-            ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
-        ):
-            var, warning = self._validate_single_scan_command(
-                cmd, curvature_axes, relative=relative,
-                current_values=current_values,
-            )
-            if not warning:
-                continue
-            # var is None -> the command cannot run as written, whatever the
-            # wording. Anything else marked serious is a judgement the
-            # operator is allowed to overrule (a very long scan, say).
-            if var is None:
-                hard.append(f"{label}: {warning}")
-            elif "⚠" in warning:
-                soft.append(f"{label}: {warning}")
-
+        accepted, refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
+        hard = [str(refused[None])] if None in refused else []
+        for number in (1, 2):
+            text = str(refused.get(number, ""))
+            if text:
+                hard.append(text if text.startswith(f"Command {number} ")
+                            else f"Command {number}: {text}")
+        soft = [f"Command {number}: {note}" for number, command in sorted(accepted.items())
+                if (note := self._scan_command_note(command)) and "⚠" in note]
         return hard, soft
 
-    def _scan_command_warnings(self, cmd1: str, cmd2: str,
-                               monocris=None, anacris=None, modules=None,
-                               relative_1=False, relative_2=False,
-                               current_values=None):
+    def _scan_command_warnings(self, launch_state):
         """``Command N: ``-prefixed messages for the API's ``warnings`` list.
 
-        Every message a command returns that is not a refusal: the stop note and
-        the point-count notes. Advisory only, so ``force`` does not touch them; a
-        soft count note appears here and in the soft issues alike.
+        Every accepted command's note: the stop note and the point-count notes.
+        Advisory only, so ``force`` does not touch them; a soft count note appears
+        here and in the soft issues alike.
         """
-        curvature_axes = self._curvature_axis_specs(monocris, anacris, modules=modules)
-        warnings = []
-        for label, cmd, relative in (
-            ("Command 1", cmd1, relative_1), ("Command 2", cmd2, relative_2)
-        ):
-            var, warning = self._validate_single_scan_command(
-                (cmd or "").strip(), curvature_axes, relative=relative,
-                current_values=current_values,
-            )
-            if warning and var is not None:
-                warnings.append(f"{label}: {warning}")
-        return warnings
-
-    def _validate_scan_commands_text(self, cmd1: str, cmd2: str,
-                                     monocris=None, anacris=None,
-                                     modules=None) -> str:
-        """Hard and soft issues joined as one string, or "" when there are none.
-
-        For callers that only want the text. The API gate reads
-        ``_scan_command_issues`` itself, because ``force`` may clear the soft
-        issues only (``TaviApiBackend._blocking_scan_issues``).
-        """
-        hard, soft = self._scan_command_issues(cmd1, cmd2, monocris, anacris, modules)
-        return "\n".join(hard + soft)
+        accepted, _refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
+        return [f"Command {number}: {note}" for number, command in sorted(accepted.items())
+                if (note := self._scan_command_note(command))]
 
     # ------------------------------------------------------------- remote API
     #
@@ -8336,11 +8137,15 @@ class TAVIController(QObject):
         context = context_from_state(launch_state['scan_config'], vals,
                                      self.instrument.capabilities(),
                                      launch_state.get('engine') or 'mcstas')
-        if commands is None:
-            commands = [
-                (vals.get('scan_command1') or "", bool(launch_state.get('relative_mode_1'))),
+        return build_plan(self._launch_commands(launch_state) if commands is None else commands,
+                          context)
+
+    @staticmethod
+    def _launch_commands(launch_state):
+        """A launch's ``[(text, relative), (text, relative)]`` for boxes 1 and 2."""
+        vals = launch_state['vals']
+        return [(vals.get('scan_command1') or "", bool(launch_state.get('relative_mode_1'))),
                 (vals.get('scan_command2') or "", bool(launch_state.get('relative_mode_2')))]
-        return build_plan(commands, context)
 
     def validate_scan_launch_state(self, launch_state):
         """Check each point of a launch's compiled plan for feasibility.

@@ -5,8 +5,8 @@ GUI-Run entry-point regression pins that an out-of-travel relative scan
 never reaches the job queue).
 
 ``curvature_scan_error`` (``instruments.tas_runtime``) is the module-level
-helper both ``_validate_single_scan_command`` (the literal-text preflight)
-and ``validate_scan_launch_state``'s per-point check now share, reusing
+helper the point plan's range check runs (``rules.build_plan``, read by the
+preflight ``_scan_command_issues`` and by ``validate_scan_launch_state``), reusing
 ``parse_scan_steps`` for the expansion so this test's numbers are exactly
 what execution would run with.
 """
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
+from test_api_partial_collimation import issues_for, launch_for  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -56,7 +57,7 @@ def test_absolute_interior_point_is_refused_though_endpoints_are_legal():
     expanded value must be checked, not just the two endpoints."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
-        hard, _ = ctrl._scan_command_issues("rhm 0 2 1", "", mono, ana)
+        hard, _ = issues_for(ctrl, "rhm 0 2 1", monocris=mono, anacris=ana)
         assert hard, "the interior point at 1.0 m must hard-block"
         assert "rhm" in hard[0]
 
@@ -66,10 +67,8 @@ def test_relative_interior_point_is_refused_the_same_way():
     expand to the identical 0.0, 1.0, 2.0 m -- same interior refusal."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
-        hard, _ = ctrl._scan_command_issues(
-            "rhm -2.5 -0.5 1", "", mono, ana, relative_1=True,
-            current_values={"rhm": 2.5},
-        )
+        hard, _ = issues_for(ctrl, "rhm -2.5 -0.5 1", relative=(True, False),
+                             monocris=mono, anacris=ana, rhm=2.5)
         assert hard, "the interior point at 1.0 m must hard-block"
         assert "rhm" in hard[0]
 
@@ -79,10 +78,10 @@ def test_relative_command_on_a_non_numeric_current_value_is_a_hard_issue():
     field, not a silent pass-through."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
-        hard, _ = ctrl._scan_command_issues(
-            "rhm 0.5 1.0 0.5", "", mono, ana, relative_1=True,
-            current_values={"rhm": None},
-        )
+        launch = launch_for(ctrl, "rhm 0.5 1.0 0.5", relative=(True, False),
+                            monocris=mono, anacris=ana)
+        del launch["snapshot"]["mono_horizontal_radius_m"]   # an emptied field
+        hard, _ = ctrl._scan_command_issues(launch)
         assert hard, "a relative command with no numeric base must hard-block"
         assert "rhm" in hard[0]
 
@@ -93,11 +92,8 @@ def test_api_blocking_scan_issues_agrees_on_the_absolute_interior_point_case():
     scan-submission path refuses the same interior point the GUI does."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
-        vals = {"monocris": mono, "anacris": ana, "modules": {},
-                "rhm": 0.0, "rvm": 0.0, "rha": 0.0, "rva": 0.0}
-        issues = cm.TaviApiBackend._blocking_scan_issues(
-            ctrl, vals, "rhm 0 2 1", "", force=False
-        )
+        launch = launch_for(ctrl, "rhm 0 2 1", monocris=mono, anacris=ana)
+        issues = cm.TaviApiBackend._blocking_scan_issues(ctrl, launch, force=False)
         assert issues, "the API path must refuse the same interior point"
         assert "rhm" in issues[0]
 
@@ -143,9 +139,9 @@ def test_a_radius_run_that_crosses_zero_is_refused_in_the_gui_and_over_the_api()
     A run of one sign stays scannable."""
     with _controller("puma") as ctrl:
         mono, ana = ctrl.descriptor.mono_crystals[0].id, ctrl.descriptor.ana_crystals[0].id
-        hard, _ = ctrl._scan_command_issues("rhm -2 2 2", "", mono, ana)
+        hard, _ = issues_for(ctrl, "rhm -2 2 2", monocris=mono, anacris=ana)
         assert hard and "magnitude" in hard[0], hard
-        hard, _ = ctrl._scan_command_issues("rhm -2.4 -2.0 0.2", "", mono, ana)
+        hard, _ = issues_for(ctrl, "rhm -2.4 -2.0 0.2", monocris=mono, anacris=ana)
         assert hard == []
 
         class _SyncBridge:
