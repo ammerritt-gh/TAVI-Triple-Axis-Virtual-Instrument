@@ -12,10 +12,12 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, Qt  # noqa: E402
-from PySide6.QtWidgets import (QApplication, QGridLayout, QGroupBox, QLabel,  # noqa: E402
-                               QLineEdit, QWidget)
+from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
+from PySide6.QtGui import QColor  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QGridLayout, QGroupBox, QHBoxLayout,  # noqa: E402
+                               QLabel, QLineEdit, QWidget)
 
+from gui import theme  # noqa: E402
 from gui.docks.unified_simulation_dock import UnifiedSimulationDock  # noqa: E402
 from gui.field_marks import mark_for, set_group_note  # noqa: E402
 
@@ -101,6 +103,32 @@ def test_group_note_shows_hides_without_size_change(app):
     set_group_note(box, None)
     app.processEvents()
     assert not note.isVisible() and box.sizeHint() == hint
+
+
+def test_field_in_tight_cell_keeps_its_outline(app):
+    """The overlay lives in the group box, not the zero-margin cell that would clip it."""
+    group = QGroupBox("Instrument Angles")
+    grid = QGridLayout(group)
+    grid.setSpacing(3)
+    cell = QWidget()
+    cell_layout = QHBoxLayout(cell)
+    cell_layout.setContentsMargins(0, 0, 0, 0)
+    field = QLineEdit("2")
+    cell_layout.addWidget(field)
+    grid.addWidget(QLabel("Mono 2θ"), 0, 0)
+    grid.addWidget(cell, 0, 1)
+    group.show()
+    app.processEvents()
+    mark = mark_for(field)
+    mark.set_mark("set", "2")
+    app.processEvents()
+    assert mark._outline.parentWidget() is group
+    field_rect = QRect(field.mapTo(group, QPoint(0, 0)), field.size())
+    outline_rect = QRect(mark._outline.mapTo(group, QPoint(0, 0)), mark._outline.size())
+    assert outline_rect.contains(field_rect.adjusted(-1, -1, 1, 1))
+    # The row just above the field carries the outline colour, not the group's background.
+    above = group.grab().toImage().pixelColor(field_rect.center().x(), field_rect.top() - 1)
+    assert above == QColor(theme.DERIVED_OUTLINE)
 
 
 def test_simulation_dock_keeps_warnings_and_gains_chips_and_legend(app):

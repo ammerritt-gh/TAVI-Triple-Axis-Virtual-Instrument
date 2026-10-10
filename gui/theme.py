@@ -11,7 +11,7 @@ COMMAND_COLORS = {1: "#1f5fbf", 2: "#b35c00"}
 
 # Outline of a field set at each point, and the badge text of a set mark.
 DERIVED_OUTLINE = "#5a5a5a"
-BADGE_TEXT = "#5a5a5a"
+BADGE_TEXT = "#333333"
 
 # Legend and group-note text.
 NOTE_TEXT = "#444444"

@@ -4,15 +4,17 @@ Drawing only. The plan decides which mark a field gets; this module draws it.
 The outline is an overlay beside the field, never a stylesheet change, so the
 controller's edit and error highlighting still show, and no layout moves.
 """
-from PySide6.QtCore import QEvent, QObject, QRectF, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QGroupBox, QLabel, QWidget
 
 from gui import theme
 
-# Outline sits this far outside the field, in px, so it never covers the text.
-_OUTLINE_GAP = 2
-_BADGE_STYLE = "font-size: 9px; padding: 0 2px; background: palette(base);"
+# Outline sits this far outside the field, in px; 1 keeps rows 3 px apart visibly separate.
+_OUTLINE_GAP = 1
+# Badge takes the window colour so it reads as a legend set in the outline's gap.
+_BADGE_STYLE = "font-size: 9px; padding: 0 2px; background: palette(window);"
+_FIELD_EVENTS = (QEvent.Move, QEvent.Resize, QEvent.Show, QEvent.Hide)
 _NOTE_MARGIN = 8
 _STYLES = (None, "scanned", "set")
 
@@ -46,11 +48,12 @@ class _Outline(QWidget):
         rect = QRectF(self.rect())
         with QPainter(self) as painter:
             if style == "scanned":
-                half = theme.SCANNED_PEN_WIDTH / 2
+                # The dash is centred on the field's edge: 1 px outside, 1 px over its border.
                 pen = QPen(QColor(theme.COMMAND_COLORS[command]), theme.SCANNED_PEN_WIDTH,
                            Qt.DashLine)
                 painter.setPen(pen)
-                painter.drawRect(rect.adjusted(half, half, -half, -half))
+                painter.drawRect(rect.adjusted(_OUTLINE_GAP, _OUTLINE_GAP,
+                                               -_OUTLINE_GAP, -_OUTLINE_GAP))
             else:
                 half = theme.SET_PEN_WIDTH / 2
                 painter.setPen(QPen(QColor(theme.DERIVED_OUTLINE), theme.SET_PEN_WIDTH))
@@ -66,11 +69,11 @@ class FieldMark:
     def __init__(self, field):
         self._field = field
         self._state = (None, "", None, "")
-        parent = field.parentWidget()
-        self._outline = _Outline(self, parent)
-        self._badge = QLabel(parent)
-        _Follow(field, self._place, (QEvent.Move, QEvent.Resize, QEvent.Show, QEvent.Hide))
-        _Follow(parent, self._place, (QEvent.Resize,))
+        host = _overlay_host(field)
+        self._outline = _Outline(self, host)
+        self._badge = QLabel(host)
+        for widget in _path(field, host):
+            _Follow(widget, self._place, _FIELD_EVENTS)
         self._place()
 
     def set_mark(self, style, badge="", command=None, tooltip=""):
@@ -98,21 +101,38 @@ class FieldMark:
     def _place(self):
         style, badge, _command, _tooltip = self._state
         field = self._field
-        shown = style is not None and not field.isHidden()
+        host = _overlay_host(field)
+        shown = style is not None and field.isVisibleTo(host)
         self._outline.setVisible(shown)
         self._badge.setVisible(shown and bool(badge))
         if not shown:
             return
-        frame = field.geometry()
+        frame = QRect(field.mapTo(host, QPoint(0, 0)), field.size())
         self._outline.setGeometry(frame.adjusted(-_OUTLINE_GAP, -_OUTLINE_GAP,
                                                  _OUTLINE_GAP, _OUTLINE_GAP))
         self._outline.raise_()
         width, height = self._badge.width(), self._badge.height()
-        parent = self._badge.parentWidget()
-        x = min(max(0, frame.right() + _OUTLINE_GAP - width), parent.width() - width)
-        y = min(max(0, frame.top() - height // 2), parent.height() - height)
+        x = min(max(0, frame.right() + _OUTLINE_GAP - width), host.width() - width)
+        y = min(max(0, frame.top() - height // 2), host.height() - height)
         self._badge.move(x, y)
         self._badge.raise_()
+
+
+def _overlay_host(field):
+    """The nearest group box, else the top-level window: a tight parent would clip the outset."""
+    host = field.parentWidget()
+    while not isinstance(host, QGroupBox) and host.parentWidget() is not None:
+        host = host.parentWidget()
+    return host
+
+
+def _path(field, host):
+    """Widgets from ``field`` up to ``host``, both included."""
+    widget = field
+    yield widget
+    while widget is not host:
+        widget = widget.parentWidget()
+        yield widget
 
 
 def mark_for(field):
