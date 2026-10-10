@@ -583,8 +583,32 @@ def _badge_point(field):
     return rect.intersected(field.rect()).center()
 
 
+def test_a_press_under_the_badge_reaches_the_field(window):
+    field = _fields(window)[A3]
+    _type(window, "H 1.9 2.1 0.05")
+    assert mark_for(field).state()[1] == "1"   # the badge is up
+    point = _badge_point(field)
+    top = field.window()   # this window only: a closed one from an earlier test can stay on top
+    assert top.childAt(top.mapFromGlobal(field.mapToGlobal(point))) is field
+    window.activateWindow()
+    field.setFocus()
+    field.setCursorPosition(0)
+    QTest.mouseClick(field, Qt.LeftButton, Qt.NoModifier, point)
+    assert field.cursorPosition() > 0
 
 
+def test_the_badge_tooltip_shows_over_the_badge_only(window):
+    field = _fields(window)[A3]
+    field.setToolTip("the field's own tooltip")
+    _type(window, "H 1.9 2.1 0.05")
+    badge_tip = _state(window, A3)[3]
+    point = _badge_point(field)
+    QApplication.sendEvent(field, QHelpEvent(QEvent.ToolTip, point, field.mapToGlobal(point)))
+    assert QToolTip.text() == badge_tip
+    elsewhere = QPoint(1, field.height() - 1)
+    QApplication.sendEvent(field, QHelpEvent(QEvent.ToolTip, elsewhere,
+                                             field.mapToGlobal(elsewhere)))
+    assert QToolTip.text() == "the field's own tooltip"
 
 
 # ----------------------------------------------------------------- goto on a radius

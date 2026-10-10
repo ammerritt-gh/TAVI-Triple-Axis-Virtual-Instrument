@@ -6,7 +6,7 @@ controller's edit and error highlighting still show, and no layout moves.
 """
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QGroupBox, QLabel, QWidget
+from PySide6.QtWidgets import QGroupBox, QLabel, QToolTip, QWidget
 
 from gui import theme
 
@@ -31,6 +31,28 @@ class _Follow(QObject):
     def eventFilter(self, watched, event):
         if event.type() in self._events:
             self._update()
+        return False
+
+
+class _BadgeTip(QObject):
+    """Shows the badge's tooltip where the badge is; the widget's own tooltip everywhere else.
+
+    Installed on the field and its group box: the badge is transparent to the mouse, so a
+    tooltip over it goes to whichever of the two lies under it.
+    """
+
+    def __init__(self, mark, watched):
+        super().__init__(watched)
+        self._mark = mark
+        watched.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.ToolTip:
+            badge = self._mark._badge
+            if badge.isVisible() and QRect(badge.mapToGlobal(QPoint(0, 0)), badge.size()).contains(
+                    event.globalPos()):
+                QToolTip.showText(event.globalPos(), badge.toolTip(), watched)
+                return True
         return False
 
 
@@ -72,8 +94,11 @@ class FieldMark:
         host = _overlay_host(field)
         self._outline = _Outline(self, host)
         self._badge = QLabel(host)
+        self._badge.setAttribute(Qt.WA_TransparentForMouseEvents)   # clicks reach the field under it
         for widget in _path(field, host):
             _Follow(widget, self._place, _FIELD_EVENTS)
+        _BadgeTip(self, field)
+        _BadgeTip(self, host)
         self._place()
 
     def set_mark(self, style, badge="", command=None, tooltip=""):
