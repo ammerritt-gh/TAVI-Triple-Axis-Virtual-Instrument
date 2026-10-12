@@ -4552,11 +4552,15 @@ class TAVIController(QObject):
             log.warning("Scan labels and field marks: the launch does not collect (%s)", exc)
             return None, None, {}, {None: PlanRefused(f"Nothing can be planned: {exc}")}
         plan, accepted, refused = self._judge_boxes(launch_state, commands)
+        if launch_state is None:   # a field holds no number: no zero take-off to read
+            return launch_state, plan, accepted, refused
         vals = launch_state['vals']
         re_solved = self._zero_takeoff_re_solved(vals, [angle for angle in ('mtt', 'att') if vals[angle] == 0])
-        if re_solved and not refused:   # Run refuses the whole launch (_scan_command_issues), so no box stands
-            return launch_state, None, {}, {None: PlanRefused(re_solved)}
-        return launch_state, plan, accepted, refused
+        if not re_solved:
+            return launch_state, plan, accepted, refused
+        # Run refuses the whole launch (_scan_command_issues): no box stands, and the reason names no box.
+        refused[None] = PlanRefused(f"{refused[None]} {re_solved}" if None in refused else re_solved)
+        return launch_state, None, {}, refused
 
     def _show_scan_verdict(self, verdict):
         """Show a ``_box_verdict`` on the command boxes.
