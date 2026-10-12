@@ -108,12 +108,12 @@ def parse_scan_steps(input_string):
     step_size = float(words[3])
 
     # Points never pass the end: a step that does not divide the range stops at
-    # the last whole step inside it (scan_stop_note says where).
+    # the last whole step inside it (scan_stop_note says where). Values are unrounded.
     intervals, reaches_end = scan_intervals(start_value, end_value, step_size)
-    last_value = end_value if reaches_end else start_value + step_size * intervals
-    array_values = np.linspace(start_value, last_value, intervals + 1)
-    array_values = np.round(array_values, 3)
-    # Rounding to 3 decimals can push a value past the end (0.0008 -> 0.001 before 0.0016).
+    array_values = start_value + step_size * np.arange(intervals + 1)
+    if reaches_end and intervals:
+        array_values[-1] = end_value
+    # Float error can put a point a hair past the end; the clip keeps the no-overshoot rule.
     array_values = np.clip(array_values, min(start_value, end_value), max(start_value, end_value))
 
     return variable_name, array_values
@@ -128,14 +128,12 @@ def scan_point_count(input_string):
 def scan_run_values(start, end, step, indices):
     """The values parse_scan_steps returns at ``indices``, in closed form: no array is built.
 
-    Same arithmetic as parse_scan_steps: linspace's i * step + start with its exact last
-    value, then the 3-decimal rounding and clip.
+    Same arithmetic as parse_scan_steps: start + i * step, the exact end as the last value
+    when the step divides the range, then the clip.
     """
     intervals, reaches_end = scan_intervals(start, end, step)
-    last = end if reaches_end else start + step * intervals
-    delta = (last - start) / intervals if intervals else 0.0
     lo, hi = min(start, end), max(start, end)
-    return [float(np.clip(np.round(last if i == intervals and intervals else start + i * delta, 3),
+    return [float(np.clip(end if reaches_end and intervals and i == intervals else start + i * step,
                           lo, hi))
             for i in indices]
 
