@@ -1021,7 +1021,7 @@ def test_build_fingerprint_is_unchanged_by_orientation(name, cls):
     plugin = getattr(importlib.import_module(f"instruments.{name}.plugin"), cls)()
     config = plugin.default_state()
     before = plugin.build_fingerprint(config)
-    for field, value in (("A3", 12.0), ("sgl", 3.0), ("sgu", -4.0)):
+    for field, value in (("sample_rotation_deg", 12.0), ("sgl", 3.0), ("sgu", -4.0)):
         setattr(config, field, value)
     config.sample_mount = SampleMount(CUBIC_B, _rot((1, 1, 0), 8.0))
     config.U_true = _rot((1, -1, 0), 5.0)
