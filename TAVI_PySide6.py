@@ -7740,7 +7740,7 @@ class TAVIController(QObject):
 
         # --- bending setter factory (write the field, then unlock ideal) ---
         # The unlock must happen in the SETTER phase, not the after-handler:
-        # apply_parameters() runs every setter before any after-handler runs,
+        # apply_parameters() runs a group's setters before that group's after-handlers,
         # so a batch naming several radii would otherwise have one field's
         # after-handler (which also refreshes all four locked fields) fire
         # while a sibling radius is still AUTOFOCUS-locked and overwrite the
@@ -7904,9 +7904,12 @@ class TAVIController(QObject):
         ('monocris', 'anacris'),
         ('K_fixed',),
         # The fixed energy recomputes both sides, so the energies a request names for the
-        # free side (and the crystal 2-thetas, which set energies too, last) go after it.
+        # free side go after it; the crystal 2-thetas, which set energies too, go last.
         ('fixed_E',),
-        ('Ki', 'Ei', 'Kf', 'Ef', 'mtt', 'att'),
+        ('Ki', 'Ei', 'Kf', 'Ef'),
+        # Handlers run after a group's writes, so an energy's handler would overwrite an
+        # angle sent in the same group; the angle waits here and is kept as sent.
+        ('mtt', 'att'),
         # The transfer holds Q and re-solves the motors, so it follows the energies it divides.
         ('deltaE',),
         ('qx', 'qy', 'qz', 'H', 'K', 'L'),
@@ -7929,12 +7932,11 @@ class TAVIController(QObject):
     _STAGE_NAMES = ('omega', 'stt', 'sgl', 'sgu')
     _LATTICE_KEYS = ('lattice_a', 'lattice_b', 'lattice_c',
                      'lattice_alpha', 'lattice_beta', 'lattice_gamma')
-    # How far two values of one write may differ and still be one setting: half the
-    # last digit the fields keep (format_editable_number, four decimals), so a derived
-    # field can never read back other than as sent.
-    _ENERGY_TOL = 5e-5   # meV
-    _ANGLE_TOL = 5e-5    # deg
-    _HKL_TOL = 5e-5      # r.l.u.
+    # How far two values of one write may differ and still be one setting: the
+    # readouts' rounding (four decimals), with room for a crystal angle's slope.
+    _ENERGY_TOL = 0.01   # meV
+    _ANGLE_TOL = 0.01    # deg
+    _HKL_TOL = 1e-3      # r.l.u.
 
     def _adopt_patched_sample_lattice(self, vals, named):
         """A patched sample adopts its own lattice into ``vals`` unless lattice_* is also named."""
@@ -8227,7 +8229,7 @@ class TAVIController(QObject):
           c) after each group's writes fire its after-handlers once (deduped,
              first seen first), before the next group writes;
           d) log a summary to the message center;
-          e) return (applied, errors).
+          e) return (applied, errors); applied holds the values the state holds afterwards.
         """
         field_map = self._api_field_map()
         applied = {}
@@ -8324,6 +8326,10 @@ class TAVIController(QObject):
                     group_handlers.append(after)
             fire(group_handlers)
         fire(final_handlers)
+
+        # Report what the state holds now (readout precision), so each applied value reads back.
+        held = self.api_parameters() or {}
+        applied = {name: held.get(name, value) for name, value in applied.items()}
 
         # Direct writes already flashed through _set_and_confirm_text().  The
         # handlers may have written dependent fields while ``updating`` was

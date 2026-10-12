@@ -340,14 +340,73 @@ def test_an_agreeing_launch_patch_is_accepted_and_every_value_holds(launcher):
     assert vals["Ei"] == pytest.approx(20.0, abs=1e-6)
 
 
-# ------------------------------------------- agreement tolerances: the readouts' precision
+# ------------------------------------- agreement tolerances: the readouts' rounding
 
-def test_a_q_that_misses_the_hkl_beside_it_by_a_display_digit_is_refused(ctrl):
-    # 0.0008 r.l.u. apart: inside the old 1e-3 tolerance, yet H reads back as 2.0000.
-    before = copy.deepcopy(ctrl.get_gui_values())
+def _assert_reads_back_exactly(ctrl, applied):
+    """Every value the reply lists holds exactly the state's reading afterwards."""
+    state = ctrl.api_parameters()
+    assert {key: state[key] for key in applied} == applied
+
+
+def test_a_q_beside_its_hkl_within_the_readout_is_accepted_and_reads_back(ctrl):
+    # 0.0008 r.l.u. apart, inside the 1e-3 r.l.u. tolerance: the position handlers keep Q
+    # as sent and derive H from it (as they did before this rule), and the reply reports that.
     applied, errors = ctrl.apply_parameters({"qx": 3.1028, "qy": 0.0, "qz": 0.0, "h": 2.0008})
+    assert not errors, errors
+    assert applied["q_instrument_x_inv_angstrom"] == pytest.approx(3.1028, abs=1e-4)
+    assert applied["h"] == pytest.approx(2.0008, abs=1e-3)
+    _assert_reads_back_exactly(ctrl, applied)
+
+
+def test_a_q_beyond_the_readout_beside_its_hkl_is_refused(ctrl):
+    before = copy.deepcopy(ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters({"qx": 3.1028, "qy": 0.0, "qz": 0.0, "h": 2.01})
     assert applied == {}
     assert set(errors) == {"qx", "h"}
+    assert ctrl.get_gui_values() == before
+
+
+def test_a_transfer_within_the_readout_of_the_ei_beside_it_is_accepted(ctrl):
+    held = _fixed_energy(ctrl)
+    applied, errors = ctrl.apply_parameters({"Ei": held + 3.0, "deltaE": 3.008})
+    assert not errors, errors
+    _assert_reads_back_exactly(ctrl, applied)
+
+
+def test_a_transfer_beyond_the_readout_of_the_ei_beside_it_is_refused(ctrl):
+    held = _fixed_energy(ctrl)
+    before = copy.deepcopy(ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters({"Ei": held + 3.0, "deltaE": 3.05})
+    assert applied == {}
+    assert set(errors) == {"Ei", "deltaE"}
+    assert ctrl.get_gui_values() == before
+
+
+def test_a_crystal_angle_within_the_readout_of_its_energy_is_accepted(ctrl):
+    a2 = ctrl._signed_mtt(energy2k(20.0))
+    applied, errors = ctrl.apply_parameters({"Ei": 20.0, "A2": a2 + 0.008})
+    assert not errors, errors
+    # The motor is authoritative: A2 is kept as sent, the energy derived from it.
+    assert applied["mono_two_theta_deg"] == pytest.approx(a2 + 0.008, abs=1e-4)
+    assert applied["incident_energy_mev"] == pytest.approx(20.0, abs=0.01)
+    _assert_reads_back_exactly(ctrl, applied)
+
+
+def test_a_crystal_angle_within_the_readout_of_the_fixed_energy_is_kept_as_sent(ctrl):
+    fixed = _fixed_energy(ctrl)   # Kf is the held side on the default state
+    att = ctrl._signed_att(energy2k(fixed)) + 0.008
+    applied, errors = ctrl.apply_parameters({"fixed_E": fixed, "A6": att})
+    assert not errors, errors
+    assert applied["analyzer_two_theta_deg"] == pytest.approx(att, abs=1e-4)
+    _assert_reads_back_exactly(ctrl, applied)
+
+
+def test_a_crystal_angle_beyond_the_readout_of_its_energy_is_refused(ctrl):
+    before = copy.deepcopy(ctrl.get_gui_values())
+    a2 = ctrl._signed_mtt(energy2k(20.0))
+    applied, errors = ctrl.apply_parameters({"Ei": 20.0, "A2": a2 + 0.05})
+    assert applied == {}
+    assert set(errors) == {"Ei", "A2"}
     assert ctrl.get_gui_values() == before
 
 
@@ -358,21 +417,3 @@ def test_a_q_that_agrees_with_its_hkl_to_float_precision_reads_back(ctrl):
         {"qx": qx, "qy": qy, "qz": qz, "h": h, "k": k, "l": l})
     assert not errors, errors
     _assert_read_back(ctrl, applied)
-
-
-def test_a_transfer_that_misses_the_ei_beside_it_by_a_display_digit_is_refused(ctrl):
-    held = _fixed_energy(ctrl)
-    before = copy.deepcopy(ctrl.get_gui_values())
-    applied, errors = ctrl.apply_parameters({"Ei": held + 3.0, "deltaE": 3.008})
-    assert applied == {}
-    assert set(errors) == {"Ei", "deltaE"}
-    assert ctrl.get_gui_values() == before
-
-
-def test_a_crystal_angle_that_misses_its_energy_by_a_display_digit_is_refused(ctrl):
-    before = copy.deepcopy(ctrl.get_gui_values())
-    a2 = ctrl._signed_mtt(energy2k(20.0))
-    applied, errors = ctrl.apply_parameters({"Ei": 20.0, "A2": a2 + 0.008})
-    assert applied == {}
-    assert set(errors) == {"Ei", "A2"}
-    assert ctrl.get_gui_values() == before
