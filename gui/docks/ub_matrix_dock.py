@@ -880,6 +880,11 @@ class UBMatrixDock(BaseDockWidget):
                 peaks.append(data)
         return peaks
 
+    def unreadable_observation_numbers(self) -> list:
+        """Displayed numbers of observation rows with a field that is not a number (Save skips them)."""
+        return [pw.index + 1 for pw in self._peak_widgets
+                if pw.is_observation() and pw.get_peak_data() is None]
+
     def set_peak_entries(self, peaks_data: list):
         """Set peak entries from a list of peak data dicts."""
         # Clear existing

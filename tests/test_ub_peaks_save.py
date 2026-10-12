@@ -145,3 +145,21 @@ def test_a_fresh_start_restores_the_saved_peak_exactly(controller):
     line = [ln for ln in child.stdout.decode("utf-8").splitlines() if ln.startswith("PEAKS=")]
     assert line, child.stdout.decode("utf-8", "replace")
     assert json.loads(line[-1][len("PEAKS="):]) == saved
+
+
+def test_an_unreadable_observation_is_named_on_save(controller):
+    """A typed row whose field is not a number is skipped by Save, and the
+    message center says which peak it was (no silent loss)."""
+    _blank_dock(controller)
+    pw = controller.window.ub_matrix_dock.get_peak_widget(0)
+    pw.h_edit.clear()
+    QTest.keyClicks(pw.h_edit, "-")
+    seen = []
+    controller.message_printed.connect(seen.append)
+    try:
+        controller.save_parameters()
+    finally:
+        controller.message_printed.disconnect(seen.append)
+
+    assert _saved_peaks(controller) == []
+    assert "Peak 1 was not saved: a field is not a number" in seen
