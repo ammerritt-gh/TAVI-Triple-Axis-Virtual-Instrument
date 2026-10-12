@@ -101,11 +101,26 @@ def test_a_zero_analyser_two_theta_launches_with_the_final_energy_absent(ctrl):
     assert "Q, H, K, L" in said and "energy transfer" in said and "A6" in said
 
 
-def test_a_zero_take_off_beside_a_named_energy_is_still_a_disagreement(ctrl):
-    with pytest.raises(cm.ApiError) as refused:
-        _launch(ctrl, {"A2": 0.0, "Ei": 12.0})
-    assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
-    assert "disagree" in refused.value.message
+def _same_side_energies(ctrl, crystal):
+    """Bodies naming an energy of ``crystal``'s own side beside its zero angle (canonical names)."""
+    held_is_mono = ctrl._default_parameter_values()["K_fixed"] == "Ki Fixed"
+    mono = crystal == "mono_two_theta_deg"
+    bodies = [{"incident_energy_mev": 12.0} if mono else {"final_energy_mev": 12.0},
+              {"incident_wavevector_inv_angstrom": 2.5} if mono else {"final_wavevector_inv_angstrom": 2.5}]
+    if mono == held_is_mono:
+        bodies.append({"fixed_E": 12.0})
+    return bodies
+
+
+@pytest.mark.parametrize("crystal", ["mono_two_theta_deg", "analyzer_two_theta_deg"])
+def test_a_zero_take_off_beside_an_energy_of_its_side_is_refused_as_a_transmitting_crystal(ctrl, crystal):
+    for energy in _same_side_energies(ctrl, crystal):
+        with pytest.raises(cm.ApiError) as refused:
+            _launch(ctrl, {crystal: 0.0, **energy})
+        assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
+        message = refused.value.message
+        assert "selects no energy" in message and "0 meV" not in message and "disagree" not in message
+        assert crystal in message and next(iter(energy)) in message
 
 
 def test_an_energy_that_would_be_non_positive_is_still_refused(ctrl):
@@ -194,13 +209,17 @@ def test_a_zero_take_off_beside_a_new_lattice_says_q_is_recomputed_from_the_kept
 
 
 @pytest.mark.parametrize("crystal", ["A2", "A6"])
-@pytest.mark.parametrize("position", [{"h": 1.0}, {"K": 0.5}, {"qx": 1.0}, {"qz": 0.1}])
-def test_a_position_beside_a_zero_take_off_is_refused(ctrl, crystal, position):
-    """A transmitting crystal selects no energy, so no stage can be solved from the position."""
+@pytest.mark.parametrize("beside", [{"h": 1.0}, {"K": 0.5}, {"qx": 1.0}, {"qz": 0.1}, {"deltaE": 3.0}])
+def test_a_position_or_transfer_beside_a_zero_take_off_is_refused(ctrl, crystal, beside):
+    """A transmitting crystal selects no energy: no stage can be solved from a position and
+    no energy transfer is defined with it."""
     with pytest.raises(cm.ApiError) as refused:
-        _launch(ctrl, {crystal: 0.0, **position})
+        _launch(ctrl, {crystal: 0.0, **beside})
     assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
     message = refused.value.message
-    assert crystal in message and next(iter(position)) in message
+    named = next(iter(beside))
+    # The message names canonical IDs; the details key on the names as sent.
+    ids = list(ctrl._api_resolve_patch({crystal: 0.0, **beside}, ctrl._api_field_map())[0])
+    assert all(i in message for i in ids), (ids, message)
     assert "selects no energy" in message
-    assert set(refused.value.details["errors"]) == {crystal, next(iter(position))}
+    assert set(refused.value.details["errors"]) == {crystal, named}

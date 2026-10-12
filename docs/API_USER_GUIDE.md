@@ -1393,11 +1393,13 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
   A crystal 2θ of exactly 0 (A2 or A6) launches with that side's energy and wavevector recorded as
   `null` (a transmitting crystal selects none, and none is invented); the launch's `warnings` list
   says which of Q, h, k, l and the energy transfer could not follow the motors. It is refused beside
-  a scan that re-solves the crystal angles at every point (an H, K, L or Q scan) and beside a
-  position (`h`, `k`, `l`, `qx`, `qy`, `qz`), because with no energy selected no stage can be solved
-  from the position. `PATCH /parameters` with such an angle (and a typed one in the panels) keeps that
-  side's energy and wavevector, the fixed energy, Q, h, k, l and the energy transfer as they were,
-  never a zero energy.
+  a scan that re-solves the crystal angles at every point (an H, K, L or Q scan). In any remote
+  update, a launch or `PATCH /parameters`, it is refused before anything changes beside a position
+  (`h`, `k`, `l`, `qx`, `qy`, `qz`), an energy transfer, or an energy, wavevector or fixed energy of
+  its own side: a transmitting crystal selects no energy, so none of these can be set with it; send
+  them separately. `PATCH /parameters` with such an angle alone (and a typed one in the panels) keeps
+  that side's energy and wavevector, the fixed energy, Q, h, k, l and the energy transfer as they
+  were, never a zero energy.
 - **An empty field refuses.** A scan that reads a numeric field (a relative base, or a quantity
   it uses as typed, such as K in an H scan) refuses when the field holds no number, and names
   it. It is never read as 0.

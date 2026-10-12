@@ -502,3 +502,27 @@ def test_a_crystal_motor_beside_a_fixed_energy_sample_or_lattice_leaves_the_same
             state["h"], state["k"], state["l"]] == pytest.approx(
         [launch["qx"], launch["qy"], launch["qz"], launch["deltaE"],
          launch["H"], launch["K"], launch["L"]], abs=TOL)
+
+
+# ------------------------------------- a transmitting crystal: no position, transfer or energy beside it
+
+ZERO_BESIDE = {
+    "a position": {"mono_two_theta_deg": 0.0, "h": 1.0},
+    "a q component": {"analyzer_two_theta_deg": 0.0, "q_instrument_x_inv_angstrom": 1.0},
+    "an energy transfer": {"analyzer_two_theta_deg": 0.0, "energy_transfer_mev": 3.0},
+    "an energy transfer beside the mono": {"mono_two_theta_deg": 0.0, "energy_transfer_mev": 3.0},
+    "an incident energy": {"mono_two_theta_deg": 0.0, "incident_energy_mev": 12.0},
+    "a final wavevector": {"analyzer_two_theta_deg": 0.0, "final_wavevector_inv_angstrom": 2.5},
+    "the fixed energy on its side": {"analyzer_two_theta_deg": 0.0, "fixed_E": 12.0},
+}
+
+
+@pytest.mark.parametrize("case", sorted(ZERO_BESIDE))
+def test_a_zero_crystal_angle_beside_a_position_energy_or_transfer_is_refused_and_changes_nothing(ctrl, case):
+    patch = ZERO_BESIDE[case]
+    before = copy.deepcopy(ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters(patch)
+    assert applied == {}
+    assert set(errors) == set(patch)
+    assert all("selects no energy" in message and "0 meV" not in message for message in errors.values()), errors
+    assert ctrl.get_gui_values() == before
