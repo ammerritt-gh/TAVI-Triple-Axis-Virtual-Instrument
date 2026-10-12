@@ -7939,21 +7939,24 @@ class TAVIController(QObject):
         if spec is not None and spec.lattice is not None:
             vals.update(zip(self._LATTICE_KEYS, spec.lattice))
 
-    def _api_conflict(self, parsed):
-        """``_write_conflict`` for a PATCH body (parsed values by public name) against the GUI state."""
+    def _api_conflict(self, patch, parsed):
+        """``_write_conflict`` for a PATCH body against the GUI state: ``patch`` names every
+        field sent, ``parsed`` holds the values that parsed (by public name)."""
         named = {_to_internal(name): value for name, value in parsed.items()}
         base = self.get_gui_values()
         if base is not None:
             base = {**base, **{k: v for k, v in named.items()
                                if k == 'sample' or k in self._LATTICE_KEYS}}
             self._adopt_patched_sample_lattice(base, named)
-        return self._write_conflict(named, base)
+        return self._write_conflict(named, base, {_to_internal(name) for name in patch})
 
-    def _write_conflict(self, named, base):
+    def _write_conflict(self, named, base, names=None):
         """``(first, second, message)`` naming two values of one write that cannot all hold, else None.
 
-        ``named`` holds the write's parsed values by internal name; ``base`` the
-        state it lands on, lattice already as the write leaves it (only the
+        ``named`` holds the write's parsed values by internal name; ``names`` the
+        internal names the write submitted, parsed or not (default: those of
+        ``named``), so a pair with an unreadable value is still refused; ``base``
+        the state it lands on, lattice already as the write leaves it (only the
         values the write does not name are read from it; None when the GUI does
         not read as numbers, which skips the checks that need it). The names in
         the answer are public. Every value a reply lists as applied must read
@@ -7961,8 +7964,9 @@ class TAVIController(QObject):
         changes: a position beside a stage motor, energy-group values that
         disagree, and Q beside a disagreeing H, K, L.
         """
-        position = [n for n in self._POSITION_NAMES if n in named]
-        stage = [n for n in self._STAGE_NAMES if n in named]
+        names = named.keys() if names is None else names
+        position = [n for n in self._POSITION_NAMES if n in names]
+        stage = [n for n in self._STAGE_NAMES if n in names]
         if position and stage:
             first, second = _to_public(position[0]), _to_public(stage[0])
             return (first, second, "%s and %s cannot be set together: the position decides "
@@ -8263,7 +8267,7 @@ class TAVIController(QObject):
             return applied, errors
 
         # (a'') Values that cannot all hold are refused before anything is written.
-        conflict = self._api_conflict(parsed)
+        conflict = self._api_conflict(patch, parsed)
         if conflict is not None:
             first, second, message = conflict
             errors[submitted[first]] = errors[submitted[second]] = message
