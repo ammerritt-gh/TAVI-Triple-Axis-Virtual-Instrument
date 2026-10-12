@@ -1,0 +1,4 @@
+category: fix
+notice: Remote API scripts that name a position together with a sample stage motor in one update are now refused; send one or the other.
+
+Changing a monochromator or analyzer angle, or an energy that moves one, now moves Q, HKL and the energy transfer to follow the motors, in the panels and over the remote API, and a monochromator or analyzer angle of zero now launches with no selected energy recorded instead of being refused. A remote update naming a position together with a sample stage motor is refused before anything changes, values sent together in one update no longer overwrite one another, slit gaps must be finite and not negative, fine scans keep their step precision instead of collapsing to three decimals, a remote launch naming a position beside a monochromator or analyzer angle of zero is refused, and Save writes the peaks shown in the UB Matrix panel even before a UB is calculated, refusing while a peak field is not a number.
