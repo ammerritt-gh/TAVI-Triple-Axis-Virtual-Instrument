@@ -6054,6 +6054,11 @@ class TAVIController(QObject):
 
     def save_parameters(self):
         """Save all parameters to JSON file."""
+        # The UB dock's observations as they stand, never fitted: the saved
+        # list is the dock's, self.ub_matrix (its peaks and UB) is untouched.
+        ub_state = self.ub_matrix.to_dict()
+        ub_state["peaks"] = [ObservedPeak.from_dict(pd).to_dict()
+                             for pd in self.window.ub_matrix_dock.get_observation_peak_data()]
         parameters = {
             "mono_two_theta_deg": self.window.instrument_dock.mtt_edit.text(),
             "sample_two_theta_deg": self.window.instrument_dock.stt_edit.text(),
@@ -6118,7 +6123,7 @@ class TAVIController(QObject):
                 and self.window.sample_dock.use_sample_reflection_table_check.isChecked()
             ),
             # UB matrix state (the operator's belief)
-            "ub_matrix_state": self.ub_matrix.to_dict(),
+            "ub_matrix_state": ub_state,
             # The sample as described. R_hidden is never saved in clear: the
             # training hash below is its only record.
             "true_mount": {
@@ -6622,8 +6627,7 @@ class TAVIController(QObject):
                     peaks_data = []
                     for p in self.ub_matrix.peaks:
                         peaks_data.append(p.to_dict())
-                    if peaks_data:
-                        self.window.ub_matrix_dock.set_peak_entries(peaks_data)
+                    self.window.ub_matrix_dock.set_peak_entries(peaks_data)
                     self._reconnect_peak_signals()
                     self.print_to_message_center("UB matrix state restored")
                     # Peaks without a sense predate the sample-sense fix:

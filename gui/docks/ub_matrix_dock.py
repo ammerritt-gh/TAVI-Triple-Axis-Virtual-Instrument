@@ -121,6 +121,7 @@ class PeakEntryWidget(QFrame):
         self._stage = None      # the stage record, or None when legacy
         self._legacy = False
         self._sense = None      # sense_sample as loaded (legacy peaks)
+        self._observed = False  # taken, restored or typed into: a blank row is not
 
         self.setFrameShape(QFrame.StyledPanel)
         self.setFrameShadow(QFrame.Raised)
@@ -219,11 +220,19 @@ class PeakEntryWidget(QFrame):
         # Connect field changes to validation
         for field in self._fields():
             field.textChanged.connect(lambda _: self.peak_data_changed.emit(self.index))
+            field.textEdited.connect(self._mark_observed)  # typed only; setText does not emit it
         self.peak_data_changed.connect(lambda _: self._validate_self())
 
     def _fields(self):
         return [self.h_edit, self.k_edit, self.l_edit, *self.axis_edits,
                 self.stt_edit, self.ki_edit, self.kf_edit]
+
+    def _mark_observed(self, _text=None):
+        self._observed = True
+
+    def is_observation(self) -> bool:
+        """True once the row holds an observation: taken, restored, or typed into."""
+        return self._observed
 
     @staticmethod
     def _fmt(value):
@@ -329,6 +338,7 @@ class PeakEntryWidget(QFrame):
         self.ki_edit.setText(self._fmt(ki))
         self.kf_edit.setText(self._fmt(kf))
         self.lock_check.setChecked(locked)
+        self._observed = True
 
     def set_angles_from_position(self, record, stt, ki, kf):
         """Take Position: store the stage record and fill the fields."""
@@ -342,6 +352,7 @@ class PeakEntryWidget(QFrame):
         self.stt_edit.setText(self._fmt(stt))
         self.ki_edit.setText(self._fmt(ki))
         self.kf_edit.setText(self._fmt(kf))
+        self._observed = True
         # The record changed even when no field text did (ki, kf or the sense).
         self.peak_data_changed.emit(self.index)
 
@@ -856,6 +867,15 @@ class UBMatrixDock(BaseDockWidget):
         peaks = []
         for pw in self._peak_widgets:
             data = pw.get_peak_data()
+            if data:
+                peaks.append(data)
+        return peaks
+
+    def get_observation_peak_data(self) -> list:
+        """Data of the rows that hold an observation; blank placeholder rows are excluded."""
+        peaks = []
+        for pw in self._peak_widgets:
+            data = pw.get_peak_data() if pw.is_observation() else None
             if data:
                 peaks.append(data)
         return peaks
