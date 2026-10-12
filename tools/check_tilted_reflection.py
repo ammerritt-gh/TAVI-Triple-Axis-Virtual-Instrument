@@ -149,11 +149,13 @@ def main():
 
     from instruments.contract import RunExecutionState
     from instruments.in8.plugin import IN8Plugin
+    from instruments.tas_runtime import true_point_hkl
     from tavi.data_processing import read_1Ddetector_file
     from tavi.neutron_conversions import k2energy
     from tavi.sample_mount import SampleMount
     from tavi.scan_fits import com, fit_peak
     from tavi.tas_geometry import component_q_to_instrument_q
+    from tavi.ub_matrix import compute_B_matrix
 
     fixed_e = k2energy(KF)
     u_true = _rot((1, 0, 1), 4.0) @ _rot((0, 1, 0), 45.0)
@@ -161,6 +163,10 @@ def main():
     plugin = IN8Plugin()
     vals = dict(IN8_VALS, fixed_E=fixed_e)
     config = plugin.scan_config(plugin.default_state(), vals, "Al_bragg", {}, mount)
+    # Belief (the mount above) and physical truth agree, as the docstring says:
+    # the sample arm and the closure check below read U_true, which the
+    # application writes through the controller's _set_true_mount.
+    config.U_true = u_true
 
     q = component_q_to_instrument_q(np.array(mount.hkl_to_q(*HKL)))
     angles, flags = copy.deepcopy(config).calculate_stage_angles(
@@ -172,8 +178,9 @@ def main():
     elevation = math.degrees(math.asin(mount.hkl_to_q(*HKL)[1] / np.linalg.norm(q)))
     print(f"IN8, sense {config.sense_sample:+d}, Al_bragg, kf = {KF} 1/A, (2,0,0), "
           f"|Q| = {np.linalg.norm(q):.4f} 1/A, {elevation:.3f} deg above the plane")
-    print(f"Solved setting (readouts): A1 = {mtt:.4f}  A2 = {stt:.4f}  A3 = {a3:.4f}  "
-          f"A4 = {att:.4f}  sgl = {sgl:.4f}  sgu = {sgu:.4f}")
+    print(f"Solved setting (readouts): A2 (mono 2θ) = {mtt:.4f}  A3 = {a3:.4f}  "
+          f"A4 (sample 2θ) = {stt:.4f}  A6 (analyser 2θ) = {att:.4f}  "
+          f"sgl = {sgl:.4f}  sgu = {sgu:.4f}")
     if min(abs(sgl), abs(sgu)) < 0.5:
         print("Setup error: the misorientation does not need both arcs.")
         return 2
@@ -186,6 +193,17 @@ def main():
         snapshot = plugin.compute_snapshot(
             plan, _angle_point(mtt, stt, a3, att, arc_l, arc_u), 0,
             config, vals, str(root / "plan"))
+        if label == "tilted":
+            # The crystal's physical truth read at the solved stage must be (2,0,0).
+            hkl_true = true_point_hkl(config, snapshot.metadata, compute_B_matrix(
+                4.05, 4.05, 4.05, 90, 90, 90))
+            miss = max(abs(h - t) for h, t in zip(hkl_true, HKL))
+            print(f"Closure: U_true*B*hkl read back at the solved stage = "
+                  f"({hkl_true[0]:.4f}, {hkl_true[1]:.4f}, {hkl_true[2]:.4f}), "
+                  f"largest miss from (2,0,0) = {miss:.2e} r.l.u.")
+            if miss > 1e-3:
+                print("Setup error: the solved setting does not close on the true mount.")
+                return 2
         p = snapshot.params
         print(f"  {label:12s} sgl = {arc_l:8.4f}  sgu = {arc_u:8.4f}  centre-point sample arm "
               f"ROTATED = ({p['sample_rx_param']:.4f}, {p['sample_ry_param']:.4f}, "
