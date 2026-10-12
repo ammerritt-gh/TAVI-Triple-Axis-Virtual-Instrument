@@ -1439,7 +1439,7 @@ class DisplayDock(BaseDockWidget):
                 # A point publishes a requested radius as its magnitude; the axis keeps the typed sign.
                 axis = np.abs(values) if name in RADIUS_CRYSTAL else values
                 i = int(np.argmin(np.abs(axis - value)))
-                # Half of the 1e-3 rounding parse_scan_steps applied to folders saved before 2026-10-12.
+                # Half of parse_scan_steps' 1e-3 rounding of a command's values.
                 if not np.isclose(axis[i], value, rtol=0, atol=5e-4):
                     raise ValueError(
                         f"{folder_name}: {name} = {value:g} lies on none of the scan's axis "
