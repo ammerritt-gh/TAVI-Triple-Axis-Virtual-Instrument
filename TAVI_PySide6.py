@@ -3008,6 +3008,7 @@ class TAVIController(QObject):
                 vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
                 vals[energy] = k2energy(vals[wavevector])
             if zero_takeoffs:
+                self._refuse_position_beside_zero_takeoff(zero_takeoffs, named, submitted)
                 self._refuse_zero_takeoff_that_is_re_solved(vals, zero_takeoffs, submitted)
             both = vals['Ei'] is not None and vals['Ef'] is not None
             if 'mtt' in patched or 'att' in patched:
@@ -3085,13 +3086,6 @@ class TAVIController(QObject):
                           + lattice_keys)
         solved = False
         energies_absent = vals['Ei'] is None or vals['Ef'] is None   # a zero take-off: nothing to solve with
-        if (energies_absent and named.intersection(self._POSITION_NAMES)
-                and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))):
-            launch_warnings.append(
-                "The position named (%s) was not solved onto the stage: %s selects no energy, so "
-                "the stage motors keep their values."
-                % (", ".join(_to_public(n) for n in self._POSITION_NAMES if n in named),
-                   self._motor_names(vals, ('mtt', 'att'), only_zero=True)))
         if (patched.intersection(geometry_names) and not energies_absent
                 and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
                 and selected_calculation([(vals.get('scan_command1') or "", False),
@@ -3269,6 +3263,20 @@ class TAVIController(QObject):
         """``fields`` of the launch as ``A2 (...) = 0`` text; ``only_zero`` keeps the zero ones."""
         return ", ".join("%s = %g" % (quantity_by_id(_to_public(f)).name, vals[f])
                          for f in fields if not only_zero or vals[f] == 0)
+
+    def _refuse_position_beside_zero_takeoff(self, zero_takeoffs, named, submitted):
+        """A position beside a zero take-off is refused: a transmitting crystal selects no energy,
+        so no stage can be solved from the position, and nothing launched may describe a setting
+        the instrument is not at."""
+        position = [n for n in self._POSITION_NAMES if n in named]
+        if not position:
+            return
+        pair = [submitted.get(_to_public(n), _to_public(n)) for n in (zero_takeoffs[0], position[0])]
+        message = ("%s and %s cannot be set together: a crystal at zero take-off selects no energy, "
+                   "so the position cannot be solved onto the stage. Send one or the other."
+                   % tuple(pair))
+        raise ApiError(400, "invalid_parameters", message,
+                       details={"errors": {name: message for name in pair}})
 
     def _refuse_zero_takeoff_that_is_re_solved(self, vals, zero_takeoffs, submitted):
         """A zero take-off cannot be kept by a scan that solves the crystal angles per point.
