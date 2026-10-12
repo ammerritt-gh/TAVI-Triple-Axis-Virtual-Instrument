@@ -289,10 +289,6 @@ Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
   take-off refusals) are skipped with a logged warning when any GUI field does
   not read as a number; run the named-only checks before that guard with the
   next change to `_write_conflict` (deferred by the same job).
-- `.github/instructions/copilot-instructions.md` is gitignored, so no job can
-  carry it: lines 3 (PUMA only, `CODEX.md`), 20 (recommends the refused `chi`
-  and `kappa`), 106 (no test suite) and 113 (`CLAUDE.md`/`CODEX.md`) are stale.
-  Edit it by hand, or track it.
 - The full suite took 404–541 s on 2026-10-13 against 229 s on 2026-10-10
   (2882 tests against 2342); the per-test time rose too.
 
@@ -309,5 +305,5 @@ numbering in comments and tests, the fingerprint test varying the turntable,
 the tilt-gate tool setting the crystal's physical truth with a closure check,
 explicit encodings in `tavi/data_processing.py`, the changelog correction, the
 API guide and authoring-guide corrections, and the records the previous
-closeout owed to `TODO.md` and `AGENTS.md`. The gitignored Copilot file could
-not ride the PR; it is on the small-fixes list above.
+closeout owed to `TODO.md` and `AGENTS.md`. The Copilot file, gitignored and
+local only, was corrected by hand at closeout.
