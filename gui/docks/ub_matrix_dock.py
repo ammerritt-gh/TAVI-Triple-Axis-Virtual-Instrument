@@ -373,8 +373,6 @@ class UBMatrixDock(BaseDockWidget):
 
     # Signals
     ub_matrix_changed = Signal(bool)  # True if non-identity UB
-    lattice_refinement_requested = Signal(tuple)  # (a, b, c, alpha, beta, gamma)
-    training_changed = Signal(bool)  # True if training loaded
 
     def __init__(self, parent=None, descriptor=None):
         super().__init__("UB Matrix", parent, use_scroll_area=True)
