@@ -454,3 +454,36 @@ def test_a_new_sample_beside_one_lattice_constant_adopts_the_rest_on_launch(laun
     vals = launcher.build_api_launch_state({**patch, "scan_command1": SCAN})["vals"]
     assert vals["sample"] == PB
     assert vals["lattice_b"] == pytest.approx(PB_A)
+
+
+# ----------------------------------- a fixed energy beside a crystal motor follows the motors
+
+FIXED_BESIDE_CRYSTAL = {
+    "fixed_E and A2": lambda c: {"fixed_E": 12.0, "A2": 30.0},
+    "fixed_E and A6": lambda c: {"fixed_E": 12.0, "A6": c._signed_att(energy2k(12.0))},
+    "fixed_E and Ei": lambda c: {"fixed_E": 12.0, "Ei": 20.0},
+}
+STAGE_KEYS = ("sample_rotation_deg", "sample_two_theta_deg",
+              "sample_lower_arc_deg", "sample_upper_arc_deg")
+
+
+@pytest.mark.parametrize("case", sorted(FIXED_BESIDE_CRYSTAL))
+def test_a_fixed_energy_beside_a_crystal_motor_leaves_the_same_stage_on_patch_and_launch(ctrl, case):
+    patch = FIXED_BESIDE_CRYSTAL[case](ctrl)
+    before = ctrl.api_parameters()
+    launch = ctrl.build_api_launch_state({**patch, "scan_command1": SCAN})["vals"]
+    applied, errors = ctrl.apply_parameters(patch)
+    assert not errors, errors
+    state = ctrl.api_parameters()
+    # No position and no stage motor named: the unnamed stage motors stay where they were ...
+    assert {k: state[k] for k in STAGE_KEYS} == pytest.approx({k: before[k] for k in STAGE_KEYS}, abs=TOL)
+    launched = {"sample_rotation_deg": launch["omega"], "sample_two_theta_deg": launch["stt"],
+                "sample_lower_arc_deg": launch["sgl"], "sample_upper_arc_deg": launch["sgu"]}
+    assert launched == pytest.approx({k: before[k] for k in STAGE_KEYS}, abs=TOL)
+    # ... and Q, HKL and E derive forward from the motors, on both paths.
+    _assert_follows_motors(ctrl)
+    assert [state["q_instrument_x_inv_angstrom"], state["q_instrument_y_inv_angstrom"],
+            state["q_instrument_z_inv_angstrom"], state["energy_transfer_mev"],
+            state["h"], state["k"], state["l"]] == pytest.approx(
+        [launch["qx"], launch["qy"], launch["qz"], launch["deltaE"],
+         launch["H"], launch["K"], launch["L"]], abs=TOL)

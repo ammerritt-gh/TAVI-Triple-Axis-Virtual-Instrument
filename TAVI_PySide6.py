@@ -3086,7 +3086,9 @@ class TAVIController(QObject):
                           + lattice_keys)
         solved = False
         energies_absent = vals['Ei'] is None or vals['Ef'] is None   # a zero take-off: nothing to solve with
-        if (patched.intersection(geometry_names) and not energies_absent
+        holds_q = patched.intersection(geometry_names) - (
+            {'fixed_E'} if self._fixed_energy_follows_motors(named) else set())
+        if (holds_q and not energies_absent
                 and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
                 and selected_calculation([(vals.get('scan_command1') or "", False),
                                           (vals.get('scan_command2') or "", False)]) == MOTORS):
@@ -8032,6 +8034,7 @@ class TAVIController(QObject):
     # naming one of each is refused (operator, 12 October 2026: "Refuse the pair").
     _POSITION_NAMES = ('H', 'K', 'L', 'qx', 'qy', 'qz')
     _STAGE_NAMES = ('omega', 'stt', 'sgl', 'sgu')
+    _CRYSTAL_NAMES = ('mtt', 'att', 'Ei', 'Ki', 'Ef', 'Kf')
     _LATTICE_KEYS = ('lattice_a', 'lattice_b', 'lattice_c',
                      'lattice_alpha', 'lattice_beta', 'lattice_gamma')
     # How far two values of one write may differ and still be one setting: the
@@ -8039,6 +8042,20 @@ class TAVIController(QObject):
     _ENERGY_TOL = 0.01   # meV
     _ANGLE_TOL = 0.01    # deg
     _HKL_TOL = 1e-3      # r.l.u.
+
+    def _fixed_energy_follows_motors(self, names):
+        """A write naming the fixed energy beside a crystal motor (A2, A6 or an energy or
+        wavevector) and no position or stage motor follows the motors: the unnamed stage motors
+        stay where they were and Q, H, K, L and E derive forward from the motors. ``names``
+        are internal names."""
+        return ('fixed_E' in names and any(n in names for n in self._CRYSTAL_NAMES)
+                and not any(n in names for n in self._POSITION_NAMES + self._STAGE_NAMES))
+
+    def _follow_motors_after_fixed_energy(self):
+        """The fixed energy's after-handler for such a write: only the fixed side's energy is
+        set (the rest of the energies follow), then Q, HKL and E derive from the motors."""
+        self.update_all_variables()
+        self.on_angles_changed()
 
     def _adopt_patched_sample_lattice(self, vals, named):
         """A patched sample adopts its own lattice into ``vals`` for every lattice_* the write does not name."""
@@ -8413,10 +8430,13 @@ class TAVIController(QObject):
                         f"failed: {exc}"
                     )
 
+        follows_motors = self._fixed_energy_follows_motors({_to_internal(n) for n in parsed})
         for group in groups:
             group_handlers = []
             for name in group:
                 _parse_fn, setter_fn, after = field_map[name]
+                if follows_motors and name == _to_public('fixed_E'):
+                    after = self._follow_motors_after_fixed_energy
                 value = parsed[name]
                 try:
                     setter_fn(value)
