@@ -176,7 +176,8 @@ re-sync is part of U5.
 
 Done when: the operator has run a hands-on alignment pass (find peaks, Calculate
 UB, read residuals, lock a plane, a training exercise) on the real GUI and the
-defects it finds are fixed or filed, and ISAR's geometry copy is synced.
+defects it finds are fixed or filed, and ISAR's geometry copy is re-synced to
+U1's signatures (U5).
 
 ## Compact window: blocks, column width, 2/3/4-column layouts
 
@@ -288,39 +289,25 @@ Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
   take-off refusals) are skipped with a logged warning when any GUI field does
   not read as a number; run the named-only checks before that guard with the
   next change to `_write_conflict` (deferred by the same job).
+- `.github/instructions/copilot-instructions.md` is gitignored, so no job can
+  carry it: lines 3 (PUMA only, `CODEX.md`), 20 (recommends the refused `chi`
+  and `kappa`), 106 (no test suite) and 113 (`CLAUDE.md`/`CODEX.md`) are stale.
+  Edit it by hand, or track it.
+- The full suite took 404–541 s on 2026-10-13 against 229 s on 2026-10-10
+  (2882 tests against 2342); the per-test time rose too.
 
 Done when: each is fixed or dropped by the operator.
 
 ## Audit closeout: UB and A1–A6 text residue (job ja01620de5591)
 
-**State:** pinned
+**State:** done
 
-The 2026-10-12 audit of the UB (PRs #48–#50) and ILL-numbering (PRs #55–#58)
-programmes found both complete and consistent; its six behaviour defects
-landed as PR #59 (job j52ca1d7b6e04, `e194a118`: the instrument state follows
-the motors on every door, a position beside a stage motor and disagreeing
-values are refused, zero take-off launches run, slit gaps are bounded, scan
-coordinates keep their precision, Save writes the dock's peaks). What is left
-is text: old-numbering comments in the plugins and tests, retired-word
-fixtures and comments, the Bragg helper docstrings, the Copilot instruction
-file, a false v1.3.2 changelog claim (χ never loads as `sgl`), guide
-corrections, the dead UB dock signals, three unencoded text writes in
-`tavi/data_processing.py`, the manual tilt-gate tool's truth and labels, the
-fingerprint test's dead `A3` field, the tests README count and the
-reading-guide stamp. The T0 job ja01620de5591 carries the full list in its
-goal and waits for its design and the operator's approval. ISAR's migration
-job must also learn the new refusals (see the consumer handoff).
-
-Two records the closeout could not write (the gate refuses `TODO.md` and
-`AGENTS.md` to an unbound session) are owed to that job's first commit: a
-`TODO.md` *Known better shapes* line for refiner finding `ac047a3d93d88-4`
-(refuse a zero take-off beside a re-solving scan once, in `_launch_plan`
-after `build_plan`, instead of at three sites; revisit at a fourth plan
-consumer or when the conflict-label deferral above reopens), and three
-memory lines for `AGENTS.md`: a Qt reproduction outside pytest runs from the
-env's `python.exe` once `Library\bin` leads PATH, offscreen, with
-`TAVI_CONFIG_DIR` on a temp copy; leaf scratch output must live under
-`%LOCALAPPDATA%\Temp\claude\`; the runtime's files check treats a file
-another unit owns as outside a packet even when the packet lists it.
-
-Done when: ja01620de5591 has landed.
+The 2026-10-12 audit's six behaviour defects landed as PR #59 (job
+j52ca1d7b6e04); its text residue landed as PR #60 (job ja01620de5591,
+`940b1694`), the suite passing on that exact revision: current angle
+numbering in comments and tests, the fingerprint test varying the turntable,
+the tilt-gate tool setting the crystal's physical truth with a closure check,
+explicit encodings in `tavi/data_processing.py`, the changelog correction, the
+API guide and authoring-guide corrections, and the records the previous
+closeout owed to `TODO.md` and `AGENTS.md`. The gitignored Copilot file could
+not ride the PR; it is on the small-fixes list above.
