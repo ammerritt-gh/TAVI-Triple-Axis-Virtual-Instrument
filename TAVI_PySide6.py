@@ -4148,6 +4148,11 @@ class TAVIController(QObject):
                 self._update_tracked_value('qx', qx)
                 self._update_tracked_value('qy', qy)
                 self._update_tracked_value('qz', qz)
+            else:
+                self.print_to_message_center(
+                    "Q, HKL and the energy transfer cannot follow these motors "
+                    f"({describe_scan_error_flags(error_flags)}); "
+                    "Q and HKL still show the previous position.")
         except Exception as exc:
             self.print_to_message_center(f"Q update from angles failed: {exc}")
         finally:
