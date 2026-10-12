@@ -466,6 +466,11 @@ FIXED_BESIDE_CRYSTAL = {
     "sample, fixed_E and A2": lambda c: {"sample": PB, "fixed_E": 12.0, "A2": 30.0},
     "lattice and A2": lambda c: {"lattice_a_angstrom": 4.2, "A2": 30.0},
     "lattice, fixed_E and A2": lambda c: {"lattice_a_angstrom": 4.2, "fixed_E": 12.0, "A2": 30.0},
+    "K_fixed and Ei": lambda c: {"K_fixed": "Ki Fixed", "Ei": 20.0},
+    "K_fixed and A2": lambda c: {"K_fixed": "Ki Fixed", "A2": 30.0},
+    "deltaE and Ei": lambda c: {"Ei": _fixed_energy(c) + 3.0, "deltaE": 3.0},
+    "deltaE and A2": lambda c: {"A2": c._signed_mtt(energy2k(_fixed_energy(c) + 3.0)), "deltaE": 3.0},
+    "deltaE and A4": lambda c: {"deltaE": 3.0, "A4": 60.0},
 }
 STAGE_KEYS = ("sample_rotation_deg", "sample_two_theta_deg",
               "sample_lower_arc_deg", "sample_upper_arc_deg")
@@ -475,6 +480,9 @@ STAGE_KEYS = ("sample_rotation_deg", "sample_two_theta_deg",
 def test_a_crystal_motor_beside_a_fixed_energy_sample_or_lattice_leaves_the_same_stage_on_patch_and_launch(ctrl, case):
     patch = FIXED_BESIDE_CRYSTAL[case](ctrl)
     before = ctrl.api_parameters()
+    sent, _submitted, _errors = ctrl._api_resolve_patch(patch, ctrl._api_field_map())
+    # A stage motor the request names takes its value; the others stay where they were.
+    stage = {k: sent.get(k, before[k]) for k in STAGE_KEYS}
     launch = ctrl.build_api_launch_state({**patch, "scan_command1": SCAN})["vals"]
     applied, errors = ctrl.apply_parameters(patch)
     assert not errors, errors
@@ -483,10 +491,10 @@ def test_a_crystal_motor_beside_a_fixed_energy_sample_or_lattice_leaves_the_same
         assert state["lattice_a_angstrom"] == pytest.approx(patch["lattice_a_angstrom"])
         assert launch["lattice_a"] == pytest.approx(patch["lattice_a_angstrom"])
     # No position and no stage motor named: the unnamed stage motors stay where they were ...
-    assert {k: state[k] for k in STAGE_KEYS} == pytest.approx({k: before[k] for k in STAGE_KEYS}, abs=TOL)
+    assert {k: state[k] for k in STAGE_KEYS} == pytest.approx(stage, abs=TOL)
     launched = {"sample_rotation_deg": launch["omega"], "sample_two_theta_deg": launch["stt"],
                 "sample_lower_arc_deg": launch["sgl"], "sample_upper_arc_deg": launch["sgu"]}
-    assert launched == pytest.approx({k: before[k] for k in STAGE_KEYS}, abs=TOL)
+    assert launched == pytest.approx(stage, abs=TOL)
     # ... and Q, HKL and E derive forward from the motors, on both paths.
     _assert_follows_motors(ctrl)
     assert [state["q_instrument_x_inv_angstrom"], state["q_instrument_y_inv_angstrom"],
