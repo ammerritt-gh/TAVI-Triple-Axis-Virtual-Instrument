@@ -1722,6 +1722,9 @@ class TAVIController(QObject):
         self.window.instrument_dock.omega_edit.editingFinished.connect(self.on_omega_changed)
         self.window.instrument_dock.sgl_edit.editingFinished.connect(self.on_arc_changed)
         self.window.instrument_dock.sgu_edit.editingFinished.connect(self.on_arc_changed)
+        for qid, edit in self._slit_gap_edits().items():
+            edit.editingFinished.connect(
+                lambda qid=qid, edit=edit: self.on_slit_gap_changed(qid, edit))
         
         # Energies - update related energies and angles
         self.window.instrument_dock.Ki_edit.editingFinished.connect(self.on_Ki_changed)
@@ -5069,6 +5072,22 @@ class TAVIController(QObject):
         except ValueError:
             self.print_to_message_center("Invalid arc (sgl/sgu) value")
     
+    def on_slit_gap_changed(self, qid, edit):
+        """Refuse a slit gap that is negative or not finite; the field returns to its last accepted text."""
+        text = edit.text().strip()
+        if not text:   # an empty gap is what a launch does with it today
+            return
+        try:
+            value = float(text)
+        except ValueError:
+            value = math.nan
+        if math.isfinite(value) and value >= 0:
+            return
+        self.print_to_message_center(
+            f"Slit gap refused: {quantity_by_id(qid).name} must be a finite number of 0 mm or more")
+        # original_value is the feedback baseline: setup, every load and every API write set it.
+        self._set_and_confirm_text(edit, edit.property("original_value"), force=True)
+
     # ===== The true mount and the one loaded exercise =====
     # U_true = R_hidden @ U_described is the truth the McStas sample arm and
     # the analytic engine read; the operator's UB is belief and none of the
@@ -7697,6 +7716,13 @@ class TAVIController(QObject):
                 raise ValueError("must be a finite number")
             return value
 
+        # A negative gap is a closed beam McStas cannot model; refusing it here keeps PATCH and launch agreed.
+        def p_slit_gap(v):
+            value = float(v)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError("must be a finite number of 0 mm or more")
+            return value
+
         # --- arc parser: a readout outside the arc's travel is refused with
         # the words an angle-mode point past travel gets.
         def p_arc(name):
@@ -7795,7 +7821,7 @@ class TAVIController(QObject):
         fields = {_to_public(name): spec for name, spec in fields.items()}
         # Slit gaps: only this instrument's own apertures, one key per gap, in mm.
         for qid, edit in self._slit_gap_edits().items():
-            fields[qid] = (p_float, set_text(edit), None)
+            fields[qid] = (p_slit_gap, set_text(edit), None)
         return fields
 
     def _api_resolve_patch(self, patch, field_map):

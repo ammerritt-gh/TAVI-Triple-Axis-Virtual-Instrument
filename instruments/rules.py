@@ -407,6 +407,25 @@ def _curvature_error(cmd, ctx, values=None):
     return curvature_run_error(axis, values, policy.hardware)
 
 
+def _slit_gap_error(qid, values, command=None, base=None):
+    """The refusal when a slit gap takes a value below zero or not finite, else None.
+
+    ``command`` is the scan command that reaches the values (``base`` the relative base it
+    steps from); with none, the value is typed.
+    """
+    if not qid.startswith("slit."):
+        return None
+    bad = next((v for v in values if not (math.isfinite(v) and v >= 0)), None)
+    if bad is None:
+        return None
+    name = _name(qid)
+    if command is None:
+        return f"{name} is {bad:g} mm as typed; a slit gap must be 0 mm or more."
+    stepped = "" if base is None else f", stepped from {base:g} mm"
+    return (f"Command {command} reaches {name} = {bad:g} mm{stepped}; "
+            "a slit gap must be 0 mm or more.")
+
+
 def _closure(qid, producer):
     """(inputs, policies) a quantity's value reaches through the rules' dependencies."""
     inputs, policies, seen, stack = set(), [], set(), [qid]
@@ -505,8 +524,10 @@ def build_plan(commands, context):
 
     # (2) Hard constraints, then (3) the commands' range checks against the hardware.
     for cmd in cmds:
-        reason = _hard_constraint(cmd, context) or (None if cmd.relative
-                                                    else _curvature_error(cmd, context))
+        reason = _hard_constraint(cmd, context)
+        if not reason and not cmd.relative:
+            reason = (_curvature_error(cmd, context)
+                      or _slit_gap_error(cmd.quantity, _end_values(cmd), cmd.number))
         if reason:
             raise PlanRefused(reason, cmd.number, cmd.quantity)
 
@@ -588,8 +609,6 @@ def _end_values(cmd):
 
     The travel is {0} or an interval, so the nonzero values nearest zero sit beside a zero
     end: the ends and their neighbours are what a travel check needs.
-    shortcut: 3-decimal rounding can hide those neighbours (steps under 1e-3 from zero), so a
-    scan over 1000 points passes the label and Run's full check refuses; upgrade if they must agree.
     """
     last = scan_point_count(cmd.text) - 1
     return scan_run_values(cmd.start, cmd.stop, cmd.step,
@@ -608,6 +627,9 @@ def check_runs(plan, launch_snapshot):
         typed[qid] = _snapshot_value(
             launch_snapshot, qid, f"{_name(qid)} is used as typed, but the launch state holds "
                                   "no number for it.")
+        error = _slit_gap_error(qid, [typed[qid]])
+        if error:
+            raise PlanRefused(error, quantity=qid)
     bases = {}
     for cmd in plan.commands:
         if cmd.relative:
@@ -616,7 +638,9 @@ def check_runs(plan, launch_snapshot):
                 f"Command {cmd.number} steps relative to {_name(cmd.quantity)}, but its field "
                 "holds no number to step from.", cmd.number)
             bases[cmd.number] = base
-            error = _curvature_error(cmd, plan.context, [v + base for v in _end_values(cmd)])
+            values = [v + base for v in _end_values(cmd)]
+            error = (_curvature_error(cmd, plan.context, values)
+                     or _slit_gap_error(cmd.quantity, values, cmd.number, base))
             if error:
                 raise PlanRefused(error, cmd.number, cmd.quantity)
     return typed, bases
@@ -631,7 +655,8 @@ def _runs(plan, launch_snapshot):
         if cmd.relative:
             run = [v + bases[cmd.number] for v in run]
             # Every value of the run, where check_runs judged the ends and their neighbours.
-            error = _curvature_error(cmd, plan.context, run)
+            error = (_curvature_error(cmd, plan.context, run)
+                     or _slit_gap_error(cmd.quantity, run, cmd.number, bases[cmd.number]))
             if error:
                 raise PlanRefused(error, cmd.number, cmd.quantity)
         values[cmd.number] = tuple(run)

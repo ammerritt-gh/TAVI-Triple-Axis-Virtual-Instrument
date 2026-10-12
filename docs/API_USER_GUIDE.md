@@ -1287,7 +1287,7 @@ user presses Enter, so dependent fields update automatically.
 **Slit gaps.** `slit.<stable_id>.horizontal_gap_mm` (and `.vertical_gap_mm`
 where the slit has a height) replace the old `slits_mm` object: one key per gap,
 always in millimetres, and only the active instrument's own appear in `GET`,
-`/schema` and `result.metadata`. Naming a slit the instrument lacks is refused.
+`/schema` and `result.metadata`. Naming a slit the instrument lacks is refused. A gap is a finite number of 0 mm or more: zero is a closed slit, and a negative or non-finite gap is refused with `400 invalid_parameters`, and a scan that reaches one is refused too.
 
 | Instrument | `<stable_id>` with horizontal gap | also a vertical gap |
 |---|---|---|
