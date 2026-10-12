@@ -82,14 +82,18 @@ def test_reciprocal_and_angle_updates_track_the_text_they_display():
     assert "qz belongs to the physical point" in reciprocal
     assert "field.setText(text)" in reciprocal
 
+    # The transfer goes through _update_transfer, which keeps it while the other crystal transmits.
+    transfer = source[source.index("def _update_transfer"):source.index("\n    def ", source.index("def _update_transfer") + 1)]
+    assert "_update_tracked_value('deltaE'" in transfer
     for name, fields in (
-        ("on_mtt_changed", ("'Ki'", "'Ei'", "'fixed_E'", "'deltaE'")),
-        ("on_att_changed", ("'Kf'", "'Ef'", "'fixed_E'", "'deltaE'")),
+        ("on_mtt_changed", ("'Ki'", "'Ei'", "'fixed_E'")),
+        ("on_att_changed", ("'Kf'", "'Ef'", "'fixed_E'")),
     ):
         start = source.index(f"def {name}")
         block = source[start:source.index("\n    def ", start + 1)]
         for field in fields:
             assert f"_update_tracked_value({field}" in block
+        assert "self._update_transfer(" in block
 
 
 def test_reciprocal_snapshot_and_live_paths_are_separate_and_covered():
