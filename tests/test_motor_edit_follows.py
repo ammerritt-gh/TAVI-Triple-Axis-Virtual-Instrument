@@ -282,3 +282,31 @@ def test_forward_scattering_records_zero_q_and_hkl_like_the_launch(ctrl):
     assert _num(sdock.deltaE_edit) == pytest.approx(0.0, abs=1e-9)
     assert not idock.angles_stale_label.isVisibleTo(idock)
     assert any("forward scattering" in m for m in seen), seen
+
+
+# (zero crystal, the other crystal's edit, a value for it): the other side transmits nothing to subtract
+OTHER_SIDE_EDITS = [("att_edit", "mtt_edit", 60.0), ("att_edit", "Ei_edit", 20.0), ("att_edit", "Ki_edit", 3.0),
+                    ("mtt_edit", "att_edit", 50.0), ("mtt_edit", "Ef_edit", 12.0), ("mtt_edit", "Kf_edit", 2.5)]
+
+
+@pytest.mark.parametrize("mode", ["Kf Fixed", "Ki Fixed"])
+@pytest.mark.parametrize("zero,edit,value", OTHER_SIDE_EDITS)
+def test_editing_the_other_crystal_beside_a_zero_one_keeps_the_transfer_and_that_energy(ctrl, mode, zero, edit, value):
+    """With one crystal at zero (stale state) the transfer is not recomputed against that crystal's
+    last energy: it keeps its last value, and so does that crystal's energy, under the stale mark."""
+    idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
+    _, errors = ctrl.apply_parameters({"K_fixed": mode})
+    assert not errors, errors
+    _type_and_finish(getattr(idock, zero), 0.0)
+    zero_side = idock.Ef_edit if zero == "att_edit" else idock.Ei_edit
+    kept = [_num(sdock.deltaE_edit), _num(zero_side)]
+    _type_and_finish(getattr(idock, edit), value)
+    assert [_num(sdock.deltaE_edit), _num(zero_side)] == pytest.approx(kept, abs=1e-9)
+    assert idock.angles_stale_label.isVisibleTo(idock)
+    assert ctrl._angles_stale
+    # The edited crystal's angle and energy still agree: the kept transfer did not pull them back.
+    if zero == "att_edit":
+        implied, shown = ctrl._signed_mtt(energy2k(_num(idock.Ei_edit))), _num(idock.mtt_edit)
+    else:
+        implied, shown = ctrl._signed_att(energy2k(_num(idock.Ef_edit))), _num(idock.att_edit)
+    assert implied == pytest.approx(shown, abs=0.01)

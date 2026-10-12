@@ -3969,6 +3969,15 @@ class TAVIController(QObject):
         if any([rhm_locked, rvm_locked, rha_locked, rva_locked]):
             self.update_ideal_bending_buttons()
     
+    def _update_transfer(self, Ei, Ef, other_angle):
+        """Show the transfer an energy edit leaves. While the other crystal transmits
+        (``other_angle`` 0) it has no energy to subtract, so the transfer keeps its last value."""
+        if other_angle == 0:
+            return
+        deltaE = Ei - Ef
+        self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+        self._update_tracked_value('deltaE', deltaE)
+
     def on_mtt_changed(self):
         """Update energies when mono 2theta changes."""
         if self.updating:
@@ -3998,14 +4007,10 @@ class TAVIController(QObject):
             if vals['K_fixed'] == "Ki Fixed":
                 self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ei))
             
-            # Update deltaE
-            Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
-            deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_transfer(Ei, float(self.window.instrument_dock.Ef_edit.text() or 0), vals['att'])
             self._update_tracked_value('Ki', Ki)
             self._update_tracked_value('Ei', Ei)
             self._update_tracked_value('fixed_E', Ei if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
-            self._update_tracked_value('deltaE', deltaE)
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4041,14 +4046,10 @@ class TAVIController(QObject):
             if vals['K_fixed'] == "Kf Fixed":
                 self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ef))
             
-            # Update deltaE
-            Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
-            deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_transfer(float(self.window.instrument_dock.Ei_edit.text() or 0), Ef, vals['mtt'])
             self._update_tracked_value('Kf', Kf)
             self._update_tracked_value('Ef', Ef)
             self._update_tracked_value('fixed_E', Ef if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
-            self._update_tracked_value('deltaE', deltaE)
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4077,13 +4078,9 @@ class TAVIController(QObject):
             if vals['K_fixed'] == "Ki Fixed":
                 self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ei))
             
-            # Update deltaE
-            Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
-            deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_transfer(Ei, float(self.window.instrument_dock.Ef_edit.text() or 0), vals['att'])
             self._update_tracked_value('Ei', Ei)
             self._update_tracked_value('fixed_E', Ei if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
-            self._update_tracked_value('deltaE', deltaE)
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4112,13 +4109,9 @@ class TAVIController(QObject):
             if vals['K_fixed'] == "Ki Fixed":
                 self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(vals['Ei']))
             
-            # Update deltaE
-            Ef = float(self.window.instrument_dock.Ef_edit.text() or 0)
-            deltaE = vals['Ei'] - Ef
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_transfer(vals['Ei'], float(self.window.instrument_dock.Ef_edit.text() or 0), vals['att'])
             self._update_tracked_value('Ki', Ki)
             self._update_tracked_value('fixed_E', vals['Ei'] if vals['K_fixed'] == "Ki Fixed" else vals['fixed_E'])
-            self._update_tracked_value('deltaE', deltaE)
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4147,13 +4140,9 @@ class TAVIController(QObject):
             if vals['K_fixed'] == "Kf Fixed":
                 self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(Ef))
             
-            # Update deltaE
-            Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
-            deltaE = Ei - Ef
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_transfer(float(self.window.instrument_dock.Ei_edit.text() or 0), Ef, vals['mtt'])
             self._update_tracked_value('Ef', Ef)
             self._update_tracked_value('fixed_E', Ef if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
-            self._update_tracked_value('deltaE', deltaE)
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4182,13 +4171,9 @@ class TAVIController(QObject):
             if vals['K_fixed'] == "Kf Fixed":
                 self.window.scattering_dock.fixed_E_edit.setText(format_editable_number(vals['Ef']))
             
-            # Update deltaE
-            Ei = float(self.window.instrument_dock.Ei_edit.text() or 0)
-            deltaE = Ei - vals['Ef']
-            self.window.scattering_dock.deltaE_edit.setText(format_editable_number(deltaE))
+            self._update_transfer(float(self.window.instrument_dock.Ei_edit.text() or 0), vals['Ef'], vals['mtt'])
             self._update_tracked_value('Kf', Kf)
             self._update_tracked_value('fixed_E', vals['Ef'] if vals['K_fixed'] == "Kf Fixed" else vals['fixed_E'])
-            self._update_tracked_value('deltaE', deltaE)
         finally:
             self._commit_programmatic_feedback()
             self.updating = False
@@ -4240,6 +4225,7 @@ class TAVIController(QObject):
         if not vals:
             return
 
+        transmitting = []
         try:
             self.updating = True
             mtt = float(self.window.instrument_dock.mtt_edit.text() or 0)
@@ -4301,8 +4287,10 @@ class TAVIController(QObject):
             # since the angles are the source of truth here
             self.on_Q_changed(skip_angle_update=True)
             # Update energies based on updated deltaE, but don't recalculate mtt/att
-            # since crystal angles are part of the input and shouldn't change
-            self.update_all_variables(skip_crystal_angles=True)
+            # since crystal angles are part of the input and shouldn't change. A transmitting
+            # crystal leaves the transfer stale: it must not pull the energies back to it.
+            if not transmitting:
+                self.update_all_variables(skip_crystal_angles=True)
     
     def on_Q_changed(self, skip_angle_update=False):
         """Update HKL when Q changes.
