@@ -165,6 +165,15 @@ def test_a_position_beside_a_stage_motor_is_refused_and_changes_nothing(ctrl, po
     assert ctrl.get_gui_values() == before
 
 
+def test_an_unreadable_position_beside_a_stage_motor_still_refuses_the_pair(ctrl):
+    before = copy.deepcopy(ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters({"h": "bad", "sample_rotation_deg": 12})
+    assert applied == {}
+    assert set(errors) == {"h", "sample_rotation_deg"}
+    assert all("decides the stage" in message for message in errors.values())
+    assert ctrl.get_gui_values() == before
+
+
 def test_the_launch_refuses_a_position_beside_a_stage_motor(launcher):
     with pytest.raises(cm.ApiError) as refused:
         launcher.build_api_launch_state({"h": 1.0, "A3": 12.0, "scan_command1": SCAN})
