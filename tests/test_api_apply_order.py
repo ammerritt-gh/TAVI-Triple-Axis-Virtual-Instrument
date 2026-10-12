@@ -256,6 +256,27 @@ def test_a_named_energy_beside_the_fixed_energy_wins_in_the_launch(launcher):
     assert vals["deltaE"] == pytest.approx(vals["Ei"] - 12.0)
 
 
+@pytest.mark.parametrize("patch", [
+    {"Ei": 20.0, "h": 1.0},
+    {"K_fixed": "Ki Fixed", "Ei": 20.0, "h": 1.0},
+    {"Ef": 12.0, "h": 1.0},
+])
+def test_a_named_energy_beside_a_position_gives_the_launch_the_patch_answer(ctrl, patch):
+    # K and L are named at their defaults: the dock's own K drifts with the energy
+    # (the motors move Q), while a launch starts from the defaults, not the dock.
+    patch = {**patch, "K": 0.0, "L": 0.0}
+    launch = ctrl.build_api_launch_state({**patch, "scan_command1": SCAN})["vals"]
+    applied, errors = ctrl.apply_parameters(patch)
+    assert not errors
+    state = ctrl.api_parameters()
+    expected = {"incident_energy_mev": launch["Ei"], "final_energy_mev": launch["Ef"],
+                "energy_transfer_mev": launch["deltaE"], "mono_two_theta_deg": launch["mtt"],
+                "sample_two_theta_deg": launch["stt"], "sample_rotation_deg": launch["omega"],
+                "sample_lower_arc_deg": launch["sgl"], "sample_upper_arc_deg": launch["sgu"],
+                "analyzer_two_theta_deg": launch["att"]}
+    assert {key: state[key] for key in expected} == pytest.approx(expected, abs=TOL)
+
+
 def test_a_named_position_beside_a_crystal_motor_still_solves_the_stage(launcher):
     vals = launcher.build_api_launch_state(
         {"qx": 2.0, "qy": 1.0, "qz": 0.0, "A2": 30.0, "scan_command1": SCAN})["vals"]

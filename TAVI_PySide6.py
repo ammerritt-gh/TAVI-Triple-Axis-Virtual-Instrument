@@ -2951,6 +2951,10 @@ class TAVIController(QObject):
             vals['fixed_E'] = vals[held_side[0]]
         named_energies = {key: vals[key] for pair in (('Ei', 'Ki'), ('Ef', 'Kf'))
                           if patched.intersection(pair) for key in pair}
+        # A named energy moves the transfer with the other side kept, as the dock's energy
+        # handlers do, whether or not a position is named; the fold below reads it.
+        if named_energies and 'deltaE' not in patched:
+            vals['deltaE'] = vals['Ei'] - vals['Ef']
         if patched.intersection(('fixed_E', 'K_fixed', 'deltaE')):
             # Both sides, as the GUI's update_all_variables derives them:
             # the free side is fixed_E offset by the launch state's deltaE.
