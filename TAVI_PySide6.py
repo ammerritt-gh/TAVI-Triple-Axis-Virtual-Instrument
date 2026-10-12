@@ -4292,7 +4292,8 @@ class TAVIController(QObject):
                 self.print_to_message_center(
                     f"Q, HKL and the energy transfer cannot follow these motors: {reason}; "
                     "the energies, Q and HKL still show the previous position.")
-                self._set_angles_stale(reason)
+                self._set_angles_stale(reason, "Q, HKL and the energy transfer keep the last point: "
+                                               "the crystal transmits and selects no energy.")
             elif not error_flags or forward:
                 qx, qy, qz, deltaE = q_vals
                 self._set_angles_stale(None)     # Q now follows the angles
@@ -4501,14 +4502,15 @@ class TAVIController(QObject):
             self.updating = False
             self.update_ideal_bending_buttons()
     
-    def _set_angles_stale(self, reason):
+    def _set_angles_stale(self, reason, text=None):
         """Mark the angle fields as not matching Q/HKL (``reason``, the
-        stage's refusal) or clear the mark (None). Take Position refuses
+        stage's refusal) or clear the mark (None). ``text`` replaces the label's
+        wording when the reason is not a stage refusal. Take Position refuses
         while they are stale."""
         self._angles_stale = reason
         label = self.window.instrument_dock.angles_stale_label
         if reason:
-            label.setText(f"Angles above are stale (they do not match Q/HKL): {reason}")
+            label.setText(text or f"Angles above are stale (they do not match Q/HKL): {reason}")
         label.setVisible(bool(reason))
 
     def update_monocris_info(self):

@@ -131,7 +131,7 @@ function pins it.
   reached from either side, from a typed target the stage cannot reach or from
   motors that define no position (A2 or A6 at zero: that crystal transmits and
   selects no energy, so its energy and wavevector, the fixed energy, Q, HKL and
-  the transfer keep their last values and the message center says why). A4 = 0 at
+  the transfer keep their last values and the label and message center say why). A4 = 0 at
   equal incident and final energies is a position, Q = 0 and HKL = (0, 0, 0).
 
 ## Sample Orientation
