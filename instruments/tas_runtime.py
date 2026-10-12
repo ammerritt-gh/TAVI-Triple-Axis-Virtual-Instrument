@@ -233,7 +233,7 @@ class TAS_Instrument:
         # "hkl_v": [h, k, l], "tilts": {inner axis: degrees}}, the tilts being
         # readouts that never move while locked.
         self.plane_lock = None
-        # Angle mode only: (Ei, Ef) inverted from the scanned A1/A4. Set per
+        # Angle mode only: (Ei, Ef) inverted from the scanned A2/A6. Set per
         # point by _solve_point_geometry on its private copy of the state, so
         # the recorded energies, the transfer and the source parameter all read
         # one source of truth instead of re-deriving it three ways.
@@ -359,12 +359,12 @@ class TAS_Instrument:
              declared ``fixed_radius_m``, overriding whatever was supplied;
           2. a driven axis is clamped (magnitude only) to ``curvature_limits``;
           3. the result is signed onto the crystal's ACTUAL LOCAL take-off
-             branch -- ``sign(sin(A1/2))`` for rhm/rvm, ``sign(sin(A4/2))``
+             branch -- ``sign(sin(A2/2))`` for rhm/rvm, ``sign(sin(A6/2))``
              for rha/rva.
 
         The sign NEVER comes from ``sense_mono``/``sense_ana``: those declare
         the instrument's normal kinematic branch, but direct-angle mode can
-        put a crystal on the opposite one (PANDA's declared A4 range spans
+        put a crystal on the opposite one (PANDA's declared A6 range spans
         both signs), and deriving the sign from the sense would defocus a
         legitimate opposite-branch point by ~7 orders of magnitude.
 
@@ -658,7 +658,7 @@ class TAS_Instrument:
                     # flat is fixed by the geometry, not by the model. The
                     # other order leaves the whole accepted-then-unrunnable
                     # defect in place for IN12's Heusler rva
-                    # (driven=True, focusing_known=False, A4 travel through
+                    # (driven=True, focusing_known=False, A6 travel through
                     # zero), which would raise here instead of running flat.
                     magnitude = 0.0
                 elif not curvature_axis.focusing_known:
@@ -707,8 +707,8 @@ class TAS_Instrument:
         # A Mono source is steered onto the energy the monochromator selects,
         # which IS Ei: fixed_E in Ki-fixed mode, and fixed_E + deltaE in
         # Kf-fixed mode only because Ef is then held at fixed_E. In angle mode
-        # neither is held, so that arithmetic drifts -- an A4 scan would move
-        # E0 while A1, and therefore the real Ei, stood still, starving the
+        # neither is held, so that arithmetic drifts -- an A6 scan would move
+        # E0 while A2, and therefore the real Ei, stood still, starving the
         # beam. Take Ei from the crystals when they are the authority.
         if self._angle_energies is not None and self._angle_energies[0] is not None:
             return self._angle_energies[0]
@@ -721,7 +721,7 @@ class TAS_Instrument:
         """Return the per-point energy values recorded with the scan output.
 
         ``energies`` is an (Ei, Ef) pair read straight off the crystal angles.
-        Angle mode supplies it, because there the user drives A1 and A4 and
+        Angle mode supplies it, because there the user drives A2 and A6 and
         neither energy is held at ``fixed_E``; every other mode leaves it None
         and the pair follows ``K_fixed`` below.
 
@@ -767,11 +767,11 @@ class TAS_Instrument:
     def nominal_energies_from_angles(self, mtt, att):
         """(Ei, Ef) as the two crystals actually select them, per crystal.
 
-        In ``angle`` scan mode the user drives A1 and A4 directly, so BOTH
+        In ``angle`` scan mode the user drives A2 and A6 directly, so BOTH
         energies are whatever the monochromator and analyser select -- neither
-        one is held at ``fixed_E``. An A4 scan in Kf-fixed mode moves the
+        one is held at ``fixed_E``. An A6 scan in Kf-fixed mode moves the
         analyser, so recording Ef = fixed_E across it is wrong in exactly the
-        way the momentum-mode fix addresses, and an A1 scan does the same to
+        way the momentum-mode fix addresses, and an A2 scan does the same to
         Ei. The launch state's frozen ``deltaE`` does not move either.
 
         This is the inverse of ``calculate_angles`` and agrees with

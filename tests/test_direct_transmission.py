@@ -62,7 +62,7 @@ def _base_vals(k_fixed, source_type, deltaE_field=0.0):
 
 
 def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field=0.0, stt=-71.25):
-    """One ``angle``-mode point: the user drives A1..A4 directly.
+    """One ``angle``-mode point: the user drives A2..A6 directly.
 
     Same rig as ``tests/test_point_energy_metadata.py``'s ``_angle_snapshot``.
     """
@@ -87,15 +87,15 @@ def _momentum_snapshot(k_fixed, source_type, qx, qy, qz, deltaE, fixed_E=_FIXED_
 
 
 def _mtt_for_ei(state, ei):
-    """The A1 that selects the given Ei, the same construction the reproducer
+    """The A2 that selects the given Ei, the same construction the reproducer
     (``direct_beam_energy.py``) uses."""
     mono_info, _ = state.crystal_info(state.monocris, state.anacris)
     return 2 * state.sense_mono * k2angle(energy2k(ei), mono_info['dm'])
 
 
 def test_att_zero_records_ana_transmission_and_keeps_e0_continuous():
-    """The reproducer's construction: a Mono source stays on A1's real Ei
-    across a zero-crossing A4 scan instead of jumping to fixed_E."""
+    """The reproducer's construction: a Mono source stays on A2's real Ei
+    across a zero-crossing A6 scan instead of jumping to fixed_E."""
     plugin = IN8Plugin()
     state = plugin.default_state()
     state.monocris = state.anacris = "pg002"
@@ -118,7 +118,7 @@ def test_att_zero_records_ana_transmission_and_keeps_e0_continuous():
     assert not _angle_snapshot("Kf Fixed", "Mono", mtt, 0.0).error_flags
     assert _angle_snapshot("Kf Fixed", "Mono", mtt, 0.0).params is not None
 
-    # Continuity: the source tracks A1's Ei across the zero crossing, not a
+    # Continuity: the source tracks A2's Ei across the zero crossing, not a
     # jump to fixed_E and back.
     assert zero["E0_param"] == pytest.approx(results[-1.0]["E0_param"], rel=1e-9)
     assert zero["E0_param"] == pytest.approx(results[1.0]["E0_param"], rel=1e-9)
@@ -280,7 +280,7 @@ class _SyncBridge:
 
 
 def _in8_mtt_for_ei(ei):
-    """The A1 that selects the given Ei -- same construction as the
+    """The A2 that selects the given Ei -- same construction as the
     reproducer and the slice 1 tests above."""
     plugin = IN8Plugin()
     state = plugin.default_state()
@@ -323,7 +323,7 @@ def test_background_q_magnitude_returns_a_number_for_an_ordinary_point():
 # --- Deterministic engine, real controller rig ------------------------------
 
 def test_deterministic_engine_a4_scan_skips_only_the_transmission_point(tmp_path):
-    """A 3-point angle-mode A4 scan through 0 on IN8: the neighbours produce
+    """A 3-point angle-mode A6 scan through 0 on IN8: the neighbours produce
     finite counts, the zero point is NaN, the message names direct
     transmission, and no exception is raised."""
     mtt = _in8_mtt_for_ei(20.0)
@@ -407,7 +407,7 @@ def test_a_crystal_angle_beside_the_fixed_energy_it_agrees_with_is_launched():
 # --- Validation: /scan and /validate ----------------------------------------
 
 def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, tmp_path):
-    """A deterministic job with an A4 = 0 point is rejected 400 without
+    """A deterministic job with an A6 = 0 point is rejected 400 without
     ``allow_partial``; with it, the submission's validation block lists the
     point ``kind == "transmission"``. The same body under engine ``mcstas``
     validates clean (ruling 1: legal there). ``submit_scan_job`` is

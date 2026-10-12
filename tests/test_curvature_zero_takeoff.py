@@ -1,7 +1,7 @@
 """A zero take-off angle is the direct-beam position, not an error.
 
 Audit `docs/audits/new-instruments-crystal-bending.md` entry 2 (now deleted)
-found that an accepted A4 scan crossing zero raised ``ZeroDivisionError``
+found that an accepted A6 scan crossing zero raised ``ZeroDivisionError``
 during autofocus. The operator ruled: a zero take-off is not refused -- it is
 the direct-beam position (the crystal is pointing the wrong way, nothing is
 reflected) -- so the instrument runs it and returns FLAT. These tests pin
@@ -144,13 +144,13 @@ def _panda_autofocus_snapshot(att, tmp_path):
     plan = scan_plan(plugin, state, vals, f"A6 {att} {att} 1")
     point = motors_point(-74.332, 30.0, 0.0, att)
     check = plugin.check_point_feasibility(state, plan, point)
-    assert check.feasible, f"A4={att} was refused: {check.reason}"
+    assert check.feasible, f"A6={att} was refused: {check.reason}"
     return plugin.compute_snapshot(plan, point, 0, state, vals, str(tmp_path))
 
 
 def test_a4_zero_is_feasible_and_the_snapshot_succeeds_flat(tmp_path):
     """The ruled acceptance, replacing the audit reproducer's assumed
-    refusal: A4 = 0 is feasible and the snapshot succeeds with no error
+    refusal: A6 = 0 is feasible and the snapshot succeeds with no error
     flags -- the driven singular (analyser horizontal) crystal goes flat,
     the mono does not. PANDA's rva is a FIXED axis (declared radius,
     ignores mode and angle entirely, per
@@ -181,13 +181,13 @@ def test_a4_scan_crossing_zero_keeps_the_opposite_branch_signs(tmp_path):
     )
     assert zero.params["rha_param"] == 0.0
 
-    # The mono, unaffected by A4, must not move across the scan.
+    # The mono, unaffected by A6, must not move across the scan.
     assert minus.params["rhm_param"] == pytest.approx(zero.params["rhm_param"])
     assert zero.params["rhm_param"] == pytest.approx(plus.params["rhm_param"])
 
 
 def test_a4_zero_held_radius_is_stored_at_its_commanded_magnitude(tmp_path):
-    """A HELD (explicitly commanded) radius at A4 = 0 is stored at its
+    """A HELD (explicitly commanded) radius at A6 = 0 is stored at its
     commanded magnitude -- not flattened like the AUTOFOCUS axes, because the
     operator asked for that bend."""
     plugin = PANDAPlugin()
@@ -217,7 +217,7 @@ def test_zero_takeoff_beats_an_unknown_focusing_model():
     IN12's Heusler analyser declares ``rva`` driven with
     ``focusing_known=False`` -- there is no established focusing model, so
     ``ideal_curvature`` normally refuses to invent a radius for it. But its
-    A4 travel includes zero, and at zero take-off there is no focusing to
+    A6 travel includes zero, and at zero take-off there is no focusing to
     model: flat is fixed by the geometry, not by the model. With the checks
     in the other order this axis still raises instead of running, which is
     the ORIGINAL accepted-then-unrunnable defect surviving for a supported

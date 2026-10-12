@@ -56,7 +56,7 @@ def test_fixed_kf_energy_scan_tracks_the_mono_and_leaves_the_analyser(tmp_path):
     scan; rha (a pure function of the constant analyser two-theta) must not.
 
     Before the fix this fails: curvature was computed once from the launch
-    state's frozen A1/A4 and never touched again, so rhm was identical at
+    state's frozen A2/A6 and never touched again, so rhm was identical at
     every point (the assertion below rejects a single distinct value).
     """
     state = _puma_state()
@@ -86,20 +86,20 @@ def test_fixed_kf_energy_scan_tracks_the_mono_and_leaves_the_analyser(tmp_path):
 
 
 def test_angle_convention_halves_two_theta_exactly_once(tmp_path):
-    """A1/A4 are two-theta; ideal_curvature takes theta. The autofocus call
+    """A2/A6 are two-theta; ideal_curvature takes theta. The autofocus call
     site must halve exactly once: comparing against ideal_curvature called
     directly with the SAME halved angles is the ground truth."""
     state = _puma_state()
     vals = _autofocus_vals()
-    A1, A4 = 41.167, 50.0  # two-theta values, deliberately different from A1
+    A2, A6 = 41.167, 50.0  # two-theta values, deliberately different from A2
 
     snapshot = compute_scan_snapshot(
-        plan_for(PUMAPlugin(), state, vals, MOTORS), motors_point(A1, 0.0, 0.0, A4),
+        plan_for(PUMAPlugin(), state, vals, MOTORS), motors_point(A2, 0.0, 0.0, A6),
         0, state, vals, str(tmp_path),
     )
     assert snapshot.error_flags == []
 
-    expected = state.ideal_curvature("pg002", "pg002", A1 / 2, A4 / 2)
+    expected = state.ideal_curvature("pg002", "pg002", A2 / 2, A6 / 2)
     for axis in ("rhm", "rvm", "rha", "rva"):
         assert snapshot.metadata[axis] == pytest.approx(expected[axis]), axis
 
@@ -118,9 +118,9 @@ def test_held_axis_does_not_move_across_the_scan(tmp_path):
     }
 
     magnitudes = []
-    for A4 in (30.0, 60.0):  # same sign, very different ideal rha
+    for A6 in (30.0, 60.0):  # same sign, very different ideal rha
         snapshot = compute_scan_snapshot(
-            plan_for(plugin, state, vals, MOTORS), motors_point(41.18, 0.0, 0.0, A4),
+            plan_for(plugin, state, vals, MOTORS), motors_point(41.18, 0.0, 0.0, A6),
             0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == []
@@ -162,11 +162,11 @@ def test_fixed_axis_ignores_mode_and_stays_at_its_declared_radius(tmp_path):
     state = _puma_state()
     vals = _autofocus_vals()
 
-    for A1, A4 in ((41.167, 41.167), (30.0, 50.0)):
+    for A2, A6 in ((41.167, 41.167), (30.0, 50.0)):
         # Even scanned as a bare 3.0 (a plan never accepts it), it must not stick.
         snapshot = compute_scan_snapshot(
             plan_for(PUMAPlugin(), state, vals, MOTORS, scanned=(RVA,)),
-            {**motors_point(A1, 0.0, 0.0, A4), RVA: 3.0}, 0, state, vals, str(tmp_path),
+            {**motors_point(A2, 0.0, 0.0, A6), RVA: 3.0}, 0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == []
         assert abs(snapshot.metadata["rva"]) == pytest.approx(0.8)

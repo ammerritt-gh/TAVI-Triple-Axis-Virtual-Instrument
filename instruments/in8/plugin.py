@@ -250,7 +250,7 @@ def in8_descriptor() -> InstrumentDescriptor:
         ),
         # vTAS a2/a4/a6 mechanical limits; defaults are the standard elastic
         # Al (2,0,0) configuration at kf = 2.662 (signs per verified senses).
-        # A1 is the exception: vTAS's inherited -40...110 deg admitted take-off
+        # A2 is the exception: vTAS's inherited -40...110 deg admitted take-off
         # angles outside the real machine. ILL's current characteristics page
         # gives 11 deg < 2-theta_M < 90 deg, and the 2023 Thermes paper gives
         # approximately 10-90 deg. The tighter, currently-published envelope is

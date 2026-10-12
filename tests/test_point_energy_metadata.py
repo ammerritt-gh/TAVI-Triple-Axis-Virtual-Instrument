@@ -86,7 +86,7 @@ def test_e0_param_stays_a_source_parameter():
 
 
 def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
-    """One ``angle``-mode point: the user drives A1..A4 directly."""
+    """One ``angle``-mode point: the user drives A2..A6 directly."""
     plugin = IN8Plugin()
     vals = {
         "K_fixed": k_fixed,
@@ -112,9 +112,9 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
 def test_angle_mode_reads_both_crystals(source_type):
     """In angle mode NEITHER energy is held at fixed_E.
 
-    The user drives A1 and A4 directly, so Ei comes from the monochromator and
+    The user drives A2 and A6 directly, so Ei comes from the monochromator and
     Ef from the analyser, both of them, every point. Deriving only one from its
-    angle and leaving the other at fixed_E made an A4 scan record a constant Ef
+    angle and leaving the other at fixed_E made an A6 scan record a constant Ef
     while the analyser was visibly moving -- the same class of error as the
     momentum-mode fix, one crystal further along.
     """
@@ -133,7 +133,7 @@ def test_angle_mode_reads_both_crystals(source_type):
 
 
 def test_angle_mode_an_analyser_scan_moves_ef():
-    """The specific case that was wrong: Kf-fixed, scanning A4."""
+    """The specific case that was wrong: Kf-fixed, scanning A6."""
     transfers, finals = [], []
     for att in (-41.19, -50.0, -60.0):
         meta = _angle_snapshot("Kf Fixed", "Maxwellian", 41.19, att,
@@ -156,7 +156,7 @@ def test_angle_mode_a_monochromator_scan_moves_ei():
 
 
 def test_angle_mode_falls_back_when_the_angle_is_degenerate():
-    """A1 = 0 has no Bragg inverse: the monochromator transmits.
+    """A2 = 0 has no Bragg inverse: the monochromator transmits.
 
     The point is marked (``transmission``), not refused, and the recorded
     claim about the transfer is withdrawn -- ``metadata['deltaE']`` is None
@@ -226,10 +226,10 @@ def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
 
 
 def test_angle_mode_mono_source_follows_the_monochromator():
-    """E0 for a Mono source is the energy A1 selects, not fixed_E + deltaE.
+    """E0 for a Mono source is the energy A2 selects, not fixed_E + deltaE.
 
     That arithmetic is only equal to Ei while the other crystal is held at
-    fixed_E. In angle mode neither is, so an A4 scan would have walked the
+    fixed_E. In angle mode neither is, so an A6 scan would have walked the
     source band away from the energy the monochromator was still selecting,
     starving the beam while every angle stayed valid.
     """
@@ -240,7 +240,7 @@ def test_angle_mode_mono_source_follows_the_monochromator():
         ei = k2energy(angle2k(41.19 / 2, d))
         assert meta["Ei"] == pytest.approx(ei, rel=1e-9)
         assert meta["E0_param"] == pytest.approx(ei, rel=1e-9)
-        # The transfer moves with A4 while E0 stays on the monochromator.
+        # The transfer moves with A6 while E0 stays on the monochromator.
         assert meta["Ef"] == pytest.approx(k2energy(angle2k(abs(att) / 2, d)),
                                            rel=1e-9)
 

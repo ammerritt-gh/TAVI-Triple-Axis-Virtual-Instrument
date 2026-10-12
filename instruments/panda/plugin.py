@@ -306,13 +306,13 @@ def panda_descriptor() -> InstrumentDescriptor:
             SourceType("Maxwellian", "Maxwellian"),
             SourceType("Mono", "Mono", extra_params=("source_dE",)),
         ),
-        # Axis travel. A2/A4 are the current MLZ figures verbatim
-        # (5 < 2ThetaS < 125 deg, -130 < 2ThetaA < 100 deg); A4's asymmetric
-        # range is a signed instrument range, not a magnitude. A1 is the 2007
+        # Axis travel. A4/A6 are the current MLZ figures verbatim
+        # (5 < 2ThetaS < 125 deg, -130 < 2ThetaA < 100 deg); A6's asymmetric
+        # range is a signed instrument range, not a magnitude. A2 is the 2007
         # table's PG(002) range 20 < 2ThetaM < 132 deg carried onto the
         # negative branch that sense_mono = -1 puts the monochromator on.
         # Defaults are the standard cold elastic setting: kf = 1.55 A^-1 with
-        # PG(002) (A1 = A4 = -74.332 deg, matching vPANDA's own mtt/att
+        # PG(002) (A2 = A6 = -74.332 deg, matching vPANDA's own mtt/att
         # defaults) and Al (1,1,1) at the sample.
         axis_limits={
             "mono_two_theta_deg": AxisLimits(-132.0, -74.332, -20.0),

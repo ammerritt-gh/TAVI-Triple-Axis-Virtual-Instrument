@@ -211,7 +211,7 @@ def test_snapshot_params_match_descriptor(tmp_path):
 
 
 def test_angle_feasibility_enforces_raw_axis_limits():
-    """A positive A1 is unreachable: PANDA's monochromator is on the -1 branch."""
+    """A positive A2 is unreachable: PANDA's monochromator is on the -1 branch."""
     pytest.importorskip("mcstasscript")
     plugin = PANDAPlugin()
     state = plugin.default_state()
@@ -256,7 +256,7 @@ def test_crystal_bending_splits_the_monochromator_object_distance():
 
     plugin = PANDAPlugin()
     state = plugin.default_state()
-    mth, ath = -37.166, -37.166      # signed: PANDA's A1/2 and A4/2 are negative
+    mth, ath = -37.166, -37.166      # signed: PANDA's A2/2 and A6/2 are negative
     radii = state.ideal_curvature("pg002", "pg002", mth, ath)
 
     assert radii["rhm"] == pytest.approx(-3.9848, abs=5e-5)
