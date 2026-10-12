@@ -881,7 +881,7 @@ class UBMatrixDock(BaseDockWidget):
         return peaks
 
     def unreadable_observation_numbers(self) -> list:
-        """Displayed numbers of observation rows with a field that is not a number (Save skips them)."""
+        """Displayed numbers of observation rows with a field that is not a number (Save refuses while any exist)."""
         return [pw.index + 1 for pw in self._peak_widgets
                 if pw.is_observation() and pw.get_peak_data() is None]
 

@@ -20,7 +20,7 @@ pytest.importorskip("PySide6")
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from test_orientation_gui import _controller_for  # noqa: E402
-from tavi.neutron_conversions import energy2k, k2energy  # noqa: E402
+from tavi.neutron_conversions import angle2k, energy2k, k2energy  # noqa: E402
 
 TOL = 2e-3   # the docks show four decimals
 SCAN = "rhm 2 3 1"
@@ -346,20 +346,15 @@ def test_an_agreeing_launch_patch_is_accepted_and_every_value_holds(launcher):
 
 # ------------------------------------- agreement tolerances: the readouts' rounding
 
-def _assert_reads_back_exactly(ctrl, applied):
-    """Every value the reply lists holds exactly the state's reading afterwards."""
-    state = ctrl.api_parameters()
-    assert {key: state[key] for key in applied} == applied
-
-
-def test_a_q_beside_its_hkl_within_the_readout_is_accepted_and_reads_back(ctrl):
+def test_a_q_beside_its_hkl_within_the_readout_is_accepted_and_reports_the_derived_hkl(ctrl):
     # 0.0008 r.l.u. apart, inside the 1e-3 r.l.u. tolerance: the position handlers keep Q
-    # as sent and derive H from it (as they did before this rule), and the reply reports that.
+    # as sent and derive H from it, and the reply reports that derived H, not the 2.0008 sent.
     applied, errors = ctrl.apply_parameters({"qx": 3.1028, "qy": 0.0, "qz": 0.0, "h": 2.0008})
     assert not errors, errors
     assert applied["q_instrument_x_inv_angstrom"] == pytest.approx(3.1028, abs=1e-4)
-    assert applied["h"] == pytest.approx(2.0008, abs=1e-3)
-    _assert_reads_back_exactly(ctrl, applied)
+    derived_h = ctrl._sample_q_to_hkl(3.1028, 0.0, 0.0, ctrl.get_gui_values())[0]
+    assert applied["h"] == pytest.approx(derived_h, abs=1e-4)
+    assert abs(applied["h"] - 2.0008) > 5e-4
 
 
 def test_a_q_beyond_the_readout_beside_its_hkl_is_refused(ctrl):
@@ -374,7 +369,9 @@ def test_a_transfer_within_the_readout_of_the_ei_beside_it_is_accepted(ctrl):
     held = _fixed_energy(ctrl)
     applied, errors = ctrl.apply_parameters({"Ei": held + 3.0, "deltaE": 3.008})
     assert not errors, errors
-    _assert_reads_back_exactly(ctrl, applied)
+    # The energy is authoritative and the transfer is what it gives, not the 3.008 sent.
+    assert applied["incident_energy_mev"] == pytest.approx(held + 3.0, abs=1e-4)
+    assert applied["energy_transfer_mev"] == pytest.approx(3.0, abs=1e-4)
 
 
 def test_a_transfer_beyond_the_readout_of_the_ei_beside_it_is_refused(ctrl):
@@ -390,10 +387,12 @@ def test_a_crystal_angle_within_the_readout_of_its_energy_is_accepted(ctrl):
     a2 = ctrl._signed_mtt(energy2k(20.0))
     applied, errors = ctrl.apply_parameters({"Ei": 20.0, "A2": a2 + 0.008})
     assert not errors, errors
-    # The motor is authoritative: A2 is kept as sent, the energy derived from it.
+    # The motor is authoritative: A2 is kept as sent, the energy derived from it (not the 20 sent).
     assert applied["mono_two_theta_deg"] == pytest.approx(a2 + 0.008, abs=1e-4)
-    assert applied["incident_energy_mev"] == pytest.approx(20.0, abs=0.01)
-    _assert_reads_back_exactly(ctrl, applied)
+    derived = k2energy(angle2k((a2 + 0.008) / (2 * ctrl.instrument_state.sense_mono),
+                               ctrl.monocris_info["dm"]))
+    assert applied["incident_energy_mev"] == pytest.approx(derived, abs=1e-4)
+    assert abs(applied["incident_energy_mev"] - 20.0) > 1e-3
 
 
 def test_a_crystal_angle_within_the_readout_of_the_fixed_energy_is_kept_as_sent(ctrl):
@@ -401,8 +400,11 @@ def test_a_crystal_angle_within_the_readout_of_the_fixed_energy_is_kept_as_sent(
     att = ctrl._signed_att(energy2k(fixed)) + 0.008
     applied, errors = ctrl.apply_parameters({"fixed_E": fixed, "A6": att})
     assert not errors, errors
+    # A6 is kept as sent; the fixed energy it sets is reported as derived, not as sent.
     assert applied["analyzer_two_theta_deg"] == pytest.approx(att, abs=1e-4)
-    _assert_reads_back_exactly(ctrl, applied)
+    derived = k2energy(angle2k(att / (2 * ctrl.instrument_state.sense_ana), ctrl.anacris_info["da"]))
+    assert applied["fixed_E"] == pytest.approx(derived, abs=1e-4)
+    assert abs(applied["fixed_E"] - fixed) > 1e-3
 
 
 def test_a_crystal_angle_beyond_the_readout_of_its_energy_is_refused(ctrl):
