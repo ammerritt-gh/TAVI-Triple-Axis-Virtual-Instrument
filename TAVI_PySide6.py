@@ -7850,18 +7850,27 @@ class TAVIController(QObject):
         return ({key: patch[name] for name, key in keys.items()},
                 {key: name for name, key in keys.items()}, errors)
 
-    # Dependency order for applying API parameter writes (sec 8 step b): lattice
-    # first, then energy mode, then Q/HKL, then angles. Fields not listed are
-    # applied afterward in patch order.
-    _API_APPLY_ORDER = tuple(_to_public(name) for name in (
+    # Dependency order for applying API parameter writes (sec 8 step b), in groups:
+    # each group's values are written and their derived quantities recomputed (its
+    # after-handlers) before the next group writes, so a later explicit value is
+    # never overwritten by an earlier group's derivation. Fields not listed are
+    # applied last, in patch order.
+    _API_APPLY_ORDER = tuple(tuple(_to_public(name) for name in group) for group in (
         # Sample first: selecting it adopts the sample's own lattice, so an
         # explicit lattice_* in the same patch (applied next) still wins.
-        'sample',
-        'lattice_a', 'lattice_b', 'lattice_c',
-        'lattice_alpha', 'lattice_beta', 'lattice_gamma',
-        'K_fixed', 'fixed_E', 'Ki', 'Ei', 'Kf', 'Ef',
-        'qx', 'qy', 'qz', 'H', 'K', 'L', 'deltaE',
-        'mtt', 'stt', 'omega', 'sgl', 'sgu', 'att',
+        ('sample',),
+        ('lattice_a', 'lattice_b', 'lattice_c',
+         'lattice_alpha', 'lattice_beta', 'lattice_gamma'),
+        # A crystal change recomputes the angles from the energies, so it goes
+        # before any angle or energy the same patch names for the new crystal.
+        ('monocris', 'anacris'),
+        ('K_fixed',),
+        # The energies; the crystal 2-thetas last, they set energies too.
+        ('fixed_E', 'Ki', 'Ei', 'Kf', 'Ef', 'mtt', 'att'),
+        # The transfer holds Q and re-solves the motors, so it follows the energies it divides.
+        ('deltaE',),
+        ('qx', 'qy', 'qz', 'H', 'K', 'L'),
+        ('stt', 'omega', 'sgl', 'sgu'),
     ))
 
     # Keys the API reports that no write may set (declared readOnly in
@@ -8038,9 +8047,10 @@ class TAVIController(QObject):
              the plane lock is judged on the whole body, and a refused lock
              request or a field the lock holds applies nothing at all;
           b) apply the lock request (only a release can share a body, as a
-             lock request stands alone), then valid fields in dependency order
-             (lattice -> energy mode -> Q/HKL -> angles -> the rest in patch order);
-          c) fire each field's after-handler once (deduped, order preserved);
+             lock request stands alone), then valid fields group by group in
+             dependency order (_API_APPLY_ORDER; the rest last in patch order);
+          c) after each group's writes fire its after-handlers once (deduped,
+             first seen first), before the next group writes;
           d) log a summary to the message center;
           e) return (applied, errors).
         """
@@ -8086,7 +8096,7 @@ class TAVIController(QObject):
         if lock_errors or (lock_request and errors):
             return applied, errors
 
-        after_handlers = []  # deduped-by-identity, order preserved
+        final_handlers = []  # run after every group, order preserved
         if lock_action is not None:
             # A lock request stands alone (_lock_refusals), so only a release
             # shares a body: released first, the other fields solve free.
@@ -8097,33 +8107,41 @@ class TAVIController(QObject):
                 if name in parsed:
                     applied[name] = patch[name]
                     parsed.pop(name)
-            after_handlers.append(self._update_ub_display)
+            final_handlers.append(self._update_ub_display)
 
-        # (b) Apply valid fields in dependency order, then leftover patch order.
-        ordered = [n for n in self._API_APPLY_ORDER if n in parsed]
-        ordered += [n for n in patch.keys() if n in parsed and n not in ordered]
+        # (b) Apply valid fields group by group in dependency order, the fields no
+        # group lists last in patch order; (c) after each group's writes fire each
+        # of its after-handlers once (deduped, first seen first), so the next group
+        # writes onto a state that already follows the previous one.
+        groups = [[n for n in group if n in parsed] for group in self._API_APPLY_ORDER]
+        listed = {n for group in groups for n in group}
+        groups.append([n for n in patch.keys() if n in parsed and n not in listed])
 
-        for name in ordered:
-            _parse_fn, setter_fn, after = field_map[name]
-            value = parsed[name]
-            try:
-                setter_fn(value)
-            except Exception as exc:  # setter failure: surface, do not swallow
-                errors[submitted[name]] = "could not apply: %s" % exc
-                continue
-            applied[name] = value
-            if after is not None and after not in after_handlers:
-                after_handlers.append(after)
+        def fire(handlers):
+            for handler in handlers:
+                try:
+                    handler()
+                except Exception as exc:
+                    self.print_to_message_center(
+                        f"API: after-update handler {getattr(handler, '__name__', handler)} "
+                        f"failed: {exc}"
+                    )
 
-        # (c) Fire each after-handler once, in dependency order.
-        for handler in after_handlers:
-            try:
-                handler()
-            except Exception as exc:
-                self.print_to_message_center(
-                    f"API: after-update handler {getattr(handler, '__name__', handler)} "
-                    f"failed: {exc}"
-                )
+        for group in groups:
+            group_handlers = []
+            for name in group:
+                _parse_fn, setter_fn, after = field_map[name]
+                value = parsed[name]
+                try:
+                    setter_fn(value)
+                except Exception as exc:  # setter failure: surface, do not swallow
+                    errors[submitted[name]] = "could not apply: %s" % exc
+                    continue
+                applied[name] = value
+                if after is not None and after not in group_handlers:
+                    group_handlers.append(after)
+            fire(group_handlers)
+        fire(final_handlers)
 
         # Direct writes already flashed through _set_and_confirm_text().  The
         # handlers may have written dependent fields while ``updating`` was
