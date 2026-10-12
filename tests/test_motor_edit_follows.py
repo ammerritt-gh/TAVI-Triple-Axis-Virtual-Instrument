@@ -17,6 +17,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 import instruments.builtin  # noqa: F401,E402
 from test_orientation_gui import _controller_for  # noqa: E402
 from TAVI_PySide6 import format_editable_number  # noqa: E402
+from instruments.tas_runtime import describe_scan_error_flags  # noqa: E402
 
 TOL = 2e-3  # the dock shows 4 decimals; forward kinematics of the shown motors
 
@@ -114,3 +115,35 @@ def test_a2_edit_emits_one_reciprocal_snapshot_at_new_position(ctrl):
     snap = snapshots[0]
     assert [snap["qx"], snap["qy"], snap["qz"]] == pytest.approx(
         [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit)], abs=1e-9)
+
+
+def test_zero_take_off_leaves_q_and_says_why(ctrl):
+    """Both crystals at exactly zero select no energy, so Q has no value at
+    these motors: the fields keep the last position and the message center
+    says so. A2 alone still has a Q (only the analyzer side is lost)."""
+    idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
+    _type_and_finish(idock.mtt_edit, 0.0)
+    before = [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit),
+              _num(sdock.H_edit), _num(sdock.K_edit), _num(sdock.L_edit)]
+    seen = []
+    ctrl.message_printed.connect(seen.append)
+    try:
+        _type_and_finish(idock.att_edit, 0.0)
+    finally:
+        ctrl.message_printed.disconnect(seen.append)
+
+    vals = ctrl.get_gui_values()
+    _, errors = ctrl.instrument_state.calculate_q_and_deltaE(
+        _num(idock.mtt_edit), _num(idock.stt_edit), _num(idock.omega_edit),
+        _num(idock.sgl_edit), _num(idock.att_edit),
+        vals["fixed_E"], vals["K_fixed"], vals["monocris"], vals["anacris"],
+        sgu=_num(idock.sgu_edit),
+    )
+    assert errors, "precondition: A2 = A6 = 0 must raise an error flag"
+    notice = [m for m in seen if "cannot follow these motors" in m]
+    assert notice, seen
+    assert describe_scan_error_flags(errors) in notice[0]
+    assert "still show the previous position" in notice[0]
+    assert [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit),
+            _num(sdock.H_edit), _num(sdock.K_edit), _num(sdock.L_edit)] == pytest.approx(
+        before, abs=TOL)
