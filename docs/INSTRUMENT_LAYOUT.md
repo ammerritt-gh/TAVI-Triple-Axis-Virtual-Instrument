@@ -129,8 +129,9 @@ function pins it.
   edit holds Q and re-solves the motors (`update_angles_from_q`). The stale mark
   under the angle fields means one thing only: no consistent setting exists,
   reached from either side, from a typed target the stage cannot reach or from
-  motors that define no position (A2 and A6 both zero, both crystals transmit;
-  Q and HKL keep the last point and the message center says why). A4 = 0 at
+  motors that define no position (A2 or A6 at zero: that crystal transmits and
+  selects no energy, so its energy and wavevector, the fixed energy, Q, HKL and
+  the transfer keep their last values and the message center says why). A4 = 0 at
   equal incident and final energies is a position, Q = 0 and HKL = (0, 0, 0).
 
 ## Sample Orientation
