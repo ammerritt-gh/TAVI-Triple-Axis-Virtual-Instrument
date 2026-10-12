@@ -6054,13 +6054,20 @@ class TAVIController(QObject):
 
     def save_parameters(self):
         """Save all parameters to JSON file."""
+        # An observation row that does not parse would be dropped from the
+        # file while the rest saved; refuse instead, and keep the last save.
+        unreadable = self.window.ub_matrix_dock.unreadable_observation_numbers()
+        if unreadable:
+            names = ", ".join(f"Peak {number}" for number in unreadable)
+            self.print_to_message_center(
+                f"Parameters not saved: a field is not a number in {names}; "
+                "correct it or clear the row, then save again.")
+            return
         # The UB dock's observations as they stand, never fitted: the saved
         # list is the dock's, self.ub_matrix (its peaks and UB) is untouched.
         ub_state = self.ub_matrix.to_dict()
         ub_state["peaks"] = [ObservedPeak.from_dict(pd).to_dict()
                              for pd in self.window.ub_matrix_dock.get_observation_peak_data()]
-        for number in self.window.ub_matrix_dock.unreadable_observation_numbers():
-            self.print_to_message_center(f"Peak {number} was not saved: a field is not a number")
         parameters = {
             "mono_two_theta_deg": self.window.instrument_dock.mtt_edit.text(),
             "sample_two_theta_deg": self.window.instrument_dock.stt_edit.text(),

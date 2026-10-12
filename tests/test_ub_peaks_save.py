@@ -148,9 +148,14 @@ def test_a_fresh_start_restores_the_saved_peak_exactly(controller):
 
 
 def test_an_unreadable_observation_is_named_on_save(controller):
-    """A typed row whose field is not a number is skipped by Save, and the
-    message center says which peak it was (no silent loss)."""
+    """Save refuses while a peak row holds a field that is not a number: the
+    file on disk stays as the last save left it, and the message names the peak."""
     _blank_dock(controller)
+    _take_one(controller, (2, 0, 0))
+    controller.save_parameters()
+    with open(config_path("parameters.json"), "rb") as fh:
+        before = fh.read()
+
     pw = controller.window.ub_matrix_dock.get_peak_widget(0)
     pw.h_edit.clear()
     QTest.keyClicks(pw.h_edit, "-")
@@ -161,5 +166,7 @@ def test_an_unreadable_observation_is_named_on_save(controller):
     finally:
         controller.message_printed.disconnect(seen.append)
 
-    assert _saved_peaks(controller) == []
-    assert "Peak 1 was not saved: a field is not a number" in seen
+    with open(config_path("parameters.json"), "rb") as fh:
+        assert fh.read() == before
+    assert any("Parameters not saved" in line and "Peak 1" in line for line in seen), seen
+    assert "Parameters saved successfully" not in seen
