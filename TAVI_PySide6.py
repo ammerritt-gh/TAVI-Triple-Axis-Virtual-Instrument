@@ -3138,11 +3138,15 @@ class TAVIController(QObject):
             if flags is None or (flags and not forward):
                 # Never keep the default position silently: name the motors and the reason.
                 log.warning("Launch position not derived from the motors: %s", why)
+                # A new lattice or sample moved Q above (HKL is kept, Q is derived from it).
+                kept = ("H, K, L and the energy transfer keep their previous values and Q is "
+                        "recomputed from them under the new lattice."
+                        if named.intersection(('sample', *lattice_keys))
+                        else "They keep their previous values.")
                 launch_warnings.append(
-                    "Q, H, K, L and the energy transfer could not follow the motors (%s): %s. "
-                    "They keep their previous values."
+                    "Q, H, K, L and the energy transfer could not follow the motors (%s): %s. %s"
                     % (self._motor_names(vals, ('mtt', 'att'), only_zero=True) if flags is None
-                       else self._motor_names(vals, ('mtt', 'stt', 'omega', 'sgl', 'sgu', 'att')), why))
+                       else self._motor_names(vals, ('mtt', 'stt', 'omega', 'sgl', 'sgu', 'att')), why, kept))
             else:
                 if forward:
                     launch_warnings.append(

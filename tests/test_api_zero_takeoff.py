@@ -175,6 +175,25 @@ def test_a_launch_whose_derivation_flags_keeps_the_previous_position_and_says_so
 
 
 @pytest.mark.parametrize("crystal", ["A2", "A6"])
+def test_a_zero_take_off_beside_a_new_lattice_says_q_is_recomputed_from_the_kept_hkl(ctrl, crystal):
+    default = ctrl._default_parameter_values()
+    launch = _launch(ctrl, {crystal: 0.0, "lattice_a_angstrom": default["lattice_a"] * 1.1})
+    vals = launch["vals"]
+    assert (vals["H"], vals["K"], vals["L"], vals["deltaE"]) == (
+        default["H"], default["K"], default["L"], default["deltaE"])
+    recorded_q = [vals["qx"], vals["qy"], vals["qz"]]
+    assert recorded_q == pytest.approx(ctrl._hkl_to_sample_q(vals["H"], vals["K"], vals["L"], vals))
+    assert recorded_q != pytest.approx([default["qx"], default["qy"], default["qz"]])   # Q did move
+    said = " ".join(_warnings(ctrl, launch))
+    assert "H, K, L and the energy transfer keep their previous values and Q is recomputed" in said
+    assert "under the new lattice" in said
+    assert "They keep their previous values" not in said
+    # Without a lattice or sample change the position is simply kept.
+    kept = " ".join(_warnings(ctrl, _launch(ctrl, {crystal: 0.0})))
+    assert "They keep their previous values" in kept and "recomputed" not in kept
+
+
+@pytest.mark.parametrize("crystal", ["A2", "A6"])
 @pytest.mark.parametrize("position", [{"h": 1.0}, {"K": 0.5}, {"qx": 1.0}, {"qz": 0.1}])
 def test_a_position_beside_a_zero_take_off_is_refused(ctrl, crystal, position):
     """A transmitting crystal selects no energy, so no stage can be solved from the position."""
