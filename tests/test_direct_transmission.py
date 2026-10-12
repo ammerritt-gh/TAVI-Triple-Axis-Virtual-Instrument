@@ -363,8 +363,9 @@ def test_deterministic_engine_stt_scan_skips_forward_scattering_point(tmp_path):
     """Both crystals reflect; only the sample take-off is zero (ruling 7)."""
     with _controller("in8") as ctrl:
         ctrl.output_directory = str(tmp_path)
+        # No fixed_E: att sets Ef, and a named fixed_E would have to match it exactly.
         launch = ctrl.build_api_launch_state({
-            "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
+            "K_fixed": "Kf Fixed",
             "monocris": "pg002", "anacris": "pg002", "source_type": "Maxwellian",
             "mtt": 41.19, "stt": -1.0, "omega": -35.63, "att": -41.19,
             "scan_command1": "A4 -1 1 1",
