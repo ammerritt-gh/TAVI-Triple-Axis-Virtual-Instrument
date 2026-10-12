@@ -637,6 +637,9 @@ def check_runs(plan, launch_snapshot):
                 launch_snapshot, cmd.quantity,
                 f"Command {cmd.number} steps relative to {_name(cmd.quantity)}, but its field "
                 "holds no number to step from.", cmd.number)
+            error = _slit_gap_error(cmd.quantity, [base])   # the typed base, whatever its points
+            if error:
+                raise PlanRefused(error, cmd.number, cmd.quantity)
             bases[cmd.number] = base
             values = [v + base for v in _end_values(cmd)]
             error = (_curvature_error(cmd, plan.context, values)
