@@ -7929,11 +7929,12 @@ class TAVIController(QObject):
     _STAGE_NAMES = ('omega', 'stt', 'sgl', 'sgu')
     _LATTICE_KEYS = ('lattice_a', 'lattice_b', 'lattice_c',
                      'lattice_alpha', 'lattice_beta', 'lattice_gamma')
-    # How far two values of one write may differ and still be one setting: the
-    # readouts' rounding (four decimals), with room for a crystal angle's slope.
-    _ENERGY_TOL = 0.01   # meV
-    _ANGLE_TOL = 0.01    # deg
-    _HKL_TOL = 1e-3      # r.l.u.
+    # How far two values of one write may differ and still be one setting: half the
+    # last digit the fields keep (format_editable_number, four decimals), so a derived
+    # field can never read back other than as sent.
+    _ENERGY_TOL = 5e-5   # meV
+    _ANGLE_TOL = 5e-5    # deg
+    _HKL_TOL = 5e-5      # r.l.u.
 
     def _adopt_patched_sample_lattice(self, vals, named):
         """A patched sample adopts its own lattice into ``vals`` unless lattice_* is also named."""

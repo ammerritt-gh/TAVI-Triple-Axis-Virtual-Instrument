@@ -309,7 +309,7 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   (`400 invalid_parameters`, nothing applied, both fields named): a position (`h`,
   `k`, `l`, `qx`, `qy`, `qz`) beside a stage motor (`sample_rotation_deg`,
   `sample_two_theta_deg`, `sample_lower_arc_deg`, `sample_upper_arc_deg`), because the
-  position decides the stage; values of one request that disagree (`incident_wavevector_inv_angstrom`
+  position decides the stage; values of one request that disagree beyond the four decimals the fields keep (`incident_wavevector_inv_angstrom`
   with `incident_energy_mev`, a crystal 2θ with its side's energy or wavevector or with the
   fixed energy, `energy_transfer_mev` with the two energies, `qx`/`qy`/`qz` with `h`/`k`/`l`).
   Everything `applied` lists therefore reads back as sent.
