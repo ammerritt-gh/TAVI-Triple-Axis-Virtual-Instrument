@@ -6059,6 +6059,8 @@ class TAVIController(QObject):
         ub_state = self.ub_matrix.to_dict()
         ub_state["peaks"] = [ObservedPeak.from_dict(pd).to_dict()
                              for pd in self.window.ub_matrix_dock.get_observation_peak_data()]
+        for number in self.window.ub_matrix_dock.unreadable_observation_numbers():
+            self.print_to_message_center(f"Peak {number} was not saved: a field is not a number")
         parameters = {
             "mono_two_theta_deg": self.window.instrument_dock.mtt_edit.text(),
             "sample_two_theta_deg": self.window.instrument_dock.stt_edit.text(),
