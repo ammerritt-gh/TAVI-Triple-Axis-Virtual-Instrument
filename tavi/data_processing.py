@@ -28,7 +28,7 @@ def read_1Ddetector_file(scan_folder):
         # Check if the file exists before attempting to load it
         if os.path.exists(file_path):
             # Load the file
-            with open(file_path, 'r') as file:
+            with open(file_path, 'r', encoding='utf-8') as file:
                 content = file.read()
                          
                 # Split the content into lines
@@ -90,7 +90,7 @@ def write_parameters_to_file(target_folder, parameters):
                 continue
             items.append((k, value))
 
-    with open(file_path, 'w') as file:
+    with open(file_path, 'w', encoding='utf-8', newline='\r\n') as file:
         # Quantities are keyed by canonical ID; the version marks the A2/A4/A6 numbering.
         file.write(f"api_version: {API_VERSION}\n")
         for key, value in items:
@@ -223,7 +223,7 @@ def write_1D_scan(x_values, data_values, data_folder, file_name, x_label: str = 
     """
     os.makedirs(data_folder, exist_ok=True)
     file_path = os.path.join(data_folder, file_name)
-    with open(file_path, 'w') as f:
+    with open(file_path, 'w', encoding='utf-8', newline='\r\n') as f:
         # Header: column names
         f.write(f"# {x_label} {y_label}\n")
         f.write(f"# api_version: {API_VERSION}\n")
@@ -251,7 +251,7 @@ def write_2D_scan(x_values, y_values, nan_grid, data_folder, file_name, x_label:
     """
     os.makedirs(data_folder, exist_ok=True)
     file_path = os.path.join(data_folder, file_name)
-    with open(file_path, 'w') as f:
+    with open(file_path, 'w', encoding='utf-8', newline='\r\n') as f:
         # Header: describe scan axes and measurement
         f.write(f"# {x_label} vs {y_label}  (values arranged as rows: {y_label} then counts...)\n")
         f.write(f"# api_version: {API_VERSION}\n")
