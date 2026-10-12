@@ -119,6 +119,16 @@ function pins it.
   the instrument's scattering sense, and unsigned at an exactly zero take-off
   (`set_crystal_bending`, `instruments/tas_runtime.py`). An applied radius is
   an output; sending one back as an input is refused.
+- **Motor edits follow the motors.** The operator's rule (12 October 2026):
+  change a motor and the position follows; change the position and the motors
+  follow. An A2 or A6 edit, or an Ei, Ef, Ki or Kf edit (each moves a crystal
+  angle), recomputes Q, H, K, L and the energy transfer (`energy_transfer_mev`,
+  the ΔE field) from the motors as set: the forward kinematics in
+  `TAVIController.on_angles_changed` (`instrument_state.calculate_q_and_deltaE`).
+  A3, A4 and the arcs already did this. A Q, energy-transfer or fixed-energy
+  edit holds Q and re-solves the motors (`update_angles_from_q`). The stale mark
+  under the angle fields means one thing only: a typed Q the stage cannot reach,
+  where no consistent setting exists.
 
 ## Sample Orientation
 
