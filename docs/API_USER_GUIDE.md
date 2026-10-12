@@ -305,6 +305,19 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   "stt": "sample_two_theta_deg is assigned twice, as 'A4' and 'stt'; send it once",
   "A4": "sample_two_theta_deg is assigned twice, as 'A4' and 'stt'; send it once"}}}}
 ```
+- A request whose values **cannot all hold** is refused whole the same way
+  (`400 invalid_parameters`, nothing applied, both fields named): a position (`h`,
+  `k`, `l`, `qx`, `qy`, `qz`) beside a stage motor (`sample_rotation_deg`,
+  `sample_two_theta_deg`, `sample_lower_arc_deg`, `sample_upper_arc_deg`), because the
+  position decides the stage; values of one request that disagree (`incident_wavevector_inv_angstrom`
+  with `incident_energy_mev`, a crystal 2θ with its side's energy or wavevector or with the
+  fixed energy, `energy_transfer_mev` with the two energies, `qx`/`qy`/`qz` with `h`/`k`/`l`).
+  Everything `applied` lists therefore reads back as sent.
+- One request is applied **in groups**, each group's values written and their dependants
+  recomputed before the next group writes: sample, lattice, crystals, energy mode, fixed
+  energy, energies (the crystal 2θ last), energy transfer, position (Q or h, k, l), stage
+  motors. Setting `A2`,
+  `A6` or an energy leaves Q, h, k, l and the transfer at the motors, as the dock does.
 - A **value** problem (not a number, outside an arc's travel ...) is reported
   per field: that field is skipped and the other valid fields still apply.
   `details.applied` lists what did:
@@ -1192,7 +1205,7 @@ Server-Sent Events stream. See §8.
 |---|---|---|
 | 400 | `bad_request` | Malformed JSON body, non-object body, a PATCH field whose value is not a scalar/object, or an unknown query key on `GET /resolution`. |
 | 400 | `api_version_required` | A `PATCH /parameters`, `POST /scan`, `POST /validate` or `PUT /background` body had no `"api_version": 2` (or another value). Nothing was applied, queued or replaced. `details.required_api_version` is `2`; see §15. |
-| 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) named an unknown, retired, derived-only, read-only, absent or duplicate key (the whole request is refused, `applied` is empty), or had a bad value (that field is skipped). `details` lists `applied` and `errors`, keyed by the names you sent. |
+| 400 | `invalid_parameters` | A `PATCH /parameters` (or inline `parameters` on `POST /scan`) named an unknown, retired, derived-only, read-only, absent or duplicate key, or values that cannot all hold (a position beside a stage motor, disagreeing energies; the whole request is refused, `applied` is empty), or had a bad value (that field is skipped). `details` lists `applied` and `errors`, keyed by the names you sent. |
 | 400 | `scan_validation` | `POST /scan` scan command(s) failed validation (unknown variable, conflict, zero or wrong-sign step, step larger than range). `"force": true` clears only the soft warnings (a one-point scan, or one over 1000 points); command issues and plan refusals stand. |
 | 400 | `invalid_background` | A background configuration (`PUT /background`, or the `background` field of `POST /scan` / `POST /validate`) failed to resolve — for example a missing/mismatched `catalog_version`, unknown source id or nested field, non-boolean enable, or invalid scale. On `PUT` the stored configuration is untouched; on `POST /scan` `details.background` is the validation background block. Unknown top-level fields are `bad_request`. |
 | 400 | `infeasible_points` | `POST /scan` had one or more geometrically infeasible points (scattering triangle does not close, angle out of range). `details` is the full `validation` object. Queue anyway (skipping them) with `"allow_partial": true`. |
@@ -1360,12 +1373,15 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
 
 - **A scan that selects no geometry holds the motors.** A plain Run, a curvature scan and a
   slit scan calculate no angles: the angles stay as the parameters set them, not re-solved
-  from H, K and L. A request that patches H, K, L, Q or an energy beside such a scan has its
-  sample-stage motors (A4, A3, sgl, sgu) and the unnamed crystal 2θ solved from them first,
-  under the plane lock if one is set; a position the stage cannot reach is refused with 400
-  `invalid_parameters`. A request that names any stage motor keeps the stage as given. A patched
-  crystal 2θ (A2 or A6) sets its side's energy, and a named Ei/Ki (or Ef/Kf) that disagrees with
-  it is refused with 400 `invalid_parameters`.
+  from H, K and L. A request that patches H, K, L, Q, the lattice, the sample, the energy
+  transfer or the fixed energy beside such a scan has its sample-stage motors (A4, A3, sgl, sgu)
+  and the unnamed crystal 2θ solved from the held Q first, under the plane lock if one is set; a
+  position the stage cannot reach is refused with 400 `invalid_parameters`. A request that names
+  only a crystal 2θ (A2 or A6) or an Ei, Ki, Ef or Kf keeps the stage and derives Q, h, k, l and
+  the energy transfer from the motors, as the dock does; so does one that names a stage motor, which
+  keeps the stage as given. A position beside a stage motor is refused. A patched crystal 2θ sets its
+  side's energy, and a named energy or wavevector that disagrees with it is refused with 400
+  `invalid_parameters`.
 - **An empty field refuses.** A scan that reads a numeric field (a relative base, or a quantity
   it uses as typed, such as K in an H scan) refuses when the field holds no number, and names
   it. It is never read as 0.
@@ -1925,7 +1941,10 @@ guessed: an old client is **refused**, never reinterpreted.
 4. **Key-level refusals.** A request that names a retired, derived-only,
    read-only, unknown or absent-slit key, or one quantity twice, is refused
    whole (`400 invalid_parameters`, nothing applied); a bad *value* is still
-   reported per field. `GET /resolution` refuses query keys it does not know.
+   reported per field. A position (`h`, `k`, `l`, `qx`, `qy`, `qz`) beside a stage motor
+   (`sample_rotation_deg`, `sample_two_theta_deg`, `sample_lower_arc_deg`,
+   `sample_upper_arc_deg`) is refused the same way, in a `PATCH` and in a `POST /scan` patch.
+   `GET /resolution` refuses query keys it does not know.
 5. **Slit gaps** are one key each, `slit.<stable_id>.horizontal_gap_mm` /
    `.vertical_gap_mm`, replacing the `slits_mm` object.
 6. **Saved state version 5.** `config/parameters.json` blocks carry the canonical
@@ -1951,8 +1970,10 @@ guessed: an old client is **refused**, never reinterpreted.
 11. **A scan that selects no geometry holds the motors.** A plain Run, a curvature scan and a
     slit scan keep the angles the parameters set, instead of re-solving them from H, K and L.
     They agree whenever the HKL fields and the angles were consistent, so the point is the same.
-    An API request that patches H, K, L, Q or an energy beside such a scan has its stage motors
-    solved from them first (an explicitly patched stage motor is kept, and then the whole stage).
+    An API request that patches H, K, L, Q, the lattice, the sample, the energy transfer or the
+    fixed energy beside such a scan has its stage motors solved from them first; one that names
+    only a crystal 2θ or an Ei, Ki, Ef or Kf keeps the stage and derives Q, h, k, l and the energy
+    transfer from the motors (an explicitly patched stage motor is kept, and then the whole stage).
 12. **An empty field the scan reads refuses.** It is no longer read as 0 or as the default.
 13. **Under a plane lock a direct-motor point runs at the lock's tilts.** A typed arc that
     disagrees with the lock no longer makes the point infeasible.

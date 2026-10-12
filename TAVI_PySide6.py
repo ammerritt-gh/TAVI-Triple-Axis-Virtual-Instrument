@@ -2879,6 +2879,7 @@ class TAVIController(QObject):
         # job renames them (plan amendment 7); slit gaps land in the nested slits_mm
         # each plugin indexes.
         internal = {_to_internal(n): v for n, v in parsed.items() if not n.startswith("slit.")}
+        named = frozenset(internal)   # the caller's own names; `patched` grows with derived ones
         patched = set(internal)
         vals.update(internal)
         for slit in self.descriptor.slits:
@@ -2935,8 +2936,8 @@ class TAVIController(QObject):
                                                submitted[second]: message}})
 
         # k<->E consistency: a lone patched member of a k/E pair derives its
-        # partner; a patched fixed_E/K_fixed recomputes the fixed side. deltaE
-        # stays an independent scan variable (not folded back into the energies).
+        # partner; a patched energy of the held side is the fixed energy; a patched
+        # fixed_E/K_fixed/deltaE recomputes both sides.
         if 'Ei' in patched and 'Ki' not in patched:
             vals['Ki'] = energy2k(vals['Ei'])
         elif 'Ki' in patched and 'Ei' not in patched:
@@ -2945,7 +2946,12 @@ class TAVIController(QObject):
             vals['Kf'] = energy2k(vals['Ef'])
         elif 'Kf' in patched and 'Ef' not in patched:
             vals['Ef'] = k2energy(vals['Kf'])
-        if 'fixed_E' in patched or 'K_fixed' in patched:
+        held_side = ('Ei', 'Ki') if vals['K_fixed'] == "Ki Fixed" else ('Ef', 'Kf')
+        if patched.intersection(held_side):
+            vals['fixed_E'] = vals[held_side[0]]
+        named_energies = {key: vals[key] for pair in (('Ei', 'Ki'), ('Ef', 'Kf'))
+                          if patched.intersection(pair) for key in pair}
+        if patched.intersection(('fixed_E', 'K_fixed', 'deltaE')):
             # Both sides, as the GUI's update_all_variables derives them:
             # the free side is fixed_E offset by the launch state's deltaE.
             if vals['K_fixed'] == "Ki Fixed":
@@ -2956,6 +2962,10 @@ class TAVIController(QObject):
                 vals['Ei'] = vals['fixed_E'] + vals['deltaE']
             vals['Ki'] = energy2k(vals['Ei'])
             vals['Kf'] = energy2k(vals['Ef'])
+            # An energy the caller named beside them wins; the transfer follows it.
+            vals.update(named_energies)
+            if named_energies and 'deltaE' not in patched:
+                vals['deltaE'] = vals['Ei'] - vals['Ef']
 
         # Energy -> crystal angle, the API twin of the GUI's Ei/Ki/Ef/Kf
         # handlers: a patched energy side re-derives its own take-off angle
@@ -2967,7 +2977,7 @@ class TAVIController(QObject):
         # non-positive energy is refused here: direct motors take A1/A4 as
         # raw authority and never reaches calculate_angles' own Ei/Ef > 0
         # guard, and a NaN angle passes every limit comparison.
-        energy_keys = ('fixed_E', 'K_fixed', 'monocris', 'anacris')
+        energy_keys = ('fixed_E', 'K_fixed', 'deltaE', 'monocris', 'anacris')
         if any(k in patched for k in energy_keys + ('Ei', 'Ki', 'Ef', 'Kf', 'mtt', 'att')):
             mono_info, ana_info = self.instrument.crystal_info(
                 vals['monocris'], vals['anacris']
@@ -2986,19 +2996,23 @@ class TAVIController(QObject):
                 vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
                 vals[energy] = k2energy(vals[wavevector])
             if 'mtt' in patched or 'att' in patched:
-                # The side the angles did not set follows K_fixed and deltaE, as the energy block does.
-                if ki_fixed:
-                    if 'att' in patched:
-                        vals['deltaE'] = vals['Ei'] - vals['Ef']
+                if 'deltaE' in patched:
+                    # The side the angles did not set follows the transfer the caller named.
+                    if ki_fixed:
+                        if 'att' in patched:
+                            vals['deltaE'] = vals['Ei'] - vals['Ef']
+                        else:
+                            vals['Ef'] = vals['Ei'] - vals['deltaE']
                     else:
-                        vals['Ef'] = vals['Ei'] - vals['deltaE']
-                    vals['fixed_E'] = vals['Ei']
+                        if 'mtt' in patched:
+                            vals['deltaE'] = vals['Ei'] - vals['Ef']
+                        else:
+                            vals['Ei'] = vals['Ef'] + vals['deltaE']
                 else:
-                    if 'mtt' in patched:
-                        vals['deltaE'] = vals['Ei'] - vals['Ef']
-                    else:
-                        vals['Ei'] = vals['Ef'] + vals['deltaE']
-                    vals['fixed_E'] = vals['Ef']
+                    # As the dock's A2/A6 edit does: the other side keeps its energy and the
+                    # transfer follows the motors.
+                    vals['deltaE'] = vals['Ei'] - vals['Ef']
+                vals['fixed_E'] = vals['Ei'] if ki_fixed else vals['Ef']
                 vals['Ki'], vals['Kf'] = energy2k(vals['Ei']), energy2k(vals['Ef'])
             if not (vals['Ei'] > 0 and vals['Ef'] > 0):
                 raise ApiError(
@@ -3037,11 +3051,15 @@ class TAVIController(QObject):
         # patched position or energy must reach them here or the result would echo
         # an H the stage never ran at. Solve the stage as the GUI does for typed Q
         # (update_angles_from_q: the same solve, the plane lock owning the arcs).
-        # A caller who names any stage motor keeps the whole stage: the others
-        # would be solved for a 2-theta they did not choose.
+        # A caller who names a stage motor keeps the whole stage (the others would be
+        # solved for a 2-theta they did not choose); a stage motor beside a position
+        # was refused above. A crystal motor or an energy keeps the stage too: only
+        # a named position, lattice, sample, transfer or fixed energy holds Q and
+        # solves it (operator, 12 October 2026: follow the motors).
         energy_names = ('Ei', 'Ki', 'Ef', 'Kf', 'fixed_E', 'K_fixed')
-        geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE', 'mtt', 'att')
-                          + energy_names + lattice_keys)
+        geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE', 'fixed_E', 'K_fixed')
+                          + lattice_keys)
+        solved = False
         if (patched.intersection(geometry_names)
                 and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
                 and selected_calculation([(vals.get('scan_command1') or "", False),
@@ -3069,6 +3087,29 @@ class TAVIController(QObject):
             if 'att' not in patched:
                 vals['att'] = att
                 patched.add('att')
+            solved = True
+
+        # A patch that moves a motor and names no position follows the motors, as the
+        # dock does (on_angles_changed): the stage stays where it is and Q, H, K, L and
+        # the energy transfer are what the motors give. A named position solved the
+        # stage above instead; a stage motor beside one was refused.
+        if (not solved and not named.intersection(self._POSITION_NAMES)
+                and named.intersection(('mtt', 'att', 'Ei', 'Ki', 'Ef', 'Kf') + self._STAGE_NAMES)):
+            q_vals, flags = self.instrument_state.calculate_q_and_deltaE(
+                vals['mtt'], vals['stt'], vals['omega'], vals['sgl'], vals['att'],
+                vals['fixed_E'], vals['K_fixed'], vals['monocris'], vals['anacris'],
+                sgu=vals['sgu'])
+            if flags:
+                log.warning("Launch position not derived from the motors: %s",
+                            describe_scan_error_flags(flags))
+            else:
+                vals['qx'], vals['qy'], vals['qz'], vals['deltaE'] = q_vals
+                vals['H'], vals['K'], vals['L'] = self._sample_q_to_hkl(*q_vals[:3], vals)
+                if vals['K_fixed'] == "Ki Fixed":
+                    vals['Ef'] = vals['Ei'] - vals['deltaE']
+                else:
+                    vals['Ei'] = vals['Ef'] + vals['deltaE']
+                vals['Ki'], vals['Kf'] = energy2k(vals['Ei']), energy2k(vals['Ef'])
 
         # Refresh the AUTOFOCUS radii's starting numbers when mtt/att/modules/
         # monocris/anacris were patched, so a submitted request already
@@ -7858,8 +7899,10 @@ class TAVIController(QObject):
         # before any angle or energy the same patch names for the new crystal.
         ('monocris', 'anacris'),
         ('K_fixed',),
-        # The energies; the crystal 2-thetas last, they set energies too.
-        ('fixed_E', 'Ki', 'Ei', 'Kf', 'Ef', 'mtt', 'att'),
+        # The fixed energy recomputes both sides, so the energies a request names for the
+        # free side (and the crystal 2-thetas, which set energies too, last) go after it.
+        ('fixed_E',),
+        ('Ki', 'Ei', 'Kf', 'Ef', 'mtt', 'att'),
         # The transfer holds Q and re-solves the motors, so it follows the energies it divides.
         ('deltaE',),
         ('qx', 'qy', 'qz', 'H', 'K', 'L'),
