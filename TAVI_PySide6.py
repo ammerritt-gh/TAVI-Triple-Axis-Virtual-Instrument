@@ -2923,7 +2923,7 @@ class TAVIController(QObject):
         # (b) Pure derivation pass (replaces the widget after-handlers).
         lattice_keys = self._LATTICE_KEYS
 
-        # A patched sample adopts its own lattice unless lattice_* is explicit.
+        # A patched sample adopts its own lattice for each lattice_* the patch leaves unnamed.
         self._adopt_patched_sample_lattice(vals, patched)
         sample_key = None if vals['sample'] == "none" else vals['sample']
 
@@ -8033,12 +8033,12 @@ class TAVIController(QObject):
     _HKL_TOL = 1e-3      # r.l.u.
 
     def _adopt_patched_sample_lattice(self, vals, named):
-        """A patched sample adopts its own lattice into ``vals`` unless lattice_* is also named."""
-        if 'sample' not in named or any(k in named for k in self._LATTICE_KEYS):
+        """A patched sample adopts its own lattice into ``vals`` for every lattice_* the write does not name."""
+        if 'sample' not in named:
             return
         spec = next((s for s in self.descriptor.samples if s.id == vals['sample']), None)
         if spec is not None and spec.lattice is not None:
-            vals.update(zip(self._LATTICE_KEYS, spec.lattice))
+            vals.update((k, v) for k, v in zip(self._LATTICE_KEYS, spec.lattice) if k not in named)
 
     def _api_conflict(self, patch, parsed):
         """``_write_conflict`` for a PATCH body against the GUI state: ``patch`` names every
