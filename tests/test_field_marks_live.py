@@ -544,6 +544,33 @@ def test_a_zero_take_off_beside_a_re_solving_scan_is_refused_on_the_labels(windo
     assert _marks(window)[A4] == ("scanned", "1")
 
 
+def test_a_non_numeric_field_refuses_on_the_labels_without_raising(window):
+    """Mid-typing, a field holds text: no launch collects, and the labels say why instead of raising."""
+    mtt = window.instrument_dock.mtt_edit
+    before = mtt.text()
+    mtt.setText("abc")
+    try:
+        _type(window, "H 1.9 2.1 0.05")
+        window.controller._refresh_scan_feedback()   # called directly, so an exception reaches the test
+        assert "does not hold a number" in _warning(window), _warning(window)
+    finally:
+        mtt.setText(before)
+        _settle()
+
+
+def test_a_zero_take_off_stays_on_the_label_beside_another_pair_refusal(window):
+    """A pair refused for another reason still refuses a zero take-off that re-solves: the conflict
+    label carries both reasons and no box is accepted."""
+    _type(window, "H 1 2 0.5", "H 1 2 0.5")
+    assert _run_verdict(window)[0], "premise: the pair is refused at a nonzero A2"
+    window.instrument_dock.mtt_edit.setText("0")
+    window.instrument_dock.mtt_edit.editingFinished.emit()
+    _settle()
+    _plan, accepted, refused = window.controller._box_verdict()[1:]
+    assert accepted == {} and "re-solves" in str(refused[None]), (accepted, refused)
+    assert "re-solves" in _warning(window) and "A2" in _warning(window), _warning(window)
+
+
 def test_a_scan_over_the_maximum_is_refused_at_once_and_marks_nothing(window):
     """A3 0 100 0.000001 is 1e8 points, over the maximum: box 1 says so at once, no mark
     is drawn, and Run's preflight lists it as a hard issue."""
