@@ -1029,7 +1029,7 @@ parsed, before any travel is consulted), which is deliberately a different
 code from `curvature_out_of_travel` — "your numeric value is invalid" and
 "this radius conflicts with the hardware's travel" are different problems
 with different fixes. A **fixed** axis
-(`CurvatureAxis.driven=False` — PUMA's `rva` at a fixed 0.8 m, PANDA's at a fixed 0.60 m, or PUMA's
+(`CurvatureAxis.driven=False` — the `rva` of PUMA at 0.8 m, IN12 at 1.40 m and PANDA at 0.60 m, or PUMA's
 `rhm`/`rvm` once a nested mirror optic (NMO) module is fitted, which pins
 both to flat) accepts **only** its declared radius and refuses every other
 value, `0` included when the declared radius is nonzero:
