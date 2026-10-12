@@ -3076,21 +3076,17 @@ class TAVIController(QObject):
         # patched position or energy must reach them here or the result would echo
         # an H the stage never ran at. Solve the stage as the GUI does for typed Q
         # (update_angles_from_q: the same solve, the plane lock owning the arcs).
-        # A caller who names a stage motor keeps the whole stage (the others would be
-        # solved for a 2-theta they did not choose); a stage motor beside a position
-        # was refused above. A crystal motor or an energy keeps the stage too, even
-        # beside a sample, lattice or fixed energy: without a crystal motor, a named
-        # position, lattice, sample, transfer or fixed energy holds Q and solves it
-        # (operator, 12 October 2026: follow the motors).
-        energy_names = ('Ei', 'Ki', 'Ef', 'Kf', 'fixed_E', 'K_fixed')
-        geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE', 'fixed_E', 'K_fixed')
-                          + lattice_keys)
+        # A caller who names a motor and no position follows the motors (_motor_leads):
+        # the unnamed stage motors stay and no Q-holder beside it re-solves them. Without
+        # a motor, a named position or Q-holder holds Q and solves the stage
+        # (operator, 12 October 2026: follow the motors). A stage motor beside a
+        # position was refused above.
+        energy_names = self._CRYSTAL_NAMES + ('fixed_E', 'K_fixed')
         solved = False
         energies_absent = vals['Ei'] is None or vals['Ef'] is None   # a zero take-off: nothing to solve with
-        holds_q = patched.intersection(geometry_names) - (
-            {'fixed_E', 'sample', *lattice_keys} if self._crystal_motor_leads(named) else set())
+        holds_q = (not self._motor_leads(named)
+                   and patched.intersection(self._POSITION_NAMES + self._Q_HOLDERS))
         if (holds_q and not energies_absent
-                and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
                 and selected_calculation([(vals.get('scan_command1') or "", False),
                                           (vals.get('scan_command2') or "", False)]) == MOTORS):
             if patched.intersection(energy_names):   # the energies the block above derived
@@ -3122,8 +3118,7 @@ class TAVIController(QObject):
         # dock does (on_angles_changed): the stage stays where it is and Q, H, K, L and
         # the energy transfer are what the motors give. A named position solved the
         # stage above instead; a stage motor beside one was refused.
-        if (not solved and not named.intersection(self._POSITION_NAMES)
-                and named.intersection(('mtt', 'att', 'Ei', 'Ki', 'Ef', 'Kf') + self._STAGE_NAMES)):
+        if not solved and self._motor_leads(named):
             if energies_absent:
                 flags, why = None, "that crystal transmits the beam and selects no energy"
             else:
@@ -3145,8 +3140,8 @@ class TAVIController(QObject):
                         else "They keep their previous values.")
                 launch_warnings.append(
                     "Q, H, K, L and the energy transfer could not follow the motors (%s): %s. %s"
-                    % (self._motor_names(vals, ('mtt', 'att'), only_zero=True) if flags is None
-                       else self._motor_names(vals, ('mtt', 'stt', 'omega', 'sgl', 'sgu', 'att')), why, kept))
+                    % (self._motor_names(vals, [f for f in ('mtt', 'att') if vals[f] == 0]) if flags is None
+                       else self._motor_names(vals, ('mtt', 'att') + self._STAGE_NAMES), why, kept))
             else:
                 if forward:
                     launch_warnings.append(
@@ -3266,10 +3261,9 @@ class TAVIController(QObject):
         }
 
     @staticmethod
-    def _motor_names(vals, fields, only_zero=False):
-        """``fields`` of the launch as ``A2 (...) = 0`` text; ``only_zero`` keeps the zero ones."""
-        return ", ".join("%s = %g" % (quantity_by_id(_to_public(f)).name, vals[f])
-                         for f in fields if not only_zero or vals[f] == 0)
+    def _motor_names(vals, fields):
+        """``fields`` of the launch as ``A2 (...) = 0`` text."""
+        return ", ".join("%s = %g" % (quantity_by_id(_to_public(f)).name, vals[f]) for f in fields)
 
     def _refuse_position_beside_zero_takeoff(self, zero_takeoffs, named, submitted):
         """A position beside a zero take-off is refused: a transmitting crystal selects no energy,
@@ -8096,23 +8090,40 @@ class TAVIController(QObject):
     _ANGLE_TOL = 0.01    # deg
     _HKL_TOL = 1e-3      # r.l.u.
 
-    def _crystal_motor_leads(self, names):
-        """A write naming a crystal motor (A2, A6 or an energy or wavevector) and no position or
-        stage motor follows the motors, whatever sample, lattice or fixed energy it names beside
-        them: the unnamed stage motors stay where they were and Q, H, K, L and E derive forward
-        from the motors. ``names`` are internal names."""
-        return (any(n in names for n in self._CRYSTAL_NAMES)
-                and not any(n in names for n in self._POSITION_NAMES + self._STAGE_NAMES))
+    # The names that hold Q and re-solve the stage when no motor leads: the energy holders,
+    # whose after-handlers re-solve it, and the sample and lattice, which move HKL.
+    _ENERGY_HOLDERS = ('deltaE', 'fixed_E', 'K_fixed')
+    _Q_HOLDERS = _ENERGY_HOLDERS + ('sample',) + _LATTICE_KEYS
 
-    def _fixed_energy_follows_motors(self, names):
-        """``_crystal_motor_leads`` for a write that also names the fixed energy."""
-        return 'fixed_E' in names and self._crystal_motor_leads(names)
+    @classmethod
+    def _motor_leads(cls, names):
+        """A write naming a motor (crystal: A2, A6 or an energy or wavevector; stage: A3, A4,
+        sgl, sgu) and no position follows the motors, whatever Q-holder (``_Q_HOLDERS``) it names
+        beside it: the unnamed stage motors stay where they were and Q, H, K, L and E derive
+        forward from the motors. ``names`` are internal names. The launch and PATCH both read this."""
+        return (any(n in names for n in cls._CRYSTAL_NAMES + cls._STAGE_NAMES)
+                and not any(n in names for n in cls._POSITION_NAMES))
 
-    def _follow_motors_after_fixed_energy(self):
-        """The fixed energy's after-handler for such a write: only the fixed side's energy is
-        set (the rest of the energies follow), then Q, HKL and E derive from the motors."""
+    def _follow_motors(self):
+        """An energy holder's after-handler for such a write: its energies are set (the rest
+        follow), then Q, HKL and E derive from the motors instead of re-solving the stage."""
         self.update_all_variables()
         self.on_angles_changed()
+
+    def _select_k_fixed_quietly(self, value):
+        """Select the energy mode without the combo's own handler re-solving the stage
+        (``updating`` makes that handler's two updates return); ``_follow_motors`` runs after."""
+        self.updating = True
+        try:
+            self.window.scattering_dock.K_fixed_combo.setCurrentText(value)
+        finally:
+            self.updating = False
+
+    def _transfer_already_held(self, value):
+        """Whether a transfer named beside a crystal motor is the one the motors already give
+        (within the readout): the derived value stands, as the launch derives it."""
+        vals = self.get_gui_values()
+        return bool(vals) and abs(value - vals['deltaE']) <= self._ENERGY_TOL
 
     def _adopt_patched_sample_lattice(self, vals, named):
         """A patched sample adopts its own lattice into ``vals`` for every lattice_* the write does not name."""
@@ -8487,14 +8498,21 @@ class TAVIController(QObject):
                         f"failed: {exc}"
                     )
 
-        follows_motors = self._fixed_energy_follows_motors({_to_internal(n) for n in parsed})
+        named = {_to_internal(n) for n in parsed}
+        follows_motors = self._motor_leads(named)
         for group in groups:
             group_handlers = []
             for name in group:
                 _parse_fn, setter_fn, after = field_map[name]
-                if follows_motors and name == _to_public('fixed_E'):
-                    after = self._follow_motors_after_fixed_energy
                 value = parsed[name]
+                if follows_motors and _to_internal(name) in self._ENERGY_HOLDERS:
+                    after = self._follow_motors
+                    if name == _to_public('K_fixed'):
+                        setter_fn = self._select_k_fixed_quietly
+                    if (name == _to_public('deltaE') and named.intersection(self._CRYSTAL_NAMES)
+                            and self._transfer_already_held(value)):
+                        applied[name] = value   # the crystal motor beside it already gave this transfer
+                        continue
                 try:
                     setter_fn(value)
                 except Exception as exc:  # setter failure: surface, do not swallow

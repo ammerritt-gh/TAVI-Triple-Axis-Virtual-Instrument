@@ -1385,9 +1385,11 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
   the energy transfer from the motors, as the dock does; so does one that names a stage motor, which
   keeps the stage as given. A position beside a stage motor is refused. A patched crystal 2θ sets its
   side's energy, and a named energy or wavevector that disagrees with it is refused with 400
-  `invalid_parameters`. The fixed energy, a sample or a lattice constant beside a crystal 2θ or an
-  energy, with no position and no stage motor named, follows the motors the same way: the unnamed
-  stage motors stay where they were (the new lattice applies, and Q, h, k, l and the transfer derive from the motors).
+  `invalid_parameters`. The fixed energy, the energy mode (`K_fixed`), the energy transfer, a sample
+  or a lattice constant beside a motor (a crystal 2θ, an energy or wavevector, or a stage motor),
+  with no position named, follows the motors the same way, on a launch and on `PATCH /parameters`:
+  the unnamed stage motors stay where they were (the new lattice applies, and Q, h, k, l and the
+  transfer derive from the motors).
   A crystal 2θ of exactly 0 (A2 or A6) launches with that side's energy and wavevector recorded as
   `null` (a transmitting crystal selects none, and none is invented); the launch's `warnings` list
   says which of Q, h, k, l and the energy transfer could not follow the motors. It is refused beside
