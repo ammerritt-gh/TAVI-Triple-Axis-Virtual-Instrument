@@ -59,10 +59,14 @@ def _assert_follows_motors(ctrl):
     assert [p["h"], p["k"], p["l"]] == pytest.approx(list(hkl), abs=TOL)
 
 
-def _assert_read_back(ctrl, applied):
-    """Every key the reply lists as applied holds the value it was sent."""
+def _assert_read_back(ctrl, applied, patch):
+    """Every key the reply lists as applied holds the value the request SENT (not ``applied``,
+    which apply_parameters has already replaced with the state's own values)."""
     state = ctrl.api_parameters()
-    for key, value in applied.items():
+    sent, _submitted, _errors = ctrl._api_resolve_patch(patch, ctrl._api_field_map())
+    assert set(applied) <= set(sent), set(applied) - set(sent)
+    for key in applied:
+        value = sent[key]
         if isinstance(value, (int, float)):
             assert state[key] == pytest.approx(value, abs=TOL), key
         else:
@@ -127,7 +131,7 @@ def test_every_applied_key_reads_back(ctrl, case):
     applied, errors = ctrl.apply_parameters(patch)
     assert not errors, errors
     assert applied
-    _assert_read_back(ctrl, applied)
+    _assert_read_back(ctrl, applied, patch)
 
 
 def test_a2_beside_q_reads_back_as_sent(ctrl):
@@ -416,4 +420,4 @@ def test_a_q_that_agrees_with_its_hkl_to_float_precision_reads_back(ctrl):
     applied, errors = ctrl.apply_parameters(
         {"qx": qx, "qy": qy, "qz": qz, "h": h, "k": k, "l": l})
     assert not errors, errors
-    _assert_read_back(ctrl, applied)
+    _assert_read_back(ctrl, applied, {"qx": qx, "qy": qy, "qz": qz, "h": h, "k": k, "l": l})
