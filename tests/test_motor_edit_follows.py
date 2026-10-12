@@ -183,6 +183,15 @@ def test_zero_take_off_of_both_crystals_leaves_q_and_says_why(ctrl):
     _assert_follows_motors(ctrl)
 
 
+def test_a_zero_take_off_label_says_what_keeps_the_last_point(ctrl):
+    idock = ctrl.window.instrument_dock
+    _type_and_finish(idock.mtt_edit, 0.0)
+    assert idock.angles_stale_label.isVisibleTo(idock)
+    text = idock.angles_stale_label.text()
+    assert "Angles above" not in text, text
+    assert "Q, HKL and the energy transfer keep the last point" in text and "selects no energy" in text, text
+
+
 @pytest.mark.parametrize("name,energy", [("A2", "incident_energy_mev"), ("A6", "final_energy_mev")])
 def test_a_patched_zero_take_off_reports_no_zero_energy_and_no_q_from_a_zero_wavevector(ctrl, name, energy):
     before = ctrl.api_parameters()
