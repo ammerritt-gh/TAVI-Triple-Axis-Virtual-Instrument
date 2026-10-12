@@ -456,25 +456,32 @@ def test_a_new_sample_beside_one_lattice_constant_adopts_the_rest_on_launch(laun
     assert vals["lattice_b"] == pytest.approx(PB_A)
 
 
-# ----------------------------------- a fixed energy beside a crystal motor follows the motors
+# ------- a crystal motor beside a fixed energy, a sample or a lattice constant follows the motors
 
 FIXED_BESIDE_CRYSTAL = {
     "fixed_E and A2": lambda c: {"fixed_E": 12.0, "A2": 30.0},
     "fixed_E and A6": lambda c: {"fixed_E": 12.0, "A6": c._signed_att(energy2k(12.0))},
     "fixed_E and Ei": lambda c: {"fixed_E": 12.0, "Ei": 20.0},
+    "sample and A2": lambda c: {"sample": PB, "A2": 30.0},
+    "sample, fixed_E and A2": lambda c: {"sample": PB, "fixed_E": 12.0, "A2": 30.0},
+    "lattice and A2": lambda c: {"lattice_a_angstrom": 4.2, "A2": 30.0},
+    "lattice, fixed_E and A2": lambda c: {"lattice_a_angstrom": 4.2, "fixed_E": 12.0, "A2": 30.0},
 }
 STAGE_KEYS = ("sample_rotation_deg", "sample_two_theta_deg",
               "sample_lower_arc_deg", "sample_upper_arc_deg")
 
 
 @pytest.mark.parametrize("case", sorted(FIXED_BESIDE_CRYSTAL))
-def test_a_fixed_energy_beside_a_crystal_motor_leaves_the_same_stage_on_patch_and_launch(ctrl, case):
+def test_a_crystal_motor_beside_a_fixed_energy_sample_or_lattice_leaves_the_same_stage_on_patch_and_launch(ctrl, case):
     patch = FIXED_BESIDE_CRYSTAL[case](ctrl)
     before = ctrl.api_parameters()
     launch = ctrl.build_api_launch_state({**patch, "scan_command1": SCAN})["vals"]
     applied, errors = ctrl.apply_parameters(patch)
     assert not errors, errors
     state = ctrl.api_parameters()
+    if "lattice_a_angstrom" in patch:   # the new lattice applies on both paths
+        assert state["lattice_a_angstrom"] == pytest.approx(patch["lattice_a_angstrom"])
+        assert launch["lattice_a"] == pytest.approx(patch["lattice_a_angstrom"])
     # No position and no stage motor named: the unnamed stage motors stay where they were ...
     assert {k: state[k] for k in STAGE_KEYS} == pytest.approx({k: before[k] for k in STAGE_KEYS}, abs=TOL)
     launched = {"sample_rotation_deg": launch["omega"], "sample_two_theta_deg": launch["stt"],
