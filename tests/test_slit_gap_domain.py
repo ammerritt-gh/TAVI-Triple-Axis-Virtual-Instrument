@@ -99,6 +99,18 @@ def test_the_scan_plan_refuses_a_command_that_reaches_a_negative_gap():
     assert [point[qid] for point in points] == [0.0, 1.0, 2.0]
 
 
+def test_a_relative_run_refuses_a_negative_base_gap_even_when_its_points_are_legal():
+    plugin, config, vals, snapshot = _launch(LABEL)
+    qid = sorted(plugin.capabilities().slit_bindings)[0]
+    alias = by_id(qid).aliases[0]
+    ctx = context_from_state(config, vals, plugin.capabilities())
+    plan = build_plan([(f"{alias} 6 6 1", True), ("", False)], ctx)   # points land at 1 mm
+    snapshot[qid] = -5.0                                              # the typed base
+    with pytest.raises(PlanRefused) as caught:
+        expand(plan, snapshot)
+    assert by_id(qid).name in str(caught.value) and "-5" in str(caught.value)
+
+
 def test_the_gui_field_returns_to_its_last_accepted_text_on_a_negative_gap(controller):
     qid, edit = _gap(controller)
     seen = []
