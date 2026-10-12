@@ -421,3 +421,36 @@ def test_a_q_that_agrees_with_its_hkl_to_float_precision_reads_back(ctrl):
         {"qx": qx, "qy": qy, "qz": qz, "h": h, "k": k, "l": l})
     assert not errors, errors
     _assert_read_back(ctrl, applied, {"qx": qx, "qy": qy, "qz": qz, "h": h, "k": k, "l": l})
+
+
+# ------------------------------------------- a new sample's lattice, one constant named
+
+PB = "Pb_phonon_DFT"
+PB_A = 4.9508   # the sample's own cubic constant; b, c and the angles are left to the sample
+
+
+def _pb_patch(ctrl, base):
+    """Select Pb beside lattice_a and a Q/H,K,L pair that agrees on Pb's own lattice."""
+    pb = next(s for s in ctrl.descriptor.samples if s.id == PB).lattice
+    assert base["lattice_b"] != pytest.approx(pb[1]), "precondition: the old b must differ from Pb's"
+    qx, qy, qz = 2.0, 1.0, 0.0
+    on_pb = {**base, **dict(zip(ctrl._LATTICE_KEYS, pb)), "sample": PB}
+    h, k, l = ctrl._sample_q_to_hkl(qx, qy, qz, on_pb)
+    return {"sample": PB, "lattice_a_angstrom": PB_A, "qx": qx, "qy": qy, "qz": qz,
+            "h": h, "k": k, "l": l}
+
+
+def test_a_new_sample_beside_one_lattice_constant_adopts_the_rest_on_patch(ctrl):
+    patch = _pb_patch(ctrl, ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters(patch)
+    assert not errors, errors
+    state = ctrl.api_parameters()
+    assert state["lattice_b_angstrom"] == pytest.approx(PB_A)
+    _assert_read_back(ctrl, applied, patch)
+
+
+def test_a_new_sample_beside_one_lattice_constant_adopts_the_rest_on_launch(launcher):
+    patch = _pb_patch(launcher, launcher._default_parameter_values())
+    vals = launcher.build_api_launch_state({**patch, "scan_command1": SCAN})["vals"]
+    assert vals["sample"] == PB
+    assert vals["lattice_b"] == pytest.approx(PB_A)
