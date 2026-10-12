@@ -6,6 +6,11 @@ motors the GUI held while its metadata echoed the patched H.
 ``build_api_launch_state`` now solves the stage from the patched geometry first,
 with the solver an H-only scan uses; each test compares against the snapshot of
 that H-only scan at the same point.
+
+A patch that names only a crystal motor or an energy (A2, A6, Ei, Ef, Ki, Kf) and
+no position, lattice, sample, transfer or fixed energy keeps the stage and derives
+Q, H, K, L and the energy transfer from the motors, as the dock does (operator,
+12 October 2026: follow the motors).
 """
 import os
 import sys
@@ -60,6 +65,17 @@ def _assert_stage(metadata, reference, skip=()):
             assert metadata[key] == pytest.approx(reference[key], abs=1e-9), key
 
 
+def _assert_follows_motors(controller, vals):
+    """The launch's Q, HKL and transfer are the forward kinematics of the motors it carries."""
+    q, errors = controller.instrument_state.calculate_q_and_deltaE(
+        vals["mtt"], vals["stt"], vals["omega"], vals["sgl"], vals["att"],
+        vals["fixed_E"], vals["K_fixed"], vals["monocris"], vals["anacris"], sgu=vals["sgu"])
+    assert not errors, errors
+    hkl = controller._sample_q_to_hkl(q[0], q[1], q[2], vals)
+    assert [vals["qx"], vals["qy"], vals["qz"], vals["deltaE"]] == pytest.approx(list(q), abs=1e-9)
+    assert [vals["H"], vals["K"], vals["L"]] == pytest.approx(list(hkl), abs=1e-9)
+
+
 def test_a_radius_scan_runs_at_the_stage_the_patched_h_solves(ctrl):
     reference = _run(ctrl, {"K": 0.0, "L": 0.0}, "H 1.2 1.2 1")[0]
     held = _run(ctrl, {}, "rhm 2 3 1")[0]
@@ -86,7 +102,18 @@ def test_an_energy_transfer_alone_moves_the_stage(ctrl):
         _assert_stage(metadata, reference)
 
 
-def test_a_patched_energy_is_solved_with_the_same_stage(ctrl):
+def test_a_patched_energy_keeps_the_stage_and_moves_the_position(ctrl):
+    held = _run(ctrl, {}, "rhm 2 3 1")[0]
+    patch = {"Ei": 12.0}
+    for metadata in _run(ctrl, patch, "rhm 2 3 1"):
+        _assert_stage(metadata, held, skip=("mtt",))
+        assert metadata["mtt"] != pytest.approx(held["mtt"], abs=0.5)   # the crystal took the energy
+    vals = ctrl.build_api_launch_state({**patch, "scan_command1": "rhm 2 3 1"})["vals"]
+    assert vals["Ei"] == pytest.approx(12.0)
+    _assert_follows_motors(ctrl, vals)
+
+
+def test_a_patched_energy_beside_a_position_is_solved_with_the_same_stage(ctrl):
     reference = _run(ctrl, {"fixed_E": 12.0, "H": 1.2}, "H 1.2 1.2 1")[0]
     for metadata in _run(ctrl, {"fixed_E": 12.0, "H": 1.2}, "rhm 2 3 1"):
         _assert_stage(metadata, reference)
@@ -135,7 +162,20 @@ def test_a_position_beside_an_hkl_scan_is_left_to_the_points(ctrl):
     assert (vals["stt"], vals["omega"]) == (held["stt"], held["omega"])
 
 
-def test_a_patched_mono_two_theta_sets_the_energy_the_stage_solves_at(ctrl):
+def test_a_patched_mono_two_theta_keeps_the_stage_and_moves_the_position(ctrl):
+    held = _run(ctrl, {}, "rhm 2 3 1")[0]
+    sense = ctrl.instrument_state.sense_mono
+    patch = {"A2": 40.0 * sense}
+    for metadata in _run(ctrl, patch, "rhm 2 3 1"):
+        _assert_stage(metadata, held, skip=("mtt",))
+        assert metadata["mtt"] == pytest.approx(40.0 * sense)
+    vals = ctrl.build_api_launch_state({**patch, "scan_command1": "rhm 2 3 1"})["vals"]
+    _assert_follows_motors(ctrl, vals)
+    assert vals["deltaE"] != pytest.approx(ctrl.build_api_launch_state(
+        {"scan_command1": "rhm 2 3 1"})["vals"]["deltaE"], abs=0.1)   # the energy moved the transfer
+
+
+def test_a_patched_mono_two_theta_beside_a_position_sets_the_energy_the_stage_solves_at(ctrl):
     vals = ctrl._default_parameter_values()
     mono_info, _ = ctrl.instrument.crystal_info(vals["monocris"], vals["anacris"])
     sense = ctrl.instrument_state.sense_mono   # the readout's sign convention: 40 degrees is 40*sense
@@ -149,7 +189,20 @@ def test_a_patched_mono_two_theta_sets_the_energy_the_stage_solves_at(ctrl):
         assert metadata["mtt"] == pytest.approx(40.0 * sense)
 
 
-def test_a_patched_analyser_two_theta_sets_the_energy_transfer_for_the_stage(ctrl):
+def test_a_patched_analyser_two_theta_keeps_the_stage_and_moves_the_position(ctrl):
+    held = _run(ctrl, {}, "rhm 2 3 1")[0]
+    sense = ctrl.instrument_state.sense_ana
+    patch = {"A6": 40.0 * sense}
+    for metadata in _run(ctrl, patch, "rhm 2 3 1"):
+        _assert_stage(metadata, held, skip=("att",))
+        assert metadata["att"] == pytest.approx(40.0 * sense)
+    vals = ctrl.build_api_launch_state({**patch, "scan_command1": "rhm 2 3 1"})["vals"]
+    _assert_follows_motors(ctrl, vals)
+    # The incident side stays where the caller left it; the transfer follows the analyser.
+    assert vals["mtt"] == pytest.approx(held["mtt"], abs=1e-9)
+
+
+def test_a_patched_analyser_two_theta_beside_a_position_sets_the_energy_transfer_for_the_stage(ctrl):
     vals = ctrl._default_parameter_values()
     _, ana_info = ctrl.instrument.crystal_info(vals["monocris"], vals["anacris"])
     sense = ctrl.instrument_state.sense_ana

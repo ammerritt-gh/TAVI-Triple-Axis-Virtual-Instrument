@@ -111,6 +111,8 @@ READ_BACK = {
     "ei alone": lambda ctrl: {"Ei": 20.0},
     "ki fixed and ei": lambda ctrl: {"K_fixed": "Ki Fixed", "Ei": 20.0},
     "fixed energy and h": lambda ctrl: {"fixed_E": 12.0, "H": 1.0},
+    "fixed energy and the free side": lambda ctrl: {"fixed_E": 12.0, "Ei": 20.0},
+    "ki fixed and ef": lambda ctrl: {"K_fixed": "Ki Fixed", "Ef": 12.0},
     "ei and the transfer it implies": _agreeing_energies,
     "ki and the ei it implies": _agreeing_wavevector,
     "a3 and an arc": lambda ctrl: {"A3": 10.0, "sgl": 1.0},
@@ -178,6 +180,83 @@ def test_a_stage_motor_alone_keeps_the_stage_at_the_callers(launcher):
     assert vals["omega"] == 12.0
     assert (vals["stt"], vals["sgl"], vals["sgu"], vals["mtt"], vals["att"]) == (
         held["stt"], held["sgl"], held["sgu"], held["mtt"], held["att"])
+
+
+# --------------------------------------------- the launch follows the motors
+
+def _launch_follows_motors(launcher, patch):
+    state = launcher.build_api_launch_state({**patch, "scan_command1": SCAN})
+    vals = state["vals"]
+    q, errors = launcher.instrument_state.calculate_q_and_deltaE(
+        vals["mtt"], vals["stt"], vals["omega"], vals["sgl"], vals["att"],
+        vals["fixed_E"], vals["K_fixed"], vals["monocris"], vals["anacris"], sgu=vals["sgu"])
+    assert not errors, errors
+    assert [vals["qx"], vals["qy"], vals["qz"], vals["deltaE"]] == pytest.approx(list(q), abs=1e-9)
+    hkl = launcher._sample_q_to_hkl(q[0], q[1], q[2], vals)
+    assert [vals["H"], vals["K"], vals["L"]] == pytest.approx(list(hkl), abs=1e-9)
+    return vals
+
+
+@pytest.mark.parametrize("patch", [
+    {"A4": 40.0}, {"A2": 40.0, "A4": 40.0}, {"A2": 40.0}, {"A6": 50.0}, {"Ei": 20.0},
+    {"Ki": 2.0}, {"Ef": 12.0}, {"Kf": 2.0}, {"A3": 20.0}, {"sgl": 1.0, "A2": 40.0},
+])
+def test_a_motor_or_energy_launch_patch_derives_the_position_from_its_motors(launcher, patch):
+    default = launcher.build_api_launch_state({"scan_command1": SCAN})["vals"]
+    vals = _launch_follows_motors(launcher, patch)
+    named = {cm._to_internal(name) for name in launcher._api_resolve_patch(
+        patch, launcher._api_field_map())[0]}
+    # The stage is the default state's except for the motors the caller named.
+    for key in ("stt", "omega", "sgl", "sgu"):
+        if key not in named:
+            assert vals[key] == default[key], key
+
+
+@pytest.mark.parametrize("route", ["dock", "patch"])
+@pytest.mark.parametrize("field, edit, value", [
+    ("A2", "mtt_edit", 40.0), ("A6", "att_edit", 50.0), ("Ei", "Ei_edit", 20.0),
+    ("Kf", "Kf_edit", 2.0),
+])
+def test_the_dock_patch_and_launch_give_one_answer_for_the_same_motors(ctrl, route, field, edit, value):
+    launch = ctrl.build_api_launch_state({field: value, "scan_command1": SCAN})["vals"]
+    if route == "dock":
+        widget = getattr(ctrl.window.instrument_dock, edit)
+        widget.setText(cm.format_editable_number(value))
+        widget.editingFinished.emit()
+    else:
+        applied, errors = ctrl.apply_parameters({field: value})
+        assert not errors
+    state = ctrl.api_parameters()
+    expected = {"mono_two_theta_deg": launch["mtt"], "sample_two_theta_deg": launch["stt"],
+                "sample_rotation_deg": launch["omega"], "analyzer_two_theta_deg": launch["att"],
+                "q_instrument_x_inv_angstrom": launch["qx"], "q_instrument_y_inv_angstrom": launch["qy"],
+                "q_instrument_z_inv_angstrom": launch["qz"], "energy_transfer_mev": launch["deltaE"],
+                "h": launch["H"], "k": launch["K"], "l": launch["L"],
+                "incident_energy_mev": launch["Ei"], "final_energy_mev": launch["Ef"]}
+    assert {key: state[key] for key in expected} == pytest.approx(expected, abs=TOL)
+
+
+def test_a_named_energy_beside_the_fixed_energy_wins_in_the_launch(launcher):
+    vals = launcher.build_api_launch_state(
+        {"fixed_E": 12.0, "Ei": 20.0, "scan_command1": SCAN})["vals"]
+    assert (vals["Ei"], vals["Ef"], vals["fixed_E"]) == pytest.approx((20.0, 12.0, 12.0))
+    assert vals["deltaE"] == pytest.approx(8.0)
+    vals = launcher.build_api_launch_state(
+        {"K_fixed": "Ki Fixed", "Ef": 12.0, "scan_command1": SCAN})["vals"]
+    assert (vals["Ef"], vals["fixed_E"], vals["Ei"]) == pytest.approx((12.0, vals["Ei"], vals["Ei"]))
+    assert vals["deltaE"] == pytest.approx(vals["Ei"] - 12.0)
+
+
+def test_a_named_position_beside_a_crystal_motor_still_solves_the_stage(launcher):
+    vals = launcher.build_api_launch_state(
+        {"qx": 2.0, "qy": 1.0, "qz": 0.0, "A2": 30.0, "scan_command1": SCAN})["vals"]
+    assert vals["mtt"] == 30.0
+    assert [vals["qx"], vals["qy"], vals["qz"]] == [2.0, 1.0, 0.0]
+    q, errors = launcher.instrument_state.calculate_q_and_deltaE(
+        vals["mtt"], vals["stt"], vals["omega"], vals["sgl"], vals["att"],
+        vals["fixed_E"], vals["K_fixed"], vals["monocris"], vals["anacris"], sgu=vals["sgu"])
+    assert not errors
+    assert list(q[:3]) == pytest.approx([2.0, 1.0, 0.0], abs=1e-6)
 
 
 # ------------------------------------------------------------- contradictions
