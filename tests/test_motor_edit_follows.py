@@ -18,7 +18,7 @@ from PySide6.QtTest import QTest  # noqa: E402
 import instruments.builtin  # noqa: F401,E402
 from test_orientation_gui import _controller_for  # noqa: E402
 from TAVI_PySide6 import format_editable_number  # noqa: E402
-from instruments.tas_runtime import describe_scan_error_flags  # noqa: E402
+from instruments.tas_runtime import compute_scan_snapshot, describe_scan_error_flags  # noqa: E402
 from tavi.neutron_conversions import energy2k, k2angle  # noqa: E402
 
 TOL = 2e-3  # the dock shows 4 decimals; forward kinematics of the shown motors
@@ -119,57 +119,98 @@ def test_a2_edit_emits_one_reciprocal_snapshot_at_new_position(ctrl):
         [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit)], abs=1e-9)
 
 
-def test_zero_take_off_leaves_q_and_says_why(ctrl):
-    """Both crystals at exactly zero select no energy, so Q has no value at
-    these motors: the fields keep the last position and the message center
-    says so. A2 alone still has a Q (only the analyzer side is lost)."""
+def _kept(ctrl):
+    """Every energy, wavevector and position field the dock shows, in a fixed order."""
     idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
-    _type_and_finish(idock.mtt_edit, 0.0)
-    before = [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit),
-              _num(sdock.H_edit), _num(sdock.K_edit), _num(sdock.L_edit)]
+    edits = (idock.Ki_edit, idock.Ei_edit, idock.Kf_edit, idock.Ef_edit, sdock.fixed_E_edit,
+             sdock.deltaE_edit, sdock.qx_edit, sdock.qy_edit, sdock.qz_edit,
+             sdock.H_edit, sdock.K_edit, sdock.L_edit)
+    return [_num(edit) for edit in edits]
+
+
+ZERO_TAKE_OFFS = [("mtt_edit", 60.0, "Kf Fixed"), ("mtt_edit", 60.0, "Ki Fixed"),
+                  ("att_edit", 50.0, "Kf Fixed"), ("att_edit", 50.0, "Ki Fixed")]
+
+
+@pytest.mark.parametrize("edit,off_zero,mode", ZERO_TAKE_OFFS)
+def test_a_single_zero_take_off_keeps_the_energies_and_the_position_and_says_why(ctrl, edit, off_zero, mode):
+    """A crystal at exactly zero transmits and selects no energy: that side's energy and
+    wavevector, the fixed energy, Q, HKL and the transfer keep their last values (never 0) under
+    the stale mark, with a notice; moving the angle off zero derives forward again."""
+    idock = ctrl.window.instrument_dock
+    _, errors = ctrl.apply_parameters({"K_fixed": mode})
+    assert not errors, errors
+    before = _kept(ctrl)
     seen = []
     ctrl.message_printed.connect(seen.append)
     try:
-        _type_and_finish(idock.att_edit, 0.0)
+        _type_and_finish(getattr(idock, edit), 0.0)
     finally:
         ctrl.message_printed.disconnect(seen.append)
-
-    vals = ctrl.get_gui_values()
-    _, errors = ctrl.instrument_state.calculate_q_and_deltaE(
-        _num(idock.mtt_edit), _num(idock.stt_edit), _num(idock.omega_edit),
-        _num(idock.sgl_edit), _num(idock.att_edit),
-        vals["fixed_E"], vals["K_fixed"], vals["monocris"], vals["anacris"],
-        sgu=_num(idock.sgu_edit),
-    )
-    assert errors, "precondition: A2 = A6 = 0 must raise an error flag"
-    notice = [m for m in seen if "cannot follow these motors" in m]
-    assert notice, seen
-    assert describe_scan_error_flags(errors) in notice[0]
-    assert "still show the previous position" in notice[0]
-    assert [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit),
-            _num(sdock.H_edit), _num(sdock.K_edit), _num(sdock.L_edit)] == pytest.approx(
-        before, abs=TOL)
-
-
-def test_zero_take_off_marks_the_position_stale_and_clears_on_the_next_edit(ctrl):
-    """The motors define no Q at A2 = A6 = 0: the Q/HKL fields keep the last point under the
-    same stale mark a typed Q the stage cannot reach gets, and the next good motor edit clears it."""
-    idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
-    _type_and_finish(idock.mtt_edit, 0.0)
-    seen = []
-    ctrl.message_printed.connect(seen.append)
-    try:
-        _type_and_finish(idock.att_edit, 0.0)
-    finally:
-        ctrl.message_printed.disconnect(seen.append)
+    assert _kept(ctrl) == pytest.approx(before, abs=1e-9)
     assert idock.angles_stale_label.isVisibleTo(idock)
     assert ctrl._angles_stale
-    assert any("cannot follow these motors" in m for m in seen), seen
+    notice = [m for m in seen if "transmits" in m and "selects no energy" in m]
+    assert notice, seen
+    _type_and_finish(getattr(idock, edit), off_zero)
+    assert not idock.angles_stale_label.isVisibleTo(idock)
+    assert not ctrl._angles_stale
+    _assert_follows_motors(ctrl)
+
+
+def test_zero_take_off_of_both_crystals_leaves_q_and_says_why(ctrl):
+    """Both crystals at exactly zero select no energy, so Q has no value at these motors: the
+    fields keep the last position and the message center says why."""
+    idock = ctrl.window.instrument_dock
+    _type_and_finish(idock.mtt_edit, 0.0)
+    before = _kept(ctrl)
+    seen = []
+    ctrl.message_printed.connect(seen.append)
+    try:
+        _type_and_finish(idock.att_edit, 0.0)
+    finally:
+        ctrl.message_printed.disconnect(seen.append)
+    assert _kept(ctrl) == pytest.approx(before, abs=1e-9)
+    notice = [m for m in seen if "transmits" in m and "selects no energy" in m]
+    assert notice, seen
+    assert "still show the previous position" in notice[0]
+    assert idock.angles_stale_label.isVisibleTo(idock)
     _type_and_finish(idock.mtt_edit, 60.0)
     _type_and_finish(idock.att_edit, 50.0)
     assert not idock.angles_stale_label.isVisibleTo(idock)
     assert not ctrl._angles_stale
     _assert_follows_motors(ctrl)
+
+
+@pytest.mark.parametrize("name,energy", [("A2", "incident_energy_mev"), ("A6", "final_energy_mev")])
+def test_a_patched_zero_take_off_reports_no_zero_energy_and_no_q_from_a_zero_wavevector(ctrl, name, energy):
+    before = ctrl.api_parameters()
+    applied, errors = ctrl.apply_parameters({name: 0.0})
+    assert not errors, errors
+    state = ctrl.api_parameters()
+    assert state[energy] == pytest.approx(before[energy]) and state[energy] != 0
+    keys = ("q_instrument_x_inv_angstrom", "q_instrument_y_inv_angstrom", "q_instrument_z_inv_angstrom",
+            "h", "k", "l", "energy_transfer_mev", "fixed_E")
+    assert [state[k] for k in keys] == pytest.approx([before[k] for k in keys], abs=1e-9)
+    assert ctrl._angles_stale
+
+
+@pytest.mark.parametrize("edit,side,energy,wavevector", [
+    ("mtt_edit", "mono", "Ei", "Ki"), ("att_edit", "ana", "Ef", "Kf")])
+def test_a_gui_run_at_a_zero_take_off_records_that_energy_absent(ctrl, edit, side, energy, wavevector):
+    """The Run button's launch (dock state, kept energies and all) runs the transmission path:
+    that side's energy and wavevector are recorded absent, never the kept number and never 0."""
+    _type_and_finish(getattr(ctrl.window.instrument_dock, edit), 0.0)
+    ctrl.window.simulation_dock.scan_command_1_edit.setText("A4 20 22 1")
+    launch = ctrl._collect_simulation_launch_state()
+    # The launch's own numbers, as the API launch records them (they reach the parameters file).
+    assert launch["vals"][energy] is None and launch["vals"][wavevector] is None
+    plan, expansion = ctrl._compile_launch(launch)
+    metadata = compute_scan_snapshot(plan, expansion.points[0], 0, launch["scan_config"],
+                                     launch["vals"], "unused").metadata
+    assert side in metadata["transmission"]
+    assert metadata[energy] is None and metadata[wavevector] is None
+    assert not ctrl.validate_scan_launch_state(launch)["infeasible"]   # the run's own feasibility check
 
 
 def _equal_energy_mono_text(ctrl):

@@ -1392,7 +1392,9 @@ Set them with `PATCH /parameters` (or the inline `parameters` block on
   says which of Q, h, k, l and the energy transfer could not follow the motors. It is refused beside
   a scan that re-solves the crystal angles at every point (an H, K, L or Q scan) and beside a
   position (`h`, `k`, `l`, `qx`, `qy`, `qz`), because with no energy selected no stage can be solved
-  from the position.
+  from the position. `PATCH /parameters` with such an angle (and a typed one in the panels) keeps that
+  side's energy and wavevector, the fixed energy, Q, h, k, l and the energy transfer as they were,
+  never a zero energy.
 - **An empty field refuses.** A scan that reads a numeric field (a relative base, or a quantity
   it uses as typed, such as K in an H scan) refuses when the field holds no number, and names
   it. It is never read as 0.

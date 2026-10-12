@@ -3304,6 +3304,11 @@ class TAVIController(QObject):
         vals = self.get_gui_values()
         if not vals:
             return None
+        # A crystal at exactly zero take-off transmits: the dock keeps its last energy for it
+        # (on_angles_changed), but the launch records it absent, as the API launch does.
+        for angle, energy, wavevector in (('mtt', 'Ei', 'Ki'), ('att', 'Ef', 'Kf')):
+            if vals[angle] == 0:
+                vals[energy] = vals[wavevector] = None
 
         try:
             sample_key = self.window.sample_dock.get_selected_sample_key()
@@ -3990,6 +3995,10 @@ class TAVIController(QObject):
         # Check if value actually changed
         if not self._field_value_changed('mtt', vals['mtt']):
             return
+
+        if vals['mtt'] == 0:   # a transmitting crystal selects no energy: the fields keep theirs
+            self.on_angles_changed()
+            return
         
         try:
             self.updating = True
@@ -4028,6 +4037,10 @@ class TAVIController(QObject):
         
         # Check if value actually changed
         if not self._field_value_changed('att', vals['att']):
+            return
+
+        if vals['att'] == 0:   # a transmitting crystal selects no energy: the fields keep theirs
+            self.on_angles_changed()
             return
         
         try:
@@ -4251,7 +4264,12 @@ class TAVIController(QObject):
             sgl = float(self.window.instrument_dock.sgl_edit.text() or 0)
             sgu = float(self.window.instrument_dock.sgu_edit.text() or 0)
 
-            q_vals, error_flags = self.instrument_state.calculate_q_and_deltaE(
+            # A crystal at exactly zero take-off transmits: it selects no energy, so the
+            # energies keep their last values and Q cannot follow (the launch records the energy absent).
+            transmitting = [f"{name} = 0 (the {crystal} transmits the beam and selects no energy)"
+                            for name, crystal, angle in (("A2", "monochromator", mtt),
+                                                         ("A6", "analyzer", att)) if angle == 0]
+            q_vals, error_flags = (None, None) if transmitting else self.instrument_state.calculate_q_and_deltaE(
                 mtt, stt, sth, sgl, att,
                 vals['fixed_E'], vals['K_fixed'],
                 vals['monocris'], vals['anacris'], sgu=sgu,
@@ -4259,7 +4277,13 @@ class TAVIController(QObject):
             # Zero |Q| at A4 = 0 is not a failed derivation: the motors give forward
             # scattering, Q = 0 and HKL = 0 (the launch records the same).
             forward = error_flags == ["q"] and stt == 0
-            if not error_flags or forward:
+            if transmitting:
+                reason = "; ".join(transmitting)
+                self.print_to_message_center(
+                    f"Q, HKL and the energy transfer cannot follow these motors: {reason}; "
+                    "the energies, Q and HKL still show the previous position.")
+                self._set_angles_stale(reason)
+            elif not error_flags or forward:
                 qx, qy, qz, deltaE = q_vals
                 self._set_angles_stale(None)     # Q now follows the angles
                 if forward:
