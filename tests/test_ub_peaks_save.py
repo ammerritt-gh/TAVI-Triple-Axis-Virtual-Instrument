@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtTest import QTest  # noqa: E402
 
+import TAVI_PySide6 as cm  # noqa: E402
 from test_orientation_gui import _controller_for  # noqa: E402
 from tavi.local_state import config_path  # noqa: E402
 from tavi.ub_matrix import ObservedPeak  # noqa: E402
@@ -170,3 +171,42 @@ def test_an_unreadable_observation_is_named_on_save(controller):
         assert fh.read() == before
     assert any("Parameters not saved" in line and "Peak 1" in line for line in seen), seen
     assert "Parameters saved successfully" not in seen
+
+
+def _save_and_close_diagnostics(controller, monkeypatch):
+    """Press Save and Close on the diagnostics dialog (a stand-in that returns the current
+    settings); return the message-center lines that press printed."""
+    settings = controller.diagnostic_settings
+
+    class _Dialog:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return 1
+
+        def get_settings(self):
+            return settings
+
+    monkeypatch.setattr(cm, "DiagnosticConfigDialog", _Dialog)
+    seen = []
+    controller.message_printed.connect(seen.append)
+    try:
+        controller.configure_diagnostics()
+    finally:
+        controller.message_printed.disconnect(seen.append)
+    return seen
+
+
+def test_diagnostics_save_and_close_says_saved_only_when_it_wrote(controller, monkeypatch):
+    _blank_dock(controller)
+    _take_one(controller, (2, 0, 0))
+    seen = _save_and_close_diagnostics(controller, monkeypatch)
+    assert "Diagnostic settings saved" in seen, seen
+
+    pw = controller.window.ub_matrix_dock.get_peak_widget(0)
+    pw.h_edit.clear()
+    QTest.keyClicks(pw.h_edit, "-")
+    seen = _save_and_close_diagnostics(controller, monkeypatch)
+    assert any("Parameters not saved" in line for line in seen), seen
+    assert "Diagnostic settings saved" not in seen, seen

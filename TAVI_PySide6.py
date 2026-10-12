@@ -5896,8 +5896,8 @@ class TAVIController(QObject):
             # Update the live instrument state with new settings
             self.instrument_state.update_diagnostic_settings(self.diagnostic_settings)
             # Save parameters to persist the settings
-            self.save_parameters()
-            self.print_to_message_center("Diagnostic settings saved")
+            if self.save_parameters():
+                self.print_to_message_center("Diagnostic settings saved")
         else:
             self.print_to_message_center("Diagnostic configuration cancelled")
     
@@ -6188,6 +6188,7 @@ class TAVIController(QObject):
 
         self._edit_parameters_file(put_block)
         self.print_to_message_center("Parameters saved successfully")
+        return True   # a refusal above returns None: nothing was written
 
     def _edit_parameters_file(self, edit):
         """The one writer of parameters.json. Reads the document (only the
