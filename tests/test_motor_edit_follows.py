@@ -14,6 +14,7 @@ pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
 from test_orientation_gui import _controller_for  # noqa: E402
@@ -211,6 +212,29 @@ def test_a_gui_run_at_a_zero_take_off_records_that_energy_absent(ctrl, edit, sid
     assert side in metadata["transmission"]
     assert metadata[energy] is None and metadata[wavevector] is None
     assert not ctrl.validate_scan_launch_state(launch)["infeasible"]   # the run's own feasibility check
+
+
+def test_a_gui_run_refuses_a_zero_take_off_beside_a_scan_that_re_solves_the_crystals(ctrl, monkeypatch):
+    """Run refuses what the API refuses: a zero A2 beside an H scan (the crystal angles are
+    re-solved per point) never starts, while a direct-motor scan at the same zero still runs."""
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.No)
+    submitted = []
+    monkeypatch.setattr(ctrl, "submit_scan_job", lambda *a, **k: submitted.append(a))
+    seen = []
+    ctrl.message_printed.connect(seen.append)
+    try:
+        _type_and_finish(ctrl.window.instrument_dock.mtt_edit, 0.0)
+        sdock = ctrl.window.simulation_dock
+        sdock.scan_command_1_edit.setText("H 1 2 0.5")
+        ctrl.run_simulation_thread()
+        assert submitted == [], seen
+        assert any("re-solves" in m and "A2" in m for m in seen), seen
+        sdock.scan_command_1_edit.setText("A4 20 22 1")
+        ctrl.run_simulation_thread()
+        assert len(submitted) == 1, seen
+    finally:
+        ctrl.message_printed.disconnect(seen.append)
 
 
 def _equal_energy_mono_text(ctrl):

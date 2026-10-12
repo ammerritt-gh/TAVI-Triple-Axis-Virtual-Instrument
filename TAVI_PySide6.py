@@ -3285,21 +3285,27 @@ class TAVIController(QObject):
         raise ApiError(400, "invalid_parameters", message,
                        details={"errors": {name: message for name in pair}})
 
-    def _refuse_zero_takeoff_that_is_re_solved(self, vals, zero_takeoffs, submitted):
-        """A zero take-off cannot be kept by a scan that solves the crystal angles per point.
+    def _zero_takeoff_re_solved(self, vals, zero_takeoffs):
+        """The reason a zero take-off cannot stand beside this scan, or None.
 
-        An H, K, L or Q scan re-derives A2 and A6 from the energies, so its points would run at
-        a nonzero crystal while the launch recorded that energy absent.
+        A scan that solves the crystal angles per point (an H, K, L or Q scan) re-derives A2 and
+        A6 from the energies, so its points would run at a nonzero crystal while the launch
+        recorded that energy absent. The API launch and the GUI Run's scan-command gate share this.
         """
         commands = [text for text in (vals.get('scan_command1'), vals.get('scan_command2'))
                     if text and text.strip()]
-        if selected_calculation([(text, False) for text in commands]) in (None, MOTORS):
+        if not zero_takeoffs or selected_calculation([(text, False) for text in commands]) in (None, MOTORS):
+            return None
+        return ("%s cannot be kept: the scan command %s re-solves the crystal angles at every "
+                "point, so that crystal would not stay at zero."
+                % (self._motor_names(vals, zero_takeoffs),
+                   "; ".join("'%s'" % text.strip() for text in commands)))
+
+    def _refuse_zero_takeoff_that_is_re_solved(self, vals, zero_takeoffs, submitted):
+        reason = self._zero_takeoff_re_solved(vals, zero_takeoffs)
+        if reason is None:
             return
-        names = self._motor_names(vals, zero_takeoffs)
-        message = ("%s cannot be kept: the scan command %s re-solves the crystal angles at every "
-                   "point, so that crystal would not stay at zero. Scan the motors directly or "
-                   "leave that crystal unpatched."
-                   % (names, "; ".join("'%s'" % text.strip() for text in commands)))
+        message = reason + " Scan the motors directly or leave that crystal unpatched."
         raise ApiError(400, "invalid_parameters", message,
                        details={"errors": {submitted.get(_to_public(f), _to_public(f)): message for f in zero_takeoffs}})
 
@@ -7713,7 +7719,8 @@ class TAVIController(QObject):
 
         Hard is the plan's refusal of the pair or of a command in its own box
         (``_judge_boxes``, the same verdict the command labels show), ``Command N: ``-prefixed
-        unless it already names its box; soft a "⚠" note, the operator's call. Reads no
+        unless it already names its box; soft a "⚠" note, the operator's call. A zero take-off
+        beside a scan that re-solves the crystals is hard too. Reads no
         widgets: the GUI passes its collected launch, the API its frozen one.
         """
         _plan, accepted, refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
@@ -7723,6 +7730,11 @@ class TAVIController(QObject):
             if text:
                 hard.append(text if text.startswith(f"Command {number} ")
                             else f"Command {number}: {text}")
+        vals = launch_state['vals']
+        re_solved = self._zero_takeoff_re_solved(
+            vals, [angle for angle in ('mtt', 'att') if vals[angle] == 0])
+        if re_solved:
+            hard.append(re_solved)
         soft = [f"Command {number}: {note}" for number, command in sorted(accepted.items())
                 if (note := self._scan_command_note(command)) and "⚠" in note]
         return hard, soft
