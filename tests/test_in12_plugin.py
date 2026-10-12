@@ -530,10 +530,10 @@ def test_heusler_rva_held_does_not_block_an_unrelated_rhm_autofocus(tmp_path):
 
     rhm_values = []
     rva_magnitudes = []
-    for A1 in (-55.834469, -50.0):
+    for A2 in (-55.834469, -50.0):
         snapshot = compute_scan_snapshot(
             plan_for(IN12Plugin(), state, vals, MOTORS),
-            motors_point(A1, 0.0, 0.0, -55.834469), 0, state, vals, str(tmp_path),
+            motors_point(A2, 0.0, 0.0, -55.834469), 0, state, vals, str(tmp_path),
         )
         assert snapshot.error_flags == [], snapshot.error_flags
         assert snapshot.metadata["curvature_modes"]["rhm"] == "autofocus"

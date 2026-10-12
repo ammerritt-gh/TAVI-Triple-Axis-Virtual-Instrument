@@ -203,7 +203,7 @@ def test_crystal_bending_is_point_source_and_branch_signed():
 
     plugin = IN8Plugin()
     state = plugin.default_state()
-    mth, ath = 20.59, -20.59       # signed angles: A4/2 is negative on IN8
+    mth, ath = 20.59, -20.59       # signed angles: A6/2 is negative on IN8
     radii = state.ideal_curvature("pg002", "pg002", mth, ath)
 
     assert radii["rhm"] == pytest.approx(6.7556, abs=5e-5)
@@ -221,7 +221,7 @@ def test_scanned_rha_lands_on_the_negative_take_off_branch(tmp_path):
     forced its branch -- a ~1e7x defocus bug this slice fixes by moving
     branch-signing into the one shared setter
     (``instruments/tas_runtime.py::TAS_Instrument.set_crystal_bending``).
-    IN8 takes off NEGATIVE at the analyser (A4 is negative), so a positive
+    IN8 takes off NEGATIVE at the analyser (A6 is negative), so a positive
     scanned rha must arrive negative.
     """
     pytest.importorskip("mcstasscript")

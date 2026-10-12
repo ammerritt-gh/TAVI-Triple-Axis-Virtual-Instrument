@@ -253,7 +253,7 @@ def test_default_instrument_senses_are_baked_convention():
 # IN8 goldens -- vTAS-verified 2026-07-02 (live run; magnitudes within 0.02
 # deg, signs exact: a2 +, a4 +, a6 -, i.e. senses (+1, +1, -1)). Setup: cubic
 # a=4.05, plane (1,0,0)/(0,1,0); kf fixed 2.662 (V1-V3), ki fixed 4.1 (V4).
-# Mapping: TAVI A1 = vTAS a2, A2 = a4, A4 = a6, A3 = a3 (Friedel/-Q branch).
+# Mapping: TAVI A2 = vTAS a2, A4 = a4, A6 = a6, A3 = a3 (Friedel/-Q branch).
 # The a3 convention is ALSO vTAS-verified: the user's live a3(V3) = 69.337
 # matches TAVI's sth to three decimals, and a3(V1) = 125.647 is TAVI's value
 # +90.000 exactly -- vTAS displayed the cubic-equivalent (0,2,0) setting for

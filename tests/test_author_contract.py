@@ -81,7 +81,7 @@ def test_instrument_extras_live_under_the_instrument_namespace():
     "instrument.other.cell_gain",          # another instrument's namespace
     "instrument.contract_fixture.Cell",    # a capital letter in the name
     "A4",                                  # an alias, not a canonical ID
-    "psi",                                 # a retired alias
+    "psi",                                 # alias of A3, not a canonical ID
     "mono_theta_deg",                      # derived: no input may set A1
 ])
 def test_undeclared_or_derived_quantities_are_refused(qid):

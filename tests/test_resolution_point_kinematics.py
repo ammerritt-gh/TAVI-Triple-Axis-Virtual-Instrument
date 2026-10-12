@@ -5,7 +5,7 @@ must reach the analytic resolution model.
 overlaid only rhm/rvm/rha/rva onto the frozen launch ``vals``, while
 ``resolution_adapter._kfix`` prefers ``vals['Ki']``/``vals['Kf']`` -- the
 LAUNCH wavevector. In angle-scan mode neither Ei nor Ef is held at
-``fixed_E`` (``nominal_energies_from_angles``'s docstring): a direct A4 scan
+``fixed_E`` (``nominal_energies_from_angles``'s docstring): a direct A6 scan
 moves the analyser away from the take-off angle ``fixed_E`` predicted, so the
 snapshot's own Ei/Ki/Ef/Kf differ from what the launch ``vals`` carries. Only
 the overlay now includes them.
@@ -63,9 +63,9 @@ def _angle_snapshot(plugin, mtt, stt, sth, att, tmp_path, K_fixed="Kf Fixed"):
 
 
 def test_kf_fixed_angle_point_uses_its_own_kf_not_the_launch_kf(tmp_path):
-    """A1 = -74.332, A4 = +50 (PANDA's opposite-branch A4,
+    """A2 = -74.332, A6 = +50 (PANDA's opposite-branch A6,
     ``test_resolution_point_sense.py``'s ``_OPPOSITE_BRANCH_ATT``), nominally
-    Kf-fixed at 4.97845 meV. In angle mode the analyser take-off (A4=+50)
+    Kf-fixed at 4.97845 meV. In angle mode the analyser take-off (A6=+50)
     does not sit where fixed_E predicts, so the point's own Kf/Ei must reach
     the resolution model -- not the launch's fixed_E-derived Kf."""
     from TAVI_PySide6 import _vals_with_point_state
@@ -91,7 +91,7 @@ def test_kf_fixed_angle_point_uses_its_own_kf_not_the_launch_kf(tmp_path):
 
 
 def test_ki_fixed_angle_point_uses_its_own_ki_not_the_launch_ki(tmp_path):
-    """Mirror case: Ki-fixed, A1 scanned away from where fixed_E predicts."""
+    """Mirror case: Ki-fixed, A2 scanned away from where fixed_E predicts."""
     from TAVI_PySide6 import _vals_with_point_state
 
     plugin = PANDAPlugin()
