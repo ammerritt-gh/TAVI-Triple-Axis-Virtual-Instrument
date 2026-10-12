@@ -115,10 +115,18 @@ def test_validate_and_scan_refuse_it_the_same_way(ctrl):
 
 def test_a_patched_stage_motor_keeps_the_stage_the_callers(ctrl):
     held = ctrl.build_api_launch_state({"scan_command1": "rhm 2 3 1"})["vals"]
-    vals = ctrl.build_api_launch_state({"H": 1.2, "A4": 40.0, "scan_command1": "rhm 2 3 1"})["vals"]
+    vals = ctrl.build_api_launch_state({"A4": 40.0, "scan_command1": "rhm 2 3 1"})["vals"]
     assert vals["stt"] == 40.0
     # The stage is then the caller's whole: nothing else is solved for a 2-theta they did not choose.
     assert (vals["omega"], vals["sgl"], vals["sgu"]) == (held["omega"], held["sgl"], held["sgu"])
+
+
+def test_a_position_beside_a_stage_motor_is_refused(ctrl):
+    # The position decides the stage, so a request naming both has no meaning: refused, not reinterpreted.
+    with pytest.raises(cm.ApiError) as refused:
+        ctrl.build_api_launch_state({"H": 1.2, "A4": 40.0, "scan_command1": "rhm 2 3 1"})
+    assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
+    assert "h" in refused.value.message and "sample_two_theta_deg" in refused.value.message
 
 
 def test_a_position_beside_an_hkl_scan_is_left_to_the_points(ctrl):

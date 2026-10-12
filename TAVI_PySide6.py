@@ -2919,18 +2919,20 @@ class TAVIController(QObject):
                 vals['modules'].setdefault(module_id, default)
 
         # (b) Pure derivation pass (replaces the widget after-handlers).
-        lattice_keys = ('lattice_a', 'lattice_b', 'lattice_c',
-                        'lattice_alpha', 'lattice_beta', 'lattice_gamma')
+        lattice_keys = self._LATTICE_KEYS
 
         # A patched sample adopts its own lattice unless lattice_* is explicit.
-        if 'sample' in patched and not any(k in patched for k in lattice_keys):
-            spec = next((s for s in self.descriptor.samples
-                         if s.id == vals['sample']), None)
-            if spec is not None and spec.lattice is not None:
-                (vals['lattice_a'], vals['lattice_b'], vals['lattice_c'],
-                 vals['lattice_alpha'], vals['lattice_beta'],
-                 vals['lattice_gamma']) = spec.lattice
+        self._adopt_patched_sample_lattice(vals, patched)
         sample_key = None if vals['sample'] == "none" else vals['sample']
+
+        # Values that cannot all hold (a position beside a stage motor, energies or Q
+        # that disagree) are refused, as PATCH refuses them.
+        conflict = self._write_conflict(internal, vals)
+        if conflict is not None:
+            first, second, message = conflict
+            raise ApiError(400, "invalid_parameters", message,
+                           details={"errors": {submitted[first]: message,
+                                               submitted[second]: message}})
 
         # k<->E consistency: a lone patched member of a k/E pair derives its
         # partner; a patched fixed_E/K_fixed recomputes the fixed side. deltaE
@@ -2971,25 +2973,16 @@ class TAVIController(QObject):
                 vals['monocris'], vals['anacris']
             )
             # A patched crystal 2theta sets its own side's energy, the one
-            # calculate_q_and_deltaE reads back. An energy named on that side must
-            # agree with the angle, or the stage and the crystals disagree.
+            # calculate_q_and_deltaE reads back. An energy named on that side that
+            # disagrees with the angle was refused above (_write_conflict).
             ki_fixed = vals['K_fixed'] == "Ki Fixed"
             sides = (
-                ('mtt', 'Ei', 'Ki', ki_fixed, self.instrument_state.sense_mono, mono_info['dm']),
-                ('att', 'Ef', 'Kf', not ki_fixed, self.instrument_state.sense_ana, ana_info['da']),
+                ('mtt', 'Ei', 'Ki', self.instrument_state.sense_mono, mono_info['dm']),
+                ('att', 'Ef', 'Kf', self.instrument_state.sense_ana, ana_info['da']),
             )
-            for angle, energy, wavevector, fixed_side, sense, d in sides:
+            for angle, energy, wavevector, sense, d in sides:
                 if angle not in patched:
                     continue
-                named = patched & ({energy, wavevector} | ({'fixed_E', 'K_fixed'} if fixed_side else set()))
-                implied = sense * 2 * k2angle(vals[wavevector], d)
-                if named and abs(implied - vals[angle]) > 0.01:   # the readout's rounding
-                    raise ApiError(
-                        400, "invalid_parameters",
-                        "%s and %s disagree: %s = %g meV gives %.4f deg, not %g deg"
-                        % (_to_public(angle), ", ".join(sorted(_to_public(n) for n in named)),
-                           _to_public(energy), vals[energy], implied, vals[angle]),
-                    )
                 vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
                 vals[energy] = k2energy(vals[wavevector])
             if 'mtt' in patched or 'att' in patched:
@@ -7883,6 +7876,136 @@ class TAVIController(QObject):
     _LOCK_FIELDS = ('orientation_mode', 'lock_plane')
     _LOCK_HELD_FIELDS = ('sample_lower_arc_deg', 'sample_upper_arc_deg')
 
+    # The names a write cannot combine: a position decides the stage, so a request
+    # naming one of each is refused (operator, 12 October 2026: "Refuse the pair").
+    _POSITION_NAMES = ('H', 'K', 'L', 'qx', 'qy', 'qz')
+    _STAGE_NAMES = ('omega', 'stt', 'sgl', 'sgu')
+    _LATTICE_KEYS = ('lattice_a', 'lattice_b', 'lattice_c',
+                     'lattice_alpha', 'lattice_beta', 'lattice_gamma')
+    # How far two values of one write may differ and still be one setting: the
+    # readouts' rounding (four decimals), with room for a crystal angle's slope.
+    _ENERGY_TOL = 0.01   # meV
+    _ANGLE_TOL = 0.01    # deg
+    _HKL_TOL = 1e-3      # r.l.u.
+
+    def _adopt_patched_sample_lattice(self, vals, named):
+        """A patched sample adopts its own lattice into ``vals`` unless lattice_* is also named."""
+        if 'sample' not in named or any(k in named for k in self._LATTICE_KEYS):
+            return
+        spec = next((s for s in self.descriptor.samples if s.id == vals['sample']), None)
+        if spec is not None and spec.lattice is not None:
+            vals.update(zip(self._LATTICE_KEYS, spec.lattice))
+
+    def _api_conflict(self, parsed):
+        """``_write_conflict`` for a PATCH body (parsed values by public name) against the GUI state."""
+        named = {_to_internal(name): value for name, value in parsed.items()}
+        base = self.get_gui_values()
+        if base is not None:
+            base = {**base, **{k: v for k, v in named.items()
+                               if k == 'sample' or k in self._LATTICE_KEYS}}
+            self._adopt_patched_sample_lattice(base, named)
+        return self._write_conflict(named, base)
+
+    def _write_conflict(self, named, base):
+        """``(first, second, message)`` naming two values of one write that cannot all hold, else None.
+
+        ``named`` holds the write's parsed values by internal name; ``base`` the
+        state it lands on, lattice already as the write leaves it (only the
+        values the write does not name are read from it; None when the GUI does
+        not read as numbers, which skips the checks that need it). The names in
+        the answer are public. Every value a reply lists as applied must read
+        back, so a write whose values contradict is refused before anything
+        changes: a position beside a stage motor, energy-group values that
+        disagree, and Q beside a disagreeing H, K, L.
+        """
+        position = [n for n in self._POSITION_NAMES if n in named]
+        stage = [n for n in self._STAGE_NAMES if n in named]
+        if position and stage:
+            first, second = _to_public(position[0]), _to_public(stage[0])
+            return (first, second, "%s and %s cannot be set together: the position decides "
+                    "the stage. Send one or the other." % (first, second))
+        if base is None:
+            log.warning("Write consistency not checked: a GUI field does not read as a number")
+            return None
+        return self._energy_conflict(named, base) or self._position_conflict(named, base)
+
+    @staticmethod
+    def _disagreement(a, b, detail=""):
+        """``_write_conflict``'s answer for two entries ``(internal name, meV, angle, text)``."""
+        first, second = _to_public(a[0]), _to_public(b[0])
+        return (first, second, "%s (%s) and %s (%s) disagree%s: every value in one request must "
+                "hold afterwards, so send them consistent or only one of them."
+                % (first, a[3], second, b[3], detail))
+
+    def _energies_differ(self, a, b, sense, d):
+        """Whether two energy entries of one side name different settings (a crystal angle by its angle)."""
+        (_, energy_a, angle_a, _), (_, energy_b, angle_b, _) = a, b
+        if angle_a is None and angle_b is None:
+            return not abs(energy_a - energy_b) <= self._ENERGY_TOL
+        angle, energy = (angle_a, energy_b) if angle_a is not None else (angle_b, energy_a)
+        if not energy > 0:
+            return True
+        implied = sense * 2 * k2angle(energy2k(energy), d)   # inf when no Bragg angle exists
+        return not abs(implied - angle) <= self._ANGLE_TOL
+
+    def _energy_conflict(self, named, base):
+        """The energy group of ``_write_conflict``: Ki with Ei, a crystal angle with its side's
+        energy, fixed_E with the held side, and the transfer with both energies when the write
+        determines both (the held side from fixed_E as it stands when the write names none)."""
+        state = self.instrument_state
+        mono_info, ana_info = self.instrument.crystal_info(
+            named.get('monocris', base['monocris']), named.get('anacris', base['anacris']))
+        ki_fixed = named.get('K_fixed', base['K_fixed']) == "Ki Fixed"
+        sides = (('Ei', 'Ki', 'mtt', ki_fixed, state.sense_mono, mono_info['dm']),
+                 ('Ef', 'Kf', 'att', not ki_fixed, state.sense_ana, ana_info['da']))
+        found = []
+        for energy, wavevector, angle, held, sense, d in sides:
+            entries = []
+            if energy in named:
+                entries.append((energy, named[energy], None, "%g meV" % named[energy]))
+            if wavevector in named:
+                entries.append((wavevector, k2energy(named[wavevector]), None,
+                                "%g 1/A" % named[wavevector]))
+            if angle in named:
+                entries.append((angle, k2energy(angle2k(named[angle] / (2 * sense), d)),
+                                named[angle], "%g deg" % named[angle]))
+            if held and 'fixed_E' in named:
+                entries.append(('fixed_E', named['fixed_E'], None, "%g meV" % named['fixed_E']))
+            found.append(entries)
+            for other in entries[1:]:
+                if self._energies_differ(entries[0], other, sense, d):
+                    return self._disagreement(entries[0], other)
+        free, held = (found[1], found[0]) if ki_fixed else (found[0], found[1])
+        if 'deltaE' in named and free:
+            held_entry = held[0] if held else (
+                'fixed_E', base['fixed_E'], None, "%g meV" % base['fixed_E'])
+            ei, ef = (held_entry, free[0]) if ki_fixed else (free[0], held_entry)
+            if not abs(named['deltaE'] - (ei[1] - ef[1])) <= self._ENERGY_TOL:
+                return self._disagreement(
+                    ('deltaE', named['deltaE'], None, "%g meV" % named['deltaE']), free[0],
+                    " (%s against %s makes %g meV)" % (ei[3], ef[3], ei[1] - ef[1]))
+        return None
+
+    def _position_conflict(self, named, base):
+        """The position group of ``_write_conflict``: the H, K, L named must be the HKL of the Q
+        written (named Q components over the rest of Q as it stands), under the lattice and UB."""
+        q_names = [n for n in ('qx', 'qy', 'qz') if n in named]
+        hkl_names = [n for n in ('H', 'K', 'L') if n in named]
+        if not q_names or not hkl_names:
+            return None
+        try:
+            hkl = self._sample_q_to_hkl(*[named.get(n, base[n]) for n in ('qx', 'qy', 'qz')], base)
+        except ValueError as exc:   # a lattice the mount cannot build: the write reports it itself
+            log.warning("Write consistency (Q with HKL) not checked: %s", exc)
+            return None
+        for key, value in zip(('H', 'K', 'L'), hkl):
+            if key in named and not abs(value - named[key]) <= self._HKL_TOL:
+                return self._disagreement(
+                    (q_names[0], named[q_names[0]], None, "%g" % named[q_names[0]]),
+                    (key, named[key], None, "%g" % named[key]),
+                    " (that Q is %s = %.4f)" % (_to_public(key), value))
+        return None
+
     def _lock_refusals(self, body):
         """{field: reason} for the fields of one request body a lock refuses:
         sgl or sgu beside orientation_mode/lock_plane (whichever way it
@@ -8094,6 +8217,13 @@ class TAVIController(QObject):
                 field = 'lock_plane' if 'lock_plane' in parsed else 'orientation_mode'
                 errors[submitted[field]] = "refused: %s" % exc
         if lock_errors or (lock_request and errors):
+            return applied, errors
+
+        # (a'') Values that cannot all hold are refused before anything is written.
+        conflict = self._api_conflict(parsed)
+        if conflict is not None:
+            first, second, message = conflict
+            errors[submitted[first]] = errors[submitted[second]] = message
             return applied, errors
 
         final_handlers = []  # run after every group, order preserved

@@ -146,3 +146,86 @@ def test_a_motor_or_energy_patch_leaves_q_hkl_and_the_transfer_at_the_motors(ctr
     applied, errors = ctrl.apply_parameters(patch)
     assert not errors
     _assert_follows_motors(ctrl)
+
+
+# -------------------------------------------------- position beside a stage motor
+
+@pytest.mark.parametrize("position", ["h", "qx"])
+@pytest.mark.parametrize("motor", ["sample_lower_arc_deg", "A3", "A4", "sgu"])
+def test_a_position_beside_a_stage_motor_is_refused_and_changes_nothing(ctrl, position, motor):
+    before = copy.deepcopy(ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters({position: 1.0, motor: 2.0})
+    assert applied == {}
+    assert set(errors) == {position, motor}
+    for message in errors.values():
+        assert "decides the stage" in message
+        assert position in message or cm._to_public(position) in message
+    assert ctrl.get_gui_values() == before
+
+
+def test_the_launch_refuses_a_position_beside_a_stage_motor(launcher):
+    with pytest.raises(cm.ApiError) as refused:
+        launcher.build_api_launch_state({"h": 1.0, "A3": 12.0, "scan_command1": SCAN})
+    assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
+    assert "h" in refused.value.message
+    assert "sample_rotation_deg" in refused.value.message
+    assert set(refused.value.details["errors"]) == {"h", "A3"}
+
+
+def test_a_stage_motor_alone_keeps_the_stage_at_the_callers(launcher):
+    held = launcher.build_api_launch_state({"scan_command1": SCAN})["vals"]
+    vals = launcher.build_api_launch_state({"A3": 12.0, "scan_command1": SCAN})["vals"]
+    assert vals["omega"] == 12.0
+    assert (vals["stt"], vals["sgl"], vals["sgu"], vals["mtt"], vals["att"]) == (
+        held["stt"], held["sgl"], held["sgu"], held["mtt"], held["att"])
+
+
+# ------------------------------------------------------------- contradictions
+
+def _contradictions(ctrl):
+    held = _fixed_energy(ctrl)
+    return {
+        "ki beside ei": {"Ki": 2.5, "Ei": 20.0},
+        "transfer beside a2, kf held": {"deltaE": 99.0, "A2": 40.0},
+        "a2 beside another ei": {"A2": 40.0, "Ei": 10.0},
+        "q beside another h": {"qx": 2.0, "qy": 0.0, "qz": 0.0, "h": 5.0},
+        "ei beside a transfer it does not make": {"Ei": held + 3.0, "deltaE": 7.0},
+        "ef beside a6 elsewhere": {"A6": 50.0, "Ef": 3.0},
+    }
+
+
+CONTRADICTION_CASES = ["ki beside ei", "transfer beside a2, kf held", "a2 beside another ei",
+                       "q beside another h", "ei beside a transfer it does not make",
+                       "ef beside a6 elsewhere"]
+
+
+@pytest.mark.parametrize("case", CONTRADICTION_CASES)
+def test_contradicting_values_in_one_patch_are_refused_and_change_nothing(ctrl, case):
+    patch = _contradictions(ctrl)[case]
+    before = copy.deepcopy(ctrl.get_gui_values())
+    applied, errors = ctrl.apply_parameters(patch)
+    assert applied == {}
+    assert len(errors) == 2
+    assert set(errors) <= set(patch)
+    assert ctrl.get_gui_values() == before
+
+
+@pytest.mark.parametrize("case", CONTRADICTION_CASES)
+def test_the_launch_refuses_the_same_contradictions(launcher, case):
+    patch = _contradictions(launcher)[case]
+    if case == "ei beside a transfer it does not make":
+        patch = {"Ei": launcher._default_parameter_values()["fixed_E"] + 3.0, "deltaE": 7.0}
+    with pytest.raises(cm.ApiError) as refused:
+        launcher.build_api_launch_state({**patch, "scan_command1": SCAN})
+    assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
+
+
+def test_an_agreeing_launch_patch_is_accepted_and_every_value_holds(launcher):
+    held = launcher._default_parameter_values()["fixed_E"]
+    vals = launcher.build_api_launch_state(
+        {"Ei": held + 3.0, "deltaE": 3.0, "scan_command1": SCAN})["vals"]
+    assert vals["Ei"] == pytest.approx(held + 3.0)
+    assert vals["deltaE"] == pytest.approx(3.0, abs=1e-6)
+    vals = launcher.build_api_launch_state(
+        {"Ki": energy2k(20.0), "Ei": 20.0, "scan_command1": SCAN})["vals"]
+    assert vals["Ei"] == pytest.approx(20.0, abs=1e-6)
