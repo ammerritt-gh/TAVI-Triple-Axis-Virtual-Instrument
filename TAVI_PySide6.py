@@ -1761,6 +1761,9 @@ class TAVIController(QObject):
         for field in (
             self.window.instrument_dock.Ki_edit, self.window.instrument_dock.Ei_edit,
             self.window.instrument_dock.Kf_edit, self.window.instrument_dock.Ef_edit,
+            self.window.instrument_dock.mtt_edit, self.window.instrument_dock.att_edit,
+            self.window.instrument_dock.stt_edit, self.window.instrument_dock.omega_edit,
+            self.window.instrument_dock.sgl_edit, self.window.instrument_dock.sgu_edit,
         ):
             field.editingFinished.connect(self.request_reciprocal_snapshot)
         
@@ -3894,6 +3897,7 @@ class TAVIController(QObject):
             self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
+        self.on_angles_changed()
     
     def on_att_changed(self):
         """Update energies when analyzer 2theta changes."""
@@ -3932,6 +3936,7 @@ class TAVIController(QObject):
             self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
+        self.on_angles_changed()
     
     def on_Ki_changed(self):
         """Update Ei and mtt when Ki changes."""
@@ -3966,6 +3971,7 @@ class TAVIController(QObject):
             self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
+        self.on_angles_changed()
     
     def on_Ei_changed(self):
         """Update Ki and mtt when Ei changes."""
@@ -4000,6 +4006,7 @@ class TAVIController(QObject):
             self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
+        self.on_angles_changed()
     
     def on_Kf_changed(self):
         """Update Ef and att when Kf changes."""
@@ -4034,6 +4041,7 @@ class TAVIController(QObject):
             self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
+        self.on_angles_changed()
     
     def on_Ef_changed(self):
         """Update Kf and att when Ef changes."""
@@ -4068,6 +4076,7 @@ class TAVIController(QObject):
             self._commit_programmatic_feedback()
             self.updating = False
             self.update_ideal_bending_buttons()
+        self.on_angles_changed()
     
     def on_K_fixed_changed(self):
         """Update all when K fixed mode changes."""
