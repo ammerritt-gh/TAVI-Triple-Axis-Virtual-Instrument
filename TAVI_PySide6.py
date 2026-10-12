@@ -2843,6 +2843,7 @@ class TAVIController(QObject):
         """
         vals = self._default_parameter_values()
         field_map = self._api_field_map()
+        launch_warnings = []   # what the launch could not follow; rides the reply's `warnings`
 
         # (a) Resolve the names, then parse/validate the patch with apply_parameters'
         #     own parse fns; an unknown name / bad value collects the identical 400.
@@ -2994,31 +2995,50 @@ class TAVIController(QObject):
                 ('mtt', 'Ei', 'Ki', self.instrument_state.sense_mono, mono_info['dm']),
                 ('att', 'Ef', 'Kf', self.instrument_state.sense_ana, ana_info['da']),
             )
+            zero_takeoffs = []
             for angle, energy, wavevector, sense, d in sides:
                 if angle not in patched:
                     continue
+                if vals[angle] == 0:
+                    # A crystal at exactly zero transmits: it selects no energy, which is
+                    # recorded absent, never inverted to zero or invented (CONFIGURABLE_INSTRUMENTS 22.4).
+                    vals[wavevector] = vals[energy] = None
+                    zero_takeoffs.append(angle)
+                    continue
                 vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
                 vals[energy] = k2energy(vals[wavevector])
+            if zero_takeoffs:
+                self._refuse_zero_takeoff_that_is_re_solved(vals, zero_takeoffs, submitted)
+            both = vals['Ei'] is not None and vals['Ef'] is not None
             if 'mtt' in patched or 'att' in patched:
+                # An absent side (a zero take-off) is not an energy to subtract: the held
+                # number fixed_E stands in for it, and the transfer is not recomputed from it.
                 if 'deltaE' in patched:
                     # The side the angles did not set follows the transfer the caller named.
                     if ki_fixed:
                         if 'att' in patched:
-                            vals['deltaE'] = vals['Ei'] - vals['Ef']
+                            if both:
+                                vals['deltaE'] = vals['Ei'] - vals['Ef']
                         else:
-                            vals['Ef'] = vals['Ei'] - vals['deltaE']
+                            ei = vals['fixed_E'] if vals['Ei'] is None else vals['Ei']
+                            vals['Ef'] = ei - vals['deltaE']
                     else:
                         if 'mtt' in patched:
-                            vals['deltaE'] = vals['Ei'] - vals['Ef']
+                            if both:
+                                vals['deltaE'] = vals['Ei'] - vals['Ef']
                         else:
-                            vals['Ei'] = vals['Ef'] + vals['deltaE']
-                else:
+                            ef = vals['fixed_E'] if vals['Ef'] is None else vals['Ef']
+                            vals['Ei'] = ef + vals['deltaE']
+                elif both:
                     # As the dock's A2/A6 edit does: the other side keeps its energy and the
                     # transfer follows the motors.
                     vals['deltaE'] = vals['Ei'] - vals['Ef']
-                vals['fixed_E'] = vals['Ei'] if ki_fixed else vals['Ef']
-                vals['Ki'], vals['Kf'] = energy2k(vals['Ei']), energy2k(vals['Ef'])
-            if not (vals['Ei'] > 0 and vals['Ef'] > 0):
+                held_energy = vals['Ei'] if ki_fixed else vals['Ef']
+                if held_energy is not None:
+                    vals['fixed_E'] = held_energy
+                vals['Ki'] = None if vals['Ei'] is None else energy2k(vals['Ei'])
+                vals['Kf'] = None if vals['Ef'] is None else energy2k(vals['Ef'])
+            if not all(e is None or e > 0 for e in (vals['Ei'], vals['Ef'])):
                 raise ApiError(
                     400, "invalid_parameters",
                     "energy transfer %s leaves Ei=%s, Ef=%s; both must be positive"
@@ -3064,7 +3084,15 @@ class TAVIController(QObject):
         geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE', 'fixed_E', 'K_fixed')
                           + lattice_keys)
         solved = False
-        if (patched.intersection(geometry_names)
+        energies_absent = vals['Ei'] is None or vals['Ef'] is None   # a zero take-off: nothing to solve with
+        if (energies_absent and named.intersection(self._POSITION_NAMES)
+                and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))):
+            launch_warnings.append(
+                "The position named (%s) was not solved onto the stage: %s selects no energy, so "
+                "the stage motors keep their values."
+                % (", ".join(_to_public(n) for n in self._POSITION_NAMES if n in named),
+                   self._motor_names(vals, ('mtt', 'att'), only_zero=True)))
+        if (patched.intersection(geometry_names) and not energies_absent
                 and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
                 and selected_calculation([(vals.get('scan_command1') or "", False),
                                           (vals.get('scan_command2') or "", False)]) == MOTORS):
@@ -3099,14 +3127,31 @@ class TAVIController(QObject):
         # stage above instead; a stage motor beside one was refused.
         if (not solved and not named.intersection(self._POSITION_NAMES)
                 and named.intersection(('mtt', 'att', 'Ei', 'Ki', 'Ef', 'Kf') + self._STAGE_NAMES)):
-            q_vals, flags = self.instrument_state.calculate_q_and_deltaE(
-                vals['mtt'], vals['stt'], vals['omega'], vals['sgl'], vals['att'],
-                vals['fixed_E'], vals['K_fixed'], vals['monocris'], vals['anacris'],
-                sgu=vals['sgu'])
-            if flags:
-                log.warning("Launch position not derived from the motors: %s",
-                            describe_scan_error_flags(flags))
+            if energies_absent:
+                flags, why = None, "that crystal transmits the beam and selects no energy"
             else:
+                q_vals, flags = self.instrument_state.calculate_q_and_deltaE(
+                    vals['mtt'], vals['stt'], vals['omega'], vals['sgl'], vals['att'],
+                    vals['fixed_E'], vals['K_fixed'], vals['monocris'], vals['anacris'],
+                    sgu=vals['sgu'])
+                why = describe_scan_error_flags(flags)
+            # Zero |Q| with the sample at zero take-off is not a failed derivation: the motors
+            # define forward scattering, Q = 0 and H, K, L = 0, and the position records it.
+            forward = flags == ["q"] and vals['stt'] == 0
+            if flags is None or (flags and not forward):
+                # Never keep the default position silently: name the motors and the reason.
+                log.warning("Launch position not derived from the motors: %s", why)
+                launch_warnings.append(
+                    "Q, H, K, L and the energy transfer could not follow the motors (%s): %s. "
+                    "They keep their previous values."
+                    % (self._motor_names(vals, ('mtt', 'att'), only_zero=True) if flags is None
+                       else self._motor_names(vals, ('mtt', 'stt', 'omega', 'sgl', 'sgu', 'att')), why))
+            else:
+                if forward:
+                    launch_warnings.append(
+                        "%s and the incident and final energies are equal: the motors give "
+                        "forward scattering, so Q = 0 and H, K, L = 0 are recorded as the position "
+                        "(sample transmission)." % self._motor_names(vals, ('stt',)))
                 vals['qx'], vals['qy'], vals['qz'], vals['deltaE'] = q_vals
                 vals['H'], vals['K'], vals['L'] = self._sample_q_to_hkl(*q_vals[:3], vals)
                 if vals['K_fixed'] == "Ki Fixed":
@@ -3216,7 +3261,32 @@ class TAVIController(QObject):
             'relative_mode_2': False,
             'compact_save_enabled': False,
             'mpi_count': self.mpi_count,
+            'launch_warnings': launch_warnings,
         }
+
+    @staticmethod
+    def _motor_names(vals, fields, only_zero=False):
+        """``fields`` of the launch as ``A2 (...) = 0`` text; ``only_zero`` keeps the zero ones."""
+        return ", ".join("%s = %g" % (quantity_by_id(_to_public(f)).name, vals[f])
+                         for f in fields if not only_zero or vals[f] == 0)
+
+    def _refuse_zero_takeoff_that_is_re_solved(self, vals, zero_takeoffs, submitted):
+        """A zero take-off cannot be kept by a scan that solves the crystal angles per point.
+
+        An H, K, L or Q scan re-derives A2 and A6 from the energies, so its points would run at
+        a nonzero crystal while the launch recorded that energy absent.
+        """
+        commands = [text for text in (vals.get('scan_command1'), vals.get('scan_command2'))
+                    if text and text.strip()]
+        if selected_calculation([(text, False) for text in commands]) in (None, MOTORS):
+            return
+        names = self._motor_names(vals, zero_takeoffs)
+        message = ("%s cannot be kept: the scan command %s re-solves the crystal angles at every "
+                   "point, so that crystal would not stay at zero. Scan the motors directly or "
+                   "leave that crystal unpatched."
+                   % (names, "; ".join("'%s'" % text.strip() for text in commands)))
+        raise ApiError(400, "invalid_parameters", message,
+                       details={"errors": {submitted.get(_to_public(f), _to_public(f)): message for f in zero_takeoffs}})
 
     def _collect_simulation_launch_state(self):
         """Freeze GUI state before starting the simulation worker thread."""
@@ -7602,8 +7672,9 @@ class TAVIController(QObject):
         here and in the soft issues alike.
         """
         _plan, accepted, _refused = self._judge_boxes(launch_state, self._launch_commands(launch_state))
-        return [f"Command {number}: {note}" for number, command in sorted(accepted.items())
-                if (note := self._scan_command_note(command))]
+        return list(launch_state.get('launch_warnings') or ()) + [
+            f"Command {number}: {note}" for number, command in sorted(accepted.items())
+            if (note := self._scan_command_note(command))]
 
     # ------------------------------------------------------------- remote API
     #
