@@ -4245,9 +4245,17 @@ class TAVIController(QObject):
                 vals['fixed_E'], vals['K_fixed'],
                 vals['monocris'], vals['anacris'], sgu=sgu,
             )
-            if not error_flags:
+            # Zero |Q| at A4 = 0 is not a failed derivation: the motors give forward
+            # scattering, Q = 0 and HKL = 0 (the launch records the same).
+            forward = error_flags == ["q"] and stt == 0
+            if not error_flags or forward:
                 qx, qy, qz, deltaE = q_vals
                 self._set_angles_stale(None)     # Q now follows the angles
+                if forward:
+                    self.print_to_message_center(
+                        "A4 = 0 and the incident and final energies are equal: the motors give "
+                        "forward scattering, so Q = 0 and H, K, L = 0 are recorded as the position "
+                        "(sample transmission).")
                 self.window.scattering_dock.qx_edit.setText(format_editable_number(qx))
                 self.window.scattering_dock.qy_edit.setText(format_editable_number(qy))
                 self.window.scattering_dock.qz_edit.setText(format_editable_number(qz))
@@ -4261,6 +4269,8 @@ class TAVIController(QObject):
                     "Q, HKL and the energy transfer cannot follow these motors "
                     f"({describe_scan_error_flags(error_flags)}); "
                     "Q and HKL still show the previous position.")
+                # Motors that define no position: the same mark as a typed Q the stage cannot reach.
+                self._set_angles_stale(describe_scan_error_flags(error_flags))
         except Exception as exc:
             self.print_to_message_center(f"Q update from angles failed: {exc}")
         finally:

@@ -3,6 +3,7 @@
 Reads every value from the dock fields the operator sees. The expected
 position is the instrument's own forward kinematics at the motors as shown.
 """
+import math
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -18,6 +19,7 @@ import instruments.builtin  # noqa: F401,E402
 from test_orientation_gui import _controller_for  # noqa: E402
 from TAVI_PySide6 import format_editable_number  # noqa: E402
 from instruments.tas_runtime import describe_scan_error_flags  # noqa: E402
+from tavi.neutron_conversions import energy2k, k2angle  # noqa: E402
 
 TOL = 2e-3  # the dock shows 4 decimals; forward kinematics of the shown motors
 
@@ -147,3 +149,62 @@ def test_zero_take_off_leaves_q_and_says_why(ctrl):
     assert [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit),
             _num(sdock.H_edit), _num(sdock.K_edit), _num(sdock.L_edit)] == pytest.approx(
         before, abs=TOL)
+
+
+def test_zero_take_off_marks_the_position_stale_and_clears_on_the_next_edit(ctrl):
+    """The motors define no Q at A2 = A6 = 0: the Q/HKL fields keep the last point under the
+    same stale mark a typed Q the stage cannot reach gets, and the next good motor edit clears it."""
+    idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
+    _type_and_finish(idock.mtt_edit, 0.0)
+    seen = []
+    ctrl.message_printed.connect(seen.append)
+    try:
+        _type_and_finish(idock.att_edit, 0.0)
+    finally:
+        ctrl.message_printed.disconnect(seen.append)
+    assert idock.angles_stale_label.isVisibleTo(idock)
+    assert ctrl._angles_stale
+    assert any("cannot follow these motors" in m for m in seen), seen
+    _type_and_finish(idock.mtt_edit, 60.0)
+    _type_and_finish(idock.att_edit, 50.0)
+    assert not idock.angles_stale_label.isVisibleTo(idock)
+    assert not ctrl._angles_stale
+    _assert_follows_motors(ctrl)
+
+
+def _equal_energy_mono_text(ctrl):
+    """An A2 whose Ki equals the dock's fixed Kf bit for bit, as full-precision text."""
+    vals = ctrl.get_gui_values()
+    state = ctrl.instrument_state
+    mono_info, _ = ctrl.instrument.crystal_info(vals["monocris"], vals["anacris"])
+    angle = state.sense_mono * 2 * k2angle(energy2k(vals["fixed_E"]), mono_info["dm"])
+    for step in range(-6, 7):
+        candidate = angle
+        for _ in range(abs(step)):
+            candidate = math.nextafter(candidate, math.inf if step > 0 else -math.inf)
+        _, flags = state.calculate_q_and_deltaE(
+            candidate, 0.0, 0.0, 0.0, vals["att"], vals["fixed_E"], vals["K_fixed"],
+            vals["monocris"], vals["anacris"], sgu=0.0)
+        if flags:
+            return repr(candidate)
+    pytest.fail("no A2 within a few ulps gives exactly zero Q at A4 = 0")
+
+
+def test_forward_scattering_records_zero_q_and_hkl_like_the_launch(ctrl):
+    """A4 = 0 at equal incident and final energies is a position: Q = 0, HKL = (0, 0, 0)."""
+    idock, sdock = ctrl.window.instrument_dock, ctrl.window.scattering_dock
+    if ctrl.get_gui_values()["K_fixed"] != "Kf Fixed":
+        pytest.skip("the equal-energy A2 is built for the Kf-fixed default")
+    idock.mtt_edit.setText(_equal_energy_mono_text(ctrl))
+    idock.mtt_edit.editingFinished.emit()
+    seen = []
+    ctrl.message_printed.connect(seen.append)
+    try:
+        _type_and_finish(idock.stt_edit, 0.0)
+    finally:
+        ctrl.message_printed.disconnect(seen.append)
+    assert [_num(sdock.qx_edit), _num(sdock.qy_edit), _num(sdock.qz_edit)] == pytest.approx([0, 0, 0], abs=1e-12)
+    assert [_num(sdock.H_edit), _num(sdock.K_edit), _num(sdock.L_edit)] == pytest.approx([0, 0, 0], abs=1e-9)
+    assert _num(sdock.deltaE_edit) == pytest.approx(0.0, abs=1e-9)
+    assert not idock.angles_stale_label.isVisibleTo(idock)
+    assert any("forward scattering" in m for m in seen), seen
