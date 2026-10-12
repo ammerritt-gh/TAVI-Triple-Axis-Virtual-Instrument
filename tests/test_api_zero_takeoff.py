@@ -172,3 +172,16 @@ def test_a_launch_whose_derivation_flags_keeps_the_previous_position_and_says_so
     said = " ".join(_warnings(ctrl, launch))
     assert "Q, H, K, L" in said and "energy transfer" in said
     assert "crystal" in said   # the derivation's own reason
+
+
+@pytest.mark.parametrize("crystal", ["A2", "A6"])
+@pytest.mark.parametrize("position", [{"h": 1.0}, {"K": 0.5}, {"qx": 1.0}, {"qz": 0.1}])
+def test_a_position_beside_a_zero_take_off_is_refused(ctrl, crystal, position):
+    """A transmitting crystal selects no energy, so no stage can be solved from the position."""
+    with pytest.raises(cm.ApiError) as refused:
+        _launch(ctrl, {crystal: 0.0, **position})
+    assert (refused.value.status, refused.value.code) == (400, "invalid_parameters")
+    message = refused.value.message
+    assert crystal in message and next(iter(position)) in message
+    assert "selects no energy" in message
+    assert set(refused.value.details["errors"]) == {crystal, next(iter(position))}
