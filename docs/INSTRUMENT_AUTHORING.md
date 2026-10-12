@@ -279,12 +279,14 @@ read `vals`, the launch's value dict (`gui_values` in `scan_config`, `vals` in
 `curvature_modes`. That shape is part of contract v1: changing it bumps
 `CONTRACT_VERSION`. The positional scan-slot layout was removed in U3.
 
-**Point metadata.** `PointSnapshot.metadata` is spread into `scan_parameters.txt`. The
+**Point metadata.** `PointSnapshot.metadata` keeps internal names in memory, and the
 controller and `tas_runtime` read these keys back: `Ei`, `Ki`, `Ef`, `Kf`, `deltaE`,
 `transmission`, `qx`, `qy`, `qz`, `H`, `K`, `L`, `mtt`, `stt`, `att`, `sth`, `omega`,
 `sgl`, `sgu`, `rhm`, `rvm`, `rha`, `rva`. The angle, stage and radius keys keep the
 internal names beside the canonical slit keys (`slit.<stable_id>.horizontal_gap_mm`,
 `.vertical_gap_mm`), so a plugin that writes its own metadata must write them all.
+`scan_parameters.txt` is not that dict: the controller writes it with canonical IDs
+through `public_values` (`tavi/quantities.py`).
 
 A minimal author-side plugin that uses only this surface is
 `tests/contract_plugin_fixture.py`, with its checks in `tests/test_author_contract.py`.

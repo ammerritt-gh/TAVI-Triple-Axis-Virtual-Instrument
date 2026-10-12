@@ -138,6 +138,7 @@ Roadmap order per CONTROL_FEATURES §9:
 - 2026-10-10 · TAVI_PySide6.py parameters set-aside (~6104) and gui/main_window.py layout set-aside (~934) · one backup rule for both saved-state files (name, overwrite, copy-when-move-fails) instead of `.bak`/`.bak2` for parameters and `.v<N>.bak` for layout · revisit: when either file's restore is next touched · j92f2a0718dc1 abf66766d0266-8
 - 2026-10-10 · TAVI_PySide6.py `compute_scan_snapshot` point metadata (~2457) · build a point's public view through the registry's `public_values` instead of controller special cases, and drop the internal `rhm`..`rva` = applied-radius name inversion · revisit: with the controller-internal-keys rename on WIP.md · j0db04ee4343c ae60539244f76-4
 - 2026-10-10 · instruments/tas_runtime.py slit bindings (~1355) · read the plugin's declared `Capabilities` bindings instead of re-deriving the quantity → ParameterSpec map from `scannable_parameters` (a load-time check now keeps them equal) · revisit: the next plugin-contract version bump · j2a2021bab8fc ab8e9292170ae-6
+- 2026-10-12 · TAVI_PySide6.py `_launch_plan` · refuse a zero take-off beside a re-solving scan once, after `build_plan`, instead of at three sites · revisit: a fourth plan consumer, or when the conflict-label deferral on the board reopens · j52ca1d7b6e04 ac047a3d93d88-4
 
 ## Housekeeping
 

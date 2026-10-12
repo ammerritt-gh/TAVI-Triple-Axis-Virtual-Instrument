@@ -865,7 +865,7 @@ are remembered for the 256 most recently used values. No header → every reques
 creates a new job.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/scan \
-  -H "Content-Type: application/json" -H "Idempotency-Key: run-2026-07-03-a" -d '{}'
+  -H "Content-Type: application/json" -H "Idempotency-Key: run-2026-07-03-a" -d '{"api_version": 2}'
 ```
 
 ### GET /scan/{id}
@@ -970,8 +970,9 @@ frozen parameter snapshot (exposed as `launch.parameters` on `GET /scan/{id}` an
 as `result.metadata` here) carries a flat set of resolution/geometry fields for
 downstream analysis (e.g. reconstructing the theoretical resolution offline).
 Every quantity in these two objects is named by its canonical ID (§6; the slit
-gaps as `slit.<stable_id>.<axis>_gap_mm`), and `result.metadata` carries
-`"api_version": 2`:
+gaps as `slit.<stable_id>.<axis>_gap_mm`), with one exception: the keys in the
+table below are flat model inputs, not registry quantities. `result.metadata`
+carries `"api_version": 2`:
 
 | Key | Meaning |
 |-----|---------|
@@ -1019,7 +1020,7 @@ refused, never silently clamped, as:
 ```
 (PUMA's `rhm` has a 2 m mechanical minimum; commanding `1` is refused.) A
 driven axis with no declared minimum/maximum refuses nothing — **IN8 and
-PANDA declare no mechanical travel on any axis**, because neither is
+PANDA declare no mechanical travel on any driven axis**, because neither is
 published, and inventing a limit would be the defect. A commanded radius
 must always be a finite number, on every axis, regardless of declared
 travel: `NaN` and `+/-inf` are refused as `invalid_parameters` (the
@@ -1028,7 +1029,7 @@ parsed, before any travel is consulted), which is deliberately a different
 code from `curvature_out_of_travel` — "your numeric value is invalid" and
 "this radius conflicts with the hardware's travel" are different problems
 with different fixes. A **fixed** axis
-(`CurvatureAxis.driven=False` — PUMA's `rva` at a fixed 0.8 m, or PUMA's
+(`CurvatureAxis.driven=False` — PUMA's `rva` at a fixed 0.8 m, PANDA's at a fixed 0.60 m, or PUMA's
 `rhm`/`rvm` once a nested mirror optic (NMO) module is fitted, which pins
 both to flat) accepts **only** its declared radius and refuses every other
 value, `0` included when the declared radius is nonzero:
@@ -1965,8 +1966,11 @@ guessed: an old client is **refused**, never reinterpreted.
    `GET /resolution` refuses query keys it does not know.
 5. **Slit gaps** are one key each, `slit.<stable_id>.horizontal_gap_mm` /
    `.vertical_gap_mm`, replacing the `slits_mm` object.
-6. **Saved state version 5.** `config/parameters.json` blocks carry the canonical
-   IDs and `_schema` 5. A file of any other version is refused whole: at
+6. **Saved state version 5.** `config/parameters.json` blocks mix canonical IDs
+   (the instrument, scattering and lattice fields) with internal names (the
+   `*_var` keys, `modules`, `collimation`) and the UB-state keys
+   (`ub_matrix_state`, `true_mount`, `ub_training_hash`, `plane_lock`), under
+   `_schema` 5. A file of any other version is refused whole: at
    start-up it is set aside as `parameters.json.bak` (`.bak2` ...) and defaults
    load, with one message in the message centre; *File > Load Parameters* of such
    a file changes nothing.
