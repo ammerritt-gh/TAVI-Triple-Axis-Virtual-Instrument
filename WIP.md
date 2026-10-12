@@ -169,8 +169,10 @@ kept apart from the operator's UB, lock plane, per-peak residuals, Refine Lattic
 by crystal system) ships in v1.3.2 on the suite and an offscreen acceptance test
 only. Operator, 2026-10-07: "It's fine for now, but pin that we need to proof it
 and ensure it's working well." Not yet named: what the proofing run covers. ISAR's
-vendored copies of the four geometry modules have not been synced with this work
-(16 TAVI commits since 2026-09-29, none in `ISAR/isar/geometry/`).
+vendored copies of the four geometry modules were synced to TAVI `010cec6d` on
+2026-10-01 (ISAR PR #40, its commit `e365022`; the earlier claim here that they
+never synced was stale), but not with U1's signature changes of 2026-10-09; that
+re-sync is part of U5.
 
 Done when: the operator has run a hands-on alignment pass (find peaks, Calculate
 UB, read residuals, lock a plane, a training exercise) on the real GUI and the
@@ -279,5 +281,46 @@ Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
   monochromator still comes from the typed energy fields.
 - Flake watch: `test_mark_updates_leave_focus_selection_style_and_names_alone`
   failed once on focus in a combined targeted run.
+- The scan conflict label hides a per-box refusal while a zero take-off refusal
+  stands (Run's preflight and the API still list both); a field-marks display
+  change, deferred by job j52ca1d7b6e04's repair check.
+- The write-consistency checks on PATCH (the pair, energy-group and zero
+  take-off refusals) are skipped with a logged warning when any GUI field does
+  not read as a number; run the named-only checks before that guard with the
+  next change to `_write_conflict` (deferred by the same job).
 
 Done when: each is fixed or dropped by the operator.
+
+## Audit closeout: UB and A1–A6 text residue (job ja01620de5591)
+
+**State:** pinned
+
+The 2026-10-12 audit of the UB (PRs #48–#50) and ILL-numbering (PRs #55–#58)
+programmes found both complete and consistent; its six behaviour defects
+landed as PR #59 (job j52ca1d7b6e04, `e194a118`: the instrument state follows
+the motors on every door, a position beside a stage motor and disagreeing
+values are refused, zero take-off launches run, slit gaps are bounded, scan
+coordinates keep their precision, Save writes the dock's peaks). What is left
+is text: old-numbering comments in the plugins and tests, retired-word
+fixtures and comments, the Bragg helper docstrings, the Copilot instruction
+file, a false v1.3.2 changelog claim (χ never loads as `sgl`), guide
+corrections, the dead UB dock signals, three unencoded text writes in
+`tavi/data_processing.py`, the manual tilt-gate tool's truth and labels, the
+fingerprint test's dead `A3` field, the tests README count and the
+reading-guide stamp. The T0 job ja01620de5591 carries the full list in its
+goal and waits for its design and the operator's approval. ISAR's migration
+job must also learn the new refusals (see the consumer handoff).
+
+Two records the closeout could not write (the gate refuses `TODO.md` and
+`AGENTS.md` to an unbound session) are owed to that job's first commit: a
+`TODO.md` *Known better shapes* line for refiner finding `ac047a3d93d88-4`
+(refuse a zero take-off beside a re-solving scan once, in `_launch_plan`
+after `build_plan`, instead of at three sites; revisit at a fourth plan
+consumer or when the conflict-label deferral above reopens), and three
+memory lines for `AGENTS.md`: a Qt reproduction outside pytest runs from the
+env's `python.exe` once `Library\bin` leads PATH, offscreen, with
+`TAVI_CONFIG_DIR` on a temp copy; leaf scratch output must live under
+`%LOCALAPPDATA%\Temp\claude\`; the runtime's files check treats a file
+another unit owns as outside a packet even when the packet lists it.
+
+Done when: ja01620de5591 has landed.
