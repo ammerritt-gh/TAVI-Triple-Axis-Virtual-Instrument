@@ -5,7 +5,9 @@ digits (ISAR sends %g) still reaches its end point exactly.
 """
 import pytest
 
+from instruments.rules import build_plan, expand
 from tavi.utilities import parse_scan_steps, scan_run_values, scan_stop_note
+from test_rules import _context, _snapshot  # the point plan's frozen context and snapshot
 
 
 def test_a_step_that_does_not_divide_stops_at_the_last_point_inside_the_range():
@@ -52,10 +54,22 @@ def test_descending_ranges_stop_short_with_a_note():
 @pytest.mark.parametrize("command", [
     "A3 0 10 4", "A3 0 10 2.5", "deltaE 0 10 0.0502513", "deltaE 10 0 -0.0502513",
     "A3 0 0.0016 0.0008", "A3 10 0 -4", "A3 -2 3 0.001", "A3 0.1234 9.8765 0.0371",
-    "A3 0 1e-12 1", "A3 2 2 1",
+    "A3 0 1e-12 1", "A3 2 2 1", "H 1 1.001 0.0001",
 ])
 def test_the_closed_form_values_are_the_run_values(command):
     """scan_run_values at every index is parse_scan_steps' array, so the travel check judges the run."""
     _, values = parse_scan_steps(command)
     start, end, step = map(float, command.split()[1:])
     assert scan_run_values(start, end, step, range(len(values))) == list(values)
+
+
+def test_a_fine_step_keeps_eleven_distinct_points_and_the_exact_end():
+    """F8: coordinates are not rounded to 3 decimals, so a 1e-4 step is 11 distinct points."""
+    _, values = parse_scan_steps("H 1 1.001 0.0001")
+    assert len(values) == 11 and values[-1] == 1.001
+    assert len(set(values)) == 11, values
+
+    plan = build_plan([("H 1 1.001 0.0001", False), ("", False)], _context())
+    run = expand(plan, _snapshot()).values[1]
+    assert len(run) == 11 and run[-1] == 1.001
+    assert len(set(run)) == 11, run
