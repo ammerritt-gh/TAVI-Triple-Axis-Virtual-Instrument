@@ -3078,16 +3078,17 @@ class TAVIController(QObject):
         # (update_angles_from_q: the same solve, the plane lock owning the arcs).
         # A caller who names a stage motor keeps the whole stage (the others would be
         # solved for a 2-theta they did not choose); a stage motor beside a position
-        # was refused above. A crystal motor or an energy keeps the stage too: only
-        # a named position, lattice, sample, transfer or fixed energy holds Q and
-        # solves it (operator, 12 October 2026: follow the motors).
+        # was refused above. A crystal motor or an energy keeps the stage too, even
+        # beside a sample, lattice or fixed energy: without a crystal motor, a named
+        # position, lattice, sample, transfer or fixed energy holds Q and solves it
+        # (operator, 12 October 2026: follow the motors).
         energy_names = ('Ei', 'Ki', 'Ef', 'Kf', 'fixed_E', 'K_fixed')
         geometry_names = (('H', 'K', 'L', 'qx', 'qy', 'qz', 'sample', 'deltaE', 'fixed_E', 'K_fixed')
                           + lattice_keys)
         solved = False
         energies_absent = vals['Ei'] is None or vals['Ef'] is None   # a zero take-off: nothing to solve with
         holds_q = patched.intersection(geometry_names) - (
-            {'fixed_E'} if self._fixed_energy_follows_motors(named) else set())
+            {'fixed_E', 'sample', *lattice_keys} if self._crystal_motor_leads(named) else set())
         if (holds_q and not energies_absent
                 and not patched.intersection(('stt', 'omega', 'sgl', 'sgu'))
                 and selected_calculation([(vals.get('scan_command1') or "", False),
@@ -8044,13 +8045,17 @@ class TAVIController(QObject):
     _ANGLE_TOL = 0.01    # deg
     _HKL_TOL = 1e-3      # r.l.u.
 
-    def _fixed_energy_follows_motors(self, names):
-        """A write naming the fixed energy beside a crystal motor (A2, A6 or an energy or
-        wavevector) and no position or stage motor follows the motors: the unnamed stage motors
-        stay where they were and Q, H, K, L and E derive forward from the motors. ``names``
-        are internal names."""
-        return ('fixed_E' in names and any(n in names for n in self._CRYSTAL_NAMES)
+    def _crystal_motor_leads(self, names):
+        """A write naming a crystal motor (A2, A6 or an energy or wavevector) and no position or
+        stage motor follows the motors, whatever sample, lattice or fixed energy it names beside
+        them: the unnamed stage motors stay where they were and Q, H, K, L and E derive forward
+        from the motors. ``names`` are internal names."""
+        return (any(n in names for n in self._CRYSTAL_NAMES)
                 and not any(n in names for n in self._POSITION_NAMES + self._STAGE_NAMES))
+
+    def _fixed_energy_follows_motors(self, names):
+        """``_crystal_motor_leads`` for a write that also names the fixed energy."""
+        return 'fixed_E' in names and self._crystal_motor_leads(names)
 
     def _follow_motors_after_fixed_energy(self):
         """The fixed energy's after-handler for such a write: only the fixed side's energy is
