@@ -529,6 +529,21 @@ def test_a_command_edit_judges_the_boxes_once(window, monkeypatch):
     assert len(calls) == 1
 
 
+def test_a_zero_take_off_beside_a_re_solving_scan_is_refused_on_the_labels(window):
+    """The labels and marks show what Run does: a zero A2 beside an H scan re-solves the crystal
+    angles, so the pair is refused and no mark claims a run; a direct-motor scan at that zero stands."""
+    window.instrument_dock.mtt_edit.setText("0")
+    window.instrument_dock.mtt_edit.editingFinished.emit()
+    _type(window, "H 1 2 0.5")
+    assert "re-solves" in _warning(window) and "A2" in _warning(window), _warning(window)
+    assert _marks(window) == {}
+    hard, gate = _run_verdict(window)
+    assert hard == gate and len(gate) == 1 and "re-solves" in gate[0], gate
+    _type(window, "A4 20 22 1")
+    assert _warning(window) == "" and _run_verdict(window) == ([], [])
+    assert _marks(window)[A4] == ("scanned", "1")
+
+
 def test_a_scan_over_the_maximum_is_refused_at_once_and_marks_nothing(window):
     """A3 0 100 0.000001 is 1e8 points, over the maximum: box 1 says so at once, no mark
     is drawn, and Run's preflight lists it as a hard issue."""

@@ -4551,7 +4551,12 @@ class TAVIController(QObject):
         except ValueError as exc:   # a cell the sample mount cannot build, mid-edit
             log.warning("Scan labels and field marks: the launch does not collect (%s)", exc)
             return None, None, {}, {None: PlanRefused(f"Nothing can be planned: {exc}")}
-        return (launch_state, *self._judge_boxes(launch_state, commands))
+        plan, accepted, refused = self._judge_boxes(launch_state, commands)
+        vals = launch_state['vals']
+        re_solved = self._zero_takeoff_re_solved(vals, [angle for angle in ('mtt', 'att') if vals[angle] == 0])
+        if re_solved and not refused:   # Run refuses the whole launch (_scan_command_issues), so no box stands
+            return launch_state, None, {}, {None: PlanRefused(re_solved)}
+        return launch_state, plan, accepted, refused
 
     def _show_scan_verdict(self, verdict):
         """Show a ``_box_verdict`` on the command boxes.
