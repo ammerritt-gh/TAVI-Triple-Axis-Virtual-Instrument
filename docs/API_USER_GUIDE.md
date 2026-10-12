@@ -309,10 +309,14 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   (`400 invalid_parameters`, nothing applied, both fields named): a position (`h`,
   `k`, `l`, `qx`, `qy`, `qz`) beside a stage motor (`sample_rotation_deg`,
   `sample_two_theta_deg`, `sample_lower_arc_deg`, `sample_upper_arc_deg`), because the
-  position decides the stage; values of one request that disagree beyond the four decimals the fields keep (`incident_wavevector_inv_angstrom`
-  with `incident_energy_mev`, a crystal 2θ with its side's energy or wavevector or with the
-  fixed energy, `energy_transfer_mev` with the two energies, `qx`/`qy`/`qz` with `h`/`k`/`l`).
-  Everything `applied` lists therefore reads back as sent.
+  position decides the stage; values of one request that disagree beyond the readouts' rounding
+  (0.01 deg for a crystal 2θ, 0.01 meV for an energy, 0.001 r.l.u. for `qx`/`qy`/`qz` against
+  `h`/`k`/`l`) (`incident_wavevector_inv_angstrom` with `incident_energy_mev`, a crystal 2θ with
+  its side's energy or wavevector or with the fixed energy, `energy_transfer_mev` with the two
+  energies, `qx`/`qy`/`qz` with `h`/`k`/`l`). Values within that rounding are one setting: a
+  crystal 2θ is kept as sent and its energy derived from it, and Q is kept as sent with `h`,
+  `k`, `l` derived from it. Everything `applied` lists therefore reads back, at the readouts'
+  precision.
 - One request is applied **in groups**, each group's values written and their dependants
   recomputed before the next group writes: sample, lattice, crystals, energy mode, fixed
   energy, energies (the crystal 2θ last), energy transfer, position (Q or h, k, l), stage

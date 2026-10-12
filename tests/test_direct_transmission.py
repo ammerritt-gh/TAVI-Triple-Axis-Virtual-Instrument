@@ -390,6 +390,20 @@ def test_deterministic_engine_stt_scan_skips_forward_scattering_point(tmp_path):
         assert result.transmission_points == [{"index": 1, "axes": ["sample"]}]
 
 
+def test_a_crystal_angle_beside_the_fixed_energy_it_agrees_with_is_launched():
+    """A6 -41.19 beside fixed_E 14.68 agrees within the readout: the launch keeps the
+    motor as sent and derives the analyser energy and fixed_E from it."""
+    with _controller("in8") as ctrl:
+        vals = ctrl.build_api_launch_state({
+            "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
+            "monocris": "pg002", "anacris": "pg002",
+            "att": -41.19, "scan_command1": "A4 -1 1 1",
+        })["vals"]
+    assert vals["att"] == -41.19
+    assert vals["Ef"] == pytest.approx(_FIXED_E, abs=0.02)
+    assert vals["fixed_E"] == vals["Ef"]
+
+
 # --- Validation: /scan and /validate ----------------------------------------
 
 def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, tmp_path):
