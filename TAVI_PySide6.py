@@ -3008,28 +3008,23 @@ class TAVIController(QObject):
                 vals[wavevector] = angle2k(vals[angle] / (2 * sense), d)
                 vals[energy] = k2energy(vals[wavevector])
             if zero_takeoffs:
-                self._refuse_position_beside_zero_takeoff(zero_takeoffs, named, submitted)
                 self._refuse_zero_takeoff_that_is_re_solved(vals, zero_takeoffs, submitted)
             both = vals['Ei'] is not None and vals['Ef'] is not None
             if 'mtt' in patched or 'att' in patched:
-                # An absent side (a zero take-off) is not an energy to subtract: the held
-                # number fixed_E stands in for it, and the transfer is not recomputed from it.
+                # An absent side (a zero take-off) is not an energy to subtract; a transfer
+                # named beside one was refused above, so here both energies exist.
                 if 'deltaE' in patched:
                     # The side the angles did not set follows the transfer the caller named.
                     if ki_fixed:
                         if 'att' in patched:
-                            if both:
-                                vals['deltaE'] = vals['Ei'] - vals['Ef']
+                            vals['deltaE'] = vals['Ei'] - vals['Ef']
                         else:
-                            ei = vals['fixed_E'] if vals['Ei'] is None else vals['Ei']
-                            vals['Ef'] = ei - vals['deltaE']
+                            vals['Ef'] = vals['Ei'] - vals['deltaE']
                     else:
                         if 'mtt' in patched:
-                            if both:
-                                vals['deltaE'] = vals['Ei'] - vals['Ef']
+                            vals['deltaE'] = vals['Ei'] - vals['Ef']
                         else:
-                            ef = vals['fixed_E'] if vals['Ef'] is None else vals['Ef']
-                            vals['Ei'] = ef + vals['deltaE']
+                            vals['Ei'] = vals['Ef'] + vals['deltaE']
                 elif both:
                     # As the dock's A2/A6 edit does: the other side keeps its energy and the
                     # transfer follows the motors.
@@ -3264,20 +3259,6 @@ class TAVIController(QObject):
     def _motor_names(vals, fields):
         """``fields`` of the launch as ``A2 (...) = 0`` text."""
         return ", ".join("%s = %g" % (quantity_by_id(_to_public(f)).name, vals[f]) for f in fields)
-
-    def _refuse_position_beside_zero_takeoff(self, zero_takeoffs, named, submitted):
-        """A position beside a zero take-off is refused: a transmitting crystal selects no energy,
-        so no stage can be solved from the position, and nothing launched may describe a setting
-        the instrument is not at."""
-        position = [n for n in self._POSITION_NAMES if n in named]
-        if not position:
-            return
-        pair = [submitted.get(_to_public(n), _to_public(n)) for n in (zero_takeoffs[0], position[0])]
-        message = ("%s and %s cannot be set together: a crystal at zero take-off selects no energy, "
-                   "so the position cannot be solved onto the stage. Send one or the other."
-                   % tuple(pair))
-        raise ApiError(400, "invalid_parameters", message,
-                       details={"errors": {name: message for name in pair}})
 
     def _zero_takeoff_re_solved(self, vals, zero_takeoffs):
         """The reason a zero take-off cannot stand beside this scan, or None.
@@ -8165,10 +8146,24 @@ class TAVIController(QObject):
             first, second = _to_public(position[0]), _to_public(stage[0])
             return (first, second, "%s and %s cannot be set together: the position decides "
                     "the stage. Send one or the other." % (first, second))
+        # A crystal at exactly zero transmits: it selects no energy, so no stage can be solved
+        # from a position and no energy transfer is defined with it.
+        zero = [a for a in ('mtt', 'att') if named.get(a) == 0]
+        beside = [n for n in self._POSITION_NAMES + ('deltaE',) if n in names]
+        if zero and beside:
+            return self._transmitting(zero[0], beside[0])
         if base is None:
             log.warning("Write consistency not checked: a GUI field does not read as a number")
             return None
         return self._energy_conflict(named, base) or self._position_conflict(named, base)
+
+    @staticmethod
+    def _transmitting(angle, other):
+        """``_write_conflict``'s answer for a zero crystal angle (internal name) beside ``other``."""
+        first, second = _to_public(angle), _to_public(other)
+        return (first, second, "%s and %s cannot be set together: a crystal at zero take-off "
+                "transmits and selects no energy, so no position, energy or energy transfer can "
+                "be set with it. Send them separately." % (first, second))
 
     @staticmethod
     def _disagreement(a, b, detail=""):
@@ -8201,6 +8196,14 @@ class TAVIController(QObject):
                  ('Ef', 'Kf', 'att', not ki_fixed, state.sense_ana, ana_info['da']))
         found = []
         for energy, wavevector, angle, held, sense, d in sides:
+            if named.get(angle) == 0:   # transmitting: no energy to compare, none invented
+                same_side = [n for n in (energy, wavevector) if n in named]
+                if held and 'fixed_E' in named:
+                    same_side.append('fixed_E')
+                if same_side:
+                    return self._transmitting(angle, same_side[0])
+                found.append([])
+                continue
             entries = []
             if energy in named:
                 entries.append((energy, named[energy], None, "%g meV" % named[energy]))
