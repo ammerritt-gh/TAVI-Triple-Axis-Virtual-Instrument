@@ -13,7 +13,7 @@ TAVI is a Python/PySide6 GUI for simulating triple-axis spectrometer experiments
 - **Entrypoint:** `python TAVI_PySide6.py`.
 - **Developer launcher:** `run-tavi-dev.bat` runs the GUI in the local `tavi-dev` micromamba environment.
 - **Dependency manager:** `pip install -r requirements.txt` for standalone Python dependencies; installer docs use micromamba for McStas and Python.
-- **Environment traps:** `.pytest_cache\` (May 2026) has broken ACLs and cannot be read or deleted without an elevated shell (`takeown` then `icacls`); it is gitignored, and pytest recreates its cache elsewhere. Git identity is repo-local (`ammerritt-gh`), so a fresh clone must set it locally before it can commit. The `tavi-dev` activation runs a noisy MSVC/vcvars hook; call the env's `python.exe` directly when clean output matters. For targeted runs of pure-Python tests only: invoked directly, the interpreter has `Library\bin` off PATH, and anything importing matplotlib or Qt dies with a delay-load fault (0xc06d007f; explained in `TODO.md` Housekeeping, 2026-09-09, and hit again 2026-09-12); run the full suite through `micromamba run`.
+- **Environment traps:** `.pytest_cache\` (May 2026) has broken ACLs and cannot be read or deleted without an elevated shell (`takeown` then `icacls`); it is gitignored, and pytest recreates its cache elsewhere. Git identity is repo-local (`ammerritt-gh`), so a fresh clone must set it locally before it can commit. The `tavi-dev` activation runs a noisy MSVC/vcvars hook; call the env's `python.exe` directly when clean output matters. For targeted runs of pure-Python tests only: invoked directly, the interpreter has `Library\bin` off PATH, and anything importing matplotlib or Qt dies with a delay-load fault (0xc06d007f; explained in `TODO.md` Housekeeping, 2026-09-09, and hit again 2026-09-12); run the full suite through `micromamba run`. A Qt repro outside pytest uses the env's `python.exe` with `<env>\Library\bin` first on PATH, offscreen, and `TAVI_CONFIG_DIR` on a temp copy of `config/`; `micromamba run` mangles a multi-line `-c` (the vcvars hook). The tool shells set `NoDefaultCurrentDirectoryInExePath=1`, so `mcrun`'s bare `name.exe` launch fails until that variable is emptied in the shell. A file inside a conda env is a hardlink into the package cache and every sibling env: unlink it before writing, never write in place.
 - **Config location:** `config/*.json` stores local McStas paths, GUI parameters, layout state, runtime estimates, and Config-menu preferences (`settings.json`: the MPI process count, via `tavi/settings.py`). Resolved by `tavi/local_state.py`; `TAVI_CONFIG_DIR` overrides, used by the tests.
 - **Generated output:** simulation results are written under `output/`; McStas can generate `.c`, `.instr`, executables, and detector output files.
 - **External runtime dependency:** McStas 3.4+ and a C compiler. The installer's `tavi` env carries conda-forge GCC (`gcc_win-64`) with McStas's config pointed at it; the `tavi-dev` env still uses MSVC.
@@ -258,6 +258,7 @@ For Python changes, use the smallest relevant checks available:
 - `components/PHONON_DFT.md` - canonical TAVI-owned `Phonon_DFT` component and shared dispersion-file contract.
 - `installer/TAVI-Installation-README.md` - Windows installation and launcher details.
 - `.github/instructions/copilot-instructions.md` - tactical code-style and local-convention rules.
+- `examples/takin/` - untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not yet written up.
 
 ---
 
@@ -329,10 +330,6 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 
 ## Memory — promote or die
 
-- 2026-09-13 · `examples/takin/` is an untracked clone of ILL Takin 2.10, a newer TAS reference than vTAS (presets, angle math, resolution); not written up yet.
-- 2026-09-15 · floor: the tool shells set `NoDefaultCurrentDirectoryInExePath=1`; `mcrun`'s bare `name.exe` launch fails until it is emptied in that shell.
-- 2026-09-15 · floor: a file inside a conda env is a hardlink into the package cache and every sibling env; unlink before writing, never write in place.
 - 2026-09-30 · skill: an external_unit payload must ask ChatGPT to name the revision SHA on line 1, or `acs-job submit` refuses its reply.
-- 2026-10-12 · Qt repro outside pytest: env python.exe with `<env>\Library\bin` first on PATH, offscreen, `TAVI_CONFIG_DIR` on a temp `config/` copy; `micromamba run` mangles multi-line `-c` (vcvars hook).
 - 2026-10-12 · floor: leaf scratch output must live under `%LOCALAPPDATA%\Temp\claude\`, not in the worktree.
 - 2026-10-12 · floor: the ACS runtime's files check treats a file another unit owns as outside a packet even when the packet lists it.
