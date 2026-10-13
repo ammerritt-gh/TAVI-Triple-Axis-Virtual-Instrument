@@ -331,5 +331,4 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 ## Memory — promote or die
 
 - 2026-09-30 · skill: an external_unit payload must ask ChatGPT to name the revision SHA on line 1, or `acs-job submit` refuses its reply.
-- 2026-10-12 · floor: leaf scratch output must live under `%LOCALAPPDATA%\Temp\claude\`, not in the worktree.
 - 2026-10-12 · floor: the ACS runtime's files check treats a file another unit owns as outside a packet even when the packet lists it.
