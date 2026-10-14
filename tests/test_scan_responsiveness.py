@@ -284,6 +284,38 @@ def test_gui_stays_responsive_and_stop_is_prompt(controller):
     assert len(rec.lines) > STOP_AT_POINTS // 2, "scan produced suspiciously few lines"
 
 
+def test_worker_line_does_not_overtake_a_gui_line(controller):
+    """A worker line that lands after a GUI line was handed over, but before the
+    drain takes the buffer, must not be shown ahead of that GUI line."""
+    ctrl = controller
+    panel = ctrl.window.output_dock.message_text
+    panel.clear()
+    buf = ctrl._gui_updates
+    real_take = buf.take
+    landed = []
+
+    def _take_after_worker_lands():
+        if not landed:
+            landed.append(True)
+            worker = threading.Thread(target=ctrl._post_log, args=("worker",), daemon=True)
+            worker.start()
+            worker.join(timeout=SCAN_DEADLINE_S)
+            assert not worker.is_alive(), "worker thread did not finish"
+        return real_take()
+
+    buf.take = _take_after_worker_lands
+    try:
+        ctrl._post_log("gui")
+        end = time.perf_counter() + SCAN_DEADLINE_S
+        while buf._logs:  # drain until the buffer is empty
+            ctrl._drain_updates()
+            assert time.perf_counter() < end, "the log buffer never emptied"
+    finally:
+        del buf.take
+    assert panel.toPlainText() == "gui\nworker", (
+        "panel shows %r; the GUI line was handed over first" % panel.toPlainText())
+
+
 def _finish(ctrl, job):
     """Wait for a short scan to end and the plot to say so; return the job."""
     dock = ctrl.window.display_dock
