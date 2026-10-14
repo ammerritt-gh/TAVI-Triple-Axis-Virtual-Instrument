@@ -275,7 +275,7 @@ The current pipeline passes snapshot dicts through the queue so the simulation t
 
 `docs/MCSTAS_PARAMETERS.md` is the authoritative reference for what is build-time (requires recompilation) vs run-time (safe to change between points via `set_parameters()`).
 
-Cancellation uses drain semantics through `self.stop_event` (`threading.Event`): the prep thread stops queueing new work, and the simulation thread exits after the current point finishes postprocessing.
+Cancellation is two-stage, recorded only by `TAVIController.request_stop` on the running job (`docs/PIPELINE_DESIGN.md` §3.3): a graceful stop drains through `self.stop_event` (`threading.Event`) -- the prep thread stops queueing new work and the simulation thread exits after the current point finishes postprocessing -- and a force stop ends the current MC point's process tree (each point runs on a point thread inside a `tavi/point_processes.py` `PointScope`), records that point as not executed and deletes its output folder.
 
 `tavi/runtime_tracker.py` now persists a heuristic `compilation_time` field for new runs, but compile-time estimates still come from first-point timing rather than an independently measured compile phase.
 

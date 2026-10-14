@@ -53,14 +53,46 @@ Rationale: makes the prep↔sim interface contract explicit. Eliminates any poss
 
 If prep hits an error (invalid angles, zero-Q, unreachable monochromator angle), it puts an error sentinel on the queue. The simulation thread logs the error, skips `backengine()` for that point, records the point as failed in the scan output, and pulls the next snapshot. This preserves the current behavior where failed points appear as NaN/zero in the scan results rather than being silently dropped.
 
-### 3.3 Cancellation: drain semantics
+### 3.3 Cancellation: graceful drain, then force stop
 
-`threading.Event` replaces the current `stop_flag` bool. When set:
+A stop is two-stage. Every stop is recorded by one entry point,
+`TAVIController.request_stop(job_id, kill=)`, as the running job's own
+`stop_request` (`"graceful"`, or `"kill"`, which overrides it and is never
+downgraded), and sets the shared `stop_event` (`threading.Event`). The worker
+clears that event only as it starts the next job, in one locked step with the
+job's RUNNING transition, so a stop never leaks from one job into the next.
+
+**Graceful** (the first click on Stop, or the first Cancel in the API dock on
+the running job; a plain API stop):
 - Prep thread checks the event before computing the next snapshot. If set, it stops producing and exits.
-- Simulation thread checks the event before pulling from the queue. If set after the current point's `backengine()` finishes, it completes postprocessing for that point, then exits.
-- The in-flight `backengine()` call (subprocess) runs to completion — there is no mechanism to interrupt it mid-execution, and this matches current behavior.
+- Simulation thread checks the event before pulling from the queue. If set after the current point's McStas run finishes, it completes postprocessing for that point, then exits.
+- The in-flight McStas run is left to finish. Maximum latency is one point.
 
-The drain model means: stop accepting new prep work, finish the in-flight simulation, postprocess it, stop. Maximum cancellation latency is one simulation duration (typically under 5 minutes). Emergency kills are handled externally (process termination), not by this pipeline.
+**Force stop** (the second GUI request, the button now reading *Force stop*;
+the controller's `shutdown()`, which closing the window runs). Each
+Monte Carlo point runs `run_point()` on a short-lived point thread inside a
+`tavi.point_processes.PointScope`, which records every process that thread
+launches (the `mpiexec` launcher of a direct point, or the `cmd.exe` under
+which McStasScript compiles and runs the first point) and tracks their
+descendants. A kill ends that process tree through held process handles,
+waits up to `KILL_WAIT_S` for it to exit, and logs any survivor by name and
+PID. The point is then decided by the scope's flags:
+- A kill that landed while a recorded process was still running, a launch
+  refused because a stop arrived before the point's first launch (the check
+  and the launch are one step under the scope lock), or a call still blocked
+  after the kill: the point is **not executed**. None of its writers run (plot,
+  data arrays, job result, executed mask, timing records, API events), its
+  `scan_NNNN` folder is deleted (or, if that fails, its `scan_parameters.txt`,
+  so a reload skips it) and the log names the discarded point. A killed
+  first point also invalidates the compiled binary: the execution state and
+  the cross-scan reuse cache are reset, so the next scan compiles again.
+- A kill that landed after every recorded process had exited records the
+  point normally (orphans are still ended first), then the scan stops.
+
+The job ends `stopped` with `result.stop_mode` `"graceful"` or `"kill"`, set in
+the same `job.lock` section as the state. The next queued job starts only
+after the kill, its wait and the folder removal. The analytic engine has no
+external process: its kill is a stop at the next point boundary.
 
 ### 3.4 Build/run split: included in this refactor
 
@@ -216,14 +248,14 @@ run_simulation(launch_state):
         else:
             data = math.nan
             error_flags = snapshot.error_flags
-            # Log the error
-            self.message_printed.emit(
+            # Log the error (buffered; the GUI thread drains it)
+            self._post_log(
                 f"Point {i}: skipped, error flags: {error_flags}"
             )
         
         # --- Inline postprocessing (unchanged logic) ---
         # read_1Ddetector_file(), write_parameters_to_file(),
-        # emit scan_point_updated signals, record timing, etc.
+        # post the point's display events to the update buffer, record timing, etc.
         # Uses snapshot['metadata'] for logging and parameter file.
     
     # --- Cleanup ---
@@ -275,10 +307,10 @@ The `RuntimeTracker` (`tavi/runtime_tracker.py`) now persists a heuristic `compi
 
 Replace `self.stop_flag` (bool) with `self.stop_event` (threading.Event):
 
-- `stop_simulation()` calls `self.stop_event.set()` instead of `self.stop_flag = True`.
+- `stop_simulation()` sets the event through `request_stop()` instead of `self.stop_flag = True` (§3.3).
 - Prep thread checks `stop_event.is_set()` before each snapshot computation.
 - Simulation thread checks `stop_event.is_set()` before each `queue.get()`.
-- Reset with `self.stop_event.clear()` at the start of `run_simulation_thread()`.
+- The job worker resets it with `self.stop_event.clear()` as it starts each job (§3.3).
 
 ## 5. Thread Topology
 
@@ -289,9 +321,10 @@ Main Thread (Qt event loop)
 │   ├── Starts with frozen launch_state captured on the GUI thread
 │   ├── Owns the instrument object after plugin build()
 │   ├── Pulls snapshots from queue
-│   ├── Calls InstrumentPlugin.run_point() → run_tas_point() → subprocess.run() (GIL released)
+│   ├── Runs each InstrumentPlugin.run_point() → run_tas_point() → subprocess.run() (GIL released)
+│   │   on a short-lived point thread inside a PointScope (§3.3), joined in 0.5 s steps
 │   ├── Does inline postprocessing
-│   └── Emits Qt signals for UI updates
+│   └── Posts UI updates to the controller's update buffer (drained on the GUI thread)
 │
 └── Prep Thread (new, daemon, started by simulation thread)
     ├── Computes param snapshots from scan_parameter_input
@@ -448,7 +481,7 @@ The instrument object from plugin `build()` is used by the simulation thread for
 ## 10. What This Does NOT Change
 
 - **DisplayDock**: results still arrive in order (simulation thread processes points sequentially). No out-of-order handling needed.
-- **Signal semantics**: `scan_point_updated_1d/2d`, `scan_completed`, `progress_updated` are emitted from the simulation thread exactly as before, at the same logical points.
+- **GUI update semantics**: the per-point display updates (point counts, invalid points, current-point marker), log lines and the latest progress, counts and times are posted from the simulation and prep threads, at the same logical points, to the controller's `_GuiUpdateBuffer` (`_post_log` is the one log producer). `_drain_updates` applies them on the GUI thread in arrival order about five times a second (`DRAIN_INTERVAL_MS`), one pass per call with one plot redraw, and every end-of-scan slot drains first; `_yield_to_gui` parks the scan thread once per point (at most `GUI_YIELD_MAX_S`) while the GUI thread draws. `scan_completed` and `scan_auto_save` are still signals.
 - **Output file format**: detector files and the `.instr` copy are unchanged. `scan_parameters.txt` changed with the naming contract (API version 2): the scan-level file and every point's file start with the line `api_version: 2` and are keyed by canonical IDs (`TAVIController.output_parameters`, which drops the `sth` stage readout because `omega` already records the same quantity), and a folder without that line is refused at load (`tavi.data_processing.require_output_version`).
 - **Diagnostic mode**: instrument diagram request is emitted once after plugin `build()`. Diagnostic monitors are build-time decisions, frozen at build time. The direct-binary slice keeps diagnostic plotting on the retained first-point `backengine()` McStasData; later direct-invocation points do not replace that retained diagnostic data.
 - **Single-point scans**: work identically; the prep thread computes one snapshot and exits.
