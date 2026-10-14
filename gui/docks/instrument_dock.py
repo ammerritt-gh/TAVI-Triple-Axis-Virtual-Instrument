@@ -722,7 +722,7 @@ class InstrumentDock(BaseDockWidget):
             status = state.fixed if state.fixed.startswith("fixed") else f"fixed, {state.fixed}"
             why = f"{_sentence(state.fixed)} The hardware fixes this radius, so it cannot follow the ideal."
             tips = (why, f"{why} The field shows the fixed value.",
-                    "No ideal is shown for a radius the hardware fixes.")
+                    f"No ideal is shown: {why}")
         else:
             status = f"held: tracking unavailable, {state.no_model}"
             why = (f"Tracking is unavailable: {state.no_model}. The value typed in the field "
