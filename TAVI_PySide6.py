@@ -151,6 +151,7 @@ from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
                              parse_scan_background, ALLOWED_ENGINES,
                              BACKGROUND_SPEC_KEYS)
 from tavi import background as _background
+from tavi import point_processes
 from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused
@@ -1181,6 +1182,10 @@ class TAVIController(QObject):
     DRAIN_INTERVAL_MS = 200
     # Longest a scan thread waits, per point, for the GUI thread's plot draw.
     GUI_YIELD_MAX_S = 1.0
+    # Bounds every wait for a force stop to finish (its kill, wait and folder removal).
+    CLOSE_WAIT_S = point_processes.KILL_WAIT_S + 5
+    # After a kill, how long the worker still waits for a point's call to return.
+    POINT_JOIN_AFTER_KILL_S = 2.0
 
     # Signals for thread-safe GUI updates
     progress_updated = Signal(int, int)  # current, total
@@ -1268,6 +1273,14 @@ class TAVIController(QObject):
 
         # Global variables
         self.stop_event = threading.Event()
+        # Lock order: _stop_lock, then the active PointScope's lock, then a job.lock.
+        # _stop_lock guards _active_scope and every stop decision (request_stop).
+        self._stop_lock = threading.Lock()
+        self._active_scope = None  # the PointScope of the MC point running now, or None
+        # The job whose graceful GUI stop relabelled the Stop button (or None).
+        self._force_stop_label_job = None
+        # Records the processes a scan point starts so a force stop can end them.
+        point_processes.install()
 
         # Scan job queue (API design phase 1): every scan -- GUI or (later) API --
         # runs as a ScanJob through a single persistent worker thread, so runs
@@ -2433,7 +2446,9 @@ class TAVIController(QObject):
         """Update progress bar."""
         percentage = int(current * 100 / total) if total > 0 else 0
         self.window.simulation_dock.progress_bar.setValue(percentage)
-        self.window.simulation_dock.progress_label.setText(f"{percentage}% ({current}/{total})")
+        # Total 0 is a job that has started but not yet sized its scan.
+        self.window.simulation_dock.progress_label.setText(
+            f"{percentage}% ({current}/{total})" if total > 0 else "Initializing...")
     
     @Slot(str)
     def update_remaining_time(self, remaining_time):
@@ -7204,7 +7219,8 @@ class TAVIController(QObject):
             self.print_to_message_center(f"Simulation refused: {refused}")
             return
 
-        self.stop_event.clear()
+        # No stop_event.clear() here: the worker clears it as the job starts, so a
+        # submission can never clear a stop recorded for a job that is running.
 
         # Reset progress bar and show initializing state
         self.window.simulation_dock.progress_bar.setValue(0)
@@ -7254,25 +7270,31 @@ class TAVIController(QObject):
                 # Sentinel from shutdown() -- exit the loop.
                 break
 
-            with job.lock:
-                if job.state == JobState.CANCELLED:
-                    # Cancelled before it ran; keep the registry record, skip it.
-                    skip = True
-                else:
-                    skip = False
+            # One step: the cancelled check, the stop_event clear, the RUNNING
+            # transition and the publication as the active job. A cancel or stop
+            # cannot land between them, a stop recorded for the previous job
+            # cannot be cleared into this one, and a RUNNING job is always the
+            # active one (see docs/API_SERVER_DESIGN.md sec 7.2).
+            with self._stop_lock:
+                with job.lock:
+                    skip = job.state == JobState.CANCELLED
+                    if not skip:
+                        self.stop_event.clear()
+                        job.state = JobState.RUNNING
+                        job.started_at = time.time()
+                        job.notify_state_change()
+                        self._active_job = job
+                        # The start-of-job progress reset, as latest values: this job's
+                        # own progress overwrites it, and no queued GUI handler can wipe
+                        # a finished job's progress. update_progress shows total 0 as
+                        # "Initializing...".
+                        self._gui_updates.latest('progress_updated', 0, 0)
+                        self._gui_updates.latest('remaining_time_updated', 'calculating...')
             if skip:
+                # Cancelled before it ran; keep the registry record, skip it.
                 self.job_state_changed.emit(job.job_id, JobState.CANCELLED.value)
                 continue
 
-            # Clear the shared stop event AFTER popping and BEFORE marking the
-            # job RUNNING, so a Stop pressed between jobs cannot leak into the
-            # next one (see docs/API_SERVER_DESIGN.md sec 7.2).
-            self.stop_event.clear()
-            with job.lock:
-                job.state = JobState.RUNNING
-                job.started_at = time.time()
-                job.notify_state_change()
-            self._active_job = job
             self.job_state_changed.emit(job.job_id, JobState.RUNNING.value)
             self._journal.record("job", f"{job.job_id}: started")
             self._publish_api_event('job_started', {
@@ -7293,7 +7315,9 @@ class TAVIController(QObject):
                     job.notify_state_change()
                 self._post_log(f"Scan job {job.job_id} failed: {exc}")
             finally:
-                self._active_job = None
+                # Only now, after run_simulation (kill wait and folder removal included).
+                with self._stop_lock:
+                    self._active_job = None
 
             with job.lock:
                 final_state = job.state.value
@@ -7318,24 +7342,20 @@ class TAVIController(QObject):
     def _on_job_state_changed(self, job_id, state):
         """GUI-thread reaction to job-queue transitions.
 
-        Resets the progress display when a queued job actually starts, and
-        keeps the Run button disabled while any job is queued or running.
+        Applies the buffered updates first (the worker posts a starting job's
+        progress reset into the buffer, not here), returns the Stop button to
+        its plain label when the job a GUI stop relabelled has ended or another
+        job has started, and keeps the Run button disabled while any job is
+        queued or running.
         """
-        if state == JobState.RUNNING.value:
-            # Reset the progress display for the starting job (mirrors the prep
-            # done in run_simulation_thread at submission time, so a job that
-            # waited in the queue still gets a clean start). Before the drain: a
-            # fast scan may already have buffered its final progress, which
-            # belongs to the job that has just started.
-            try:
-                self.window.simulation_dock.progress_bar.setValue(0)
-                self.window.simulation_dock.progress_label.setText("Initializing...")
-                self.window.simulation_dock.remaining_time_label.setText(
-                    "Estimated Remaining Time: calculating..."
-                )
-            except Exception:
-                logging.getLogger(__name__).exception("Could not reset the progress display for a starting job")
         self._drain_updates()
+
+        label_job = self._force_stop_label_job
+        if label_job is not None and (
+                (job_id == label_job and state in _JOB_TERMINAL_STATE_VALUES)
+                or (job_id != label_job and state == JobState.RUNNING.value)):
+            self._force_stop_label_job = None
+            self.window.simulation_dock.show_force_stop(False)
 
         # Disable Run while work is pending/active; re-enable once idle.
         busy = self._has_pending_jobs()
