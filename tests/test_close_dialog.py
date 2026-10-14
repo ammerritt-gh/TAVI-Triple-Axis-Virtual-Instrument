@@ -259,6 +259,24 @@ def test_a_job_submitted_during_the_wait_is_cancelled_before_close(rig, monkeypa
         f"the late job was {at_shutdown} when the close reached shutdown()"
 
 
+def test_close_waits_until_the_controller_is_idle(rig, monkeypatch):
+    rig.running_job()
+    real_idle = rig.ctrl.is_idle
+    polls = []      # (window visible, shutdown called) at each poll of is_idle
+
+    def busy_for_five_polls():
+        polls.append((rig.window.isVisible(), rig.ctrl._shutdown_called))
+        return len(polls) > 5 and real_idle()
+
+    monkeypatch.setattr(rig.ctrl, "is_idle", busy_for_five_polls)
+    rig.click = "Stop scan and close"
+    rig.window.close()
+    pump_until(lambda: len(polls) > 5 or window_closed(rig), "several polls while not idle")
+    assert len(polls) > 5, f"closed after {len(polls)} poll(s) while the controller was not idle"
+    assert all(visible and not shut for visible, shut in polls[:5]), polls
+    pump_until(lambda: window_closed(rig), "the window to close once idle")
+
+
 # --------------------------------------------------------------- queued only
 
 def test_dialog_for_queued_jobs_only_names_the_count(rig):
