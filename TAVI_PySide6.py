@@ -1139,9 +1139,49 @@ _API_TERMINAL_STATES = frozenset(
 _JOB_TERMINAL_STATE_VALUES = frozenset(s.value for s in _API_TERMINAL_STATES)
 
 
+class _GuiUpdateBuffer:
+    """Thread-safe hand-over of a running scan's GUI updates to the GUI thread.
+
+    The scan loops append ordered log lines, ordered display-dock events (a
+    dock method name and its arguments) and latest-wins values (a controller
+    signal name and its arguments); ``TAVIController._drain_updates`` is the
+    only consumer and applies them at a human rate instead of once per point.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._logs = []
+        self._points = []
+        self._latest = {}
+
+    def log(self, line):
+        with self._lock:
+            self._logs.append(line)
+
+    def point(self, method, *args):
+        with self._lock:
+            self._points.append((method, args))
+
+    def latest(self, signal, *args):
+        with self._lock:
+            self._latest[signal] = args
+
+    def take(self):
+        """Everything pending, as (log lines, point events, latest values); empties the buffer."""
+        with self._lock:
+            taken = (self._logs, self._points, self._latest)
+            self._logs, self._points, self._latest = [], [], {}
+        return taken
+
+
 class TAVIController(QObject):
     """Controller class to connect GUI with backend logic."""
     
+    # How often a running scan's buffered updates reach the GUI.
+    DRAIN_INTERVAL_MS = 200
+    # Longest a scan thread waits, per point, for the GUI thread's plot draw.
+    GUI_YIELD_MAX_S = 1.0
+
     # Signals for thread-safe GUI updates
     progress_updated = Signal(int, int)  # current, total
     remaining_time_updated = Signal(str)
@@ -1149,14 +1189,10 @@ class TAVIController(QObject):
     counts_updated = Signal(float, float)  # max_counts, total_counts
     message_printed = Signal(str)
     
-    # Signals for real-time display dock updates
+    # Per-point display-dock updates of a running scan go through _GuiUpdateBuffer, not
+    # signals (counts, invalid points, current-point marker). The scan's start is
+    # still this signal, but the drain emits it, in order with those updates.
     scan_initialized = Signal(str, list, list, str, str, list, list)  # mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d
-    scan_point_updated_1d = Signal(int, float)  # index, counts
-    scan_point_updated_2d = Signal(int, int, float)  # idx_x, idx_y, counts
-    scan_point_invalid_1d = Signal(int)  # index
-    scan_point_invalid_2d = Signal(int, int)  # idx_x, idx_y
-    scan_current_index_1d = Signal(int)  # current index
-    scan_current_index_2d = Signal(int, int)  # idx_x, idx_y
     scan_completed = Signal()  # scan finished
     scan_auto_save = Signal()  # trigger auto-save of plot
     single_point_result = Signal(float, float)  # max_counts, total_counts for single-point scan
@@ -1190,6 +1226,14 @@ class TAVIController(QObject):
 
     def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
+        # Scan updates from the worker thread, applied on the GUI thread at about
+        # 5 Hz (_drain_updates); first, so that nothing logged during setup is lost.
+        self._gui_updates = _GuiUpdateBuffer()
+        self._gui_thread_ident = threading.get_ident()
+        self._draining = False
+        # Cleared while the GUI thread applies a batch and draws the plot; see _yield_to_gui.
+        self._gui_idle = threading.Event()
+        self._gui_idle.set()
         self.window = window
         # CLI overrides for the remote API server (see main()); empty by default.
         self._api_cli_overrides = api_overrides or {}
@@ -1250,6 +1294,10 @@ class TAVIController(QObject):
         self._benchmark_adaptive_ncounts = set()
         self._benchmark_finalized = False
         self._shutdown_called = False
+        self._drain_timer = QTimer(self)
+        self._drain_timer.setInterval(self.DRAIN_INTERVAL_MS)
+        self._drain_timer.timeout.connect(self._drain_updates)
+        self._drain_timer.start()
         self._job_worker = threading.Thread(
             target=self._job_worker_loop, name="scan-job-worker", daemon=True
         )
@@ -1444,12 +1492,11 @@ class TAVIController(QObject):
         """Forward an API-server log line to the message center.
 
         Invoked from HTTP request threads and the server's own threads, so it
-        must never touch widgets directly. ``message_printed`` is a Qt signal;
-        emitting it is thread-safe (Qt delivers it to the GUI-thread slot via a
-        queued connection), so this is the safe path off the GUI thread.
+        must never touch widgets directly. ``_post_log`` buffers a line posted
+        off the GUI thread and the GUI thread's drain emits it.
         """
         stamp = time.strftime("%H:%M:%S")
-        self.message_printed.emit(f"API [{stamp}]: {msg}")
+        self._post_log(f"API [{stamp}]: {msg}")
         # Mirror to the API dock's activity log (timestamped, no "API:" prefix).
         self.api_activity.emit(f"[{stamp}] {msg}")
 
@@ -1650,15 +1697,10 @@ class TAVIController(QObject):
         
         # Connect display dock signals
         self.scan_initialized.connect(self._on_scan_initialized)
-        self.scan_point_updated_1d.connect(self.window.display_dock.update_1d_point)
-        self.scan_point_updated_2d.connect(self.window.display_dock.update_2d_point)
-        self.scan_point_invalid_1d.connect(self.window.display_dock.mark_1d_point_invalid)
-        self.scan_point_invalid_2d.connect(self.window.display_dock.mark_2d_point_invalid)
-        self.scan_current_index_1d.connect(self.window.display_dock.set_current_scan_index)
-        self.scan_current_index_2d.connect(self.window.display_dock.set_current_scan_index_2d)
-        self.scan_completed.connect(self.window.display_dock.scan_complete)
-        self.scan_auto_save.connect(self.window.display_dock.auto_save_plot)
-        self.single_point_result.connect(self.window.display_dock.show_single_point_result)
+        # Each slot that ends a scan flushes the buffered updates first.
+        self.scan_completed.connect(self._on_scan_completed)
+        self.scan_auto_save.connect(self._on_scan_auto_save)
+        self.single_point_result.connect(self._on_single_point_result)
         
         # Connect diagnostic plot signals (runs on main thread for matplotlib)
         self.diagnostic_plot_requested.connect(self._show_diagnostic_plots)
@@ -1947,8 +1989,95 @@ class TAVIController(QObject):
     
     def print_to_message_center(self, message):
         """Print message to the GUI message center."""
-        self.message_printed.emit(message)
+        self._post_log(message)
         print(message)  # Also print to console
+
+    def _post_log(self, line):
+        """The one log producer: every line for the message center goes through here.
+
+        On the GUI thread the pending updates are applied first and the line
+        is emitted at once (order kept, no latency). On any other thread, or
+        inside a drain, the line is buffered; only ``_drain_updates`` then
+        emits it, so no line can overtake an older one.
+        """
+        if threading.get_ident() == self._gui_thread_ident and not self._draining:
+            self._drain_updates()
+            self.message_printed.emit(line)
+        else:
+            self._gui_updates.log(line)
+
+    def _yield_to_gui(self):
+        """Scan threads call this once per point: wait (bounded) while the GUI thread draws.
+
+        Measured: a matplotlib draw makes thousands of short GIL acquisitions, and
+        against a CPU-bound scan thread each one waits for the thread's next GIL
+        release (a 40 ms draw took 2.5 s against the analytic loop, 17 s against a
+        busy-loop thread), so the GUI froze for the whole scan. Parked here, the
+        scan thread releases the GIL and the draw runs at full speed.
+        """
+        if threading.get_ident() != self._gui_thread_ident:  # a synchronous run on the GUI thread
+            self._gui_idle.wait(self.GUI_YIELD_MAX_S)
+
+    def _drain_updates(self):
+        """Apply the buffered scan updates. GUI thread only; the only consumer.
+
+        Log lines go out as one ``message_printed``; display-dock events run in
+        arrival order with their redraw suppressed and one redraw after them;
+        then the latest progress, counts and times. One pass takes what is
+        pending now: a loop until empty never ends while the worker produces as
+        fast as the GUI applies (measured: one drain held the GUI for the whole
+        scan). A drain called while one runs returns at once; what the running
+        drain's own slots post waits for the next tick, in order.
+        """
+        if self._draining:
+            return
+        self._draining = True
+        events = ()
+        try:
+            lines, events, latest = self._gui_updates.take()
+            if not (lines or events or latest):
+                return
+            if events:
+                self._gui_idle.clear()
+            if lines:
+                self.message_printed.emit("\n".join(lines))
+            dock = self.window.display_dock
+            redraw = False
+            for method, args in events:
+                try:
+                    if method == 'scan_initialized':
+                        self.scan_initialized.emit(*args)
+                    else:
+                        getattr(dock, method)(*args, redraw=False)
+                        redraw = True
+                except Exception as exc:
+                    logging.getLogger(__name__).exception("GUI update %s failed", method)
+                    self.message_printed.emit("GUI update %s failed: %s" % (method, exc))
+            if redraw:
+                dock.redraw()
+            for signal, args in latest.items():
+                getattr(self, signal).emit(*args)
+        finally:
+            self._draining = False
+            if events:
+                # Qt runs zero-delay timers in creation order, so this fires after the
+                # draws the pass scheduled (matplotlib's draw_idle is one such timer).
+                QTimer.singleShot(0, self._gui_idle.set)
+
+    @Slot()
+    def _on_scan_completed(self):
+        self._drain_updates()
+        self.window.display_dock.scan_complete()
+
+    @Slot()
+    def _on_scan_auto_save(self):
+        self._drain_updates()
+        self.window.display_dock.auto_save_plot()
+
+    @Slot(float, float)
+    def _on_single_point_result(self, max_counts, total_counts):
+        self._drain_updates()
+        self.window.display_dock.show_single_point_result(max_counts, total_counts)
 
     def request_reciprocal_snapshot(self, *_args):
         """Coalesce ordinary widget-originated reciprocal refreshes."""
@@ -7164,7 +7293,7 @@ class TAVIController(QObject):
                     if job.finished_at is None:
                         job.finished_at = time.time()
                     job.notify_state_change()
-                self.message_printed.emit(f"Scan job {job.job_id} failed: {exc}")
+                self._post_log(f"Scan job {job.job_id} failed: {exc}")
             finally:
                 self._active_job = None
 
@@ -7194,6 +7323,7 @@ class TAVIController(QObject):
         Resets the progress display when a queued job actually starts, and
         keeps the Run button disabled while any job is queued or running.
         """
+        self._drain_updates()
         if state == JobState.RUNNING.value:
             # Reset the progress display for the starting job (mirrors the prep
             # done in run_simulation_thread at submission time, so a job that
@@ -7603,7 +7733,7 @@ class TAVIController(QObject):
             msg = f"API: failed to publish '{event}' event: {exc}"
             if msg != getattr(self, '_api_publish_last_error', None):
                 self._api_publish_last_error = msg
-                self.message_printed.emit(msg)
+                self._post_log(msg)
 
 
     def _format_job_finished_summary(self, job_id, state, error, result):
@@ -8944,6 +9074,7 @@ class TAVIController(QObject):
 
         # Signal any running scan to drain out.
         self.stop_event.set()
+        self._gui_idle.set()
 
         # Cancel every still-queued job so the worker skips them on drain.
         for job in self._job_registry.all_jobs():
@@ -8959,11 +9090,16 @@ class TAVIController(QObject):
         if self._job_worker is not None:
             self._job_worker.join(timeout=2)
 
+        # Whatever the worker (or a force stop) logged last must not be lost.
+        self._drain_updates()
+        self._drain_timer.stop()
+
     def _prep_worker(self, scan_parameter_input, plan, scan_config, vals, data_folder,
                      snapshot_queue, stop_event):
         """Compute per-point snapshots of the plan's points ahead of the simulation thread."""
         try:
             for scan_index, (point, indices) in enumerate(scan_parameter_input):
+                self._yield_to_gui()
                 if stop_event.is_set():
                     break
 
@@ -9120,7 +9256,7 @@ class TAVIController(QObject):
                 if analytic_model_error
                 else "no analytic ground truth for sample %r" % (sample_key,)
             )
-            self.message_printed.emit(
+            self._post_log(
                 "Deterministic engine: %s -- job failed." % reason
             )
             if job is not None:
@@ -9135,7 +9271,7 @@ class TAVIController(QObject):
             self.scan_completed.emit()
             return data_folder
 
-        self.message_printed.emit(
+        self._post_log(
             "Deterministic engine: sample '%s', seed %d%s"
             % (getattr(sqw, 'sample_id', '?'), seed,
                ", noiseless" if noiseless else "")
@@ -9160,7 +9296,7 @@ class TAVIController(QObject):
             background = _background.resolve(background_spec)
         except ValueError as exc:
             reason = "invalid background profile: %s" % exc
-            self.message_printed.emit(
+            self._post_log(
                 "Deterministic engine: %s -- job failed." % reason
             )
             if job is not None:
@@ -9218,6 +9354,7 @@ class TAVIController(QObject):
 
         try:
             for i, (point, indices) in enumerate(scan_parameter_input):
+                self._yield_to_gui()
                 if self.stop_event.is_set():
                     simulation_stopped = True
                     break
@@ -9233,16 +9370,16 @@ class TAVIController(QObject):
                 w = float(snapshot.deltaE)
 
                 if is_2d_scan:
-                    self.scan_current_index_2d.emit(idx_x, idx_y)
+                    self._gui_updates.point('set_current_scan_index_2d', idx_x, idx_y)
                 else:
-                    self.scan_current_index_1d.emit(idx_1d)
+                    self._gui_updates.point('set_current_scan_index', idx_1d)
 
                 if error_flags:
-                    self.message_printed.emit(
+                    self._post_log(
                         "Point %d: skipped, error flags: %s" % (i, error_flags)
                     )
                     if is_2d_scan:
-                        self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        self._gui_updates.point('mark_2d_point_invalid', idx_x, idx_y)
                         if job is not None:
                             self._publish_api_event('point_invalid', {
                                 'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
@@ -9250,7 +9387,7 @@ class TAVIController(QObject):
                                 'value_2': float(array_values2[idx_y]),
                             })
                     elif not is_single_point_scan and idx_1d >= 0:
-                        self.scan_point_invalid_1d.emit(idx_1d)
+                        self._gui_updates.point('mark_1d_point_invalid', idx_1d)
                         if job is not None:
                             self._publish_api_event('point_invalid', {
                                 'job_id': job.job_id, 'index': idx_1d,
@@ -9289,9 +9426,9 @@ class TAVIController(QObject):
                         "direct transmission (%s); the analytic engine makes "
                         "no claim" % ", ".join(md['transmission'])
                     )
-                    self.message_printed.emit("Point %d: %s" % (i, reason))
+                    self._post_log("Point %d: %s" % (i, reason))
                     if is_2d_scan:
-                        self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        self._gui_updates.point('mark_2d_point_invalid', idx_x, idx_y)
                         if job is not None:
                             self._publish_api_event('point_invalid', {
                                 'job_id': job.job_id, 'ix': idx_x, 'iy': idx_y,
@@ -9299,7 +9436,7 @@ class TAVIController(QObject):
                                 'value_2': float(array_values2[idx_y]),
                             })
                     elif not is_single_point_scan and idx_1d >= 0:
-                        self.scan_point_invalid_1d.emit(idx_1d)
+                        self._gui_updates.point('mark_1d_point_invalid', idx_1d)
                         if job is not None:
                             self._publish_api_event('point_invalid', {
                                 'job_id': job.job_id, 'index': idx_1d,
@@ -9355,7 +9492,7 @@ class TAVIController(QObject):
                         rr = _resolution(cfg)
                         meta_res = rr
                     except Exception as exc:
-                        self.message_printed.emit(
+                        self._post_log(
                             "Point %d: resolution unavailable (%s); signal counts=0"
                             % (i, exc)
                         )
@@ -9397,7 +9534,7 @@ class TAVIController(QObject):
                         )
                         counts += event_counts
                         realized_background_events.extend(point_events)
-                    self.message_printed.emit(
+                    self._post_log(
                         "Final counts (analytic): %s" % (counts,)
                     )
 
@@ -9405,11 +9542,11 @@ class TAVIController(QObject):
                     max_counts = max(max_counts, counts)
 
                     if is_2d_scan:
-                        self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                        self._gui_updates.point('update_2d_point', idx_x, idx_y, counts)
                         counts_grid[idx_y, idx_x] = counts
                     elif not is_single_point_scan:
                         if idx_1d >= 0:
-                            self.scan_point_updated_1d.emit(idx_1d, counts)
+                            self._gui_updates.point('update_1d_point', idx_1d, counts)
                         if 0 <= idx_1d < len(array_values1):
                             scan_x_values.append(array_values1[idx_1d])
                         scan_counts.append(counts)
@@ -9470,8 +9607,8 @@ class TAVIController(QObject):
                             })
 
                 processed_points += 1
-                self.progress_updated.emit(processed_points, total_scans)
-                self.counts_updated.emit(max_counts, total_counts)
+                self._gui_updates.latest('progress_updated', processed_points, total_scans)
+                self._gui_updates.latest('counts_updated', max_counts, total_counts)
                 if job is not None:
                     with job.lock:
                         job.progress_done = processed_points
@@ -9481,10 +9618,10 @@ class TAVIController(QObject):
                     })
         except Exception as exc:
             simulation_error_message = "Deterministic engine failed: %s" % exc
-            self.message_printed.emit(simulation_error_message)
+            self._post_log(simulation_error_message)
 
         if simulation_stopped or self.stop_event.is_set():
-            self.message_printed.emit("Simulation stopped by user.")
+            self._post_log("Simulation stopped by user.")
 
         # Stamp engine provenance into result.metadata (run + stamp, §6.5), so
         # cn_valid / invalidations reach every reader even when cn_valid is false.
@@ -9533,12 +9670,12 @@ class TAVIController(QObject):
                                   "1D_scan_data.txt", x_label=x_label,
                                   y_label='counts')
             except Exception as exc:
-                self.message_printed.emit(
+                self._post_log(
                     "Warning: Failed to write deterministic scan data: %s" % exc
                 )
 
         if simulation_error_message is None and not self.stop_event.is_set():
-            self.message_printed.emit(
+            self._post_log(
                 "Deterministic scan complete. Total counts: %s, Max counts: %s"
                 % (total_counts, max_counts)
             )
@@ -9608,7 +9745,7 @@ class TAVIController(QObject):
         (API snapshots) and the final job state is set here. When ``job`` is
         None, behavior is unchanged from the pre-queue code path.
         """
-        self.message_printed.emit("Starting simulation...")
+        self._post_log("Starting simulation...")
 
         vals = launch_state['vals']
         scan_config = launch_state['scan_config']
@@ -9646,7 +9783,7 @@ class TAVIController(QObject):
         array_values2 = list(expansion.values[commands[1].number]) if is_2d_scan else []
         for command in commands:
             if command.relative:
-                self.message_printed.emit(
+                self._post_log(
                     f"Relative scan {command.number}: {command.quantity} base = "
                     f"{expansion.bases[command.number]}")
 
@@ -9670,7 +9807,7 @@ class TAVIController(QObject):
             valid_mask_1d = [self._point_runs(plan, point, scan_config)
                              for point, _ in scan_parameter_input]
             # Initialize display dock for 1D scan
-            self.scan_initialized.emit('1D', list(array_values1), valid_mask_1d,
+            self._gui_updates.point('scan_initialized', '1D', list(array_values1), valid_mask_1d,
                                        variable_name1, "", [], [])
 
             if job is not None:
@@ -9716,7 +9853,7 @@ class TAVIController(QObject):
             valid_mask_2d = [valid[row * width:(row + 1) * width]
                              for row in range(len(array_values2))]
             # Initialize display dock for 2D scan
-            self.scan_initialized.emit('2D', list(array_values1), [], variable_name1,
+            self._gui_updates.point('scan_initialized', '2D', list(array_values1), [], variable_name1,
                                        variable_name2, list(array_values2), valid_mask_2d)
 
             if job is not None:
@@ -9798,7 +9935,7 @@ class TAVIController(QObject):
                 item for k, item in enumerate(scan_parameter_input)
                 if k not in skipped_indices
             ]
-            self.message_printed.emit(
+            self._post_log(
                 f"Skipping {len(skipped_indices)} infeasible point(s) "
                 f"from the frozen feasibility manifest; running "
                 f"{len(scan_parameter_input)}."
@@ -9871,7 +10008,7 @@ class TAVIController(QObject):
             background = _background.resolve(background_spec)
         except ValueError as exc:
             reason = "invalid background profile: %s" % exc
-            self.message_printed.emit("McStas engine: %s -- job failed." % reason)
+            self._post_log("McStas engine: %s -- job failed." % reason)
             if job is not None:
                 with job.lock:
                     job.state = JobState.FAILED
@@ -9899,7 +10036,7 @@ class TAVIController(QObject):
             enabled_sources = sum(
                 1 for state in background.sources if state.enabled
             )
-            self.message_printed.emit(
+            self._post_log(
                 "Background overlay: sources=%d, seed=%d, fingerprint=%s"
                 % (enabled_sources, background_seed,
                    _background.profile_fingerprint(background))
@@ -9908,7 +10045,7 @@ class TAVIController(QObject):
         # Run the scans
         start_time = time.time()
         total_scans = len(scan_parameter_input)
-        self.message_printed.emit(f"Running {total_scans} scan points...")
+        self._post_log(f"Running {total_scans} scan points...")
         
         # Resolve binary reuse before estimating: a reused binary skips the
         # rebuild, so the pre-scan estimate must not add compile time.
@@ -9934,7 +10071,7 @@ class TAVIController(QObject):
         if total_est is not None:
             est_str = RuntimeTracker.format_time(total_est)
             self.pre_scan_estimate_updated.emit(est_str)
-            self.message_printed.emit(f"Estimated total time: {est_str}")
+            self._post_log(f"Estimated total time: {est_str}")
         else:
             self.pre_scan_estimate_updated.emit("")
         
@@ -9963,7 +10100,7 @@ class TAVIController(QObject):
         if reuse_binary:
             instrument = self._binary_reuse_cache["instrument"]
             execution_state = self._binary_reuse_cache["execution_state"]
-            self.message_printed.emit(
+            self._post_log(
                 "Build settings unchanged; reusing compiled instrument from previous scan"
             )
         else:
@@ -10019,12 +10156,12 @@ class TAVIController(QObject):
 
                 if isinstance(snapshot, PrepFailure):
                     simulation_error_message = f"Preparation thread failed: {snapshot.message}"
-                    self.message_printed.emit(simulation_error_message)
+                    self._post_log(simulation_error_message)
                     break
 
                 scan_start_time = time.time()
                 i = snapshot.scan_index
-                self.message_printed.emit(snapshot.log_message)
+                self._post_log(snapshot.log_message)
                 indices = snapshot.indices
                 idx_1d = indices['idx_1d']
                 idx_x = indices['idx_x']
@@ -10055,9 +10192,9 @@ class TAVIController(QObject):
                 simulation_duration = 0.0
 
                 if is_2d_scan:
-                    self.scan_current_index_2d.emit(idx_x, idx_y)
+                    self._gui_updates.point('set_current_scan_index_2d', idx_x, idx_y)
                 else:
-                    self.scan_current_index_1d.emit(idx_1d)
+                    self._gui_updates.point('set_current_scan_index', idx_1d)
 
                 execution_info = {
                     'mode': 'skipped',
@@ -10084,18 +10221,18 @@ class TAVIController(QObject):
                     simulated_point = True
                 else:
                     data = math.nan
-                    self.message_printed.emit(f"Point {i}: skipped, error flags: {error_flags}")
+                    self._post_log(f"Point {i}: skipped, error flags: {error_flags}")
                     simulated_point = False
 
                 if execution_info.get('armed_direct_run'):
                     launcher_text = " ".join(execution_info.get('launcher_argv', [])) or "unresolved"
-                    self.message_printed.emit(
+                    self._post_log(
                         f"Direct run armed: binary={execution_info.get('binary_path')}, "
                         f"launcher={launcher_text}, point={i}"
                     )
 
                 if execution_info.get('mode') == 'direct' and not error_flags:
-                    self.message_printed.emit(f"Point {i} executed via direct binary")
+                    self._post_log(f"Point {i} executed via direct binary")
 
                 if retained_diagnostic_data is None and data is not None and data is not math.nan:
                     retained_diagnostic_data = data
@@ -10139,19 +10276,19 @@ class TAVIController(QObject):
                 # Check for errors
                 if error_flags:
                     if execution_info.get('error_message'):
-                        self.message_printed.emit(
+                        self._post_log(
                             f"Point {i} {execution_info.get('mode')} error: {execution_info['error_message']}"
                         )
                     if execution_info.get('stdout'):
                         stdout_text = execution_info['stdout'].strip()
                         if stdout_text:
-                            self.message_printed.emit(
+                            self._post_log(
                                 f"Point {i} direct output:\n{stdout_text}"
                             )
                     message = f"Scan failed, error flags: {error_flags}"
-                    self.message_printed.emit(message)
+                    self._post_log(message)
                     if is_2d_scan:
-                        self.scan_point_invalid_2d.emit(idx_x, idx_y)
+                        self._gui_updates.point('mark_2d_point_invalid', idx_x, idx_y)
                         if job is not None:
                             self._publish_api_event('point_invalid', {
                                 'job_id': job.job_id,
@@ -10161,7 +10298,7 @@ class TAVIController(QObject):
                                 'value_2': float(array_values2[idx_y]),
                             })
                     elif not is_single_point_scan and idx_1d >= 0:
-                        self.scan_point_invalid_1d.emit(idx_1d)
+                        self._gui_updates.point('mark_1d_point_invalid', idx_1d)
                         if job is not None:
                             self._publish_api_event('point_invalid', {
                                 'job_id': job.job_id,
@@ -10183,7 +10320,7 @@ class TAVIController(QObject):
                         vals, metadata, i, number_neutrons))
 
                     if metadata.get('transmission'):
-                        self.message_printed.emit(
+                        self._post_log(
                             "Point %d: direct transmission (%s); %s, McStas "
                             "counts as simulated"
                             % (i, ", ".join(metadata['transmission']),
@@ -10205,7 +10342,7 @@ class TAVIController(QObject):
                     if background.enabled and counts is not None:
                         q0 = _background_q_magnitude(metadata)
                         if q0 is None:
-                            self.message_printed.emit(
+                            self._post_log(
                                 "Point %d: background not planted: |Q| "
                                 "undetermined at a direct-transmission point"
                                 % i
@@ -10238,7 +10375,7 @@ class TAVIController(QObject):
                                             background_resolution, 'dE'
                                         )
                                 except Exception as exc:
-                                    self.message_printed.emit(
+                                    self._post_log(
                                         f"Point {i}: background resolution widths "
                                         f"unavailable ({exc}); using catalog "
                                         f"fallback widths"
@@ -10272,7 +10409,7 @@ class TAVIController(QObject):
                                 realized_background_events.extend(point_events)
 
                     message = f"Final counts at detector: {int(counts)}"
-                    self.message_printed.emit(message)
+                    self._post_log(message)
 
                     # Update counts
                     total_counts += counts
@@ -10280,13 +10417,13 @@ class TAVIController(QObject):
                     
                     # Emit display update signal
                     if is_2d_scan:
-                        self.scan_point_updated_2d.emit(idx_x, idx_y, counts)
+                        self._gui_updates.point('update_2d_point', idx_x, idx_y, counts)
                         # Store in grid for output file
                         counts_grid[idx_y, idx_x] = counts
                     elif not is_single_point_scan:
                         # 1D scan with actual scan values
                         if idx_1d >= 0:
-                            self.scan_point_updated_1d.emit(idx_1d, counts)
+                            self._gui_updates.point('update_1d_point', idx_1d, counts)
                         # Store in arrays for output file
                         if idx_1d >= 0 and idx_1d < len(array_values1):
                             scan_x_values.append(array_values1[idx_1d])
@@ -10375,8 +10512,8 @@ class TAVIController(QObject):
                 processed_points += 1
                 
                 # Emit progress signals
-                self.progress_updated.emit(processed_points, total_scans)
-                self.counts_updated.emit(max_counts, total_counts)
+                self._gui_updates.latest('progress_updated', processed_points, total_scans)
+                self._gui_updates.latest('counts_updated', max_counts, total_counts)
 
                 # Mirror progress into the job (covers valid and invalid points,
                 # since processed_points increments for every drained point).
@@ -10395,7 +10532,7 @@ class TAVIController(QObject):
                 # Emit elapsed time for UI
                 try:
                     elapsed_str = RuntimeTracker.format_time(elapsed_time)
-                    self.elapsed_time_updated.emit(elapsed_str)
+                    self._gui_updates.latest('elapsed_time_updated', elapsed_str)
                 except Exception:
                     pass
                 if len(executed_scan_times) <= 1:
@@ -10423,7 +10560,7 @@ class TAVIController(QObject):
                 minutes = int((remaining_time % 3600) // 60)
                 seconds = int(remaining_time % 60)
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                self.remaining_time_updated.emit(time_str)
+                self._gui_updates.latest('remaining_time_updated', time_str)
 
                 postprocessing_duration = time.perf_counter() - postprocessing_stage_start
                 if simulated_point and not error_flags:
@@ -10446,7 +10583,7 @@ class TAVIController(QObject):
                     first_successful_stage_record_index = len(point_stage_timings) - 1
         except Exception as e:
             simulation_error_message = f"Simulation failed: {e}"
-            self.message_printed.emit(simulation_error_message)
+            self._post_log(simulation_error_message)
             self.stop_event.set()
         finally:
             if simulation_error_message is not None:
@@ -10454,7 +10591,7 @@ class TAVIController(QObject):
             prep_thread.join(timeout=1)
 
         if simulation_stopped:
-            self.message_printed.emit("Simulation stopped by user.")
+            self._post_log("Simulation stopped by user.")
 
         self._binary_reuse_cache = self._updated_binary_cache(
             self._binary_reuse_cache,
@@ -10510,7 +10647,7 @@ class TAVIController(QObject):
                     f"compile={inferred_compile_duration:.3f}s"
                     if inferred_compile_duration is not None else "compile=unavailable"
                 )
-                self.message_printed.emit(
+                self._post_log(
                     "Stage timings recorded: "
                     f"{compile_message}, avg prep={stage_summary['avg_prep_duration_s']:.3f}s "
                     f"(compute={stage_summary['avg_prep_compute_duration_s']:.3f}s, "
@@ -10518,9 +10655,9 @@ class TAVIController(QObject):
                     f"avg sim={stage_summary['avg_simulation_duration_s']:.3f}s, "
                     f"avg post={stage_summary['avg_postprocessing_duration_s']:.3f}s"
                 )
-                self.message_printed.emit(f"Stage timing summary written to: {summary_path}")
+                self._post_log(f"Stage timing summary written to: {summary_path}")
             except Exception as e:
-                self.message_printed.emit(f"Warning: Failed to write stage timing summary: {e}")
+                self._post_log(f"Warning: Failed to write stage timing summary: {e}")
         
         # Record runtime data for future estimates (only if scan completed normally)
         if executed_scan_times and simulation_error_message is None and not self.stop_event.is_set():
@@ -10569,7 +10706,7 @@ class TAVIController(QObject):
                 source=record_source,
                 mpi_count=mpi_count,
             )
-            self.message_printed.emit(
+            self._post_log(
                 f"Timing data recorded: {len(executed_scan_times)} simulated points in {RuntimeTracker.format_time(total_time)}"
             )
             # Trigger update of scan time estimates on main thread
@@ -10577,8 +10714,8 @@ class TAVIController(QObject):
         
         # Simulation complete
         if simulation_error_message is None and not self.stop_event.is_set():
-            self.message_printed.emit(f"Simulation complete! Data saved to: {data_folder}")
-            self.message_printed.emit(f"Total counts: {total_counts}, Max counts: {max_counts}")
+            self._post_log(f"Simulation complete! Data saved to: {data_folder}")
+            self._post_log(f"Total counts: {total_counts}, Max counts: {max_counts}")
         
         # Write scan data to output files
         if not is_single_point_scan and simulation_error_message is None and not self.stop_event.is_set():
@@ -10596,7 +10733,7 @@ class TAVIController(QObject):
                         x_label=x_label,
                         y_label=y_label,
                     )
-                    self.message_printed.emit(f"2D scan data written to: {os.path.join(data_folder, '2D_scan_data.txt')}")
+                    self._post_log(f"2D scan data written to: {os.path.join(data_folder, '2D_scan_data.txt')}")
                 else:
                     # Write 1D scan data
                     if scan_x_values and scan_counts:
@@ -10606,9 +10743,9 @@ class TAVIController(QObject):
                         sorted_counts = np.array(scan_counts)[sorted_indices]
                         x_label = variable_name1 if 'variable_name1' in locals() and variable_name1 else 'scan'
                         write_1D_scan(sorted_x, sorted_counts, data_folder, "1D_scan_data.txt", x_label=x_label, y_label='counts')
-                        self.message_printed.emit(f"1D scan data written to: {os.path.join(data_folder, '1D_scan_data.txt')}")
+                        self._post_log(f"1D scan data written to: {os.path.join(data_folder, '1D_scan_data.txt')}")
             except Exception as e:
-                self.message_printed.emit(f"Warning: Failed to write scan data file: {e}")
+                self._post_log(f"Warning: Failed to write scan data file: {e}")
         
         # Handle display based on scan type
         if simulation_error_message is not None or self.stop_event.is_set():
