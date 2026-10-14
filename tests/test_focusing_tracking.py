@@ -529,7 +529,7 @@ def test_a_scanned_axis_counts_and_says_which_command(world):
     assert _flag(ctrl) == "● 1 not tracking"
     tip = _group(ctrl).flag_label.toolTip()
     assert "command 1" in tip and "open the block" not in tip.lower()   # a scanned axis is not changed in the block
-    assert _status(ctrl, "rhm") == "scanned by command 1"
+    assert _status(ctrl, "rhm") == "scanned by command 1; remove rhm from the command to restore your setting"
     ctrl.window.simulation_dock.scan_command_1_edit.setText("")
     ctrl._refresh_scan_feedback()
     assert _flag(ctrl) == "" and _status(ctrl, "rhm") == ""
