@@ -955,7 +955,7 @@ def test_header_toggles_from_the_keyboard_without_reflow(window):
         QTest.keyClick(group.header, Qt.Key_Space)
         QApplication.processEvents()
         assert not group.is_collapsed() and group.body.isVisible()
-        assert not group.summary_label.isVisible()
+        assert not group.summary_rows.isVisible()
         assert {_title(block): block.x() for block in _blocks(dock)} == columns
         QTest.keyClick(group.header, Qt.Key_Return)
         QApplication.processEvents()
