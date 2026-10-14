@@ -601,6 +601,9 @@ class DisplayDock(BaseDockWidget):
     # reset -- ``initialize_scan`` clears the axes.
     scan_data_reset = Signal()
     scan_data_finished = Signal()
+    # The 1D axes were cleared and rebuilt with the same scan data (a point
+    # turned out unreachable mid-scan); overlay artists on them are gone.
+    plot_rebuilt = Signal()
 
     # Constants for plot states
     STATE_UNMEASURED = 0  # White - to be measured
@@ -953,6 +956,7 @@ class DisplayDock(BaseDockWidget):
             self._counts[index] = np.nan
             self._setup_1d_plot()
             self._update_1d_display()
+            self.plot_rebuilt.emit()
 
     @Slot(int, int)
     def mark_2d_point_invalid(self, idx_x, idx_y):

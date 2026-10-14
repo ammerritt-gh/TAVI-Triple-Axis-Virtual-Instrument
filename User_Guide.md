@@ -116,7 +116,7 @@ The whole path from a fresh start to a scan in an aligned plane, mouse and keybo
 3. In the Simulation dock choose **Engine: Deterministic (analytic)** for quick scans (McStas works too, more slowly).
 4. Type the (h k l) of a strong reflection, for example 2 0 0, into the Scattering dock. The instrument goes where your UB says the reflection is, which for a misaligned crystal is not quite where it is.
 5. Rock the sample: press **Relative** beside the first scan command, enter `A3 -3 3 0.1` and press **Run Simulation**.
-6. In the Fitting dock press **Fit**, then **Go to CEN**: A3 moves to the fitted centre of the peak.
+6. In the Fitting dock press **Fit**, then the **Go** button on the CEN row: A3 moves to the fitted centre of the peak.
 7. In the UB Matrix dock press **Take Position** on Peak 1 and type its (h k l).
 8. Repeat steps 4 to 7 for a second reflection that is not parallel to the first, for example 0 2 0, into Peak 2.
 9. Press **Calculate UB** and read the residuals table. A row marked ⚠ means a peak is likely mis-indexed, or that your lattice fields are off: correct the (h k l), or try Refine Lattice, and press Calculate UB again until no row is marked.
@@ -221,63 +221,139 @@ drive the scanned variable straight to it — the same "run a scan, go to the
 peak" move you would make on a real instrument, without reading a number off
 the screen and retyping it.
 
+**Layout.** The top row holds the range controls and **Fit**. Below it are
+three groups, read in this order: **Position** (where the peak is, with a
+**Go** button on each row), **Lineshape** (what shape it is and how good the
+fit is) and **Intensity** (how much). When the dock is wide the three groups
+sit side by side; when it is narrow they stack in the same order. **Revert**
+sits under the Position buttons. The status line runs across the bottom, with
+**Copy results** beside it.
+
 **Workflow**
 
 1. Run a 1D scan. The dock follows whatever the Display dock is showing, so a
    scan you load from disk works too. It is inactive for 2D scans and says so.
-2. *(Optional)* Restrict the range. Press **Select range** and drag across the
-   plot, or type a min and max. The chosen window is shaded on the plot and
-   everything below uses only the points inside it. **Clear** goes back to the
-   whole scan. Note that pan and zoom are switched off while range selection is
+2. *(Optional)* Restrict the range. Press **Select on plot** and drag across
+   the plot, or type a min and max in the two range boxes (leave them empty
+   for the full scan). The chosen window is shaded on the plot and everything
+   below uses only the points inside it. **Clear** goes back to the whole
+   scan. Note that pan and zoom are switched off while **Select on plot** is
    active, and are not switched back on for you.
 3. Press **Fit**. Nothing is fitted until you do — a running scan never refits
    itself under you, so the numbers on screen always belong to a fit you asked
    for. You *can* fit part-way through a scan; only the points measured so far
    are used, so press Fit again later to use the rest.
 4. Read the result. The fit curve is drawn over your data in red with a dashed
-   line at the centre, and the grid lists centre, FWHM, height, area, the
-   pseudo-Voigt mixing parameter `eta`, background, reduced deviance, and the
-   point/degree-of-freedom count, each with its uncertainty.
-5. Press **Go to CEN**, **Go to COM**, or **Go to MAX**. The scanned variable's
-   parameter field is set to that value, exactly as if you had typed it — you
-   will see it change, and it is recorded in the message log and the session
-   journal.
+   line at the centre. Each fitted value is followed by its uncertainty after
+   ±. The status line says whether the fit converged and what to doubt.
+5. Press **Go** on the row you want. **CEN** is the fitted centre, **COM** the
+   centre of mass and **MAX** the highest measured point. The scanned
+   variable's parameter field is set to that row's value, exactly as if you
+   had typed it — you will see it change, and it is recorded in the message
+   log and the session journal. Hover a **Go** to read what it drives, for
+   example "Drives h to this row's value: CEN = 0.1."
 
-**COM and MAX** do not need a fit — they appear as soon as the scan has counts.
-COM is the counts-weighted centre of mass over raw counts (no background
-subtraction — the same convention `spec` uses). The small **Copy** button next
-to each puts the value on the clipboard at full precision.
+**Position.** CEN is the fitted centre with its error, and it can lie between
+measured points. COM and MAX do not need a fit — they appear as soon as the
+scan has counts. COM is the counts-weighted centre of mass over raw counts (no
+background subtraction — the same convention `spec` uses). MAX is the abscissa
+of the highest measured point, with no interpolation.
 
-They are not live per point. They are recomputed when the scan finishes, when a
-scan starts or stops, when you change the range, and when you press Fit — so
-during a running scan the numbers on screen can lag the plot. The **Go to COM**
-and **Go to MAX** buttons do not use the displayed number: they recompute from
+They are not live per point. They are recomputed when the scan finishes, when
+a scan starts or stops, when you change the range, and when you press Fit — so
+during a running scan the numbers on screen can lag the plot. The **Go**
+buttons on COM and MAX do not use the displayed number: they recompute from
 the current data at the moment you click, so the instrument always moves to a
 value derived from everything measured so far, even if the readout above was a
 few points behind.
 
-**MAX is a bin, not a peak position.** It is the abscissa of the highest
-measured point, with no interpolation, so it can only ever be as accurate as
-your step size — the tooltip tells you what that step is. Use CEN when you want
-a position better than one step.
+**MAX is a bin, not a peak position.** It can only ever be as accurate as your
+step size — its tooltip gives the bin width. Use CEN when you want a position
+better than one step.
 
-**Amber "Go to CEN" means "look at the plot before you press it."** The fit
-converged and the value is usable, but something about it deserves a glance:
-the peak sits near the edge of the range, the centre uncertainty is large
-compared to the width, the peak is weak against the background, there may be
-more than one peak, or there were few degrees of freedom. Hover the button to
-see which. TAVI does not refuse the move — you can see the fit curve on your
-data and are better placed to judge it than the software is. The button is only
-*disabled* when there is no converged fit at all (you have not pressed Fit yet,
-the range changed since you did, or the fit failed); the tooltip says which.
+**Lineshape.** After a converged fit the group title names the shape. It reads
+**Gaussian** or **Lorentzian** when the fit ended with the mixing parameter
+η on one of its limits (η is then fixed, and has no row), and
+**pseudo-Voigt, η = … ± …** otherwise. η is the Lorentzian fraction of the
+pseudo-Voigt: 0 is a pure Gaussian, 1 a pure Lorentzian. The rows are FWHM (full
+width at half maximum), Height, Background and **Fit quality**: the reduced
+deviance, about 1 for a good fit, then the points fitted (n) and the degrees
+of freedom (dof). Before a fit, and after a failed one, the title is plain
+**Lineshape** and the rows read `-`.
 
-The goto buttons are also disabled while any scan is queued or running — the
+**0 (at limit)** on the Background row means the fit pushed the background
+against its lower bound, zero. No error is quoted there, because an error bar
+on a value pinned at a bound means nothing. A background that comes out small
+but not exactly zero shows its value and its error.
+
+**Intensity, background removed.** Three rows give the same peak three ways.
+Read them in this order:
+
+- **Integrated** (counts) is the area under the peak as you would read it off
+  the plot: the peak's summed counts at this scan's points, background removed.
+  It depends on the step. Halve the step and, with the same counting time per
+  point, the peak spans twice as many points, so Integrated doubles. Use it to
+  check the fit against the plotted counts. If the fitted points are not
+  evenly spaced it reads **uneven steps**, because no single step converts the
+  area to counts.
+- **Normalised** (counts × the scan variable's unit, shown as counts·r.l.u. for
+  an h scan) is the fit's Area parameter. It does not depend on the step, so it
+  is the number to compare scans taken with different step sizes. The step it
+  was computed with is shown after it. This is the value the old **Area** row
+  showed.
+- **Raw, range** (counts) is the measured counts over the fit range, minus the
+  fitted background, summed over the points the fit used. It needs no peak
+  shape, only the background level, and it covers only what was measured: a
+  range that stops short of the tails gives less. If the fit could not
+  determine the background's error, the value shows alone and its tooltip says
+  the error is unavailable.
+
+The two agree when the fit range covers the whole peak, tails included, and
+every point in it was measured. With a full-width range and every point
+measured, a large gap between them means the model does not describe the
+data: look at the plot before you trust either. A range that stops short of
+the tails, or a point missing inside it (one marked impossible during the
+scan, say), lowers Raw, range by design; that is not a sign of a bad fit.
+
+**Amber "Go" on CEN means "look at the plot before you press it."** The fit
+converged and the value is usable, but something deserves a glance: the centre
+sits near the edge of the range, its uncertainty is large compared to the
+width, the peak is weak against the background, there may be more than one
+peak, there are few degrees of freedom, or points were measured after the fit.
+Hover the button to see which. TAVI does not refuse the move — you can see the
+fit curve on your data and are better placed to judge it than the software is.
+The CEN **Go** is only *disabled* when there is no converged fit at all (you
+have not pressed Fit yet, the range changed since you did, or the fit failed);
+the tooltip says which. If points arrived after the fit, press Fit again to use
+them.
+
+The **Go** buttons are also disabled while any scan is queued or running — the
 instrument is not moved out from under a measurement — and for scan variables
-that are not scan variables (anything unrecognised). The analyzer vertical radius `rva` moves only where the
-crystal leaves it adjustable; on PUMA's PG(002) analyser it is fixed and does not move.
+that are not scan variables (anything unrecognised). The analyzer vertical
+radius `rva` moves only where the crystal leaves it adjustable; on PUMA's
+PG(002) analyser it is fixed and does not move.
 
-**Revert** undoes the last goto, restoring the field to the value it had
-beforehand. It is one level deep: one goto, one revert.
+**Revert** sits under the Position buttons and undoes the last goto, restoring
+the field to the value it had beforehand. It is one level deep: one goto, one
+revert.
+
+**Copy results** puts the whole result on the clipboard as tab-separated text,
+at full precision, ready to paste into a notebook or spreadsheet. The first
+line is a header, `quantity`, `value`, `error`, `unit`; then one line each for
+CEN, COM, MAX, FWHM, Step, Height, Background, eta, Lineshape, Integrated,
+Normalised, Raw range, Reduced deviance, Points and Degrees of freedom. Where the
+fit could not determine an error, its cell is left empty. Three cells carry
+a word instead: Step's error cell reads `uneven steps`, Integrated's value
+does too, and a background on zero reads `at limit` in its error cell. The
+eta line is left out when the shape is pinned, and the Lineshape line has an
+empty unit cell because its value is a name. With no fit, the copy holds COM
+and MAX only.
+
+**Status line.** It reads "Fit converged." or "Fit failed:" and the reason,
+then any warnings by name (the same ones the amber CEN tooltip lists), then
+"N point(s) measured since this fit -- press Fit again to use them." once
+points have arrived. A **Go** or a **Revert** replaces it with its own message;
+**Copy results** puts its message in front of the fit's status.
 
 **Noiseless runs.** If the last scan was run on the deterministic engine with
 noise switched off, the status line says `noiseless run - σ nominal`. The fit

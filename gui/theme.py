@@ -1,9 +1,9 @@
-"""Colour and stroke tokens for the scan-field marks and the folding-group flag.
+"""Colour and stroke tokens for the scan-field marks, the folding-group flag and the warning state.
 
-Holds the mark tokens: the two command accents, the set-per-point outline
-and badge text, the quiet note text, the command chip text and the group flag text.
-The older inline setStyleSheet colour literals across the docks are not migrated
-here yet (named debt). Retune on sight.
+Holds the mark tokens (the two command accents, the set-per-point outline
+and badge text, the quiet note text and the command chip text), the group
+flag text and the warning fill of a control. The older inline setStyleSheet colour
+literals across the docks are not migrated here yet (named debt). Retune on sight.
 """
 
 # Command 1 blue, command 2 orange: distinct under colour-blindness, and every
@@ -28,3 +28,8 @@ FLAG_TEXT = "#7a5c00"
 SCANNED_PEN_WIDTH = 2
 SET_PEN_WIDTH = 1
 SET_BOTTOM_EDGE_WIDTH = 2
+
+# A control in its warning state: the Fitting dock's CEN "Go" when the fit
+# converged with warnings or points were measured since it; its tooltip says why.
+WARNING_FILL = "#e8a33d"
+WARNING_TEXT = "#202020"
