@@ -209,7 +209,7 @@ class _Known:
         self.pid, self.created, self.gone, self.image, self.proc = pid, created, gone, image, proc
 
 
-def _discover(known, table, open_proc):
+def _discover(known, table, open_proc, taken=None):
     """Grow ``known`` (a list of ``_Known``) from one process table.
 
     A running entry whose process has exited gets ``gone``, its real exit time,
@@ -218,6 +218,8 @@ def _discover(known, table, open_proc):
     runs), holding the handle ``open_proc`` gave it; a handle not adopted is
     closed.  Dead entries stay, so orphans of an exited parent are still found.
     Repeats until stable so a grandchild in the same table is found in the same pass.
+    ``taken`` is when the table was read: a handle to a process created later
+    belongs to a PID reused after the read, so it is never adopted.
     """
     opened = {}  # candidate PID -> its open _Proc; None once adopted or not openable
 
@@ -256,6 +258,8 @@ def _discover(known, table, open_proc):
                     if parent.created is not None and proc.created < parent.created:
                         continue
                     if parent.gone is not None and proc.created > parent.gone:
+                        continue
+                    if taken is not None and proc.created > taken:
                         continue
                     known.append(_Known(pid, proc.created, proc.exit_time(), name, proc))
                     opened[pid] = None  # the entry owns the handle now
@@ -353,6 +357,7 @@ class PointScope:
 
     def _rescan(self):
         """Read the table outside the lock, grow the known set under it, return the live entries."""
+        taken = _filetime_now()
         try:
             table = _read_table()
         except OSError:
@@ -361,7 +366,7 @@ class PointScope:
         with self._lock:
             if self._closed:
                 return []
-            _discover(self._known, table, _open_proc)
+            _discover(self._known, table, _open_proc, taken)
             return [e for e in self._known if e.gone is None]
 
     def known(self):
