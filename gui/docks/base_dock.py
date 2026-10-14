@@ -196,18 +196,16 @@ class CollapsibleGroup(QGroupBox):
         # arrow alone should mark the state.
         self.header.setAutoRaise(True)
         self.header.setFocusPolicy(Qt.StrongFocus)
-        self.header.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.header.installEventFilter(self)  # Enter toggles too; Space is built in
         self.flag_label = QLabel()
         self.flag_label.setStyleSheet(f"color: {theme.FLAG_TEXT};")
         self.flag_label.hide()
-        # The trailing stretch keeps the flag beside the title, not at the far edge.
         self.header_row = QHBoxLayout()
         self.header_row.setContentsMargins(0, 0, 0, 0)
         self.header_row.setSpacing(metrics.BLOCK_GAP)
         self.header_row.addWidget(self.header)
         self.header_row.addWidget(self.flag_label, 0, Qt.AlignVCenter)
-        self.header_row.addStretch(1)
         indent = self.header.iconSize().width() + 4  # under the title
         self.summary_label = QLabel()
         # Elided by hand to the block width, so its full text never widens the block.
