@@ -31,7 +31,7 @@ from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QScreen  # noqa
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QGridLayout,  # noqa: E402
                                QGroupBox, QLabel, QMessageBox, QPushButton, QTabBar,
-                               QToolButton)
+                               QToolButton, QWidget)
 
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
@@ -473,6 +473,77 @@ def test_nothing_clipped(window, size, mode, columns):
     assert not clipped, "\n".join(clipped)
 
 
+def _focusing_problems(dock):
+    """What is clipped or outside in the Crystal Focusing block as it is drawn now (open or folded)."""
+    group = dock.collapsible_groups["instrument.focusing"]
+    problems = []
+    for widget in group.findChildren(QWidget):
+        if not widget.isVisible() or widget is group.header:
+            continue
+        rect = widget.rect().translated(widget.mapTo(group, QPoint(0, 0)))
+        if not group.rect().contains(rect):
+            problems.append(f"{type(widget).__name__} {getattr(widget, 'text', str)()!r} outside the block")
+        elif isinstance(widget, QLabel):
+            if problem := _label_problem(widget, [group]):
+                problems.append(f"{widget.text()!r}: {problem}")
+        elif isinstance(widget, QCheckBox) and widget.width() < widget.sizeHint().width():
+            problems.append(f"{widget.text()!r}: {widget.width()} < {widget.sizeHint().width()} px")
+    return problems
+
+
+@pytest.mark.parametrize("size, columns", [(LAPTOP, 2), (MONITOR, 3)],
+                         ids=["laptop-2col", "monitor-3col"])
+@MODES
+def test_the_focusing_block_is_not_clipped_open_or_folded_in_the_window(window, size, columns, mode):
+    """The composed window, Narrow and Wide: the rows, status lines, help line, cells and flag fit the block."""
+    _resize(window, size, mode, columns)
+    dock = window.instrument_dock
+    group = dock.collapsible_groups["instrument.focusing"]
+    was_collapsed = group.is_collapsed()
+    try:
+        for collapsed in (False, True):
+            group.set_collapsed(collapsed)
+            for _ in range(3):
+                QApplication.processEvents()
+            assert group.width() == metrics.BLOCK_WIDTH
+            assert group.body.isVisible() is not collapsed
+            assert group.summary_rows.isVisible() is collapsed
+            assert not _focusing_problems(dock), (collapsed, _focusing_problems(dock))
+    finally:
+        group.set_collapsed(was_collapsed)
+
+
+def test_the_focusing_block_holds_long_text_open_and_folded():
+    """Every mode's longest wording at once, Heusler names and a four-digit radius: wrapped or elided with the full text."""
+    app = QApplication.instance() or QApplication([sys.argv[0]])
+    font = app.font()
+    dock, _descriptor = _standalone_instrument_dock("in12")
+    group = dock.collapsible_groups["instrument.focusing"]
+    try:
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            dock.set_ideal(axis, 12.345)
+        dock.rhm_edit.setText("1234.567")
+        dock.set_choice("rhm", False)                 # held, a long way from the ideal
+        dock.set_scanned({"rvm": 2})
+        dock.set_fixed("rha", "fixed at 0.8 m for the Heusler[111] analyser of the instrument", declared=True)
+        dock.set_no_model("rva", "no established focusing model for the Heusler[111] analyser")
+        for collapsed in (False, True):
+            group.set_collapsed(collapsed)
+            for _ in range(3):
+                app.processEvents()
+            assert not _focusing_problems(dock), (collapsed, _focusing_problems(dock))
+        assert group.flag_label.isVisible() and group.flag_label.text() == "\u25cf 3 not tracking"
+        group.set_collapsed(False)
+        app.processEvents()
+        assert group.flag_label.isVisible()           # the flag stays while the block is open
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            assert getattr(dock, f"{axis}_status_label").isVisible()
+    finally:
+        dock.deleteLater()
+        app.processEvents()
+        app.setFont(font)
+
+
 HOURS = 123 * 3600 + 59 * 60 + 59  # a scan of five days, as the tracker formats it
 
 
@@ -827,7 +898,20 @@ def test_folded_blocks_summarise_their_fields(instrument_id):
         def summary(key):
             group = groups[key]
             assert group.is_collapsed() and not group.body.isVisible()
-            assert group.summary_label.isVisible() and group.header.text() == group.title_text
+            # The header elides to make room for its flag; the full title stays in the accessible name.
+            shown_title = group.header.text()
+            assert group.header.accessibleName() == group.title_text
+            assert shown_title == group.title_text or (
+                shown_title.endswith("…") and group.flag_label.isVisible()
+                and group.title_text.startswith(shown_title[:-1])), shown_title
+            if key == "instrument.focusing":   # rows of cells, and the flag beside the title
+                assert group.summary_rows.isVisible() and not group.summary_label.isVisible()
+                cells = [(label.text(), label.toolTip()) for label in group.summary_rows.findChildren(QLabel)]
+                assert len(cells) == 4
+                for shown, full in cells:
+                    assert shown == full or shown.endswith("…"), (shown, full)  # elided, never cut
+                return tuple(cells), group.flag_label.text()
+            assert group.summary_label.isVisible()
             shown, full = group.summary_label.text(), group.summary_label.toolTip()
             assert shown == full or shown.endswith("…"), (shown, full)  # elided, never cut
             return shown, full
