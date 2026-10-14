@@ -181,7 +181,7 @@ The refusal reason is designed to tell a client *what to do next* (extend the sc
 
 An unknown variable also returns `None`, and the GUI disables all three goto buttons with the reason in their tooltip.
 
-**Verification.** `tavi/scan_fits.py` is unit-tested in `tests/test_scan_fits.py`. The controller adapters and the dock boundary are guarded by source-scan tests (`tests/test_goto_controller.py`, `tests/test_fitting_dock.py`) because this suite does not import Qt. The dock's widgets run offscreen in `tests/test_fitting_dock_gui.py`.
+**Verification.** `tavi/scan_fits.py` is unit-tested in `tests/test_scan_fits.py`. The controller adapters and the dock boundary are guarded by source-scan tests (`tests/test_goto_controller.py`, `tests/test_fitting_dock.py`: no arithmetic in the dock, no automatic refit). The real widgets also run offscreen in `tests/test_fitting_dock_gui.py`: layout geometry, each Go on its own row, the overlay redraw after a mid-scan rebuild, and Copy results.
 
 ---
 
