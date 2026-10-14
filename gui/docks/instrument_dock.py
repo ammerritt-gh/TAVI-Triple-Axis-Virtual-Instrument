@@ -47,6 +47,16 @@ def _sentence(text):
     return text[:1].upper() + text[1:].rstrip(".") + "."
 
 
+def _radius_cell(text):
+    """A typed radius as a folded cell shows it: 'flat' at zero, 'empty' when blank."""
+    if not text:
+        return "empty"
+    try:
+        return "flat" if float(text) == 0 else f"{text} m"
+    except ValueError:   # not a number: show it as typed
+        return f"{text} m"
+
+
 @dataclass
 class _FocusingAxis:
     """What one radius row knows. ``track`` is the operator's choice (what is saved);
@@ -743,9 +753,8 @@ class InstrumentDock(BaseDockWidget):
                  "no_model": "held"}   # no model: the typed value is held
         cells = {}
         for name in FOCUSING_AXES:
-            edit = getattr(self, f"{name}_edit")
-            value = f"{edit.text()} m" if edit.text() else "empty"
-            cells[name] = f"{name} {value} {words[self.mode(name)]}"
+            text = getattr(self, f"{name}_edit").text()
+            cells[name] = f"{name} {_radius_cell(text)} {words[self.mode(name)]}"
         group = self.collapsible_groups["instrument.focusing"]
         rows = [[cells["rhm"], cells["rvm"]], [cells["rha"], cells["rva"]]]
         if rows != self._focusing_rows:
