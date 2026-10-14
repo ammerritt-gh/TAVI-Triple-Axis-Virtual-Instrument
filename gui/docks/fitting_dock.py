@@ -98,7 +98,7 @@ _ROW_TIPS = {
     "cen": "Fitted peak centre ± its error, from the fit (it can lie between "
            "measured points).",
     "com": "Centre of mass: the counts-weighted mean position of the measured "
-           "points in the selection.",
+           "points in the selection, background included.",
     "max": "Highest measured bin - not interpolated",
     "eta": "Lorentzian fraction of the pseudo-Voigt: 0 is pure Gaussian, "
            "1 pure Lorentzian.",
@@ -113,20 +113,24 @@ _ROW_TIPS = {
                "degrees of freedom (dof).",
     "integrated": "Integrated intensity, in counts: the fitted peak's summed "
                   "counts at this scan's points, background removed (the fit's "
-                  "area divided by the step). It depends on the step: halve "
+                  "area divided by the step). Because it comes from the fitted "
+                  "peak shape, it includes the peak's tails beyond the measured "
+                  "points. It depends on the step: halve "
                   "the step and it doubles. Use it to read the peak against "
                   "the plotted counts.\n\"uneven steps\": the fitted points are "
                   "not evenly spaced, so no single step converts the area to "
                   "counts.",
-    "normalised": "Normalised intensity, in counts × the scan variable's unit: "
-                  "the fit's Area parameter, equal to Integrated × step. It "
+    "normalised": "Normalised intensity, normalised to the scan step (not to "
+                  "monitor), in counts × the scan variable's unit: the fit's "
+                  "Area parameter, equal to Integrated × step. It "
                   "does not depend on the step: use it to compare scans taken "
                   "with different step sizes. The step it relates to is shown "
                   "after it.",
     "raw": "Raw counts over the fit range, in counts: the measured counts minus "
            "the fitted background, summed over the points the fit used. "
            "Model-free, and covers only what was measured: use it to check "
-           "Integrated.",
+           "Integrated: the two agree when the fit range covers the whole "
+           "peak, tails included.",
 }
 _RAW_ERROR_UNAVAILABLE = ("\nError unavailable: the fit could not determine "
                           "the background's error.")
