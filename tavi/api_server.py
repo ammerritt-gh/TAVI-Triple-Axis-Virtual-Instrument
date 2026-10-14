@@ -27,8 +27,8 @@ Backend protocol
 - ``get_journal(limit: int) -> dict``   (session-narrative ring buffer)
 - ``get_background() -> dict``   (instrument background profile: spec + resolved)
 - ``set_background(body: dict) -> dict``   (replace the profile wholesale)
-- ``stop_job(job_id: str) -> dict``
-- ``stop_all(clear_queue: bool) -> dict``
+- ``stop_job(job_id: str, kill: bool = False) -> dict``
+- ``stop_all(clear_queue: bool, kill: bool = False) -> dict``
 - ``list_jobs() -> list``
 
 Any backend method may raise ``ApiError(status, code, message, details=None)``,
@@ -210,7 +210,7 @@ SCAN_BODY_KEYS = frozenset({
 VALIDATE_BODY_KEYS = frozenset({
     "parameters", "force", "background", "engine", "seed", "noiseless",
 })
-STOP_BODY_KEYS = frozenset({"clear_queue"})
+STOP_BODY_KEYS = frozenset({"clear_queue", "kill"})
 
 
 def require_api_version(body):
@@ -256,6 +256,21 @@ def reject_unknown_body_keys(body, allowed):
             % (", ".join(unknown), ", ".join(sorted(allowed))),
             details={"unknown": unknown, "allowed": sorted(allowed)},
         )
+
+
+def parse_stop_kill(body):
+    """The optional ``kill`` of a stop request: False when absent, else a JSON boolean or 400.
+
+    Never coerced: ``bool("false")`` is True, and a mistyped kill must not force-stop a run.
+    """
+    if "kill" not in body:
+        return False
+    kill = body["kill"]
+    if not isinstance(kill, bool):
+        raise ApiError(
+            400, "bad_request",
+            "\"kill\" must be a JSON boolean (true or false); got %s" % json.dumps(kill))
+    return kill
 
 
 def _json_safe(obj):
@@ -523,6 +538,17 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
             raise ApiError(400, "bad_request", "Request body must be a JSON object")
         return parsed
 
+    def _read_stop_body(self):
+        """A /scan/{id}/stop body as far as it matters: ``{}`` unless it is a JSON object.
+
+        That route never read a body, so every other shape stays accepted: logged, then ignored.
+        """
+        try:
+            return self._read_json_body()
+        except ApiError as e:
+            self._log("[TAVI API] stop body ignored: %s" % e.message)
+            return {}
+
     # ---- auth / gating -------------------------------------------------
 
     def _check_auth(self):
@@ -729,8 +755,9 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
                 return
             body = self._read_json_body()
             reject_unknown_body_keys(body, STOP_BODY_KEYS)
+            kill = parse_stop_kill(body)
             clear_queue = bool(body.get("clear_queue", False))
-            self._send_json(200, self._call_backend("stop_all", clear_queue))
+            self._send_json(200, self._call_backend("stop_all", clear_queue, kill))
             return
 
         if len(segments) >= 2 and segments[0] == "scan":
@@ -761,7 +788,8 @@ class ApiRequestHandler(BaseHTTPRequestHandler):
                 self._require_method(method, "POST")
                 if not self._check_writable():
                     return
-                self._send_json(200, self._call_backend("stop_job", job_id))
+                kill = parse_stop_kill(self._read_stop_body())
+                self._send_json(200, self._call_backend("stop_job", job_id, kill))
                 return
             raise ApiError(404, "not_found", "Unknown path: %s" % path)
 

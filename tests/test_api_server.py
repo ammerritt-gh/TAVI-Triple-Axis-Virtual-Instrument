@@ -70,12 +70,12 @@ class FakeBackend:
     def get_job_data(self, job_id):
         return {"job_id": job_id, "complete": False}
 
-    def stop_job(self, job_id):
-        self.calls.append(("stop_job", job_id))
+    def stop_job(self, job_id, kill=False):
+        self.calls.append(("stop_job", job_id, kill))
         return {"job_id": job_id, "state": "stopped"}
 
-    def stop_all(self, clear_queue):
-        self.calls.append(("stop_all", clear_queue))
+    def stop_all(self, clear_queue, kill=False):
+        self.calls.append(("stop_all", clear_queue, kill))
         return {"stopped": True, "clear_queue": clear_queue}
 
     def list_jobs(self):
