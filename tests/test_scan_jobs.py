@@ -272,6 +272,25 @@ def test_skipped_points_serialized_in_snapshot():
     json.dumps(job.snapshot(include_data=True), allow_nan=False)
 
 
+def test_stop_mode_is_null_unless_stopped_and_in_both_views():
+    job = _job_with_result([1.0, 2.0, 3.0])
+    assert job.result.stop_mode is None
+    for include_data in (False, True):
+        assert job.snapshot(include_data=include_data)["result"]["stop_mode"] is None
+    for mode in ("graceful", "kill"):
+        job.result.stop_mode = mode
+        for include_data in (False, True):
+            snap = job.snapshot(include_data=include_data)
+            assert snap["result"]["stop_mode"] == mode
+            json.dumps(snap, allow_nan=False)
+
+
+def test_a_new_job_starts_with_no_stop_recorded():
+    job = ScanJob(job_id="j-0001", source="gui", launch_state={})
+    assert job.stop_request is None
+    assert job.gui_stop_requested is False
+
+
 def test_snapshot_include_data_toggles_arrays():
     job = _job_with_result([1.0, 2.0, 3.0], include_meta={"foo": "bar"})
 
