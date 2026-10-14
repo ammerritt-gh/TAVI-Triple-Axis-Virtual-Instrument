@@ -625,6 +625,7 @@ class DisplayDock(BaseDockWidget):
         self._valid_mask = None  # Which points are valid (not impossible)
         self._measured_mask = None  # Which points have been measured
         self._current_index = -1  # Current scan point being measured
+        self._replot_pending = False  # an invalid point was marked with redraw=False
         self._data_folder = None  # Path to scan data folder
         self._scan_metadata = {}  # Store scan metadata for info panel
         self._colorbar = None  # Reference to colorbar for proper cleanup
@@ -701,7 +702,8 @@ class DisplayDock(BaseDockWidget):
         self._variable_name_2 = var_name_2
         self._scan_values_1 = np.array(values_1)
         self._current_index = -1
-        
+        self._replot_pending = False
+
         if mode == '1D':
             n_points = len(values_1)
             self._counts = np.full(n_points, np.nan)
@@ -907,12 +909,13 @@ class DisplayDock(BaseDockWidget):
                       loc='upper right', fontsize='small')
     
     @Slot(int, float)
-    def update_1d_point(self, index, counts):
+    def update_1d_point(self, index, counts, redraw=True):
         """Update a single point in 1D scan.
-        
+
         Args:
             index: Index into the scan values array
             counts: Measured counts at this point
+            redraw: False records the point only; the caller then calls redraw()
         """
         if self._mode != '1D' or self._counts is None:
             return
@@ -921,16 +924,18 @@ class DisplayDock(BaseDockWidget):
             self._counts[index] = counts
             self._measured_mask[index] = True
             self._current_index = index
-            self._update_1d_display()
-    
+            if redraw:
+                self._update_1d_display()
+
     @Slot(int, int, float)
-    def update_2d_point(self, idx_x, idx_y, counts):
+    def update_2d_point(self, idx_x, idx_y, counts, redraw=True):
         """Update a single point in 2D scan.
         
         Args:
             idx_x: Index into scan_values_1 (x-axis)
             idx_y: Index into scan_values_2 (y-axis)
             counts: Measured counts at this point
+            redraw: False records the point only; the caller then calls redraw()
         """
         if self._mode != '2D' or self._counts is None:
             return
@@ -939,10 +944,11 @@ class DisplayDock(BaseDockWidget):
             self._counts[idx_y, idx_x] = counts
             self._measured_mask[idx_y, idx_x] = True
             self._current_index = (idx_x, idx_y)
-            self._update_2d_display()
+            if redraw:
+                self._update_2d_display()
 
     @Slot(int)
-    def mark_1d_point_invalid(self, index):
+    def mark_1d_point_invalid(self, index, redraw=True):
         """Mark a 1D scan point as impossible after scan initialization."""
         if self._mode != '1D' or self._counts is None or self._valid_mask is None:
             return
@@ -951,11 +957,14 @@ class DisplayDock(BaseDockWidget):
             self._valid_mask[index] = False
             self._measured_mask[index] = False
             self._counts[index] = np.nan
-            self._setup_1d_plot()
-            self._update_1d_display()
+            if redraw:
+                self._setup_1d_plot()
+                self._update_1d_display()
+            else:
+                self._replot_pending = True
 
     @Slot(int, int)
-    def mark_2d_point_invalid(self, idx_x, idx_y):
+    def mark_2d_point_invalid(self, idx_x, idx_y, redraw=True):
         """Mark a 2D scan point as impossible after scan initialization."""
         if self._mode != '2D' or self._counts is None or self._valid_mask is None:
             return
@@ -964,27 +973,49 @@ class DisplayDock(BaseDockWidget):
             self._valid_mask[idx_y, idx_x] = False
             self._measured_mask[idx_y, idx_x] = False
             self._counts[idx_y, idx_x] = np.nan
-            self._setup_2d_plot()
-            self._update_2d_display()
-    
+            if redraw:
+                self._setup_2d_plot()
+                self._update_2d_display()
+            else:
+                self._replot_pending = True
+
     @Slot(int)
-    def set_current_scan_index(self, index):
+    def set_current_scan_index(self, index, redraw=True):
         """Set the current scan index (for showing progress marker).
         
         For 1D: index is a single integer
         For 2D: index is converted to (x_idx, y_idx) based on scan order
         """
         self._current_index = index
-        if self._mode == '1D':
+        if redraw and self._mode == '1D':
             self._update_current_marker_1d(index)
         # For 2D, the marker is updated in update_2d_point
-    
+
     @Slot(int, int)
-    def set_current_scan_index_2d(self, idx_x, idx_y):
+    def set_current_scan_index_2d(self, idx_x, idx_y, redraw=True):
         """Set the current scan index for 2D scan."""
         self._current_index = (idx_x, idx_y)
-        self._update_current_marker_2d(idx_x, idx_y)
-    
+        if redraw:
+            self._update_current_marker_2d(idx_x, idx_y)
+
+    def redraw(self):
+        """Draw the scan once, after point updates made with ``redraw=False``.
+
+        Does what the per-point path does for each point: rebuild the plot if
+        an invalid point was marked, then the data and the current-point marker.
+        """
+        if self._counts is None:
+            return
+        if self._mode == '1D':
+            if self._replot_pending:
+                self._setup_1d_plot()
+            self._update_1d_display()
+        elif self._mode == '2D':
+            if self._replot_pending:
+                self._setup_2d_plot()
+            self._update_2d_display()
+        self._replot_pending = False
+
     def _update_1d_display(self):
         """Update the 1D plot display."""
         if self._counts is None:
