@@ -7,6 +7,7 @@ import hashlib
 import logging
 import time
 import datetime
+import contextlib
 import copy
 import threading
 import queue
@@ -1533,29 +1534,117 @@ class TAVIController(QObject):
     def cancel_job(self, job_id):
         """Cancel a queued job or stop a running one (API dock Cancel button).
 
-        Mirrors the core of ``TaviApiBackend.stop_job`` without the HTTP error
-        envelope: QUEUED -> CANCELLED, RUNNING -> shared stop event, terminal
-        states -> no-op. GUI-thread entry; independent of the API server state
-        so it works even when the server is off.
+        QUEUED -> CANCELLED; RUNNING -> the two-stage GUI stop shared with the
+        Stop button (the first GUI request is graceful, the next kills);
+        terminal states -> no-op. GUI-thread entry; independent of the API
+        server state so it works even when the server is off.
         """
         job = self._job_registry.get(job_id)
         if job is None:
             self.print_to_message_center(f"Cancel: unknown job {job_id}")
             return
-        with job.lock:
-            state = job.state
-            if state == JobState.QUEUED:
-                job.state = JobState.CANCELLED
-                if job.finished_at is None:
-                    job.finished_at = time.time()
-                job.notify_state_change()
-        if state == JobState.QUEUED:
+        outcome = self._gui_stop(job)
+        if outcome == "cancelled":
             self.job_state_changed.emit(job_id, JobState.CANCELLED.value)
             self._api_log(f"job {job_id} cancelled from dock")
-        elif state == JobState.RUNNING:
-            self.stop_event.set()
+        elif outcome == "graceful":
             self._api_log(f"job {job_id} stop requested from dock")
+        elif outcome == "kill":
+            self._api_log(f"job {job_id} force stop requested from dock")
         # Terminal states: nothing to do.
+
+    def request_stop(self, job_id=None, *, kill=False):
+        """Record a stop request; the only place a stop is recorded. Waits on nothing.
+
+        ``job_id`` None means the running job. Returns what it did:
+        ``"cancelled"`` (the job was queued), ``"graceful"`` or ``"kill"`` (the
+        running job's stop request now; ``"kill"`` overrides ``"graceful"``,
+        never the reverse), ``"finished"`` (any terminal state), ``"unknown"``
+        (no such job) or ``"idle"`` (no job named and none running). Callers
+        write their own log line. A kill of a running MC point ends its
+        processes on the scope's own thread; this returns at once.
+        """
+        with self._stop_lock:
+            active = self._active_job
+            job = active if job_id is None else self._job_registry.get(job_id)
+            if job is None:
+                return "idle" if job_id is None else "unknown"
+            scope = self._active_scope if job is active else None
+            # PointScope's lock is an RLock: kill() below takes it again. Holding it
+            # waits at most for one Popen.__init__ that is checking and launching.
+            with (scope._lock if scope is not None else contextlib.nullcontext()):
+                with job.lock:
+                    if job.state == JobState.QUEUED:
+                        job.state = JobState.CANCELLED
+                        if job.finished_at is None:
+                            job.finished_at = time.time()
+                        job.notify_state_change()
+                        return "cancelled"
+                    if job.state != JobState.RUNNING:
+                        return "finished"
+                    if kill:
+                        job.stop_request = "kill"
+                    elif job.stop_request is None:
+                        job.stop_request = "graceful"
+                    self.stop_event.set()
+                    if kill and scope is not None:
+                        # Buffer only: a GUI-thread drain here would run Qt slots under these locks.
+                        scope.kill(self._gui_updates.log)
+                    return job.stop_request
+
+    def _gui_stop(self, job):
+        """A stop from a GUI control (Stop button or the dock's Cancel): graceful once, then kill."""
+        with job.lock:
+            kill = job.gui_stop_requested
+        outcome = self.request_stop(job.job_id, kill=kill)
+        if outcome == "graceful":
+            with job.lock:
+                job.gui_stop_requested = True
+            self._force_stop_label_job = job.job_id
+            self.window.simulation_dock.show_force_stop(True)
+            self.print_to_message_center(
+                "Stop requested: the scan stops after the current point. "
+                "Click Force stop to end it immediately.")
+        elif outcome == "kill":
+            self.print_to_message_center(
+                f"Force stop: scan job {job.job_id} is being force-stopped now.")
+        return outcome
+
+    def force_stop_all(self):
+        """Kill the running job and cancel every queued one, synchronously; waits for nothing.
+
+        One kill request per job: on a queued job it cancels, on the running job
+        it kills, on a finished job it does nothing, so a job that starts while
+        this runs is caught either way.
+        """
+        for job in self._job_registry.all_jobs():
+            if self.request_stop(job.job_id, kill=True) == "cancelled":
+                self.job_state_changed.emit(job.job_id, JobState.CANCELLED.value)
+
+    def is_idle(self):
+        """True when no job is running (its kill wait and folder removal included)."""
+        return self._active_job is None
+
+    def ongoing_work(self):
+        """What a close would stop: ``None`` when idle, else a dict.
+
+        ``{"job_id": running job or None, "point": the point in flight (1-based),
+        "points": its point count, "queued": number of queued jobs}``.
+        """
+        queued = 0
+        for job in self._job_registry.all_jobs():
+            with job.lock:
+                if job.state == JobState.QUEUED:
+                    queued += 1
+        active = self._active_job
+        if active is None and not queued:
+            return None
+        if active is None:
+            return {"job_id": None, "point": None, "points": None, "queued": queued}
+        with active.lock:
+            total = active.progress_total
+            point = min(active.progress_done + 1, total) if total else None
+        return {"job_id": active.job_id, "point": point, "points": total, "queued": queued}
 
     def set_api_mode(self, mode):
         """Apply an access mode chosen in the API dock and persist it.
@@ -7530,10 +7619,14 @@ class TAVIController(QObject):
         return job
 
     def cancel_benchmark(self):
-        """Cancel every in-flight benchmark stage (queued or running)."""
-        self.stop_event.set()
+        """Cancel every in-flight benchmark stage (queued or running); always graceful."""
         for job_id in list(self._benchmark_job_ids):
-            self.cancel_job(job_id)
+            outcome = self.request_stop(job_id)
+            if outcome == "cancelled":
+                self.job_state_changed.emit(job_id, JobState.CANCELLED.value)
+                self._api_log(f"job {job_id} cancelled from dock")
+            elif outcome == "graceful":
+                self._api_log(f"job {job_id} stop requested from dock")
 
     def _all_benchmark_jobs_terminal(self):
         """True if every tracked benchmark job has reached a terminal state."""
@@ -9072,13 +9165,15 @@ class TAVIController(QObject):
         self.on_lattice_changed()
 
     def stop_simulation(self):
-        """Stop the running simulation.
+        """Stop button: the first click stops after the current point, the second kills.
 
-        Sets the shared stop event; the worker's run_simulation completion path
-        marks the active job STOPPED once it drains.
+        The worker's run_simulation completion path marks the job STOPPED.
         """
-        self.stop_event.set()
-        self.print_to_message_center("Stop requested...")
+        job = self._active_job
+        if job is None:
+            self.print_to_message_center("Stop requested, but no scan is running.")
+            return
+        self._gui_stop(job)
 
     def shutdown(self):
         """Stop work and tear down the job worker. Safe to call repeatedly."""
@@ -9092,23 +9187,18 @@ class TAVIController(QObject):
         if server is not None:
             server.stop()
 
-        # Signal any running scan to drain out.
-        self.stop_event.set()
+        # Force-stop the running scan and cancel every queued job.
+        self.force_stop_all()
         self._gui_idle.set()
 
-        # Cancel every still-queued job so the worker skips them on drain.
-        for job in self._job_registry.all_jobs():
-            with job.lock:
-                if job.state == JobState.QUEUED:
-                    job.state = JobState.CANCELLED
-                    if job.finished_at is None:
-                        job.finished_at = time.time()
-                    job.notify_state_change()
-
-        # Wake the worker with the exit sentinel and give it a moment to stop.
+        # Wake the worker with the exit sentinel; the force stop (kill, bounded
+        # wait, folder removal) finishes within CLOSE_WAIT_S.
         self._job_queue.put(None)
         if self._job_worker is not None:
-            self._job_worker.join(timeout=2)
+            self._job_worker.join(timeout=self.CLOSE_WAIT_S)
+            if self._job_worker.is_alive():
+                self._post_log("Shutdown: the scan worker did not finish within "
+                               f"{self.CLOSE_WAIT_S:g} s; closing anyway.")
 
         # Whatever the worker (or a force stop) logged last must not be lost.
         self._drain_updates()
@@ -9740,22 +9830,36 @@ class TAVIController(QObject):
             self.scan_completed.emit()
             self.scan_auto_save.emit()
 
-        # Finalize job bookkeeping (same terminal-state selection as McStas).
+        # Finalize job bookkeeping (same terminal-state selection as McStas). A
+        # kill is a stop at the next point boundary here: no external process.
         if job is not None:
-            if simulation_error_message is not None:
+            self._finish_job(job, simulation_error_message)
+
+        return data_folder
+
+    def _finish_job(self, job, error_message):
+        """Set a scan's terminal state and its stop mode in one ``job.lock`` section.
+
+        The decision is taken under the lock that ``request_stop`` records under,
+        so a stop either lands before it (``stopped`` with its mode) or finds the
+        job finished.
+        """
+        with job.lock:
+            if error_message is not None:
                 final_state = JobState.FAILED
             elif self.stop_event.is_set():
                 final_state = JobState.STOPPED
             else:
                 final_state = JobState.DONE
-            with job.lock:
-                job.state = final_state
-                job.error = simulation_error_message
-                job.finished_at = time.time()
-                self.last_scan_result = job.result
-                job.notify_state_change()
-
-        return data_folder
+            job.state = final_state
+            job.error = error_message
+            job.finished_at = time.time()
+            if job.result is not None:
+                # A stop_event set with no request recorded is an API stop, which is graceful.
+                job.result.stop_mode = ((job.stop_request or "graceful")
+                                        if final_state == JobState.STOPPED else None)
+            self.last_scan_result = job.result
+            job.notify_state_change()
 
     def run_simulation(self, launch_state, job=None):
         """Run the full simulation.
@@ -10815,18 +10919,7 @@ class TAVIController(QObject):
         # the display/output paths above already used. The worker loop emits the
         # job_state_changed signal after this returns.
         if job is not None:
-            if simulation_error_message is not None:
-                final_state = JobState.FAILED
-            elif self.stop_event.is_set():
-                final_state = JobState.STOPPED
-            else:
-                final_state = JobState.DONE
-            with job.lock:
-                job.state = final_state
-                job.error = simulation_error_message
-                job.finished_at = time.time()
-                self.last_scan_result = job.result
-                job.notify_state_change()
+            self._finish_job(job, simulation_error_message)
 
         return data_folder
 
