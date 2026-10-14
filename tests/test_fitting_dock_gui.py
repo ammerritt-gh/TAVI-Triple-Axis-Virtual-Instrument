@@ -365,11 +365,13 @@ def test_copy_says_when_the_fit_predates_points_measured_since(docks):
     fitting._on_fit_clicked()
     display.update_1d_point(20, 5.0)           # a point arrives after the fit
     fitting.copy_results_button.click()
-    # COM and MAX include that point, the fit does not: the status line says so.
-    assert fitting.status_label.text() == (
+    # The status line says the fit predates that point; it makes no claim that
+    # COM and MAX include it (with a range selected they may not).
+    text = fitting.status_label.text()
+    assert text == (
         "Copied the fit results, COM and MAX to the clipboard. The fit predates "
-        "1 point(s) measured since it; COM and MAX include them -- press Fit "
-        "again to use them.")
+        "1 point(s) measured since it -- press Fit again to use them.")
+    assert "include them" not in text
     # Nothing measured after the fit: the plain text, as before.
     _scan_peak(display)
     fitting._on_fit_clicked()

@@ -914,10 +914,9 @@ class FittingDock(BaseDockWidget):
         if result.converged:
             copied = "Copied the fit results, COM and MAX to the clipboard."
             arrived = self._points_since_fit()
-            if arrived:   # COM and MAX include points the fit does not
-                copied += (" The fit predates %d point(s) measured since it; COM "
-                           "and MAX include them -- press Fit again to use them."
-                           % arrived)
+            if arrived:
+                copied += (" The fit predates %d point(s) measured since it -- "
+                           "press Fit again to use them." % arrived)
             self.status_label.setText(copied)
         else:
             self.status_label.setText(
