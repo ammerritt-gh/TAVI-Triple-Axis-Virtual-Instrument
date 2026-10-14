@@ -465,9 +465,13 @@ def test_a_2d_scan_says_why_each_control_is_off(docks):
     for button in (fitting.fit_button, fitting.range_button,
                    fitting.range_clear_button, fitting.goto_cen_button,
                    fitting.goto_com_button, fitting.goto_max_button,
-                   fitting.revert_button, fitting.copy_results_button):
+                   fitting.revert_button, fitting.copy_results_button,
+                   fitting.range_min_edit, fitting.range_max_edit):
         assert not button.isEnabled()
         assert button.toolTip() == "The Fitting dock works on 1D scans only."
+    _scan_peak(display)                # back to 1D: no stale 2D reason on the fields
+    for edit in (fitting.range_min_edit, fitting.range_max_edit):
+        assert edit.toolTip() == ""
 
 
 @pytest.fixture()
