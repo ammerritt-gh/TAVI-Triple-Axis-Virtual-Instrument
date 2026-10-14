@@ -1087,10 +1087,13 @@ class FittingDock(BaseDockWidget):
             for button in (self.fit_button, self.range_button,
                            self.range_clear_button, self.goto_cen_button,
                            self.goto_com_button, self.goto_max_button,
-                           self.revert_button, self.copy_results_button):
+                           self.revert_button, self.copy_results_button,
+                           self.range_min_edit, self.range_max_edit):
                 button.setToolTip(_TWO_D_TIP)
             self._forget_and_clear_overlay()
             return
+        for edit in (self.range_min_edit, self.range_max_edit):
+            edit.setToolTip("")
 
         for button, tip in ((self.fit_button, _FIT_TIP),
                             (self.range_button, _RANGE_TIP),
