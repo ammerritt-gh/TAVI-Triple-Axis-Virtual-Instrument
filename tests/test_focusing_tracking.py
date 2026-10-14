@@ -542,7 +542,7 @@ def test_in12_heusler_rva_counts_and_reads_held_in_the_summary(world):
     assert _rows(ctrl) == _cells(ctrl, _words(rva="held"))    # no model: the typed value is held
     assert _flag(ctrl) == "● 1 not tracking"
     assert "rva held" in _group(ctrl).flag_label.toolTip()
-    assert _status(ctrl, "rva").startswith("tracking unavailable: no established focusing model")
+    assert _status(ctrl, "rva").startswith("held: tracking unavailable, no established focusing model")
 
 
 def test_the_flag_counts_held_and_scanned_but_not_the_fixed_nmo_axes(world):
