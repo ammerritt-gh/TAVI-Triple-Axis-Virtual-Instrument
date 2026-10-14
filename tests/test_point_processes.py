@@ -1,14 +1,15 @@
 """The point-process guard ends what a scan point started, and only that.
 
 Windows only; no McStas.  The stand-ins are ``sys.executable`` processes that
-write their PID into a temp folder and sleep.  Every test cleans up each
-process it started, by PID and creation time, in a ``finally``-style fixture
-teardown, and every wait has a deadline.
+write their PID into a temp folder and sleep.  The ``tree`` fixture holds a
+handle on each stand-in PID the test learns while that stand-in is alive, and
+teardown ends the stand-ins through those handles.  A held handle is the
+process's identity, so a PID reused after a stand-in exited is never touched.
+Every wait has a deadline.
 
 Wall-time budget for this file: 10 s (the slowest case is the grandchild
 orphan, about 2 s).
 """
-import os
 import subprocess
 import sys
 import threading
@@ -22,6 +23,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows process
 
 DEADLINE_S = 8.0
 CREATE_NO_WINDOW = 0x08000000
+SECOND = 10 ** 7  # FILETIME ticks (100 ns) per second
 
 STAND_IN = '''
 import os, subprocess, sys, time
@@ -75,41 +77,38 @@ def alive(pid):
         proc.close()
 
 
-def end_by_pid(pid):
-    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                   creationflags=CREATE_NO_WINDOW, timeout=15)
-
-
 @pytest.fixture
 def tree(tmp_path):
-    """A folder for stand-in PID files; ends every PID found there at teardown."""
+    """A folder of stand-in PID files.  Teardown ends what the test held, by handle."""
     script = tmp_path / "stand_in.py"
     script.write_text(STAND_IN, encoding="utf-8", newline="\n")
-    spawned = []  # PIDs the test started by other means
+    held = []  # _Proc handles, each opened while its stand-in was known to be alive
 
     class Tree:
         dir = tmp_path
         argv = lambda self, role: [sys.executable, str(script), role, str(tmp_path)]  # noqa: E731
-        track = spawned.append
 
-        def pid(self, role):
+        def track(self, pid):
+            proc = pp._open_proc(pid)
+            if proc is not None:
+                held.append(proc)
+
+        def pid(self, role, hold=True):
             def read():
                 try:
                     return int((tmp_path / f"{role}.pid").read_text())
                 except (OSError, ValueError):
                     return None
-            return wait_for(read, f"{role}.pid")
+            found = wait_for(read, f"{role}.pid")
+            if hold:
+                self.track(found)
+            return found
 
     yield Tree()
-    pids = list(spawned)
-    for f in tmp_path.glob("*.pid"):
-        try:
-            pids.append(int(f.read_text()))
-        except (OSError, ValueError):
-            pass
-    for pid in pids:
-        if alive(pid):
-            end_by_pid(pid)
+    for proc in held:
+        if proc.running():
+            proc.terminate()
+        proc.close()
 
 
 class Worker:
@@ -185,7 +184,8 @@ def test_kill_twice_is_harmless(tree):
 def test_orphan_is_still_ended(tree):
     scope = pp.PointScope()
     worker = Worker(scope, run(tree.argv("orphaner")))
-    orphaner, child = tree.pid("orphaner"), tree.pid("sleeper")
+    orphaner = tree.pid("orphaner", hold=False)  # it exits by itself; a handle could race that exit
+    child = tree.pid("sleeper")
     worker.join()  # the recorded root has exited; its child lives on
     assert alive(child) and not alive(orphaner)
     logs = []
@@ -199,7 +199,7 @@ def test_grandchild_orphan_is_ended(tree, monkeypatch):
     monkeypatch.setattr(pp, "TRACK_INTERVAL_S", 0.05)
     scope = pp.PointScope()
     Worker(scope, run(tree.argv("top")))
-    middle, grandchild = tree.pid("middle"), tree.pid("sleeper")
+    top, middle, grandchild = tree.pid("top"), tree.pid("middle"), tree.pid("sleeper")
     # the watcher sees the grandchild, then sees the intermediate gone
     wait_for(lambda: any(p == grandchild for p, _, _ in scope.known()), "the grandchild to be known")
     wait_for(lambda: any(p == middle and g is not None for p, _, g in scope.known()),
@@ -207,7 +207,7 @@ def test_grandchild_orphan_is_ended(tree, monkeypatch):
     assert alive(grandchild) and not alive(middle)
     scope.kill(lambda m: None)
     assert scope.wait_killed(pp.KILL_WAIT_S + 1) == []
-    gone(grandchild, tree.pid("top"))
+    gone(grandchild, top)
 
 
 def test_late_kill_leaves_interrupted_false():
@@ -232,7 +232,6 @@ def test_a_process_outside_the_scope_is_not_reached(tree):
     assert entered.wait(DEADLINE_S)
     # started on this (the main) thread while the scope is active on another
     outsider = subprocess.Popen(tree.argv("sleeper"), creationflags=CREATE_NO_WINDOW)
-    tree.track(outsider.pid)
     try:
         tree.pid("sleeper")
         logs = []
@@ -244,7 +243,8 @@ def test_a_process_outside_the_scope_is_not_reached(tree):
     finally:
         release.set()
         worker.join()
-        end_by_pid(outsider.pid)
+        outsider.kill()
+        outsider.wait(DEADLINE_S)
 
 
 def test_survivors_are_named(tree, monkeypatch):
@@ -263,6 +263,25 @@ def test_survivors_are_named(tree, monkeypatch):
     assert (proc.pid, image) in [(s.pid, s.image) for s in survivors]
     assert len(logs) == 1 and str(proc.pid) in logs[0] and image in logs[0] and "by hand" in logs[0]
     assert scope.interrupted and alive(proc.pid)
+
+
+def test_wait_killed_names_what_still_runs_when_the_kill_outlasts_the_wait(tree, monkeypatch):
+    """The kill is still working when the wait ends, so the running stand-in is named, not []."""
+    monkeypatch.setattr(pp, "KILL_WAIT_S", 2.0)
+    monkeypatch.setattr(pp._k32, "TerminateProcess", lambda handle, code: 0)  # does nothing: fails
+    scope = pp.PointScope()
+    worker = Worker(scope, lambda: subprocess.Popen(tree.argv("sleeper"),
+                                                    creationflags=CREATE_NO_WINDOW)).join()
+    proc = worker.result
+    tree.track(proc.pid)
+    scope.kill(lambda m: None)
+    started = time.monotonic()
+    running = scope.wait_killed(0.3)
+    assert time.monotonic() - started < 1.5, "wait_killed overran its timeout"
+    assert proc.pid in [s.pid for s in running], running
+    proc.kill()  # the stand-in ends; the kill then finds nothing it can end
+    proc.wait(DEADLINE_S)
+    assert proc.pid not in [s.pid for s in scope.wait_killed(DEADLINE_S)]
 
 
 # --------------------------------------------------------------- launch refusal
@@ -334,6 +353,20 @@ def test_creation_time_window_rejects_reused_pids():
     procs = {500: FakeProc(1950), 501: FakeProc(1850)}
     pp._discover(known, _table((500, 100), (501, 100)), procs.get)
     assert sorted(e.pid for e in known) == [100, 501]
+
+
+def test_reused_pid_child_after_the_real_exit_is_not_collected():
+    """A reuse inside the tracking gap: the parent (PID 100) exited at T; its PID went to a
+    new process whose child (200) began at T+0.5 s; the scan ran at T+1.0 s.
+
+    A held handle keeps a known PID from being reused, so this is the case the window
+    must still refuse once the exit time is known: the bound is the real exit, not the scan.
+    """
+    T = 2000 * SECOND
+    known = [pp._Known(100, 1000, None, "mcrun.exe", FakeProc(1000, exited=T))]
+    pp._discover(known, _table((100, 4), (200, 100)), {200: FakeProc(T + SECOND // 2)}.get)
+    assert known[0].gone == T
+    assert [e.pid for e in known] == [100], "a child created after the parent's real exit was collected"
 
 
 # --------------------------------------------------------------------- install
