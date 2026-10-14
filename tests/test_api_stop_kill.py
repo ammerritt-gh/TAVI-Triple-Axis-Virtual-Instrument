@@ -124,7 +124,8 @@ def wait_for(call, job_id, states, what):
 
 
 def stop_mode(snap):
-    return (snap.get("result") or {}).get("stop_mode")
+    """``stop_mode`` of a job that has a result; a null ``result`` raises rather than reads as None."""
+    return snap["result"]["stop_mode"]
 
 
 def running_job(call, gate, scan=SCAN):
@@ -182,7 +183,7 @@ def test_kill_on_queued_job_cancels_with_no_stop_mode(api, gate):
     second = submit(call)
     status, reply = call("POST", "/scan/%s/stop" % second, {"kill": True})
     assert status == 200 and reply["state"] == "cancelled"
-    assert stop_mode(job(call, second)) is None
+    assert job(call, second)["result"] is None      # a queued cancel has no result, so no stop_mode
     call("POST", "/scan/%s/stop" % first, {"kill": True})
     finish(call, gate, first)
 
