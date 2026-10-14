@@ -67,6 +67,7 @@ KEY ENDPOINTS (all paths relative to BASE URL):
   GET  /scan/{id}/plot.png   -> 512x512 PNG of current arrays (409 no_data if nothing renderable yet)
   GET  /journal?limit=N      -> human-readable session log (params, job lifecycle, mode/budget events)
   POST /scan/{id}/stop  |  POST /stop {"clear_queue":true}  -> drain-stop one job | stop running + clear queue
+              optional {"kill":true} on either: force-stop the running job now (JSON boolean; see section 5)
 
 API VERSION 2: every PATCH /parameters, POST /scan, POST /validate and PUT /background body must contain
   "api_version": 2, or the answer is 400 api_version_required and nothing changes. Names are canonical IDs (aliases
@@ -1154,12 +1155,23 @@ Cancel or stop one job. A `queued` job becomes `cancelled` immediately; a
 `running` job is stopped with **drain semantics** — the in-flight point finishes,
 then the job becomes `stopped` and its partial data stays retrievable via
 `/scan/{id}/data`. Returns the job snapshot.
-- Stopping an already-finished job → `409 job_finished`.
+- Optional body `{"kill": true}` force-stops a running job instead: on an McStas point
+  TAVI ends the processes it started for that point (McStas, its compiler, `mpiexec`) and
+  discards the point, which is then not executed (absent from the plot and data file).
+  An analytic point is not interrupted; its scan stops at the next point.
+- `kill` must be a JSON boolean. `"true"` or `1` → `400 bad_request` and nothing changes.
+- Without `kill`, or with any other body (`{"api_version":2}`, an unknown key, malformed
+  JSON, or none), the stop is graceful, as before. Repeating a plain stop never escalates.
+  `kill` on a job already stopping gracefully escalates it.
+- `kill` on a queued job cancels it, as a plain stop does (`cancelled`, no `stop_mode`).
+- Stopping an already-finished job, with or without `kill` → `409 job_finished`.
 - Read-only mode → `403 read_only`. Unknown id → `404 unknown_job`.
 
 ### POST /stop
 Stop the currently running job. Body `{"clear_queue": true}` also cancels every
-queued job.
+queued job. Body `{"kill": true}` force-stops the running job as on
+`POST /scan/{id}/stop` (JSON boolean; anything else → `400 bad_request`, nothing changes);
+`kill` never cancels a queued job by itself.
 ```bash
 curl -X POST http://127.0.0.1:8642/api/v1/stop \
   -H "Content-Type: application/json" -d '{"clear_queue": true}'
@@ -1557,13 +1569,15 @@ job through a single serial worker. Jobs execute one at a time.
 - **running** — actively simulating points.
 - **done** — completed normally.
 - **failed** — raised an error; see the `error` field.
-- **stopped** — a running job was stopped; partial data is retained.
+- **stopped** — a running job was stopped; partial data is retained. `result.stop_mode`
+  is `"graceful"` (the in-flight point finished) or `"kill"` (the point was ended and
+  discarded); it is `null` in every other state.
 - **cancelled** — a queued job was cancelled before it started running.
 
 `done`, `failed`, `stopped`, and `cancelled` are **terminal** — poll until the
 state is one of these. Stopping uses **drain semantics**: the in-flight point
 completes, then the job stops, so results already collected remain available via
-`GET /scan/{id}/data`.
+`GET /scan/{id}/data`. A force stop (`"kill": true`) does not wait for that point.
 
 Stop endpoints:
 - `POST /scan/{id}/stop` — stop or cancel one specific job.
@@ -1663,8 +1677,10 @@ These are real, verified behaviors worth knowing:
 
 4. **Mid-scan stop is drain, not abort.** `POST /scan/{id}/stop` (or `POST /stop`)
    on a running job lets the in-flight point finish before the job becomes
-   `stopped`. The partial data collected so far stays retrievable via
-   `GET /scan/{id}/data`. Do not expect an instantaneous halt.
+   `stopped`. A McStas point can take hours, so a plain stop can take as long; send
+   `{"kill": true}` to end it now (that point is then discarded). The partial data
+   collected so far stays retrievable via `GET /scan/{id}/data`. Retries of a plain
+   stop never escalate to a kill.
 
 Additional notes:
 - **`null` counts mean unmeasured or invalid — never `0`.** Any not-yet-run point
