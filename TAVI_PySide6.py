@@ -9304,12 +9304,9 @@ class TAVIController(QObject):
                 created is None or (created <= kill_at and (gone is None or gone > kill_at))
                 for _pid, created, gone in scope.known())
             discard = discard or scope.interrupted or alive
-            if discard or survivors:
-                thread.join(self.POINT_JOIN_AFTER_KILL_S)
-            else:
-                # Its processes had all exited: the call finishes as a normal point does.
-                while thread.is_alive():
-                    thread.join(0.5)
+            # Bounded either way: a call still blocked after its join is left behind.
+            thread.join(self.POINT_JOIN_AFTER_KILL_S if discard or survivors
+                        else point_processes.KILL_WAIT_S)
             if thread.is_alive():
                 discard = True
                 box['blocked'] = True
