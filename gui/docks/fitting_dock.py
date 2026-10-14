@@ -913,14 +913,17 @@ class FittingDock(BaseDockWidget):
         QApplication.clipboard().setText(text)
         if result.converged:
             copied = "Copied the fit results, COM and MAX to the clipboard."
-            arrived = self._points_since_fit()
-            if arrived:
-                copied += (" The fit predates %d point(s) measured since it -- "
-                           "press Fit again to use them." % arrived)
-            self.status_label.setText(copied)
         else:
-            self.status_label.setText(
-                "No fit for the current selection: copied COM and MAX only.")
+            copied = "No fit for the current selection: copied COM and MAX only."
+        # Prefix, not replace: the fit's status keeps its warnings and caveats.
+        if self._fit_result is not None:
+            self._show_status(self._fit_result)
+            copied += " " + self.status_label.text()
+        else:
+            caveat = self._noiseless_caveat()
+            if caveat:
+                copied += " " + caveat
+        self.status_label.setText(copied)
 
     # ------------------------------------------------------------------
     # Goto
