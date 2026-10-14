@@ -337,7 +337,7 @@ def test_second_click_kills_the_tree_and_discards_the_point(rig, controller):
         assert [t["scan_index"] for t in timings] == [0]
         assert records(ctrl) == before
         text = log_text(ctrl)
-        assert "Scan force-stopped: point 1 was discarded" in text
+        assert "Scan force-stopped: point 2 of 3 was discarded" in text
         assert f"partial output folder was deleted: {killed_folder[0]}" in text
 
         # The next job starts only after the kill, its wait and the folder removal.
@@ -410,6 +410,19 @@ def test_an_orphan_alive_at_the_kill_discards_the_point(rig, controller):
     assert seen == {"orphan_running": False}, "the next job started before the orphan was gone"
     next_may_finish.set()
     assert wait_terminal(nxt) == JobState.DONE
+
+
+def test_a_discarded_point_is_named_one_based_of_the_scan(rig, controller):
+    ctrl = controller
+    s = rig.stand_in("tree")
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point to start")
+    tree = [s.pid(0, "parent"), s.pid(0, "sleeper")]
+    stop_button(ctrl).click()
+    stop_button(ctrl).click()
+    assert wait_terminal(job) == JobState.STOPPED
+    assert not any(p.running() for p in tree)
+    assert "Scan force-stopped: point 1 of 3 was discarded (not executed)." in log_text(ctrl)
 
 
 def test_a_kill_during_the_compile_leaves_no_reusable_binary(rig, controller):
@@ -504,7 +517,7 @@ def test_a_kill_after_every_process_exited_ends_a_blocked_call_in_bounded_time(
     assert time.monotonic() - t0 < 5.0, "a blocked call held the scan"
     assert final == JobState.STOPPED
     assert not s.returned[0].is_set(), "the stand-in should still be blocked"
-    assert "still blocked after its processes were ended" in log_text(ctrl)
+    assert "Point 1 of 3: its McStas call is still blocked after its processes were ended" in log_text(ctrl)
     assert job.result.counts == [None, None, None]
     assert job.result.executed_feasible_mask == [False, False, False]
     assert not os.path.exists(s.calls[0][1])
@@ -596,7 +609,7 @@ def test_a_stop_between_check_and_launch_refuses_the_launch(rig, controller):
     assert job.result.counts == [None, None, None]
     assert job.result.executed_feasible_mask == [False, False, False]
     assert not os.path.exists(s.calls[0][1])
-    assert "the stop arrived before its McStas process started" in log_text(ctrl)
+    assert "Point 1 of 3 was not executed: the stop arrived before its McStas process started" in log_text(ctrl)
 
 
 # --------------------------------------------------------------- analytic engine
