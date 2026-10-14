@@ -2,10 +2,10 @@
 
 ``install()`` appends to ``output/tavi-crash.log``: a header per launch
 (platform, library versions, display session), every thread's Python stack
-on a native crash (``faulthandler``), and uncaught Python errors from any
-thread, including the ones PySide6 reports from paint and mouse handlers.
-Qt-free; ``main()`` adds Qt's version, display plugin and Qt's own warnings
-through ``record()`` once a QApplication exists.
+on a native crash (``faulthandler``, not on Windows), and uncaught Python
+errors from any thread, including the ones PySide6 reports from paint and
+mouse handlers. Qt-free; ``main()`` routes Qt's own warnings and display
+setup here through ``record()``.
 """
 import datetime
 import faulthandler
@@ -23,6 +23,7 @@ LOG_PATH = REPO_ROOT / "output" / "tavi-crash.log"
 MAX_BYTES = 1_000_000
 
 _stream = None
+_written = 0
 
 
 def _version(package):
@@ -46,13 +47,21 @@ def environment():
 
 
 def record(title, text=""):
-    """Append one timestamped entry; a no-op until ``install()`` has run."""
-    if _stream is None:
+    """Append one timestamped entry; a no-op until ``install()`` has run.
+
+    One session writes at most ``MAX_BYTES``: an error raised on every mouse
+    move must not fill the disk.
+    """
+    global _written
+    if _stream is None or _written > MAX_BYTES:
         return
     stamp = datetime.datetime.now().isoformat(timespec="seconds")
-    body = text.rstrip("\n") + "\n" if text else ""
+    entry = f"[{stamp}] {title}\n" + (text.rstrip("\n") + "\n" if text else "")
+    _written += len(entry)
+    if _written > MAX_BYTES:
+        entry = f"[{stamp}] Log limit reached: nothing more is recorded this session\n"
     try:
-        _stream.write(f"[{stamp}] {title}\n{body}")
+        _stream.write(entry)
         _stream.flush()
     except (OSError, ValueError) as exc:
         print(f"TAVI crash log: could not write: {exc}", file=sys.stderr)
@@ -60,14 +69,22 @@ def record(title, text=""):
 
 def install(path=LOG_PATH):
     """Open the log, enable faulthandler on it and hook uncaught exceptions."""
-    global _stream
+    global _stream, _written
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.stat().st_size > MAX_BYTES:
-        os.replace(path, path.with_name(path.name + ".1"))
+        try:
+            os.replace(path, path.with_name(path.name + ".1"))
+        except OSError as exc:  # another TAVI holds it open (Windows)
+            print(f"TAVI crash log: not rotated: {exc}", file=sys.stderr)
     # Kept open for the whole process: faulthandler writes to its descriptor.
     _stream = open(path, "a", encoding="utf-8", newline="\n")
-    faulthandler.enable(_stream, all_threads=True)
+    _written = 0
+    # Not on Windows: there faulthandler also reports exceptions that are
+    # raised and handled (Qt's clipboard and drag-and-drop), so the log would
+    # show crashes that never happened.
+    if sys.platform != "win32":
+        faulthandler.enable(_stream, all_threads=True)
 
     previous_hook = sys.excepthook
 

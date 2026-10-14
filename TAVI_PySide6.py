@@ -10674,14 +10674,10 @@ class TAVIController(QObject):
         return data_folder
 
 
-def _log_qt_to_crash_log(app, crash_log):
-    """Record Qt's display setup, and route Qt's warnings to the crash log too."""
-    from PySide6.QtCore import QtMsgType, qInstallMessageHandler, qVersion
-
-    screen = app.primaryScreen()
-    ratio = screen.devicePixelRatio() if screen is not None else "no screen"
-    crash_log.record("Qt", f"Qt {qVersion()}  platform plugin: {app.platformName()}  "
-                           f"device pixel ratio: {ratio}")
+def _route_qt_messages(crash_log):
+    """Send Qt's warnings to the crash log too; installed before QApplication
+    so the display-plugin warnings its constructor emits are caught."""
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 
     logged = 0
 
@@ -10759,8 +10755,13 @@ def main():
             )
             sys.exit(2)
 
+    _route_qt_messages(crash_log)
     app = QApplication([sys.argv[0], *qt_args])
-    _log_qt_to_crash_log(app, crash_log)
+    from PySide6.QtCore import qVersion
+    screen = app.primaryScreen()
+    crash_log.record("Qt", f"Qt {qVersion()}  platform plugin: {app.platformName()}  "
+                           f"device pixel ratio: "
+                           f"{screen.devicePixelRatio() if screen is not None else 'no screen'}")
 
     # Precedence: --instrument flag > saved last_instrument (if still registered)
     # > single-instrument shortcut > picker dialog. A stale/unknown saved id is
