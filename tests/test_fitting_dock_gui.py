@@ -408,6 +408,30 @@ def test_copy_keeps_the_noiseless_caveat(docks):
     assert "noiseless run" in fitting.status_label.text()
 
 
+def test_copy_after_a_failed_fit_keeps_the_reason(docks):
+    display, fitting, _ = docks
+    _scan_peak(display)
+    fitting._on_span_selected(-0.25, 0.05)     # three points: too few to fit
+    fitting._on_fit_clicked()
+    assert fitting._fit_result is None
+    assert "Fit failed: need at least 6" in fitting.status_label.text()
+    fitting.copy_results_button.click()
+    assert fitting.status_label.text().startswith(
+        "No fit for the current selection: copied COM and MAX only. "
+        "Fit failed: need at least 6")
+    # A range change drops the failure: Copy no longer repeats it.
+    fitting._on_span_selected(-0.6, 0.8)
+    fitting.copy_results_button.click()
+    assert fitting.status_label.text() == (
+        "No fit for the current selection: copied COM and MAX only.")
+    # So does a new scan, after a fresh failed fit.
+    fitting._on_span_selected(-0.25, 0.05)
+    fitting._on_fit_clicked()
+    _scan_peak(display)
+    fitting.copy_results_button.click()
+    assert "Fit failed" not in fitting.status_label.text()
+
+
 def test_without_a_scan_disabled_controls_say_why(docks):
     _display, fitting, _ = docks
     assert not fitting.copy_results_button.isEnabled()
