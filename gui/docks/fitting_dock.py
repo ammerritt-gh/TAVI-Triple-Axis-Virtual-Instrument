@@ -824,7 +824,10 @@ class FittingDock(BaseDockWidget):
         self._show_status(result)
 
     def _show_status(self, result):
-        """The status line: outcome, warnings, points since the fit, caveat."""
+        self.status_label.setText(self._status_text(result))
+
+    def _status_text(self, result):
+        """Status line text: outcome, warnings, points since the fit, caveat."""
         parts = []
         if result.converged:
             parts.append("Fit converged.")
@@ -839,7 +842,7 @@ class FittingDock(BaseDockWidget):
         caveat = self._noiseless_caveat()
         if caveat:
             parts.append(caveat)
-        self.status_label.setText(" ".join(parts))
+        return " ".join(parts)
 
     def _note_points_since_fit(self):
         """Restate the fit's status once points have arrived since it."""
@@ -925,8 +928,7 @@ class FittingDock(BaseDockWidget):
         if shown is None:
             shown = self._failed_fit
         if shown is not None:
-            self._show_status(shown)
-            copied += " " + self.status_label.text()
+            copied += " " + self._status_text(shown)
         else:
             caveat = self._noiseless_caveat()
             if caveat:
