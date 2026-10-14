@@ -308,6 +308,8 @@ def test_intensity_rows_units_and_step(docks):
         assert "not the area" not in rows[key].toolTip()
     assert "not to monitor" in rows["normalised"].toolTip()
     assert "tails" in rows["integrated"].toolTip()
+    # Integrated and Raw agree only when no point in the range is missing.
+    assert "every point in it was measured" in rows["raw"].toolTip()
 
 
 def test_uneven_steps_and_unknown_unit(docks):
