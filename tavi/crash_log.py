@@ -46,20 +46,20 @@ def environment():
     ])
 
 
-def record(title, text=""):
+def record(title, text="", always=False):
     """Append one timestamped entry; a no-op until ``install()`` has run.
 
     One session writes at most ``MAX_BYTES``: an error raised on every mouse
-    move must not fill the disk.
+    move must not fill the disk. ``always`` (a fatal message) passes the limit.
     """
     global _written
-    if _stream is None or _written > MAX_BYTES:
+    if _stream is None or (_written > MAX_BYTES and not always):
         return
     stamp = datetime.datetime.now().isoformat(timespec="seconds")
     entry = f"[{stamp}] {title}\n" + (text.rstrip("\n") + "\n" if text else "")
     _written += len(entry)
-    if _written > MAX_BYTES:
-        entry = f"[{stamp}] Log limit reached: nothing more is recorded this session\n"
+    if _written > MAX_BYTES and not always:
+        entry = f"[{stamp}] Log limit reached: only fatal errors are recorded from here\n"
     try:
         _stream.write(entry)
         _stream.flush()

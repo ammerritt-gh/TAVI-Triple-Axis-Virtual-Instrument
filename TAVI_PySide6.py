@@ -10689,7 +10689,9 @@ def _route_qt_messages(crash_log):
             return
         # A warning repeated on every mouse move must not grow the log without
         # bound; fatal messages are always kept.
-        if logged < 200 or mode == QtMsgType.QtFatalMsg:
+        if mode == QtMsgType.QtFatalMsg:
+            crash_log.record(f"Qt {mode.name}", message, always=True)
+        elif logged < 200:
             crash_log.record(f"Qt {mode.name}", message)
         elif logged == 200:
             crash_log.record("Qt", "further Qt warnings not logged this session")

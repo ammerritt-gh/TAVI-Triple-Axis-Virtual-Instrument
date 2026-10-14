@@ -3,6 +3,7 @@ GUI thread, in worker threads and inside Qt paint handlers, plus the header
 naming the platform, without growing past its limit. Offscreen Qt, no McStas."""
 import faulthandler
 import os
+import platform
 import sys
 import threading
 
@@ -37,14 +38,16 @@ def test_header_names_platform_and_versions(log):
     assert "platform:" in text and "PySide6:" in text and "XDG_SESSION_TYPE=" in text
 
 
-@pytest.mark.parametrize("platform, on", [("linux", True), ("darwin", True), ("win32", False)])
-def test_faulthandler_writes_to_the_log_except_on_windows(tmp_path, monkeypatch, platform, on):
+@pytest.mark.parametrize("system, on", [("linux", True), ("darwin", True), ("win32", False)])
+def test_faulthandler_writes_to_the_log_except_on_windows(tmp_path, monkeypatch, system, on):
     enabled = []
+    # Fill platform's process-wide uname cache with the real OS before sys.platform is faked.
+    platform.uname()
     monkeypatch.setattr(faulthandler, "enable", lambda *a, **k: enabled.append(a[0]))
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     monkeypatch.setattr(threading, "excepthook", threading.excepthook)
     monkeypatch.setattr(crash_log, "_stream", None)
-    monkeypatch.setattr(crash_log.sys, "platform", platform)
+    monkeypatch.setattr(crash_log.sys, "platform", system)
     crash_log.install(tmp_path / "tavi-crash.log")
     try:
         assert enabled == ([crash_log._stream] if on else [])
@@ -101,6 +104,8 @@ def test_a_session_stops_writing_at_the_limit(log, monkeypatch):
     monkeypatch.setattr(crash_log, "MAX_BYTES", 2_000)
     for _ in range(100):
         crash_log.record("Uncaught exception", "x" * 100)
+    crash_log.record("Qt QtFatalMsg", "the crash itself", always=True)
     text = path.read_text(encoding="utf-8")
-    assert len(text) < 2_000 + 200
+    assert len(text) < 2_000 + 300
     assert text.count("Log limit reached") == 1
+    assert text.rstrip().endswith("the crash itself")
