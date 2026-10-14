@@ -1571,7 +1571,9 @@ job through a single serial worker. Jobs execute one at a time.
 - **failed** — raised an error; see the `error` field.
 - **stopped** — a running job was stopped; partial data is retained. `result.stop_mode`
   is `"graceful"` (the in-flight point finished) or `"kill"` (the point was ended and
-  discarded); it is `null` in every other state.
+  discarded). It is `null` on a `done` job's result. A job cancelled while queued has
+  `result: null`, so it has no `stop_mode` at all, and a `failed` job may have no result
+  either: check that `result` is not `null` before reading `stop_mode`.
 - **cancelled** — a queued job was cancelled before it started running.
 
 `done`, `failed`, `stopped`, and `cancelled` are **terminal** — poll until the
