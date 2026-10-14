@@ -136,6 +136,9 @@ class ScanResult:
     # entry ``{"index", "axes"}`` per marked point, in the same flat index as
     # ``applied_curvature``. Not pre-sized -- most scans have none.
     transmission_points: List[Dict[str, Any]] = field(default_factory=list)
+    # How a job that ended ``stopped`` was stopped: ``"graceful"`` (the point in
+    # flight finished) or ``"kill"`` (force stop). ``None`` for every other end.
+    stop_mode: Optional[str] = None
 
     def to_dict(self, include_data: bool = False) -> Dict[str, Any]:
         """Return a JSON-safe dict view of this result.
@@ -156,6 +159,7 @@ class ScanResult:
             'planned_feasible_mask': _json_safe(self.planned_feasible_mask),
             'executed_feasible_mask': _json_safe(self.executed_feasible_mask),
             'feasible_segments': _json_safe(self.feasible_segments),
+            'stop_mode': self.stop_mode,
         }
         if not include_data:
             return summary
@@ -192,6 +196,11 @@ class ScanJob:
     progress_total: int = 0
     error: Optional[str] = None
     result: Optional[ScanResult] = None
+    # The job's own stop state, written under ``lock`` (TAVIController.request_stop):
+    # None, "graceful" or "kill" ("kill" overrides "graceful", never the reverse),
+    # and whether a GUI control already asked once, so the next GUI request kills.
+    stop_request: Optional[str] = None
+    gui_stop_requested: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def __post_init__(self):
