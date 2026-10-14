@@ -1,8 +1,9 @@
-"""Colour and stroke tokens for the scan-field marks.
+"""Colour and stroke tokens for the scan-field marks and the folding-group flag.
 
-Holds only the mark tokens: the two command accents, the set-per-point outline
-and badge text, the quiet note text and the command chip text. The older inline setStyleSheet colour
-literals across the docks are not migrated here yet (named debt). Retune on sight.
+Holds the mark tokens: the two command accents, the set-per-point outline
+and badge text, the quiet note text, the command chip text and the group flag text.
+The older inline setStyleSheet colour literals across the docks are not migrated
+here yet (named debt). Retune on sight.
 """
 
 # Command 1 blue, command 2 orange: distinct under colour-blindness, and every
@@ -18,6 +19,9 @@ NOTE_TEXT = "#444444"
 
 # Text on the filled command chips "1" and "2".
 CHIP_TEXT = "#ffffff"
+
+# Group header flag: muted dark amber, AA on the panel, apart from the command colours.
+FLAG_TEXT = "#7a5c00"
 
 # Outline widths in px: a scanned field is dashed, a set one solid with a
 # heavier bottom edge.
