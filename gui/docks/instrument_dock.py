@@ -724,7 +724,7 @@ class InstrumentDock(BaseDockWidget):
             tips = (why, f"{why} The field shows the fixed value.",
                     "No ideal is shown for a radius the hardware fixes.")
         else:
-            status = f"tracking unavailable: {state.no_model}"
+            status = f"held: tracking unavailable, {state.no_model}"
             why = (f"Tracking is unavailable: {state.no_model}. The value typed in the field "
                    "is held for the whole scan.")
             tips = (why, why, f"No ideal radius exists: {state.no_model}.")
