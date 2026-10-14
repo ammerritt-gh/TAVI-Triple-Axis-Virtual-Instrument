@@ -271,6 +271,20 @@ def test_puma_rva_is_fixed_launches_held_and_saves_held(world):
     assert [block[f"{a}_ideal_locked"] for a in ("rhm", "rvm", "rha")] == [True, True, True]
 
 
+def test_a_fixed_radius_shows_a_dash_in_the_ideal_column_not_its_fixed_value(world):
+    ctrl = world("puma")
+    idock = ctrl.window.instrument_dock
+    assert idock.mode("rva") == "fixed"
+    assert idock.rva_ideal_label.text() == "—"           # the 0.8 m field is not an ideal
+    assert "no ideal" in idock.rva_ideal_label.toolTip().lower()
+    idock.module_widgets["nmo"].setCurrentText("Both")        # rhm and rvm fixed flat
+    _settle()
+    assert idock.rhm_ideal_label.text() == idock.rvm_ideal_label.text() == "—"
+    idock.module_widgets["nmo"].setCurrentText("None")
+    _settle()
+    assert idock.rhm_ideal_label.text() != "—" and idock.rvm_ideal_label.text() != "—"
+
+
 def test_in12_heusler_rva_has_no_model_launches_held_and_keeps_its_choice(world):
     ctrl = world("in12")
     idock = ctrl.window.instrument_dock
