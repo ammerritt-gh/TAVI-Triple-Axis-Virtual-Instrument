@@ -1180,7 +1180,11 @@ class TAVIController(QObject):
     """Controller class to connect GUI with backend logic."""
     
     # How often a running scan's buffered updates reach the GUI.
-    DRAIN_INTERVAL_MS = 200
+    DRAIN_INTERVAL_MS = 100
+    # A drain pass (Qt calls and the plot draw) runs only while the scan thread is
+    # parked (see _yield_to_gui), so each pass costs the scan its own duration.
+    # Passes are spaced so that the parked share of wall time stays near this.
+    GUI_DRAW_SHARE = 0.12
     # Longest a scan thread waits, per point, for the GUI thread's plot draw.
     GUI_YIELD_MAX_S = 1.0
     # Bounds every wait for a force stop to finish (its kill, wait and folder removal).
@@ -1232,14 +1236,20 @@ class TAVIController(QObject):
 
     def __init__(self, window, instrument, api_overrides=None):
         super().__init__()
-        # Scan updates from the worker thread, applied on the GUI thread at about
-        # 5 Hz (_drain_updates); first, so that nothing logged during setup is lost.
+        # Scan updates from the worker thread, applied on the GUI thread about
+        # every DRAIN_INTERVAL_MS (_drain_updates); first, so that nothing logged
+        # during setup is lost.
         self._gui_updates = _GuiUpdateBuffer()
         self._gui_thread_ident = threading.get_ident()
         self._draining = False
         # Cleared while the GUI thread applies a batch and draws the plot; see _yield_to_gui.
         self._gui_idle = threading.Event()
         self._gui_idle.set()
+        # Passes whose draw has not run yet, when the last began, and the earliest the
+        # next timer pass is due (GUI_DRAW_SHARE).
+        self._open_spans = 0
+        self._draw_started = 0.0
+        self._draw_next_at = 0.0
         self.window = window
         # CLI overrides for the remote API server (see main()); empty by default.
         self._api_cli_overrides = api_overrides or {}
@@ -1311,7 +1321,7 @@ class TAVIController(QObject):
         self._shutdown_called = False
         self._drain_timer = QTimer(self)
         self._drain_timer.setInterval(self.DRAIN_INTERVAL_MS)
-        self._drain_timer.timeout.connect(self._drain_updates)
+        self._drain_timer.timeout.connect(self._drain_tick)
         self._drain_timer.start()
         self._job_worker = threading.Thread(
             target=self._job_worker_loop, name="scan-job-worker", daemon=True
@@ -2110,38 +2120,63 @@ class TAVIController(QObject):
             self._drain_updates()
 
     def _yield_to_gui(self):
-        """Scan threads call this once per point: wait (bounded) while the GUI thread draws.
+        """Scan threads call this once per point: wait (bounded) while the GUI thread works.
 
         Measured: a matplotlib draw makes thousands of short GIL acquisitions, and
         against a CPU-bound scan thread each one waits for the thread's next GIL
         release (a 40 ms draw took 2.5 s against the analytic loop, 17 s against a
-        busy-loop thread), so the GUI froze for the whole scan. Parked here, the
-        scan thread releases the GIL and the draw runs at full speed.
+        busy-loop thread), so the GUI froze for the whole scan; every Qt call the
+        GUI thread makes pays the same wait. Parked here, the scan thread releases
+        the GIL and the pass runs at full speed. The thread waits only while a
+        drain pass is under way (``_drain_updates`` clears the flag for the span
+        and spaces the passes by ``GUI_DRAW_SHARE``); between passes this returns
+        at once.
         """
         if threading.get_ident() != self._gui_thread_ident:  # a synchronous run on the GUI thread
             self._gui_idle.wait(self.GUI_YIELD_MAX_S)
+
+    def _end_draw_span(self):
+        """After a pass's draw: release the scan thread once no pass is open, and space the next."""
+        self._open_spans -= 1
+        if self._open_spans > 0:  # a later pass is still waiting for its own draw
+            return
+        now = time.perf_counter()
+        share = self.GUI_DRAW_SHARE
+        self._draw_next_at = now + (now - self._draw_started) * (1.0 - share) / share
+        self._gui_idle.set()
+
+    def _drain_tick(self):
+        """The timer's slot: a pass only when ``GUI_DRAW_SHARE`` allows one."""
+        if time.perf_counter() >= self._draw_next_at:
+            self._drain_updates()
 
     def _drain_updates(self):
         """Apply the buffered scan updates. GUI thread only; the only consumer.
 
         Log lines go out as one ``message_printed``; display-dock events run in
         arrival order with their redraw suppressed and one redraw after them;
-        then the latest progress, counts and times. One pass takes what is
-        pending now: a loop until empty never ends while the worker produces as
-        fast as the GUI applies (measured: one drain held the GUI for the whole
-        scan). A drain called while one runs returns at once; what the running
-        drain's own slots post waits for the next tick, in order.
+        then the latest progress, counts and times. The whole pass runs with the
+        scan thread parked; the timer (``_drain_tick``) starts a pass only when
+        ``GUI_DRAW_SHARE`` of the wall time allows, leaving everything buffered, in
+        order, until then, while the end-of-scan slots and a log line posted on the
+        GUI thread drain at once. One pass takes what is pending now: a loop until
+        empty never ends while the worker produces as fast as the GUI applies
+        (measured: one drain held the GUI for the whole scan). A drain called while
+        one runs returns at once; what the running drain's own slots post waits for
+        the next pass, in order.
         """
         if self._draining:
             return
         self._draining = True
-        events = ()
+        parked = False
         try:
             lines, events, latest = self._gui_updates.take()
             if not (lines or events or latest):
                 return
-            if events:
-                self._gui_idle.clear()
+            parked = True
+            self._open_spans += 1
+            self._draw_started = time.perf_counter()
+            self._gui_idle.clear()
             if lines:
                 self.message_printed.emit("\n".join(lines))
             dock = self.window.display_dock
@@ -2162,10 +2197,10 @@ class TAVIController(QObject):
                 getattr(self, signal).emit(*args)
         finally:
             self._draining = False
-            if events:
+            if parked:
                 # Qt runs zero-delay timers in creation order, so this fires after the
                 # draws the pass scheduled (matplotlib's draw_idle is one such timer).
-                QTimer.singleShot(0, self._gui_idle.set)
+                QTimer.singleShot(0, self._end_draw_span)
 
     @Slot()
     def _on_scan_completed(self):
