@@ -1995,16 +1995,14 @@ class TAVIController(QObject):
     def _post_log(self, line):
         """The one log producer: every line for the message center goes through here.
 
-        On the GUI thread the pending updates are applied first and the line
-        is emitted at once (order kept, no latency). On any other thread, or
-        inside a drain, the line is buffered; only ``_drain_updates`` then
-        emits it, so no line can overtake an older one.
+        The line is buffered in hand-over order, and ``_drain_updates`` is the
+        only emitter, so the buffer's order is the panel's order. On the GUI
+        thread the drain runs at once (no latency); on any other thread, or
+        inside a drain, the line waits for the next drain.
         """
-        if threading.get_ident() == self._gui_thread_ident and not self._draining:
+        self._gui_updates.log(line)
+        if threading.get_ident() == self._gui_thread_ident:
             self._drain_updates()
-            self.message_printed.emit(line)
-        else:
-            self._gui_updates.log(line)
 
     def _yield_to_gui(self):
         """Scan threads call this once per point: wait (bounded) while the GUI thread draws.
