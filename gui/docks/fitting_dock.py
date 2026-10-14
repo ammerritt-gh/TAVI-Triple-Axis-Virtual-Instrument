@@ -912,8 +912,13 @@ class FittingDock(BaseDockWidget):
                                      com, peak)
         QApplication.clipboard().setText(text)
         if result.converged:
-            self.status_label.setText(
-                "Copied the fit results, COM and MAX to the clipboard.")
+            copied = "Copied the fit results, COM and MAX to the clipboard."
+            arrived = self._points_since_fit()
+            if arrived:   # COM and MAX include points the fit does not
+                copied += (" The fit predates %d point(s) measured since it; COM "
+                           "and MAX include them -- press Fit again to use them."
+                           % arrived)
+            self.status_label.setText(copied)
         else:
             self.status_label.setText(
                 "No fit for the current selection: copied COM and MAX only.")

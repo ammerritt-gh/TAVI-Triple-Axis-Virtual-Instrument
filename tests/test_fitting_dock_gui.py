@@ -359,6 +359,25 @@ def test_copy_results_puts_the_u1_text_on_the_clipboard(docks):
     assert not hasattr(fitting, "max_copy_button")
 
 
+def test_copy_says_when_the_fit_predates_points_measured_since(docks):
+    display, fitting, _ = docks
+    _scan_peak(display, measured=20)
+    fitting._on_fit_clicked()
+    display.update_1d_point(20, 5.0)           # a point arrives after the fit
+    fitting.copy_results_button.click()
+    # COM and MAX include that point, the fit does not: the status line says so.
+    assert fitting.status_label.text() == (
+        "Copied the fit results, COM and MAX to the clipboard. The fit predates "
+        "1 point(s) measured since it; COM and MAX include them -- press Fit "
+        "again to use them.")
+    # Nothing measured after the fit: the plain text, as before.
+    _scan_peak(display)
+    fitting._on_fit_clicked()
+    fitting.copy_results_button.click()
+    assert fitting.status_label.text() == (
+        "Copied the fit results, COM and MAX to the clipboard.")
+
+
 def test_without_a_scan_disabled_controls_say_why(docks):
     _display, fitting, _ = docks
     assert not fitting.copy_results_button.isEnabled()
