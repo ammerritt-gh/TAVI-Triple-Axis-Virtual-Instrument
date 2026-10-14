@@ -488,6 +488,28 @@ def test_a_blocked_point_ends_the_scan_and_a_late_wake_keeps_the_new_scope(
     assert wait_terminal(nxt) == JobState.DONE
 
 
+def test_a_kill_after_every_process_exited_ends_a_blocked_call_in_bounded_time(
+        rig, controller, monkeypatch):
+    ctrl = controller
+    monkeypatch.setattr(pp, "KILL_WAIT_S", 0.5)
+    monkeypatch.setattr(ctrl, "POINT_JOIN_AFTER_KILL_S", 0.2)
+    s = rig.stand_in("late")  # its process exits, then the call holds until teardown
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point's process to exit")
+    t0 = time.monotonic()
+    stop_button(ctrl).click()
+    stop_button(ctrl).click()
+    final = wait_terminal(job)
+    print(f"blocked point: scan ended {time.monotonic() - t0:.2f} s after the kill", file=sys.__stdout__)
+    assert time.monotonic() - t0 < 5.0, "a blocked call held the scan"
+    assert final == JobState.STOPPED
+    assert not s.returned[0].is_set(), "the stand-in should still be blocked"
+    assert "still blocked after its processes were ended" in log_text(ctrl)
+    assert job.result.counts == [None, None, None]
+    assert job.result.executed_feasible_mask == [False, False, False]
+    assert not os.path.exists(s.calls[0][1])
+
+
 # --------------------------------------------------------------- graceful and races
 
 def test_a_graceful_stop_alone_records_the_point_in_flight(rig, controller):

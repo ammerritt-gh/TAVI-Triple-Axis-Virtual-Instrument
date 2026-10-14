@@ -90,6 +90,10 @@ PID. The point is then decided by the scope's flags:
 - A kill that landed after every process of the point had exited records the
   point normally (orphans are still ended first), then the scan stops.
 
+- Every join after a kill is bounded: `POINT_JOIN_AFTER_KILL_S` when the point is
+  discarded, `KILL_WAIT_S` otherwise. A call still blocked after its join is
+  counted as not executed and its log line says TAVI leaves it behind.
+
 The job ends `stopped` with `result.stop_mode` `"graceful"` or `"kill"`, set in
 the same `job.lock` section as the state. The next queued job starts only
 after the kill, its wait and the folder removal. The analytic engine has no
