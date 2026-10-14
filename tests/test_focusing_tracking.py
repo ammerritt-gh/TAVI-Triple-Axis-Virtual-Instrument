@@ -456,6 +456,7 @@ def test_one_held_axis_is_flagged_and_the_flag_names_it(world):
     assert _rows(ctrl) == _cells(ctrl, _words(rhm="held", rva="fixed"))
     assert _flag(ctrl) == "● 1 not tracking"
     assert "rhm held" in _group(ctrl).flag_label.toolTip()
+    assert "tick track ideal" in _group(ctrl).flag_label.toolTip().lower()
     assert "rvm" not in _group(ctrl).flag_label.toolTip()
     assert _group(ctrl).flag_label.accessibleName() == "● 1 not tracking"
     _box(ctrl, "rhm").click()                                 # tick again: the flag goes out
@@ -477,6 +478,8 @@ def test_a_scanned_axis_counts_and_says_which_command(world):
     ctrl._refresh_scan_feedback()
     assert _rows(ctrl) == _cells(ctrl, _words(rhm="scanned", rva="fixed"))
     assert _flag(ctrl) == "● 1 not tracking"
+    tip = _group(ctrl).flag_label.toolTip()
+    assert "command 1" in tip and "open the block" not in tip.lower()   # a scanned axis is not changed in the block
     assert _status(ctrl, "rhm") == "scanned by command 1"
     ctrl.window.simulation_dock.scan_command_1_edit.setText("")
     ctrl._refresh_scan_feedback()
