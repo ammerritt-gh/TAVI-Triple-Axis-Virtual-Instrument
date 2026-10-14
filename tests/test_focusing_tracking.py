@@ -551,7 +551,8 @@ def test_the_flag_counts_held_and_scanned_but_not_the_fixed_nmo_axes(world):
     idock.module_widgets["nmo"].setCurrentText("Both")        # rhm, rvm, rva all fixed
     _settle()
     assert _flag(ctrl) == ""
-    assert _rows(ctrl) == _cells(ctrl, _words(rhm="fixed", rvm="fixed", rva="fixed"))
+    assert _rows(ctrl)[0] == ["rhm flat fixed", "rvm flat fixed"]   # a flat fixed radius reads flat
+    assert _rows(ctrl)[1] == _cells(ctrl, _words(rva="fixed"))[1]
     _box(ctrl, "rha").click()
     assert _flag(ctrl) == "● 1 not tracking"
     ctrl.window.simulation_dock.scan_command_1_edit.setText("rha 2 3 0.5")
@@ -560,6 +561,15 @@ def test_the_flag_counts_held_and_scanned_but_not_the_fixed_nmo_axes(world):
     ctrl.window.simulation_dock.scan_command_1_edit.setText("")
     ctrl._refresh_scan_feedback()
     idock.module_widgets["nmo"].setCurrentText("None")
+    _settle()
+
+
+def test_a_flat_fixed_radius_reads_flat_in_the_folded_cell(world):
+    ctrl = world("puma")
+    ctrl.window.instrument_dock.module_widgets["nmo"].setCurrentText("Both")
+    _settle()
+    assert _rows(ctrl)[0] == ["rhm flat fixed", "rvm flat fixed"]   # the open block says "flat"
+    ctrl.window.instrument_dock.module_widgets["nmo"].setCurrentText("None")
     _settle()
 
 
