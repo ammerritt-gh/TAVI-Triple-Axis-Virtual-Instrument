@@ -8635,8 +8635,8 @@ class TAVIController(QObject):
             "readOnly": True,
             "description": (
                 "Per-axis curvature policy (mono/analyzer horizontal/vertical radius "
-                "ID -> '%s'/'%s'/'%s'), derived from the Ideal locks and from which "
-                "axes the scan command names. Read-only." % (
+                "ID -> '%s'/'%s'/'%s'), derived from each radius's Track ideal choice "
+                "and from which axes the scan command names. Read-only." % (
                     CurvatureMode.AUTOFOCUS.value, CurvatureMode.HELD.value,
                     CurvatureMode.SCANNED.value,
                 )
