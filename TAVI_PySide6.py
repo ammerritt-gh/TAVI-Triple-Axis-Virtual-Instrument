@@ -9299,10 +9299,10 @@ class TAVIController(QObject):
         """Run one MC point's ``run_point`` on a point thread inside a PointScope.
 
         Returns ``{'discarded': bool, 'result' | 'error': ..., 'scope': scope,
-        'blocked': bool}``. The point is discarded (not executed) when its first
-        launch was refused (a stop came first), when a kill landed while a process
-        it started, or a descendant of one, was still running, or when its call is still blocked
-        after the kill; a kill landing after its processes exited leaves it
+        'blocked': bool}``. The point is discarded (not executed) when a launch
+        was refused (a stop came first, at any time during the point), when a kill
+        landed while a process it started, or a descendant of one, was still running,
+        or when its call is still blocked after the kill; a kill landing after its processes exited leaves it
         recorded normally. Decided by the scope's flags, never by what
         ``run_point`` returned or raised.
         """
@@ -9352,6 +9352,8 @@ class TAVIController(QObject):
                     f"Point {i + 1} of {n}: its McStas call is still blocked {cause}; TAVI leaves "
                     "it behind and ignores its result.")
             scope.release()
+        # A launch refused during the join above came after the read at the top.
+        discard = discard or scope.refused
         box['discarded'] = discard
         return box
 
