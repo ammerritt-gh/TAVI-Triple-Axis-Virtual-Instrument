@@ -316,6 +316,25 @@ class FittingDock(BaseDockWidget):
         self._refresh_all()
 
     @Slot()
+    def on_plot_rebuilt(self):
+        """The display dock rebuilt its axes but kept the scan data.
+
+        ``ax.clear()`` destroyed the overlay and the span selector's artists;
+        redraw them from the state kept here (fit, range, range button). The
+        cached fit, range, range fields and readout are left alone.
+        """
+        if not self._is_1d():
+            return
+        self._forget_artists()
+        if self._fit_result is not None and self._fit_result.converged:
+            self._draw_fit_artists(self._fit_result)
+        self._draw_span()
+        if self.range_button.isChecked():
+            self._teardown_span_selector()
+            self._setup_span_selector()
+        self._refresh_gating()
+
+    @Slot()
     def on_scan_finished(self):
         """The displayed scan finished (or a saved scan finished loading).
 
