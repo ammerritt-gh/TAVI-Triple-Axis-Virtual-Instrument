@@ -300,11 +300,12 @@ Read them in this order:
   determine the background's error, the value shows alone and its tooltip says
   the error is unavailable.
 
-The two agree when the fit range covers the whole peak, tails included. With
-a full-width range, a large gap between them means the model does not
-describe the data: look at the plot before you trust either. A range that
-stops short of the tails lowers Raw, range by design; that is not a sign of
-a bad fit.
+The two agree when the fit range covers the whole peak, tails included, and
+every point in it was measured. With a full-width range and every point
+measured, a large gap between them means the model does not describe the
+data: look at the plot before you trust either. A range that stops short of
+the tails, or a point missing inside it (one marked impossible during the
+scan, say), lowers Raw, range by design; that is not a sign of a bad fit.
 
 **Amber "Go" on CEN means "look at the plot before you press it."** The fit
 converged and the value is usable, but something deserves a glance: the centre

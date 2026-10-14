@@ -130,7 +130,7 @@ _ROW_TIPS = {
            "the fitted background, summed over the points the fit used. "
            "Model-free, and covers only what was measured: use it to check "
            "Integrated: the two agree when the fit range covers the whole "
-           "peak, tails included.",
+           "peak, tails included, and every point in it was measured.",
 }
 _RAW_ERROR_UNAVAILABLE = ("\nError unavailable: the fit could not determine "
                           "the background's error.")
