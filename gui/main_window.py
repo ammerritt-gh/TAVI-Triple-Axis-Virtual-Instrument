@@ -1148,6 +1148,7 @@ class TAVIMainWindow(QMainWindow):
         """Force-stop everything, then close once the controller is idle or the wait ran out."""
         self._close_in_progress = True
         controller.print_to_message_center("Window closing - stopping the scan before closing...")
+        self.simulation_dock.run_button.setEnabled(False)
         controller.force_stop_all()
         self._close_deadline = time.monotonic() + controller.CLOSE_WAIT_S
         self._close_timer = QTimer(self)
@@ -1157,9 +1158,13 @@ class TAVIMainWindow(QMainWindow):
 
     def _poll_stop_before_close(self):
         controller = self.controller
+        # _on_job_state_changed re-enables Run whenever a job ends, so hold it off on every tick.
+        self.simulation_dock.run_button.setEnabled(False)
         idle = controller.is_idle()
-        if not idle and time.monotonic() < self._close_deadline:
-            return
+        if not idle:
+            controller.force_stop_all()     # a job queued or started during the wait
+            if time.monotonic() < self._close_deadline:
+                return
         self._close_timer.stop()
         if not idle:
             controller.print_to_message_center(

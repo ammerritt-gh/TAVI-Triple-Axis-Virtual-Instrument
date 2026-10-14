@@ -230,6 +230,35 @@ def test_a_wait_that_runs_out_closes_anyway_and_says_so(rig, monkeypatch):
         rig.ctrl.is_idle = real_idle
 
 
+def test_a_job_submitted_during_the_wait_is_cancelled_before_close(rig, monkeypatch):
+    rig.running_job()
+    monkeypatch.setattr(type(rig.ctrl), "CLOSE_WAIT_S", 3.0)
+    real_idle = rig.ctrl.is_idle
+    real_shutdown = rig.ctrl.shutdown
+    late = []           # a job submitted through the controller while the wait runs
+    at_shutdown = []    # that job's state when the close finally reaches shutdown()
+
+    def idle_once_the_late_job_has_ended():
+        if not late:
+            late.append(rig.submit())
+        if state(late[0]) not in (JobState.CANCELLED, JobState.STOPPED):
+            return False
+        return real_idle()
+
+    def recording_shutdown():
+        at_shutdown.append(state(late[0]) if late else None)
+        real_shutdown()
+
+    monkeypatch.setattr(rig.ctrl, "is_idle", idle_once_the_late_job_has_ended)
+    monkeypatch.setattr(rig.ctrl, "shutdown", recording_shutdown)
+    rig.click = "Stop scan and close"
+    rig.window.close()
+    assert not rig.window.simulation_dock.run_button.isEnabled()
+    pump_until(lambda: window_closed(rig), "the window to close")
+    assert at_shutdown and at_shutdown[0] in (JobState.CANCELLED, JobState.STOPPED), \
+        f"the late job was {at_shutdown} when the close reached shutdown()"
+
+
 # --------------------------------------------------------------- queued only
 
 def test_dialog_for_queued_jobs_only_names_the_count(rig):
