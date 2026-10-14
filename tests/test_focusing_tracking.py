@@ -28,7 +28,7 @@ pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
@@ -479,7 +479,7 @@ def _status(ctrl, axis):
 
 def _cells(ctrl, words):
     """The 2x2 the summary should be: each axis's field text and its mode word."""
-    return [[f"{a} {_edit(ctrl, a).text()} m {words[a]}" for a in pair]
+    return [[f"{a} {words[a]} {_edit(ctrl, a).text()} m" for a in pair]
             for pair in (("rhm", "rvm"), ("rha", "rva"))]
 
 
@@ -552,7 +552,7 @@ def test_the_flag_counts_held_and_scanned_but_not_the_fixed_nmo_axes(world):
     idock.module_widgets["nmo"].setCurrentText("Both")        # rhm, rvm, rva all fixed
     _settle()
     assert _flag(ctrl) == ""
-    assert _rows(ctrl)[0] == ["rhm flat fixed", "rvm flat fixed"]   # a flat fixed radius reads flat
+    assert _rows(ctrl)[0] == ["rhm fixed flat", "rvm fixed flat"]   # a flat fixed radius reads flat
     assert _rows(ctrl)[1] == _cells(ctrl, _words(rva="fixed"))[1]
     _box(ctrl, "rha").click()
     assert _flag(ctrl) == "● 1 not tracking"
@@ -569,7 +569,7 @@ def test_a_flat_fixed_radius_reads_flat_in_the_folded_cell(world):
     ctrl = world("puma")
     ctrl.window.instrument_dock.module_widgets["nmo"].setCurrentText("Both")
     _settle()
-    assert _rows(ctrl)[0] == ["rhm flat fixed", "rvm flat fixed"]   # the open block says "flat"
+    assert _rows(ctrl)[0] == ["rhm fixed flat", "rvm fixed flat"]   # the open block says "flat"
     ctrl.window.instrument_dock.module_widgets["nmo"].setCurrentText("None")
     _settle()
 
@@ -583,9 +583,16 @@ def test_the_flag_shows_folded_and_open_and_the_summary_follows_every_edit(world
             group.set_collapsed(collapsed)
             assert not group.flag_label.isHidden() and group.flag_label.text() == "● 1 not tracking"
         idock.rvm_edit.setText("1.234")                       # every field edit reaches the cell
-        assert _rows(ctrl)[0][1] == "rvm 1.234 m held"
+        assert _rows(ctrl)[0][1] == "rvm held 1.234 m"
+        idock.rvm_edit.setText("15.0809123456789012345")     # a long value elides, never the mode
+        group.set_collapsed(True)
+        _settle()
+        full = "rvm held 15.0809123456789012345 m"
+        shown = next(lbl for lbl in group.summary_rows.findChildren(QLabel)
+                     if full in (lbl.text(), lbl.toolTip()))
+        assert shown.text() != full and shown.text().startswith("rvm held"), shown.text()
         idock.rvm_edit.setText("")
-        assert _rows(ctrl)[0][1] == "rvm empty held"
+        assert _rows(ctrl)[0][1] == "rvm held empty"
     finally:
         group.set_collapsed(True)
 
