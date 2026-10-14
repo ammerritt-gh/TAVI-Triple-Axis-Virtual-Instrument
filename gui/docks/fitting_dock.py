@@ -141,6 +141,7 @@ _CLEAR_TIP = "Fit the whole scan again."
 _FIT_TIP = ("Fit a pseudo-Voigt + flat background to the selection.\n"
             "Never runs by itself -- press it again after more points arrive.")
 _NO_SCAN_TIP = "no 1D scan is displayed -- run or load one"
+_TWO_D_TIP = "The Fitting dock works on 1D scans only."
 
 _COPY_TIP = ("Puts the whole result on the clipboard as tab-separated text "
              "(quantity, value, error, unit), ready to paste into a notebook "
@@ -1083,6 +1084,11 @@ class FittingDock(BaseDockWidget):
         self._notice_label.setVisible(two_d)
         self._body.setEnabled(not two_d)
         if two_d:
+            for button in (self.fit_button, self.range_button,
+                           self.range_clear_button, self.goto_cen_button,
+                           self.goto_com_button, self.goto_max_button,
+                           self.revert_button, self.copy_results_button):
+                button.setToolTip(_TWO_D_TIP)
             self._forget_and_clear_overlay()
             return
 

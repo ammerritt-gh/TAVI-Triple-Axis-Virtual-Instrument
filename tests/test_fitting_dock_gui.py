@@ -455,6 +455,21 @@ def test_without_a_scan_disabled_controls_say_why(docks):
     assert fitting.status_label.text().startswith("Nothing to copy")
 
 
+def test_a_2d_scan_says_why_each_control_is_off(docks):
+    display, fitting, _ = docks
+    _scan_peak(display)
+    fitting._on_fit_clicked()          # 1D tooltips are now set on every control
+    display.initialize_scan(
+        "2D", [0.0, 1.0], [], "a", "b", [0.0, 1.0],
+        valid_mask_2d=np.ones((2, 2), dtype=bool))
+    for button in (fitting.fit_button, fitting.range_button,
+                   fitting.range_clear_button, fitting.goto_cen_button,
+                   fitting.goto_com_button, fitting.goto_max_button,
+                   fitting.revert_button, fitting.copy_results_button):
+        assert not button.isEnabled()
+        assert button.toolTip() == "The Fitting dock works on 1D scans only."
+
+
 @pytest.fixture()
 def windows_ui_font():
     """Measure with the font the real window uses (Segoe UI 9 pt on Windows).
