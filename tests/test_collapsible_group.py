@@ -15,8 +15,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPalette  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from gui import metrics, theme  # noqa: E402
@@ -89,6 +90,19 @@ def test_empty_flag_is_hidden(make_group):
     group.set_flag("")
     _settle()
     assert group.flag_label.isHidden()
+
+
+def test_the_whole_header_row_folds_the_block_when_nothing_is_flagged(make_group):
+    group = make_group("Source Control")
+    group.set_collapsed(True)
+    _settle()
+    inner = group.width() - group.layout().contentsMargins().right()
+    edge = QPoint(inner - 5, group.header.geometry().center().y())   # the row's right end, past the title
+    target = QApplication.widgetAt(group.mapToGlobal(edge))
+    assert target is group.header, target
+    QTest.mouseClick(target, Qt.LeftButton, Qt.NoModifier, target.mapFromGlobal(group.mapToGlobal(edge)))
+    _settle()
+    assert not group.is_collapsed()
 
 
 def test_flag_text_reads_on_the_panel(make_group):
