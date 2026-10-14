@@ -7321,11 +7321,12 @@ class TAVIController(QObject):
         Resets the progress display when a queued job actually starts, and
         keeps the Run button disabled while any job is queued or running.
         """
-        self._drain_updates()
         if state == JobState.RUNNING.value:
             # Reset the progress display for the starting job (mirrors the prep
             # done in run_simulation_thread at submission time, so a job that
-            # waited in the queue still gets a clean start).
+            # waited in the queue still gets a clean start). Before the drain: a
+            # fast scan may already have buffered its final progress, which
+            # belongs to the job that has just started.
             try:
                 self.window.simulation_dock.progress_bar.setValue(0)
                 self.window.simulation_dock.progress_label.setText("Initializing...")
@@ -7333,7 +7334,8 @@ class TAVIController(QObject):
                     "Estimated Remaining Time: calculating..."
                 )
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Could not reset the progress display for a starting job")
+        self._drain_updates()
 
         # Disable Run while work is pending/active; re-enable once idle.
         busy = self._has_pending_jobs()

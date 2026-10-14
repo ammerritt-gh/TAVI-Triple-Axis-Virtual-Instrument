@@ -448,3 +448,13 @@ def test_batched_display_updates_draw_what_the_per_point_path_draws_2d(controlle
     assert one_by_one._current_rect.get_xy() == batched._current_rect.get_xy()
     assert one_by_one.status_label.text() == batched.status_label.text()
     assert batched._replot_pending is False
+
+
+def test_running_state_keeps_a_fast_scans_final_progress(controller):
+    """A fast scan may buffer its final progress before the queued RUNNING
+    signal of the next job arrives; the start reset must not wipe it."""
+    ctrl = controller
+    bar = ctrl.window.simulation_dock.progress_bar
+    ctrl._gui_updates.latest('progress_updated', 100, 100)
+    ctrl._on_job_state_changed("job-fast", JobState.RUNNING.value)
+    assert bar.value() == 100, "the start of a job reset the progress to %d" % bar.value()
