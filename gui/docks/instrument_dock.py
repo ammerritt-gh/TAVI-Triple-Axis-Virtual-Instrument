@@ -420,7 +420,8 @@ class InstrumentDock(BaseDockWidget):
         self.collapsible_groups["instrument.source"] = source_group
 
         # Each folded block's summary follows its fields.
-        for axis, (edit, _check) in self._focusing_axes().items():
+        for axis in FOCUSING_AXES:
+            edit = getattr(self, f"{axis}_edit")
             edit.textChanged.connect(lambda _text, axis=axis: self._render_focusing_axis(axis))
         for axis in FOCUSING_AXES:
             self._render_focusing_axis(axis)   # also draws the summary
@@ -734,10 +735,6 @@ class InstrumentDock(BaseDockWidget):
             return "held at the ideal"
         return f"held, {shown} m {'above' if value > ideal else 'below'} ideal"
 
-    def _focusing_axes(self):
-        return {axis: (getattr(self, f"{axis}_edit"), getattr(self, f"{axis}_track_check"))
-                for axis in FOCUSING_AXES}
-
     # The folded blocks' summaries: the values the simulation will use, as typed.
 
     def _refresh_focusing_summary(self, *_):
@@ -745,7 +742,8 @@ class InstrumentDock(BaseDockWidget):
         words = {"track": "track", "held": "held", "scanned": "scanned", "fixed": "fixed",
                  "no_model": "held"}   # no model: the typed value is held
         cells = {}
-        for name, (edit, _check) in self._focusing_axes().items():
+        for name in FOCUSING_AXES:
+            edit = getattr(self, f"{name}_edit")
             value = f"{edit.text()} m" if edit.text() else "empty"
             cells[name] = f"{name} {value} {words[self.mode(name)]}"
         group = self.collapsible_groups["instrument.focusing"]
