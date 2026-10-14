@@ -129,7 +129,8 @@ class StandIn:
     state compiled, as ``run_tas_point`` does after ``backengine()``; ``late``
     runs a process that exits, then holds; ``orphan`` runs a parent that leaves
     a sleeping child and exits, then holds; ``block`` starts a tree and holds,
-    ignoring the kill; ``hold`` holds; ``gate`` holds, then launches a sleeper.
+    ignoring the kill; ``hold`` holds; ``gate`` holds, then launches a sleeper;
+    ``relaunch`` runs a process that exits, holds, then launches a sleeper.
     A callable is called with (call number, output folder) and returns at once.
     """
 
@@ -213,6 +214,14 @@ class StandIn:
                 self._hold(n)
             elif mode == "hold":
                 self._hold(n)
+            elif mode == "relaunch":
+                subprocess.run([sys.executable, "-c", "pass"], timeout=30)
+                self._hold(n)
+                try:
+                    subprocess.run(self.argv("sleeper", n), timeout=30)
+                except BaseException as exc:  # recorded for the test, then re-raised as McStasScript would
+                    self.raised[n] = exc
+                    raise
             elif mode == "gate":
                 self._hold(n)
                 try:
@@ -521,6 +530,36 @@ def test_a_kill_after_every_process_exited_ends_a_blocked_call_in_bounded_time(
     assert job.result.counts == [None, None, None]
     assert job.result.executed_feasible_mask == [False, False, False]
     assert not os.path.exists(s.calls[0][1])
+
+
+def test_a_launch_refused_after_a_kill_discards_the_point(rig, controller, monkeypatch):
+    """The kill lands after the point's process exited; the call launches again while
+    the worker waits for it, and that launch is refused: the point is not executed."""
+    ctrl = controller
+    s = rig.stand_in("relaunch")  # its process exits, then the call holds, then launches again
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point's process to exit")
+    scope = s.scopes[0]
+    waiting = threading.Event()
+    real_wait = scope.wait_killed
+
+    def wait_then_mark(timeout):  # the worker has read its kill-time flags and is now joining the call
+        survivors = real_wait(timeout)
+        waiting.set()
+        return survivors
+
+    monkeypatch.setattr(scope, "wait_killed", wait_then_mark)
+    stop_button(ctrl).click()
+    stop_button(ctrl).click()
+    pump_until(waiting.is_set, "the worker to wait for the kill")
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+    assert isinstance(s.raised.get(0), pp.PointLaunchRefused)
+    assert job.result.stop_mode == "kill"
+    assert job.result.counts == [None, None, None]
+    assert job.result.executed_feasible_mask == [False, False, False]
+    assert not os.path.exists(os.path.join(s.dir(0), "sleeper.pid")), "the refused launch created a process"
+    assert not os.path.exists(s.calls[0][1]), "the discarded point's folder survived"
 
 
 # --------------------------------------------------------------- graceful and races
