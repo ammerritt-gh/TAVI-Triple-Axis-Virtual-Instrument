@@ -9251,6 +9251,101 @@ class TAVIController(QObject):
                         break
                     continue
     
+    def _unpublish_scope(self, scope):
+        """Clear the active scope only if it is still ``scope`` (compare-and-clear)."""
+        with self._stop_lock:
+            if self._active_scope is scope:
+                self._active_scope = None
+
+    def _run_point_in_scope(self, i, *run_args, **run_kwargs):
+        """Run one MC point's ``run_point`` on a point thread inside a PointScope.
+
+        Returns ``{'discarded': bool, 'result' | 'error': ..., 'scope': scope,
+        'blocked': bool}``. The point is discarded (not executed) when its first
+        launch was refused (a stop came first), when a kill landed while a
+        process it started was still running, or when its call is still blocked
+        after the kill; a kill landing after its processes exited leaves it
+        recorded normally. Decided by the scope's flags, never by what
+        ``run_point`` returned or raised.
+        """
+        scope = point_processes.PointScope(stop_requested=self.stop_event.is_set)
+        box = {'scope': scope, 'blocked': False}
+
+        def point_main():
+            try:
+                with scope:
+                    with self._stop_lock:
+                        self._active_scope = scope
+                    try:
+                        box['result'] = self.instrument.run_point(*run_args, **run_kwargs)
+                    except BaseException as exc:  # kept for the worker, which re-raises it if the point counts
+                        box['error'] = exc
+            finally:
+                # A thread left behind below that wakes later never clears a later point's scope.
+                self._unpublish_scope(scope)
+                scope.release()
+
+        thread = threading.Thread(target=point_main, name=f"scan-point-{i}", daemon=True)
+        thread.start()
+        while thread.is_alive() and not scope.killed:
+            thread.join(0.5)
+        if scope.killed:
+            # Orphans of an exited root are ended (or named) before the job can end.
+            survivors = scope.wait_killed(point_processes.KILL_WAIT_S + 1)
+            if scope.interrupted or survivors:
+                thread.join(self.POINT_JOIN_AFTER_KILL_S)
+            else:
+                # Its processes had all exited: the call finishes as a normal point does.
+                while thread.is_alive():
+                    thread.join(0.5)
+            if thread.is_alive():
+                box['blocked'] = True
+                self._unpublish_scope(scope)
+                cause = ("by the surviving processes named above" if survivors
+                         else "after its processes were ended")
+                self._post_log(
+                    f"Point {i}: its McStas call is still blocked {cause}; TAVI leaves "
+                    "it behind and ignores its result.")
+            scope.release()
+        box['discarded'] = bool(box['blocked'] or scope.refused
+                                or (scope.killed and scope.interrupted))
+        return box
+
+    def _discard_point_output(self, i, scan_folder, point):
+        """Remove a not-executed point's output so no reload reads it as data; log the outcome."""
+        if point['scope'].refused and not point['scope'].killed:
+            why = (f"Point {i} was not executed: the stop arrived before its McStas "
+                   "process started.")
+        else:
+            why = f"Scan force-stopped: point {i} was discarded (not executed)."
+        if not os.path.isdir(scan_folder):
+            self._post_log(f"{why} It left no output folder.")
+            return
+        error = None
+        for attempt in range(3):
+            try:
+                shutil.rmtree(scan_folder)
+                self._post_log(f"{why} Its partial output folder was deleted: {scan_folder}")
+                return
+            except OSError as exc:  # a process that just died may still hold a file
+                error = exc
+                logging.getLogger(__name__).warning("Deleting %s failed (attempt %d): %s",
+                                                    scan_folder, attempt + 1, exc)
+                time.sleep(0.33)
+        params_file = os.path.join(scan_folder, "scan_parameters.txt")
+        try:
+            if os.path.exists(params_file):
+                os.remove(params_file)
+            self._post_log(
+                f"{why} Its output folder could not be deleted ({error}); its "
+                f"parameters file was removed so a reload skips it. The folder is not "
+                f"data: {scan_folder}")
+        except OSError as exc:
+            logging.getLogger(__name__).exception("Removing %s failed", params_file)
+            self._post_log(
+                f"{why} Neither its output folder ({error}) nor its parameters file "
+                f"({exc}) could be removed. The folder is not data: {scan_folder}")
+
     @staticmethod
     def _mark_executed_result_point(result, *, is_2d_scan,
                                     is_single_point_scan, idx_1d, idx_x, idx_y):
@@ -10261,6 +10356,7 @@ class TAVIController(QObject):
         data = None
         simulation_stopped = False
         simulation_error_message = None
+        binary_untrusted = False  # a not-executed first (compile) point
 
         try:
             while True:
@@ -10333,14 +10429,25 @@ class TAVIController(QObject):
 
                 if not error_flags and snapshot.params is not None:
                     simulation_stage_start = time.perf_counter()
-                    data, error_flags, execution_info = self.instrument.run_point(
-                        instrument,
-                        snapshot,
-                        scan_folder,
-                        number_neutrons,
-                        execution_state,
-                        mpi_count=mpi_count,
+                    was_backengine = not execution_state.first_backengine_succeeded
+                    point = self._run_point_in_scope(
+                        i, instrument, snapshot, scan_folder, number_neutrons,
+                        execution_state, mpi_count=mpi_count,
                     )
+                    if point['discarded']:
+                        # Not executed: no writer of this point's data runs (the
+                        # rest of this loop body), its output folder goes, the loop ends.
+                        self._discard_point_output(i, scan_folder, point)
+                        if was_backengine:
+                            # A compile that was killed or never ran: never reuse its binary.
+                            execution_state.first_backengine_succeeded = False
+                            execution_state.direct_run_ready = False
+                            binary_untrusted = True
+                        simulation_stopped = True
+                        break
+                    if 'error' in point:
+                        raise point['error']
+                    data, error_flags, execution_info = point['result']
                     simulation_duration = time.perf_counter() - simulation_stage_start
                     simulated_point = True
                 else:
@@ -10717,14 +10824,20 @@ class TAVIController(QObject):
         if simulation_stopped:
             self._post_log("Simulation stopped by user.")
 
-        self._binary_reuse_cache = self._updated_binary_cache(
-            self._binary_reuse_cache,
-            reuse_binary,
-            build_fingerprint,
-            instrument,
-            execution_state,
-            os.path.join(data_folder, f"{self._mcstas_name}.instr"),
-        )
+        if binary_untrusted:
+            # The binary on disk may be half-written, and the cached entry may name
+            # the same file: the next scan compiles with force_compile, overwriting it.
+            self._binary_reuse_cache = None
+            self._post_log("The compile of this scan did not finish; the next scan compiles again.")
+        else:
+            self._binary_reuse_cache = self._updated_binary_cache(
+                self._binary_reuse_cache,
+                reuse_binary,
+                build_fingerprint,
+                instrument,
+                execution_state,
+                os.path.join(data_folder, f"{self._mcstas_name}.instr"),
+            )
 
         inferred_compile_duration = None
         if len(simulation_stage_durations) > 1:
