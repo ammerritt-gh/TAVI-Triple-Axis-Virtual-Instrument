@@ -306,6 +306,8 @@ def test_intensity_rows_units_and_step(docks):
                        ("raw", "Model-free")):
         assert words in rows[key].toolTip()
         assert "not the area" not in rows[key].toolTip()
+    assert "not to monitor" in rows["normalised"].toolTip()
+    assert "tails" in rows["integrated"].toolTip()
 
 
 def test_uneven_steps_and_unknown_unit(docks):
