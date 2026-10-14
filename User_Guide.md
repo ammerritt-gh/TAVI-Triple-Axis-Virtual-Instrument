@@ -140,7 +140,7 @@ The simulation dock is the main center for ruinning an experiment.
 
 - Select the number of neutrons. A rough estimate for the time the simulation will take, per point, is given here.
 - To start an simulation, click the "Run Simulation" button.
-- "Stop Simulation" will stop any ongoing simulation once a point finishes. **File → Quit** also stops simulations, then closes TAVI.
+- "Stop Simulation" stops the scan once the current point finishes, and the button then reads **Force stop**. Click **Force stop** to end the scan immediately: TAVI ends the McStas processes of the point in flight and discards that point (its counts are not recorded and its partial output folder is deleted), and the log names the discarded point. For an analytic scan, Force stop ends the scan at the next point, a few milliseconds away. The button returns to "Stop Simulation" when the scan has ended. The API dock's Cancel button on the running scan works the same way and shares the two steps with Stop. **File → Quit** also stops simulations, then closes TAVI.
 
 Finished simulations are saved into a named folder. When all scans are completed, the program saves a formatted data file and display figure automatically.
 ### Running Scans
