@@ -10,6 +10,8 @@ Every wait has a deadline.
 Wall-time budget for this file: 10 s (the slowest case is the grandchild
 orphan, about 2 s).
 """
+import ctypes
+import logging
 import subprocess
 import sys
 import threading
@@ -377,6 +379,48 @@ def test_pid_reused_after_the_table_read_is_not_adopted():
     assert [e.pid for e in known] == [100]
     pp._discover(known, _table((100, 4), (200, 100)), {200: FakeProc(1500)}.get, taken=2000)
     assert [e.pid for e in known] == [100, 200]
+
+
+def test_an_entry_without_a_creation_time_adopts_no_children():
+    """A root that could not be held has no window, so nothing is adopted under it."""
+    known = [pp._Known(100, None, None, "a.exe", None)]
+    pp._discover(known, _table((100, 4), (200, 100)), {200: FakeProc(1500)}.get)
+    assert [e.pid for e in known] == [100]
+
+
+def test_a_refused_open_falls_back_to_the_popen_handle(monkeypatch):
+    """OpenProcess refused for a root: the scope holds a duplicate of Popen's handle."""
+    pp.install()
+    real_open = pp._open_proc
+    monkeypatch.setattr(pp, "_open_proc", lambda pid, warned=None: None)
+    scope = pp.PointScope()
+    with scope:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        proc.wait(10)
+        entry = scope._known[0]
+        assert entry.proc is not None and entry.created is not None
+        assert entry.proc.exit_time() is not None
+    finally:
+        monkeypatch.setattr(pp, "_open_proc", real_open)
+        scope.release()
+
+
+def test_a_refused_candidate_is_logged_once(monkeypatch, caplog):
+    calls = []
+
+    def refuse(access, inherit, pid):
+        calls.append(pid)
+        ctypes.set_last_error(5)
+        return None
+
+    monkeypatch.setattr(pp._k32, "OpenProcess", refuse)
+    warned = set()
+    with caplog.at_level(logging.WARNING, logger=pp.__name__):
+        assert pp._open_proc(4242, warned) is None
+        assert pp._open_proc(4242, warned) is None
+    assert len(calls) == 2, "it still retries"
+    assert sum("4242" in r.getMessage() for r in caplog.records) == 1
 
 
 # --------------------------------------------------------------------- install
