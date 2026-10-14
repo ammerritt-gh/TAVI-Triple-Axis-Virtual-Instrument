@@ -21,6 +21,7 @@ from tavi import point_processes as pp
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows process table")
 
 DEADLINE_S = 8.0
+CREATE_NO_WINDOW = 0x08000000
 
 STAND_IN = '''
 import os, subprocess, sys, time
@@ -65,13 +66,18 @@ def wait_for(predicate, what, timeout=DEADLINE_S):
 
 
 def alive(pid):
-    state = pp._probe(pid)
-    return bool(state and state[1])
+    proc = pp._open_proc(pid)
+    if proc is None:
+        return False
+    try:
+        return proc.running()
+    finally:
+        proc.close()
 
 
 def end_by_pid(pid):
     subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                   creationflags=pp.CREATE_NO_WINDOW, timeout=15)
+                   creationflags=CREATE_NO_WINDOW, timeout=15)
 
 
 @pytest.fixture
@@ -140,7 +146,7 @@ def gone(*pids):
 
 def test_ending_only_the_root_leaves_the_child(tree):
     """The premise: Windows keeps a child alive when its parent is ended."""
-    proc = subprocess.Popen(tree.argv("parent"), creationflags=pp.CREATE_NO_WINDOW)
+    proc = subprocess.Popen(tree.argv("parent"), creationflags=CREATE_NO_WINDOW)
     tree.track(proc.pid)
     child = tree.pid("sleeper")
     proc.kill()
@@ -225,7 +231,7 @@ def test_a_process_outside_the_scope_is_not_reached(tree):
     worker = Worker(scope, hold)
     assert entered.wait(DEADLINE_S)
     # started on this (the main) thread while the scope is active on another
-    outsider = subprocess.Popen(tree.argv("sleeper"), creationflags=pp.CREATE_NO_WINDOW)
+    outsider = subprocess.Popen(tree.argv("sleeper"), creationflags=CREATE_NO_WINDOW)
     tree.track(outsider.pid)
     try:
         tree.pid("sleeper")
@@ -243,10 +249,10 @@ def test_a_process_outside_the_scope_is_not_reached(tree):
 
 def test_survivors_are_named(tree, monkeypatch):
     monkeypatch.setattr(pp, "KILL_WAIT_S", 0.4)
-    monkeypatch.setattr(pp, "_taskkill", lambda pid: None)
+    monkeypatch.setattr(pp._k32, "TerminateProcess", lambda handle, code: 0)  # does nothing: fails
     scope = pp.PointScope()
     worker = Worker(scope, lambda: subprocess.Popen(tree.argv("sleeper"),
-                                                    creationflags=pp.CREATE_NO_WINDOW)).join()
+                                                    creationflags=CREATE_NO_WINDOW)).join()
     proc = worker.result
     tree.track(proc.pid)
     logs = []
@@ -289,33 +295,44 @@ def test_only_the_first_launch_checks_the_stop_flag_and_a_kill_refuses_all(tmp_p
 
 # ------------------------------------------------------ the known-set rule itself
 
+class FakeProc:
+    """Stands in for a held handle: a creation time and an exit time (None while running)."""
+
+    def __init__(self, created, exited=None):
+        self.created, self.exited = created, exited
+
+    def exit_time(self):
+        return self.exited
+
+    def close(self):
+        pass
+
+
 def _table(*rows):
     return {pid: (ppid, f"p{pid}.exe") for pid, ppid in rows}
 
 
 def test_creation_time_window_rejects_reused_pids():
     """Synthetic tables: no real PID reuse is needed to pin the rule."""
-    known = [pp._Known(100, 1000, None, "a.exe")]
-    states = {100: (1000, True), 200: (1500, True), 201: (900, True), 400: (1600, True)}
-    pp._discover(known, _table((100, 4), (200, 100), (201, 100), (400, 200)),
-                 states.get, now=1700)
+    known = [pp._Known(100, 1000, None, "a.exe", FakeProc(1000))]
+    procs = {200: FakeProc(1500), 201: FakeProc(900), 400: FakeProc(1600)}
+    pp._discover(known, _table((100, 4), (200, 100), (201, 100), (400, 200)), procs.get)
     assert sorted(e.pid for e in known) == [100, 200, 400]  # 201 predates its parent
     assert all(e.gone is None for e in known)
 
-    # PID 100 died and was reused by an unrelated process created at 3000
-    known = [pp._Known(100, 1000, None, "a.exe")]
-    states = {100: (3000, True), 300: (2500, True), 301: (1800, False), 302: (1200, True)}
-    pp._discover(known, _table((100, 4), (300, 100), (301, 100), (302, 100)),
-                 states.get, now=2000)
+    # PID 100 exited at 1900; a child created at 2500 is outside its window
+    known = [pp._Known(100, 1000, None, "a.exe", FakeProc(1000, exited=1900))]
+    procs = {300: FakeProc(2500), 301: FakeProc(1800, exited=1850), 302: FakeProc(1200)}
+    pp._discover(known, _table((100, 4), (300, 100), (301, 100), (302, 100)), procs.get)
     by_pid = {e.pid: e for e in known}
-    assert by_pid[100].gone == 2000 and not any(e.pid == 100 and e.created == 3000 for e in known)
-    assert 300 not in by_pid, "created after the entry was seen gone"
-    assert by_pid[301].gone == 2000 and by_pid[302].gone is None  # inside the window: collected
+    assert by_pid[100].gone == 1900
+    assert 300 not in by_pid, "created after the entry's real exit"
+    assert by_pid[301].gone == 1850 and by_pid[302].gone is None  # inside the window: collected
 
-    # an entry already seen gone keeps its window closed
-    known = [pp._Known(100, 1000, 1900, "a.exe")]
-    states = {100: None, 500: (1950, True), 501: (1850, True)}
-    pp._discover(known, _table((500, 100), (501, 100)), states.get, now=5000)
+    # an entry already gone keeps its window closed
+    known = [pp._Known(100, 1000, 1900, "a.exe", None)]
+    procs = {500: FakeProc(1950), 501: FakeProc(1850)}
+    pp._discover(known, _table((500, 100), (501, 100)), procs.get)
     assert sorted(e.pid for e in known) == [100, 501]
 
 
