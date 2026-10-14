@@ -749,13 +749,14 @@ class InstrumentDock(BaseDockWidget):
     # The folded blocks' summaries: the values the simulation will use, as typed.
 
     def _refresh_focusing_summary(self, *_):
-        """Two rows (monochromator, analyser) of 'rhm 15.081 m track' cells, and the not-tracking flag."""
+        """Two rows (monochromator, analyser) of 'rhm track 15.081 m' cells, and the not-tracking flag."""
         words = {"track": "track", "held": "held", "scanned": "scanned", "fixed": "fixed",
                  "no_model": "held"}   # no model: the typed value is held
         cells = {}
         for name in FOCUSING_AXES:
             text = getattr(self, f"{name}_edit").text()
-            cells[name] = f"{name} {_radius_cell(text)} {words[self.mode(name)]}"
+            # the mode word before the value: a long value elides, never the mode
+            cells[name] = f"{name} {words[self.mode(name)]} {_radius_cell(text)}"
         group = self.collapsible_groups["instrument.focusing"]
         rows = [[cells["rhm"], cells["rvm"]], [cells["rha"], cells["rva"]]]
         if rows != self._focusing_rows:
