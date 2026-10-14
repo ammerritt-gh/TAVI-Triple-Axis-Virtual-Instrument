@@ -119,7 +119,7 @@ The installer already compile-checks the compiler before it finishes, so a first
 
 ### TAVI crashes or closes unexpectedly
 
-Send `output/tavi-crash.log` from the TAVI folder with your report; the console prints its full path at startup. It records your operating system, library versions and display session (on Linux, Wayland or X11), and the Python stack of every thread when TAVI crashes.
+Send `output/tavi-crash.log` from the TAVI folder with your report; the console prints its full path at startup. It records your operating system, library versions and display session (on Linux, Wayland or X11), uncaught errors and Qt warnings, and on Linux and macOS the Python stack of every thread when TAVI crashes.
 
 ### Compiler check failed during install
 
