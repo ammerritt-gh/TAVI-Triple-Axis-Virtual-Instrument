@@ -33,6 +33,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import instruments.builtin  # noqa: F401,E402  (registers built-in instruments)
 import TAVI_PySide6 as cm  # noqa: E402
 from gui.docks.instrument_dock import FOCUSING_AXES  # noqa: E402
+from gui.field_marks import mark_for  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
 
 AUTOFOCUS, HELD = cm.CurvatureMode.AUTOFOCUS, cm.CurvatureMode.HELD
@@ -353,6 +354,40 @@ def test_the_field_marks_timer_pushes_the_scanned_map_too(world):
     ctrl.window.simulation_dock.scan_command_1_edit.setText("")
     ctrl._refresh_scan_feedback()
     _agree(ctrl, NEVER["puma"])
+
+
+def _assert_rhm_free(ctrl):
+    """Once a command no longer names rhm: it tracks or holds by its choice, with no scan mark and no flag."""
+    idock = ctrl.window.instrument_dock
+    assert _agree(ctrl)["rhm"] == ("track" if idock.choice("rhm") else "held")
+    assert idock.scanned_command("rhm") is None
+    assert mark_for(_edit(ctrl, "rhm")).state()[0] != "scanned"   # a tracking axis carries a per-point "set" mark
+    assert _flag(ctrl) == ""
+
+
+def test_defaults_and_load_clear_a_scan_command_and_its_scanned_axis(world):
+    """The command boxes are set with signals blocked, so the marks must be redrawn after them."""
+    ctrl = world("in8")
+    idock, sim = ctrl.window.instrument_dock, ctrl.window.simulation_dock
+    ctrl.save_parameters()
+    assert _saved(world, ctrl)["scan_command_var1"] == "H 1.9 2.1 0.01"   # the saved file names no rhm
+
+    sim.scan_command_1_edit.setText("rhm 10 20 2")
+    _settle()
+    assert _agree(ctrl)["rhm"] == "scanned"
+    assert mark_for(_edit(ctrl, "rhm")).state()[0] == "scanned"
+    assert _flag(ctrl) == "● 1 not tracking"
+
+    ctrl.set_default_parameters()                          # File > Defaults
+    _settle()
+    _assert_rhm_free(ctrl)
+
+    sim.scan_command_1_edit.setText("rhm 10 20 2")
+    _settle()
+    assert _agree(ctrl)["rhm"] == "scanned"
+    ctrl.load_parameters()                                 # File > Load Parameters
+    _settle()
+    _assert_rhm_free(ctrl)
 
 
 # ------------------------------------------------------------------ saved files
