@@ -15,7 +15,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QRect, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QPalette  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
@@ -61,7 +61,7 @@ def _settle():
 
 def _in(group, widget):
     """The widget's rectangle in the group's own coordinates."""
-    return widget.geometry().translated(widget.mapTo(group, QPoint(0, 0)))
+    return QRect(widget.mapTo(group, QPoint(0, 0)), widget.size())
 
 
 def _cell(group, text):
