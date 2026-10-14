@@ -53,6 +53,7 @@ from instruments.tas_runtime import (
     training_reach_error,
 )
 from instruments.paths import COMPONENTS_DIR
+from instruments.descriptor import CurvatureAxis
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ from gui.main_window import TAVIMainWindow
 from gui.field_marks import mark_for, set_group_note
 from gui.dialogs.background_config_dialog import BackgroundConfigDialog
 from gui.dialogs.diagnostic_config_dialog import DiagnosticConfigDialog
+from gui.docks.instrument_dock import FOCUSING_AXES
 
 # Physical constants
 N_MASS = 1.67492749804e-27  # neutron mass
@@ -1318,7 +1320,7 @@ class TAVIController(QObject):
         self.update_monocris_info()
         self.update_anacris_info()
 
-        # Update ideal focusing buttons after initial load
+        # Push the ideals and tracking state into the focusing rows after initial load
         self.update_ideal_bending_buttons()
         
         # Set up visual feedback for all input fields
@@ -1686,21 +1688,10 @@ class TAVIController(QObject):
             self.reciprocal_state_changed.connect(reciprocal_dock.set_snapshot)
             self.reciprocal_live_result.connect(reciprocal_dock.set_live_result)
 
-        # Ideal focusing buttons
-        self.window.instrument_dock.rhm_ideal_button.clicked.connect(
-            lambda: self.apply_ideal_bending_value("rhm")
-        )
-        self.window.instrument_dock.rvm_ideal_button.clicked.connect(
-            lambda: self.apply_ideal_bending_value("rvm")
-        )
-        self.window.instrument_dock.rha_ideal_button.clicked.connect(
-            lambda: self.apply_ideal_bending_value("rha")
-        )
-        self.window.instrument_dock.rva_ideal_button.clicked.connect(
-            lambda: self.apply_ideal_bending_value("rva")
-        )
+        # A click on a Track ideal box ticks (track) or unticks (hold) its axis
+        self.window.instrument_dock.track_clicked.connect(self._on_track_clicked)
 
-        # User edits unlock ideal lock
+        # Typing in a radius field holds it (unticks Track ideal)
         self.window.instrument_dock.rhm_edit.textEdited.connect(
             lambda: self.unlock_ideal_bending("rhm")
         )
@@ -1812,9 +1803,9 @@ class TAVIController(QObject):
                  sample.lattice_alpha_edit, sample.lattice_beta_edit, sample.lattice_gamma_edit)
         for edit in edits:
             edit.textChanged.connect(self._schedule_field_marks)
-        for button in (sim.relative_1_button, sim.relative_2_button, idock.rhm_ideal_button,
-                       idock.rvm_ideal_button, idock.rha_ideal_button, idock.rva_ideal_button):
+        for button in (sim.relative_1_button, sim.relative_2_button):
             button.toggled.connect(self._schedule_field_marks)
+        idock.tracking_changed.connect(self._schedule_field_marks)
         for combo in (self.window.scattering_dock.K_fixed_combo, idock.monocris_combo,
                       idock.anacris_combo, sim.engine_combo, sample.sample_combo):
             combo.currentIndexChanged.connect(self._schedule_field_marks)
@@ -2489,11 +2480,11 @@ class TAVIController(QObject):
                 'rha': float(self.window.instrument_dock.rha_edit.text() or 0),
                 'rva': float(self.window.instrument_dock.rva_edit.text() or 0),
                 # Per-axis curvature policy for the scan about to run: the
-                # Ideal lock already tracked per field (locked = follow the
-                # optics, unlocked = the operator's own number). A fixed
-                # axis's mode is irrelevant -- set_crystal_bending pins it to
-                # the declared radius regardless -- so rva follows its lock
-                # exactly like its siblings rather than being special-cased.
+                # Track ideal choice per field (tracking = follow the optics,
+                # held = the operator's own number), except that an axis which
+                # can never track (a crystal-fixed or no-model axis) is held.
+                # A fixed axis's mode is irrelevant -- set_crystal_bending
+                # pins it to the declared radius regardless.
                 'curvature_modes': {
                     'rhm': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rhm')
                            else CurvatureMode.HELD,
@@ -3569,7 +3560,7 @@ class TAVIController(QObject):
         unknown (IN12's Heusler ``rva``) is simply left out of the askable
         set (``_askable_curvature_axes``) rather than blanking the whole
         result -- the other three axes still get a real ideal. The caller
-        shows "Ideal: --" for a missing key the same way it already does for
+        shows no ideal for a missing key the same way it already does for
         a fully refused result.
         """
         try:
@@ -3595,13 +3586,13 @@ class TAVIController(QObject):
             # Expected refusal: an unrequested-but-still-raising crystal
             # lookup failure. A degenerate take-off angle is handled inside
             # ``_ideal_bending_from_modules`` (ZeroDivisionError -> None) and
-            # never reaches here. The caller shows "Ideal: --".
+            # never reaches here. The caller shows no ideal.
             log.info("ideal bending unavailable (%s/%s): %s",
                      monocris, anacris, exc)
             return None
         except Exception:
             # Anything else is a wiring bug, not a refusal. It still degrades
-            # to "Ideal: --" rather than taking the window down mid-session,
+            # to no ideal rather than taking the window down mid-session,
             # but it is never silent -- this catch used to hide the traceback
             # entirely, and it now guards a call into the instrument model
             # rather than a few lines of arithmetic.
@@ -3633,111 +3624,67 @@ class TAVIController(QObject):
         return rva_axis
 
     def _apply_rva_axis_policy(self, rva_axis):
-        """Enable/disable rva's field and Ideal button per the descriptor.
+        """rva's field is editable only while the selected analyser leaves it driven.
 
-        Three cases (docs/CONFIGURABLE_INSTRUMENTS.md, this branch's packet):
-        fixed -- the operator has no say, the field shows the declared radius
-        and is not editable, and the Ideal button is pointless (the applier
-        pins the value regardless of mode); driven with no established
-        focusing model -- a typed value is legitimate (HELD) but there is no
-        optimum to compute, so the Ideal button is disabled with a tooltip
-        saying why; otherwise it behaves exactly like rha.
+        The row's Track ideal box and its reason come from
+        ``update_ideal_bending_buttons``; this keeps the field enable state
+        even when ``_sync_curvature_fields`` is suspended by ``self.updating``.
+        """
+        self.window.instrument_dock.rva_edit.setEnabled(rva_axis.driven)
+
+    def _declared_curvature_axis(self, axis):
+        """The selected crystal's own declaration for ``axis``, blind to fitted modules.
+
+        ``_curvature_axis_specs`` folds the live modules in; this does not, because
+        the two cases differ here: a crystal-fixed axis can never track, a
+        module-fixed one (the NMO's flat rhm/rvm) keeps its choice.
         """
         idock = self.window.instrument_dock
-        if not rva_axis.driven:
-            idock.rva_ideal_button.setChecked(False)
-            idock.rva_ideal_button.setEnabled(False)
-            idock.rva_edit.setEnabled(False)
-            idock.rva_ideal_button.setToolTip(
-                "rva is fixed for this analyser; there is no autofocus and "
-                "no operator override."
-            )
-        elif not rva_axis.focusing_known:
-            idock.rva_ideal_button.setChecked(False)
-            idock.rva_ideal_button.setEnabled(False)
-            idock.rva_edit.setEnabled(True)
-            idock.rva_ideal_button.setToolTip(
-                "No established focusing model for this analyser's rva; a "
-                "typed value is honoured, but autofocus cannot be offered."
-            )
-        else:
-            idock.rva_edit.setEnabled(True)
-            if not idock.rva_ideal_button.isChecked():
-                idock.rva_ideal_button.setEnabled(True)
-            idock.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
+        selected, crystals = ((idock.selected_mono_id(), self.descriptor.mono_crystals)
+                              if axis in ("rhm", "rvm")
+                              else (idock.selected_ana_id(), self.descriptor.ana_crystals))
+        spec = next((c for c in crystals if c.id == selected), None)
+        return spec.curvature.get(axis, CurvatureAxis()) if spec else CurvatureAxis()
+
+    def _tracks_by_default(self, axis):
+        """Whether a fresh start, File > Defaults or a file with no record of ``axis`` tracks it."""
+        return self._declared_curvature_axis(axis).driven
+
+    def _push_axis_policy(self, axis, resolved):
+        """Tell ``axis``'s row why it cannot be asked to track: fixed, or driven with no focusing model.
+
+        ``resolved`` is its ``(CurvatureAxis, crystal name)`` from ``_curvature_axis_specs``.
+        """
+        curvature, crystal = resolved or (CurvatureAxis(), "")
+        declared = self._declared_curvature_axis(axis)
+        fixed = no_model = None
+        if not declared.driven:
+            fixed = f"fixed at {abs(declared.fixed_radius_m or 0.0):g} m for the {crystal}"
+        elif not curvature.driven:   # only a fitted module makes it so
+            radius = abs(curvature.fixed_radius_m or 0.0)
+            fixed = "flat while the NMO is fitted" if radius == 0 else f"fixed at {radius:g} m while a module is fitted"
+        elif not curvature.focusing_known:
+            no_model = f"no established focusing model for the {crystal}"
+        idock = self.window.instrument_dock
+        idock.set_fixed(axis, fixed, declared=not declared.driven)
+        idock.set_no_model(axis, no_model)
 
     def update_ideal_bending_buttons(self):
-        """Update ideal bending button labels based on current angles."""
+        """Push the ideals and each axis's fixed or no-model reason into the focusing rows, then sync the fields.
+
+        Kept under its old name: the tests and the API after-handlers call it.
+        """
         idock = self.window.instrument_dock
-        monocris = idock.selected_mono_id()
-        anacris = idock.selected_ana_id()
-        modules = idock.module_values()
-        axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
-        rva_axis = self._current_rva_axis()
-        self._apply_rva_axis_policy(rva_axis)
-
+        axis_specs = self._curvature_axis_specs(
+            idock.selected_mono_id(), idock.selected_ana_id(), modules=idock.module_values())
+        self._apply_rva_axis_policy(self._current_rva_axis())
         ideal = self._compute_ideal_bending_values()
-        if not ideal:
-            idock.rhm_ideal_button.setText("Ideal: --")
-            idock.rvm_ideal_button.setText("Ideal: --")
-            idock.rha_ideal_button.setText("Ideal: --")
-            idock.rva_ideal_button.setText("Ideal: --")
-            # No ideal (degenerate take-off angle) does not suspend policy:
-            # a fixed axis still shows its resolved radius, disabled, so a
-            # later Run is not refused on a stale value the module never
-            # uses. Same loop as below, with no ideal to sync locked axes to.
-            self._sync_curvature_fields(axis_specs, ideal=None)
-            return
-
-        rhm_locked = self.is_bending_locked("rhm")
-        rvm_locked = self.is_bending_locked("rvm")
-        rha_locked = self.is_bending_locked("rha")
-        rva_locked = self.is_bending_locked("rva")
-
-        # Show "Flat" when NMO is installed and ideal value is 0
-        if ideal['rhm'] == 0:
-            idock.rhm_ideal_button.setText(
-                f"Ideal ({'L' if rhm_locked else 'U'}): Flat (NMO)"
-            )
-        else:
-            idock.rhm_ideal_button.setText(
-                f"Ideal ({'L' if rhm_locked else 'U'}): {ideal['rhm']:.3f} m"
-            )
-
-        if ideal['rvm'] == 0:
-            idock.rvm_ideal_button.setText(
-                f"Ideal ({'L' if rvm_locked else 'U'}): Flat (NMO)"
-            )
-        else:
-            idock.rvm_ideal_button.setText(
-                f"Ideal ({'L' if rvm_locked else 'U'}): {ideal['rvm']:.3f} m"
-            )
-
-        idock.rha_ideal_button.setText(
-            f"Ideal ({'L' if rha_locked else 'U'}): {ideal['rha']:.3f} m"
-        )
-
-        if rva_axis.driven and not rva_axis.focusing_known:
-            # No model to report a number from -- the button is disabled by
-            # policy above; the label matches the "no ideal available" case.
-            idock.rva_ideal_button.setText("Ideal: --")
-        else:
-            idock.rva_ideal_button.setText(
-                f"Ideal ({'L' if rva_locked else 'U'}): {ideal['rva']:.3f} m"
-            )
-
-        # If locked to ideal, keep fields synced. A fixed axis is always
-        # synced regardless of lock bookkeeping -- the field is disabled and
-        # the applier pins it anyway, so it must always show the declared
-        # radius, sourced here from the producer, never computed locally.
-        # One loop over all four: an axis whose RESOLVED policy (this
-        # crystal pair plus live module state, e.g. a nested mirror optic
-        # fixing rhm/rvm flat) is not driven has its field disabled and
-        # synced unconditionally; a driven axis stays editable and is
-        # synced only when its own Ideal lock is on. Previously only rva's
-        # field ever got disabled here (via ``_apply_rva_axis_policy``) --
-        # rhm/rvm/rha kept whatever stale value the operator last typed,
-        # with no disabled cue, once a module fixed them flat.
+        for axis in FOCUSING_AXES:
+            idock.set_ideal(axis, (ideal or {}).get(axis))
+            self._push_axis_policy(axis, axis_specs.get(axis))
+        # With no ideal (a degenerate take-off angle) policy is not suspended: a
+        # fixed axis still shows its resolved radius, disabled, so a later Run
+        # is not refused on a stale value the module never uses.
         self._sync_curvature_fields(axis_specs, ideal)
 
     def _sync_curvature_fields(self, axis_specs, ideal):
@@ -3745,9 +3692,9 @@ class TAVIController(QObject):
 
         A non-driven axis (fixed by declaration, or by a fitted module) is
         disabled and shows its resolved radius; a driven axis is editable
-        and synced to its ideal only while its Ideal lock is on. ``ideal``
+        and synced to its ideal only while it tracks. ``ideal``
         may be None (no take-off angle to focus at) or a dict narrowed to
-        the askable axes; a locked driven axis with no ideal is left as is.
+        the askable axes; a tracking driven axis with no ideal is left as is.
         """
         idock = self.window.instrument_dock
         axis_edits = {
@@ -3772,72 +3719,22 @@ class TAVIController(QObject):
         finally:
             self.updating = False
 
+    def _on_track_clicked(self, axis, checked):
+        """A click on ``axis``'s Track ideal box: tick tracks, untick holds."""
+        (self.apply_ideal_bending_value if checked else self.unlock_ideal_bending)(axis)
+
     def apply_ideal_bending_value(self, key):
-        """Apply the ideal bending value to the selected input field."""
-        ideal = self._compute_ideal_bending_values()
-        if not ideal:
-            return
-        if key == "rhm":
-            self.window.instrument_dock.rhm_ideal_button.setChecked(True)
-            self.window.instrument_dock.rhm_ideal_button.setEnabled(False)
-            self._set_and_confirm_field(self.window.instrument_dock.rhm_edit, ideal['rhm'])
-        elif key == "rvm":
-            self.window.instrument_dock.rvm_ideal_button.setChecked(True)
-            self.window.instrument_dock.rvm_ideal_button.setEnabled(False)
-            self._set_and_confirm_field(self.window.instrument_dock.rvm_edit, ideal['rvm'])
-        elif key == "rha":
-            self.window.instrument_dock.rha_ideal_button.setChecked(True)
-            self.window.instrument_dock.rha_ideal_button.setEnabled(False)
-            self._set_and_confirm_field(self.window.instrument_dock.rha_edit, ideal['rha'])
-        elif key == "rva":
-            self.window.instrument_dock.rva_ideal_button.setChecked(True)
-            self.window.instrument_dock.rva_ideal_button.setEnabled(False)
-            self._set_and_confirm_field(self.window.instrument_dock.rva_edit, ideal['rva'])
+        """Track ``key``: the choice goes on and its field takes the ideal at once, when there is one."""
+        self.window.instrument_dock.set_choice(key, True)
         self.update_ideal_bending_buttons()
 
-    def apply_ideal_bending_values(self):
-        """Apply ideal bending values to all fields."""
-        ideal = self._compute_ideal_bending_values()
-        if not ideal:
-            return
-        self._set_and_confirm_field(self.window.instrument_dock.rhm_edit, ideal['rhm'])
-        self._set_and_confirm_field(self.window.instrument_dock.rvm_edit, ideal['rvm'])
-        self._set_and_confirm_field(self.window.instrument_dock.rha_edit, ideal['rha'])
-        self._set_and_confirm_field(self.window.instrument_dock.rva_edit, ideal['rva'])
-
     def unlock_ideal_bending(self, key):
-        """Unlock ideal bending button when user edits the field."""
-        if key == "rhm":
-            self.window.instrument_dock.rhm_ideal_button.setChecked(False)
-            self.window.instrument_dock.rhm_ideal_button.setEnabled(True)
-        elif key == "rvm":
-            self.window.instrument_dock.rvm_ideal_button.setChecked(False)
-            self.window.instrument_dock.rvm_ideal_button.setEnabled(True)
-        elif key == "rha":
-            self.window.instrument_dock.rha_ideal_button.setChecked(False)
-            self.window.instrument_dock.rha_ideal_button.setEnabled(True)
-        elif key == "rva":
-            self.window.instrument_dock.rva_ideal_button.setChecked(False)
-            # Unlike the other three, rva's button may legitimately be
-            # unavailable for the selected analyser (fixed, or no established
-            # focusing model) -- re-enable it only when the descriptor says
-            # autofocus is actually offered here.
-            rva_axis = self._current_rva_axis()
-            self.window.instrument_dock.rva_ideal_button.setEnabled(
-                rva_axis.driven and rva_axis.focusing_known
-            )
+        """Hold ``key`` at the value now in its field (a click, typing, an API PATCH)."""
+        self.window.instrument_dock.set_choice(key, False)
 
     def is_bending_locked(self, key):
-        """Return True if a bending field is locked to ideal."""
-        if key == "rhm":
-            return self.window.instrument_dock.rhm_ideal_button.isChecked() and not self.window.instrument_dock.rhm_ideal_button.isEnabled()
-        if key == "rvm":
-            return self.window.instrument_dock.rvm_ideal_button.isChecked() and not self.window.instrument_dock.rvm_ideal_button.isEnabled()
-        if key == "rha":
-            return self.window.instrument_dock.rha_ideal_button.isChecked() and not self.window.instrument_dock.rha_ideal_button.isEnabled()
-        if key == "rva":
-            return self.window.instrument_dock.rva_ideal_button.isChecked() and not self.window.instrument_dock.rva_ideal_button.isEnabled()
-        return False
+        """Whether a launch tracks ``key``'s ideal: the operator's choice, unless the axis can never track."""
+        return self.window.instrument_dock.is_tracking(key)
 
     def _set_and_confirm_field(self, line_edit, value, force=False):
         """Set a field programmatically and flash accepted state."""
@@ -3948,27 +3845,17 @@ class TAVIController(QObject):
                 result[key] = default
         return result
 
-    def _apply_bending_lock_state(self, rhm_locked, rvm_locked, rha_locked, rva_locked):
-        """Apply lock state for ideal bending buttons.
+    def _apply_bending_lock_state(self, choices):
+        """Set each axis's Track ideal choice from ``{axis: bool}``.
 
-        ``rva``'s enabled state set here is provisional: ``update_ideal_bending_buttons``
-        (called below, and always again once loading finishes) re-applies the
-        descriptor's own policy over it -- a saved lock the current analyser
-        no longer offers (fixed, or no established focusing model) does not
-        survive that call.
+        Choices only: ``update_ideal_bending_buttons`` (always called once
+        loading finishes) pushes what each axis can do, so a saved choice
+        the current analyser does not offer (fixed, or no established
+        focusing model) is kept and simply does not apply.
         """
-        self.window.instrument_dock.rhm_ideal_button.setChecked(bool(rhm_locked))
-        self.window.instrument_dock.rhm_ideal_button.setEnabled(not bool(rhm_locked))
-        self.window.instrument_dock.rvm_ideal_button.setChecked(bool(rvm_locked))
-        self.window.instrument_dock.rvm_ideal_button.setEnabled(not bool(rvm_locked))
-        self.window.instrument_dock.rha_ideal_button.setChecked(bool(rha_locked))
-        self.window.instrument_dock.rha_ideal_button.setEnabled(not bool(rha_locked))
-        self.window.instrument_dock.rva_ideal_button.setChecked(bool(rva_locked))
-        self.window.instrument_dock.rva_ideal_button.setEnabled(not bool(rva_locked))
+        for axis in FOCUSING_AXES:
+            self.window.instrument_dock.set_choice(axis, bool(choices[axis]))
 
-        if any([rhm_locked, rvm_locked, rha_locked, rva_locked]):
-            self.update_ideal_bending_buttons()
-    
     def _update_transfer(self, Ei, Ef, other_angle):
         """Show the transfer an energy edit leaves. While the other crystal transmits
         (``other_angle`` 0) it has no energy to subtract, so the transfer keeps its last value."""
@@ -4590,12 +4477,12 @@ class TAVIController(QObject):
         return specs
 
     def _askable_curvature_axes(self, monocris, anacris, modules=None):
-        """Axes the GUI's advisory Ideal labels may ask a radius for.
+        """Axes the GUI's advisory ideal readouts may ask a radius for.
 
         One caller, on purpose: ``_compute_ideal_bending_values`` wants an
         answer for every axis that HAS a focusing model so that an
         unrelated axis with none (IN12's Heusler ``rva``, driven with
-        ``focusing_known=False``) does not blank the other three labels.
+        ``focusing_known=False``) does not blank the other three readouts.
         That is an advisory-display question. The API's launch refresh
         (``build_api_launch_state``, ``_default_parameter_values``) asks a
         different one -- which axes this launch will actually AUTOFOCUS --
@@ -4603,7 +4490,7 @@ class TAVIController(QObject):
         that is genuinely AUTOFOCUS, unpinned and unscanned must reach
         ``ideal_curvature`` and be refused naming the axis, because there
         is no radius to run with. The GUI can never put such an axis into
-        AUTOFOCUS (its Ideal button is disabled), so the two paths do not
+        AUTOFOCUS (``is_bending_locked`` is False for it), so the two paths do not
         disagree on any reachable launch; they answer different questions.
         """
         axis_specs = self._curvature_axis_specs(monocris, anacris, modules=modules)
@@ -4640,8 +4527,8 @@ class TAVIController(QObject):
         """Hard-refusal messages for a HELD curvature radius, straight from
         the instrument-dock widgets.
 
-        Only an axis the operator actually commanded is checked -- one whose
-        Ideal lock is off, i.e. HELD, not AUTOFOCUS (``is_bending_locked``
+        Only an axis the operator actually commanded is checked -- one that is
+        not tracking, i.e. HELD, not AUTOFOCUS (``is_bending_locked``
         mirrors the same read ``get_gui_values`` uses to set
         ``curvature_modes``) -- AND not named by a non-empty scan command
         (``scan_named_axes``, from ``_scan_named_curvature_axes``): that axis
@@ -5069,6 +4956,9 @@ class TAVIController(QObject):
                      for c in accepted.values()}
         for qid, field in fields:
             mark_for(field).set_mark(*marks.get(qid, (None,)))
+        self.window.instrument_dock.set_scanned({
+            self._RADIUS_AXES[qid]: mark[2] for qid, mark in marks.items()
+            if qid in self._RADIUS_AXES and mark[0] == "scanned"})
         for group, parts in self.window.scattering_dock.field_groups():
             names = " and ".join(name for name, ids in parts if unread.issuperset(ids))
             set_group_note(group, f"{names} not used by this scan" if names else None)
@@ -6117,10 +6007,8 @@ class TAVIController(QObject):
             "mono_vertical_radius_m": self.window.instrument_dock.rvm_edit.text(),
             "analyzer_horizontal_radius_m": self.window.instrument_dock.rha_edit.text(),
             "analyzer_vertical_radius_m": self.window.instrument_dock.rva_edit.text(),
-            "rhm_ideal_locked": self.is_bending_locked("rhm"),
-            "rvm_ideal_locked": self.is_bending_locked("rvm"),
-            "rha_ideal_locked": self.is_bending_locked("rha"),
-            "rva_ideal_locked": self.is_bending_locked("rva"),
+            # The operator's choice, not what launches: it survives an analyser that cannot track
+            **{f"{axis}_ideal_locked": self.window.instrument_dock.choice(axis) for axis in FOCUSING_AXES},
             "fixed_E_var": self.window.scattering_dock.fixed_E_edit.text(),
             "q_instrument_x_inv_angstrom": self.window.scattering_dock.qx_edit.text(),
             "q_instrument_y_inv_angstrom": self.window.scattering_dock.qy_edit.text(),
@@ -6228,7 +6116,7 @@ class TAVIController(QObject):
                 json.dump(document, file)
 
     # v2: rva joined rhm/rvm/rha as a real GUI field with its own saved
-    # radius and Ideal lock.
+    # radius and Track ideal choice (the ``*_ideal_locked`` keys).
     # v3: the true mount apart from the operator's UB -- "true_mount"
     # {U_described, mount_plane}.
     # v4: the psi/kappa corrections, the hidden zero errors and the
@@ -6593,14 +6481,11 @@ class TAVIController(QObject):
                 self._saved_slit_values(parameters)
             )
 
-            # Absolute bending radii, then the ideal locks
+            # Absolute bending radii, then the Track ideal choices (a missing key takes the default)
             self._load_bending_parameters(parameters)
-            self._apply_bending_lock_state(
-                parameters.get("rhm_ideal_locked", False),
-                parameters.get("rvm_ideal_locked", False),
-                parameters.get("rha_ideal_locked", False),
-                parameters.get("rva_ideal_locked", False),
-            )
+            self._apply_bending_lock_state({
+                axis: parameters.get(f"{axis}_ideal_locked", self._tracks_by_default(axis))
+                for axis in FOCUSING_AXES})
             
             self.window.simulation_dock.set_number_neutrons(parameters.get("number_neutrons_var", 1000000))
             self.window.scattering_dock.K_fixed_combo.setCurrentText(parameters.get("K_fixed_var", "Kf Fixed"))
@@ -6972,9 +6857,9 @@ class TAVIController(QObject):
         # Slit apertures - descriptor defaults (SlitSpec.default_*_mm)
         self.window.instrument_dock.set_slit_values_mm({})
 
-        # Set default absolute bending to ideal values
+        # Every axis that can track tracks, and its field takes the ideal
+        self._apply_bending_lock_state({axis: self._tracks_by_default(axis) for axis in FOCUSING_AXES})
         self.update_ideal_bending_buttons()
-        self.apply_ideal_bending_values()
         
         self.window.simulation_dock.set_number_neutrons(1000000)
         self.window.scattering_dock.K_fixed_combo.setCurrentText("Kf Fixed")
@@ -7754,7 +7639,7 @@ class TAVIController(QObject):
         Deliberately excluded, though ``get_gui_values()``/``GET /parameters``/
         ``GET /state`` all expose it: ``curvature_modes``, read-only derived
         state (``build_api_schema`` declares it with ``readOnly: True``). It is
-        computed from the Ideal locks and from which axes a scan command names
+        computed from the Track ideal choices and from which axes a scan command names
         -- a second way to set it here would be a new twin of that logic, not a
         convenience.
         """

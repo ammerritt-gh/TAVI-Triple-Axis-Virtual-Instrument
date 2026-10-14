@@ -1,7 +1,7 @@
 """Ledger entry 3 (P1) in docs/audits/new-instruments-crystal-bending.md: a
 batched radius PATCH silently discarded one of the commanded radii.
 
-Each radius field's after-handler used to unlock its own Ideal-focusing lock
+Each radius field's after-handler used to untick its own Track ideal box
 and then refresh all four fields from ``_sync_curvature_fields`` (which
 overwrites any axis still locked to AUTOFOCUS). ``apply_parameters`` runs
 every SETTER before any after-handler, so with both monochromator axes
@@ -121,8 +121,8 @@ def test_a_four_radius_patch_keeps_every_driven_radius(controller):
     def _unlockable(key):
         spec = axis_specs[key][0]
         if key == "rva":
-            # unlock_ideal_bending's rva branch only re-enables the button
-            # when the analyser also has a known focusing model -- unrelated
+            # A no-model rva (IN12's Heusler) can never track, so its
+            # is_bending_locked stays False whatever the choice -- unrelated
             # to this ordering fix (see the packet's constraints).
             return spec.driven and spec.focusing_known
         return spec.driven
