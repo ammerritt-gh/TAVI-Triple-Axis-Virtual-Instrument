@@ -76,7 +76,7 @@ These were resolved during design review:
 |---|---|
 | Protocol | HTTP/REST with JSON bodies plus Server-Sent Events (SSE) for live streaming. Stdlib only (`http.server.ThreadingHTTPServer`) — no new dependencies. Any language or plain `curl` can be a client. |
 | Control scope | Full parameter set: everything `get_gui_values()` covers (energies, Q/HKL, angles, lattice, crystals, collimation, slits, neutron count, scan commands). API writes update the GUI widgets visibly so the user sees what the remote program did. |
-| Data delivery | Both: (a) live per-point SSE events mirroring the `scan_point_updated_*` signals, and (b) a JSON endpoint returning full arrays, valid mid-run (partial) and after completion. |
+| Data delivery | Both: (a) live per-point SSE events mirroring the per-point updates the GUI drains from the controller's buffer (`_GuiUpdateBuffer`), and (b) a JSON endpoint returning full arrays, valid mid-run (partial) and after completion. |
 | Busy policy | Job queue with sequential execution. GUI-initiated runs become jobs too, which also fixes an existing bug where double-clicking Run spawns concurrent scans (no busy flag exists today). |
 | GUI surface | A new API dock (`BaseDockWidget` pattern): server status, access-mode toggle, job queue table, budget readout, activity log. |
 | Access modes | Three modes, default **Allow control**: full API. **Read-only**: GET and SSE only, writes rejected with 403. **Off**: server not listening. Live-switchable from the dock, persisted in config. |
@@ -88,7 +88,7 @@ These were resolved during design review:
 All line references in `TAVI_PySide6.py` unless noted (as of 2026-07-03, `main` @ 7117b541):
 
 - **Scan start path:** `run_simulation_thread()` (:2833) runs on the GUI thread — validates via `_preflight_scan_validation()` (:2869; its helpers `_judge_boxes` and the pair check in `rules.build_plan` are pure, the `QMessageBox` lives in the caller), persists via `save_parameters()`, freezes `launch_state = _collect_simulation_launch_state()` (:638, wrapping `get_gui_values()` :564, ~35 flat fields including `scan_command1/2`), then spawns a bare `threading.Thread(target=run_simulation)`.
-- **`run_simulation(launch_state)` (:3001) never touches widgets.** It is fully driven by the frozen dict and communicates only via Qt signals (`scan_initialized`, `scan_point_updated_1d/2d` :3463/:3469, `scan_completed`, `progress_updated`, `counts_updated`, `actual_output_folder_updated`, `message_printed`; defined :48–73). This means an API-submitted job can reuse it verbatim once `launch_state` is frozen on the GUI thread.
+- **`run_simulation(launch_state)` (:3001) never touches widgets.** It is fully driven by the frozen dict and communicates only via Qt signals (`scan_initialized`, `scan_completed`, `progress_updated`, `counts_updated`, `actual_output_folder_updated`, `message_printed`) and the controller's buffered GUI drain (`_GuiUpdateBuffer`, `_drain_updates`) for per-point display updates. This means an API-submitted job can reuse it verbatim once `launch_state` is frozen on the GUI thread.
 - **Prep pipeline:** `_prep_worker` (:2945) plus `queue.Queue`, shared `self.stop_event` (:88) with drain semantics — see `docs/PIPELINE_DESIGN.md`. Unchanged by this design.
 - **Scan arrays are function-local.** `scan_x_values`/`scan_counts` (:3225) and `counts_grid` (:3222) are discarded after each run; only disk files (`1D_scan_data.txt`, `2D_scan_data.txt`, per-point `detector.dat`) and `display_dock._scan_data` retain them. Counts contain NaN for invalid points.
 - **Parameter setter surface:** `load_parameters()` (:2567) shows every widget setter (`setText`, `set_mono_id`, `set_module_values`, `set_collimation_values`, `set_slit_values_mm`, `set_number_neutrons`, `K_fixed_combo.setCurrentText`) and the dependency-ordering rationale (~:2677). Per-field recompute handlers: `on_Ki_changed` :1069, `on_Ei_changed` :1097, `on_Q_changed` :1253, `on_HKL_changed` :1293, `on_lattice_changed` :1331.
@@ -194,14 +194,14 @@ For 2D scans `counts` is null and `counts_grid` is a list of rows. Unmeasured or
 - Worker loop: pop job → skip if `CANCELLED` → **clear the shared `self.stop_event`** (after pop, before `RUNNING`, so a Stop pressed between jobs cannot leak into the next one) → run `run_simulation(launch_state, job)` → final state. The single shared `stop_event` is kept (prep worker and consumer already reference it); per-job events are unnecessary because only one job runs at a time.
 - `run_simulation_thread()` keeps its GUI prep and validation dialog, then calls `submit_scan_job(source='gui')` instead of spawning a thread.
 - Per-job GUI prep (progress-bar reset, `display_dock.set_scan_metadata`) moves to a GUI-thread slot on `job_state_changed → running`, so API-submitted jobs get identical GUI treatment (the plot follows remote scans too).
-- Stop semantics: GUI Stop button and `POST /stop` both set the stop event and mark the active job `STOPPED`; `clear_queue` additionally marks queued jobs `CANCELLED` so the worker skips them.
+- Stop semantics: GUI Stop button and `POST /stop` both set the stop event and mark the active job `STOPPED`; `clear_queue` additionally marks queued jobs `CANCELLED` so the worker skips them. Optional `kill` on both stop routes force-stops a running job (`result.stop_mode` `kill`), see `docs/API_USER_GUIDE.md` §5.
 
 ### 7.3 Retaining scan data
 
 `run_simulation` gains a `job` parameter:
 
 - After scan-geometry construction (~:3127/:3178), initialize `job.result` under `job.lock` with pre-sized `counts` (`[None] * n`) or `counts_grid`.
-- At each point, beside the existing `scan_point_updated_1d/2d` emits (:3463/:3469) and the invalid-point branches, write `counts[idx]` / `counts_grid[iy][ix]`, totals, and `progress_done` under the lock, and publish the `point` SSE event.
+- At each point, beside the per-point updates posted to the GUI buffer (`_GuiUpdateBuffer`, drained on the GUI thread) and the invalid-point branches, write `counts[idx]` / `counts_grid[iy][ix]`, totals, and `progress_done` under the lock, and publish the `point` SSE event.
 - At completion set the final job state (`DONE`/`STOPPED`/`FAILED` from the existing error message), `finished_at`, and keep `self.last_scan_result = job.result`.
 - Thread safety: only the worker thread writes; HTTP threads read via `snapshot()`, which deep-copies under the lock. Existing file-writing lists stay untouched (scoped change).
 
