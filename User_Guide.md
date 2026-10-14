@@ -301,6 +301,9 @@ are explicitly a centering-rule fallback and are not structure-factor filtered.
 ## Message Log
 The message log gives information about the ongoing program, for example, during a scan it will read back all the instrument angles.
 
+### Crash log
+If TAVI closes unexpectedly or shows an error, look in `output/tavi-crash.log` inside the TAVI folder (the console prints its full path at startup). Each launch adds a line naming the operating system, the library versions and the display session; any crash, uncaught error or Qt warning follows it. Please attach this file when you report a problem. It is replaced by a fresh one once it passes 1 MB, the previous kept as `tavi-crash.log.1`.
+
 ## Data Control
 Use the data control dock to determine where data is saved. Each scan is saved to its own folder, with every simulation saved to subfolders. Note that if a folder name would overlap, it appends a number at the end; it is ok to leave the name the same, it will do "scan_name" then "scan_name_1" then "scan_name_2" and so on. It (should) never overwrite your folders.
 

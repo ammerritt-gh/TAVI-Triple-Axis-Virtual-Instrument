@@ -10674,6 +10674,34 @@ class TAVIController(QObject):
         return data_folder
 
 
+def _log_qt_to_crash_log(app, crash_log):
+    """Record Qt's display setup, and route Qt's warnings to the crash log too."""
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler, qVersion
+
+    screen = app.primaryScreen()
+    ratio = screen.devicePixelRatio() if screen is not None else "no screen"
+    crash_log.record("Qt", f"Qt {qVersion()}  platform plugin: {app.platformName()}  "
+                           f"device pixel ratio: {ratio}")
+
+    logged = 0
+
+    def handler(mode, context, message):
+        # Still printed, as Qt's default handler would; debug/info chatter is not logged.
+        nonlocal logged
+        print(message, file=sys.stderr)
+        if mode in (QtMsgType.QtDebugMsg, QtMsgType.QtInfoMsg):
+            return
+        # A warning repeated on every mouse move must not grow the log without
+        # bound; fatal messages are always kept.
+        if logged < 200 or mode == QtMsgType.QtFatalMsg:
+            crash_log.record(f"Qt {mode.name}", message)
+        elif logged == 200:
+            crash_log.record("Qt", "further Qt warnings not logged this session")
+        logged += 1
+
+    qInstallMessageHandler(handler)
+
+
 def main():
     """Main entry point for the application.
 
@@ -10684,6 +10712,12 @@ def main():
     selection is fixed for the session.
     """
     import argparse
+    from tavi import crash_log
+
+    try:
+        print(f"Crash log: {crash_log.install()}", flush=True)
+    except OSError as exc:
+        print(f"Crash log unavailable: {exc}", file=sys.stderr)
 
     parser = argparse.ArgumentParser(prog="TAVI")
     parser.add_argument(
@@ -10726,6 +10760,7 @@ def main():
             sys.exit(2)
 
     app = QApplication([sys.argv[0], *qt_args])
+    _log_qt_to_crash_log(app, crash_log)
 
     # Precedence: --instrument flag > saved last_instrument (if still registered)
     # > single-instrument shortcut > picker dialog. A stale/unknown saved id is
