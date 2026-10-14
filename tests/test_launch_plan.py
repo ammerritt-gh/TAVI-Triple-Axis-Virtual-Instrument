@@ -300,6 +300,7 @@ def test_a_held_radius_typed_in_the_dock_is_the_value_the_point_emits(monkeypatc
         try:
             ctrl.set_default_parameters()
             assert float(ctrl.window.instrument_dock.rhm_edit.text()) != 2.5   # not the default
+            ctrl.unlock_ideal_bending("rhm")   # defaults track; a held radius is what is under test
             ctrl.window.instrument_dock.rhm_edit.setText("2.5")
             _plan, snaps, _launch = _run_snapshots(ctrl, monkeypatch, tmp_path, "A3 29 31 1")
             assert len(snaps) == 3
