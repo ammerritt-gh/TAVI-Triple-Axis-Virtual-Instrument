@@ -1278,6 +1278,7 @@ class TAVIController(QObject):
         # _stop_lock guards _active_scope and every stop decision (request_stop).
         self._stop_lock = threading.Lock()
         self._active_scope = None  # the PointScope of the MC point running now, or None
+        self._kill_record = None  # (scope, FILETIME of its first kill): decides what was running then
         # The job whose graceful GUI stop relabelled the Stop button (or None).
         self._force_stop_label_job = None
         # Records the processes a scan point starts so a force stop can end them.
@@ -1588,6 +1589,8 @@ class TAVIController(QObject):
                         job.stop_request = "graceful"
                     self.stop_event.set()
                     if kill and scope is not None:
+                        if self._kill_record is None or self._kill_record[0] is not scope:
+                            self._kill_record = (scope, int((time.time() + 11644473600) * 10**7))
                         # Buffer only: a GUI-thread drain here would run Qt slots under these locks.
                         scope.kill(self._gui_updates.log)
                     return job.stop_request
@@ -9262,8 +9265,8 @@ class TAVIController(QObject):
 
         Returns ``{'discarded': bool, 'result' | 'error': ..., 'scope': scope,
         'blocked': bool}``. The point is discarded (not executed) when its first
-        launch was refused (a stop came first), when a kill landed while a
-        process it started was still running, or when its call is still blocked
+        launch was refused (a stop came first), when a kill landed while a process
+        it started, or a descendant of one, was still running, or when its call is still blocked
         after the kill; a kill landing after its processes exited leaves it
         recorded normally. Decided by the scope's flags, never by what
         ``run_point`` returned or raised.
@@ -9289,16 +9292,26 @@ class TAVIController(QObject):
         thread.start()
         while thread.is_alive() and not scope.killed:
             thread.join(0.5)
+        discard = scope.refused
         if scope.killed:
             # Orphans of an exited root are ended (or named) before the job can end.
             survivors = scope.wait_killed(point_processes.KILL_WAIT_S + 1)
-            if scope.interrupted or survivors:
+            with self._stop_lock:
+                record = self._kill_record
+            kill_at = record[1] if record and record[0] is scope else None
+            # No creation time to place it by: counts as alive, so no partial count is saved.
+            alive = kill_at is None or any(
+                created is None or (created <= kill_at and (gone is None or gone > kill_at))
+                for _pid, created, gone in scope.known())
+            discard = discard or scope.interrupted or alive
+            if discard or survivors:
                 thread.join(self.POINT_JOIN_AFTER_KILL_S)
             else:
                 # Its processes had all exited: the call finishes as a normal point does.
                 while thread.is_alive():
                     thread.join(0.5)
             if thread.is_alive():
+                discard = True
                 box['blocked'] = True
                 self._unpublish_scope(scope)
                 cause = ("by the surviving processes named above" if survivors
@@ -9307,8 +9320,7 @@ class TAVIController(QObject):
                     f"Point {i}: its McStas call is still blocked {cause}; TAVI leaves "
                     "it behind and ignores its result.")
             scope.release()
-        box['discarded'] = bool(box['blocked'] or scope.refused
-                                or (scope.killed and scope.interrupted))
+        box['discarded'] = discard
         return box
 
     def _discard_point_output(self, i, scan_folder, point):

@@ -77,7 +77,8 @@ which McStasScript compiles and runs the first point) and tracks their
 descendants. A kill ends that process tree through held process handles,
 waits up to `KILL_WAIT_S` for it to exit, and logs any survivor by name and
 PID. The point is then decided by the scope's flags:
-- A kill that landed while a recorded process was still running, a launch
+- A kill that landed while a process of the point (its launcher or a tracked
+  descendant) was still running at the kill instant, a launch
   refused because a stop arrived before the point's first launch (the check
   and the launch are one step under the scope lock), or a call still blocked
   after the kill: the point is **not executed**. None of its writers run (plot,
@@ -86,7 +87,7 @@ PID. The point is then decided by the scope's flags:
   so a reload skips it) and the log names the discarded point. A killed
   first point also invalidates the compiled binary: the execution state and
   the cross-scan reuse cache are reset, so the next scan compiles again.
-- A kill that landed after every recorded process had exited records the
+- A kill that landed after every process of the point had exited records the
   point normally (orphans are still ended first), then the scan stops.
 
 The job ends `stopped` with `result.stop_mode` `"graceful"` or `"kill"`, set in
