@@ -332,12 +332,13 @@ revert.
 at full precision, ready to paste into a notebook or spreadsheet. The first
 line is a header, `quantity`, `value`, `error`, `unit`; then one line each for
 CEN, COM, MAX, FWHM, Step, Height, Background, eta, Lineshape, Integrated,
-Normalised, Raw range, Reduced deviance, Points and Degrees of freedom. Where a
-value is not available the cell says why: Step's error cell reads
-`uneven steps`, Integrated's value does too, and a background on zero reads
-`at limit` in its error cell. The eta line is left out when the shape is
-pinned, and the Lineshape line has an empty unit cell because its value is a
-name. With no fit, the copy holds COM and MAX only.
+Normalised, Raw range, Reduced deviance, Points and Degrees of freedom. Where the
+fit could not determine an error, its cell is left empty. Three cells carry
+a word instead: Step's error cell reads `uneven steps`, Integrated's value
+does too, and a background on zero reads `at limit` in its error cell. The
+eta line is left out when the shape is pinned, and the Lineshape line has an
+empty unit cell because its value is a name. With no fit, the copy holds COM
+and MAX only.
 
 **Status line.** It reads "Fit converged." or "Fit failed:" and the reason,
 then any warnings by name (the same ones the amber CEN tooltip lists), then
