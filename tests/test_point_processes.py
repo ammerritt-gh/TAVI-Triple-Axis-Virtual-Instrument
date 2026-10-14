@@ -369,6 +369,16 @@ def test_reused_pid_child_after_the_real_exit_is_not_collected():
     assert [e.pid for e in known] == [100], "a child created after the parent's real exit was collected"
 
 
+def test_pid_reused_after_the_table_read_is_not_adopted():
+    """The table showed PID 200 as a child of 100; by the time it was opened the PID
+    belonged to a process created after the read, which must not be adopted."""
+    known = [pp._Known(100, 1000, None, "a.exe", FakeProc(1000))]
+    pp._discover(known, _table((100, 4), (200, 100)), {200: FakeProc(3000)}.get, taken=2000)
+    assert [e.pid for e in known] == [100]
+    pp._discover(known, _table((100, 4), (200, 100)), {200: FakeProc(1500)}.get, taken=2000)
+    assert [e.pid for e in known] == [100, 200]
+
+
 # --------------------------------------------------------------------- install
 
 def test_install_twice_keeps_one_wrapper_and_the_guard():
