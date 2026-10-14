@@ -8,13 +8,17 @@ questions, each against a named limit:
 * a queued GUI event is handled within ``EVENT_LATENCY_LIMIT_S``;
 * the Stop button ends the scan within ``STOP_LIMIT_S`` of the click;
 * every log line the controller produced reaches the log panel, in order,
-  and the final plot and saved data file equal the job result's counts.
+  and the final plot and saved data file equal the job result's counts;
+* display updates applied in a batch (``redraw=False`` then ``redraw()``)
+  leave the plot exactly as the per-point path does.
 
 Wall-time budget: at most 20 s for the file (one 2,000-point scan stopped
-part-way, one short scan run to completion); every wait has a deadline that
+part-way, two short scans run to completion); every wait has a deadline that
 fails the test rather than hanging it. Timing assertions print the measured
 margin (run with ``-s`` or read the captured output on failure).
 """
+import contextlib
+import io
 import os
 import sys
 import threading
@@ -59,13 +63,27 @@ def controller(tmp_path_factory):
     )
     ctrl = cm.TAVIController(window, instrument, api_overrides={"disabled": True})
     ctrl.output_directory = str(tmp_path_factory.mktemp("responsiveness"))
-    print("import root:", os.path.dirname(cm.__file__))
+    print("import root:", os.path.dirname(cm.__file__), file=sys.__stdout__)
     try:
         yield ctrl
     finally:
         ctrl.shutdown()
         window.deleteLater()
         app.processEvents()
+
+
+@contextlib.contextmanager
+def _stdout_to_memory():
+    """The scan prints a line per point (stage solve); into pytest's capture file
+    that cost ~30 ms a line here, so a 2,000-point scan spent a minute before its
+    first point. Inside the test body (pytest swaps sys.stdout again around each
+    phase) the prints go to memory; this file's own report uses the real stdout."""
+    saved = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout = saved
 
 
 @pytest.fixture(autouse=True)
@@ -215,18 +233,19 @@ def test_gui_stays_responsive_and_stop_is_prompt(controller):
         lambda: marks.setdefault("handled", time.perf_counter()))
     watcher = None
     try:
-        job = _start_scan(ctrl, _scan_command_with_points(SCAN_POINTS))
-        t_start = time.perf_counter()
-        state["job"] = job
-        assert job.launch_state['engine'] == 'deterministic'
-        assert len(job.launch_state['expansion'].points) == SCAN_POINTS
-        watcher = threading.Thread(
-            target=_watch, args=(job, poster, marks, watcher_stop), daemon=True)
-        watcher.start()
-        timer.start()
-        _wait(lambda: "end" in marks, SCAN_DEADLINE_S, "the job to end")
-        # Let the GUI finish its backlog and the last drain deliver everything.
-        QTest.qWait(500)
+        with _stdout_to_memory():
+            job = _start_scan(ctrl, _scan_command_with_points(SCAN_POINTS))
+            t_start = time.perf_counter()
+            state["job"] = job
+            assert job.launch_state['engine'] == 'deterministic'
+            assert len(job.launch_state['expansion'].points) == SCAN_POINTS
+            watcher = threading.Thread(
+                target=_watch, args=(job, poster, marks, watcher_stop), daemon=True)
+            watcher.start()
+            timer.start()
+            _wait(lambda: "end" in marks, SCAN_DEADLINE_S, "the job to end")
+            # Let the GUI finish its backlog and the last drain deliver everything.
+            QTest.qWait(500)
     finally:
         watcher_stop.set()
         timer.stop()
@@ -247,7 +266,7 @@ def test_gui_stays_responsive_and_stop_is_prompt(controller):
              EVENT_LATENCY_LIMIT_S - worst, len(judged), stop_latency, STOP_LIMIT_S,
              STOP_LIMIT_S - stop_latency, marks.get("done_at_click", -1),
              marks.get("handled", float("inf")) - marks.get("click", 0.0),
-             scan_duration, marks.get("end_state")))
+             scan_duration, marks.get("end_state")), file=sys.__stdout__)
 
     assert marks.get("end_state") == JobState.STOPPED, (
         "the scan was not stopped by the click (end state %s)" % marks.get("end_state"))
@@ -263,3 +282,137 @@ def test_gui_stays_responsive_and_stop_is_prompt(controller):
         "log panel text differs from the producer sequence "
         "(%d produced lines)" % len(rec.lines))
     assert len(rec.lines) > STOP_AT_POINTS // 2, "scan produced suspiciously few lines"
+
+
+def _finish(ctrl, job):
+    """Wait for a short scan to end and the plot to say so; return the job."""
+    dock = ctrl.window.display_dock
+    _wait(lambda: _state_of(job) in _TERMINAL, SCAN_DEADLINE_S, "the short scan to end")
+    # scan_complete, then the auto-save, each write the status line.
+    _wait(lambda: dock.status_label.text().startswith(("Scan complete", "Plot auto-saved")),
+          SCAN_DEADLINE_S, "the plot to show the scan complete")
+    assert _state_of(job) == JobState.DONE
+    return job
+
+
+def _state_of(job):
+    with job.lock:
+        return job.state
+
+
+def _read_scan_file(path):
+    """(x, y) columns of a saved 1D scan file; NaN stays NaN."""
+    rows = []
+    with open(path, encoding="utf-8", newline="") as handle:
+        for line in handle.read().splitlines():
+            if line and not line.startswith("#"):
+                x, y = line.split()
+                rows.append((float(x), float(y)))
+    return rows
+
+
+def test_final_plot_and_saved_data_equal_the_job_result_1d(controller):
+    """The buffered path loses and reorders nothing: plot arrays and the saved
+    file hold exactly the counts the job recorded."""
+    import numpy as np
+
+    ctrl = controller
+    job = _finish(ctrl, _start_scan(ctrl, "deltaE 0 2 0.1"))
+    result = job.result
+    expected = [np.nan if c is None else c for c in result.counts]
+    assert sum(not np.isnan(c) for c in expected) >= 10, "scan produced too few points"
+
+    snap = ctrl.window.display_dock.scan_snapshot()
+    assert snap['mode'] == '1D'
+    assert list(snap['x']) == list(result.scan_values_1)
+    np.testing.assert_array_equal(snap['counts'], np.array(expected))
+    np.testing.assert_array_equal(snap['mask'], ~np.isnan(np.array(expected)))
+
+    # The saved file: x ascending, one row per point the loop ran (NaN for an invalid one).
+    rows = _read_scan_file(os.path.join(result.output_folder, "1D_scan_data.txt"))
+    by_x = sorted(zip(result.scan_values_1, expected))
+    assert [x for x, _ in rows] == [x for x, _ in by_x]
+    np.testing.assert_array_equal(np.array([y for _, y in rows]),
+                                  np.array([y for _, y in by_x]))
+    assert result.total_counts == pytest.approx(float(np.nansum(expected)))
+
+
+def test_final_plot_equals_the_job_result_2d(controller):
+    import numpy as np
+
+    ctrl = controller
+    dock = ctrl.window.simulation_dock
+    dock.scan_command_2_edit.setText("")
+    dock.engine_combo.setCurrentIndex(dock.engine_combo.findData("deterministic"))
+    dock.scan_command_1_edit.setText("deltaE 0 1 0.5")
+    dock.scan_command_2_edit.setText("H 1 1.4 0.2")
+    ctrl.window.data_control_dock.save_folder_edit.setText("responsiveness_scan_2d")
+    before = {j.job_id for j in ctrl._job_registry.all_jobs()}
+    dock.run_button.click()
+    jobs = [j for j in ctrl._job_registry.all_jobs() if j.job_id not in before]
+    assert len(jobs) == 1, "Run did not queue exactly one job"
+    job = _finish(ctrl, jobs[0])
+    result = job.result
+    assert result.mode == '2D'
+    expected = np.array([[np.nan if c is None else c for c in row]
+                         for row in result.counts_grid])
+    assert np.count_nonzero(~np.isnan(expected)) >= 4, "scan produced too few points"
+    np.testing.assert_array_equal(ctrl.window.display_dock._counts, expected)
+    assert os.path.isfile(os.path.join(result.output_folder, "2D_scan_data.txt"))
+
+
+def _fed_docks(mode):
+    """Two display docks fed the same events: one per point, one batched."""
+    import numpy as np
+    from gui.docks.display_dock import DisplayDock
+
+    docks = []
+    for batched in (False, True):
+        dock = DisplayDock()
+        if mode == '1D':
+            dock.initialize_scan('1D', [float(i) for i in range(8)], [True] * 8, 'deltaE')
+            events = [('set_current_scan_index', (0,)), ('update_1d_point', (0, 5.0)),
+                      ('set_current_scan_index', (1,)), ('mark_1d_point_invalid', (1,)),
+                      ('set_current_scan_index', (2,)), ('update_1d_point', (2, 9.0)),
+                      ('set_current_scan_index', (3,)), ('update_1d_point', (3, 2.0))]
+        else:
+            dock.initialize_scan('2D', [0.0, 1.0, 2.0], [], 'deltaE', 'H',
+                                 [0.0, 1.0], np.ones((2, 3), dtype=bool).tolist())
+            events = [('set_current_scan_index_2d', (0, 0)), ('update_2d_point', (0, 0, 4.0)),
+                      ('set_current_scan_index_2d', (1, 0)), ('mark_2d_point_invalid', (1, 0)),
+                      ('set_current_scan_index_2d', (2, 0)), ('update_2d_point', (2, 0, 7.0)),
+                      ('set_current_scan_index_2d', (0, 1)), ('update_2d_point', (0, 1, 1.0))]
+        for method, args in events:
+            getattr(dock, method)(*args, redraw=not batched)
+        if batched:
+            dock.redraw()
+        docks.append(dock)
+    return docks
+
+
+def test_batched_display_updates_draw_what_the_per_point_path_draws_1d(controller):
+    import numpy as np
+
+    one_by_one, batched = _fed_docks('1D')
+    np.testing.assert_array_equal(one_by_one._line.get_xdata(), batched._line.get_xdata())
+    np.testing.assert_array_equal(one_by_one._line.get_ydata(), batched._line.get_ydata())
+    assert len(batched._line.get_xdata()) == 3          # the invalid point is not drawn
+    assert len(one_by_one.ax.collections) == len(batched.ax.collections) == 2   # unmeasured + the impossible X
+    np.testing.assert_array_equal(one_by_one._unmeasured_scatter.get_offsets(),
+                                  batched._unmeasured_scatter.get_offsets())
+    assert one_by_one.ax.get_ylim() == batched.ax.get_ylim()
+    assert one_by_one.status_label.text() == batched.status_label.text()
+    assert one_by_one._current_line.get_xdata()[0] == batched._current_line.get_xdata()[0]
+    assert batched._replot_pending is False
+
+
+def test_batched_display_updates_draw_what_the_per_point_path_draws_2d(controller):
+    import numpy as np
+
+    one_by_one, batched = _fed_docks('2D')
+    np.testing.assert_array_equal(np.ma.getdata(one_by_one._heatmap.get_array()),
+                                  np.ma.getdata(batched._heatmap.get_array()))
+    assert one_by_one._heatmap.get_clim() == batched._heatmap.get_clim()
+    assert one_by_one._current_rect.get_xy() == batched._current_rect.get_xy()
+    assert one_by_one.status_label.text() == batched.status_label.text()
+    assert batched._replot_pending is False
