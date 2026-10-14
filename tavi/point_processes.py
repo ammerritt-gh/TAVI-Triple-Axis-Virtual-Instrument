@@ -112,6 +112,13 @@ _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 _k32.CloseHandle.restype = wintypes.BOOL
 _k32.GetSystemTimeAsFileTime.argtypes = [ctypes.POINTER(wintypes.FILETIME)]
 _k32.GetSystemTimeAsFileTime.restype = None
+_k32.GetCurrentProcess.argtypes = []
+_k32.GetCurrentProcess.restype = wintypes.HANDLE
+_k32.DuplicateHandle.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+                                 ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD,
+                                 wintypes.BOOL, wintypes.DWORD]
+_k32.DuplicateHandle.restype = wintypes.BOOL
+_DUPLICATE_SAME_ACCESS = 0x2
 
 
 def _ft(filetime):
@@ -186,16 +193,38 @@ class _Proc:
         _k32.CloseHandle(self.handle)
 
 
-def _open_proc(pid):
-    """Open a process with the rights the guard needs; None (logged) if it cannot be opened."""
+def _open_proc(pid, warned=None):
+    """Open a process with the rights the guard needs; None (logged) if it cannot be opened.
+
+    ``warned`` (a set) logs each PID's failure once, so a rescan every second does not
+    repeat it for the length of a point.
+    """
     handle = _k32.OpenProcess(_PROCESS_RIGHTS, False, pid)
     if not handle:
         err = ctypes.get_last_error()
-        if err != _ERROR_INVALID_PARAMETER:  # that PID does not exist
+        if err != _ERROR_INVALID_PARAMETER and (warned is None or pid not in warned):  # 87: no such PID
             logger.warning("OpenProcess(%s) failed (error %s)", pid, err)
+            if warned is not None:
+                warned.add(pid)
         return None
     times = _times(handle)
     return _Proc(pid, handle, times[0] if times else None)
+
+
+def _dup_popen_handle(popen):
+    """A handle of our own duplicated from Popen's, when OpenProcess was refused; None (logged)."""
+    source = getattr(popen, "_handle", None)
+    if source is None:
+        return None
+    me = _k32.GetCurrentProcess()
+    dup = wintypes.HANDLE()
+    if not _k32.DuplicateHandle(me, int(source), me, ctypes.byref(dup), 0, False,
+                                _DUPLICATE_SAME_ACCESS):
+        logger.warning("DuplicateHandle for PID %s failed (error %s)", popen.pid,
+                       ctypes.get_last_error())
+        return None
+    times = _times(dup)
+    return _Proc(popen.pid, dup.value, times[0] if times else None)
 
 
 # ------------------------------------------------------------------ known set
@@ -247,6 +276,8 @@ def _discover(known, table, open_proc, taken=None):
                 if pid == ppid or any(k.gone is None for k in same_pid):
                     continue
                 for parent in by_pid.get(ppid, ()):
+                    if parent.created is None:
+                        continue  # no lower bound: its window cannot tell a reused PID apart
                     proc = candidate(pid)
                     if proc is None:
                         break
@@ -255,7 +286,7 @@ def _discover(known, table, open_proc, taken=None):
                     if proc.created is None:
                         logger.warning("PID %s has no creation time; not collected", pid)
                         continue
-                    if parent.created is not None and proc.created < parent.created:
+                    if proc.created < parent.created:
                         continue
                     if parent.gone is not None and proc.created > parent.gone:
                         continue
@@ -281,8 +312,9 @@ class PointScope:
 
     Use as ``with PointScope(stop_requested) as scope:`` on the point's thread.
     ``kill`` may be called from any thread, before, during or after the block.
-    The controller calls ``release()`` once it is done with the point: after
-    ``wait_killed`` when the point was killed, or when it completed normally.
+    The controller calls ``release()`` only once no kill can reach the scope any
+    more: after it has unpublished the scope as the active one, and, when the point
+    was killed, after ``wait_killed``.  A kill after ``release()`` ends nothing.
     """
 
     def __init__(self, stop_requested=lambda: False):
@@ -298,6 +330,7 @@ class PointScope:
         self._killing = False     # a kill thread is running and owns closing the handles
         self._released = False
         self._closed = False      # the handles are closed; nothing more can be read
+        self._warned = set()      # PIDs whose failed open was already logged
         self.killed = False
         self.refused = False
         self.interrupted = False
@@ -334,7 +367,7 @@ class PointScope:
         cmd = args[0] if args else kwargs.get("args", "")
         first = cmd if isinstance(cmd, (str, os.PathLike)) else (cmd[0] if cmd else "")
         # Popen still holds its own handle, so the PID cannot have been reused yet.
-        proc = _open_proc(popen.pid)
+        proc = _open_proc(popen.pid) or _dup_popen_handle(popen)
         if proc is None:
             logger.warning("PID %s could not be held; it cannot be ended by handle", popen.pid)
         self._roots.append(popen)
@@ -366,7 +399,7 @@ class PointScope:
         with self._lock:
             if self._closed:
                 return []
-            _discover(self._known, table, _open_proc, taken)
+            _discover(self._known, table, lambda pid: _open_proc(pid, self._warned), taken)
             return [e for e in self._known if e.gone is None]
 
     def known(self):
