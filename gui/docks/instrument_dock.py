@@ -655,8 +655,8 @@ class InstrumentDock(BaseDockWidget):
             check.setChecked(mode == "track")
             check.setEnabled(mode in ("track", "held"))
         label = getattr(self, f"{axis}_ideal_label")
-        label.setText("\u2014" if state.ideal is None else "flat" if state.ideal == 0
-                      else f"{state.ideal:.3f} m")
+        shown = None if mode == "fixed" else state.ideal   # a fixed radius is not an ideal
+        label.setText("\u2014" if shown is None else "flat" if shown == 0 else f"{shown:.3f} m")
         status, tips = self._focusing_texts(axis)
         line = getattr(self, f"{axis}_status_label")
         line.setText(status)
@@ -711,7 +711,7 @@ class InstrumentDock(BaseDockWidget):
             status = state.fixed if state.fixed.startswith("fixed") else f"fixed, {state.fixed}"
             why = f"{_sentence(state.fixed)} The hardware fixes this radius, so it cannot follow the ideal."
             tips = (why, f"{why} The field shows the fixed value.",
-                    f"{readout} This radius is fixed by the hardware.")
+                    "No ideal is shown for a radius the hardware fixes.")
         else:
             status = f"tracking unavailable: {state.no_model}"
             why = (f"Tracking is unavailable: {state.no_model}. The value typed in the field "
