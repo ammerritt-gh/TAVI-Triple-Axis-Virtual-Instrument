@@ -754,14 +754,23 @@ class InstrumentDock(BaseDockWidget):
             self._focusing_rows = rows
             group.set_summary(rows)
         # Fixed axes are not counted: nothing the operator can do about them.
-        loose = [f"{a} {words[self.mode(a)]}" for a in FOCUSING_AXES
-                 if self.mode(a) in ("held", "scanned", "no_model")]
+        loose = [a for a in FOCUSING_AXES if self.mode(a) in ("held", "scanned", "no_model")]
         flag = f"\u25cf {len(loose)} not tracking" if loose else ""
-        tip = (f"Not following the ideal radius: {', '.join(loose)}. Open the block to change them."
+        tip = ("Not following the ideal radius. " + " ".join(self._not_tracking_note(a) for a in loose)
                if loose else "")
         if (flag, tip) != self._focusing_flag:
             self._focusing_flag = (flag, tip)
             group.set_flag(flag, tip)
+
+    def _not_tracking_note(self, axis):
+        """One sentence: why ``axis`` is not following the ideal, and what changes it."""
+        mode = self.mode(axis)
+        if mode == "scanned":   # the box is disabled: only its scan command changes it
+            return (f"{axis} is scanned by command {self.scanned_command(axis)}; it returns to its own "
+                    "setting when no command names it.")
+        if mode == "no_model":
+            return f"{axis} held: {self._focus[axis].no_model}, so it cannot track."
+        return f"{axis} held: tick Track ideal in the open block to follow the ideal."
 
     def _refresh_modules_summary(self, *_):
         group = self.collapsible_groups.get("instrument.modules")
