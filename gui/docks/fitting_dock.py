@@ -267,6 +267,8 @@ class FittingDock(BaseDockWidget):
         # Last converged fit that is still valid for the current scan+range;
         # None means CEN's Go has nothing to act on.
         self._fit_result = None
+        # The last failed fit, kept only so Copy results can say why.
+        self._failed_fit = None
         # How many points that fit saw. Mid-scan fitting is allowed, so the
         # scan can grow underneath a perfectly valid fit; this is what lets
         # the dock say so instead of quietly presenting a stale centre.
@@ -731,6 +733,7 @@ class FittingDock(BaseDockWidget):
         self._remove_fit_artists()
         if result.converged:
             self._fit_result = result
+            self._failed_fit = None
             self._fit_n_points = int(snapshot.get("n_measured") or 0)
             self._seed = {
                 "area": result.area, "fwhm": result.fwhm,
@@ -740,6 +743,7 @@ class FittingDock(BaseDockWidget):
             self._draw_fit_artists(result)
         else:
             self._fit_result = None
+            self._failed_fit = result
             self._fit_n_points = None
             self._seed = None
 
@@ -761,6 +765,7 @@ class FittingDock(BaseDockWidget):
     def _invalidate_fit(self):
         """Drop the cached fit, its warm start, its overlay, and the readout."""
         self._fit_result = None
+        self._failed_fit = None
         self._fit_n_points = None
         self._seed = None
         self._remove_fit_artists()
@@ -916,8 +921,11 @@ class FittingDock(BaseDockWidget):
         else:
             copied = "No fit for the current selection: copied COM and MAX only."
         # Prefix, not replace: the fit's status keeps its warnings and caveats.
-        if self._fit_result is not None:
-            self._show_status(self._fit_result)
+        shown = self._fit_result
+        if shown is None:
+            shown = self._failed_fit
+        if shown is not None:
+            self._show_status(shown)
             copied += " " + self.status_label.text()
         else:
             caveat = self._noiseless_caveat()
@@ -1194,6 +1202,7 @@ class FittingDock(BaseDockWidget):
         self._remove_artist(self._span_artist)
         self._span_artist = None
         self._fit_result = None
+        self._failed_fit = None
         self._fit_n_points = None
         self._seed = None
         self._clear_fit_rows()
