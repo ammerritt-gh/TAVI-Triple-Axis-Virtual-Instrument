@@ -822,3 +822,43 @@ def test_results_tsv_without_a_fit_copies_com_and_max_only():
     assert [row[0] for row in rows] == ["quantity", "COM", "MAX"]
     assert rows[1] == ["COM", "2.0", "", "r.l.u."]
     assert rows[2] == ["MAX", "2.0", "", "r.l.u."]
+
+
+def test_one_missing_point_inside_the_range_keeps_steps_even():
+    # mark_1d_point_invalid sets a count to NaN; the gap it leaves is 2x the step.
+    x, y, _ = _poisson_peak()
+    y[50] = np.nan
+    res = fit_peak(x, y)
+    assert res.converged, res.reason
+    assert res.steps_even and res.step == pytest.approx(0.1)
+    assert res.integrated == pytest.approx(res.area / res.step, rel=1e-12)
+
+
+def test_a_spacing_off_the_grid_stays_uneven():
+    x = np.arange(81) * 0.05
+    y = pseudo_voigt(x, area_for_height(400.0, 0.6, 0.2), 0.6, 2.0, 0.2, 2.0)
+    two_percent = x.copy()
+    two_percent[40:] += 0.001  # one spacing 2% off the step
+    stretched = x.copy()
+    stretched[40:] += 0.025  # one spacing 1.5x the step: rounds to 2 steps, still 0.5 step off
+    for xs in (two_percent, stretched):
+        res = fit_peak(xs, y)
+        assert res.converged and not res.steps_even and res.integrated is None
+
+
+def test_results_tsv_step_error_cell_marks_uneven_steps():
+    x = np.arange(81) * 0.05
+    y = pseudo_voigt(x, area_for_height(400.0, 0.6, 0.2), 0.6, 2.0, 0.2, 2.0)
+    off = x.copy()
+    off[40:] += 0.001
+    even = fit_peak(x, y)
+    uneven = fit_peak(off, y)
+    assert even.converged and uneven.converged
+
+    def step_row(xs, res):
+        lines = results_tsv("h", res, com(xs, y), peak_max(xs, y)).splitlines()
+        return next(line.split("\t") for line in lines if line.startswith("Step\t"))
+
+    assert step_row(x, even)[2] == ""
+    assert step_row(off, uneven)[1] == repr(float(uneven.step))
+    assert step_row(off, uneven)[2] == "uneven steps"

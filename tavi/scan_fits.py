@@ -128,7 +128,8 @@ class QuickFitResult:
     # Intensity readout, filled only on a converged fit from the fit's own selection.
     #: Median spacing of the fitted selection's abscissae.
     step: Optional[float] = None
-    #: Every spacing within 1% of ``step``; False makes ``integrated`` None.
+    #: Every spacing within 1% of ``step``, or of a whole multiple of it left by
+    #: an isolated missing point; False makes ``integrated`` None.
     steps_even: bool = False
     #: Area / step: the fitted peak's summed counts, background removed (counts).
     integrated: Optional[float] = None
@@ -571,7 +572,14 @@ def _intensity_readout(sel, area, area_err, background, background_err, ymax) ->
     """
     d = np.diff(sel.x)
     step = float(np.median(d))
-    steps_even = bool(step > 0.0 and np.all(np.abs(d - step) <= 0.01 * step))
+    steps_even = False
+    if step > 0.0:
+        # A missing point leaves an isolated whole-number multiple of the step: on-grid.
+        # Adjacent multiples are a coarser stretch, which no single step converts.
+        k = np.round(d / step)
+        on_grid = (k >= 1) & (np.abs(d - k * step) <= 0.01 * step)
+        gap = k >= 2
+        steps_even = bool(np.all(on_grid) and not np.any(gap[1:] & gap[:-1]))
     integrated = integrated_err = None
     if steps_even:
         integrated = area / step
@@ -944,7 +952,8 @@ def results_tsv(variable, result: QuickFitResult, com, peak_max) -> str:
         add("MAX", num(peak_max.x), "", x_unit)
     if result.converged:
         add("FWHM", num(result.fwhm), num(result.fwhm_err), x_unit)
-        add("Step", num(result.step), "", x_unit)
+        add("Step", num(result.step),
+            "" if result.steps_even else "uneven steps", x_unit)
         add("Height", num(result.height), num(result.height_err), "counts")
         bg_err = "at limit" if result.background_at_limit else num(result.background_err)
         add("Background", num(result.background), bg_err, "counts")
