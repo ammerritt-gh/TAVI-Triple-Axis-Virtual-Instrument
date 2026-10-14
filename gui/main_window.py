@@ -3,6 +3,7 @@ import sys
 import os
 import json
 import shutil
+import time
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                                 QScrollArea, QMenuBar, QMenu, QMessageBox,
                                 QInputDialog, QSizePolicy, QStyle, QTabBar)
@@ -69,6 +70,13 @@ class TAVIMainWindow(QMainWindow):
         # Set to the chosen id when the user confirms an instrument switch; main()
         # reads this after app.exec() returns to relaunch with the new instrument.
         self._restart_instrument_id = None
+        # Close with work ongoing: the user confirmed, the force stop is under way
+        # (_close_in_progress), and the poll timer then lets the real close through
+        # (_close_ready).
+        self._close_in_progress = False
+        self._close_ready = False
+        self._close_timer = None
+        self._close_deadline = 0.0
 
         # Enable dock nesting for more flexible layouts
         self.setDockNestingEnabled(True)
@@ -626,7 +634,8 @@ class TAVIMainWindow(QMainWindow):
             return
 
         # Confirmed: persist the new choice FIRST, then trigger the restart via
-        # the normal close path (closeEvent -> controller.shutdown() + layout save).
+        # the close path (closeEvent force-stops any scan without a second dialog,
+        # waits for it, then controller.shutdown() + layout save).
         # A locked plane does not survive a switch: the controller releases it
         # and drops it from this instrument's saved block (nothing else saved).
         controller = getattr(self, "controller", None)
@@ -1087,14 +1096,90 @@ class TAVIMainWindow(QMainWindow):
                          "Use View menu to manage panel visibility.")
     
     def closeEvent(self, event):
-        """Handle window close event - stop simulation and save layout."""
-        # Stop any running simulation and tear down the job worker before closing.
-        if hasattr(self, 'controller') and self.controller is not None:
-            self.controller.print_to_message_center("Window closing - stopping simulation...")
-            if hasattr(self.controller, 'shutdown'):
-                self.controller.shutdown()
+        """Close: ask first when work is ongoing, force-stop it, close once it has stopped."""
+        controller = getattr(self, 'controller', None)
+        if controller is None or self._close_ready:
+            self._finish_close(controller)
+            event.accept()
+            return
+        if self._close_in_progress:
+            event.ignore()      # a stop-before-close is already waiting
+            return
+        ongoing = controller.ongoing_work()
+        if ongoing is None:
+            self._finish_close(controller)
+            event.accept()
+            return
+        # An instrument switch already asked, and warned that scans stop.
+        if self._restart_instrument_id is None and not self._confirm_close(ongoing):
+            event.ignore()
+            return
+        event.ignore()
+        self._stop_then_close(controller)
+
+    def _confirm_close(self, ongoing):
+        """Ask whether to stop what is ongoing and close; Keep running is the default."""
+        queued = ongoing["queued"]
+        queued_text = f"{queued} queued job{'s' if queued != 1 else ''}"
+        if ongoing["job_id"] is not None:
+            where = (f"point {ongoing['point']} of {ongoing['points']}"
+                     if ongoing["point"] else "just starting")
+            text = (f"A scan is running ({where}).\n\nClosing TAVI stops it "
+                    f"immediately and discards the current point.")
+            if queued:
+                text += f"\n\nThe {queued_text} will be cancelled."
+            confirm_label = "Stop scan and close"
+        else:
+            text = f"{queued_text} will be cancelled if you close TAVI now."
+            confirm_label = "Cancel jobs and close"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Scan in progress" if ongoing["job_id"] is not None
+                           else "Queued scans")
+        box.setText(text)
+        confirm = box.addButton(confirm_label, QMessageBox.ButtonRole.DestructiveRole)
+        keep = box.addButton("Keep running", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.setEscapeButton(keep)
+        box.exec()
+        return box.clickedButton() is confirm
+
+    def _stop_then_close(self, controller):
+        """Force-stop everything, then close once the controller is idle or the wait ran out."""
+        self._close_in_progress = True
+        controller.print_to_message_center("Window closing - stopping the scan before closing...")
+        self.simulation_dock.run_button.setEnabled(False)
+        controller.force_stop_all()
+        self._close_deadline = time.monotonic() + controller.CLOSE_WAIT_S
+        self._close_timer = QTimer(self)
+        self._close_timer.setInterval(100)
+        self._close_timer.timeout.connect(self._poll_stop_before_close)
+        self._close_timer.start()
+
+    def _poll_stop_before_close(self):
+        controller = self.controller
+        # _on_job_state_changed re-enables Run whenever a job ends, so hold it off on every tick.
+        self.simulation_dock.run_button.setEnabled(False)
+        idle = controller.is_idle()
+        if not idle:
+            controller.force_stop_all()     # a job queued or started during the wait
+            if time.monotonic() < self._close_deadline:
+                return
+        self._close_timer.stop()
+        if not idle:
+            controller.print_to_message_center(
+                "The scan's processes could not all be confirmed ended; any the "
+                "force stop reported as surviving must be ended by hand. Closing anyway.")
+        self._close_ready = True
+        self.close()
+
+    def _finish_close(self, controller):
+        """Stop any simulation, tear down the job worker and save the layout."""
+        if controller is not None:
+            controller.print_to_message_center("Window closing - stopping simulation...")
+            if hasattr(controller, 'shutdown'):
+                controller.shutdown()
         self.save_layout_to_file()
-        event.accept()
 
 
 def main():
