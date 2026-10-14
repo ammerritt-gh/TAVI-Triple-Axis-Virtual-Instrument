@@ -244,6 +244,7 @@ def test_puma_with_the_nmo_fitted_shows_the_mono_fixed_flat_and_the_choice_comes
     modes = _agree(ctrl, NEVER["puma"])
     assert (modes["rhm"], modes["rvm"], modes["rha"], modes["rva"]) == ("fixed", "fixed", "track", "fixed")
     assert "flat while the nmo is fitted" in _box(ctrl, "rhm").toolTip().lower()
+    assert "flat while the nmo is fitted" in idock.rhm_ideal_label.toolTip().lower()
     assert _text(ctrl, "rhm") == 0 and _text(ctrl, "rvm") == 0
     assert idock.choice("rhm") is True and idock.choice("rvm") is False
     # a module-fixed axis keeps today's launch mode: its choice
