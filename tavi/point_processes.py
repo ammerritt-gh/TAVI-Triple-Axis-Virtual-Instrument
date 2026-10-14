@@ -17,21 +17,30 @@ step under the scope lock: a launch after a kill, or the scope's first launch
 after a stop was requested, is refused with ``PointLaunchRefused`` (an
 ``OSError``, so ``tas_runtime``'s existing launch-failure path handles it).
 
-``PointScope.kill(log)`` ends every live process of the scope's *known set* and
-returns at once; a daemon thread does the work and reports through ``log``.
-The known set is the recorded roots plus their descendants, tracked by a
-watcher thread while the point runs and re-scanned during the kill, so a worker
-whose launcher exited first is still found.  An entry is
-``(pid, creation time, first seen gone)``.  A process joins the set when its
-parent PID matches an entry and its creation time lies between that entry's
-creation and the time the entry was first seen gone; the window is what stops
-a reused PID from pulling an unrelated process in.
+Every entry of the known set holds an open process handle from the moment it is
+recorded or discovered.  While a handle is open Windows cannot reuse its PID, so
+the handle is the identity: liveness and the exit time are read from it, and a
+process is ended with ``TerminateProcess`` on it.  No taskkill, no bare PID.  A
+process joins the known set when its parent PID matches an entry and its
+creation time lies between that entry's creation time and exit time (open-ended
+while the entry runs); the window keeps an unrelated child out.
+
+``PointScope.kill(log)`` ends every live process of the known set and returns at
+once; a daemon thread does the work and reports through ``log``.  It rescans the
+table every ``KILL_POLL_S`` until nothing is left or ``KILL_WAIT_S`` has passed,
+and never calls anything that can block.  ``wait_killed(timeout)`` returns the
+processes still running if the kill outlasts the wait.
+
+``release()`` closes the handles.  The controller calls it once it is done with
+the point (after ``wait_killed`` when the point was killed, or when it completed
+normally); ``__del__`` calls it as a fallback.  A kill still running keeps its
+handles open and closes them when it ends.
 
 Lock discipline (the controller's order is ``_stop_lock``, then this scope's
-lock, then a ``job.lock``): the scope lock is held only around
-check-then-launch-then-record, ``kill``'s flag updates, and reading or merging
-the known set.  It is never held across a process-table read, a ``taskkill``,
-a sleep or a join.
+lock, then a ``job.lock``): the scope lock is held around check-then-launch-then-
+record, ``kill``'s flag updates, and every update or read of the known set.  Those
+handle queries are non-blocking.  The lock is never held across a process-table
+read, a sleep or a join.
 
 Test budget: ``tests/test_point_processes.py`` keeps to 10 s.
 """
@@ -51,8 +60,6 @@ TRACK_INTERVAL_S = 1.0   # how often the watcher reads the process table
 KILL_WAIT_S = 10.0       # how long a kill keeps trying before it names survivors
 KILL_POLL_S = 0.1        # the kill thread's rescan period
 
-CREATE_NO_WINDOW = 0x08000000
-
 Survivor = namedtuple("Survivor", "pid image")
 
 
@@ -63,8 +70,10 @@ class PointLaunchRefused(OSError):
 # ---------------------------------------------------------------- Win32 layer
 
 _TH32CS_SNAPPROCESS = 0x2
+_PROCESS_TERMINATE = 0x0001
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _SYNCHRONIZE = 0x00100000
+_PROCESS_RIGHTS = _PROCESS_TERMINATE | _PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE
 _WAIT_TIMEOUT = 0x102
 _ERROR_INVALID_PARAMETER = 87  # OpenProcess on a PID that does not exist
 _INVALID_HANDLE = ctypes.c_void_p(-1).value
@@ -97,6 +106,8 @@ _k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FIL
 _k32.GetProcessTimes.restype = wintypes.BOOL
 _k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
 _k32.WaitForSingleObject.restype = wintypes.DWORD
+_k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+_k32.TerminateProcess.restype = wintypes.BOOL
 _k32.CloseHandle.argtypes = [wintypes.HANDLE]
 _k32.CloseHandle.restype = wintypes.BOOL
 _k32.GetSystemTimeAsFileTime.argtypes = [ctypes.POINTER(wintypes.FILETIME)]
@@ -131,115 +142,129 @@ def _read_table():
     return table
 
 
-def _created_of(handle):
-    """Creation time (FILETIME ticks) of an open process handle, or None."""
-    times = [wintypes.FILETIME() for _ in range(4)]
-    if not _k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+def _times(handle):
+    """``(creation, exit)`` of a process handle in FILETIME ticks (exit is 0 while it runs), or None."""
+    ft = [wintypes.FILETIME() for _ in range(4)]
+    if not _k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in ft)):
         logger.warning("GetProcessTimes failed (error %s)", ctypes.get_last_error())
         return None
-    return _ft(times[0])
+    return _ft(ft[0]), _ft(ft[1])
 
 
-def _probe(pid):
-    """``(creation time, still running)`` for a PID, or None if it cannot be opened.
+class _Proc:
+    """An open handle on one process.  While it is open, Windows cannot reuse the PID."""
 
-    Running is read from the process object, not the table, because a process
-    that has exited but whose handle someone still holds stays listed.
-    """
-    handle = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, pid)
+    __slots__ = ("pid", "handle", "created")
+
+    def __init__(self, pid, handle, created):
+        self.pid, self.handle, self.created = pid, handle, created
+
+    def running(self):
+        return _k32.WaitForSingleObject(self.handle, 0) == _WAIT_TIMEOUT
+
+    def exit_time(self):
+        """None while the process runs; else its real exit time (FILETIME ticks)."""
+        if self.running():
+            return None
+        times = _times(self.handle)
+        if times is None or not times[1]:
+            logger.warning("exit time of PID %s is unreadable; using the scan time", self.pid)
+            return _filetime_now()
+        return times[1]
+
+    def terminate(self):
+        """``TerminateProcess`` on this handle; True once the process is ended."""
+        if _k32.TerminateProcess(self.handle, 1):
+            return True
+        err = ctypes.get_last_error()
+        if not self.running():
+            return True  # it exited on its own in the meantime
+        logger.warning("TerminateProcess failed for PID %s (error %s)", self.pid, err)
+        return False
+
+    def close(self):
+        _k32.CloseHandle(self.handle)
+
+
+def _open_proc(pid):
+    """Open a process with the rights the guard needs; None (logged) if it cannot be opened."""
+    handle = _k32.OpenProcess(_PROCESS_RIGHTS, False, pid)
     if not handle:
         err = ctypes.get_last_error()
-        if err != _ERROR_INVALID_PARAMETER:
+        if err != _ERROR_INVALID_PARAMETER:  # that PID does not exist
             logger.warning("OpenProcess(%s) failed (error %s)", pid, err)
         return None
-    try:
-        return _created_of(handle), _k32.WaitForSingleObject(handle, 0) == _WAIT_TIMEOUT
-    finally:
-        _k32.CloseHandle(handle)
-
-
-def _taskkill(pid):
-    """End a process and its tree.  Output is captured and no window is shown."""
-    try:
-        done = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True, creationflags=CREATE_NO_WINDOW, timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
-        logger.exception("taskkill for PID %s could not run", pid)
-        return
-    if done.returncode:  # 128 = already gone, the usual harmless case
-        logger.info("taskkill PID %s returned %s: %s", pid, done.returncode,
-                    done.stderr.decode(errors="replace").strip())
+    times = _times(handle)
+    return _Proc(pid, handle, times[0] if times else None)
 
 
 # ------------------------------------------------------------------ known set
 
 class _Known:
-    """One entry of the known set: a process identified by PID and creation time."""
+    """One entry of the known set.  ``proc`` is its held handle; None only if it could not be opened."""
 
-    __slots__ = ("pid", "created", "gone", "image")
+    __slots__ = ("pid", "created", "gone", "image", "proc")
 
-    def __init__(self, pid, created, gone, image):
-        self.pid, self.created, self.gone, self.image = pid, created, gone, image
-
-    def copy(self):
-        return _Known(self.pid, self.created, self.gone, self.image)
+    def __init__(self, pid, created, gone, image, proc):
+        self.pid, self.created, self.gone, self.image, self.proc = pid, created, gone, image, proc
 
 
-def _same_running(entry, state):
-    """Is the probed process the entry's own and still running?"""
-    return (state is not None and state[1]
-            and (entry.created is None or state[0] == entry.created))
+def _discover(known, table, open_proc):
+    """Grow ``known`` (a list of ``_Known``) from one process table.
 
-
-def _discover(known, table, probe, now):
-    """Grow ``known`` (a list of ``_Known`` copies) from one process table.
-
-    An entry no longer running gets ``gone = now`` once.  A process whose parent
-    PID matches an entry joins when its creation time lies in the entry's
-    window [created, gone] (open-ended while the entry is alive); dead entries
-    stay, so orphans of an exited parent are still found.  Repeats until stable
-    so a grandchild in the same table is found in the same pass.
+    A running entry whose process has exited gets ``gone``, its real exit time,
+    once.  A process whose parent PID matches an entry joins when its creation
+    time lies in the entry's window [created, gone] (open-ended while the entry
+    runs), holding the handle ``open_proc`` gave it; a handle not adopted is
+    closed.  Dead entries stay, so orphans of an exited parent are still found.
+    Repeats until stable so a grandchild in the same table is found in the same pass.
     """
-    cache = {}
+    opened = {}  # candidate PID -> its open _Proc; None once adopted or not openable
 
-    def look(pid):
-        if pid not in cache:
-            cache[pid] = probe(pid)
-        return cache[pid]
+    def candidate(pid):
+        if pid not in opened:
+            opened[pid] = open_proc(pid)
+        return opened[pid]
 
-    for entry in known:
-        if entry.gone is None:
-            if not _same_running(entry, look(entry.pid)):
-                entry.gone = now
-            elif entry.pid in table:
-                entry.image = table[entry.pid][1]
-    grew = True
-    while grew:
-        grew = False
-        by_pid = {}
+    try:
         for entry in known:
-            by_pid.setdefault(entry.pid, []).append(entry)
-        for pid, (ppid, name) in table.items():
-            same_pid = by_pid.get(pid, ())
-            if pid == ppid or any(k.gone is None for k in same_pid):
-                continue
-            for parent in by_pid.get(ppid, ()):
-                state = look(pid)
-                if state is None:
-                    break
-                created, running = state
-                if any(k.created == created for k in same_pid):
-                    break
-                if created is not None:
-                    if parent.created is not None and created < parent.created:
+            if entry.gone is None and entry.proc is not None:
+                exited = entry.proc.exit_time()
+                if exited is not None:
+                    entry.gone = exited
+                elif entry.pid in table:
+                    entry.image = table[entry.pid][1]
+        grew = True
+        while grew:
+            grew = False
+            by_pid = {}
+            for entry in known:
+                by_pid.setdefault(entry.pid, []).append(entry)
+            for pid, (ppid, name) in table.items():
+                same_pid = by_pid.get(pid, ())
+                if pid == ppid or any(k.gone is None for k in same_pid):
+                    continue
+                for parent in by_pid.get(ppid, ()):
+                    proc = candidate(pid)
+                    if proc is None:
+                        break
+                    if any(k.created == proc.created for k in same_pid):
+                        break
+                    if proc.created is None:
+                        logger.warning("PID %s has no creation time; not collected", pid)
                         continue
-                    if parent.gone is not None and created > parent.gone:
+                    if parent.created is not None and proc.created < parent.created:
                         continue
-                known.append(_Known(pid, created, None if running else now, name))
-                grew = True
-                break
+                    if parent.gone is not None and proc.created > parent.gone:
+                        continue
+                    known.append(_Known(pid, proc.created, proc.exit_time(), name, proc))
+                    opened[pid] = None  # the entry owns the handle now
+                    grew = True
+                    break
+    finally:
+        for proc in opened.values():
+            if proc is not None:
+                proc.close()
 
 
 # --------------------------------------------------------------------- scope
@@ -252,6 +277,8 @@ class PointScope:
 
     Use as ``with PointScope(stop_requested) as scope:`` on the point's thread.
     ``kill`` may be called from any thread, before, during or after the block.
+    The controller calls ``release()`` once it is done with the point: after
+    ``wait_killed`` when the point was killed, or when it completed normally.
     """
 
     def __init__(self, stop_requested=lambda: False):
@@ -264,6 +291,9 @@ class PointScope:
         self._stop_watch = threading.Event()
         self._killed_done = threading.Event()
         self._survivors = []
+        self._killing = False     # a kill thread is running and owns closing the handles
+        self._released = False
+        self._closed = False      # the handles are closed; nothing more can be read
         self.killed = False
         self.refused = False
         self.interrupted = False
@@ -283,6 +313,9 @@ class PointScope:
             watcher.join(2.0)
         return False
 
+    def __del__(self):
+        self.release()
+
     # -- the Popen hook
     def _launch(self, original, popen, args, kwargs):
         with self._lock:
@@ -296,13 +329,13 @@ class PointScope:
     def _record(self, popen, args, kwargs):
         cmd = args[0] if args else kwargs.get("args", "")
         first = cmd if isinstance(cmd, (str, os.PathLike)) else (cmd[0] if cmd else "")
-        created = None
-        try:
-            created = _created_of(int(popen._handle))
-        except Exception:  # an exotic Popen without a handle; the rescans go by PID
-            logger.exception("could not read the creation time of PID %s", popen.pid)
+        # Popen still holds its own handle, so the PID cannot have been reused yet.
+        proc = _open_proc(popen.pid)
+        if proc is None:
+            logger.warning("PID %s could not be held; it cannot be ended by handle", popen.pid)
         self._roots.append(popen)
-        self._known.append(_Known(popen.pid, created, None, os.path.basename(str(first)) or "?"))
+        self._known.append(_Known(popen.pid, proc.created if proc else None, None,
+                                  os.path.basename(str(first)) or "?", proc))
         if self._watcher is None:
             self._watcher = threading.Thread(target=self._watch, name="point-watcher", daemon=True)
             self._watcher.start()
@@ -319,31 +352,20 @@ class PointScope:
                 logger.exception("point-process watcher scan failed")
 
     def _rescan(self):
-        """Read the table outside the lock, merge into the known set, return live entries."""
-        with self._lock:
-            snapshot = [e.copy() for e in self._known]
-        if not snapshot:
-            return []
+        """Read the table outside the lock, grow the known set under it, return the live entries."""
         try:
             table = _read_table()
         except OSError:
-            logger.exception("process table unreadable; scanning by PID only")
+            logger.exception("process table unreadable; liveness still comes from the held handles")
             table = {}
-        _discover(snapshot, table, _probe, _filetime_now())
         with self._lock:
-            index = {(e.pid, e.created): e for e in self._known}
-            for fresh in snapshot:
-                mine = index.get((fresh.pid, fresh.created))
-                if mine is None:
-                    self._known.append(fresh)
-                    continue
-                if mine.gone is None:
-                    mine.gone = fresh.gone
-                mine.image = fresh.image
-        return [e for e in snapshot if e.gone is None]
+            if self._closed:
+                return []
+            _discover(self._known, table, _open_proc)
+            return [e for e in self._known if e.gone is None]
 
     def known(self):
-        """Copies of the known set as ``(pid, creation time, first seen gone)``."""
+        """Copies of the known set as ``(pid, creation time, exit time or None while running)``."""
         with self._lock:
             return [(e.pid, e.created, e.gone) for e in self._known]
 
@@ -356,32 +378,35 @@ class PointScope:
             self.killed = True
             self.interrupted = any(p.poll() is None for p in self._roots)
             self._stop_watch.set()
-            recorded = bool(self._known)
-            if recorded:
+            if self._closed:
+                message = "Force stop: the point's processes were released before the stop, so they cannot be checked."
+            elif self._known:
+                self._killing = True
                 threading.Thread(target=self._kill_main, args=(log,),
                                  name="point-kill", daemon=True).start()
-        if not recorded:
-            self._say(log, "Force stop: no process was recorded for this point.")
-            self._killed_done.set()
+                return
+            else:
+                message = "Force stop: no process was recorded for this point."
+        self._say(log, message)
+        self._killed_done.set()
 
     def _kill_main(self, log):
         deadline = time.monotonic() + KILL_WAIT_S
-        sent = {}
-        live = []
+        live, tried, ended = [], set(), []
         try:
             while True:
                 live = self._rescan()
                 if not live or time.monotonic() >= deadline:
                     break
                 for entry in live:
-                    key = (entry.pid, entry.created)
-                    if key not in sent and entry.pid != os.getpid():
-                        sent[key] = entry
-                        _taskkill(entry.pid)
+                    if entry in tried or entry.pid == os.getpid():
+                        continue
+                    tried.add(entry)  # one attempt each: a failure stays a survivor, not a retry loop
+                    if entry.proc is not None and entry.proc.terminate():
+                        ended.append(entry)
                 time.sleep(KILL_POLL_S)
+            ended = [e for e in ended if e not in live]
             survivors = [Survivor(e.pid, e.image) for e in live]
-            left = {(e.pid, e.created) for e in live}
-            ended = [e for key, e in sent.items() if key not in left]
             with self._lock:
                 self._survivors = survivors
             if survivors:
@@ -399,7 +424,11 @@ class PointScope:
                 self._survivors = [Survivor(e.pid, e.image) for e in live]
             self._say(log, "Force stop failed; check Task Manager for leftover McStas or mpiexec processes.")
         finally:
-            self._killed_done.set()
+            with self._lock:
+                self._killing = False
+                if self._released:
+                    self._close_handles()
+                self._killed_done.set()
 
     @staticmethod
     def _say(log, message):
@@ -411,13 +440,35 @@ class PointScope:
     def wait_killed(self, timeout):
         """Block until the kill has finished or ``timeout`` passes; return the survivors.
 
-        Survivors are ``Survivor(pid, image)`` tuples still running when the
-        kill gave up; empty if the kill has not finished or was never made.
+        ``Survivor(pid, image)`` tuples: the survivors the kill reported or, if it is
+        still running when the wait ends, the recorded processes still running now.
+        Empty if ``kill`` was never called or nothing survived.
         """
-        if self.killed:
-            self._killed_done.wait(timeout)
+        if not self.killed:
+            return []
+        if self._killed_done.wait(timeout):
+            with self._lock:
+                return list(self._survivors)
         with self._lock:
-            return list(self._survivors)
+            if self._killed_done.is_set():
+                return list(self._survivors)
+            return [Survivor(e.pid, e.image) for e in self._known
+                    if e.gone is None and e.proc is not None and e.proc.running()]
+
+    def release(self):
+        """Close every held handle.  Idempotent; a kill still running closes them when it ends."""
+        with self._lock:
+            self._released = True
+            if not self._killing:
+                self._close_handles()
+
+    def _close_handles(self):
+        """Close the held handles.  The caller holds the lock."""
+        for entry in self._known:
+            if entry.proc is not None:
+                entry.proc.close()
+                entry.proc = None
+        self._closed = True
 
 
 # ------------------------------------------------------------------- install
