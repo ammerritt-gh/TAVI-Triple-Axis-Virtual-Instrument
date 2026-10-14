@@ -12,6 +12,7 @@ import dataclasses
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -359,25 +360,52 @@ def test_copy_results_puts_the_u1_text_on_the_clipboard(docks):
     assert not hasattr(fitting, "max_copy_button")
 
 
-def test_copy_says_when_the_fit_predates_points_measured_since(docks):
+def test_copy_keeps_the_points_since_note_in_the_status(docks):
     display, fitting, _ = docks
     _scan_peak(display, measured=20)
     fitting._on_fit_clicked()
     display.update_1d_point(20, 5.0)           # a point arrives after the fit
     fitting.copy_results_button.click()
-    # The status line says the fit predates that point; it makes no claim that
-    # COM and MAX include it (with a range selected they may not).
-    text = fitting.status_label.text()
-    assert text == (
-        "Copied the fit results, COM and MAX to the clipboard. The fit predates "
-        "1 point(s) measured since it -- press Fit again to use them.")
-    assert "include them" not in text
-    # Nothing measured after the fit: the plain text, as before.
+    # The copy message leads; the fit's own status line follows and carries the note.
+    assert fitting.status_label.text() == (
+        "Copied the fit results, COM and MAX to the clipboard. Fit converged. "
+        "1 point(s) measured since this fit -- press Fit again to use them.")
+    assert "predates" not in fitting.status_label.text()
+    # Nothing measured after the fit: the copy message and the plain status.
     _scan_peak(display)
     fitting._on_fit_clicked()
     fitting.copy_results_button.click()
     assert fitting.status_label.text() == (
-        "Copied the fit results, COM and MAX to the clipboard.")
+        "Copied the fit results, COM and MAX to the clipboard. Fit converged.")
+
+
+def test_copy_keeps_the_fit_warnings_in_the_status(docks):
+    display, fitting, _ = docks
+    _scan_peak(display)
+    fitting._on_fit_clicked()
+    fitting._fit_result = dataclasses.replace(
+        fitting._fit_result, warnings=["centre near the range edge"])
+    fitting.copy_results_button.click()
+    assert fitting.status_label.text() == (
+        "Copied the fit results, COM and MAX to the clipboard. Fit converged. "
+        "Warnings: centre near the range edge.")
+
+
+def test_copy_keeps_the_noiseless_caveat(docks):
+    display, fitting, controller = docks
+    controller.last_scan_result = SimpleNamespace(metadata={"noiseless": True})
+    _scan_peak(display)
+    fitting._on_fit_clicked()
+    fitting.copy_results_button.click()
+    assert fitting.status_label.text().startswith(
+        "Copied the fit results, COM and MAX to the clipboard. Fit converged.")
+    assert "noiseless run" in fitting.status_label.text()
+    # No fit: the copy message alone, with the caveat after it.
+    _scan_peak(display)
+    fitting.copy_results_button.click()
+    assert fitting.status_label.text().startswith(
+        "No fit for the current selection: copied COM and MAX only.")
+    assert "noiseless run" in fitting.status_label.text()
 
 
 def test_without_a_scan_disabled_controls_say_why(docks):
