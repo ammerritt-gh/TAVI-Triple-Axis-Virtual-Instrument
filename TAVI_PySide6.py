@@ -599,17 +599,23 @@ class TaviApiBackend:
 
     def stop_all(self, clear_queue, kill=False):
         registry = self._controller._job_registry
+        jobs = registry.all_jobs()
         running_id = None
         cancelled = []
-        for job in registry.all_jobs():
-            with job.lock:
-                state = job.state
-            if state == JobState.RUNNING or (clear_queue and state == JobState.QUEUED):
-                # A queued job may have started since the read; its stop then lands as a stop.
-                outcome = self._controller.request_stop(job.job_id, kill=kill)
-                if outcome == "cancelled":
+        # Queued jobs first: stopping the running job can let the worker start the next one.
+        if clear_queue:
+            for job in jobs:
+                with job.lock:
+                    queued = job.state == JobState.QUEUED
+                if queued and self._controller.request_stop(job.job_id, kill=kill) == "cancelled":
                     cancelled.append(job.job_id)
-                elif outcome in ("graceful", "kill"):
+        for job in jobs:
+            with job.lock:
+                running = job.state == JobState.RUNNING
+            # A queued job may have started since the first pass; its stop then lands as a stop.
+            if running:
+                outcome = self._controller.request_stop(job.job_id, kill=kill)
+                if outcome in ("graceful", "kill"):
                     running_id = job.job_id
         return {"stopped": running_id, "cancelled": cancelled}
 
@@ -1618,9 +1624,16 @@ class TAVIController(QObject):
 
         One kill request per job: on a queued job it cancels, on the running job
         it kills, on a finished job it does nothing, so a job that starts while
-        this runs is caught either way.
+        this runs is caught either way. Queued jobs are cancelled first, so the
+        worker cannot start one in the window the running job's kill opens.
         """
-        for job in self._job_registry.all_jobs():
+        jobs = self._job_registry.all_jobs()
+        for job in jobs:
+            with job.lock:
+                queued = job.state == JobState.QUEUED
+            if queued and self.request_stop(job.job_id, kill=True) == "cancelled":
+                self.job_state_changed.emit(job.job_id, JobState.CANCELLED.value)
+        for job in jobs:
             if self.request_stop(job.job_id, kill=True) == "cancelled":
                 self.job_state_changed.emit(job.job_id, JobState.CANCELLED.value)
 

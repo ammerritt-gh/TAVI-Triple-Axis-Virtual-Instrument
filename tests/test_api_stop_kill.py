@@ -209,6 +209,51 @@ def test_stop_all_with_clear_queue_and_kill(api, gate):
     assert done["state"] == "stopped" and stop_mode(done) == "kill"
 
 
+def hand_off_on_stop(controller, monkeypatch, running_id, next_id):
+    """Stand in for the worker's hand-off: stopping ``running_id`` ends it and starts ``next_id``.
+
+    The race in miniature, without a thread: the running job ends during the stop
+    and the worker dequeues the next job before the stop loop reaches it.
+    """
+    real = controller.request_stop
+    registry = controller._job_registry
+
+    def request_stop(job_id=None, *, kill=False):
+        outcome = real(job_id, kill=kill)
+        if job_id == running_id and outcome in ("graceful", "kill"):
+            with registry.get(running_id).lock:
+                registry.get(running_id).state = cm.JobState.DONE
+            nxt = registry.get(next_id)
+            with nxt.lock:
+                if nxt.state == cm.JobState.QUEUED:
+                    nxt.state = cm.JobState.RUNNING
+        return outcome
+
+    monkeypatch.setattr(controller, "request_stop", request_stop)
+
+
+def test_stop_all_cancels_queued_jobs_before_stopping_the_running_one(api, gate, monkeypatch):
+    controller, call, _base = api
+    first = running_job(call, gate)
+    second = submit(call)
+    hand_off_on_stop(controller, monkeypatch, first, second)
+    status, reply = call("POST", "/stop", {"clear_queue": True, "kill": True})
+    assert status == 200
+    assert reply == {"stopped": first, "cancelled": [second]}
+    snap = job(call, second)
+    assert snap["state"] == "cancelled" and snap["started_at"] is None
+
+
+def test_force_stop_all_cancels_queued_jobs_before_killing_the_running_one(api, gate, monkeypatch):
+    controller, call, _base = api
+    first = running_job(call, gate)
+    second = submit(call)
+    hand_off_on_stop(controller, monkeypatch, first, second)
+    controller.force_stop_all()
+    snap = job(call, second)
+    assert snap["state"] == "cancelled" and snap["started_at"] is None
+
+
 def test_invalid_kill_is_400_and_changes_nothing(api, gate):
     controller, call, _base = api
     job_id = running_job(call, gate)
