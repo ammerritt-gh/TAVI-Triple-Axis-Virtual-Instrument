@@ -3600,38 +3600,6 @@ class TAVIController(QObject):
                           monocris, anacris)
             return None
 
-    def _current_rva_axis(self):
-        """The selected analyser's declared ``CurvatureAxis`` for rva.
-
-        The one axis whose declared policy actually varies between crystals
-        -- fixed (no operator say), driven with no established focusing model
-        (IN12's Heusler), or ordinary. Read fresh from the descriptor via
-        ``_curvature_axis_specs`` rather than cached, so a crystal swap is
-        picked up the moment it happens.
-        """
-        from instruments.descriptor import CurvatureAxis
-
-        idock = self.window.instrument_dock
-        monocris = idock.selected_mono_id()
-        anacris = idock.selected_ana_id()
-        # Resolved against the LIVE module state, exactly as the four-axis
-        # sync loop in update_ideal_bending_buttons resolves its specs -- a
-        # second reading without modules would be a twin that disagrees the
-        # day a module override touches rva.
-        rva_axis, _ = self._curvature_axis_specs(
-            monocris, anacris, modules=idock.module_values()
-        ).get('rva', (CurvatureAxis(), ''))
-        return rva_axis
-
-    def _apply_rva_axis_policy(self, rva_axis):
-        """rva's field is editable only while the selected analyser leaves it driven.
-
-        The row's Track ideal box and its reason come from
-        ``update_ideal_bending_buttons``; this keeps the field enable state
-        even when ``_sync_curvature_fields`` is suspended by ``self.updating``.
-        """
-        self.window.instrument_dock.rva_edit.setEnabled(rva_axis.driven)
-
     def _declared_curvature_axis(self, axis):
         """The selected crystal's own declaration for ``axis``, blind to fitted modules.
 
@@ -3677,7 +3645,8 @@ class TAVIController(QObject):
         idock = self.window.instrument_dock
         axis_specs = self._curvature_axis_specs(
             idock.selected_mono_id(), idock.selected_ana_id(), modules=idock.module_values())
-        self._apply_rva_axis_policy(self._current_rva_axis())
+        # Kept here, not only in _sync_curvature_fields, which self.updating can suspend.
+        idock.rva_edit.setEnabled(axis_specs.get('rva', (CurvatureAxis(), ''))[0].driven)
         ideal = self._compute_ideal_bending_values()
         for axis in FOCUSING_AXES:
             idock.set_ideal(axis, (ideal or {}).get(axis))
