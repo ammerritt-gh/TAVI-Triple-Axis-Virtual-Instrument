@@ -6,9 +6,9 @@ declared cases the operator must actually see and react to, on real
 instruments:
 
 - fixed (IN12's PG(002) analyser): the field shows the declared radius and
-  cannot be edited; the Ideal button is disabled -- the operator has no say.
+  cannot be edited; the Track ideal box is disabled -- the operator has no say.
 - driven but focusing_known=False (IN12's Heusler): the field is editable
-  (a typed value is legitimate/HELD), but the Ideal button stays disabled --
+  (a typed value is legitimate/HELD), but the Track ideal box stays disabled --
   there is no established focusing model to autofocus from.
 - driven and focusing-known (IN8): behaves exactly like rha.
 
@@ -67,7 +67,8 @@ def test_fixed_rva_shows_the_declared_radius_and_is_not_editable():
 
         idock = ctrl.window.instrument_dock
         assert idock.rva_edit.isEnabled() is False
-        assert idock.rva_ideal_button.isEnabled() is False
+        assert idock.rva_track_check.isEnabled() is False
+        assert idock.rva_track_check.isChecked() is False
         assert abs(float(idock.rva_edit.text())) == pytest.approx(1.40)
 
 
@@ -87,13 +88,13 @@ def test_switching_to_a_driven_analyser_re_enables_the_fixed_field():
 
         idock.set_ana_id(heusler.id)
         assert idock.rva_edit.isEnabled() is True    # driven now
-        assert idock.rva_ideal_button.isEnabled() is False  # still no model
+        assert idock.rva_track_check.isEnabled() is False  # still no model
 
 
 # ---------------------------------------------- case 2: no focusing model
 
 
-def test_heusler_rva_is_editable_with_no_ideal_button():
+def test_heusler_rva_is_editable_with_tracking_unavailable():
     with _controller("in12") as ctrl:
         d = ctrl.descriptor
         mono = d.mono_crystals[0].id
@@ -103,8 +104,9 @@ def test_heusler_rva_is_editable_with_no_ideal_button():
         idock.set_ana_id(heusler.id)
 
         assert idock.rva_edit.isEnabled() is True
-        assert idock.rva_ideal_button.isEnabled() is False
-        assert "no established focusing model" in idock.rva_ideal_button.toolTip().lower()
+        assert idock.rva_track_check.isEnabled() is False
+        assert idock.rva_track_check.isChecked() is False
+        assert "no established focusing model" in idock.rva_track_check.toolTip().lower()
 
 
 def test_typed_rva_is_honoured_as_held_under_no_focusing_model():
@@ -125,7 +127,7 @@ def test_typed_rva_is_honoured_as_held_under_no_focusing_model():
 
 
 def test_unlock_ideal_bending_does_not_re_enable_rva_with_no_focusing_model():
-    """Editing rva's field (textEdited) must not resurrect an Ideal button
+    """Editing rva's field (textEdited) must not resurrect a Track ideal box
     the descriptor never offered for this analyser."""
     with _controller("in12") as ctrl:
         d = ctrl.descriptor
@@ -136,8 +138,8 @@ def test_unlock_ideal_bending_does_not_re_enable_rva_with_no_focusing_model():
         idock.set_ana_id(heusler.id)
 
         ctrl.unlock_ideal_bending("rva")
-        assert idock.rva_ideal_button.isEnabled() is False
-        assert idock.rva_ideal_button.isChecked() is False
+        assert idock.rva_track_check.isEnabled() is False
+        assert idock.rva_track_check.isChecked() is False
 
 
 # -------------------------------------------------- case 3: ordinary (IN8)
@@ -152,18 +154,19 @@ def test_in8_rva_behaves_like_rha():
         idock.set_ana_id(ana)
 
         assert idock.rva_edit.isEnabled() is True
-        assert idock.rva_ideal_button.isEnabled() is True
+        assert idock.rva_track_check.isEnabled() is True
 
         ctrl.apply_ideal_bending_value("rva")
-        assert idock.rva_ideal_button.isChecked() is True
-        assert idock.rva_ideal_button.isEnabled() is False
+        assert idock.rva_track_check.isChecked() is True
+        assert idock.rva_track_check.isEnabled() is True   # tracking is never greyed out
         assert ctrl.is_bending_locked("rva") is True
 
         vals = ctrl.get_gui_values()
         assert vals["curvature_modes"]["rva"] == cm.CurvatureMode.AUTOFOCUS
 
         ctrl.unlock_ideal_bending("rva")
-        assert idock.rva_ideal_button.isEnabled() is True
+        assert idock.rva_track_check.isChecked() is False
+        assert idock.rva_track_check.isEnabled() is True
         assert ctrl.is_bending_locked("rva") is False
 
 
@@ -244,7 +247,9 @@ def test_all_four_radii_and_locks_round_trip_through_save_and_load(tmp_path):
         idock.rvm_edit.setText("1.1")
         idock.rha_edit.setText("2.2")
         idock.rva_edit.setText("3.3")
-        ctrl.apply_ideal_bending_value("rha")  # lock rha only
+        for axis in ("rhm", "rvm", "rva"):   # the defaults track every axis: track rha only
+            ctrl.unlock_ideal_bending(axis)
+        ctrl.apply_ideal_bending_value("rha")
 
         old_cwd = os.getcwd()
         os.chdir(tmp_path)

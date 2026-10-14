@@ -834,8 +834,7 @@ def test_folded_blocks_summarise_their_fields(instrument_id):
 
         changes = [
             ("instrument.focusing", lambda: dock.rhm_edit.setText("3.25")),
-            ("instrument.focusing", lambda: dock.rva_ideal_button.setChecked(
-                not dock.rva_ideal_button.isChecked())),
+            ("instrument.focusing", lambda: dock.set_choice("rva", not dock.choice("rva"))),
             ("instrument.source", lambda: dock.set_source_id("Mono")),
             ("instrument.source", lambda: dock.source_dE_edit.setText("0.5")),
         ]
