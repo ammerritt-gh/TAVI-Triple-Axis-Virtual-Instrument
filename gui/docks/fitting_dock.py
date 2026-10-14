@@ -9,9 +9,10 @@ Three ownership rules shape this file:
 
 * **No arithmetic here.**  Every number comes from ``tavi.scan_fits`` (Qt-free,
   unit-tested there): :func:`~tavi.scan_fits.com`,
-  :func:`~tavi.scan_fits.peak_max`, :func:`~tavi.scan_fits.fit_peak`, and the
-  scan-variable -> parameter-field table.  The dock never re-implements the
-  mapping and never decides the goto policy.
+  :func:`~tavi.scan_fits.peak_max`, :func:`~tavi.scan_fits.fit_peak` (with its
+  intensity readout), the lineshape title, the scan variable's unit, the
+  Copy-results text, and the scan-variable -> parameter-field table.  The dock
+  formats and never re-implements the mapping or decides the goto policy.
 * **No widget writes outside the dock.**  Moving the instrument goes through
   ``TAVIController.goto_scan_variable`` / ``revert_last_goto``, which own the
   refusal, the message centre entry, and the journal record.
@@ -19,13 +20,17 @@ Three ownership rules shape this file:
   hands over copies; this dock never reaches into the display dock's private
   arrays, so the two can evolve independently.
 
+The layout: one top row (range controls, Fit), then the Position, Lineshape and
+Intensity groups -- side by side when the dock is wide enough for them, stacked
+in the same order when it is not -- then one status line with Copy results.
+
 The overlay artists (fit curve, centre line, range shading) are drawn on the
 display dock's axes but *owned here*: they are created, invalidated and dropped
 by this dock alone.
 
 Gating is deliberately soft (see ``CONTROL_FEATURES_DESIGN.md`` §1.6 and the
 2026-07-26 status note appended to it): only a missing or failed fit disables
-"Go to CEN".  A converged fit with warnings stays enabled and turns amber, with
+CEN's Go.  A converged fit with warnings stays enabled and turns amber, with
 the warnings in its tooltip -- the operator judges, with the overlay in view.
 
 Everything in this module runs on the GUI thread.  The fit is milliseconds for
@@ -35,20 +40,23 @@ import logging
 
 import numpy as np
 
-from PySide6.QtWidgets import (QApplication, QGroupBox, QVBoxLayout,
+from PySide6.QtWidgets import (QApplication, QBoxLayout, QGroupBox, QVBoxLayout,
                                QHBoxLayout, QGridLayout, QLabel, QLineEdit,
-                               QPushButton, QWidget)
-from PySide6.QtCore import Qt, Slot
+                               QPushButton, QStyle, QStyleOptionGroupBox,
+                               QWidget)
+from PySide6.QtCore import Qt, Slot, QEvent, QSize
 
 from matplotlib.widgets import SpanSelector
 
+from gui import theme
 from gui.docks.base_dock import BaseDockWidget
 from tavi import scan_fits
 
 log = logging.getLogger(__name__)
 
-#: Background for a converged-but-flagged "Go to CEN" button.
-_AMBER_STYLE = "background-color: #e8a33d; color: #202020;"
+#: CEN's Go when the fit converged with warnings or points arrived since it.
+_WARNING_STYLE = "background-color: %s; color: %s;" % (theme.WARNING_FILL,
+                                                       theme.WARNING_TEXT)
 
 #: Colours of the artists this dock owns on the display dock's axes.
 _CURVE_COLOR = "#d62728"
@@ -59,6 +67,80 @@ _SPAN_COLOR = "#ffb000"
 #: ``NavigationToolbar2.mode`` stringifies to exactly these labels.
 _TOOLBAR_PAN = "pan/zoom"
 _TOOLBAR_ZOOM = "zoom rect"
+
+#: Group titles.
+_POSITION_TITLE = "Position"
+_LINESHAPE_TITLE = "Lineshape"
+_INTENSITY_TITLE = "Intensity, background removed"
+
+#: Row labels, each in one place so a rename is a one-line change.
+_ROW_LABELS = {
+    "cen": "CEN",
+    "com": "COM",
+    "max": "MAX",
+    "eta": "η",
+    "fwhm": "FWHM",
+    "height": "Height",
+    "background": "Background",
+    "quality": "Fit quality",
+    "integrated": "Integrated",
+    "normalised": "Normalised",
+    "raw": "Raw, range",
+}
+_POSITION_ROWS = ("cen", "com", "max")
+_LINESHAPE_ROWS = ("eta", "fwhm", "height", "background", "quality")
+_INTENSITY_ROWS = ("integrated", "normalised", "raw")
+#: Every row the fit fills; COM and MAX come from the scan, not the fit.
+_FIT_ROWS = ("cen",) + _LINESHAPE_ROWS + _INTENSITY_ROWS
+
+#: What each row's number is, its unit, and when to use it.
+_ROW_TIPS = {
+    "cen": "Fitted peak centre ± its error, from the fit (it can lie between "
+           "measured points).",
+    "com": "Centre of mass: the counts-weighted mean position of the measured "
+           "points in the selection.",
+    "max": "Highest measured bin - not interpolated",
+    "eta": "Lorentzian fraction of the pseudo-Voigt: 0 is pure Gaussian, "
+           "1 pure Lorentzian.",
+    "fwhm": "Full width at half maximum of the fitted peak, in the scan "
+            "variable's unit.",
+    "height": "Fitted peak height above the background, in counts per point.",
+    "background": "Fitted flat background, in counts per point. "
+                  "\"0 (at limit)\": the fit pushed it to its lower bound, "
+                  "zero, where an error bar would mean nothing.",
+    "quality": "Reduced deviance: the Poisson deviance per degree of freedom, "
+               "about 1 for a good fit. Then the points fitted (n) and the "
+               "degrees of freedom (dof).",
+    "integrated": "Integrated intensity, in counts: the fitted peak's summed "
+                  "counts at this scan's points, background removed (the fit's "
+                  "area divided by the step). It depends on the step: halve "
+                  "the step and it doubles. Use it to read the peak against "
+                  "the plotted counts.\n\"uneven steps\": the fitted points are "
+                  "not evenly spaced, so no single step converts the area to "
+                  "counts.",
+    "normalised": "Normalised intensity, in counts × the scan variable's unit: "
+                  "the fit's Area parameter, equal to Integrated × step. It "
+                  "does not depend on the step: use it to compare scans taken "
+                  "with different step sizes. The step it relates to is shown "
+                  "after it.",
+    "raw": "Raw counts over the fit range, in counts: the measured counts minus "
+           "the fitted background, summed over the points the fit used. "
+           "Model-free, and covers only what was measured: use it to check "
+           "Integrated.",
+}
+_RAW_ERROR_UNAVAILABLE = ("\nError unavailable: the fit could not determine "
+                          "the background's error.")
+
+_RANGE_TIP = ("Drag on the plot to pick the abscissa window the fit uses.\n"
+              "Pan/zoom is switched off while this is active.")
+_CLEAR_TIP = "Fit the whole scan again."
+_FIT_TIP = ("Fit a pseudo-Voigt + flat background to the selection.\n"
+            "Never runs by itself -- press it again after more points arrive.")
+_NO_SCAN_TIP = "no 1D scan is displayed -- run or load one"
+
+_COPY_TIP = ("Puts the whole result on the clipboard as tab-separated text "
+             "(quantity, value, error, unit), ready to paste into a notebook "
+             "or spreadsheet. With no fit, copies COM and MAX only.")
 
 
 def _fmt(value, digits=6):
@@ -76,7 +158,7 @@ def _fmt(value, digits=6):
 
 
 def _fmt_pm(value, error):
-    """``value ± err`` for the results grid; a missing error prints ``± ?``."""
+    """``value ± err`` for the readout; a missing error prints ``± ?``."""
     if value is None:
         return "-"
     if error is None:
@@ -84,8 +166,90 @@ def _fmt_pm(value, error):
     return "%s ± %s" % (_fmt(value), _fmt(error, 3))
 
 
+def _with_unit(text, unit):
+    """``text unit``, or ``text`` alone when there is no unit or no value."""
+    return "%s %s" % (text, unit) if unit and text != "-" else text
+
+
+class _ValueLabel(QLabel):
+    """Selectable text that wraps at spaces rather than clip in a narrow dock.
+
+    It prefers one line: QLabel's word-wrap size hint folds any text over
+    about twenty characters onto two, which would put the groups side by side
+    with every value wrapped. The minimum stays QLabel's, the longest word.
+    """
+
+    def __init__(self, text="-"):
+        super().__init__(text)
+        self.setWordWrap(True)
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        margins = self.contentsMargins()
+        line = max(self.fontMetrics().horizontalAdvance(text)
+                   for text in self.text().split("\n"))
+        width = max(hint.width(), line + margins.left() + margins.right()
+                    + 2 * self.margin() + 1)   # 1: advance-to-layout rounding
+        return QSize(width, self.heightForWidth(width))
+
+
+class _TitledGroup(QGroupBox):
+    """A group box whose title elides to its width, full title as tooltip.
+
+    QGroupBox makes its minimum width the title's width, so a long scan
+    variable in "Position (...)" would push the group past a narrow dock.
+    Here the title prefers its full width (``sizeHint``) but never widens the
+    minimum: below that it elides.
+    """
+
+    def __init__(self, title):
+        super().__init__(title)
+        self._full_title = title
+
+    def full_title(self):
+        return self._full_title
+
+    def set_full_title(self, title):
+        if title == self._full_title:
+            return
+        self._full_title = title
+        self._elide_title()
+        self.updateGeometry()
+
+    def _title_overhead(self):
+        """Width the group's frame adds around its title text."""
+        option = QStyleOptionGroupBox()
+        self.initStyleOption(option)
+        metrics = self.fontMetrics()
+        frame = self.style().sizeFromContents(
+            QStyle.CT_GroupBox, option, QSize(0, metrics.height()), self)
+        return frame.width() + metrics.horizontalAdvance(" ")
+
+    def minimumSizeHint(self):
+        return QWidget.minimumSizeHint(self)
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        title = (self._title_overhead()
+                 + self.fontMetrics().horizontalAdvance(self._full_title))
+        return QSize(max(hint.width(), title), hint.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide_title()
+
+    def _elide_title(self):
+        room = max(0, self.width() - self._title_overhead())
+        text = self.fontMetrics().elidedText(self._full_title, Qt.ElideRight, room)
+        if text != self.title():
+            self.setTitle(text)
+        self.setToolTip(self._full_title if text != self._full_title else "")
+
+
 class FittingDock(BaseDockWidget):
-    """Range selection, quick fit, COM/MAX readouts, and the goto buttons."""
+    """Range selection, quick fit, the Position/Lineshape/Intensity readout,
+    the per-row Go buttons, and Copy results."""
 
     def __init__(self, parent=None, display_dock=None):
         super().__init__("Fitting", parent, use_scroll_area=True)
@@ -101,7 +265,7 @@ class FittingDock(BaseDockWidget):
         # Selected abscissa window, or None for "the whole scan".
         self._range = None
         # Last converged fit that is still valid for the current scan+range;
-        # None means "Go to CEN" has nothing to act on.
+        # None means CEN's Go has nothing to act on.
         self._fit_result = None
         # How many points that fit saw. Mid-scan fitting is allowed, so the
         # scan can grow underneath a perfectly valid fit; this is what lets
@@ -145,133 +309,171 @@ class FittingDock(BaseDockWidget):
         layout.addWidget(self._body)
         layout.addStretch(1)
 
-        body_layout.addWidget(self._build_range_group())
-        body_layout.addWidget(self._build_actions_group())
-        body_layout.addWidget(self._build_results_group())
-        body_layout.addWidget(self._build_goto_group())
+        # Value labels by row key, and the name label beside each.
+        self._result_labels = {}
+        self._name_labels = {}
 
-    def _build_range_group(self):
-        group = QGroupBox("Range")
-        outer = QVBoxLayout(group)
+        self._top_layout = self._build_top_row()
+        body_layout.addLayout(self._top_layout)
 
-        self.range_button = QPushButton("Select range")
+        self._groups = (self._build_position_group(),
+                        self._build_lineshape_group(),
+                        self._build_intensity_group())
+        self._groups_layout = QBoxLayout(QBoxLayout.TopToBottom)
+        self._groups_layout.setSpacing(8)
+        for group in self._groups:
+            self._groups_layout.addWidget(group, 0, Qt.AlignTop)
+        body_layout.addLayout(self._groups_layout)
+
+        body_layout.addLayout(self._build_status_row())
+
+        # Reflow on a dock resize and when the groups' preferred widths change.
+        self._scroll_area.installEventFilter(self)
+        self._body.installEventFilter(self)
+
+    def _build_top_row(self):
+        """Range controls and Fit: one row when wide, two lines when narrow."""
+        self.range_button = QPushButton("Select on plot")
         self.range_button.setCheckable(True)
-        self.range_button.setToolTip(
-            "Drag on the plot to pick the abscissa window the fit uses.\n"
-            "Pan/zoom is switched off while this is active."
-        )
+        self.range_button.setToolTip(_RANGE_TIP)
         self.range_button.toggled.connect(self._on_range_button_toggled)
-        outer.addWidget(self.range_button)
 
-        fields = QHBoxLayout()
-        fields.addWidget(QLabel("min:"))
         self.range_min_edit = QLineEdit()
         self.range_min_edit.setPlaceholderText("full scan")
         self.range_min_edit.editingFinished.connect(self._on_range_fields_edited)
-        fields.addWidget(self.range_min_edit, 1)
-        fields.addWidget(QLabel("max:"))
         self.range_max_edit = QLineEdit()
         self.range_max_edit.setPlaceholderText("full scan")
         self.range_max_edit.editingFinished.connect(self._on_range_fields_edited)
-        fields.addWidget(self.range_max_edit, 1)
+
         self.range_clear_button = QPushButton("Clear")
-        self.range_clear_button.setToolTip("Fit the whole scan again.")
+        self.range_clear_button.setToolTip(_CLEAR_TIP)
         self.range_clear_button.clicked.connect(self._on_range_cleared)
-        fields.addWidget(self.range_clear_button)
-        outer.addLayout(fields)
-
-        return group
-
-    def _build_actions_group(self):
-        group = QGroupBox("Peak")
-        outer = QVBoxLayout(group)
 
         self.fit_button = QPushButton("Fit")
-        self.fit_button.setToolTip(
-            "Fit a pseudo-Voigt + flat background to the selection.\n"
-            "Never runs by itself -- press it again after more points arrive."
-        )
+        self.fit_button.setToolTip(_FIT_TIP)
         self.fit_button.clicked.connect(self._on_fit_clicked)
-        outer.addWidget(self.fit_button)
 
-        self.com_label, com_row, self.com_copy_button = self._readout_row("COM")
-        self.com_copy_button.clicked.connect(
-            lambda: self._copy_estimate(self._com, "COM")
-        )
-        outer.addLayout(com_row)
+        self._range_part = QHBoxLayout()
+        self._range_part.addWidget(self.range_button)
+        self._range_part.addWidget(QLabel("min:"))
+        self._range_part.addWidget(self.range_min_edit, 1)
+        self._range_part.addWidget(QLabel("max:"))
+        self._range_part.addWidget(self.range_max_edit, 1)
 
-        self.max_label, max_row, self.max_copy_button = self._readout_row("MAX")
-        self.max_copy_button.clicked.connect(
-            lambda: self._copy_estimate(self._max, "MAX")
-        )
-        outer.addLayout(max_row)
+        self._fit_part = QHBoxLayout()
+        self._fit_part.addWidget(self.range_clear_button)
+        self._fit_part.addStretch(1)
+        self._fit_part.addWidget(self.fit_button)
 
-        return group
+        top = QBoxLayout(QBoxLayout.TopToBottom)
+        top.addLayout(self._range_part, 0)
+        top.addLayout(self._fit_part, 1)
+        return top
 
-    def _readout_row(self, name):
-        """A ``name = value`` label plus its copy-to-clipboard button."""
-        row = QHBoxLayout()
-        label = QLabel("%s: -" % name)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        row.addWidget(label, 1)
-        button = QPushButton("Copy")
-        button.setMaximumWidth(56)
-        button.setToolTip("Copy the %s value to the clipboard (full precision)."
-                          % name)
-        button.setEnabled(False)
-        row.addWidget(button)
-        return label, row, button
-
-    def _build_results_group(self):
-        group = QGroupBox("Fit result")
-        outer = QVBoxLayout(group)
-
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(2)
-        self._result_labels = {}
-        rows = [
-            ("center", "Center"), ("fwhm", "FWHM"), ("height", "Height"),
-            ("area", "Area"), ("eta", "eta"), ("background", "Background"),
-            ("deviance", "Reduced deviance"), ("dof", "n / dof"),
-        ]
-        for row, (key, title) in enumerate(rows):
-            grid.addWidget(QLabel("%s:" % title), row, 0)
-            value = QLabel("-")
-            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            grid.addWidget(value, row, 1)
+    def _add_rows(self, grid, keys, vertical=Qt.AlignTop):
+        """A name label and a selectable value label per row key."""
+        for row, key in enumerate(keys):
+            name = QLabel(_ROW_LABELS[key])
+            value = _ValueLabel()
+            for label in (name, value):
+                label.setToolTip(_ROW_TIPS[key])
+            grid.addWidget(name, row, 0, Qt.AlignLeft | vertical)
+            grid.addWidget(value, row, 1, vertical)
+            self._name_labels[key] = name
             self._result_labels[key] = value
         grid.setColumnStretch(1, 1)
-        outer.addLayout(grid)
 
-        self.status_label = QLabel("No fit yet.")
-        self.status_label.setWordWrap(True)
-        self.status_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        outer.addWidget(self.status_label)
+    def _build_position_group(self):
+        group = _TitledGroup(_POSITION_TITLE)
+        self._position_group = group
+        grid = QGridLayout(group)
+        grid.setVerticalSpacing(4)
+        # Centred, so each value reads on the line of its Go.
+        self._add_rows(grid, _POSITION_ROWS, Qt.AlignVCenter)
 
-        return group
+        # A Go at the end of each row: the button acts on its own row's value.
+        self.goto_cen_button = QPushButton("Go")
+        self.goto_com_button = QPushButton("Go")
+        self.goto_max_button = QPushButton("Go")
+        for row, (key, button) in enumerate((("cen", self.goto_cen_button),
+                                             ("com", self.goto_com_button),
+                                             ("max", self.goto_max_button))):
+            button.setAccessibleName("Go to %s" % _ROW_LABELS[key])
+            button.clicked.connect(lambda _checked=False, kind=key:
+                                   self._on_goto_clicked(kind))
+            grid.addWidget(button, row, 2)
 
-    def _build_goto_group(self):
-        group = QGroupBox("Go to")
-        outer = QHBoxLayout(group)
-        self.goto_com_button = QPushButton("Go to COM")
-        self.goto_com_button.clicked.connect(
-            lambda: self._on_goto_clicked("com")
-        )
-        self.goto_max_button = QPushButton("Go to MAX")
-        self.goto_max_button.clicked.connect(
-            lambda: self._on_goto_clicked("max")
-        )
-        self.goto_cen_button = QPushButton("Go to CEN")
-        self.goto_cen_button.clicked.connect(
-            lambda: self._on_goto_clicked("cen")
-        )
         self.revert_button = QPushButton("Revert")
         self.revert_button.clicked.connect(self._on_revert_clicked)
-        for button in (self.goto_com_button, self.goto_max_button,
-                       self.goto_cen_button, self.revert_button):
-            outer.addWidget(button)
+        grid.addWidget(self.revert_button, len(_POSITION_ROWS), 2, Qt.AlignTop)
         return group
+
+    def _build_lineshape_group(self):
+        group = _TitledGroup(_LINESHAPE_TITLE)
+        self._lineshape_group = group
+        grid = QGridLayout(group)
+        grid.setVerticalSpacing(4)
+        self._add_rows(grid, _LINESHAPE_ROWS)
+        return group
+
+    def _build_intensity_group(self):
+        group = _TitledGroup(_INTENSITY_TITLE)
+        self._intensity_group = group
+        grid = QGridLayout(group)
+        grid.setVerticalSpacing(4)
+        self._add_rows(grid, _INTENSITY_ROWS)
+        return group
+
+    def _build_status_row(self):
+        row = QHBoxLayout()
+        self.status_label = _ValueLabel("No fit yet.")
+        row.addWidget(self.status_label, 1)
+
+        self.copy_results_button = QPushButton("Copy results")
+        self.copy_results_button.clicked.connect(self._on_copy_results)
+        row.addWidget(self.copy_results_button, 0, Qt.AlignTop)
+        return row
+
+    # ------------------------------------------------------------------
+    # Reflow
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, watched, event):
+        if ((watched is self._scroll_area and event.type() == QEvent.Resize)
+                or (watched is self._body
+                    and event.type() == QEvent.LayoutRequest)):
+            self._reflow()
+        return super().eventFilter(watched, event)
+
+    def _wide(self):
+        """True when the scroll area holds the three groups side by side.
+
+        Measured against the groups' preferred widths (and the top row's), not
+        their minimums, so side by side is never the cramped arrangement; the
+        vertical scrollbar is reserved so it coming and going cannot flip the
+        decision.
+        """
+        scroll = self._scroll_area
+        bar = scroll.style().pixelMetric(QStyle.PM_ScrollBarExtent)
+        room = scroll.width() - 2 * scroll.frameWidth() - bar
+        spacing = self._groups_layout.spacing()
+        groups = sum(group.sizeHint().width() for group in self._groups)
+        groups += spacing * (len(self._groups) - 1)
+        top = (self._range_part.sizeHint().width() + self._top_layout.spacing()
+               + self._fit_part.sizeHint().width())
+        return room >= max(groups, top)
+
+    def _reflow(self):
+        wide = self._wide()
+        direction = QBoxLayout.LeftToRight if wide else QBoxLayout.TopToBottom
+        if self._groups_layout.direction() == direction:
+            return
+        self._top_layout.setDirection(direction)
+        # No stretch factors: side by side each group gets its preferred width
+        # plus an equal share of the spare (a stretch factor would ignore the
+        # preferred widths); stacked, the dock's trailing stretch takes the
+        # spare height.
+        self._groups_layout.setDirection(direction)
 
     # ------------------------------------------------------------------
     # Wiring
@@ -342,6 +544,7 @@ class FittingDock(BaseDockWidget):
         is *not* re-run: fitting is an explicit operator action.
         """
         self._refresh_gating()
+        self._note_points_since_fit()
 
     @Slot()
     def refresh_gating(self, *args):
@@ -353,6 +556,7 @@ class FittingDock(BaseDockWidget):
         computed from may have moved on.
         """
         self._refresh_gating()
+        self._note_points_since_fit()
 
     # ------------------------------------------------------------------
     # Scan data access
@@ -542,36 +746,80 @@ class FittingDock(BaseDockWidget):
         self._show_result(result)
         self._refresh_gating()
 
+    def _clear_fit_rows(self):
+        """Every fit-derived row back to '-', the lineshape title plain."""
+        for key in _FIT_ROWS:
+            self._result_labels[key].setText("-")
+        self._set_row_visible("eta", True)
+        self._result_labels["raw"].setToolTip(_ROW_TIPS["raw"])
+        self._lineshape_group.set_full_title(_LINESHAPE_TITLE)
+
+    def _set_row_visible(self, key, visible):
+        self._name_labels[key].setVisible(visible)
+        self._result_labels[key].setVisible(visible)
+
     def _invalidate_fit(self):
         """Drop the cached fit, its warm start, its overlay, and the readout."""
         self._fit_result = None
         self._fit_n_points = None
         self._seed = None
         self._remove_fit_artists()
-        for label in self._result_labels.values():
-            label.setText("-")
+        self._clear_fit_rows()
         self.status_label.setText("No fit for the current selection.")
 
     def _show_result(self, result):
-        """Fill the results grid and the status line from ``result``."""
-        labels = self._result_labels
-        if result.converged:
-            labels["center"].setText(_fmt_pm(result.center, result.center_err))
-            labels["fwhm"].setText(_fmt_pm(result.fwhm, result.fwhm_err))
-            labels["height"].setText(_fmt_pm(result.height, result.height_err))
-            labels["area"].setText(_fmt_pm(result.area, result.area_err))
-            if result.eta_fixed is not None:
-                labels["eta"].setText("%s (fixed)" % _fmt(result.eta_fixed, 2))
-            else:
-                labels["eta"].setText(_fmt_pm(result.eta, result.eta_err))
-            labels["background"].setText(
-                _fmt_pm(result.background, result.background_err))
-            labels["deviance"].setText(_fmt(result.deviance_reduced, 4))
-            labels["dof"].setText("%d / %d" % (result.n_points, result.dof))
-        else:
-            for label in labels.values():
-                label.setText("-")
+        """Fill the fit rows, the lineshape title and the status line."""
+        if not result.converged:
+            self._clear_fit_rows()
+            self._show_status(result)
+            return
 
+        rows = self._result_labels
+        variable = self._variable_name() or "x"
+        unit = scan_fits.scan_variable_unit(variable)
+
+        rows["cen"].setText(_with_unit(_fmt_pm(result.center, result.center_err),
+                                       unit))
+        self._lineshape_group.set_full_title(
+            "%s: %s" % (_LINESHAPE_TITLE, scan_fits.lineshape_title(result)))
+        # A pinned shape is named in the title; its eta is not a fitted number.
+        self._set_row_visible("eta", result.eta_fixed is None)
+        rows["eta"].setText(_fmt_pm(result.eta, result.eta_err))
+        rows["fwhm"].setText(_with_unit(_fmt_pm(result.fwhm, result.fwhm_err),
+                                        unit))
+        rows["height"].setText(
+            _with_unit(_fmt_pm(result.height, result.height_err), "counts"))
+        if result.background_at_limit:
+            rows["background"].setText("0 (at limit)")
+        else:
+            rows["background"].setText(_with_unit(
+                _fmt_pm(result.background, result.background_err), "counts"))
+        rows["quality"].setText("%s (n / dof %d / %d)" % (
+            _fmt(result.deviance_reduced, 4), result.n_points, result.dof))
+
+        if result.steps_even:
+            rows["integrated"].setText(_with_unit(
+                _fmt_pm(result.integrated, result.integrated_err), "counts"))
+            step_note = "(Δ%s = %s)" % (variable, _fmt(result.step))
+        else:
+            rows["integrated"].setText("uneven steps")
+            step_note = "(uneven steps)"
+        # Spelled as scan_fits.results_tsv spells the Normalised unit cell.
+        norm_unit = "counts·%s" % unit if unit else "counts × %s" % variable
+        rows["normalised"].setText("%s %s %s" % (
+            _fmt_pm(result.area, result.area_err), norm_unit, step_note))
+        if result.raw_counts_err is None:
+            rows["raw"].setText(_with_unit(_fmt(result.raw_counts), "counts"))
+            rows["raw"].setToolTip(_ROW_TIPS["raw"] + _RAW_ERROR_UNAVAILABLE)
+        else:
+            rows["raw"].setText(_with_unit(
+                _fmt_pm(result.raw_counts, result.raw_counts_err), "counts"))
+            rows["raw"].setToolTip(_ROW_TIPS["raw"])
+
+        self._show_status(result)
+
+    def _show_status(self, result):
+        """The status line: outcome, warnings, points since the fit, caveat."""
         parts = []
         if result.converged:
             parts.append("Fit converged.")
@@ -579,10 +827,19 @@ class FittingDock(BaseDockWidget):
             parts.append("Fit failed: %s" % (result.reason or "unknown reason"))
         if result.warnings:
             parts.append("Warnings: " + "; ".join(result.warnings) + ".")
+        arrived = self._points_since_fit() if result.converged else 0
+        if arrived:
+            parts.append("%d point(s) measured since this fit -- press Fit "
+                         "again to use them." % arrived)
         caveat = self._noiseless_caveat()
         if caveat:
             parts.append(caveat)
         self.status_label.setText(" ".join(parts))
+
+    def _note_points_since_fit(self):
+        """Restate the fit's status once points have arrived since it."""
+        if self._fit_result is not None and self._points_since_fit():
+            self._show_status(self._fit_result)
 
     def _noiseless_caveat(self):
         """Note for a deterministic noiseless run, whose sigma is nominal."""
@@ -611,37 +868,55 @@ class FittingDock(BaseDockWidget):
                 snapshot["x"], snapshot["counts"], mask=snapshot["mask"],
                 xrange=self._range)
 
-        variable = self._variable_name() or "x"
-        self._set_readout(self.com_label, self.com_copy_button, "COM",
-                          variable, self._com)
-        self._set_readout(self.max_label, self.max_copy_button, "MAX",
-                          variable, self._max)
+        variable = self._variable_name()
+        self._position_group.set_full_title(
+            "%s (%s)" % (_POSITION_TITLE, variable) if variable else _POSITION_TITLE)
+        unit = scan_fits.scan_variable_unit(variable)
+        self._set_estimate_row("com", self._com, unit)
+        self._set_estimate_row("max", self._max, unit)
 
+        max_label = self._result_labels["max"]
         if self._max is not None and self._max.ok:
             width = self._max.bin_width
-            self.max_label.setToolTip(
+            max_label.setToolTip(
                 "Highest measured bin (width %s) - not interpolated"
                 % _fmt(width, 4))
         else:
-            self.max_label.setToolTip(
-                "Highest measured bin - not interpolated")
+            max_label.setToolTip(_ROW_TIPS["max"])
 
-    def _set_readout(self, label, copy_button, name, variable, estimate):
+    def _set_estimate_row(self, key, estimate, unit):
+        label = self._result_labels[key]
         if estimate is not None and estimate.ok:
-            label.setText("%s: %s = %s" % (name, variable, _fmt(estimate.x)))
-            copy_button.setEnabled(True)
+            label.setText(_with_unit(_fmt(estimate.x), unit))
         else:
             reason = estimate.reason if estimate is not None else "no scan"
-            label.setText("%s: %s" % (name, reason or "unavailable"))
-            copy_button.setEnabled(False)
+            label.setText(reason or "unavailable")
 
-    def _copy_estimate(self, estimate, name):
-        """Put an estimate on the clipboard at full precision."""
-        if estimate is None or not estimate.ok or estimate.x is None:
-            self.status_label.setText("No %s value to copy." % name)
+    # ------------------------------------------------------------------
+    # Copy results
+    # ------------------------------------------------------------------
+
+    def _on_copy_results(self):
+        """Put the whole result on the clipboard as ``scan_fits.results_tsv``."""
+        self._refresh_estimates()
+        com, peak = self._com, self._max
+        result = self._fit_result
+        if com is None or peak is None or not (result is not None or com.ok
+                                               or peak.ok):
+            self.status_label.setText("Nothing to copy: no fit, COM or MAX.")
+            self._refresh_gating()
             return
-        QApplication.clipboard().setText(repr(float(estimate.x)))
-        self.status_label.setText("Copied %s to the clipboard." % name)
+        if result is None:
+            result = scan_fits.QuickFitResult(converged=False, reason="no fit")
+        text = scan_fits.results_tsv(self._variable_name() or "x", result,
+                                     com, peak)
+        QApplication.clipboard().setText(text)
+        if result.converged:
+            self.status_label.setText(
+                "Copied the fit results, COM and MAX to the clipboard.")
+        else:
+            self.status_label.setText(
+                "No fit for the current selection: copied COM and MAX only.")
 
     # ------------------------------------------------------------------
     # Goto
@@ -790,9 +1065,11 @@ class FittingDock(BaseDockWidget):
             self._forget_and_clear_overlay()
             return
 
-        self.fit_button.setEnabled(is_1d)
-        self.range_button.setEnabled(is_1d)
-        self.range_clear_button.setEnabled(is_1d)
+        for button, tip in ((self.fit_button, _FIT_TIP),
+                            (self.range_button, _RANGE_TIP),
+                            (self.range_clear_button, _CLEAR_TIP)):
+            button.setEnabled(is_1d)
+            button.setToolTip(tip if is_1d else _NO_SCAN_TIP)
 
         variable = self._variable_name()
         field = scan_fits.field_for_scan_variable(variable) if variable else None
@@ -815,7 +1092,7 @@ class FittingDock(BaseDockWidget):
             elif value is None:
                 button.setToolTip("no value available")
             else:
-                button.setToolTip("Target: %s = %s" % (variable, _fmt(value)))
+                button.setToolTip(self._go_tip(kind, variable, value))
 
         self._refresh_cen_button(can_goto, goto_reason, variable)
 
@@ -835,8 +1112,21 @@ class FittingDock(BaseDockWidget):
         else:
             self.revert_button.setToolTip("Undo the last goto.")
 
+        # Gated on the scan alone: COM and MAX move with every point, and the
+        # click re-derives them, so a mid-scan copy is never refused on a
+        # reading taken before the points arrived.
+        self.copy_results_button.setEnabled(is_1d)
+        self.copy_results_button.setToolTip(
+            _COPY_TIP if is_1d else "nothing to copy -- no 1D scan is displayed")
+
+    @staticmethod
+    def _go_tip(kind, variable, value):
+        """A Go button's "this affects ___" sentence."""
+        return "Drives %s to this row's value: %s = %s." % (
+            variable, _ROW_LABELS[kind], _fmt(value))
+
     def _refresh_cen_button(self, can_goto, goto_reason, variable):
-        """Three-state soft gate on "Go to CEN".
+        """Three-state soft gate on CEN's Go.
 
         Disabled only when there is no converged fit for the current selection
         (or the goto itself is impossible); amber with the warnings in its
@@ -856,7 +1146,7 @@ class FittingDock(BaseDockWidget):
             button.setStyleSheet("")
             button.setToolTip(goto_reason)
             return
-        target = "Target: %s = %s" % (variable, _fmt(result.center))
+        target = self._go_tip("cen", variable, result.center)
         notes = list(result.warnings)
         arrived = self._points_since_fit()
         if arrived:
@@ -864,7 +1154,7 @@ class FittingDock(BaseDockWidget):
                 "%d point(s) measured since this fit -- press Fit again to use them"
                 % arrived)
         if notes:
-            button.setStyleSheet(_AMBER_STYLE)
+            button.setStyleSheet(_WARNING_STYLE)
             button.setToolTip(target + "\nFit warnings:\n- " + "\n- ".join(notes))
         else:
             button.setStyleSheet("")
@@ -899,7 +1189,6 @@ class FittingDock(BaseDockWidget):
         self._fit_result = None
         self._fit_n_points = None
         self._seed = None
-        for label in self._result_labels.values():
-            label.setText("-")
+        self._clear_fit_rows()
         self.status_label.setText("2D scan displayed - fitting is 1D only.")
         self._draw()
