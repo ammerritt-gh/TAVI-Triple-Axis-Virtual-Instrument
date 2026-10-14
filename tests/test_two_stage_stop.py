@@ -380,24 +380,36 @@ def test_a_kill_after_the_process_exited_records_the_point(rig, controller):
     assert os.path.isfile(os.path.join(s.calls[0][1], "scan_parameters.txt"))
 
 
-def test_an_orphan_is_ended_before_the_next_job_and_the_point_is_kept(rig, controller):
+def test_an_orphan_alive_at_the_kill_discards_the_point(rig, controller):
+    """The root had exited but its orphaned child was running at the kill: not executed."""
     ctrl = controller
-    seen = {}
-    s = rig.stand_in("orphan", lambda n, f: seen.update(orphan_running=orphan.running()))
+    seen, next_may_finish = {}, threading.Event()
+
+    def next_point(n, folder):   # held so the runtime records cannot change under the check
+        seen.update(orphan_running=orphan.running())
+        next_may_finish.wait(DEADLINE_S)
+
+    s = rig.stand_in("orphan", next_point)
     job = rig.submit()
-    nxt = rig.submit(scan="deltaE 10 10 5")
+    before = records(ctrl)
     pump_until(s.started[0].is_set, "the orphaner to exit")
     orphan = s.pid(0, "sleeper")
+    nxt = rig.submit(scan="deltaE 10 10 5")
     stop_button(ctrl).click()
     stop_button(ctrl).click()
     assert not s.scopes[0].interrupted, "the root had exited: the point is not interrupted"
     s.release[0].set()
     assert wait_terminal(job) == JobState.STOPPED
     assert not orphan.running(), "the orphaned child survived the force stop"
-    assert job.result.counts == [COUNTS, None, None]
+    assert job.result.counts == [None, None, None]
+    assert job.result.executed_feasible_mask == [False, False, False]
     assert job.result.stop_mode == "kill"
-    assert wait_terminal(nxt) == JobState.DONE
+    assert records(ctrl) == before, "a discarded point reached the runtime records"
+    assert not os.path.exists(s.calls[0][1]), "the discarded point's folder survived"
+    pump_until(lambda: "orphan_running" in seen, "the next job's point")
     assert seen == {"orphan_running": False}, "the next job started before the orphan was gone"
+    next_may_finish.set()
+    assert wait_terminal(nxt) == JobState.DONE
 
 
 def test_a_kill_during_the_compile_leaves_no_reusable_binary(rig, controller):
