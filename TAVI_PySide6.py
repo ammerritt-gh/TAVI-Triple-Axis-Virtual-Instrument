@@ -304,7 +304,7 @@ class TaviApiBackend:
     Holds a reference to the controller and the ``ApiBridge``. Read endpoints
     that touch GUI widgets (parameters) go through the bridge onto the GUI
     thread; job-registry reads and stop actions use the thread-safe registry,
-    per-job locks, and the shared stop event directly (no GUI touch). The write
+    per-job locks, and the controller's ``request_stop`` (no GUI touch). The write
     endpoints ``patch_parameters`` / ``submit_scan`` are intentionally absent so
     the handler returns 501 until phase 3.
     """
@@ -586,41 +586,31 @@ class TaviApiBackend:
 
     # ---- stop endpoints (thread-safe; no bridge / no GUI touch) --------
 
-    def stop_job(self, job_id):
+    def stop_job(self, job_id, kill=False):
         job = self._get_job_or_404(job_id)
-        with job.lock:
-            state = job.state
-            if state == JobState.QUEUED:
-                job.state = JobState.CANCELLED
-                if job.finished_at is None:
-                    job.finished_at = time.time()
-                job.notify_state_change()
-            elif state in _API_TERMINAL_STATES:
-                raise ApiError(
-                    409, "job_finished",
-                    "Job %s already finished (%s)" % (job_id, state.value),
-                )
-            # RUNNING: fall through and set the shared stop event outside the lock
-        if state == JobState.RUNNING:
-            self._controller.stop_event.set()
+        if self._controller.request_stop(job_id, kill=kill) == "finished":
+            with job.lock:
+                state = job.state
+            raise ApiError(
+                409, "job_finished",
+                "Job %s already finished (%s)" % (job_id, state.value),
+            )
         return job.snapshot()
 
-    def stop_all(self, clear_queue):
+    def stop_all(self, clear_queue, kill=False):
         registry = self._controller._job_registry
         running_id = None
         cancelled = []
         for job in registry.all_jobs():
             with job.lock:
-                if job.state == JobState.RUNNING:
-                    running_id = job.job_id
-                elif clear_queue and job.state == JobState.QUEUED:
-                    job.state = JobState.CANCELLED
-                    if job.finished_at is None:
-                        job.finished_at = time.time()
-                    job.notify_state_change()
+                state = job.state
+            if state == JobState.RUNNING or (clear_queue and state == JobState.QUEUED):
+                # A queued job may have started since the read; its stop then lands as a stop.
+                outcome = self._controller.request_stop(job.job_id, kill=kill)
+                if outcome == "cancelled":
                     cancelled.append(job.job_id)
-        if running_id is not None:
-            self._controller.stop_event.set()
+                elif outcome in ("graceful", "kill"):
+                    running_id = job.job_id
         return {"stopped": running_id, "cancelled": cancelled}
 
     # ---- write endpoints ----------------------------------------------
@@ -9109,10 +9099,10 @@ class TAVIController(QObject):
                 {"method": "PATCH", "path": "/parameters", "description": "Partial parameter write."},
                 {"method": "POST", "path": "/scan", "description": "Validate and queue a scan job (optional 'engine'/'seed'/'noiseless' body fields)."},
                 {"method": "POST", "path": "/validate", "description": "Run scan validation only; never queues."},
-                {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll)."},
+                {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll); a stopped job's result.stop_mode is 'graceful' or 'kill', null otherwise."},
                 {"method": "GET", "path": "/scan/{id}/data", "description": "Job status plus full scan arrays."},
-                {"method": "POST", "path": "/scan/{id}/stop", "description": "Stop or cancel one job."},
-                {"method": "POST", "path": "/stop", "description": "Stop the running job (optionally clear the queue)."},
+                {"method": "POST", "path": "/scan/{id}/stop", "description": "Stop or cancel one job (optional 'kill': true body field force-stops a running job)."},
+                {"method": "POST", "path": "/stop", "description": "Stop the running job (optional 'kill': true body field; 'clear_queue': true also cancels queued jobs)."},
                 {"method": "GET", "path": "/jobs", "description": "Recent job snapshots."},
                 {"method": "GET", "path": "/schema", "description": "This machine-readable API self-description."},
                 {"method": "GET", "path": "/events", "description": "Server-Sent Events live stream."},
