@@ -9112,7 +9112,7 @@ class TAVIController(QObject):
                 {"method": "PATCH", "path": "/parameters", "description": "Partial parameter write."},
                 {"method": "POST", "path": "/scan", "description": "Validate and queue a scan job (optional 'engine'/'seed'/'noiseless' body fields)."},
                 {"method": "POST", "path": "/validate", "description": "Run scan validation only; never queues."},
-                {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll); a stopped job's result.stop_mode is 'graceful' or 'kill', null otherwise."},
+                {"method": "GET", "path": "/scan/{id}", "description": "Job status (optionally ?wait=N long-poll); a stopped job's result.stop_mode is 'graceful' or 'kill', null on a done or failed job's result; a job cancelled while queued has result null."},
                 {"method": "GET", "path": "/scan/{id}/data", "description": "Job status plus full scan arrays."},
                 {"method": "POST", "path": "/scan/{id}/stop", "description": "Stop or cancel one job (optional 'kill': true body field force-stops a running job)."},
                 {"method": "POST", "path": "/stop", "description": "Stop the running job (optional 'kill': true body field; 'clear_queue': true also cancels queued jobs)."},
