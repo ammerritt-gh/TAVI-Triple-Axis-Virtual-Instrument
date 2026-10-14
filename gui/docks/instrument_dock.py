@@ -710,7 +710,8 @@ class InstrumentDock(BaseDockWidget):
                     f"This radius stays at this value for the whole scan. {ideal_is} Tick Track ideal to follow it again.",
                     f"{readout} This radius is held, not following it.")
         elif mode == "scanned":
-            status = f"scanned by command {state.command}"
+            status = (f"scanned by command {state.command}; remove {axis} from the command "
+                      "to restore your setting")
             why = (f"Scan command {state.command} steps this radius point by point, "
                    "whatever Track ideal says.")
             back = (f"Your choice (Track ideal {'on' if state.track else 'off'}) applies again "
