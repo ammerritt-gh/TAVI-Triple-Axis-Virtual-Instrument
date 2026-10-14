@@ -9260,7 +9260,7 @@ class TAVIController(QObject):
             if self._active_scope is scope:
                 self._active_scope = None
 
-    def _run_point_in_scope(self, i, *run_args, **run_kwargs):
+    def _run_point_in_scope(self, i, n, *run_args, **run_kwargs):
         """Run one MC point's ``run_point`` on a point thread inside a PointScope.
 
         Returns ``{'discarded': bool, 'result' | 'error': ..., 'scope': scope,
@@ -9314,19 +9314,19 @@ class TAVIController(QObject):
                 cause = ("by the surviving processes named above" if survivors
                          else "after its processes were ended")
                 self._post_log(
-                    f"Point {i}: its McStas call is still blocked {cause}; TAVI leaves "
+                    f"Point {i + 1} of {n}: its McStas call is still blocked {cause}; TAVI leaves "
                     "it behind and ignores its result.")
             scope.release()
         box['discarded'] = discard
         return box
 
-    def _discard_point_output(self, i, scan_folder, point):
+    def _discard_point_output(self, i, n, scan_folder, point):
         """Remove a not-executed point's output so no reload reads it as data; log the outcome."""
         if point['scope'].refused and not point['scope'].killed:
-            why = (f"Point {i} was not executed: the stop arrived before its McStas "
+            why = (f"Point {i + 1} of {n} was not executed: the stop arrived before its McStas "
                    "process started.")
         else:
-            why = f"Scan force-stopped: point {i} was discarded (not executed)."
+            why = f"Scan force-stopped: point {i + 1} of {n} was discarded (not executed)."
         if not os.path.isdir(scan_folder):
             self._post_log(f"{why} It left no output folder.")
             return
@@ -10440,13 +10440,13 @@ class TAVIController(QObject):
                     simulation_stage_start = time.perf_counter()
                     was_backengine = not execution_state.first_backengine_succeeded
                     point = self._run_point_in_scope(
-                        i, instrument, snapshot, scan_folder, number_neutrons,
+                        i, total_scans, instrument, snapshot, scan_folder, number_neutrons,
                         execution_state, mpi_count=mpi_count,
                     )
                     if point['discarded']:
                         # Not executed: no writer of this point's data runs (the
                         # rest of this loop body), its output folder goes, the loop ends.
-                        self._discard_point_output(i, scan_folder, point)
+                        self._discard_point_output(i, total_scans, scan_folder, point)
                         if was_backengine:
                             # A compile that was killed or never ran: never reuse its binary.
                             execution_state.first_backengine_succeeded = False
