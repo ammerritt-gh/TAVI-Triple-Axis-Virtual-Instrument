@@ -89,8 +89,9 @@ def refusal_message(folder):
     if chars:
         words.append(("the character " if len(chars) == 1 else "the characters ") + _join_words(chars))
     drive = os.path.splitdrive(folder)[0] or "this drive"
-    # A metacharacter is refused on every drive, so neither the drive nor a move to C: helps.
-    any_drive = any(c in SHELL_METACHARACTERS for c in items)
+    # A metacharacter is refused on every drive, so neither the drive nor a move to C: helps;
+    # off Windows there are no drives at all.
+    any_drive = sys.platform != "win32" or any(c in SHELL_METACHARACTERS for c in items)
     where = "" if any_drive else f" on drive {drive}"
     if any_drive or drive.upper() == "C:":
         advice = "Rename the folder (and the folders above it) without spaces or special characters."
