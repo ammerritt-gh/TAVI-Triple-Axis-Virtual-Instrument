@@ -183,7 +183,8 @@ def test_dialog_for_a_running_scan_defaults_to_keep_running(rig):
     assert d["buttons"] == ["Keep running", "Stop scan and close"]
     assert d["default"] == "Keep running" and d["escape"] == "Keep running"
     assert "point 1 of 3" in d["text"]
-    assert "discards the current point" in d["text"]
+    assert "a Monte Carlo point still running is discarded" in d["text"]
+    assert "discards the current point" not in d["text"]
     assert rig.window.isVisible() and not rig.ctrl._shutdown_called
     assert state(job) == JobState.RUNNING
     assert not rig.window._close_in_progress
