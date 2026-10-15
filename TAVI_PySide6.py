@@ -1633,6 +1633,9 @@ class TAVIController(QObject):
             self.print_to_message_center(
                 "Stop requested: the scan stops after the current point. "
                 "Click Force stop to end it immediately.")
+        elif outcome == "kill":
+            self._force_stop_label_job = job.job_id
+            self.window.simulation_dock.show_stopping()
         return outcome
 
     def force_stop_all(self):

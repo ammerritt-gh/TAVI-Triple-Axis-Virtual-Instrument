@@ -709,6 +709,22 @@ def test_a_kill_with_nothing_to_end_logs_the_request_before_its_outcome(rig, con
     assert wait_terminal(job) == JobState.STOPPED
 
 
+def test_a_force_stop_under_way_disables_the_button_until_the_scan_ends(rig, controller):
+    ctrl = controller
+    s = rig.stand_in("hold")
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point to start")
+    stop_button(ctrl).click()
+    stop_button(ctrl).click()
+    assert stop_button(ctrl).text() == "Stopping..."
+    assert not stop_button(ctrl).isEnabled()
+    assert "Force stop under way" in stop_button(ctrl).toolTip()
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+    pump_until(lambda: stop_button(ctrl).text() == "Stop Simulation", "the label to return")
+    assert stop_button(ctrl).isEnabled()
+
+
 # --------------------------------------------------------------- analytic engine
 
 def test_an_analytic_scans_second_click_ends_it_as_a_kill(rig, controller, monkeypatch):

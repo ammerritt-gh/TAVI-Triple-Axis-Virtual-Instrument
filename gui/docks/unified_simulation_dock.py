@@ -286,6 +286,8 @@ class UnifiedSimulationDock(BaseDockWidget):
     STOP_TEXT = "Stop Simulation"
     FORCE_STOP_TEXT = "Force stop"
     STOP_TOOLTIP = "Stops the scan after the current point. Click again to force stop it."
+    STOPPING_TEXT = "Stopping..."
+    STOPPING_TOOLTIP = "Force stop under way; the button returns when the scan has ended."
 
     def show_force_stop(self, force: bool):
         """Relabel Stop as Force stop after a graceful stop request, and back."""
@@ -293,6 +295,13 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.stop_button.setToolTip(
             "Ends the scan now; a McStas point still running is discarded." if force
             else self.STOP_TOOLTIP)
+        self.stop_button.setEnabled(True)
+
+    def show_stopping(self):
+        """A kill is under way: the button is inert until the scan has ended."""
+        self.stop_button.setText(self.STOPPING_TEXT)
+        self.stop_button.setToolTip(self.STOPPING_TOOLTIP)
+        self.stop_button.setEnabled(False)
 
     def set_scan_command_warning(self, command_num: int, message: str):
         """Set or clear a warning for a scan command.
