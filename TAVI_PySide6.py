@@ -1609,11 +1609,15 @@ class TAVIController(QObject):
                         job.stop_request = "graceful"
                     self.stop_event.set()
                     if kill and scope is not None:
-                        if self._kill_record is None or self._kill_record[0] is not scope:
-                            self._kill_record = (scope, int((time.time() + 11644473600) * 10**7))
-                        # Buffer only: a GUI-thread drain here would run Qt slots under these locks.
-                        scope.kill(self._gui_updates.log)
+                        self._kill_scope(scope)
                     return job.stop_request
+
+    def _kill_scope(self, scope):
+        """Kill a point's scope and record the kill instant; the caller holds ``_stop_lock``."""
+        if self._kill_record is None or self._kill_record[0] is not scope:
+            self._kill_record = (scope, int((time.time() + 11644473600) * 10**7))
+        # Buffer only: a GUI-thread drain here would run Qt slots under these locks.
+        scope.kill(self._gui_updates.log)
 
     def _gui_stop(self, job):
         """A stop from a GUI control (Stop button or the dock's Cancel): graceful once, then kill."""
@@ -9377,9 +9381,16 @@ class TAVIController(QObject):
                 self._unpublish_scope(scope)
                 scope.release()
 
-        # Published before the thread starts: a kill landing before the scope's block reaches it.
+        # Published before the thread starts, and a kill already recorded is applied here:
+        # under _stop_lock, either request_stop finds this scope or this finds its kill.
         with self._stop_lock:
             self._active_scope = scope
+            job = self._active_job
+            if job is not None:
+                with job.lock:
+                    killed = job.stop_request == "kill"
+                if killed:
+                    self._kill_scope(scope)
         thread = threading.Thread(target=point_main, name=f"scan-point-{i}", daemon=True)
         thread.start()
         while thread.is_alive() and not scope.killed:
