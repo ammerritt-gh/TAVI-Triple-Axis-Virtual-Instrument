@@ -4,6 +4,7 @@ No McStas and no Qt. The routing of run_tas_point through mcstas_path is tested 
 """
 import os
 import sys
+import types
 
 import pytest
 
@@ -97,6 +98,14 @@ def test_metacharacter_refusal_never_advises_another_drive(folder):
     assert "the & sign" in text
     assert "choose a save folder" not in text
     assert "on drive" not in text
+    assert "Rename the folder" in text
+
+
+def test_refusal_off_windows_names_no_drive(monkeypatch):
+    monkeypatch.setattr(mp, "sys", types.SimpleNamespace(platform="linux"))
+    text = mp.refusal_message("/home/u/My Data")
+    assert "containing spaces." in text
+    assert "drive" not in text
     assert "Rename the folder" in text
 
 
