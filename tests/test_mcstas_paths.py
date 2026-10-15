@@ -7,6 +7,9 @@ import sys
 
 import pytest
 
+from instruments import tas_runtime
+from instruments.contract import PointSnapshot, RunExecutionState
+from instruments.tas_runtime import run_tas_point
 from tavi import mcstas_paths as mp
 
 MULLER = "M\u00fcller_Stra\u00dfe"          # u-umlaut and sharp s: both in cp1252
@@ -100,3 +103,74 @@ def test_real_spaced_folder_gets_a_short_name_naming_the_same_folder(tmp_path):
     form = mp.mcstas_path(str(folder))
     assert form is not None and mp.is_mcstas_safe(form)
     assert os.path.samefile(form, folder)
+
+
+@pytest.fixture
+def spaced_run(tmp_path, monkeypatch):
+    """A spaced run folder, and a real directory standing in for its short name (direct runs makedirs the parent)."""
+    run = tmp_path / "Müller Probe"
+    run.mkdir()
+    short = tmp_path / "shortform"
+    short.mkdir()
+    monkeypatch.setattr(mp, "_short_path", lambda path: str(short))
+    return run, str(short)
+
+
+def _point(output_folder):
+    return PointSnapshot(
+        params={"mtt": 1.0}, output_folder=output_folder, scan_index=0, deltaE=0.0,
+        error_flags=[], metadata={}, indices={"idx_1d": 0, "idx_x": -1, "idx_y": -1}, log_message="",
+    )
+
+
+def test_direct_point_hands_mcstas_the_short_folder_and_decodes_tolerantly(spaced_run, monkeypatch, tmp_path):
+    run, short = spaced_run
+    binary = tmp_path / "PUMA_McScript.exe"
+    binary.write_bytes(b"")
+    state = RunExecutionState(
+        first_backengine_succeeded=True, direct_run_ready=True, binary_path=str(binary),
+        binary_cwd=str(tmp_path), mpi_launcher_argv=["mpiexec"],
+    )
+    seen = {}
+
+    class Finished:
+        returncode = 0
+        stdout = ""
+
+    def fake_run(args, **kwargs):
+        seen["args"], seen["kwargs"] = args, kwargs
+        return Finished()
+
+    monkeypatch.setattr(tas_runtime.subprocess, "run", fake_run)
+    output_folder = str(run / "scan_0000")
+    _, _, info = run_tas_point(object(), _point(output_folder), output_folder, 1000, state)
+
+    assert f"--dir={os.path.join(short, 'scan_0000')}" in seen["args"]
+    assert seen["kwargs"]["errors"] == "replace"
+    assert info["output_folder"] == output_folder
+
+
+def test_first_point_hands_mcstas_the_short_folder(spaced_run):
+    run, short = spaced_run
+
+    class FakeInstrument:
+        input_path = None
+        name = "PUMA_McScript"
+
+        def settings(self, **kwargs):
+            self.settings_kwargs = kwargs
+
+        def set_parameters(self, **params):
+            pass
+
+        def backengine(self):
+            return "data"
+
+    output_folder = str(run / "scan_0000")
+    instrument = FakeInstrument()
+    state = RunExecutionState(mpi_launcher_argv=["mpiexec"])
+    data, _, info = run_tas_point(instrument, _point(output_folder), output_folder, 1000, state)
+
+    assert data == "data"
+    assert instrument.settings_kwargs["output_path"] == os.path.join(short, "scan_0000")
+    assert info["output_folder"] == output_folder
