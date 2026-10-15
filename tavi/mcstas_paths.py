@@ -38,7 +38,7 @@ def _ansi_encoding():
 
 
 def offending_characters(path):
-    """Distinct characters that stop McStas taking the path: 'space' for a space, then the rest in first-seen order."""
+    """Distinct characters that stop McStas taking the path, in first-seen order, a space reported as 'space'."""
     encoding = _ansi_encoding()
     found = []
     for char in path:
@@ -63,7 +63,7 @@ def is_mcstas_safe(path):
 
 def mcstas_path(path):
     """The form of an output folder McStas receives, or None when no safe form exists. Never touches the folder."""
-    if path.isascii() and " " not in path and not any(c in SHELL_METACHARACTERS for c in path):
+    if path.isascii() and is_mcstas_safe(path):
         return path
     if os.path.exists(path):
         form = _short_path(path)
