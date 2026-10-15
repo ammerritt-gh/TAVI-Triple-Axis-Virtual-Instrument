@@ -12,16 +12,17 @@ groups:
   controller no longer touches them by attribute name.
 """
 import math
+from dataclasses import dataclass
 
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QCheckBox, QGroupBox, QFormLayout, QGridLayout,
-                                QPushButton, QWidget)
-from PySide6.QtCore import Qt
+                                QWidget)
+from PySide6.QtCore import QSignalBlocker, Qt, Signal
 
 from gui.docks.base_dock import (BaseDockWidget, CollapsibleGroup, NoScrollComboBox, pack_grid,
                                  COLLIMATION_OPEN_TOOLTIP, collimation_label)
 from instruments.descriptor import ModuleKind
-from gui import metrics
+from gui import metrics, theme
 from tavi import quantities
 
 
@@ -33,8 +34,49 @@ def _half(text):
         return "--"
 
 
+FOCUSING_AXES = ("rhm", "rvm", "rha", "rva")
+
+# What the Crystal Focusing block says about a radius that does not follow the ideal.
+FOCUSING_HELP = ("Tracked radii follow the ideal at every scan point. Held radii (Track ideal "
+                 "off, or a value typed) stay at their value for the whole scan. A radius "
+                 "named in a scan command is scanned instead.")
+
+
+def _sentence(text):
+    """``text`` as a sentence: capital first, full stop last."""
+    return text[:1].upper() + text[1:].rstrip(".") + "."
+
+
+def _radius_cell(text):
+    """A typed radius as a folded cell shows it: 'flat' at zero, 'empty' when blank."""
+    if not text:
+        return "empty"
+    try:
+        return "flat" if float(text) == 0 else f"{text} m"
+    except ValueError:   # not a number: show it as typed
+        return f"{text} m"
+
+
+@dataclass
+class _FocusingAxis:
+    """What one radius row knows. ``track`` is the operator's choice (what is saved);
+    the rest is pushed by the controller from the instrument and the scan commands."""
+
+    track: bool = True
+    fixed: str | None = None        # the reason the hardware fixes it, or None
+    declared_fixed: bool = False    # fixed by the crystal itself, not by a fitted module
+    no_model: str | None = None     # the reason no ideal exists for it, or None
+    command: int | None = None      # the scan command number that steps it, or None
+    ideal: float | None = None      # the ideal radius in metres, or None when there is none
+
+
 class InstrumentDock(BaseDockWidget):
     """Dock widget for instrument configuration (descriptor-driven)."""
+
+    # A click on a Track ideal box (the operator, never a render): axis, ticked.
+    track_clicked = Signal(str, bool)
+    # Some axis's track/hold choice changed (not a scan, fixed or no-model update).
+    tracking_changed = Signal()
 
     def __init__(self, parent=None, descriptor=None):
         super().__init__("Instrument Configuration", parent, use_scroll_area=True,
@@ -288,55 +330,46 @@ class InstrumentDock(BaseDockWidget):
         focusing_layout.setSpacing(5)
         focusing_group.set_body_layout(focusing_layout)
 
-        focusing_layout.addWidget(QLabel("rhm:"), 0, 0)
-        self.rhm_edit = QLineEdit()
-        self.rhm_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rhm_edit, 0, 1)
-        self.rhm_ideal_button = QPushButton("Ideal: --")
-        self.rhm_ideal_button.setCheckable(True)
-        self.rhm_ideal_button.setMaximumWidth(140)
-        self.rhm_ideal_button.setToolTip("Set rhm to the calculated ideal value")
-        focusing_layout.addWidget(self.rhm_ideal_button, 0, 2)
-
-        # One radius per row, its Ideal readout beside it, so the group fits
-        # one block: the monochromator's pair, then the analyser's.
-        focusing_layout.addWidget(QLabel("rvm:"), 1, 0)
-        self.rvm_edit = QLineEdit()
-        self.rvm_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rvm_edit, 1, 1)
-        self.rvm_ideal_button = QPushButton("Ideal: --")
-        self.rvm_ideal_button.setCheckable(True)
-        self.rvm_ideal_button.setMaximumWidth(140)
-        self.rvm_ideal_button.setToolTip("Set rvm to the calculated ideal value")
-        focusing_layout.addWidget(self.rvm_ideal_button, 1, 2)
-
-        focusing_layout.addWidget(QLabel("rha:"), 2, 0)
-        self.rha_edit = QLineEdit()
-        self.rha_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rha_edit, 2, 1)
-        self.rha_ideal_button = QPushButton("Ideal: --")
-        self.rha_ideal_button.setCheckable(True)
-        self.rha_ideal_button.setMaximumWidth(140)
-        self.rha_ideal_button.setToolTip("Set rha to the calculated ideal value")
-        focusing_layout.addWidget(self.rha_ideal_button, 2, 2)
-
-        # Under rha, so the analyser's two axes read as a pair the way the
-        # monochromator's rhm/rvm do. Enable state (editable/disabled) and
-        # whether the Ideal button is offered at all are set per selected
-        # analyser by the controller -- rva is the one axis whose declared
-        # policy (fixed / no established focusing model / ordinary) actually
-        # differs between crystals.
-        focusing_layout.addWidget(QLabel("rva:"), 3, 0)
-        self.rva_edit = QLineEdit()
-        self.rva_edit.setMaximumWidth(70)
-        focusing_layout.addWidget(self.rva_edit, 3, 1)
-        self.rva_ideal_button = QPushButton("Ideal: --")
-        self.rva_ideal_button.setCheckable(True)
-        self.rva_ideal_button.setMaximumWidth(140)
-        self.rva_ideal_button.setToolTip("Set rva to the calculated ideal value")
-        focusing_layout.addWidget(self.rva_ideal_button, 3, 2)
+        # One radius per row so the group fits one block: the monochromator's
+        # pair, then the analyser's. Each row is the radius field, a Track ideal
+        # box and the ideal radius. The box shows the effective mode and stores
+        # nothing: whether the axis tracks is the dock's state (mode()). The mode
+        # per selected analyser (fixed / no established focusing model / ordinary)
+        # is pushed by the controller; rva is the one axis whose declared policy
+        # actually differs between crystals.
+        self._focus = {axis: _FocusingAxis() for axis in FOCUSING_AXES}
+        self._focusing_rows = self._focusing_flag = None   # what the folded summary last showed
+        for row, axis in enumerate(FOCUSING_AXES):
+            focusing_layout.addWidget(QLabel(f"{axis}:"), 2 * row, 0)
+            edit = QLineEdit()
+            edit.setMaximumWidth(70)
+            setattr(self, f"{axis}_edit", edit)
+            focusing_layout.addWidget(edit, 2 * row, 1)
+            check = QCheckBox("Track ideal")
+            check.setObjectName(f"{axis}_track_check")
+            check.setAccessibleName(f"Track ideal radius, {axis}")
+            check.clicked.connect(lambda checked, axis=axis: self.track_clicked.emit(axis, checked))
+            setattr(self, f"{axis}_track_check", check)
+            focusing_layout.addWidget(check, 2 * row, 2)
+            ideal = QLabel()
+            ideal.setAccessibleName(f"Ideal radius, {axis}")
+            setattr(self, f"{axis}_ideal_label", ideal)
+            focusing_layout.addWidget(ideal, 2 * row, 3)
 
         pack_grid(focusing_layout)
+        # Under each row, why it is not tracking (hidden while it tracks), then one
+        # help line for the block. Both span the block, wrapped: nothing is clipped.
+        for row, axis in enumerate(FOCUSING_AXES):
+            status = QLabel()
+            status.setWordWrap(True)
+            status.setStyleSheet(f"color: {theme.NOTE_TEXT};")
+            status.hide()
+            setattr(self, f"{axis}_status_label", status)
+            focusing_layout.addWidget(status, 2 * row + 1, 1, 1, 4)   # under its field
+        self.focusing_help_label = QLabel(FOCUSING_HELP)
+        self.focusing_help_label.setWordWrap(True)
+        self.focusing_help_label.setStyleSheet(f"color: {theme.NOTE_TEXT}; padding-top: 3px;")
+        focusing_layout.addWidget(self.focusing_help_label, 2 * len(FOCUSING_AXES), 0, 1, 5)
         self.add_block(focusing_group)
         self.collapsible_groups["instrument.focusing"] = focusing_group
 
@@ -397,10 +430,11 @@ class InstrumentDock(BaseDockWidget):
         self.collapsible_groups["instrument.source"] = source_group
 
         # Each folded block's summary follows its fields.
-        for edit, button in self._focusing_axes().values():
-            edit.textChanged.connect(self._refresh_focusing_summary)
-            button.toggled.connect(self._refresh_focusing_summary)
-        self._refresh_focusing_summary()
+        for axis in FOCUSING_AXES:
+            edit = getattr(self, f"{axis}_edit")
+            edit.textChanged.connect(lambda _text, axis=axis: self._render_focusing_axis(axis))
+        for axis in FOCUSING_AXES:
+            self._render_focusing_axis(axis)   # also draws the summary
         for widget in self.module_widgets.values():
             if isinstance(widget, QComboBox):
                 widget.currentIndexChanged.connect(self._refresh_modules_summary)
@@ -568,20 +602,184 @@ class InstrumentDock(BaseDockWidget):
         """Show/hide extra source fields based on the selected source type."""
         self._update_source_extra_visibility()
 
-    def _focusing_axes(self):
-        return {"rhm": (self.rhm_edit, self.rhm_ideal_button),
-                "rvm": (self.rvm_edit, self.rvm_ideal_button),
-                "rha": (self.rha_edit, self.rha_ideal_button),
-                "rva": (self.rva_edit, self.rva_ideal_button)}
+    # ------------------------------------------------- Crystal Focusing state
+    # Effective mode, in precedence order: fixed (the hardware fixes it), scanned
+    # (a scan command steps it), no_model (driven, no ideal exists), track (the
+    # choice is on), held. The Track ideal box renders the mode and stores nothing.
+
+    def mode(self, axis):
+        state = self._focus[axis]
+        if state.fixed is not None:
+            return "fixed"
+        if state.command is not None:
+            return "scanned"
+        if state.no_model is not None:
+            return "no_model"
+        return "track" if state.track else "held"
+
+    def choice(self, axis):
+        """The operator's track/hold choice, kept while a scan, a fixed axis or a missing model overrides it."""
+        return self._focus[axis].track
+
+    def is_tracking(self, axis):
+        """Whether a launch follows the ideal: the choice, unless the axis can never track."""
+        state = self._focus[axis]
+        return state.track and not (state.declared_fixed or state.no_model is not None)
+
+    def set_choice(self, axis, track):
+        state = self._focus[axis]
+        changed = state.track != bool(track)
+        state.track = bool(track)
+        self._render_focusing_axis(axis)
+        if changed:
+            self.tracking_changed.emit()
+
+    def set_ideal(self, axis, value):
+        self._focus[axis].ideal = value
+        self._render_focusing_axis(axis)
+
+    def set_fixed(self, axis, reason, declared=False):
+        """``reason`` None clears; ``declared`` marks a crystal-fixed axis (never tracks), not a module-fixed one."""
+        state = self._focus[axis]
+        state.fixed, state.declared_fixed = reason, bool(declared and reason is not None)
+        self._render_focusing_axis(axis)
+
+    def set_no_model(self, axis, reason):
+        self._focus[axis].no_model = reason
+        self._render_focusing_axis(axis)
+
+    def set_scanned(self, commands):
+        """{axis: scan command number} for every axis a command steps; the rest are cleared."""
+        for axis in FOCUSING_AXES:
+            self._focus[axis].command = commands.get(axis)
+            self._render_focusing_axis(axis)
+
+    def scanned_command(self, axis):
+        return self._focus[axis].command
+
+    def _render_focusing_axis(self, axis):
+        """Draw one row from its state: the box ticked in track mode, enabled while it can be clicked."""
+        state, mode = self._focus[axis], self.mode(axis)
+        check = getattr(self, f"{axis}_track_check")
+        with QSignalBlocker(check):
+            check.setChecked(mode == "track")
+            check.setEnabled(mode in ("track", "held"))
+        label = getattr(self, f"{axis}_ideal_label")
+        shown = None if mode == "fixed" else state.ideal   # a fixed radius is not an ideal
+        label.setText("\u2014" if shown is None else "flat" if shown == 0 else f"{shown:.3f} m")
+        status, tips = self._focusing_texts(axis)
+        line = getattr(self, f"{axis}_status_label")
+        line.setText(status)
+        line.setVisible(bool(status))
+        check.setToolTip(tips[0])
+        getattr(self, f"{axis}_edit").setToolTip(tips[1])
+        label.setToolTip(tips[2])
+        check.setAccessibleDescription(status or "tracking the ideal")
+        self._refresh_focusing_summary()
+
+    def _focusing_texts(self, axis):
+        """(status line, (checkbox, field, ideal readout tooltips)) for ``axis`` in its mode.
+
+        The status line is empty while the axis tracks. Radii and differences are in metres.
+        """
+        state, mode = self._focus[axis], self.mode(axis)
+        ideal = state.ideal
+        if ideal is None:
+            ideal_is = "There is no ideal radius for the present angles."
+        elif ideal == 0:
+            ideal_is = "The ideal is flat."
+        else:
+            ideal_is = f"The ideal is {ideal:.3f} m."
+        follows = ("It follows the calculated ideal, recomputed whenever the angles change "
+                   "and at every scan point.")
+        holds = "It stays at the value in the field for the whole scan."
+        readout = ("The ideal radius for the present angles and crystals, in metres, as TAVI "
+                   "calculates it.")
+        if ideal is None:
+            readout = "No ideal radius can be calculated for the present angles."
+        elif ideal == 0:
+            readout = "The ideal radius for the present angles and crystals is flat (no bending)."
+        if mode == "track":
+            status = ""
+            tips = (f"Track ideal is on. {follows} Untick it, or type a value in the field, to hold it.",
+                    f"{follows} Type a value here to hold it instead.",
+                    f"{readout} A tracking radius follows it at every scan point.")
+        elif mode == "held":
+            status = self._held_status(axis)
+            tips = (f"Track ideal is off. {holds} {ideal_is} Tick Track ideal to follow it again.",
+                    f"This radius stays at this value for the whole scan. {ideal_is} Tick Track ideal to follow it again.",
+                    f"{readout} This radius is held, not following it.")
+        elif mode == "scanned":
+            status = (f"scanned by command {state.command}; remove {axis} from the command "
+                      "to restore your setting")
+            why = (f"Scan command {state.command} steps this radius point by point, "
+                   "whatever Track ideal says.")
+            back = (f"Your choice (Track ideal {'on' if state.track else 'off'}) applies again "
+                    "when no scan command names this radius.")
+            tips = (f"{why} The box is disabled meanwhile. {back}", f"{why} {back}",
+                    f"{readout} This radius is scanned instead.")
+        elif mode == "fixed":
+            status = state.fixed if state.fixed.startswith("fixed") else f"fixed, {state.fixed}"
+            why = f"{_sentence(state.fixed)} The hardware fixes this radius, so it cannot follow the ideal."
+            tips = (why, f"{why} The field shows the fixed value.",
+                    f"No ideal is shown: {why}")
+        else:
+            status = f"held: tracking unavailable, {state.no_model}"
+            why = (f"Tracking is unavailable: {state.no_model}. The value typed in the field "
+                   "is held for the whole scan.")
+            tips = (why, why, f"No ideal radius exists: {state.no_model}.")
+        return status, tips
+
+    def _held_status(self, axis):
+        """'held, 0.120 m above ideal': the field minus the ideal, in metres; or at the ideal."""
+        ideal = self._focus[axis].ideal
+        if ideal is None:
+            return "held, no ideal for these angles"
+        try:
+            value = float(getattr(self, f"{axis}_edit").text())
+        except ValueError:
+            return "held, the field is not a number"
+        if ideal == 0:
+            return "held at the ideal" if value == 0 else "held, the ideal is flat"
+        shown = f"{abs(value - ideal):.3f}"
+        if shown == "0.000":
+            return "held at the ideal"
+        return f"held, {shown} m {'above' if value > ideal else 'below'} ideal"
 
     # The folded blocks' summaries: the values the simulation will use, as typed.
 
     def _refresh_focusing_summary(self, *_):
-        parts = []
-        for name, (edit, ideal_button) in self._focusing_axes().items():
-            locked = " ideal" if ideal_button.isChecked() else ""  # held at the ideal
-            parts.append(f"{name} {edit.text() or 'empty'}{locked}")
-        self.collapsible_groups["instrument.focusing"].set_summary(", ".join(parts))
+        """Two rows (monochromator, analyser) of 'rhm track 15.081 m' cells, and the not-tracking flag."""
+        words = {"track": "track", "held": "held", "scanned": "scanned", "fixed": "fixed",
+                 "no_model": "held"}   # no model: the typed value is held
+        cells = {}
+        for name in FOCUSING_AXES:
+            text = getattr(self, f"{name}_edit").text()
+            # the mode word before the value: a long value elides, never the mode
+            cells[name] = f"{name} {words[self.mode(name)]} {_radius_cell(text)}"
+        group = self.collapsible_groups["instrument.focusing"]
+        rows = [[cells["rhm"], cells["rvm"]], [cells["rha"], cells["rva"]]]
+        if rows != self._focusing_rows:
+            self._focusing_rows = rows
+            group.set_summary(rows)
+        # Fixed axes are not counted: nothing the operator can do about them.
+        loose = [a for a in FOCUSING_AXES if self.mode(a) in ("held", "scanned", "no_model")]
+        flag = f"\u25cf {len(loose)} not tracking" if loose else ""
+        tip = ("Not following the ideal radius. " + " ".join(self._not_tracking_note(a) for a in loose)
+               if loose else "")
+        if (flag, tip) != self._focusing_flag:
+            self._focusing_flag = (flag, tip)
+            group.set_flag(flag, tip)
+
+    def _not_tracking_note(self, axis):
+        """One sentence: why ``axis`` is not following the ideal, and what changes it."""
+        mode = self.mode(axis)
+        if mode == "scanned":   # the box is disabled: only its scan command changes it
+            return (f"{axis} is scanned by command {self.scanned_command(axis)}; it returns to its own "
+                    "setting when no command names it.")
+        if mode == "no_model":
+            return f"{axis} held: {self._focus[axis].no_model}, so it cannot track."
+        return f"{axis} held: tick Track ideal in the open block to follow the ideal."
 
     def _refresh_modules_summary(self, *_):
         group = self.collapsible_groups.get("instrument.modules")

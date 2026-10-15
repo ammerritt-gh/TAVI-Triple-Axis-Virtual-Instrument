@@ -601,6 +601,9 @@ class DisplayDock(BaseDockWidget):
     # reset -- ``initialize_scan`` clears the axes.
     scan_data_reset = Signal()
     scan_data_finished = Signal()
+    # The 1D axes were cleared and rebuilt with the same scan data (a point
+    # turned out unreachable mid-scan); overlay artists on them are gone.
+    plot_rebuilt = Signal()
 
     # Constants for plot states
     STATE_UNMEASURED = 0  # White - to be measured
@@ -960,6 +963,7 @@ class DisplayDock(BaseDockWidget):
             if redraw:
                 self._setup_1d_plot()
                 self._update_1d_display()
+                self.plot_rebuilt.emit()
             else:
                 self._replot_pending = True
 
@@ -1010,6 +1014,8 @@ class DisplayDock(BaseDockWidget):
             if self._replot_pending:
                 self._setup_1d_plot()
             self._update_1d_display()
+            if self._replot_pending:
+                self.plot_rebuilt.emit()   # the rebuild cleared the fitting overlay
         elif self._mode == '2D':
             if self._replot_pending:
                 self._setup_2d_plot()

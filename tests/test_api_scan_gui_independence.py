@@ -60,7 +60,7 @@ def test_gui_and_api_launch_states_agree_at_the_snapshot_level(tmp_path):
     """A shared key set is not enough (packet slice3a): for the same
     instrument configuration, the GUI-launched and API-launched paths must
     emit the SAME McStas parameters at the same scan point. Before this
-    slice they could not agree, because the GUI's Ideal button and the
+    slice they could not agree, because the GUI's ideal path and the
     API's frozen defaults computed curvature from two independent
     hard-coded copies of PUMA's formula rather than the one producer.
 
@@ -86,11 +86,12 @@ def test_gui_and_api_launch_states_agree_at_the_snapshot_level(tmp_path):
         dock.set_ana_id(ana)
         dock.mtt_edit.setText("41.167")
         dock.att_edit.setText("41.167")
-        # rhm/rvm/rha widgets only follow mtt/att when the operator applies
-        # the Ideal values (or locks them) -- get_gui_values() reads the
-        # widgets as they stand, not a live recompute. Apply here so the GUI
-        # side reflects the angles just set, the same as an operator's flow.
-        ctrl.apply_ideal_bending_values()
+        # rhm/rvm/rha widgets only follow mtt/att while their axis tracks --
+        # get_gui_values() reads the widgets as they stand, not a live
+        # recompute. Track every axis here (a saved all-held config would
+        # start held) so the GUI side reflects the angles just set.
+        for axis in ("rhm", "rvm", "rha", "rva"):
+            ctrl.apply_ideal_bending_value(axis)
 
         gui_launch = ctrl._collect_simulation_launch_state()
         api_launch = ctrl.build_api_launch_state({

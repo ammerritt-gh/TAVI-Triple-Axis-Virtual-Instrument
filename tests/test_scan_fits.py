@@ -23,8 +23,11 @@ from tavi.scan_fits import (
     fit_peak,
     format_goto_message,
     format_revert_message,
+    lineshape_title,
     peak_max,
     plan_goto,
+    results_tsv,
+    scan_variable_unit,
 )
 from tavi.scan_fits import _DEFAULT_N_CURVE, _stall_is_expected
 from tavi.quantities import QUANTITIES, to_public
@@ -665,3 +668,197 @@ def test_known_api_field_map_keys_are_unchanged():
     actual = {to_public(k) for k in
               re.findall(r"^\s*'([A-Za-z_][A-Za-z0-9_]*)': \(", body, re.MULTILINE)}
     assert actual == known
+
+
+# --------------------------------------------------------------------------
+# Intensity readout, scan unit, lineshape name, Copy-results text
+# --------------------------------------------------------------------------
+
+def _poisson_peak(seed=0, bg=0.5):
+    """Full-width Poisson scan of a known peak: (x, counts, expected total counts)."""
+    x = np.arange(0.0, 10.05, 0.1)
+    truth = pseudo_voigt(x, area_for_height(200.0, 1.0, 0.3), 1.0, 5.0, 0.3, bg)
+    y = np.random.default_rng(seed).poisson(truth).astype(float)
+    return x, y, float(np.sum(truth - bg))
+
+
+def test_integrated_is_area_over_step_with_its_error():
+    x, y, _ = _poisson_peak()
+    res = fit_peak(x, y)
+    assert res.converged, res.reason
+    assert res.integrated * res.step == pytest.approx(res.area, rel=1e-12)
+    assert res.integrated_err * res.step == pytest.approx(res.area_err, rel=1e-12)
+
+
+def test_raw_range_and_integrated_agree_and_recover_the_known_counts():
+    x, y, known = _poisson_peak()
+    res = fit_peak(x, y)
+    assert res.converged, res.reason
+    combined = math.hypot(res.raw_counts_err, res.integrated_err)
+    assert abs(res.raw_counts - res.integrated) < 3.0 * combined
+    assert abs(res.integrated - known) < 4.0 * res.integrated_err
+    assert abs(res.raw_counts - known) < 4.0 * res.raw_counts_err
+
+
+def test_raw_range_error_is_poisson_plus_background_error():
+    x, y, _ = _poisson_peak()
+    res = fit_peak(x, y)
+    assert res.converged, res.reason
+    n = res.n_points
+    assert res.raw_counts == pytest.approx(float(np.sum(y)) - n * res.background, rel=1e-12)
+    expected = math.sqrt(float(np.sum(y)) + (n * res.background_err) ** 2)
+    assert res.raw_counts_err == pytest.approx(expected, rel=1e-12)
+
+
+def test_raw_range_error_is_unavailable_without_a_background_error(monkeypatch):
+    monkeypatch.setattr("tavi.scan_fits._covariance", lambda hess: None)
+    x, y, _ = _poisson_peak()
+    res = fit_peak(x, y)
+    assert res.converged and res.background_err is None
+    assert res.raw_counts is not None
+    assert res.raw_counts_err is None
+    assert res.integrated_err is None
+
+
+def test_step_is_taken_from_the_fitted_selection_not_the_whole_scan():
+    # 0.01 spacing on 0..2, 0.02 spacing on 2..6; the xrange sits inside the coarse half.
+    x = np.concatenate([np.arange(0.0, 2.0, 0.01), np.arange(2.0, 6.0, 0.02)])
+    truth = pseudo_voigt(x, area_for_height(300.0, 0.5, 0.3), 0.5, 4.0, 0.3, 2.0)
+    y = np.random.default_rng(1).poisson(truth).astype(float)
+
+    whole = fit_peak(x, y)
+    half = fit_peak(x, y, xrange=(2.5, 5.5))
+
+    assert whole.converged and half.converged
+    assert not whole.steps_even and whole.integrated is None
+    assert half.steps_even and half.step == pytest.approx(0.02)
+    assert half.integrated == pytest.approx(half.area / 0.02)
+
+
+def test_steps_are_even_within_one_percent_only():
+    x = np.arange(81) * 0.05
+    y = pseudo_voigt(x, area_for_height(400.0, 0.6, 0.2), 0.6, 2.0, 0.2, 2.0)
+    jitter = np.random.default_rng(2).uniform(-1e-9, 1e-9, x.size)
+    even = fit_peak(x + jitter, y)
+    assert even.converged and even.steps_even
+
+    off = x.copy()
+    off[40:] += 0.001  # one spacing is 2% off
+    uneven = fit_peak(off, y)
+    assert uneven.converged and not uneven.steps_even and uneven.integrated is None
+
+
+def test_background_at_limit_flags_a_fit_pinned_at_zero():
+    x = np.arange(0.0, 10.05, 0.1)
+    pinned = fit_peak(x, pseudo_voigt(x, area_for_height(200.0, 1.0, 0.3), 1.0, 5.0, 0.3, 0.0))
+    assert pinned.converged and pinned.background_at_limit
+    _, y, _ = _poisson_peak(bg=50.0)
+    assert not fit_peak(x, y).background_at_limit
+
+
+def test_scan_variable_unit_follows_the_registry():
+    assert scan_variable_unit("h") == "r.l.u."
+    assert scan_variable_unit("A4") == "°"
+    assert scan_variable_unit("DELTAE") == "meV"
+    assert scan_variable_unit("nonsense") is None
+    assert scan_variable_unit(None) is None
+
+
+def test_lineshape_title_names_the_shape():
+    x = np.linspace(0.5, 3.5, 121)
+    gauss = fit_peak(x, pseudo_voigt(x, area_for_height(800.0, 0.5, 0.0), 0.5, 2.0, 0.0, 5.0),
+                     seed={"eta": 0.0005})
+    lorentz = fit_peak(x, pseudo_voigt(x, area_for_height(800.0, 0.5, 1.0), 0.5, 2.0, 1.0, 5.0),
+                       seed={"eta": 0.9995})
+    xf = np.linspace(1.0, 8.0, 141)
+    free = fit_peak(xf, pseudo_voigt(xf, area_for_height(500.0, 0.8, 0.4), 0.8, 4.2, 0.4, 3.0))
+    assert lineshape_title(gauss) == "Gaussian"
+    assert lineshape_title(lorentz) == "Lorentzian"
+    assert lineshape_title(free).startswith("pseudo-Voigt, η = 0.400 ± ")
+    assert lineshape_title(QuickFitResult(converged=False, reason="no fit")) is None
+
+
+def test_results_tsv_lists_each_quantity_with_a_unit():
+    x = np.linspace(0.0, 10.0, 101)
+    y = pseudo_voigt(x, area_for_height(200.0, 1.0, 0.3), 1.0, 5.0, 0.3, 0.0)
+    res = fit_peak(x, y)
+    assert res.converged, res.reason
+    lines = results_tsv("h", res, com(x, y), peak_max(x, y)).splitlines()
+    assert lines[0] == "quantity\tvalue\terror\tunit"
+    rows = {line.split("\t")[0]: line.split("\t") for line in lines[1:]}
+    assert len(rows) == len(lines) - 1  # no two rows share a name
+    for name, cells in rows.items():
+        assert len(cells) == 4, name
+        if name != "Lineshape":  # the one line whose value is a name
+            assert cells[3], name
+    assert rows["Background"][2] == "at limit"
+    assert rows["Integrated"][3] == "counts"
+    assert rows["Normalised"][3] == "counts·r.l.u."
+    assert rows["Raw range"][3] == "counts"
+    assert "eta" in rows
+
+
+def test_results_tsv_marks_uneven_steps_and_an_unregistered_variable():
+    x = np.arange(81) * 0.05
+    y = pseudo_voigt(x, area_for_height(400.0, 0.6, 0.2), 0.6, 2.0, 0.2, 2.0)
+    x[40:] += 0.001  # one spacing is 2% off
+    res = fit_peak(x, y)
+    assert res.converged and not res.steps_even
+    lines = results_tsv("nonsense", res, com(x, y), peak_max(x, y)).splitlines()
+    rows = {line.split("\t")[0]: line.split("\t") for line in lines[1:]}
+    assert rows["Integrated"] == ["Integrated", "uneven steps", "", "counts"]
+    assert rows["Normalised"][3] == "counts × nonsense"
+    assert rows["FWHM"][3] == "nonsense units"
+
+
+def test_results_tsv_without_a_fit_copies_com_and_max_only():
+    x = np.arange(0.0, 5.0)
+    y = np.array([1.0, 4.0, 10.0, 4.0, 1.0])
+    fit = fit_peak(x, y)
+    assert not fit.converged and fit.step is None and fit.raw_counts is None
+    assert fit.integrated is None and not fit.background_at_limit
+    rows = [line.split("\t") for line in
+            results_tsv("h", fit, com(x, y), peak_max(x, y)).splitlines()]
+    assert [row[0] for row in rows] == ["quantity", "COM", "MAX"]
+    assert rows[1] == ["COM", "2.0", "", "r.l.u."]
+    assert rows[2] == ["MAX", "2.0", "", "r.l.u."]
+
+
+def test_one_missing_point_inside_the_range_keeps_steps_even():
+    # mark_1d_point_invalid sets a count to NaN; the gap it leaves is 2x the step.
+    x, y, _ = _poisson_peak()
+    y[50] = np.nan
+    res = fit_peak(x, y)
+    assert res.converged, res.reason
+    assert res.steps_even and res.step == pytest.approx(0.1)
+    assert res.integrated == pytest.approx(res.area / res.step, rel=1e-12)
+
+
+def test_a_spacing_off_the_grid_stays_uneven():
+    x = np.arange(81) * 0.05
+    y = pseudo_voigt(x, area_for_height(400.0, 0.6, 0.2), 0.6, 2.0, 0.2, 2.0)
+    two_percent = x.copy()
+    two_percent[40:] += 0.001  # one spacing 2% off the step
+    stretched = x.copy()
+    stretched[40:] += 0.025  # one spacing 1.5x the step: rounds to 2 steps, still 0.5 step off
+    for xs in (two_percent, stretched):
+        res = fit_peak(xs, y)
+        assert res.converged and not res.steps_even and res.integrated is None
+
+
+def test_results_tsv_step_error_cell_marks_uneven_steps():
+    x = np.arange(81) * 0.05
+    y = pseudo_voigt(x, area_for_height(400.0, 0.6, 0.2), 0.6, 2.0, 0.2, 2.0)
+    off = x.copy()
+    off[40:] += 0.001
+    even = fit_peak(x, y)
+    uneven = fit_peak(off, y)
+    assert even.converged and uneven.converged
+
+    def step_row(xs, res):
+        lines = results_tsv("h", res, com(xs, y), peak_max(xs, y)).splitlines()
+        return next(line.split("\t") for line in lines if line.startswith("Step\t"))
+
+    assert step_row(x, even)[2] == ""
+    assert step_row(off, uneven)[1] == repr(float(uneven.step))
+    assert step_row(off, uneven)[2] == "uneven steps"

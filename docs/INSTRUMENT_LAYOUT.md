@@ -332,7 +332,7 @@ The monochromator and analyzer can be bent to focus neutrons:
 
 Requested versus applied radii: see *Conventions* above.
 
-**Ideal focusing**: The radius is calculated to focus neutrons onto the detector, maximizing intensity. Use the "Ideal" buttons in the GUI to calculate optimal values.
+**Ideal focusing**: The radius is calculated to focus neutrons onto the detector, maximizing intensity. Ticking **Track ideal** in the GUI makes the radius follow the calculated ideal, recomputed when the angles change and at every scan point; unticking it, or typing a value in the field, holds the radius at that value.
 
 ## Reciprocal Space Navigation
 

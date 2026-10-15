@@ -50,7 +50,7 @@ def _controller(instrument_id):
 
 
 def test_gui_unlocked_out_of_travel_field_is_not_refused_when_the_scan_names_it():
-    """rhm field at 1.0 (below the 2.0 m minimum), Ideal lock off (HELD),
+    """rhm field at 1.0 (below the 2.0 m minimum), Track ideal off (HELD),
     but the scan command names rhm -- ``_preflight_scan_validation`` must
     not hard-block on the stale HELD value."""
     with _controller("puma") as ctrl:
@@ -61,11 +61,10 @@ def test_gui_unlocked_out_of_travel_field_is_not_refused_when_the_scan_names_it(
         idock.set_ana_id(ana)
         idock.rhm_edit.setText("1.0")
         # setText is programmatic, so it does not fire textEdited and does not
-        # clear the Ideal lock the way a user typing here would. Establish the
-        # HELD precondition rather than inherit it: a controller built on a
-        # machine whose config/parameters.json last saved
-        # rhm_ideal_locked=true starts locked, and the unlocked (HELD) case is
-        # this test's whole subject.
+        # untick Track ideal the way a user typing here would. Establish the
+        # HELD precondition rather than inherit it: the fresh defaults (or a
+        # config/parameters.json that saved rhm_ideal_locked=true) track rhm,
+        # and the held case is this test's whole subject.
         ctrl.unlock_ideal_bending("rhm")
         assert ctrl.is_bending_locked("rhm") is False
 

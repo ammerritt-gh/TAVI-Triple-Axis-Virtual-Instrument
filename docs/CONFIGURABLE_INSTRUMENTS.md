@@ -1879,9 +1879,10 @@ geometry stayed correct — so nothing visible broke and no test caught it.
   against internal instrument documentation and confirmed with the instrument
   scientist** (operator, 2026-09-11). Not independently citable, not a guarantee,
   and explicitly **not** covering PUMA's arm lengths, which stay provisional.
-- `curvature_modes` is **read-only** on the API. Modes derive from the Ideal locks
-  and from which axes a scan command names; a second way to set them would be
-  another twin.
+- `curvature_modes` is **read-only** on the API. Modes derive from each radius's
+  Track ideal choice (the GUI's per-axis tracking state, saved as the
+  `*_ideal_locked` keys) and from which axes a scan command names; a second way
+  to set them would be another twin.
 - **Direct transmission (2026-09-13, operator ruling).** Energy is
   downstream-only: a crystal at zero take-off passes on whatever reaches it
   and selects nothing, so a transmitting crystal's energy is recorded absent
