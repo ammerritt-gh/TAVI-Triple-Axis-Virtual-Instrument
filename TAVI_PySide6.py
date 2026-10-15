@@ -9339,9 +9339,10 @@ class TAVIController(QObject):
 
         Returns ``{'discarded': bool, 'result' | 'error': ..., 'scope': scope,
         'blocked': bool}``. The point is discarded (not executed) when a launch
-        was refused (a stop came first, at any time during the point), when a kill
-        landed while a process it started, or a descendant of one, was still running,
-        or when its call is still blocked after the kill; a kill landing after its processes exited leaves it
+        was refused (a stop came before the point's first launch, or any launch
+        came after a kill), when a kill landed while a process it started, or a
+        descendant of one, was still running, or when its call is still blocked
+        after the kill; a kill landing after its processes exited leaves it
         recorded normally. Decided by the scope's flags, never by what
         ``run_point`` returned or raised.
         """

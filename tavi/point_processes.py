@@ -31,9 +31,10 @@ table every ``KILL_POLL_S`` until nothing is left or ``KILL_WAIT_S`` has passed,
 and never calls anything that can block.  ``wait_killed(timeout)`` returns the
 processes still running if the kill outlasts the wait.
 
-``release()`` closes the handles.  The controller calls it once it is done with
-the point (after ``wait_killed`` when the point was killed, or when it completed
-normally); ``__del__`` calls it as a fallback.  A kill still running keeps its
+``release()`` closes the handles.  The controller calls it only after it has
+unpublished the scope as the active one, so no kill can reach a released scope:
+after ``wait_killed`` when the point was killed, otherwise once the point
+completed; ``__del__`` calls it as a fallback.  A kill still running keeps its
 handles open and closes them when it ends.
 
 Lock discipline (the controller's order is ``_stop_lock``, then this scope's
