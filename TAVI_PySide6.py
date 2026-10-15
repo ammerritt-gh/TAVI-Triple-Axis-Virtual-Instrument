@@ -154,6 +154,7 @@ from tavi.api_server import (TaviApiServer, ApiError, load_api_config,
                              BACKGROUND_SPEC_KEYS)
 from tavi import background as _background
 from tavi import point_processes
+from tavi import mcstas_paths
 from tavi.journal import SessionJournal
 from tavi import scan_fits
 from tavi.quantities import API_VERSION, QUANTITIES, QuantityRefused
@@ -1186,7 +1187,7 @@ class TAVIController(QObject):
     # Controller signals a scan thread posts through _post_signal; the drain emits them.
     _ORDERED_SIGNALS = frozenset({
         'scan_initialized', 'actual_output_folder_updated', 'scan_completed',
-        'scan_auto_save', 'single_point_result',
+        'scan_auto_save', 'single_point_result', 'mcstas_path_refused',
     })
     # Longest a scan thread waits, per point, for the GUI thread's plot draw.
     GUI_YIELD_MAX_S = 1.0
@@ -1215,6 +1216,7 @@ class TAVIController(QObject):
     # Asks the GUI thread for a drain pass at once (bypassing GUI_DRAW_SHARE).
     drain_requested = Signal()
     scan_completed = Signal()  # scan finished
+    mcstas_path_refused = Signal(str)  # a save folder McStas cannot use: the dialog's text
     scan_auto_save = Signal()  # trigger auto-save of plot
     single_point_result = Signal(float, float)  # max_counts, total_counts for single-point scan
     
@@ -1846,6 +1848,7 @@ class TAVIController(QObject):
         # Each slot that ends a scan flushes the buffered updates first.
         self.drain_requested.connect(self._drain_updates)
         self.scan_completed.connect(self._on_scan_completed)
+        self.mcstas_path_refused.connect(self._on_mcstas_path_refused)
         self.scan_auto_save.connect(self._on_scan_auto_save)
         self.single_point_result.connect(self._on_single_point_result)
         
@@ -2248,6 +2251,11 @@ class TAVIController(QObject):
     def _on_scan_completed(self):
         self._drain_updates()
         self.window.display_dock.scan_complete()
+
+    @Slot(str)
+    def _on_mcstas_path_refused(self, text):
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(self.window, "Cannot save in this folder", text)
 
     @Slot()
     def _on_scan_auto_save(self):
@@ -9950,6 +9958,27 @@ class TAVIController(QObject):
         # If the folder already exists, increment instead
         new_data_folder = incremented_path_writing(self.output_directory, data_folder)
         data_folder = new_data_folder
+
+        # McStas cannot take this folder (tavi/mcstas_paths.py): refuse before any point,
+        # removing the run folder, which is new and still empty.
+        if (launch_state.get('engine') != 'deterministic'
+                and mcstas_paths.mcstas_path(data_folder) is None):
+            try:
+                os.rmdir(data_folder)
+            except OSError as exc:
+                self._post_log("Could not remove the empty folder %s: %s" % (data_folder, exc))
+            text = mcstas_paths.refusal_message(data_folder)
+            self._post_log(text)
+            if job is not None:
+                with job.lock:
+                    job.state = JobState.FAILED
+                    job.error = text
+                    job.finished_at = time.time()
+                    job.notify_state_change()
+            if job is None or job.source == 'gui':  # an API client gets the job error, no modal
+                self._post_signal('mcstas_path_refused', text)
+            self._post_signal('scan_completed')
+            return data_folder
 
         self._post_signal('actual_output_folder_updated', data_folder)
         
