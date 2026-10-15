@@ -28,7 +28,7 @@ def read_1Ddetector_file(scan_folder):
         # Check if the file exists before attempting to load it
         if os.path.exists(file_path):
             # Load the file
-            with open(file_path, 'r', encoding='utf-8') as file:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as file:
                 content = file.read()
                          
                 # Split the content into lines
