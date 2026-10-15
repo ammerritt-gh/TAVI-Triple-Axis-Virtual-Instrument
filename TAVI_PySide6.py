@@ -9368,8 +9368,6 @@ class TAVIController(QObject):
         def point_main():
             try:
                 with scope:
-                    with self._stop_lock:
-                        self._active_scope = scope
                     try:
                         box['result'] = self.instrument.run_point(*run_args, **run_kwargs)
                     except BaseException as exc:  # kept for the worker, which re-raises it if the point counts
@@ -9379,6 +9377,9 @@ class TAVIController(QObject):
                 self._unpublish_scope(scope)
                 scope.release()
 
+        # Published before the thread starts: a kill landing before the scope's block reaches it.
+        with self._stop_lock:
+            self._active_scope = scope
         thread = threading.Thread(target=point_main, name=f"scan-point-{i}", daemon=True)
         thread.start()
         while thread.is_alive() and not scope.killed:
