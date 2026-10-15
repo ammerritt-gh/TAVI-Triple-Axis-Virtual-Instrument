@@ -21,6 +21,7 @@ from instruments.contract import (
     RunExecutionState,
 )
 from instruments.descriptor import CurvatureAxis
+from tavi import mcstas_paths
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
 from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
@@ -1430,6 +1431,7 @@ def _run_point_direct(execution_state, params_snapshot, output_folder, number_ne
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        errors="replace",
         cwd=execution_state.binary_cwd,
     )
 
@@ -1465,13 +1467,16 @@ def run_tas_point(instrument, params_snapshot, output_folder, number_neutrons, e
         and os.path.isfile(execution_state.binary_path)
     )
 
+    # No safe short form (the caller skipped the Run refusal): keep the long folder.
+    mcstas_folder = mcstas_paths.mcstas_path(output_folder) or output_folder
+
     if can_run_direct:
         execution_state.last_execution_mode = "direct"
         try:
             result = _run_point_direct(
                 execution_state,
                 params_snapshot,
-                output_folder,
+                mcstas_folder,
                 number_neutrons,
                 mpi_count,
             )
@@ -1513,7 +1518,7 @@ def run_tas_point(instrument, params_snapshot, output_folder, number_neutrons, e
     force_compile = not execution_state.first_backengine_succeeded
 
     instrument.settings(
-        output_path=output_folder,
+        output_path=mcstas_folder,
         ncount=number_neutrons,
         mpi=mpi_count,
         force_compile=force_compile,
