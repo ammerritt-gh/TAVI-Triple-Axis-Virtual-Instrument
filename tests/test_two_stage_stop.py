@@ -677,6 +677,24 @@ def test_a_click_after_the_relabelled_job_ended_stops_nothing(rig, controller):
     assert wait_terminal(second) == JobState.DONE
 
 
+def test_the_stop_button_says_what_a_second_click_does(rig, controller):
+    ctrl = controller
+
+    def names_the_second_click():
+        tip = stop_button(ctrl).toolTip()
+        return "Click again to force stop" in tip
+
+    assert names_the_second_click(), repr(stop_button(ctrl).toolTip())
+    s = rig.stand_in("hold")
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point to start")
+    stop_button(ctrl).click()
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+    pump_until(lambda: stop_button(ctrl).text() == "Stop Simulation", "the label to return")
+    assert names_the_second_click(), repr(stop_button(ctrl).toolTip())
+
+
 # --------------------------------------------------------------- analytic engine
 
 def test_an_analytic_scans_second_click_ends_it_as_a_kill(rig, controller, monkeypatch):
