@@ -10049,7 +10049,7 @@ class TAVIController(QObject):
             job.error = error_message
             job.finished_at = time.time()
             if job.result is not None:
-                # A stop_event set with no request recorded is an API stop, which is graceful.
+                # Every stop is recorded by request_stop; the fallback only guards a stop_event set elsewhere.
                 job.result.stop_mode = ((job.stop_request or "graceful")
                                         if final_state == JobState.STOPPED else None)
             self.last_scan_result = job.result
