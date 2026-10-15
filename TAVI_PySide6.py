@@ -1188,6 +1188,11 @@ class TAVIController(QObject):
     })
     # Longest a scan thread waits, per point, for the GUI thread's plot draw.
     GUI_YIELD_MAX_S = 1.0
+    # Between passes a CPU-bound scan thread still starves the GUI thread of the GIL
+    # (measured: a 50 ms timer ran up to 0.4 s late, 2,000 points); every
+    # GUI_BREATH_S it sleeps GUI_BREATH_NAP_S so queued GUI events run (about 1% of its time, plus what the GUI thread then runs).
+    GUI_BREATH_S = 0.1
+    GUI_BREATH_NAP_S = 0.001
     # Bounds every wait for a force stop to finish (its kill, wait and folder removal).
     CLOSE_WAIT_S = point_processes.KILL_WAIT_S + 5
     # After a kill, how long the worker still waits for a point's call to return.
@@ -1254,6 +1259,7 @@ class TAVIController(QObject):
         self._open_spans = 0
         self._draw_started = 0.0
         self._draw_next_at = 0.0
+        self._breath_at = 0.0
         self.window = window
         # CLI overrides for the remote API server (see main()); empty by default.
         self._api_cli_overrides = api_overrides or {}
@@ -2153,10 +2159,15 @@ class TAVIController(QObject):
         the GIL and the pass runs at full speed. The thread waits only while a
         drain pass is under way (``_drain_updates`` clears the flag for the span
         and spaces the passes by ``GUI_DRAW_SHARE``); between passes this returns
-        at once.
+        at once, except for the short nap every ``GUI_BREATH_S``: the GIL is not
+        handed over fairly, and without it a queued GUI event (not only a pass)
+        waited up to ~0.4 s behind the scan thread.
         """
         if threading.get_ident() != self._gui_thread_ident:  # a synchronous run on the GUI thread
             self._gui_idle.wait(self.GUI_YIELD_MAX_S)
+            if time.perf_counter() >= self._breath_at:
+                time.sleep(self.GUI_BREATH_NAP_S)
+                self._breath_at = time.perf_counter() + self.GUI_BREATH_S
 
     def _end_draw_span(self):
         """After a pass's draw: release the scan thread once no pass is open, and space the next."""
