@@ -13,7 +13,7 @@ questions, each against a named limit:
   leave the plot exactly as the per-point path does.
 
 Wall-time budget: at most 20 s for the file (one 2,000-point scan stopped
-part-way, two short scans run to completion); every wait has a deadline that
+near its end, two short scans run to completion); every wait has a deadline that
 fails the test rather than hanging it. Timing assertions print the measured
 margin (run with ``-s`` or read the captured output on failure).
 """
@@ -46,7 +46,7 @@ STOP_LIMIT_S = 1.0             # operator ruling 2026-10-14
 PING_INTERVAL_MS = 50
 SCAN_POINTS = 2000
 WARMUP_POINTS = 200            # latency is judged after this many points
-STOP_AT_POINTS = 300           # the Stop click is posted once this many are done
+STOP_AT_POINTS = 1900          # the Stop click is posted once this many are done (near the end: the whole scan is judged)
 SCAN_DEADLINE_S = 60.0         # wall-clock deadline for any wait
 
 _TERMINAL = (JobState.DONE, JobState.STOPPED, JobState.FAILED, JobState.CANCELLED)
