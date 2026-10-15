@@ -76,6 +76,14 @@ takes about 1.6 s of that. Pass `--durations=15` to see the slowest tests.
 
 - `test_tas_geometry.py` — golden tests for the general TAS geometry solvers
   (`tavi/tas_geometry.py`) and UB-matrix math (`tavi/ub_matrix.py`).
+- `test_detector_read_encoding.py` — a `detector.dat` whose header carries a
+  code-page save path (umlauts, ß) still reads its numbers.
+- `test_mcstas_paths.py` — output folders McStas can receive: the short-name
+  form, the refusal for a space, a code-page-foreign or `& ^ %` character, and
+  the refusal text (no McStas run).
+- `test_run_refusal.py` — offscreen Qt, McStas stand-ins: a GUI Run or API
+  job on a folder with no McStas form is refused before any point, the run
+  folder removed; the deterministic engine and a safe folder are not refused.
 
 Crystal orientation (truth and belief, the sample goniometer, the plane lock,
 legible alignment):
