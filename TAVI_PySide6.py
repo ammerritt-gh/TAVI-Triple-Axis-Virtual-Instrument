@@ -1619,6 +1619,11 @@ class TAVIController(QObject):
         """A stop from a GUI control (Stop button or the dock's Cancel): graceful once, then kill."""
         with job.lock:
             kill = job.gui_stop_requested
+            running = job.state == JobState.RUNNING
+        if kill and running:
+            # Logged first: a kill with nothing to wait for writes its outcome inside request_stop.
+            self.print_to_message_center(
+                f"Force stop: scan job {job.job_id} is being force-stopped now.")
         outcome = self.request_stop(job.job_id, kill=kill)
         if outcome == "graceful":
             with job.lock:
@@ -1628,9 +1633,6 @@ class TAVIController(QObject):
             self.print_to_message_center(
                 "Stop requested: the scan stops after the current point. "
                 "Click Force stop to end it immediately.")
-        elif outcome == "kill":
-            self.print_to_message_center(
-                f"Force stop: scan job {job.job_id} is being force-stopped now.")
         return outcome
 
     def force_stop_all(self):

@@ -695,6 +695,20 @@ def test_the_stop_button_says_what_a_second_click_does(rig, controller):
     assert names_the_second_click(), repr(stop_button(ctrl).toolTip())
 
 
+def test_a_kill_with_nothing_to_end_logs_the_request_before_its_outcome(rig, controller):
+    ctrl = controller
+    s = rig.stand_in("hold")
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point to start")
+    stop_button(ctrl).click()
+    stop_button(ctrl).click()
+    text = log_text(ctrl)
+    assert "no process was recorded" in text, text
+    assert text.index("is being force-stopped now") < text.index("no process was recorded"), text
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+
+
 # --------------------------------------------------------------- analytic engine
 
 def test_an_analytic_scans_second_click_ends_it_as_a_kill(rig, controller, monkeypatch):
