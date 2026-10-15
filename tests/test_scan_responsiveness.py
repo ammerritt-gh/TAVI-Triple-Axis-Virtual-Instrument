@@ -458,3 +458,53 @@ def test_running_state_keeps_a_fast_scans_final_progress(controller):
     ctrl._gui_updates.latest('progress_updated', 100, 100)
     ctrl._on_job_state_changed("job-fast", JobState.RUNNING.value)
     assert bar.value() == 100, "the start of a job reset the progress to %d" % bar.value()
+
+
+def _queue_scan(ctrl, command, folder):
+    dock = ctrl.window.simulation_dock
+    dock.scan_command_1_edit.setText(command)
+    dock.scan_command_2_edit.setText("")
+    ctrl.window.data_control_dock.save_folder_edit.setText(folder)
+    before = {j.job_id for j in ctrl._job_registry.all_jobs()}
+    # The first Run disables the button until its queued state signal is handled;
+    # the Run handler itself queues the next job all the same.
+    ctrl.run_simulation_thread()
+    new = [j for j in ctrl._job_registry.all_jobs() if j.job_id not in before]
+    assert len(new) == 1, "Run did not queue exactly one job"
+    return new[0]
+
+
+def test_a_scan_ending_does_not_drain_the_next_scans_start(controller):
+    """Scan B starts before the GUI thread handles scan A's completion: A's
+    completion and auto-save must still see A's plot and folder, not B's."""
+    ctrl = controller
+    dock = ctrl.window.display_dock
+    dock_sim = ctrl.window.simulation_dock
+    dock_sim.engine_combo.setCurrentIndex(dock_sim.engine_combo.findData("deterministic"))
+    saves = []
+    real_save = dock.auto_save_plot
+
+    def _recording_save():
+        saves.append((dock._variable_name_1, dock._data_folder,
+                      dock.scan_snapshot()['n_measured']))
+        return real_save()
+
+    dock.auto_save_plot = _recording_save
+    try:
+        with _stdout_to_memory():
+            # No Qt event is handled until both jobs are over: the GUI thread
+            # sees A's end-of-scan handling only after B's updates are queued.
+            job_a = _queue_scan(ctrl, "deltaE 0 0.4 0.1", "drain_order_a")
+            job_b = _queue_scan(ctrl, "H 1 1.6 0.1", "drain_order_b")
+            end = time.perf_counter() + SCAN_DEADLINE_S
+            while not all(_state_of(j) in _TERMINAL for j in (job_a, job_b)):
+                assert time.perf_counter() < end, "the two scans did not end"
+                time.sleep(0.01)
+            _wait(lambda: len(saves) >= 2, SCAN_DEADLINE_S, "both auto-saves")
+            QTest.qWait(300)
+    finally:
+        del dock.auto_save_plot
+    folder_a = job_a.result.output_folder
+    folder_b = job_b.result.output_folder
+    assert folder_a != folder_b
+    assert saves == [("energy_transfer_mev", folder_a, 5), ("h", folder_b, 7)], saves

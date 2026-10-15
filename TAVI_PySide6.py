@@ -1181,6 +1181,11 @@ class TAVIController(QObject):
     # parked (see _yield_to_gui), so each pass costs the scan its own duration.
     # Passes are spaced so that the parked share of wall time stays near this.
     GUI_DRAW_SHARE = 0.12
+    # Controller signals a scan thread posts through _post_signal; the drain emits them.
+    _ORDERED_SIGNALS = frozenset({
+        'scan_initialized', 'actual_output_folder_updated', 'scan_completed',
+        'scan_auto_save', 'single_point_result',
+    })
     # Longest a scan thread waits, per point, for the GUI thread's plot draw.
     GUI_YIELD_MAX_S = 1.0
     # Bounds every wait for a force stop to finish (its kill, wait and folder removal).
@@ -1196,9 +1201,12 @@ class TAVIController(QObject):
     message_printed = Signal(str)
     
     # Per-point display-dock updates of a running scan go through _GuiUpdateBuffer, not
-    # signals (counts, invalid points, current-point marker). The scan's start is
-    # still this signal, but the drain emits it, in order with those updates.
+    # signals (counts, invalid points, current-point marker). The scan's start and end
+    # are still these signals, but the drain emits them (_post_signal), in order with
+    # those updates, so a scan's end never drains the next scan's start.
     scan_initialized = Signal(str, list, list, str, str, list, list)  # mode, values1, valid_mask1, var1, var2, values2, valid_mask_2d
+    # Asks the GUI thread for a drain pass at once (bypassing GUI_DRAW_SHARE).
+    drain_requested = Signal()
     scan_completed = Signal()  # scan finished
     scan_auto_save = Signal()  # trigger auto-save of plot
     single_point_result = Signal(float, float)  # max_counts, total_counts for single-point scan
@@ -1816,6 +1824,7 @@ class TAVIController(QObject):
         # Connect display dock signals
         self.scan_initialized.connect(self._on_scan_initialized)
         # Each slot that ends a scan flushes the buffered updates first.
+        self.drain_requested.connect(self._drain_updates)
         self.scan_completed.connect(self._on_scan_completed)
         self.scan_auto_save.connect(self._on_scan_auto_save)
         self.single_point_result.connect(self._on_single_point_result)
@@ -2122,6 +2131,17 @@ class TAVIController(QObject):
         if threading.get_ident() == self._gui_thread_ident:
             self._drain_updates()
 
+    def _post_signal(self, name, *args):
+        """Emit a controller signal (``_ORDERED_SIGNALS``) from a scan thread, in order.
+
+        The signal waits in the buffer behind the scan's own updates, so its slot
+        sees exactly that scan's display and no later scan's; a drain is requested
+        at once so the scan's end is not held back by the draw pacing. On the GUI
+        thread the request drains immediately.
+        """
+        self._gui_updates.point(name, *args)
+        self.drain_requested.emit()
+
     def _yield_to_gui(self):
         """Scan threads call this once per point: wait (bounded) while the GUI thread works.
 
@@ -2157,7 +2177,9 @@ class TAVIController(QObject):
         """Apply the buffered scan updates. GUI thread only; the only consumer.
 
         Log lines go out as one ``message_printed``; display-dock events run in
-        arrival order with their redraw suppressed and one redraw after them;
+        arrival order with their redraw suppressed and one redraw after them (a
+        controller signal among them, ``_ORDERED_SIGNALS``, is emitted in its place
+        after the redraw owed so far);
         then the latest progress, counts and times. The whole pass runs with the
         scan thread parked; the timer (``_drain_tick``) starts a pass only when
         ``GUI_DRAW_SHARE`` of the wall time allows, leaving everything buffered, in
@@ -2186,8 +2208,11 @@ class TAVIController(QObject):
             redraw = False
             for method, args in events:
                 try:
-                    if method == 'scan_initialized':
-                        self.scan_initialized.emit(*args)
+                    if method in self._ORDERED_SIGNALS:
+                        if redraw:  # an auto-save sees its own scan fully drawn
+                            dock.redraw()
+                            redraw = False
+                        getattr(self, method).emit(*args)
                     else:
                         getattr(dock, method)(*args, redraw=False)
                         redraw = True
@@ -9522,7 +9547,7 @@ class TAVIController(QObject):
             # Every other exit of this method (and the McStas path) emits
             # scan_completed even on failure; without it display_dock never
             # leaves its in-progress state.
-            self.scan_completed.emit()
+            self._post_signal('scan_completed')
             return data_folder
 
         self._post_log(
@@ -9559,7 +9584,7 @@ class TAVIController(QObject):
                     job.error = reason
                     job.finished_at = time.time()
                     job.notify_state_change()
-            self.scan_completed.emit()
+            self._post_signal('scan_completed')
             return data_folder
         # Marginal widths require a 4x4 inversion per point, so compute them
         # only when an active smooth source consumes one.
@@ -9967,12 +9992,12 @@ class TAVIController(QObject):
 
         # Display completion signals (mirror the McStas finalization).
         if simulation_error_message is not None or self.stop_event.is_set():
-            self.scan_completed.emit()
+            self._post_signal('scan_completed')
         elif is_single_point_scan:
-            self.single_point_result.emit(max_counts, total_counts)
+            self._post_signal('single_point_result', max_counts, total_counts)
         else:
-            self.scan_completed.emit()
-            self.scan_auto_save.emit()
+            self._post_signal('scan_completed')
+            self._post_signal('scan_auto_save')
 
         # Finalize job bookkeeping (same terminal-state selection as McStas). A
         # kill is a stop at the next point boundary here: no external process.
@@ -10032,7 +10057,7 @@ class TAVIController(QObject):
         new_data_folder = incremented_path_writing(self.output_directory, data_folder)
         data_folder = new_data_folder
 
-        self.actual_output_folder_updated.emit(data_folder)
+        self._post_signal('actual_output_folder_updated', data_folder)
         
         # Write parameters to file, with each command's absolute axis: a relative command's
         # text holds offsets, and the Display reload places points on these values.
@@ -10285,7 +10310,7 @@ class TAVIController(QObject):
                     job.notify_state_change()
             # Every other exit of this method emits scan_completed even on
             # failure; without it display_dock never leaves its in-progress state.
-            self.scan_completed.emit()
+            self._post_signal('scan_completed')
             return data_folder
         # A McStas point has no resolution matrix of its own. Solve and invert
         # only when an active smooth source consumes a marginalized width.
@@ -11035,14 +11060,14 @@ class TAVIController(QObject):
         
         # Handle display based on scan type
         if simulation_error_message is not None or self.stop_event.is_set():
-            self.scan_completed.emit()
+            self._post_signal('scan_completed')
         elif is_single_point_scan:
             # For single-point scans, show results as text instead of plot
-            self.single_point_result.emit(max_counts, total_counts)
+            self._post_signal('single_point_result', max_counts, total_counts)
         else:
             # For 1D/2D scans, signal completion and auto-save the plot
-            self.scan_completed.emit()
-            self.scan_auto_save.emit()
+            self._post_signal('scan_completed')
+            self._post_signal('scan_auto_save')
         
         # Display diagnostic subplots if in diagnostic mode and any monitors were enabled
         if diagnostic_mode and simulation_error_message is None and not self.stop_event.is_set():
