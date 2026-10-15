@@ -709,6 +709,26 @@ def test_a_kill_with_nothing_to_end_logs_the_request_before_its_outcome(rig, con
     assert wait_terminal(job) == JobState.STOPPED
 
 
+def test_a_kill_that_finds_the_job_finished_says_so(rig, controller):
+    """The job ends between the RUNNING read and request_stop: the log must not stand at 'force-stopped'."""
+    ctrl = controller
+    s = rig.stand_in("hold")
+    job = rig.submit()
+    pump_until(s.started[0].is_set, "the point to start")
+    stop_button(ctrl).click()
+    ctrl.request_stop = lambda job_id=None, *, kill=False: "finished"   # the race, made certain
+    try:
+        stop_button(ctrl).click()
+    finally:
+        del ctrl.request_stop
+    text = log_text(ctrl)
+    assert "had already ended; nothing was killed" in text, text
+    assert text.index("is being force-stopped now") < text.index("had already ended"), text
+    assert stop_button(ctrl).text() != "Stopping..."
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+
+
 def test_a_force_stop_under_way_disables_the_button_until_the_scan_ends(rig, controller):
     ctrl = controller
     s = rig.stand_in("hold")

@@ -1636,6 +1636,9 @@ class TAVIController(QObject):
         elif outcome == "kill":
             self._force_stop_label_job = job.job_id
             self.window.simulation_dock.show_stopping()
+        elif kill and running:
+            self.print_to_message_center(
+                f"Force stop: scan job {job.job_id} had already ended; nothing was killed.")
         return outcome
 
     def force_stop_all(self):
