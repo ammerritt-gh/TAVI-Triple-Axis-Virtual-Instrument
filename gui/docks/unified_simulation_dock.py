@@ -51,6 +51,7 @@ class UnifiedSimulationDock(BaseDockWidget):
         self.run_button.setDefault(True)  # the one primary action in this dock
         buttons_row.addWidget(self.run_button)
         self.stop_button = QPushButton(self.STOP_TEXT)
+        self.stop_button.setToolTip(self.STOP_TOOLTIP)
         buttons_row.addWidget(self.stop_button)
         control_layout.addLayout(buttons_row)
 
@@ -284,12 +285,14 @@ class UnifiedSimulationDock(BaseDockWidget):
 
     STOP_TEXT = "Stop Simulation"
     FORCE_STOP_TEXT = "Force stop"
+    STOP_TOOLTIP = "Stops the scan after the current point. Click again to force stop it."
 
     def show_force_stop(self, force: bool):
         """Relabel Stop as Force stop after a graceful stop request, and back."""
         self.stop_button.setText(self.FORCE_STOP_TEXT if force else self.STOP_TEXT)
         self.stop_button.setToolTip(
-            "Ends the scan now; a McStas point still running is discarded." if force else "")
+            "Ends the scan now; a McStas point still running is discarded." if force
+            else self.STOP_TOOLTIP)
 
     def set_scan_command_warning(self, command_num: int, message: str):
         """Set or clear a warning for a scan command.
