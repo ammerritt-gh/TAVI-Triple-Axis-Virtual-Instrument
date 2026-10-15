@@ -16,6 +16,12 @@ MULLER = "M\u00fcller_Stra\u00dfe"          # u-umlaut and sharp s: both in cp12
 LODZ = "\u0141\u00f3d\u017a_\u03a9"         # Lodz_Omega: Ł, ź and Ω are outside cp1252, ó is inside
 
 
+@pytest.fixture(autouse=True)
+def _cp1252(monkeypatch):
+    # The expectations below are cp1252's; pin it so a machine on another code page checks the same thing.
+    monkeypatch.setattr(mp, "_ansi_encoding", lambda: "cp1252")
+
+
 def _no_short_names(monkeypatch):
     monkeypatch.setattr(mp, "_short_path", lambda path: path)
 
@@ -51,8 +57,6 @@ def test_spaced_or_outside_code_page_path_is_none_without_short_names(tmp_path, 
 
 
 def test_code_page_name_without_space_is_kept(tmp_path, monkeypatch):
-    if mp._ansi_encoding() != "cp1252":
-        pytest.skip(f"ANSI code page is {mp._ansi_encoding()}, not cp1252; the umlaut case is not checkable here")
     _no_short_names(monkeypatch)
     target = str(tmp_path / MULLER)
     assert mp.mcstas_path(target) == target
