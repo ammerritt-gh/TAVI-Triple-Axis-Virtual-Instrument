@@ -88,20 +88,27 @@ def refusal_message(folder):
     chars = [c for c in items if c != "space" and c not in SHELL_METACHARACTERS]
     if chars:
         words.append(("the character " if len(chars) == 1 else "the characters ") + _join_words(chars))
-    drive = os.path.splitdrive(folder)[0] or "this drive"
+    named = _join_words(words)
+    drive = os.path.splitdrive(folder)[0]
     # A metacharacter is refused on every drive, so neither the drive nor a move to C: helps;
     # off Windows there are no drives at all.
     any_drive = sys.platform != "win32" or any(c in SHELL_METACHARACTERS for c in items)
-    where = "" if any_drive else f" on drive {drive}"
+    if any_drive or not drive:
+        where = ""
+    elif drive.endswith(":"):
+        where = f" on drive {drive}"
+    else:  # a UNC share, \\server\share
+        where = f" in the network location {drive}"
+    # Name only what failed: umlauts and accents in the code page are fine and should stay.
+    advice = f"Rename the folder (and the folders above it) without {named}"
     if any_drive or drive.upper() == "C:":
-        advice = "Rename the folder (and the folders above it) without spaces or special characters."
+        advice += "."
     else:
-        advice = ("Rename the folder (and the folders above it) without spaces or special characters, "
-                  "or choose a save folder on the C: drive.")
+        advice += ", or choose a save folder on the C: drive."
     return (
         "TAVI cannot save this scan in the folder\n"
         f"    {folder}\n"
-        f"McStas, the simulation program, cannot use a folder path containing {_join_words(words)}"
+        f"McStas, the simulation program, cannot use a folder path containing {named}"
         f"{where}.\n"
         f"{advice}"
     )
