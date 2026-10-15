@@ -729,6 +729,36 @@ def test_a_kill_that_finds_the_job_finished_says_so(rig, controller):
     assert wait_terminal(job) == JobState.STOPPED
 
 
+def test_a_kill_before_the_point_thread_enters_its_scope_reaches_it(rig, controller, monkeypatch):
+    """The scope is published before its thread starts, so a kill in between still reaches it."""
+    ctrl = controller
+    entering, go, made = threading.Event(), threading.Event(), []
+
+    class SlowScope(pp.PointScope):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+        def __enter__(self):
+            entering.set()
+            go.wait(DEADLINE_S)
+            return super().__enter__()
+
+    monkeypatch.setattr(pp, "PointScope", SlowScope)
+    s = rig.stand_in("gate")
+    job = rig.submit()
+    try:
+        pump_until(entering.is_set, "the point thread to start")
+        assert ctrl.request_stop(job.job_id, kill=True) == "kill"
+        assert made[0].killed, "the kill did not reach the point's scope"
+    finally:
+        go.set()
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+    assert job.result.stop_mode == "kill"
+    assert job.result.counts[0] is None
+
+
 def test_a_force_stop_under_way_disables_the_button_until_the_scan_ends(rig, controller):
     ctrl = controller
     s = rig.stand_in("hold")
