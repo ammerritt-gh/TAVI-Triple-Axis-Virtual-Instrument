@@ -1125,7 +1125,7 @@ class TAVIMainWindow(QMainWindow):
             where = (f"point {ongoing['point']} of {ongoing['points']}"
                      if ongoing["point"] else "just starting")
             text = (f"A scan is running ({where}).\n\nClosing TAVI stops it "
-                    f"immediately and discards the current point.")
+                    f"immediately; a Monte Carlo point still running is discarded.")
             if queued:
                 text += f"\n\nThe {queued_text} will be cancelled."
             confirm_label = "Stop scan and close"
