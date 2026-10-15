@@ -63,16 +63,18 @@ v1.3.2 release page (or a fresh v1.3.2 install).
 
 ## Monte Carlo output folders containing spaces
 
-**State:** pinned
+**State:** done
 
-McStasScript's unquoted `-d` output path breaks the first-point run when the full
-save path contains spaces. Reproduced with the actual GUI Run button; see the
-[remote-install handoff §10](docs/HANDOFF-spaced-profile-install.md#10-one-transfer-support-recorder-and-local-findings-2026-09-17).
-The operator believes the affected user's save folder had no spaces, so this is
-a separate confirmed defect, not the assumed explanation of her installation.
-
-Done when: first-point Monte Carlo runs succeed for both spaced and space-free
-output paths through the actual GUI.
+Landed as PR #65 (job jff4175b4df27, `666e3500`), widened to umlauts, ß,
+accents and characters outside the Windows code page: TAVI hands McStas the
+folder's Windows 8.3 short name (`tavi/mcstas_paths.py`), reads McStas's
+code-page detector header tolerantly, and refuses at Run, before any point,
+a folder with no safe short form or containing `&`, `^` or `%`. Acceptance ran
+on that exact revision: the real offscreen Run button over a three-point PUMA
+scan produced detector output for `plain`, `Müller_Straße_éàçô`, an umlaut
+base folder, `with space`, `Müller Probe` and `Łódź_Ω`, and with short names
+simulated off the unusable three were refused cleanly; full suite 3109 passed,
+5 skipped.
 
 ## Audit ledger: new instruments and crystal bending
 
