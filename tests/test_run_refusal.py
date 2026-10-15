@@ -120,7 +120,16 @@ def test_gui_run_is_refused_before_any_point(tmp_path, monkeypatch, asked, dialo
     assert job.state == JobState.FAILED and job.error == text
     assert any(text in line for line in messages), messages
     assert events == [("refused", text), ("completed", None)], events
+    QApplication.processEvents()
     assert dialogs == [("Cannot save in this folder", text)], dialogs
+
+
+def test_refusal_dialog_opens_outside_the_drain(dialogs, controller):
+    # A modal opened inside _drain_updates would hold the drain and park the scan thread.
+    controller._on_mcstas_path_refused("refused text")
+    assert dialogs == []
+    QApplication.processEvents()
+    assert dialogs == [("Cannot save in this folder", "refused text")]
 
 
 def test_api_run_is_refused_without_a_dialog(tmp_path, monkeypatch, asked, dialogs, controller):

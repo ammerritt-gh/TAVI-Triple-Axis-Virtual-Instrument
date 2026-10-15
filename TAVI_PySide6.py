@@ -2255,7 +2255,8 @@ class TAVIController(QObject):
     @Slot(str)
     def _on_mcstas_path_refused(self, text):
         from PySide6.QtWidgets import QMessageBox
-        QMessageBox.warning(self.window, "Cannot save in this folder", text)
+        # Opened from the event loop, not inside _drain_updates, so the modal never holds the drain.
+        QTimer.singleShot(0, lambda: QMessageBox.warning(self.window, "Cannot save in this folder", text))
 
     @Slot()
     def _on_scan_auto_save(self):
