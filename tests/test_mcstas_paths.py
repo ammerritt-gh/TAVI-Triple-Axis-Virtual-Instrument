@@ -109,8 +109,8 @@ def test_refusal_off_windows_names_no_drive(monkeypatch):
     assert "Rename the folder" in text
 
 
-def test_refusal_names_a_network_share_as_a_network_location(monkeypatch):
-    monkeypatch.setattr(mp, "sys", types.SimpleNamespace(platform="win32"))
+@pytest.mark.skipif(sys.platform != "win32", reason="UNC shares exist only in Windows paths (os.path.splitdrive)")
+def test_refusal_names_a_network_share_as_a_network_location():
     text = mp.refusal_message("\\\\nas\\group\\Neue Probe")
     assert "in the network location \\\\nas\\group." in text
     assert "on drive" not in text
