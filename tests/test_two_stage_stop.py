@@ -759,6 +759,36 @@ def test_a_kill_before_the_point_thread_enters_its_scope_reaches_it(rig, control
     assert job.result.counts[0] is None
 
 
+def test_a_kill_recorded_before_the_scope_is_published_reaches_it(rig, controller, monkeypatch):
+    """The worker is held after its stop check, before publication: publication applies the kill."""
+    ctrl = controller
+    creating, go, made = threading.Event(), threading.Event(), []
+
+    class HeldScope(pp.PointScope):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+            creating.set()
+            go.wait(DEADLINE_S)
+
+    monkeypatch.setattr(pp, "PointScope", HeldScope)
+    s = rig.stand_in("gate")
+    job = rig.submit()
+    try:
+        pump_until(creating.is_set, "the worker to create the point's scope")
+        assert ctrl.request_stop(job.job_id, kill=True) == "kill"
+        assert not made[0].killed
+    finally:
+        go.set()
+    pump_until(lambda: made[0].killed, "publication to apply the recorded kill")
+    s.release[0].set()
+    assert wait_terminal(job) == JobState.STOPPED
+    assert job.result.stop_mode == "kill"
+    assert job.result.counts[0] is None
+    assert isinstance(s.raised.get(0), pp.PointLaunchRefused), s.raised
+    assert "no process was recorded for this point" in log_text(ctrl)
+
+
 def test_a_force_stop_under_way_disables_the_button_until_the_scan_ends(rig, controller):
     ctrl = controller
     s = rig.stand_in("hold")
