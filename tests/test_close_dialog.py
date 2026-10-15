@@ -57,6 +57,9 @@ class Rig:
 
     def __init__(self, monkeypatch, tmp_path):
         self.app = QApplication.instance() or QApplication([sys.argv[0]])
+        # The window restores and saves its layout; keep both off the session's shared file.
+        monkeypatch.setattr(cm.TAVIMainWindow, "_get_layout_config_path",
+                            lambda self: str(tmp_path / "view_layout.json"))
         self.window = cm.TAVIMainWindow(
             get_instrument("puma").descriptor(), instrument_infos=available_instruments(),
             current_instrument_id="puma", save_selection=lambda _id: None)
