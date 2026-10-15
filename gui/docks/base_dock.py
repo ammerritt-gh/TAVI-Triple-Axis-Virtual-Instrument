@@ -1,11 +1,11 @@
 """Base Dock Widget with custom border painting for TAVI application."""
 from PySide6.QtWidgets import (QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QScrollArea,
                                QFrame, QComboBox, QGroupBox, QLabel, QSizePolicy, QStyle,
-                               QToolButton)
+                               QToolButton, QGridLayout)
 from PySide6.QtCore import Qt, QSize, QEvent
 from PySide6.QtGui import QPainter, QPen, QColor
 
-from gui import metrics
+from gui import metrics, theme
 
 
 COLLIMATION_OPEN_TOOLTIP = "Open: no collimator installed, coarsest resolution."
@@ -158,16 +158,31 @@ class NoScrollComboBox(QComboBox):
         super().wheelEvent(event)
 
 
+def _column_widths(natural, budget):
+    """Column widths within ``budget``: narrow columns keep their width, wider ones share the rest."""
+    if sum(natural) <= budget:
+        return natural
+    widths = [0] * len(natural)
+    left = budget
+    order = sorted(range(len(natural)), key=lambda c: natural[c])
+    for taken, c in enumerate(order):
+        widths[c] = min(natural[c], left // (len(order) - taken))
+        left -= widths[c]
+    return widths
+
+
 class CollapsibleGroup(QGroupBox):
     """A form block whose fields fold away under a header.
 
     The header is a focusable arrow-and-title button; a click, Space or Enter
     shows or hides ``body`` (never ``QGroupBox.setCheckable``, which would
-    disable the fields instead). Folded, a line under the header states what
-    the fields hold (``set_summary``), elided to the block with the full text
-    as its tooltip, so a setting that changes the simulation is never hidden
-    without a word. Folding changes only this block's height; it never moves
-    the blocks between columns.
+    disable the fields instead). Folded, what the fields hold sits under the
+    header: ``set_summary`` takes one line of text, or rows of cells that line
+    up in shared columns. Every line and cell is elided to its space with the
+    full text as its tooltip, so a setting that changes the simulation is never
+    hidden without a word. ``set_flag`` puts a short status on the header line,
+    folded or open; the title elides before the flag does. Folding changes only
+    this block's height; it never moves the blocks between columns.
     """
 
     def __init__(self, title, collapsed=True, parent=None):
@@ -183,17 +198,34 @@ class CollapsibleGroup(QGroupBox):
         self.header.setFocusPolicy(Qt.StrongFocus)
         self.header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.header.installEventFilter(self)  # Enter toggles too; Space is built in
+        self.flag_label = QLabel()
+        self.flag_label.setStyleSheet(f"color: {theme.FLAG_TEXT};")
+        self.flag_label.hide()
+        self.header_row = QHBoxLayout()
+        self.header_row.setContentsMargins(0, 0, 0, 0)
+        self.header_row.setSpacing(metrics.BLOCK_GAP)
+        self.header_row.addWidget(self.header)
+        self.header_row.addWidget(self.flag_label, 0, Qt.AlignVCenter)
+        indent = self.header.iconSize().width() + 4  # under the title
         self.summary_label = QLabel()
         # Elided by hand to the block width, so its full text never widens the block.
         self.summary_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.summary_label.setIndent(self.header.iconSize().width() + 4)  # under the title
+        self.summary_label.setIndent(indent)
+        self.summary_rows = QWidget()
+        self._rows_grid = QGridLayout(self.summary_rows)
+        self._rows_grid.setContentsMargins(indent, 0, 0, 0)
+        self._rows_grid.setHorizontalSpacing(metrics.BLOCK_GAP)
+        self._rows_grid.setVerticalSpacing(0)
         self.body = QWidget()
         layout = QVBoxLayout(self)
         layout.setSpacing(2)
-        layout.addWidget(self.header)
+        layout.addLayout(self.header_row)
+        layout.addWidget(self.summary_rows)
         layout.addWidget(self.summary_label)
         layout.addWidget(self.body)
         self._summary = ""
+        self._rows_mode = False
+        self._cells = []  # rows of (label, full text), when the summary is rows
         self.header.clicked.connect(lambda: self.set_collapsed(not self._collapsed))
         self.set_collapsed(collapsed)
 
@@ -208,23 +240,90 @@ class CollapsibleGroup(QGroupBox):
     def set_collapsed(self, collapsed):
         self._collapsed = collapsed
         self.header.setArrowType(Qt.RightArrow if collapsed else Qt.DownArrow)
-        self.header.setToolTip(f"{'Show' if collapsed else 'Hide'} the {self.title_text} fields")
         self.body.setVisible(not collapsed)
-        self.summary_label.setVisible(collapsed)
+        self._show_summary()
+        self._refresh_header()
 
-    def set_summary(self, text):
-        """What the folded fields hold: one line, key values only."""
-        self._summary = text
+    def set_summary(self, summary):
+        """What the folded fields hold: one line of text, or a list of rows of cells."""
+        self._summary = summary
+        self._rows_mode = not isinstance(summary, str)
+        self._fill_rows(summary if self._rows_mode else [])
+        self._show_summary()
         self._elide_summary()
 
+    def set_flag(self, text, tooltip=""):
+        """A short status on the header line, folded or open; empty text hides it."""
+        self.flag_label.setText(text)
+        self.flag_label.setToolTip(tooltip)
+        self.flag_label.setAccessibleName(text)
+        self.flag_label.setHidden(not text)
+        self._refresh_header()
+
+    def _show_summary(self):
+        self.summary_label.setVisible(self._collapsed and not self._rows_mode)
+        self.summary_rows.setVisible(self._collapsed and self._rows_mode)
+
+    def _fill_rows(self, rows):
+        for label, _text in (pair for row in self._cells for pair in row):
+            label.setParent(None)  # leaves the grid and hides at once
+            label.deleteLater()
+        self._cells = []
+        for r, row in enumerate(rows):
+            cells = []
+            for c, text in enumerate(row):
+                label = QLabel(text)
+                label.setToolTip(text)
+                self._rows_grid.addWidget(label, r, c)
+                cells.append((label, text))
+            self._cells.append(cells)
+
+    def _inner_width(self):
+        """The width the header and the rows lay out in: the block less its frame and margins."""
+        margins = self.layout().contentsMargins()
+        return self.contentsRect().width() - margins.left() - margins.right()
+
+    def _refresh_header(self):
+        """Elide the title to the room beside the flag; its full text stays in the tooltip."""
+        header, title = self.header, self.title_text
+        header.setText(title)
+        fm = header.fontMetrics()
+        overhead = header.sizeHint().width() - fm.horizontalAdvance(title)  # arrow, padding
+        flag = 0
+        if not self.flag_label.isHidden():
+            flag = self.flag_label.sizeHint().width() + self.header_row.spacing()
+        room = self._inner_width() - flag - overhead
+        if fm.horizontalAdvance(title) > room:
+            header.setText(fm.elidedText(title, Qt.ElideRight, max(room, 0)))
+        sentence = f"{'Show' if self._collapsed else 'Hide'} the {title} fields"
+        header.setToolTip(sentence if header.text() == title else f"{title}. {sentence}")
+
     def _elide_summary(self):
+        if self._rows_mode:
+            self._lay_out_rows()
+            return
         label = self.summary_label
         room = label.contentsRect().width() - label.indent() - 2  # 2: bounding-box slack
         label.setText(label.fontMetrics().elidedText(self._summary, Qt.ElideRight, room))
         label.setToolTip(self._summary)
 
+    def _lay_out_rows(self):
+        """Each column takes its share of the room; every cell elides to its column."""
+        fm = self.summary_rows.fontMetrics()
+        columns = max((len(row) for row in self._cells), default=0)
+        natural = [max(fm.horizontalAdvance(row[c][1]) + 2 for row in self._cells if len(row) > c)
+                   for c in range(columns)]
+        room = self._inner_width() - self.summary_label.indent()
+        gaps = self._rows_grid.horizontalSpacing() * max(columns - 1, 0)
+        widths = _column_widths(natural, max(room - gaps, 0))
+        for row in self._cells:
+            for c, (label, text) in enumerate(row):
+                label.setFixedWidth(widths[c])
+                label.setText(fm.elidedText(text, Qt.ElideRight, max(widths[c] - 2, 0)))
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._refresh_header()
         self._elide_summary()
 
     def eventFilter(self, watched, event):

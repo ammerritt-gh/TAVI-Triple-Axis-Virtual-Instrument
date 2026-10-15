@@ -322,6 +322,10 @@ class TAVIMainWindow(QMainWindow):
         self.display_dock.scan_data_finished.connect(
             self.fitting_dock.on_scan_finished
         )
+        # A mid-scan axes rebuild keeps the data: the dock redraws its overlay.
+        self.display_dock.plot_rebuilt.connect(
+            self.fitting_dock.on_plot_rebuilt
+        )
 
     def _on_open_ub_matrix_dock(self):
         """Handle request to open the UB matrix dock."""

@@ -31,6 +31,8 @@ Public surface:
 * :func:`plan_goto` / :func:`format_goto_message` /
   :func:`format_revert_message` -- the refusal policy and wording for the
   controller's "goto"; the controller keeps only the widget work.
+* :func:`scan_variable_unit` / :func:`lineshape_title` / :func:`results_tsv` --
+  the unit, lineshape name and Copy-results text the fitting dock shows.
 """
 from __future__ import annotations
 
@@ -123,6 +125,20 @@ class QuickFitResult:
     warnings: tuple = ()
     curve_x: Optional[np.ndarray] = None
     curve_y: Optional[np.ndarray] = None
+    # Intensity readout, filled only on a converged fit from the fit's own selection.
+    #: Median spacing of the fitted selection's abscissae.
+    step: Optional[float] = None
+    #: Every spacing within 1% of ``step``, or of a whole multiple of it left by
+    #: an isolated missing point; False makes ``integrated`` None.
+    steps_even: bool = False
+    #: Area / step: the fitted peak's summed counts, background removed (counts).
+    integrated: Optional[float] = None
+    integrated_err: Optional[float] = None
+    #: Measured counts minus fitted background, summed over the fitted points (counts).
+    raw_counts: Optional[float] = None
+    raw_counts_err: Optional[float] = None
+    #: Fitted background sits on its lower bound, zero.
+    background_at_limit: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -548,6 +564,35 @@ def _stall_is_expected(start_was_optimum, start_deviance, deviance):
     return start_deviance - deviance <= max(1e-6, 1e-9 * abs(deviance))
 
 
+def _intensity_readout(sel, area, area_err, background, background_err, ymax) -> dict:
+    """Keyword fields of :class:`QuickFitResult` for a converged fit, from its selection.
+
+    Integrated is Area / step and so needs one step across the selection; raw
+    counts are the measured sum less the fitted background over the same points.
+    """
+    d = np.diff(sel.x)
+    step = float(np.median(d))
+    steps_even = False
+    if step > 0.0:
+        # A missing point leaves an isolated whole-number multiple of the step: on-grid.
+        # Adjacent multiples are a coarser stretch, which no single step converts.
+        k = np.round(d / step)
+        on_grid = (k >= 1) & (np.abs(d - k * step) <= 0.01 * step)
+        gap = k >= 2
+        steps_even = bool(np.all(on_grid) and not np.any(gap[1:] & gap[:-1]))
+    integrated = integrated_err = None
+    if steps_even:
+        integrated = area / step
+        integrated_err = None if area_err is None else area_err / step
+    total = float(np.sum(sel.y))
+    raw = float(np.sum(sel.y - background))
+    raw_err = (None if background_err is None else
+               math.sqrt(total + (sel.y.size * background_err) ** 2))
+    return dict(step=step, steps_even=steps_even, integrated=integrated,
+                integrated_err=integrated_err, raw_counts=raw, raw_counts_err=raw_err,
+                background_at_limit=bool(background <= 1e-9 * max(1.0, ymax)))
+
+
 def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
              n_curve=_DEFAULT_N_CURVE) -> QuickFitResult:
     """Fit a pseudo-Voigt + flat background to a scan selection.
@@ -707,6 +752,9 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
     if not converged:
         warns.append("fit did not converge")
 
+    readout = (_intensity_readout(sel, area, errs["area"], background,
+                                  errs["background"], ymax)
+               if converged else {})
     return QuickFitResult(
         converged=converged,
         reason="" if converged else "optimizer did not converge",
@@ -721,6 +769,7 @@ def fit_peak(x, counts, *, mask=None, xrange=None, seed=None,
         n_points=n, n_free=n_free, dof=dof,
         warnings=tuple(dict.fromkeys(warns)),
         curve_x=grid, curve_y=curve,
+        **readout,
     )
 
 
@@ -849,3 +898,76 @@ def format_goto_message(label: str, variable: str, field: str,
 def format_revert_message(field: str, restored_value) -> str:
     """One-line report of a completed single-level revert."""
     return "revert: %s restored to %s" % (field, _fmt_value(restored_value))
+
+
+# --------------------------------------------------------------------------
+# Readout text for the dock
+# --------------------------------------------------------------------------
+
+def scan_variable_unit(name) -> Optional[str]:
+    """Registry unit of a scan variable; ``None`` when it has none or the registry refuses it."""
+    if not isinstance(name, str):
+        return None
+    try:
+        unit = resolve(name.strip(), "scan").unit
+    except QuantityRefused as exc:
+        log.debug("scan_fits: no scan unit for %r: %s", name, exc)
+        return None
+    return unit or None
+
+
+def lineshape_title(result: QuickFitResult) -> Optional[str]:
+    """Plain-words lineshape of a converged fit; ``None`` otherwise."""
+    if not result.converged:
+        return None
+    if result.eta_fixed is not None:
+        return "Gaussian" if result.eta_fixed == 0.0 else "Lorentzian"
+    title = "pseudo-Voigt, η = %s" % _fmt_value(result.eta)
+    if result.eta_err is not None:
+        title += " ± %s" % _fmt_value(result.eta_err)
+    return title
+
+
+def results_tsv(variable, result: QuickFitResult, com, peak_max) -> str:
+    """Copy-results text: a header, then ``quantity, value, error, unit`` per line.
+
+    ``com`` and ``peak_max`` are :class:`PeakEstimate` objects; a row for one whose
+    ``ok`` is False is left out.  Numbers keep full precision via ``repr``.
+    """
+    unit = scan_variable_unit(variable)
+    x_unit = unit or "%s units" % variable
+    lines = ["quantity\tvalue\terror\tunit"]
+
+    def add(quantity, value, err, unit_cell):
+        lines.append("\t".join((quantity, value, err, unit_cell)))
+
+    def num(value):
+        return "" if value is None else repr(float(value))
+
+    if result.converged:
+        add("CEN", num(result.center), num(result.center_err), x_unit)
+    if com.ok:
+        add("COM", num(com.x), "", x_unit)
+    if peak_max.ok:
+        add("MAX", num(peak_max.x), "", x_unit)
+    if result.converged:
+        add("FWHM", num(result.fwhm), num(result.fwhm_err), x_unit)
+        add("Step", num(result.step),
+            "" if result.steps_even else "uneven steps", x_unit)
+        add("Height", num(result.height), num(result.height_err), "counts")
+        bg_err = "at limit" if result.background_at_limit else num(result.background_err)
+        add("Background", num(result.background), bg_err, "counts")
+        if result.eta_fixed is None:
+            add("eta", num(result.eta), num(result.eta_err), "dimensionless")
+        add("Lineshape", lineshape_title(result) or "", "", "")
+        if result.steps_even:
+            add("Integrated", num(result.integrated), num(result.integrated_err), "counts")
+        else:
+            add("Integrated", "uneven steps", "", "counts")
+        norm_unit = "counts·%s" % unit if unit else "counts × %s" % variable
+        add("Normalised", num(result.area), num(result.area_err), norm_unit)
+        add("Raw range", num(result.raw_counts), num(result.raw_counts_err), "counts")
+        add("Reduced deviance", num(result.deviance_reduced), "", "dimensionless")
+        add("Points", str(result.n_points), "", "count")
+        add("Degrees of freedom", str(result.dof), "", "count")
+    return "".join(line + "\n" for line in lines)

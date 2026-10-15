@@ -87,8 +87,17 @@ def test_reductions_come_from_scan_fits():
     source = _fitting_source()
     assert "from tavi import scan_fits" in source
     for call in ("scan_fits.com(", "scan_fits.peak_max(", "scan_fits.fit_peak(",
-                 "scan_fits.field_for_scan_variable("):
+                 "scan_fits.field_for_scan_variable(", "scan_fits.lineshape_title(",
+                 "scan_fits.scan_variable_unit(", "scan_fits.results_tsv("):
         assert call in source, "the fitting dock must use %s" % call
+    # The intensity readout is formatted here, never computed: no reductions,
+    # and no area/step conversion of its own.
+    for reduction in ("np.sum", "np.median", "np.diff", "np.sqrt", "np.trapz",
+                      ".sum(", "/ result.step", "* result.step", ".area /"):
+        assert reduction not in source, (
+            "the fitting dock computes %r; that arithmetic belongs in "
+            "tavi/scan_fits.py" % reduction
+        )
 
 
 def test_fitting_dock_does_not_copy_the_field_mapping():

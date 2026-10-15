@@ -117,6 +117,10 @@ The installer already compile-checks the compiler before it finishes, so a first
 
 ## Troubleshooting
 
+### TAVI crashes or closes unexpectedly
+
+Send `output/tavi-crash.log` from the TAVI folder with your report; the console prints its full path at startup. It records your operating system, library versions and display session (on Linux, Wayland or X11), uncaught errors and Qt warnings, and on Linux and macOS the Python stack of every thread when TAVI crashes.
+
 ### Compiler check failed during install
 
 Look at `<base>\compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed), where `<base>` is the install folder you chose, for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI.

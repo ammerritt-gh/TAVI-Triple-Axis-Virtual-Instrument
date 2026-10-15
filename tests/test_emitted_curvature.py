@@ -99,7 +99,7 @@ def test_api_default_curvature_halves_two_theta_and_matches_pinned_table(
                           ids=[t[0] for t in REFERENCE_TABLE])
 def test_gui_ideal_bending_halves_two_theta_and_matches_pinned_table(
         instrument_id, mth, ath, expected):
-    """_compute_ideal_bending_values (the GUI Ideal-button path) must
+    """_compute_ideal_bending_values (the GUI's ideal path) must
     reproduce the same pinned table for the same reference two-theta
     widget values and the descriptor's default crystals."""
     with _controller(instrument_id) as ctrl:
@@ -254,12 +254,12 @@ def test_metadata_matches_emitted_params_for_a_scanned_curvature_axis(tmp_path):
     assert snapshot.metadata["rha"] == pytest.approx(expected_rha)
 
 
-def test_heusler_refusal_disables_only_its_own_ideal_button():
+def test_heusler_refusal_blanks_only_its_own_ideal():
     """IN12's Heusler analyser declares rva focusing_known=False.
     ideal_curvature refuses to invent a radius for it, but that refusal is
     PER-AXIS, not whole-crystal: rhm/rvm/rha are wholly unrelated to the
-    Heusler's rva and must still show a real computed Ideal -- only rva
-    degrades to 'Ideal: --'. (Packet slice 9, defect B, test 5: the
+    Heusler's rva and must still show a real computed ideal -- only rva
+    degrades to no ideal. (Packet slice 9, defect B, test 5: the
     producer's per-axis refusal must not disable three unrelated axes.)
     """
     with _controller("in12") as ctrl:
@@ -278,11 +278,11 @@ def test_heusler_refusal_disables_only_its_own_ideal_button():
         assert ideal["rha"] == pytest.approx(1.9793706555951112, abs=1e-6)
 
         ctrl.update_ideal_bending_buttons()
-        assert dock.rhm_ideal_button.text() != "Ideal: --"
-        assert dock.rvm_ideal_button.text() != "Ideal: --"
-        assert dock.rha_ideal_button.text() != "Ideal: --"
-        assert dock.rva_ideal_button.text() == "Ideal: --"
-        assert not dock.rva_ideal_button.isEnabled()
+        for axis in ("rhm", "rvm", "rha"):
+            assert getattr(dock, f"{axis}_ideal_label").text() != "\u2014"
+            assert getattr(dock, f"{axis}_track_check").isEnabled()
+        assert dock.rva_ideal_label.text() == "\u2014"
+        assert not dock.rva_track_check.isEnabled()
 
 
 def test_operator_surface_holds_magnitudes_while_emitted_geometry_stays_signed():
@@ -296,7 +296,7 @@ def test_operator_surface_holds_magnitudes_while_emitted_geometry_stays_signed()
     They are asserted in one test on purpose. Five separate times in this
     branch a rule has been enforced in one place and not its twin, and this
     particular pair failed exactly that way: ideal_curvature returns signed
-    radii, the GUI Ideal button wrote them straight into the field, and
+    radii, the GUI's ideal path wrote them straight into the field, and
     tavi/resolution.py applies the scattering sense a second time
     (`monorh = radius_cm(cfg.rhm) * sm`). The emitted McStas geometry stayed
     correct throughout, so nothing visible broke -- only the analytic

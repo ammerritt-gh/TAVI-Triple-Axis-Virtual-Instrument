@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 import instruments.builtin  # noqa: F401,E402
 import TAVI_PySide6 as cm  # noqa: E402
 from gui.docks.base_dock import NARROW, WIDE  # noqa: E402
+from gui.docks.instrument_dock import FOCUSING_AXES  # noqa: E402
 from gui.field_marks import mark_for  # noqa: E402
 from instruments.rules import NOT_READ  # noqa: E402
 from instruments.registry import available_instruments, get_instrument  # noqa: E402
@@ -89,13 +90,18 @@ def window():
 
 @pytest.fixture(autouse=True)
 def defaults(window):
-    """Every test starts from the default parameters with both boxes empty, and leaves it so."""
+    """Every test starts from the default parameters, every radius held, with both boxes empty, and leaves it so.
+
+    The defaults track every radius that can; the marks tests read a held radius as the baseline.
+    """
     def reset():
         sim = window.simulation_dock
         for button in (sim.relative_1_button, sim.relative_2_button):
             button.setChecked(False)
         sim.engine_combo.setCurrentIndex(sim.engine_combo.findData("mcstas"))
         window.controller.set_default_parameters()
+        for axis in FOCUSING_AXES:
+            window.instrument_dock.set_choice(axis, False)
         _type(window, "", "")
     reset()
     yield
@@ -250,7 +256,7 @@ def test_autofocused_radius_follows_its_crystal_and_a_scanned_one_is_scanned(win
     ctrl = window.controller
     _type(window, "deltaE 0 2 0.5")
     assert RHM not in _marks(window)   # held: used as typed
-    ctrl.apply_ideal_bending_value("rhm")   # Ideal lock: autofocus follows the mono 2θ
+    ctrl.apply_ideal_bending_value("rhm")   # Track ideal: autofocus follows the mono 2θ
     _settle()
     try:
         assert _state(window, RHM)[:2] == ("set", "1")

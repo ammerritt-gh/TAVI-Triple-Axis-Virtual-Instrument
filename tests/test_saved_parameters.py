@@ -281,6 +281,7 @@ def test_a_saved_block_is_keyed_by_canonical_ids_and_reads_nothing_else(in8, sav
         saved["lattice_a_angstrom"] = "4.321"
         saved["mono_horizontal_radius_m"] = "9.5"
         saved["analyzer_vertical_radius_m"] = "1.25"
+        saved["rhm_ideal_locked"] = saved["rva_ideal_locked"] = False  # held, or the ideal overwrites them
         saved["lattice_b_var"] = "9.99"                             # an old key: ignored
 
     _write_block(in8, saved_file, edit)
