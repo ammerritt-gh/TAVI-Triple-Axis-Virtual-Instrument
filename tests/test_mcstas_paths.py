@@ -83,8 +83,22 @@ def test_offending_characters_and_message_name_space_and_code_page_characters():
     assert mp.offending_characters(folder) == ["space", "\u0141", "\u017a", "\u03a9"]
     text = mp.refusal_message(folder)
     assert folder in text
-    assert "cannot use a folder path containing spaces and the characters \u0141, \u017a and \u03a9 on drive D:." in text
+    assert "cannot use a folder path containing spaces and the characters \u0141, \u017a, and \u03a9 on drive D:." in text
     assert "or choose a save folder on the C: drive" in text
+
+
+@pytest.mark.parametrize("folder", ["D:\\Data\\R&D", "D:\\Data\\R&D " + LODZ])
+def test_metacharacter_refusal_never_advises_another_drive(folder):
+    text = mp.refusal_message(folder)
+    assert "the & sign" in text
+    assert "choose a save folder" not in text
+    assert "on drive" not in text
+    assert "Rename the folder" in text
+
+
+def test_mixed_refusal_lists_read_unambiguously():
+    text = mp.refusal_message("D:\\Probe &" + LODZ)
+    assert "containing spaces, the & sign, and the characters \u0141, \u017a, and \u03a9." in text
 
 
 def test_refusal_on_c_drive_keeps_only_the_rename_advice():
