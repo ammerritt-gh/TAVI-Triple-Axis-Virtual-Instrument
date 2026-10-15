@@ -9247,6 +9247,14 @@ class TAVIController(QObject):
         The worker's run_simulation completion path marks the job STOPPED.
         """
         job = self._active_job
+        label_job = self._force_stop_label_job
+        if label_job is not None and (job is None or job.job_id != label_job):
+            # The relabelled job ended, and a queued job may have started before the GUI saw it.
+            self._force_stop_label_job = None
+            self.window.simulation_dock.show_force_stop(False)
+            self.print_to_message_center(
+                f"Stop: scan job {label_job} has already ended and nothing else was stopped.")
+            return
         if job is None:
             self.print_to_message_center("Stop requested, but no scan is running.")
             return
