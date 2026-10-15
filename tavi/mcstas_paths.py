@@ -75,7 +75,7 @@ def mcstas_path(path):
 
 
 def _join_words(words):
-    return ", ".join(words[:-1]) + " and " + words[-1] if len(words) > 2 else " and ".join(words)
+    return ", ".join(words[:-1]) + ", and " + words[-1] if len(words) > 2 else " and ".join(words)
 
 
 def refusal_message(folder):
@@ -89,7 +89,10 @@ def refusal_message(folder):
     if chars:
         words.append(("the character " if len(chars) == 1 else "the characters ") + _join_words(chars))
     drive = os.path.splitdrive(folder)[0] or "this drive"
-    if drive.upper() == "C:":
+    # A metacharacter is refused on every drive, so neither the drive nor a move to C: helps.
+    any_drive = any(c in SHELL_METACHARACTERS for c in items)
+    where = "" if any_drive else f" on drive {drive}"
+    if any_drive or drive.upper() == "C:":
         advice = "Rename the folder (and the folders above it) without spaces or special characters."
     else:
         advice = ("Rename the folder (and the folders above it) without spaces or special characters, "
@@ -97,7 +100,7 @@ def refusal_message(folder):
     return (
         "TAVI cannot save this scan in the folder\n"
         f"    {folder}\n"
-        f"McStas, the simulation program, cannot use a folder path containing {_join_words(words)} "
-        f"on drive {drive}.\n"
+        f"McStas, the simulation program, cannot use a folder path containing {_join_words(words)}"
+        f"{where}.\n"
         f"{advice}"
     )
