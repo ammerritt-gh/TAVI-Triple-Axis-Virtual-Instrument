@@ -651,6 +651,32 @@ def test_a_stop_between_check_and_launch_refuses_the_launch(rig, controller):
     assert "Point 1 of 3 was not executed: the stop arrived before its McStas process started" in log_text(ctrl)
 
 
+def test_a_click_after_the_relabelled_job_ended_stops_nothing(rig, controller):
+    """The label names job A; A ended and queued job B started before the GUI handled it."""
+    ctrl = controller
+    s = rig.stand_in("hold", "hold")
+    first = rig.submit()
+    second = rig.submit()
+    pump_until(s.started[0].is_set, "the first job's point")
+    stop_button(ctrl).click()                 # relabels the button for the first job
+    assert stop_button(ctrl).text() == "Force stop"
+    s.release[0].set()
+    # No event processing here: the GUI must not yet see the first job's end.
+    end = time.monotonic() + DEADLINE_S
+    while not (state(first) in TERMINAL and s.started[1].is_set()):
+        assert time.monotonic() < end, "the second job did not start"
+        time.sleep(0.01)
+    assert ctrl._force_stop_label_job == first.job_id
+    stop_button(ctrl).click()
+    with second.lock:
+        assert second.stop_request is None, "a click for the ended job stopped the next one"
+    assert state(second) == JobState.RUNNING
+    assert stop_button(ctrl).text() == "Stop Simulation"
+    assert f"scan job {first.job_id} has already ended and nothing else was stopped" in log_text(ctrl)
+    s.release[1].set()
+    assert wait_terminal(second) == JobState.DONE
+
+
 # --------------------------------------------------------------- analytic engine
 
 def test_an_analytic_scans_second_click_ends_it_as_a_kill(rig, controller, monkeypatch):
