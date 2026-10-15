@@ -83,9 +83,14 @@ def test_metacharacter_surviving_a_fake_short_name_is_refused(tmp_path, monkeypa
     assert f"the {char} sign" in mp.refusal_message(str(folder))
 
 
-def test_offending_characters_and_message_name_space_and_code_page_characters():
+def test_offending_characters_name_space_and_code_page_characters():
     folder = "D:\\Probe " + LODZ
     assert mp.offending_characters(folder) == ["space", "\u0141", "\u017a", "\u03a9"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="drive letters exist only in Windows paths (os.path.splitdrive)")
+def test_refusal_names_the_drive_and_offers_c_on_windows():
+    folder = "D:\\Probe " + LODZ
     text = mp.refusal_message(folder)
     assert folder in text
     assert "cannot use a folder path containing spaces and the characters \u0141, \u017a, and \u03a9 on drive D:." in text
