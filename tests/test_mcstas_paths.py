@@ -109,6 +109,21 @@ def test_refusal_off_windows_names_no_drive(monkeypatch):
     assert "Rename the folder" in text
 
 
+def test_refusal_names_a_network_share_as_a_network_location(monkeypatch):
+    monkeypatch.setattr(mp, "sys", types.SimpleNamespace(platform="win32"))
+    text = mp.refusal_message("\\\\nas\\group\\Neue Probe")
+    assert "in the network location \\\\nas\\group." in text
+    assert "on drive" not in text
+
+
+def test_refusal_advice_names_only_what_failed(monkeypatch):
+    # An umlaut is fine in cp1252: the advice must not send the student to strip it.
+    monkeypatch.setattr(mp, "sys", types.SimpleNamespace(platform="win32"))
+    text = mp.refusal_message("D:\\M\u00fcller Probe")
+    assert "Rename the folder (and the folders above it) without spaces, or choose" in text
+    assert "special characters" not in text
+
+
 def test_mixed_refusal_lists_read_unambiguously():
     text = mp.refusal_message("D:\\Probe &" + LODZ)
     assert "containing spaces, the & sign, and the characters \u0141, \u017a, and \u03a9." in text
