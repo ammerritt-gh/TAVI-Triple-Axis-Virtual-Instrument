@@ -1,6 +1,12 @@
 @echo off
 setlocal DisableDelayedExpansion
 
+:: mcrun launches the compiled instrument as a bare "NAME.exe" through the shell.
+:: A shell with NoDefaultCurrentDirectoryInExePath set refuses to search the
+:: working directory and the serial run dies with "is not recognized as an
+:: internal or external command" -- a property of the shell, not the install.
+set "NoDefaultCurrentDirectoryInExePath="
+
 :: TAVI Windows installer - release-pinned v1.4.0
 :: (build 1, 2026-10-16: an install log, one ending with three headlines, a
 ::  test simulation through TAVI itself, a desktop copy of the shortcut, and

@@ -2346,3 +2346,10 @@ LOG_NAMING_FILES = [INSTALL_1_4_0, RUN_TAVI, UPDATE_TAVI, UNINSTALL_TAVI, UNINST
 @pytest.mark.parametrize("path", LOG_NAMING_FILES, ids=os.path.basename)
 def test_the_random_fallback_stamp_has_tavi_shape(path):
     assert 'set "STAMP=tavi-rnd-%RANDOM%-%RANDOM%"' in _read(path), path
+
+
+# A shell that sets NoDefaultCurrentDirectoryInExePath stops mcrun's bare
+# NAME.exe launch (see TAVI-Doctor.bat), so the installer and run-tavi clear it.
+@pytest.mark.parametrize("path", [INSTALL_1_4_0, RUN_TAVI], ids=os.path.basename)
+def test_the_installer_and_run_tavi_clear_no_default_current_directory(path):
+    assert 'set "NoDefaultCurrentDirectoryInExePath="' in _read(path), path
