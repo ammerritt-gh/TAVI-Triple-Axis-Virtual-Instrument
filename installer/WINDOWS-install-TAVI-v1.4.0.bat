@@ -1018,7 +1018,8 @@ echo [ERROR] %ERR1%
 if defined ERR2 echo         %ERR2%
 if defined ERR3 echo         %ERR3%
 if "%BASE_OURS%"=="yes" echo TAVI folder : %TAVI_BASE%
-if "%BASE_OURS%"=="yes" echo Nothing was removed: what was installed so far is still in that folder.
+if "%BASE_OURS%"=="yes" if "%OLD_REMOVED%"=="yes" echo The old TAVI installation was removed before this install began. Nothing of the new install was removed: what was installed so far is still in that folder.
+if "%BASE_OURS%"=="yes" if not "%OLD_REMOVED%"=="yes" echo Nothing was removed: what was installed so far is still in that folder.
 call :end_screen_log
 if "%UNATTENDED%"=="yes" goto :eof
 echo.
