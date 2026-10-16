@@ -112,7 +112,8 @@ _PANDA_ANA_CURVATURE = {
 
 # The full McStas parameter set build_PANDA_instrument declares via
 # add_parameter() -- the per-point snapshot dict shape. The 13 shared core TAS
-# parameters plus PANDA's bending and its three motorized apertures.
+# parameters, including the velocity-selector frequency (nu_param), plus PANDA's
+# bending and its three motorized apertures.
 _PANDA_PARAMS = (
     ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle",
                   quantity="mono_two_theta_deg"),
@@ -167,8 +168,9 @@ _ANA_W, _ANA_H = 0.013 * 11, 0.025 * 5
 # Diagnostic monitors, 1:1 with the diagnostic_settings gates in build(), in
 # beam order (McStas component order is physics; tests/test_panda_build_tree.py
 # checks it). Positions are sensible beam-order spots, not surveyed hardware.
-# Ids reuse PUMA's where the station matches. Energy monitors only;
-# the energy/wavelength switch is another job's work. Primary windows span
+# Ids reuse PUMA's where the station matches. Energy monitors only: the
+# diagnostic dialog's energy/wavelength choice turns each into an L_monitor.
+# Primary windows span
 # PANDA's reach (Cu111 at ki = 7 A^-1 is ~101 meV). Secondary windows cover the
 # MLZ reference's PG(002) analyser kf range, 1.05-4.0 A^-1 = 2.3-33.2 meV.
 _PANDA_MONITORS = (
