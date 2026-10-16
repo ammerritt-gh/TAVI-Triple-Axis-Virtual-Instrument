@@ -280,8 +280,8 @@ Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
 - Bare `except` blocks in `_update_scan_estimates` and `_count_scan_points` set
   a count of 0 or 1 without logging; a refused >1000-point scan still prints
   "validation deferred until simulation starts".
-- PUMA's selector frequency in a direct-motor scan with a transmitting
-  monochromator still comes from the typed energy fields.
+- PUMA's and PANDA's selector frequency (shared since PR #67) in a direct-motor
+  scan with a transmitting monochromator still comes from the typed energy fields.
 - Flake watch: `test_mark_updates_leave_focus_selection_style_and_names_alone`
   failed once on focus in a combined targeted run.
 - The scan conflict label hides a per-box refusal while a zero take-off refusal
