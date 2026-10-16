@@ -8298,15 +8298,19 @@ class TAVIController(QObject):
             'rha': (p_curvature, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
             'rva': (p_curvature, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
             # source
-            'moderator_mode': (p_choice(moderator.MODES, "moderator_mode"), set_source('moderator_mode'), None),
-            'moderator_profile': (p_choice(moderator.PROFILES, "moderator_profile"), set_profile, None),
-            'moderator_t1_k': (p_float, set_source('moderator_t1_k'), None),
-            'moderator_i1': (p_float, set_source('moderator_i1'), None),
-            'moderator_t2_k': (p_float, set_source('moderator_t2_k'), None),
-            'moderator_i2': (p_float, set_source('moderator_i2'), None),
-            'moderator_t3_k': (p_float, set_source('moderator_t3_k'), None),
-            'moderator_i3': (p_float, set_source('moderator_i3'), None),
-            'flat_band_half_width_mev': (p_float, set_source('flat_band_half_width_mev'), None),
+            # the source refresh is the GUI's source_changed wiring: one per write (_API_APPLY_ORDER)
+            'moderator_mode': (p_choice(moderator.MODES, "moderator_mode"), set_source('moderator_mode'),
+                               self.validate_scan_commands),
+            'moderator_profile': (p_choice(moderator.PROFILES, "moderator_profile"), set_profile,
+                                  self.validate_scan_commands),
+            'moderator_t1_k': (p_float, set_source('moderator_t1_k'), self.validate_scan_commands),
+            'moderator_i1': (p_float, set_source('moderator_i1'), self.validate_scan_commands),
+            'moderator_t2_k': (p_float, set_source('moderator_t2_k'), self.validate_scan_commands),
+            'moderator_i2': (p_float, set_source('moderator_i2'), self.validate_scan_commands),
+            'moderator_t3_k': (p_float, set_source('moderator_t3_k'), self.validate_scan_commands),
+            'moderator_i3': (p_float, set_source('moderator_i3'), self.validate_scan_commands),
+            'flat_band_half_width_mev': (p_float, set_source('flat_band_half_width_mev'),
+                                         self.validate_scan_commands),
             # descriptor-driven containers
             'modules': (p_modules, idock.set_module_values, self.update_ideal_bending_buttons),
             'collimation': (p_dict, idock.set_collimation_values, None),
@@ -8340,11 +8344,6 @@ class TAVIController(QObject):
     # never overwritten by an earlier group's derivation. Fields not listed are
     # applied last, in patch order.
     _API_APPLY_ORDER = tuple(tuple(_to_public(name) for name in group) for group in (
-        # A profile loads its entry's T/I, so the write's own T/I (next) stand over it
-        # whatever their order in the request.
-        ('moderator_profile',),
-        ('moderator_t1_k', 'moderator_i1', 'moderator_t2_k', 'moderator_i2',
-         'moderator_t3_k', 'moderator_i3'),
         # Sample first: selecting it adopts the sample's own lattice, so an
         # explicit lattice_* in the same patch (applied next) still wins.
         ('sample',),
@@ -8365,6 +8364,10 @@ class TAVIController(QObject):
         ('deltaE',),
         ('qx', 'qy', 'qz', 'H', 'K', 'L'),
         ('stt', 'omega', 'sgl', 'sgu'),
+        # The source last, as one group, so its refresh (validate_scan_commands) judges the
+        # whole write once. A profile loads its entry's T/I, so the write's own T/I stand over it.
+        ('moderator_profile', 'moderator_t1_k', 'moderator_i1', 'moderator_t2_k', 'moderator_i2',
+         'moderator_t3_k', 'moderator_i3', 'moderator_mode', 'flat_band_half_width_mev'),
     ))
 
     # Keys the API reports that no write may set (declared readOnly in
