@@ -10,6 +10,7 @@ import json
 import os
 import re
 import time
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -423,6 +424,27 @@ def test_the_preview_follows_the_ei_the_gui_shows(in12):
     dock.Ei_edit.setText("")
     assert "Ei" not in {line.get_label() for line in dock.source_ax.lines}
     in12.set_default_parameters()
+
+
+def test_a_benchmark_is_refused_up_front_on_an_invalid_source(fresh, monkeypatch):
+    """A benchmark runs Run's source check: no stage is submitted for a source the component would stop on."""
+    controller, _call = fresh
+    submitted = []
+
+    def stub_submit(launch_state, source):
+        submitted.append(source)
+        return SimpleNamespace(job_id=f"stub-{len(submitted)}")
+
+    monkeypatch.setattr(controller, "submit_scan_job", stub_submit)
+    plan = controller.build_benchmark_plan()
+    assert plan
+    controller.window.instrument_dock.set_source_settings({"moderator_t1_k": -5.0})
+    before = _log(controller)
+
+    controller.run_benchmark(plan)
+
+    assert submitted == []
+    assert "Benchmark refused: moderator_t1_k must be >= 0" in _log(controller)[len(before):]
 
 
 def test_run_is_blocked_with_the_messages_when_the_source_is_invalid(in12, monkeypatch):
