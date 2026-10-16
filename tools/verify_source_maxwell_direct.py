@@ -42,7 +42,7 @@ a check could silently be unable to fail:
 
 The report goes to ``output/source_verification/<timestamp>/report.md`` (the
 folder is gitignored); its path is printed; the exit code is non-zero on any
-failure. About 18 s on a 16-core machine (the recorded run).
+failure. About 15 s on a 16-core machine (the recorded run).
 """
 from __future__ import annotations
 
