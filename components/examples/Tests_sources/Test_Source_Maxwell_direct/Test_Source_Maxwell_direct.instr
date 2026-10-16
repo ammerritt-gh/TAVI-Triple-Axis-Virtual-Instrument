@@ -41,16 +41,20 @@
 * focus_ah: [deg] Full vertical height of the emission window
 * Lmin: [AA]      Source_gen: minimum wavelength, and the L monitor's lower limit
 * Lmax: [AA]      Source_gen: maximum wavelength, and the L monitor's upper limit
-* Emax: [meV]     Upper limit of the energy monitor (from 0)
+* Emin: [meV]     Lower limit of the energy monitor
+* Emax: [meV]     Upper limit of the energy monitor
 * Zmon: [m]       Distance of the monitors from the source
 * Msize: [m]      Width and height of the L, E and PSD monitors
+* Ndiv: [1]       Number of bins per axis of the divergence monitor (40 by default)
+* nL: [1]         Number of bins of the wavelength monitor
+* nE: [1]         Number of bins of the energy monitor
 *
 * %End
 *******************************************************************************/
 DEFINE INSTRUMENT Test_Source_Maxwell_direct(int SRC=0, int flat_band=0,
   E0=25, dE=5, flux=1,
   T1=285.6, I1=3.06e13, T2=300.0, I2=1.68e12, T3=429.9, I3=6.77e12,
-  focus_aw=4, focus_ah=4, Lmin=0.2, Lmax=20, Emax=400, Zmon=0.01, Msize=0.2)
+  focus_aw=4, focus_ah=4, Lmin=0.2, Lmax=20, Emax=400, Zmon=0.01, Msize=0.2, int Ndiv=40, Emin=0, int nL=200, int nE=200)
 
 DECLARE
 %{
@@ -91,11 +95,11 @@ AT (0, 0, 0) ABSOLUTE
 /* the monitors, all at one plane and all restoring the neutron ================ */
 
 COMPONENT L_mon = L_monitor(
-  xwidth=Msize, yheight=Msize, Lmin=Lmin, Lmax=Lmax, nL=200, restore_neutron=1
+  xwidth=Msize, yheight=Msize, Lmin=Lmin, Lmax=Lmax, nL=nL, restore_neutron=1
 ) AT (0, 0, Zmon) ABSOLUTE
 
 COMPONENT E_mon = E_monitor(
-  xwidth=Msize, yheight=Msize, Emin=0, Emax=Emax, nE=200, restore_neutron=1
+  xwidth=Msize, yheight=Msize, Emin=Emin, Emax=Emax, nE=nE, restore_neutron=1
 ) AT (0, 0, Zmon) ABSOLUTE
 
 COMPONENT PSD_mon = PSD_monitor(
@@ -103,7 +107,7 @@ COMPONENT PSD_mon = PSD_monitor(
 ) AT (0, 0, Zmon) ABSOLUTE
 
 COMPONENT Div_mon = Divergence_monitor(
-  xwidth=Msize, yheight=Msize, nh=40, nv=40,
+  xwidth=Msize, yheight=Msize, nh=Ndiv, nv=Ndiv,
   maxdiv_h=focus_aw, maxdiv_v=focus_ah, restore_neutron=1
 ) AT (0, 0, Zmon) ABSOLUTE
 
