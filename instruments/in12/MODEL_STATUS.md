@@ -84,7 +84,7 @@ inverse.
 | Item | Current | Needed |
 |---|---|---|
 | Model boundary | effective source AT the H144 exit; 115 m of guide not modeled | a real H144 model or an MCPL file at the exit. 2016 says the guide was calculated in McStas and the primary spectrometer in SIMRES plus in-house routines, so models existed — **none is public**. *needs IS* |
-| Spectrum | `Source_div_Maxwellian_v2` peaked at E0, dE = 2 meV | the true cold-source spectrum at the H144 exit for absolute flux. 2016 measured ~30 % more capture flux than the contemporary McStas cold-source description predicted. *needs IS* |
+| Spectrum | An idealised ILL vertical-cold-source spectrum (`Source_Maxwell_direct`, profile `ill_vcs_cold`) at the guide exit, full spectrum by default; the guide is not modelled, so its wavelength-dependent transmission is ignored. By a rough estimate the curved guide cuts off steeply above about 22 meV (λ ≈ 1.9 Å), so the full-spectrum mode **overstates IN12's higher-order contamination** | the true cold-source spectrum at the H144 exit for absolute flux. 2016 measured ~30 % more capture flux than the contemporary McStas cold-source description predicted. *needs IS* |
 | Guide geometry | not modeled, but the public record supports what would be modeled: ~115 m from the vertical cold source, last ~80 m at R = −2000 m in 45 × 105 mm with an m = 2.4 outer wall, final 8 m widening 105 → 140 mm vertically and focusing 45 → 20 mm horizontally at up to m = 3.2 | the upstream 6 m at R = 2700 m and ~21 m at R = 4000 m belong to the **common H14 system** before the four branches split, not to H144 specifically |
 | Velocity selector | **absent** | >36 m upstream, outside the model boundary. Its higher-order suppression is replaced by pinning both crystals to `order=1` (see *Higher orders* below), not inherited from a narrow band this model does not have. Only Astrium, >36 m, in/out, and the 2.23–6.3 Å design range are confirmed; the rotor blade count, helix angle, Δλ/λ, transmission, speed range and rpm↔λ calibration are **all unconfirmed for the IN12 unit** and must not be copied from other Astrium selectors |
 | Polarising cavity, guide fields, flippers | **absent** | ~35 m upstream, and TAVI models no polarisation |
@@ -120,9 +120,9 @@ inverse.
 
 ### Higher orders
 
-The default source is the **broadband Maxwellian** branch, where `dE` sets
-normalization rather than a sampling cutoff, so this model does **not** inherit
-the real instrument's narrow incident band. `Monochromator_curved` at its
+The default source is the **full-spectrum** moderator, which emits the whole
+spectrum with no energy cut-off and ignores the guide's transmission, so this
+model does **not** inherit the real instrument's narrow incident band. `Monochromator_curved` at its
 default `order=0` reflects at every multiple of the supplied reciprocal-lattice
 vector, so a λ/2 component at four times the nominal energy would reach the
 sample with nothing in the tree to stop it.

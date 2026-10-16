@@ -49,7 +49,7 @@ decision, §20.3); if vTAS-identical resolution ever matters, that's a
 |---|---|---|
 | Virtual source height | 0.120 m guess | real HVS aperture (2006: adjustable, < 50 mm wide; height unstated). *needs IS* |
 | Virtual source width per crystal | 0.030 m for all | ILL: 30 mm for PG/Cu but **25 mm for Si** — per-crystal width once Si lands |
-| Spectrum | `Source_div_Maxwellian_v2` peaked at E0 | true H10 thermal spectrum (T, brightness) for absolute flux. *needs IS* |
+| Spectrum | An idealised ILL thermal-moderator spectrum (`Source_Maxwell_direct`, profile `ill_thermal_h12`) at the source plane, full spectrum by default; guides are not modelled (IN8 has none before the source plane). The only published ILL thermal fit is for tube H12, and it stands in here for H10, which is presumed to view the same heavy-water moderator | the true H10 thermal spectrum (T, brightness) for absolute flux. *needs IS* |
 | Upstream optics | nothing before the virtual source | beam tube Φ200 mm / in-pile geometry only matters for background realism |
 | L1 precision | 2.28 m (ILL page) | 2006 paper says 2284 mm — 4 mm difference, cosmetic |
 
