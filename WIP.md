@@ -271,7 +271,7 @@ this; it rides the next bump after that.
 
 ## Facility moderator source: Source_Maxwell_direct (job j0236ccacd89b)
 
-**State:** parked
+**State:** in progress, slice 1 of 1
 
 A new component, `Source_Maxwell_direct`, replaces `Source_div_Maxwellian_v2`:
 the McStas `Source_gen` flux-form spectrum (up to three T/I Maxwellians, every
@@ -285,21 +285,9 @@ contract version 2; all four `model_version` 1.1.0. Design approved
 amendment 5, operator: the per-run component stamp and rebuild hash struck
 ("strip that fucking thing right out").
 
-Parked at refine on candidate `d432fef81dc6`, branch `acs/j0236ccacd89b`,
-worktree `..\.jobs\TAVI\source-rework-source`. Build and verify are done; the
-acceptance suite passed (3277 passed, 5 skipped). Remaining: refine
-(`slice_refine`, `lens_refine`: the design_fit lens's "component version and
-file hash" clause is superseded by amendment 5; the gui lens needs offscreen Qt
-with real widgets), `external_slice` on ChatGPT Pro (receipt r6e5022d9aca7),
-`external_verdict`, the PR for the operator to see, land. Deferred P4
-a724d25870322-1: `components/README.md:134` still claims exact `Source_gen`
-equivalence (one clause). Resume: `acs-job bind --handoff
-acafe92c009780824edfac7c9f3ba00cb300d8d7b330f3dba760edc4aa72d2c2 --session
-<new> --host claude`, then a fresh slice coordinator from `acs-job next`.
-
-When it lands: `docs/HANDOFF-spaced-profile-install.md:149` names
-`source_type`/`source_dE` in `gui_values`; update it on main. `TODO.md:140`
-(slit bindings) was keyed to this contract bump.
+Parked by the operator at refine on candidate `d432fef81dc6`; build and verify
+are done and the acceptance suite passed. The frontier, how to resume and what
+remains are in [the handoff](docs/HANDOFF-source-rework.md).
 
 Done when: the job lands, or the operator cancels it.
 
