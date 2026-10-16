@@ -50,7 +50,9 @@ DEFAULT_MPI_COUNT = 4
 
 # The plugin contract's version. A plugin declares the version it targets as a class
 # attribute CONTRACT_VERSION; the registry refuses any other value when it registers it.
-CONTRACT_VERSION = 1
+# Version 2: the descriptor's source_types is replaced by default_moderator_profile, and
+# the state carries the nine moderator_*/flat_band_* values (instruments/source.py).
+CONTRACT_VERSION = 2
 
 
 class CurvatureMode(str, Enum):
@@ -316,7 +318,7 @@ class InstrumentPlugin(Protocol):
 
         Maps this instrument's launch/GUI parameter dict (the same ``vals`` shape
         ``scan_config`` consumes -- ``monocris``/``anacris``/``K_fixed``/
-        ``fixed_E``/``collimation``/``modules``/``source_type``/``rhm``... plus an
+        ``fixed_E``/``collimation``/``modules``/``moderator_mode``/``rhm``... plus an
         optional ``sample_key``) onto the instrument-independent
         :class:`tavi.resolution.ResolutionConfig` (ISAR Cooper-Nathans vocabulary
         + Popovici extensions): d-spacings and mosaics from the descriptor;
