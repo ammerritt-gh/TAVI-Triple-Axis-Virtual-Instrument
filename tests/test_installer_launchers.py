@@ -1263,6 +1263,50 @@ def test_uninstall_asked_in_person_ends_on_its_headline_and_c(tmp_path, answer, 
     assert base.exists() == (answer == "N"), out
 
 
+CLOSE_PROMPT_ANSWERED = "Press C to close this window. C"  # the prompt, then choice's echo of the key
+
+
+def test_uninstall_confirmed_skips_its_question_but_waits_for_c(tmp_path):
+    """/confirmed is the launcher menu's switch: the menu has asked already, so
+    no second question, but the run is attended and ends on the headline and C."""
+    base = _uninstallable_base(tmp_path, "confirmed")
+    result = run_bat(UNINSTALL_TAVI, str(base), "/confirmed", timeout=60, input_text="C")
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert not base.exists(), out
+    assert "Remove TAVI? (Y/N)" not in out, "/confirmed must not ask again"
+    assert CLOSE_PROMPT_ANSWERED in out, out
+    assert out.rindex("Press C") > out.rindex("TAVI WAS UNINSTALLED"), "C comes after the headline"
+
+
+def test_uninstall_y_never_waits_even_when_it_is_fed_a_c(tmp_path):
+    base = _uninstallable_base(tmp_path, "unattended")
+    result = run_bat(UNINSTALL_TAVI, str(base), "/y", timeout=60, input_text="C")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Press C" not in result.stdout and "Remove TAVI? (Y/N)" not in result.stdout, result.stdout
+
+
+def test_the_menu_hands_the_uninstaller_confirmed_not_y():
+    text = _read(TAVI_LAUNCHER)
+    assert 'call "%UNINST_COPY%" "%TAVI_BASE%" /confirmed' in text
+    assert "/y" not in text.replace("copy /Y", ""), "the attended menu must not pass the unattended switch"
+
+
+def test_the_menu_uninstall_asks_once_and_then_waits_for_c(tmp_path):
+    """Menu 6, Y at the menu's own question, and then the uninstaller: no
+    second question, the headline, and C to close."""
+    base = _uninstallable_base(tmp_path, "menu-uninstall")
+    result = run_bat(str(base / "TAVI-Launcher.bat"), env=_launch_env(tmp_path), timeout=60,
+                     input_text="6YC")
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert not base.exists(), out
+    assert "Remove TAVI and everything listed above? (Y/N):" in out, out
+    assert "Remove TAVI? (Y/N)" not in out, "the uninstaller asked a second time"
+    assert CLOSE_PROMPT_ANSWERED in out, out
+    assert out.rindex("Press C") > out.rindex("TAVI WAS UNINSTALLED"), "C comes after the headline"
+
+
 @pytest.mark.parametrize("whose", ["this installation", "another installation"])
 def test_uninstall_removes_only_its_own_desktop_shortcut(tmp_path, whose):
     base = _uninstallable_base(tmp_path, "mine")
