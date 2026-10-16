@@ -43,6 +43,8 @@ from instruments.descriptor import (
     CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
+    ModuleKind,
+    ModuleSpec,
     MonitorSpec,
     ParameterSpec,
     Sense,
@@ -125,6 +127,7 @@ _PANDA_PARAMS = (
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("nu_param", "Velocity selector frequency"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending",
                   quantity="applied_mono_horizontal_radius_m"),
     ParameterSpec("rvm_param", "Monochromator vertical bending",
@@ -275,8 +278,11 @@ def panda_descriptor() -> InstrumentDescriptor:
         primary_detector="detector",
         mcstas_name=PANDA_MCSTAS_NAME,
         monitors=_PANDA_MONITORS,
-        # No NMO, no velocity selector; BAMBUS deferred -> no modules.
-        modules=(),
+        # Experimental velocity selector (not a real PANDA position; see
+        # model.py). BAMBUS is still deferred.
+        modules=(
+            ModuleSpec("v_selector", "Velocity selector", ModuleKind.TOGGLE, default=False),
+        ),
         # Four Soller positions. Unlike IN8, PANDA does have a primary
         # collimator ahead of the monochromator (an automatic changer; the
         # downstream three are changed by hand). vPANDA represents "open" as a
@@ -372,6 +378,7 @@ class PANDAPlugin:
         scan_config.rha = vals['rha']
         scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
+        scan_config.V_selector_installed = vals['modules'].get('v_selector', False)
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
         scan_config.alpha_3 = float(collimation['alpha_3'])
@@ -410,6 +417,7 @@ class PANDAPlugin:
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,
             "alpha_4": config.alpha_4,
+            "V_selector_installed": bool(config.V_selector_installed),
             "diagnostic_mode": bool(diagnostic_mode),
             "diagnostic_settings": sorted(
                 (key, bool(value))
@@ -452,9 +460,10 @@ class PANDAPlugin:
         """Build a theoretical-resolution config for PANDA (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
-        PANDA has no modules, so no module invalidations arise; a monochromatic
-        source still warns. Unlike IN8 it does carry an alpha_1 slot, so no
-        primary-collimation substitution is needed when one is selected.
+        The velocity-selector module is handled generically by the resolution
+        adapter (it warns that the band-pass is outside the divergence model);
+        a monochromatic source still warns. Unlike IN8 it does carry an alpha_1
+        slot, so no primary-collimation substitution is needed when one is selected.
         """
         from instruments.resolution_adapter import build_resolution_config
 

@@ -3,6 +3,8 @@
 Light tests exercise only the import-light plugin module; heavy tests import
 the PANDA definition module (which imports mcstasscript) and skip without it.
 """
+import math
+
 import pytest
 
 from instruments.contract import InstrumentPlugin, PointSnapshot
@@ -15,6 +17,12 @@ from instruments.panda.plugin import (
 from instruments.validation import validate_descriptor
 from instruments.tas_runtime import MOTORS, Q_CALC
 from plan_helpers import motors_point, plan_for, q_point
+from tavi.neutron_conversions import energy2lambda
+
+
+def _selector_nu(ei):
+    """PUMA's closed form for the velocity-selector frequency at incident energy ei (meV)."""
+    return 3956 * math.radians(48.3) / (2 * math.pi) / 0.25 / energy2lambda(ei)
 
 
 # ---------------------------------------------------------------- light tests
@@ -206,8 +214,30 @@ def test_snapshot_params_match_descriptor(tmp_path):
     assert snapshot.error_flags == []
     assert snapshot.params is not None
     assert set(snapshot.params) == {p.name for p in _PANDA_PARAMS}
-    assert "nu_param" not in snapshot.params      # no velocity selector
+    assert snapshot.params["nu_param"] == pytest.approx(_selector_nu(snapshot.metadata["Ei"]))
     assert "sbl_wgap_param" not in snapshot.params  # IN8's slit names, not PANDA's
+
+
+def test_selector_speed_follows_each_points_ei(tmp_path):
+    """Two mono settings with different Ei give different nu, each its own closed form."""
+    pytest.importorskip("mcstasscript")
+    plugin = PANDAPlugin()
+    state = plugin.default_state()
+    state.monocris = state.anacris = "pg002"
+    state.K_fixed = "Kf Fixed"
+    state.fixed_E = 4.978451631466585
+    vals = {"deltaE": 0.0}
+    plan = plan_for(plugin, state, vals, MOTORS)
+
+    nus = []
+    for mtt in (-74.332, -60.0):
+        snapshot = plugin.compute_snapshot(
+            plan, motors_point(mtt, 120.180, 60.090, -74.332), 0, state, vals, str(tmp_path))
+        assert snapshot.error_flags == []
+        ei = snapshot.metadata["Ei"]
+        assert snapshot.params["nu_param"] == pytest.approx(_selector_nu(ei))
+        nus.append(snapshot.params["nu_param"])
+    assert nus[0] != pytest.approx(nus[1])
 
 
 def test_angle_feasibility_enforces_raw_axis_limits():
@@ -289,6 +319,12 @@ def test_build_fingerprint_stable_and_sensitive():
     primary.monocris = primary.anacris = "pg002"
     primary.alpha_1 = 40.0
     assert plugin.build_fingerprint(primary) != fp1
+
+    # The velocity selector is compiled in or out, so it is a build input.
+    selector = plugin.default_state()
+    selector.monocris = selector.anacris = "pg002"
+    selector.V_selector_installed = True
+    assert plugin.build_fingerprint(selector) != fp1
 
     # Aperture gaps are runtime McStas parameters -- not build inputs.
     slit_changed = plugin.default_state()

@@ -13,7 +13,8 @@ PANDA's:
   the literal remainder is the source block, the axis arms and the detector.
 
 The model starts at the SR-2 guide exit and simulates the primary spectrometer
-from there: primary Soller, horizontal virtual source, monochromator. Guide
+from there: primary Soller, horizontal virtual source, monochromator. An
+experimental velocity selector can be inserted after the primary Soller. Guide
 transport upstream of that plane is not simulated -- see the L1 note in
 ``instruments/panda/plugin.py``.
 
@@ -88,6 +89,8 @@ class PANDA_Instrument(TAS_Instrument):
         # Energy half-spread for the Mono source (meV). 1, not IN8's 2: the
         # same E0 - dE > 0 guard applies, and PANDA runs down to E0 = 2.28 meV.
         self.source_dE = 1
+        # Experimental velocity selector (module "v_selector"); off by default.
+        self.V_selector_installed = False
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -126,6 +129,7 @@ class PANDA_Instrument(TAS_Instrument):
             "mono_theta_param": crystal_theta(self.mono_two_theta_deg),
             "analyzer_theta_param": crystal_theta(self.analyzer_two_theta_deg),
             "E0_param": self.e0_param_value(deltaE),
+            "nu_param": self.v_selector_frequency(deltaE),
             "rhm_param": self.rhm,
             "rvm_param": self.rvm,
             "rha_param": self.rha,
@@ -156,6 +160,7 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
     instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
     instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
     instrument.add_parameter("rha_param", comment="Analyzer horizontal bending.")
@@ -223,6 +228,22 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
         emit_collimator(instrument, "primary_collimator", relative="origin",
                         at=(0, 0, 0.10), divergence=PANDA.alpha_1, length=0.50,
                         xwidth=0.108, yheight=0.160)
+
+        # Experimental: PANDA has no velocity selector in this position. It sits
+        # after the primary Soller (which stays at its real 0.10-0.60 m), housing
+        # 0.645-0.955 m; its 40 mm window clips about 70% of the 138 mm guide-exit height.
+        if PANDA.V_selector_installed:
+            v_selector = instrument.add_component("v_selector", "V_selector",
+                                                  AT=[0, 0, 0.80], RELATIVE="origin")
+            v_selector.xwidth = 0.100
+            v_selector.yheight = 0.040
+            v_selector.zdepth = 0.310
+            v_selector.radius = 0.290
+            v_selector.length = 0.25
+            v_selector.d = 0.004
+            v_selector.nslit = 72
+            v_selector.alpha = 48.3
+            v_selector.nu = "nu_param"
 
         # The horizontal virtual source (ms1): a variable-width slit 2.180 m
         # past the guide exit. This is what the monochromator images
