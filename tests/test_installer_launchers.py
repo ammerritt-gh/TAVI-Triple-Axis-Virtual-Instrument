@@ -822,11 +822,12 @@ def test_run_tavi_writes_a_launch_log_and_passes_arguments_through(tmp_path, mic
     base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
     stub_log = tmp_path / "stub.log"
     env = _launch_env(tmp_path, MICROMAMBA_STUB_LOG=str(stub_log), MICROMAMBA_STUB_LINES="3")
-    result = run_bat(str(base / "run-tavi.bat"), "--self-test", env=env, timeout=30)
+    result = run_bat(str(base / "run-tavi.bat"), "--self-test", "--instrument", "puma",
+                     env=env, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
 
     argv = _read_stub_log(stub_log)[0]
-    assert argv[-2:] == ["TAVI_PySide6.py", "--self-test"], argv
+    assert argv[-4:] == ["TAVI_PySide6.py", "--self-test", "--instrument", "puma"], argv
 
     logs = os.listdir(_logs_dir(env))
     assert len(logs) == 1 and re.fullmatch(r"launch-\d{8}-\d{6}\.log", logs[0]), logs
@@ -2433,3 +2434,14 @@ def test_the_random_fallback_stamp_has_tavi_shape(path):
 @pytest.mark.parametrize("path", [INSTALL_1_4_0, RUN_TAVI], ids=os.path.basename)
 def test_the_installer_and_run_tavi_clear_no_default_current_directory(path):
     assert 'set "NoDefaultCurrentDirectoryInExePath="' in _read(path), path
+
+
+def test_the_v140_installer_names_the_instrument_for_its_self_test():
+    """TAVI's controller picks no instrument for --self-test, so the installer must name one;
+    any nonzero exit (1: the test failed, 2: refused) is the third outcome."""
+    text = _read(INSTALL_1_4_0)
+    lines = [ln for ln in text.splitlines()
+             if "TAVI_PySide6.py --self-test" in ln and not ln.lstrip().startswith("::")]
+    assert len(lines) == 1, lines
+    assert lines[0].rstrip().endswith("TAVI_PySide6.py --self-test --instrument puma"), lines[0]
+    assert 'if not "%RC%"=="0" goto selftest_failed' in text
