@@ -327,3 +327,26 @@ def test_instrument_switch_force_stops_without_a_second_dialog(rig, monkeypatch)
     assert state(job) == JobState.STOPPED and job.result.stop_mode == "kill"
     assert state(queued) == JobState.CANCELLED
     assert rig.window._restart_instrument_id == other
+
+
+def test_a_relaunch_hands_the_new_session_this_process_output(tmp_path, monkeypatch):
+    """The relaunched TAVI writes where this one writes, which under run-tavi.bat is
+    the launch log. A stream with no file behind it gives nothing, and the child
+    inherits as it always did."""
+    class NoFile:
+        closed = False
+
+        def flush(self):
+            pass
+
+        def fileno(self):
+            raise OSError("no file behind this stream")
+
+    with open(tmp_path / "launch.log", "w", encoding="utf-8", newline="\n") as log:
+        monkeypatch.setattr(sys, "stdout", log)
+        monkeypatch.setattr(sys, "stderr", log)
+        assert cm._relaunch_std_kwargs() == {"stdout": log, "stderr": log}
+        monkeypatch.setattr(sys, "stderr", NoFile())
+        assert cm._relaunch_std_kwargs() == {}
+    monkeypatch.setattr(sys, "stdout", None)
+    assert cm._relaunch_std_kwargs() == {}
