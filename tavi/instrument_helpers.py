@@ -20,6 +20,11 @@ descriptor tuples like ``(0.0, 0.0, 0.144)`` emit as the legacy ``(0, 0,
 """
 from __future__ import annotations
 
+from tavi.neutron_conversions import energy2lambda
+
+WAVELENGTH_MONITORS_KEY = "Wavelength Monitors"  # diagnostic bool: E_monitors become L_monitors
+LAMBDA_MAX_A = 10.0  # cap on an L_monitor's long-wavelength end (operator ruling 2026-10-16)
+
 
 def _mcstas_number(value):
     """Coerce integral floats to int so emitted .instr text matches legacy."""
@@ -32,6 +37,25 @@ def _placement(triple):
     return [_mcstas_number(v) for v in triple]
 
 
+def _wavelength_settings(settings):
+    """E_monitor settings -> L_monitor settings over the same bins and energy range."""
+    emin = settings["Emin"]
+    kept = {k: v for k, v in settings.items() if k not in ("nE", "Emin", "Emax")}
+    return {
+        **kept,
+        "nL": settings["nE"],
+        "Lmin": energy2lambda(settings["Emax"]),
+        "Lmax": min(LAMBDA_MAX_A, energy2lambda(emin)) if emin > 0 else LAMBDA_MAX_A,
+    }
+
+
+def _wavelength_name(name):
+    """An L_monitor's instance name: ``Emonitor`` -> ``Lmonitor``, so its output file says so."""
+    if "Emonitor" in name:
+        return name.replace("Emonitor", "Lmonitor")
+    return f"{name}_Lmonitor"
+
+
 def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
     """Add each enabled diagnostic monitor from an ordered group of MonitorSpecs.
 
@@ -39,25 +63,33 @@ def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
     order. ``enabled`` is the diagnostic-settings mapping (spec.id -> bool).
     ``size_overrides`` maps a spec's ``component_name`` to parameter overrides
     applied over ``spec.settings`` -- used for monitors sized from the selected
-    crystal's slab geometry at build time.
+    crystal's slab geometry at build time. With ``WAVELENGTH_MONITORS_KEY`` true,
+    each enabled E_monitor is emitted as an L_monitor in the same place, named
+    with ``Lmonitor`` in place of ``Emonitor``.
 
     Returns the list of added components.
     """
+    wavelength = bool(enabled.get(WAVELENGTH_MONITORS_KEY))
     added = []
     for spec in specs:
         if not enabled.get(spec.id):
             continue
         name = spec.component_name or spec.id
+        settings = dict(spec.settings)
+        if size_overrides:
+            settings.update(size_overrides.get(name, {}))
+        component_type = spec.component_type
+        if wavelength and component_type == "E_monitor":
+            component_type = "L_monitor"
+            settings = _wavelength_settings(settings)
+            name = _wavelength_name(name)  # after the size lookup, which is keyed by the energy name
         component = instrument.add_component(
             name,
-            spec.component_type,
+            component_type,
             AT=_placement(spec.at),
             ROTATED=_placement(spec.rotated),
             RELATIVE=spec.relative,
         )
-        settings = dict(spec.settings)
-        if size_overrides:
-            settings.update(size_overrides.get(name, {}))
         for key, value in settings.items():
             setattr(component, key, value)
         added.append(component)

@@ -13,7 +13,7 @@ from instruments.panda.plugin import _PANDA_MONITORS, PANDAPlugin
 
 def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
            monocris="pg002", source_type="Maxwellian",
-           alpha_1="0", alpha_2="0", alpha_3="0", alpha_4="0"):
+           alpha_1="0", alpha_2="0", alpha_3="0", alpha_4="0", modules=None):
     plugin = PANDAPlugin()
     diagnostic_settings = diagnostic_settings or {}
     vals = {
@@ -27,7 +27,7 @@ def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
         "fixed_E": 4.978451631466585,       # kf = 1.55 A^-1
         "monocris": monocris,
         "anacris": "pg002",
-        "modules": {},
+        "modules": modules or {},
         "collimation": {"alpha_1": alpha_1, "alpha_2": alpha_2,
                         "alpha_3": alpha_3, "alpha_4": alpha_4},
         "slits_mm": {"ms1": 40.0, "ss1": (40.0, 80.0), "ss2": (40.0, 80.0)},
@@ -93,15 +93,36 @@ def test_declared_parameters_match_descriptor(plain_instrument):
 def test_no_puma_or_in8_only_components(plain_instrument, diag_all_instrument):
     for instrument in (plain_instrument, diag_all_instrument):
         names = set(_component_names(instrument))
-        assert not names & {"v_selector", "NMO_slit", "vertical_focusing_NMO",
+        assert not names & {"NMO_slit", "vertical_focusing_NMO",
                             "horizontal_focusing_NMO", "mono_collimator",
                             "postmono_slit", "exit_beam_tube",
                             "analyzer_filter", "detector_slit"}
 
 
+def test_selector_absent_by_default(plain_instrument):
+    assert "v_selector" not in _component_names(plain_instrument)
+
+
+def test_selector_sits_after_the_primary_soller():
+    """Experimental PANDA selector: PUMA's rotor, centred 0.80 m past the guide exit."""
+    instrument = _build(alpha_1="40", modules={"v_selector": True})
+    names = _component_names(instrument)
+    assert names.count("v_selector") == 1
+    assert names.index("primary_collimator") < names.index("v_selector") < names.index("virtual_source")
+    selector = {c.name: c for c in instrument.component_list}["v_selector"]
+    assert selector.component_name == "V_selector"
+    assert selector.AT_data[2] == pytest.approx(0.80)
+    assert selector.AT_reference == "origin"
+    assert selector.nu == "nu_param"
+    rotor = (selector.xwidth, selector.yheight, selector.zdepth, selector.radius,
+             selector.length, selector.d, selector.nslit, selector.alpha)
+    assert rotor == pytest.approx((0.100, 0.040, 0.310, 0.290, 0.25, 0.004, 72, 48.3))
+
+
 def test_all_monitors_present_once_and_in_descriptor_order(diag_all_instrument):
     names = _component_names(diag_all_instrument)
     monitor_names = [m.component_name for m in _PANDA_MONITORS]
+    assert len(_PANDA_MONITORS) == 21
     assert [n for n in names if n in set(monitor_names)] == monitor_names
 
 
@@ -275,3 +296,51 @@ def test_maxwellian_de_clears_the_source_init_guard_at_pandas_cold_floor():
 def test_mono_source_de_default_also_clears_the_guard():
     source_dE = _build(source_type="Mono").get_component("source").dE
     assert 2.072142 * 1.05 ** 2 - source_dE > 0
+
+
+def test_monitor_order_holds_with_the_selector_and_primary_soller_in_beam():
+    enabled = {m.id: True for m in _PANDA_MONITORS}
+    instrument = _build(sample_key="Al_bragg", diagnostic_mode=True,
+                        diagnostic_settings=enabled, alpha_1="40",
+                        modules={"v_selector": True})
+    names = _component_names(instrument)
+    monitor_names = [m.component_name for m in _PANDA_MONITORS]
+    assert [n for n in names if n in set(monitor_names)] == monitor_names
+    assert (names.index("primary_collimator") < names.index("v_selector")
+            < names.index("source_DSD") < names.index("virtual_source"))
+
+
+def test_crystal_face_monitors_follow_the_selected_crystal(monkeypatch):
+    """Crystal-face monitors take the selected crystal's slab extents.
+
+    PG(002) and Cu(111) share slab extents, so a real crystal swap cannot show
+    a missing override; doubling the slabs in crystal_info does.
+    """
+    from instruments.panda.model import PANDA_Instrument
+
+    mono_info, ana_info = PANDA_Instrument().crystal_info("pg002", "pg002")
+
+    def doubled(info):
+        return {**info, "slabwidth": 2 * info["slabwidth"],
+                "slabheight": 2 * info["slabheight"]}
+
+    monkeypatch.setattr(PANDA_Instrument, "crystal_info",
+                        lambda self, monocris, anacris: (doubled(mono_info),
+                                                         doubled(ana_info)))
+    enabled = {m.id: True for m in _PANDA_MONITORS}
+    by_name = {c.name: c for c in
+               _build(diagnostic_mode=True, diagnostic_settings=enabled).component_list}
+    mono_w = 2 * mono_info["slabwidth"] * mono_info["ncolumns"]
+    mono_h = 2 * mono_info["slabheight"] * mono_info["nrows"]
+    ana_w = 2 * ana_info["slabwidth"] * ana_info["ncolumns"]
+    ana_h = 2 * ana_info["slabheight"] * ana_info["nrows"]
+    expected = {"premono_Emonitor": (mono_w, mono_h),
+                "postmono_Emonitor": (mono_w, mono_h),
+                "preanalyzer_Emonitor": (ana_w, ana_h),
+                "preanalyzer_PSD": (ana_w, ana_h),
+                "postanalyzer_Emonitor": (ana_w, ana_h),
+                "postanalyzer_PSD": (ana_w, ana_h)}
+    for name, (w, h) in expected.items():
+        assert by_name[name].xwidth == pytest.approx(w), name
+        assert by_name[name].yheight == pytest.approx(h), name
+

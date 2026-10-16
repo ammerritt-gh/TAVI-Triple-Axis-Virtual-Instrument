@@ -13,7 +13,8 @@ PANDA's:
   the literal remainder is the source block, the axis arms and the detector.
 
 The model starts at the SR-2 guide exit and simulates the primary spectrometer
-from there: primary Soller, horizontal virtual source, monochromator. Guide
+from there: primary Soller, horizontal virtual source, monochromator. An
+experimental velocity selector can be inserted after the primary Soller. Guide
 transport upstream of that plane is not simulated -- see the L1 note in
 ``instruments/panda/plugin.py``.
 
@@ -88,6 +89,8 @@ class PANDA_Instrument(TAS_Instrument):
         # Energy half-spread for the Mono source (meV). 1, not IN8's 2: the
         # same E0 - dE > 0 guard applies, and PANDA runs down to E0 = 2.28 meV.
         self.source_dE = 1
+        # Experimental velocity selector (module "v_selector"); off by default.
+        self.V_selector_installed = False
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -126,6 +129,7 @@ class PANDA_Instrument(TAS_Instrument):
             "mono_theta_param": crystal_theta(self.mono_two_theta_deg),
             "analyzer_theta_param": crystal_theta(self.analyzer_two_theta_deg),
             "E0_param": self.e0_param_value(deltaE),
+            "nu_param": self.v_selector_frequency(deltaE),
             "rhm_param": self.rhm,
             "rvm_param": self.rvm,
             "rha_param": self.rha,
@@ -156,6 +160,7 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
     instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
     instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
     instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
     instrument.add_parameter("rha_param", comment="Analyzer horizontal bending.")
@@ -174,9 +179,24 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
 
     monitor = {m.id: m for m in _PANDA_MONITORS}
     enabled_monitors = diagnostic_settings if diagnostic_mode else {}
+    # Crystal-face monitors track the SELECTED crystal's slab geometry, as
+    # PUMA's do; the descriptor's PG(002) sizes are only the no-override default.
+    _mono_w = monochromator_info['slabwidth'] * monochromator_info['ncolumns']
+    _mono_h = monochromator_info['slabheight'] * monochromator_info['nrows']
+    _ana_w = analyzer_info['slabwidth'] * analyzer_info['ncolumns']
+    _ana_h = analyzer_info['slabheight'] * analyzer_info['nrows']
+    monitor_size_overrides = {
+        "premono_Emonitor": {"xwidth": _mono_w, "yheight": _mono_h},
+        "postmono_Emonitor": {"xwidth": _mono_w, "yheight": _mono_h},
+        "preanalyzer_Emonitor": {"xwidth": _ana_w, "yheight": _ana_h},
+        "preanalyzer_PSD": {"xwidth": _ana_w, "yheight": _ana_h},
+        "postanalyzer_Emonitor": {"xwidth": _ana_w, "yheight": _ana_h},
+        "postanalyzer_PSD": {"xwidth": _ana_w, "yheight": _ana_h},
+    }
 
     def emit_monitor_group(instrument, *ids):
-        emit_monitors(instrument, [monitor[i] for i in ids], enabled_monitors)
+        emit_monitors(instrument, [monitor[i] for i in ids], enabled_monitors,
+                      size_overrides=monitor_size_overrides)
 
     def configure_component_tree():
 
@@ -224,12 +244,34 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
                         at=(0, 0, 0.10), divergence=PANDA.alpha_1, length=0.50,
                         xwidth=0.108, yheight=0.160)
 
+        # Experimental: PANDA has no velocity selector in this position. It sits
+        # after the primary Soller (which stays at its real 0.10-0.60 m), housing
+        # 0.645-0.955 m; its 40 mm window clips about 70% of the 138 mm guide-exit height.
+        if PANDA.V_selector_installed:
+            v_selector = instrument.add_component("v_selector", "V_selector",
+                                                  AT=[0, 0, 0.80], RELATIVE="origin")
+            v_selector.xwidth = 0.100
+            v_selector.yheight = 0.040
+            v_selector.zdepth = 0.310
+            v_selector.radius = 0.290
+            v_selector.length = 0.25
+            v_selector.d = 0.004
+            v_selector.nslit = 72
+            v_selector.alpha = 48.3
+            v_selector.nu = "nu_param"
+
+        emit_monitor_group(instrument, 'Source DSD')
+
         # The horizontal virtual source (ms1): a variable-width slit 2.180 m
         # past the guide exit. This is what the monochromator images
         # horizontally onto the sample.
         emit_slit(instrument, "virtual_source", relative="origin",
                   at=(0, 0, PANDA.L1 - PANDA.l_virtual_source_mono),
                   xwidth="ms1_wgap_param", yheight=0.180)
+
+        emit_monitor_group(instrument, 'Virtual source PSD', 'Virtual source DSD')
+
+        emit_monitor_group(instrument, 'Premono PSD', 'Premono DSD', 'Premono Emonitor')
 
         ## monochromator section
 
@@ -246,19 +288,23 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
         sample_arm = instrument.add_component("sample_arm", "Arm", AT=[0, 0, PANDA.L1],
                                               RELATIVE="origin", ROTATED=[0, "mono_two_theta_param", 0])
 
+        emit_monitor_group(instrument, 'Postmono Emonitor', 'Pre-sample collimation PSD')
+
         # Second Soller (ca2), 0.20 m long at 0.90 m from the monochromator
         # (vPANDA PANDA_ca2). Open (0) withdraws it from the beam.
         emit_collimator(instrument, "sample_collimator", relative="sample_arm",
                         at=(0, 0, 0.90), divergence=PANDA.alpha_2, length=0.20,
                         xwidth=0.040, yheight=0.120)
 
+        emit_monitor_group(instrument, 'Sample PSD @ L2-0.5')
+
         # Sample entrance slit ss1, 1.70 m from the monochromator (vPANDA).
         emit_slit(instrument, "sample_slit", relative="sample_arm",
                   at=(0, 0, 1.70),
                   xwidth="ss1_wgap_param", yheight="ss1_hgap_param")
 
-        emit_monitor_group(instrument, 'Sample PSD @ Sample', 'Sample DSD @ Sample',
-                           'Sample EMonitor @ Sample')
+        emit_monitor_group(instrument, 'Sample PSD @ L2-0.3', 'Sample PSD @ Sample',
+                           'Sample DSD @ Sample', 'Sample EMonitor @ Sample')
 
         # Sample orientation (shared with every TAVI instrument): one
         # sample_mount Arm whose runtime rotation carries the goniometer at
@@ -295,10 +341,14 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
                   at=(0, 0, 0.40),
                   xwidth="ss2_wgap_param", yheight="ss2_hgap_param")
 
+        emit_monitor_group(instrument, 'Pre-analyzer collimation PSD')
+
         # Third Soller (ca3) at L3 - 0.55 m (vPANDA PANDA_ca3).
         emit_collimator(instrument, "analyzer_collimator", relative="analyzer_arm",
                         at=(0, 0, PANDA.L3 - 0.55), divergence=PANDA.alpha_3, length=0.20,
                         xwidth=0.040, yheight=0.140)
+
+        emit_monitor_group(instrument, 'Pre-analyzer EMonitor', 'Pre-analyzer PSD')
 
         # No analyzer-side filter. PANDA's PG / cold-Be / BeO filters remove
         # higher-order contamination, and this model has no contamination to
@@ -319,6 +369,8 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
 
         detector_arm = instrument.add_component("detector_arm", "Arm", AT=[0, 0, PANDA.L3],
                                                 ROTATED=[0, "analyzer_two_theta_param", 0], RELATIVE="analyzer_arm")
+
+        emit_monitor_group(instrument, 'Post-analyzer EMonitor', 'Post-analyzer PSD')
 
         # Fourth Soller (ca4) at 0.410 m past the analyzer (vPANDA PANDA_ca4).
         emit_collimator(instrument, "detector_collimator", relative="detector_arm",

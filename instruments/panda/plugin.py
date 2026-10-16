@@ -43,6 +43,8 @@ from instruments.descriptor import (
     CurvatureAxis,
     Geometry,
     InstrumentDescriptor,
+    ModuleKind,
+    ModuleSpec,
     MonitorSpec,
     ParameterSpec,
     Sense,
@@ -110,7 +112,8 @@ _PANDA_ANA_CURVATURE = {
 
 # The full McStas parameter set build_PANDA_instrument declares via
 # add_parameter() -- the per-point snapshot dict shape. The 13 shared core TAS
-# parameters plus PANDA's bending and its three motorized apertures.
+# parameters, including the velocity-selector frequency (nu_param), plus PANDA's
+# bending and its three motorized apertures.
 _PANDA_PARAMS = (
     ParameterSpec("mono_two_theta_param", "Monochromator 2-theta angle",
                   quantity="mono_two_theta_deg"),
@@ -125,6 +128,7 @@ _PANDA_PARAMS = (
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
     ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("nu_param", "Velocity selector frequency"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending",
                   quantity="applied_mono_horizontal_radius_m"),
     ParameterSpec("rvm_param", "Monochromator vertical bending",
@@ -155,10 +159,20 @@ _PANDA_PARAMS = (
 
 _SAMPLE_REGION = ("sample_region",)
 
-# Minimal diagnostic set (IN8's shape): guide-exit pair, sample-position trio,
-# detector PSD. Apertures follow vPANDA's monitor windows where it has one;
-# positions are sensible beam-order spots, not surveyed hardware.
-# The energy window spans PANDA's whole reach: Cu111 at ki = 7 A^-1 is ~101 meV.
+# PG(002) mono and analyser slab extents (slabwidth * ncolumns, slabheight *
+# nrows, no gaps): the crystal-face monitors' default sizes. build() replaces
+# them with the SELECTED crystal's extents, as PUMA does.
+_MONO_W, _MONO_H = 0.020 * 11, 0.018 * 11
+_ANA_W, _ANA_H = 0.013 * 11, 0.025 * 5
+
+# Diagnostic monitors, 1:1 with the diagnostic_settings gates in build(), in
+# beam order (McStas component order is physics; tests/test_panda_build_tree.py
+# checks it). Positions are sensible beam-order spots, not surveyed hardware.
+# Ids reuse PUMA's where the station matches. Energy monitors only: the
+# diagnostic dialog's energy/wavelength choice turns each into an L_monitor.
+# Primary windows span
+# PANDA's reach (Cu111 at ki = 7 A^-1 is ~101 meV). Secondary windows cover the
+# MLZ reference's PG(002) analyser kf range, 1.05-4.0 A^-1 = 2.3-33.2 meV.
 _PANDA_MONITORS = (
     MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.10), "origin",
                 settings={"xwidth": 0.11, "yheight": 0.14, "nE": 100, "Emin": -2,
@@ -168,6 +182,46 @@ _PANDA_MONITORS = (
                 settings={"xwidth": 0.11, "yheight": 0.14, "nx": 100, "ny": 100,
                           "restore_neutron": 1},
                 component_name="source_PSD"),
+    MonitorSpec("Source DSD", "Divergence_monitor", (0.0, 0.0, 0.97), "origin",
+                settings={"xwidth": 0.11, "yheight": 0.14, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="source_DSD"),
+    MonitorSpec("Virtual source PSD", "PSD_monitor", (0.0, 0.0, 2.19), "origin",
+                settings={"xwidth": 0.11, "yheight": 0.20, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="virtual_source_PSD"),
+    MonitorSpec("Virtual source DSD", "Divergence_monitor", (0.0, 0.0, 2.20), "origin",
+                settings={"xwidth": 0.11, "yheight": 0.20, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="virtual_source_DSD"),
+    MonitorSpec("Premono PSD", "PSD_monitor", (0.0, 0.0, _L1 - 0.003), "origin",
+                settings={"xwidth": 0.25, "yheight": 0.25, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="premono_PSD"),
+    MonitorSpec("Premono DSD", "Divergence_monitor", (0.0, 0.0, _L1 - 0.002), "origin",
+                settings={"xwidth": 0.25, "yheight": 0.25, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="premono_DSD"),
+    MonitorSpec("Premono Emonitor", "E_monitor", (0.0, 0.0, _L1 - 0.001), "origin",
+                settings={"xwidth": _MONO_W, "yheight": _MONO_H, "nE": 400,
+                          "Emin": -2, "Emax": 120, "restore_neutron": 1},
+                component_name="premono_Emonitor"),
+    MonitorSpec("Postmono Emonitor", "E_monitor", (0.0, 0.0, 0.1), "sample_arm",
+                settings={"xwidth": _MONO_W, "yheight": _MONO_H, "nE": 400,
+                          "Emin": -2, "Emax": 120, "restore_neutron": 1},
+                component_name="postmono_Emonitor"),
+    MonitorSpec("Pre-sample collimation PSD", "PSD_monitor", (0.0, 0.0, 0.85), "sample_arm",
+                settings={"xwidth": 0.06, "yheight": 0.15, "nx": 200, "ny": 200,
+                          "restore_neutron": 1},
+                component_name="sample1_PSD"),
+    MonitorSpec("Sample PSD @ L2-0.5", "PSD_monitor", (0.0, 0.0, _L2 - 0.5), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.20, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample2_PSD"),
+    MonitorSpec("Sample PSD @ L2-0.3", "PSD_monitor", (0.0, 0.0, _L2 - 0.3), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.20, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample3_PSD"),
     MonitorSpec("Sample PSD @ Sample", "PSD_monitor", (0.0, 0.0, _L2 - 0.03), "sample_arm",
                 settings={"xwidth": 0.10, "yheight": 0.20, "nx": 100, "ny": 100,
                           "restore_neutron": 1},
@@ -180,6 +234,26 @@ _PANDA_MONITORS = (
                 settings={"xwidth": 0.2, "yheight": 0.2, "nE": 100, "Emin": -2,
                           "Emax": 120, "restore_neutron": 1},
                 tags=_SAMPLE_REGION, component_name="sample_Emonitor"),
+    MonitorSpec("Pre-analyzer collimation PSD", "PSD_monitor", (0.0, 0.0, 0.45), "analyzer_arm",
+                settings={"xwidth": 1.0, "yheight": 1.0, "nx": 200, "ny": 200,
+                          "restore_neutron": 1},
+                component_name="precollim_PSD"),
+    MonitorSpec("Pre-analyzer EMonitor", "E_monitor", (0.0, 0.0, _L3 - 0.1), "analyzer_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nE": 100,
+                          "Emin": -2, "Emax": 40, "restore_neutron": 1},
+                component_name="preanalyzer_Emonitor"),
+    MonitorSpec("Pre-analyzer PSD", "PSD_monitor", (0.0, 0.0, _L3 - 0.1), "analyzer_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="preanalyzer_PSD"),
+    MonitorSpec("Post-analyzer EMonitor", "E_monitor", (0.0, 0.0, 0.10), "detector_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nE": 100,
+                          "Emin": -2, "Emax": 40, "restore_neutron": 1},
+                component_name="postanalyzer_Emonitor"),
+    MonitorSpec("Post-analyzer PSD", "PSD_monitor", (0.0, 0.0, 0.35), "detector_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="postanalyzer_PSD"),
     MonitorSpec("Detector PSD", "PSD_monitor", (0.0, 0.0, _L4 - 0.005), "detector_arm",
                 settings={"xwidth": 0.06, "yheight": 0.20, "nx": 100, "ny": 100,
                           "restore_neutron": 1},
@@ -275,8 +349,11 @@ def panda_descriptor() -> InstrumentDescriptor:
         primary_detector="detector",
         mcstas_name=PANDA_MCSTAS_NAME,
         monitors=_PANDA_MONITORS,
-        # No NMO, no velocity selector; BAMBUS deferred -> no modules.
-        modules=(),
+        # Experimental velocity selector (not a real PANDA position; see
+        # model.py). BAMBUS is still deferred.
+        modules=(
+            ModuleSpec("v_selector", "Velocity selector", ModuleKind.TOGGLE, default=False),
+        ),
         # Four Soller positions. Unlike IN8, PANDA does have a primary
         # collimator ahead of the monochromator (an automatic changer; the
         # downstream three are changed by hand). vPANDA represents "open" as a
@@ -372,6 +449,7 @@ class PANDAPlugin:
         scan_config.rha = vals['rha']
         scan_config.rva = vals['rva']
         scan_config.sample_key = sample_key
+        scan_config.V_selector_installed = vals['modules'].get('v_selector', False)
         scan_config.alpha_1 = float(collimation['alpha_1'])
         scan_config.alpha_2 = float(collimation['alpha_2'])
         scan_config.alpha_3 = float(collimation['alpha_3'])
@@ -410,6 +488,7 @@ class PANDAPlugin:
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,
             "alpha_4": config.alpha_4,
+            "V_selector_installed": bool(config.V_selector_installed),
             "diagnostic_mode": bool(diagnostic_mode),
             "diagnostic_settings": sorted(
                 (key, bool(value))
@@ -452,9 +531,10 @@ class PANDAPlugin:
         """Build a theoretical-resolution config for PANDA (see contract).
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
-        PANDA has no modules, so no module invalidations arise; a monochromatic
-        source still warns. Unlike IN8 it does carry an alpha_1 slot, so no
-        primary-collimation substitution is needed when one is selected.
+        The velocity-selector module is handled generically by the resolution
+        adapter (it warns that the band-pass is outside the divergence model);
+        a monochromatic source still warns. Unlike IN8 it does carry an alpha_1
+        slot, so no primary-collimation substitution is needed when one is selected.
         """
         from instruments.resolution_adapter import build_resolution_config
 

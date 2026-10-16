@@ -1349,6 +1349,7 @@ Missing keys fall back to instrument defaults.
 
 - `modules` — `{module_id: value}`. On PUMA: `nmo` takes a string from
   `"None" | "Vertical" | "Horizontal" | "Both"`; `v_selector` takes a boolean.
+  On PANDA: `v_selector` takes a boolean (experimental).
   Example: `{"modules": {"nmo": "None", "v_selector": false}}`.
 - `collimation` — `{slot_id: selection}`. On PUMA the slots are `alpha_1`,
   `alpha_2`, `alpha_3`, `alpha_4`. Single-select slots take a string (e.g.
