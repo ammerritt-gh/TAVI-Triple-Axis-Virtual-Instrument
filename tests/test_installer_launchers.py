@@ -2302,6 +2302,39 @@ def test_cancelling_after_an_old_installation_was_removed_says_so(tmp_path, layo
     assert "Continue with TAVI installation? Answer: N" in _text(_install_logs(env)[0])
 
 
+@pytest.mark.parametrize("layout", ["current", "legacy"])
+def test_failing_after_an_old_installation_was_removed_says_so(tmp_path, layout):
+    """Y deletes the old installation, Y continues, then the forced micromamba
+    step fails. The failed screen must say the removal happened, and that nothing
+    of the new install was removed."""
+    if layout == "current":
+        base = _uninstallable_base(tmp_path, "base")
+    else:
+        base = _legacy_base(tmp_path)
+        (base / "run-tavi.bat").write_text("rem stub\n", encoding="utf-8", newline="\n")
+    env = _sandbox_env(tmp_path)
+    # An attended failure opens Notepad. Without notepad.exe under SystemRoot it
+    # stays off the desk; the helpers the installer calls there are copied in.
+    sysroot = tmp_path / "sysroot"
+    (sysroot / "System32").mkdir(parents=True)
+    for name in ("find.exe", "more.com", "where.exe", "ping.exe", "tar.exe"):
+        shutil.copy(os.path.join(os.environ["SYSTEMROOT"], "System32", name),
+                    sysroot / "System32")
+    env["SYSTEMROOT"] = str(sysroot)
+    # The folder for set /p, Y (delete it), Y (continue), then C at the failure screen.
+    keys = tmp_path / "keys.txt"
+    keys.write_bytes(f"{base}\r\nYYC".encode("ascii"))
+    result = run_bat(INSTALL_1_4_0, "/test-fail", "micromamba", env=env, timeout=60,
+                     input_file=keys)
+    out = result.stdout
+    assert result.returncode == 1, out + result.stderr
+    assert "INSTALLATION FAILED" in out, out
+    assert ("The old TAVI installation was removed before this install began. "
+            "Nothing of the new install was removed: what was installed so far "
+            "is still in that folder.") in out, out
+    assert "Nothing was removed: what was installed so far" not in out, out
+
+
 def _fixed_clock(tmp_path, env, stamp="20260101-000000"):
     """The launchers take their log stamp from powershell. A stub on PATH fixes
     it, so a log name can be known in advance and a clash made on purpose."""
