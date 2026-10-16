@@ -66,6 +66,13 @@ def test_a_skipped_point_fails_even_if_the_job_is_done(tmp_path):
     assert not ok and "A4 out of range" in reason
 
 
+@pytest.mark.parametrize("values", ["nan 0.5 625", "12.5 inf 625", "12.5 0.5 nan"])
+def test_a_non_finite_detector_value_fails(tmp_path, values):
+    detector = DETECTOR.replace("12.5 0.5 625", values)
+    ok, reason = _verdict(_point(tmp_path, detector=detector))
+    assert not ok and "non-finite" in reason, reason
+
+
 def test_missing_detector_file_fails(tmp_path):
     ok, reason = _verdict(_point(tmp_path, detector=None))
     assert not ok and "detector.dat" in reason

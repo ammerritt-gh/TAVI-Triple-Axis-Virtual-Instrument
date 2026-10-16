@@ -11121,6 +11121,7 @@ def _self_test_verdict(state, error, executed_mask, skipped_points, output_folde
     point's ``detector.dat`` exists and reads back with ``read_1Ddetector_file``.
     """
     import glob
+    import math
 
     state = str(getattr(state, "value", state))
     if state != JobState.DONE.value:
@@ -11135,11 +11136,15 @@ def _self_test_verdict(state, error, executed_mask, skipped_points, output_folde
     if len(detectors) != 1:
         return False, f"{len(detectors)} detector.dat file(s) found under {output_folder}, expected 1"
     try:
-        _, _, counts = read_1Ddetector_file(os.path.dirname(detectors[0]))
+        intensity, intensity_error, counts = read_1Ddetector_file(os.path.dirname(detectors[0]))
     except Exception as exc:
         return False, f"detector.dat is unreadable: {type(exc).__name__}: {exc}"
     if counts is None:
         return False, f"detector.dat holds no readable detector data: {detectors[0]}"
+    # a numerical failure can write nan or inf in a file that still parses
+    if not all(math.isfinite(v) for v in (intensity, intensity_error, counts)):
+        return False, (f"detector.dat holds a non-finite value (I = {intensity}, "
+                       f"I_err = {intensity_error}, N = {counts}): {detectors[0]}")
     return True, f"detector.dat read back, N = {counts:g}"
 
 
