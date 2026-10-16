@@ -10,7 +10,6 @@ from instruments.descriptor import CurvatureAxis
 from instruments.paths import COMPONENTS_DIR
 from tavi.quantities import crystal_theta
 from instruments.tas_runtime import TAS_Instrument
-from tavi.neutron_conversions import energy2lambda
 from tavi.instrument_helpers import (
     crystal_info_from_descriptor,
     crystal_spec_to_info as _crystal_spec_to_info,
@@ -150,20 +149,8 @@ def _get_E0_param_value(PUMA, deltaE):
 
 
 def _get_v_selector_frequency(PUMA, deltaE):
-    """Return the runtime velocity-selector frequency for the current point."""
-    selector_alpha_rad = math.radians(48.3)
-    selector_length = 0.25
-    # The mono's Ei, as the point records it: fixed_E + deltaE would follow the analyser in angle mode.
-    selector_energy = PUMA.point_energy_metadata(deltaE)["Ei"]
-    if selector_energy is None:
-        # Fallback: the mono transmits, so no crystal selects Ei; K_fixed arithmetic.
-        if PUMA.K_fixed == "Ki Fixed":
-            selector_energy = PUMA.fixed_E
-        else:
-            selector_energy = PUMA.fixed_E + deltaE
-
-    selector_energy = max(selector_energy, 1e-9)
-    return 3956 * selector_alpha_rad / 2 / math.pi / selector_length / energy2lambda(selector_energy)
+    """Back-compat wrapper; the logic lives on TAS_Instrument.v_selector_frequency."""
+    return PUMA.v_selector_frequency(deltaE)
 
 
 def _get_point_energy_metadata(PUMA, deltaE):

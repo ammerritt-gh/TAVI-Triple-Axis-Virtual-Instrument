@@ -157,7 +157,7 @@ state; the method no longer exists, replaced by the one shared producer,
 `TAS_Instrument.ideal_curvature` (`instruments/tas_runtime.py`), driven by each
 crystal's declared `CurvatureAxis` (`docs/INSTRUMENT_AUTHORING.md`).
 `_get_v_selector_frequency`
-(`:480`) hard-codes selector geometry.
+(`:151`) is a wrapper; the selector frequency lives in `TAS_Instrument.v_selector_frequency` (`instruments/tas_runtime.py`).
 
 **D. Per-point parameter snapshot.** `build_puma_point_params()` (`:524`) and
 `compute_scan_snapshot()` (`:557`) emit exactly the PUMA parameter dict. The keys

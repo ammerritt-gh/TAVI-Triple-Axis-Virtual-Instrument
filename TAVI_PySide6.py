@@ -225,6 +225,7 @@ from gui.main_window import TAVIMainWindow
 from gui.field_marks import mark_for, set_group_note
 from gui.dialogs.background_config_dialog import BackgroundConfigDialog
 from gui.dialogs.diagnostic_config_dialog import DiagnosticConfigDialog
+from tavi.instrument_helpers import WAVELENGTH_MONITORS_KEY
 from gui.docks.instrument_dock import FOCUSING_AXES
 
 # Physical constants
@@ -11044,10 +11045,10 @@ class TAVIController(QObject):
         
         # Display diagnostic subplots if in diagnostic mode and any monitors were enabled
         if diagnostic_mode and simulation_error_message is None and not self.stop_event.is_set():
-            # Check if any diagnostic monitors were enabled (excluding Show Instrument Diagram)
+            # Check if any diagnostic monitors were enabled (excluding Show Instrument Diagram and the wavelength choice)
             monitors_enabled = any(
                 enabled for key, enabled in diagnostic_settings.items() 
-                if key != "Show Instrument Diagram" and enabled
+                if key not in ("Show Instrument Diagram", WAVELENGTH_MONITORS_KEY) and enabled
             )
             if monitors_enabled and retained_diagnostic_data is not None and retained_diagnostic_data is not math.nan:
                 # Emit signal to display plots on main thread (matplotlib requires this)

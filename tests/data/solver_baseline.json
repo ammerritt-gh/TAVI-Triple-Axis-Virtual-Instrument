@@ -5665,6 +5665,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 1041.8524972941125
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -5862,6 +5867,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 1041.8524972941125
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -6057,6 +6067,11 @@
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
     },
     {
      "name": "rha_param",
@@ -6286,6 +6301,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -6511,6 +6531,11 @@
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
     },
     {
      "name": "rha_param",
@@ -6740,6 +6765,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -6967,6 +6997,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -7177,6 +7212,11 @@
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
     },
     {
      "name": "rha_param",
@@ -7391,6 +7431,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -7603,6 +7648,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 1041.8524972941125
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -7813,6 +7863,11 @@
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
     },
     {
      "name": "rha_param",
@@ -8042,6 +8097,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -8269,6 +8329,11 @@
      "value": 0.04
     },
     {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 899.9777888949696
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -8494,6 +8559,11 @@
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "nu_param",
+     "role": "nu_param",
+     "value": 1041.8524972941125
     },
     {
      "name": "rha_param",
