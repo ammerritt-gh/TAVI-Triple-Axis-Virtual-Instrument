@@ -41,6 +41,17 @@ def _self_test_isolate(root):
     return work
 
 
+def _self_test_load_failed(exc_type, exc, tb, folder):
+    """``sys.excepthook`` under ``--self-test``: a module-level import failed before ``main()``.
+    Prints the traceback and the verdict line, then exits 1."""
+    import traceback
+    traceback.print_exception(exc_type, exc, tb)
+    sys.stderr.flush()
+    print(f"Throwaway folder kept for diagnosis: {folder}", flush=True)
+    print(f"TAVI SELF-TEST FAILED: TAVI could not load: {exc_type.__name__}: {exc}", flush=True)
+    os._exit(1)
+
+
 # tavi.mcstas_config reads its file path from TAVI_CONFIG_DIR at import, so the
 # isolation has to happen here, before the tavi imports below.
 _SELF_TEST_DIR = None
@@ -51,6 +62,7 @@ if "--self-test" in sys.argv:
         print(f"TAVI SELF-TEST FAILED: could not prepare the throwaway folder: "
               f"{type(_exc).__name__}: {_exc}", flush=True)
         sys.exit(1)
+    sys.excepthook = lambda t, e, tb: _self_test_load_failed(t, e, tb, _SELF_TEST_DIR)
 
 from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
@@ -11141,6 +11153,7 @@ def _self_test_main(qt_args):
     import traceback
     from tavi import crash_log
 
+    sys.excepthook = sys.__excepthook__  # the import-failure hook is for module level only
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")  # a non-ASCII path must not break the verdict line
