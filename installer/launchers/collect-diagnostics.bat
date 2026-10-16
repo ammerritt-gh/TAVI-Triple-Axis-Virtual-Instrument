@@ -70,8 +70,9 @@ set "ZIP=%OUT_DIR%\%NAME%.zip"
 
 echo Collecting the log files...
 :: The logs folder holds only TAVI's own logs. In %TEMP%, where each log falls
-:: back when that folder cannot be written, only stamp-shaped names are taken:
-:: another program's install-*.log is not ours to send.
+:: back when that folder cannot be written, only TAVI's own shapes are taken: a
+:: stamp, or tavi-rnd-digits-digits when PowerShell gave no clock. Another
+:: program's install-*.log is not ours to send.
 set "FOUND="
 set "SRC=%LOG_HOME%"
 set "DST=%STAGE%"
@@ -80,6 +81,8 @@ if defined LOG_HOME call :copy_logs
 set "SRC=%TEMP%"
 set "DST=%STAGE%\temp-fallback"
 set "PATTERN=????????-??????"
+if defined TEMP call :copy_logs
+set "PATTERN=tavi-rnd-*"
 if defined TEMP call :copy_logs
 set "MISSED="
 if not defined FOUND goto no_logs_found
@@ -292,5 +295,5 @@ set "STAMP="
 for /f "delims=" %%S in ('powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd-HHmmss" ^<nul 2^>nul') do set "STAMP=%%S"
 if not defined STAMP set "STAMP=none"
 set STAMP| findstr /r /x /c:"STAMP=[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]-[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]" >nul
-if errorlevel 1 set "STAMP=%RANDOM%-%RANDOM%"
+if errorlevel 1 set "STAMP=tavi-rnd-%RANDOM%-%RANDOM%"
 goto :eof
