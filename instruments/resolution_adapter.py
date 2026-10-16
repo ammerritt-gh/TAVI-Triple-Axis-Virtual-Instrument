@@ -283,12 +283,12 @@ def build_resolution_config(descriptor, vals, q0, w, point_angles=None):
                 "Cooper-Nathans/Popovici divergence model"
             )
             prov["v_selector_installed"] = True
-    if str(vals.get("source_type", "")).lower() == "mono":
+    if vals.get("moderator_mode") == "flat_band":
         warnings.append(
-            "monochromatic source selected: the incident distribution differs "
-            "from the Maxwellian source assumed by the resolution model"
+            "the flat-band source differs from the Maxwellian moderator "
+            "assumed by the resolution model"
         )
-        prov["source_type"] = vals.get("source_type")
+        prov["moderator_mode"] = vals.get("moderator_mode")
 
     return ResolutionConfig(
         dm=dm, da=da,
