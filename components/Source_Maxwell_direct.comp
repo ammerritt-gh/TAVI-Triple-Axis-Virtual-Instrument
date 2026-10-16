@@ -23,7 +23,9 @@
 *
 * Full spectrum (flat_band=0, the default). The flux spectrum is the sum of up
 * to three Maxwellians, exactly the one Source_gen builds from the same T1..T3,
-* I1..I3 (P. Ageron, Nucl. Inst. Meth. A 284 (1989) 197). In wavelength each
+* I1..I3 (P. Ageron, Nucl. Inst. Meth. A 284 (1989) 197), with one difference:
+* Source_gen adds pairs 2 and 3 only when pair 1 is active, while here every
+* pair with T > 0 and I > 0 counts on its own. In wavelength each
 * Maxwellian is normalised to one,
 *   SG(L,T) = 2 a^2 exp(-a/L^2) / L^5,  a = 949/T  (T in K, L in Angstrom),
 * and the flux per steradian, cm^2 and second is the sum of Ii*SG(L,Ti). In
