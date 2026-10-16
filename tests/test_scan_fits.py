@@ -660,7 +660,9 @@ def test_known_api_field_map_keys_are_unchanged():
         'sample', 'monocris', 'anacris',
         'mono_horizontal_radius_m', 'mono_vertical_radius_m',
         'analyzer_horizontal_radius_m', 'analyzer_vertical_radius_m',
-        'source_type', 'source_dE',
+        'moderator_mode', 'moderator_profile', 'moderator_t1_k', 'moderator_i1',
+        'moderator_t2_k', 'moderator_i2', 'moderator_t3_k', 'moderator_i3',
+        'flat_band_half_width_mev',
         'modules', 'collimation',
         'number_neutrons', 'scan_command1', 'scan_command2', 'diagnostic_mode',
     }   # the slit gaps of the active instrument are added from its descriptor
