@@ -65,7 +65,8 @@
 * component, its instance and the parameter with its value on stderr, then
 * exits. It refuses a non-positive xwidth, yheight, focus_aw or focus_ah, a
 * window beyond 360 x 180 deg, any T or I that is negative or not finite, an
-* input with no active pair, a flat_band other than 0 or 1, and, with
+* input with no active pair, an I sum that overflows, a ray weight that is not
+* finite or not positive, a flat_band other than 0 or 1, and, with
 * flat_band=1, a dE or flux that is not positive or an E0-dE that is not
 * positive. In full-spectrum mode E0, dE and flux are neither read nor checked.
 *
@@ -225,6 +226,10 @@ INITIALIZE
       n_pairs++;
     }
   }
+  if (!isfinite(sumI)) {
+    fprintf(stderr, "Source_Maxwell_direct: %s: I1=%g I2=%g I3=%g: their sum overflows\n", NAME_CURRENT_COMP, I1, I2, I3);
+    exit(-1);
+  }
   if (n_pairs == 0) {
     fprintf(stderr, "Source_Maxwell_direct: %s: T1=%g I1=%g T2=%g I2=%g T3=%g I3=%g: no pair has T>0 and I>0\n",
             NAME_CURRENT_COMP, T1, I1, T2, I2, T3, I3);
@@ -249,6 +254,11 @@ INITIALIZE
     p_ray = flux*2*dE*1e4*xwidth*yheight*omega_sr/mcget_ncount();
   else
     p_ray = sumI*1e4*xwidth*yheight*omega_sr/mcget_ncount();
+  if (!(isfinite(p_ray) && p_ray > 0)) {
+    fprintf(stderr, "Source_Maxwell_direct: %s: ray weight %g is not finite and > 0 (I1..I3 sum %g, xwidth=%g, yheight=%g, focus_aw=%g, focus_ah=%g; flat band also flux, dE)\n",
+            NAME_CURRENT_COMP, p_ray, sumI, xwidth, yheight, focus_aw, focus_ah);
+    exit(-1);
+  }
 
   /* distance to the next component, for the display only */
   dist = 0;
