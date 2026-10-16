@@ -179,7 +179,9 @@ if exist "%MARKER%" del /f /q "%MARKER%" 2>nul
 :: The status file and the Doctor's report folders are TAVI's own too; left
 :: behind, they stop the base folder going and a reinstall into it being allowed.
 if exist "%TAVI_BASE%\install-status.txt" del /f /q "%TAVI_BASE%\install-status.txt" 2>nul
-for /d %%D in ("%TAVI_BASE%\tavi_doctor_*") do rd /s /q "%%D" 2>nul
+:: A tavi_doctor_* folder is the Doctor's only when it holds the Doctor's report;
+:: any other folder of that name is the student's, so it stays and is named below.
+for /d %%D in ("%TAVI_BASE%\tavi_doctor_*") do if exist "%%D\TAVI-doctor-report.txt" rd /s /q "%%D" 2>nul
 rd "%TAVI_BASE%" 2>nul
 set "DESK_LEGACY="
 call :remove_desktop_shortcut
