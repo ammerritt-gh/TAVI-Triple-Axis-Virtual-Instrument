@@ -2265,3 +2265,25 @@ def test_replacing_a_legacy_installation_removes_only_its_own_desktop_shortcut(t
     assert "Delete the old installation and continue? Answer: Y" in text, text
     assert "Continue with TAVI installation? Answer: N" in text, text
     assert str(lnk) in text, "the desktop step is not in the log"
+
+
+@pytest.mark.parametrize("layout", ["current", "legacy"])
+def test_cancelling_after_an_old_installation_was_removed_says_so(tmp_path, layout):
+    """Y deletes the old installation, then N at "Continue?" installs nothing.
+    The cancelled screen must say the removal happened, not that nothing was."""
+    if layout == "current":
+        base = _uninstallable_base(tmp_path, "base")
+    else:
+        base = _legacy_base(tmp_path)
+        (base / "run-tavi.bat").write_text("rem stub\n", encoding="utf-8", newline="\n")
+    env = _sandbox_env(tmp_path)
+    # The folder for set /p, then Y (delete it), N (do not continue), C (close).
+    keys = tmp_path / "keys.txt"
+    keys.write_bytes(f"{base}\r\nYNC".encode("ascii"))
+    result = run_bat(INSTALL_1_4_0, env=env, timeout=60, input_file=keys)
+    out = result.stdout
+    assert result.returncode == 0, out + result.stderr
+    assert "INSTALLATION CANCELLED" in out, out
+    assert "The old TAVI installation was removed. Nothing new was installed." in out, out
+    assert "Nothing was installed and nothing was removed." not in out, out
+    assert "Continue with TAVI installation? Answer: N" in _text(_install_logs(env)[0])
