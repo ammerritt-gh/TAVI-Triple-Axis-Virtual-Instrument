@@ -161,8 +161,9 @@ never reweights a ray by its energy, direction or position (decision 1 below).
 Invalid input stops the run: INITIALIZE prints the component, the instance and
 the parameter with its value on stderr and exits. It refuses a non-positive or
 non-finite `xwidth`, `yheight`, `focus_aw`, `focus_ah`, or a window beyond 360 x 180
-deg; a negative or non-finite T or I; no active pair; an I sum that overflows; a ray
-weight that is not finite or not positive; `flat_band` other than 0 or 1; and, with
+deg; a negative or non-finite T or I; no active pair; an I sum that overflows; an
+active pair whose energy scale is not finite; a ray weight that is not finite
+or not positive; `flat_band` other than 0 or 1; and, with
 `flat_band=1`, a `dE` or `flux` that is not positive, or `E0 - dE <= 0`.
 
 ### Facility table

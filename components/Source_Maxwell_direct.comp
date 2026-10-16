@@ -65,7 +65,8 @@
 * component, its instance and the parameter with its value on stderr, then
 * exits. It refuses a non-positive xwidth, yheight, focus_aw or focus_ah, a
 * window beyond 360 x 180 deg, any T or I that is negative or not finite, an
-* input with no active pair, an I sum that overflows, a ray weight that is not
+* input with no active pair, an I sum that overflows, an active pair whose
+* energy scale is not finite, a ray weight that is not
 * finite or not positive, a flat_band other than 0 or 1, and, with
 * flat_band=1, a dE or flux that is not positive or an E0-dE that is not
 * positive. In full-spectrum mode E0, dE and flux are neither read nor checked.
@@ -199,6 +200,7 @@ INITIALIZE
   double Tv[3], Iv[3];
   double sumI = 0, omega_sr, c_e;
   int k;
+  static const char *tname[3] = {"T1", "T2", "T3"};
 
   Tv[0] = T1; Tv[1] = T2; Tv[2] = T3;
   Iv[0] = I1; Iv[1] = I2; Iv[2] = I3;
@@ -212,7 +214,6 @@ INITIALIZE
   if (flat_band != 0 && flat_band != 1) smd_refuse(NAME_CURRENT_COMP, "flat_band", flat_band, "must be 0 (full spectrum) or 1 (flat band)");
 
   for (k = 0; k < 3; k++) {
-    static const char *tname[3] = {"T1", "T2", "T3"};
     static const char *iname[3] = {"I1", "I2", "I3"};
     if (!(isfinite(Tv[k]) && Tv[k] >= 0)) smd_refuse(NAME_CURRENT_COMP, tname[k], Tv[k], "must be finite and >= 0");
     if (!(isfinite(Iv[k]) && Iv[k] >= 0)) smd_refuse(NAME_CURRENT_COMP, iname[k], Iv[k], "must be finite and >= 0");
@@ -224,6 +225,7 @@ INITIALIZE
   for (k = 0; k < 3; k++) {
     if (Tv[k] > 0 && Iv[k] > 0) {
       pair_theta[n_pairs] = c_e*Tv[k]/949.0;
+      if (!isfinite(pair_theta[n_pairs])) smd_refuse(NAME_CURRENT_COMP, tname[k], Tv[k], "gives an energy scale that is not finite");
       pair_cum[n_pairs]   = Iv[k];
       sumI += Iv[k];
       n_pairs++;
