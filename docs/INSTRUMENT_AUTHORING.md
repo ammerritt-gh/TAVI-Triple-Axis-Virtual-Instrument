@@ -71,7 +71,9 @@ plugins, but built-in packages use the central path.
 1. **Descriptor** — write `<id>_descriptor()` returning an
    `InstrumentDescriptor` (`instruments/descriptor.py`): geometry + senses,
    crystals, `samples=default_sample_library()`, scannable parameters,
-   monitors, collimation, slits, source types, axis limits, and the sample
+   monitors, collimation, slits, `default_moderator_profile` (the id in
+   `instruments/source.py` `PROFILES` of the moderator this instrument views),
+   axis limits, and the sample
    stage: `goniometer=tas_goniometer(arc_travel)` with the arcs' travel from
    a cited source, or `tas_goniometer()` (undocumented, unlimited) when none
    exists — say which in `MODEL_STATUS.md`; never invent a limit.
@@ -107,7 +109,9 @@ plugins, but built-in packages use the central path.
    failure. Run `python -m instruments._descriptor_examples` for a printout.
 3. **State class** — subclass `TAS_Instrument`
    (`instruments/tas_runtime.py`): set L1–L4, the senses, and
-   instrument fields in `__init__`; implement `crystal_info()` and
+   instrument fields in `__init__`, and call `self.reset_source()` there (it
+   fills the nine source values from the descriptor's
+   `default_moderator_profile`); implement `crystal_info()` and
    `build_point_params()`. The angle fields are the canonical IDs
    (`mono_two_theta_deg`, `sample_two_theta_deg`, `sample_rotation_deg`,
    `analyzer_two_theta_deg`), not the ILL labels A2, A4, A3 and A6 they stand for.
@@ -120,10 +124,13 @@ plugins, but built-in packages use the central path.
 4. **`build_<ID>_instrument()`** — the McStas component tree, in beam order,
    through the shared emitters of `tavi/instrument_helpers.py` wherever a
    category exists there. `add_parameter` names must match the descriptor's
-   `scannable_parameters` 1:1 (build-tree test).
+   `scannable_parameters` 1:1 (build-tree test). The source is added with
+   `tas_runtime.add_source(...)`, which declares `descriptor.SOURCE_PARAMS`
+   (the plugin splices the same tuple into its `scannable_parameters`) and
+   `build_point_params` merges `self.source_point_params()`.
 5. **Plugin** — `<ID>Plugin` in `instruments/<id>/plugin.py`, implementing
    `instruments/contract.py`: class attributes `id`, `display_name` and
-   `CONTRACT_VERSION = 1`; methods `descriptor`, `capabilities`, `default_state`,
+   `CONTRACT_VERSION = 2`; methods `descriptor`, `capabilities`, `default_state`,
    `scan_config` (the GUI→state mapping), `crystal_info`, `build_fingerprint`,
    `check_point_feasibility`, and function-local delegations for
    `build`/`compute_snapshot`/`run_point`. The contract is described in
@@ -181,7 +188,8 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
 | No reflectivity file? | use the McStas sentinel string `"NULL"` (constant r0) — a non-None string satisfies the validator and `Monochromator_curved` treats it as "no file" |
 | mcstas_name | set, valid C identifier |
 | component_path | must exist **if set**; `None` is fine (build passes `input_path` itself) |
-| Non-empty | mono/ana crystals, samples, source_types, scannable_parameters. `monitors`/`modules`/`collimation`/`slits` MAY be empty |
+| Non-empty | mono/ana crystals, samples, scannable_parameters. `monitors`/`modules`/`collimation`/`slits` MAY be empty |
+| Moderator | `default_moderator_profile` names a profile of `instruments.source.PROFILES` |
 
 ## Scattering senses and signed bending
 
@@ -207,7 +215,7 @@ defaults in options, L2–L4 finite > 0, axis-limit ordering, senses are
 
 ## The point contract
 
-The contract is `CONTRACT_VERSION = 1` (`instruments/contract.py`). Three things
+The contract is `CONTRACT_VERSION = 2` (`instruments/contract.py`; version 2 replaced the descriptor's `source_types` by `default_moderator_profile` and added the nine source values to the state and to `vals`). Three things
 are kept apart, and an author declares each one separately.
 
 **(a) The scientific quantities: the registry.** `tavi/quantities.py` names every
@@ -259,7 +267,7 @@ scanned or written, and the runtime ignores them.
 `registry.register()` reads it from the factory class (or, for a lambda or partial
 without one, from the plugin it builds) and refuses a plugin whose value is missing
 or differs, for example
-`plugin 'x' (MyPlugin) declares CONTRACT_VERSION 2; TAVI supports CONTRACT_VERSION 1`.
+`plugin 'x' (MyPlugin) declares CONTRACT_VERSION 1; TAVI supports CONTRACT_VERSION 2`.
 A refused plugin is not registered; for a built-in, startup stops with that error.
 Bump the version only for an incompatible change to this contract, and update
 every plugin in the same change.
@@ -275,8 +283,10 @@ read `vals`, the launch's value dict (`gui_values` in `scan_config`, `vals` in
 `compute_snapshot` and `resolution_config`). Its keys are the internal names that
 `tavi/quantities.py` maps to canonical IDs (`_INTERNAL`: `mtt`, `stt`, `omega`, `att`,
 `H`, `K`, `L`, `rhm`..`rva`, the lattice fields), plus `K_fixed`, `fixed_E`, `monocris`,
-`anacris`, `slits_mm`, `collimation`, `source_type`, `source_dE`, `modules` and
-`curvature_modes`. That shape is part of contract v1: changing it bumps
+`anacris`, `slits_mm`, `collimation`, the nine source values
+(`instruments.source.FIELD_IDS`: `moderator_mode`, `moderator_profile`,
+`moderator_t1_k` .. `moderator_i3`, `flat_band_half_width_mev`), `modules` and
+`curvature_modes`. That shape is part of contract v2: changing it bumps
 `CONTRACT_VERSION`. The positional scan-slot layout was removed in U3.
 
 **Point metadata.** `PointSnapshot.metadata` keeps internal names in memory, and the

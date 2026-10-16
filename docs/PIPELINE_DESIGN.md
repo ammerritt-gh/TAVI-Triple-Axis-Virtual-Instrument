@@ -145,13 +145,14 @@ Build-time (affect component tree / require recompilation):
 - sample_key — selects which sample component (Phonon_simple, Single_crystal, Phonon_DFT, etc.)
 - Collimator selection (alpha_1, alpha_2 list, alpha_3, alpha_4) — alpha_2 controls which collimator components are present
 - V_selector_installed — controls whether velocity selector component is added
-- source_type, source_dE — affect source component configuration
+- the hash of `components/Source_Maxwell_direct.comp` — an edited component file is recompiled (the source values themselves are per-point, below)
 - diagnostic_mode, diagnostic_settings — control which monitor components are added
 
 Per-point (McStas parameters, set via `set_parameters()`):
 - mono_two_theta_param, sample_two_theta_param, sample_rotation_param, analyzer_two_theta_param
 - mono_theta_param, analyzer_theta_param (the crystal cradles' rotation)
 - E0_param
+- moderator_flat_band_param, moderator_t1_param .. moderator_i3_param, flat_band_de_param (the source: mode, facility spectrum and flat-band half-width, so a source change never recompiles)
 - rhm_param, rvm_param, rha_param, rva_param
 - vbl_hgap_param, pbl_hgap_param, pbl_vgap_param, dbl_hgap_param
 - sample_rx_param, sample_ry_param, sample_rz_param (the single sample arm)

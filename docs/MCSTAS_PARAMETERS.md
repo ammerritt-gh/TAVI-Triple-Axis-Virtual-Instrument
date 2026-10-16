@@ -190,9 +190,24 @@ plane, c completing it: `tavi/sample_mount.py` `reciprocal_basis_tas`), or its
 crystal axes will not be where the UB says.
 
 ### Source Parameters
+The source is `Source_Maxwell_direct`. Every value below is a run-time parameter, so a
+change of mode, facility entry, temperature, flux or half-width never recompiles
+(`tas_runtime.add_source` declares them, `TAS_Instrument.source_point_params` fills them).
+In full-spectrum mode they are the facility spectrum alone: no scan or instrument setting
+(Ei, kf, the fixed side, the point) reaches them, and the component ignores `E0_param` and
+`flat_band_de_param`.
+
 | Parameter | Description | Used By |
 |-----------|-------------|---------|
-| `E0_param` | Source energy (meV) for the monochromatic source | `source.E0` |
+| `moderator_flat_band_param` | `0` full spectrum, `1` unphysical flat band | `source.flat_band` |
+| `moderator_t1_param` .. `moderator_t3_param` | Moderator temperatures (K); `0` = unused | `source.T1` .. `source.T3` |
+| `moderator_i1_param` .. `moderator_i3_param` | Integrated fluxes (n/cm²/s/sr), as `Source_gen`; `0` = unused | `source.I1` .. `source.I3` |
+| `flat_band_de_param` | Flat-band half-width dE (meV), read only in flat-band mode | `source.dE` |
+| `E0_param` | Flat-band centre (meV): Ei in flat-band mode, `fixed_E` otherwise; read only in flat-band mode | `source.E0` |
+
+### Other Parameters
+| Parameter | Description | Used By |
+|-----------|-------------|---------|
 | `nu_param` | Velocity selector frequency | `v_selector` component (only when `V_selector_installed`) |
 
 ## What Requires Recompilation
@@ -204,7 +219,7 @@ The following changes **always require recompilation** because they are baked in
 - **Velocity selector**: enabling/disabling
 - **Collimators**: `alpha_1`, the installed `alpha_2` set (30', 40', 60'), `alpha_3`, `alpha_4`
 - **Crystals**: `monocris`, `anacris` (baked into the component tree at build time)
-- **Source**: `source_type`, `source_dE`
+- **Source**: only the hash of `components/Source_Maxwell_direct.comp`, so an edited component file is recompiled; the source values themselves are run-time parameters (see Source Parameters)
 - **Sample type**: changing the sample component (`sample_key`)
 
 These are typically configuration changes made between scans, not during scans, so recompilation is acceptable.

@@ -17,6 +17,13 @@
 > (`mono_two_theta_param`, and so on). The scan-slot layout this record describes was removed
 > in U3; the author contract is in `docs/INSTRUMENT_AUTHORING.md` (The point contract).
 
+> **Source (2026-10-16).** `Source_div_Maxwellian_v2`, `SourceType` and the
+> descriptor's `source_types` of the sections below were replaced by
+> `Source_Maxwell_direct` and the descriptor field `default_moderator_profile`
+> (author contract version 2; `docs/INSTRUMENT_AUTHORING.md`,
+> `docs/MCSTAS_PARAMETERS.md` "Source Parameters"). Sections below that name the
+> old source are the record as it was written.
+
 **Status:** Design decided; Phase-0 drafted; review §15 folded in (§16);
 Phase 1 + 1.5 IMPLEMENTED (2026-07-02, spec §17). **Phase 2 IMPLEMENTED
 (2026-07-02, spec §18):** the GUI renders from the descriptor (instrument dock,

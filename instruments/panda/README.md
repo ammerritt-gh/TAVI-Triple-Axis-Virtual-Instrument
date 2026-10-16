@@ -17,9 +17,10 @@ the literature documents rather than the one that will come back online. See
 
 What is in the beam, in order:
 
-1. **Source** at the SR-2 guide exit — a Maxwellian (or monochromatic) source
-   with the guide's exit aperture, 107 × 138 mm. Guide transport upstream of
-   this plane is not simulated; it is folded into the spectrum.
+1. **Source** at the SR-2 guide exit — `Source_Maxwell_direct`, by default the
+   FRM2 cold-source spectrum (any facility entry, or an unphysical flat band, can
+   be chosen), with the guide's exit aperture, 107 × 138 mm. Guide transport
+   upstream of this plane is not simulated.
 2. **Primary Soller `ca1`** — 20′/40′/60′ or open, 0.50 m long. On the real
    instrument this is the automatic changer; the three downstream collimators
    are changed by hand.
@@ -44,7 +45,7 @@ The experimental **velocity selector** (module `v_selector`, off by default) is 
 
 The **diagnostic monitor suite** is 21 PUMA-style monitors at the beam stations from the source to the detector, each switched on in the diagnostic options dialog; its energy monitors follow the dialog's energy/wavelength choice, and with wavelength chosen each is emitted as an L_monitor.
 
-Component dependencies: `Source_div_Maxwellian_v2` from the central
+Component dependencies: `Source_Maxwell_direct` from the central
 `components/` tree; `Monochromator_curved`, `Collimator_linear`, `V_selector`, `Slit`,
 `Monitor`, `PSD_monitor`, `E_monitor`, `L_monitor`, `Divergence_monitor` and the sample
 components from stock McStas. `HOPG.rfl` / `HOPG.trm` resolve from the McStas
