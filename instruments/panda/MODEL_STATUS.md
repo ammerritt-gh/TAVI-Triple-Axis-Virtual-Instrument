@@ -79,6 +79,18 @@ conventions and the mechanical bending limits remain unconfirmed.
 | Analyzer vertical curvature | fixed at −0.60 m | **Fixed vertical / variable horizontal is confirmed** by two peer-reviewed PANDA papers, one of which ties the fixed vertical geometry to the vertically oriented 1″ ³He detector, and by the MLZ page advertising only variable horizontal focusing. | the *fixedness* is now well supported; the **radius is not** — no source gives it, and −0.60 m is our point-focus value for kf = 1.55 Å⁻¹ |
 | Bending minimum radii | none applied | No published minimum or maximum radius for either crystal was found. The 2007 reporting confirms driven focusing existed, but gives no travel. Applying no clamp is the deliberate choice: inventing one would be worse, and the monochromator is new anyway. | missing — confirmed absent from the literature, not merely unlocated |
 
+## Experimental velocity selector and diagnostic monitors
+
+Both are modelling additions. The selector is off by default and is not a real PANDA position; the monitors change no angle and are switched on one by one.
+
+| Area | Value in TAVI | Source | Confidence |
+|---|---|---|---|
+| Velocity selector (module `v_selector`, off by default) | McStas `V_selector` with PUMA's rotor and sizing: `xwidth` 0.100 m, `yheight` 0.040 m, `zdepth` 0.310 m, `radius` 0.290 m, `length` 0.25 m, `nslit` 72, `d` 0.004 m, `alpha` 48.3°. Centred 0.80 m past the guide exit, after the primary Soller; the Soller stays at its real 0.10-0.60 m, and the housing spans 0.645-0.955 m. Speed `nu` comes from each point's Ei through the shared `TAS_Instrument.v_selector_frequency`, which falls back to the typed energy fields when the monochromator transmits. | Rotor and sizing copied from PUMA's model; the position is ours. Real PANDA has no selector at this position. | experimental: a modelling choice, not hardware |
+| Selector clipping | The 40 mm window against the 138 mm guide-exit height clips about 70% (1 - 40/138, about 71%). This compares two heights; it is not a beam profile taken at the selector. | Geometry | arithmetic good; the physical effect is only as good as the McStas model |
+| Selector transmission | McStas `V_selector`'s own model only. No tilt and no further transmission model is added. | McStas component | as good as that component |
+| Diagnostic monitors (21) | PUMA-style monitors at the beam stations from source to detector: source; virtual source; premono and postmono; pre-sample collimation and the sample region; pre-analyser; post-analyser; detector. Each is switched on in the diagnostic options dialog. Crystal-face monitors take the selected crystal's slab size. Energy monitors sit at the source, premono, postmono, sample, pre-analyser and post-analyser; the monochromator-side windows run -2 to 120 meV and the analyser-side windows -2 to 40 meV, which covers the MLZ reference's PG(002) analyser range of 2.3-33.2 meV. | Positions are simulation placements, not surveyed hardware. | provisional |
+| Monitor scope | Energy-axis monitors only. Wavelength monitors are not in this suite; they belong to a separate job. | Scope decision | not a physics claim |
+
 ## `vPANDA` defects, and how each was handled
 
 The 0.1.0 status recorded seven interface and geometry defects in the retained

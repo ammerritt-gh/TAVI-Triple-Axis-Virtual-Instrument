@@ -40,8 +40,12 @@ What is in the beam, in order:
 8. **Soller `ca4`, detector** — the 1″ high-pressure ³He tube used in the
    focusing configuration, 25 × 100 mm.
 
+The experimental **velocity selector** (module `v_selector`, off by default) is a McStas `V_selector` 0.80 m past the guide exit, after the primary Soller, with its speed set from each point's incident energy; real PANDA has no selector at that position.
+
+The **diagnostic monitor suite** is 21 PUMA-style monitors at the beam stations from the source to the detector, each switched on in the diagnostic options dialog, with energy-axis monitors only and no wavelength monitors.
+
 Component dependencies: `Source_div_Maxwellian_v2` from the central
-`components/` tree; `Monochromator_curved`, `Collimator_linear`, `Slit`,
+`components/` tree; `Monochromator_curved`, `Collimator_linear`, `V_selector`, `Slit`,
 `Monitor`, `PSD_monitor`, `E_monitor`, `Divergence_monitor` and the sample
 components from stock McStas. `HOPG.rfl` / `HOPG.trm` resolve from the McStas
 data directory. This package adds no assets of its own.
