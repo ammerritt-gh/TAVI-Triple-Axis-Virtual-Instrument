@@ -48,7 +48,7 @@ Your last screen says one of these. Only the `C` key closes that window; other k
 |----------|---------------|
 | `INSTALLATION SUCCEEDED` | TAVI is installed and its test simulation worked. Start it from the TAVI Launcher. |
 | `INSTALLATION FAILED` | A step did not finish. The screen names the step and the error, and says what was removed (see below). Nothing of the new install is removed: what was installed so far stays in the TAVI folder. |
-| `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED` | TAVI is installed and will open, but its test simulation did not work, so simulations will probably fail too. The screen says `Nothing was removed: TAVI is fully installed in that folder.` and how to start it from the TAVI Launcher. |
+| `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED` | TAVI is installed and will open, but its test simulation did not work, so simulations will probably fail too. The screen says `Nothing was removed: TAVI is fully installed in that folder.` (or, when an older installation was replaced, that it was removed and the new TAVI is fully installed) and how to start it from the TAVI Launcher. |
 | `INSTALLATION CANCELLED` | You answered No to "Continue with TAVI installation?". Nothing new was installed, and it is not a failure. |
 
 On a failure, the last lines of the install log appear on screen and Notepad opens the full log. The screen offers **D**: press D to collect diagnostics for support, which makes the zip described under Troubleshooting. The screen then comes back; press **C** to close it.
