@@ -929,6 +929,9 @@ def _diagnostics_env(tmp_path):
     # The fallback when PowerShell gives no clock: TAVI's own shape, taken.
     with open(os.path.join(env["TEMP"], "install-tavi-rnd-12345-6789.log"), "w", encoding="utf-8") as fh:
         fh.write("fallback, no clock\n")
+    # A same-second clash: the stamp with run-tavi's %RANDOM% suffix, also TAVI's.
+    with open(os.path.join(env["TEMP"], "install-20261016-091500-1234.log"), "w", encoding="utf-8") as fh:
+        fh.write("fallback, clashed\n")
     # A bare %RANDOM% name is not TAVI's shape, so it is left alone.
     with open(os.path.join(env["TEMP"], "install-12345-6789.log"), "w", encoding="utf-8") as fh:
         fh.write("another program's log\n")
@@ -960,7 +963,8 @@ def test_collect_diagnostics_quiet_zips_the_logs_and_the_doctor_report(tmp_path,
         for expected in ("INSTALL_INFO.txt", "install-status.txt", "compile_check-serial.log",
                          "TAVI-doctor-report.txt", "TAVI-doctor-summary.txt", "collected.txt",
                          "temp-fallback/install-20261016-091500.log",
-                         "temp-fallback/install-tavi-rnd-12345-6789.log"):
+                         "temp-fallback/install-tavi-rnd-12345-6789.log",
+                         "temp-fallback/install-20261016-091500-1234.log"):
             assert expected in by_tail, (expected, names)
         assert not any(name.endswith(("install-other.log", "install-12345-6789.log"))
                        for name in names), names
