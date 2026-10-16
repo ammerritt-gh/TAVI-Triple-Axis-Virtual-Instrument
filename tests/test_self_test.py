@@ -4,6 +4,7 @@ No McStas runs here; the live run is part of the unit review. The verdict is a
 pure function of the job's end state and the files the point left behind, so each
 way a point can fail to count is built here as a small folder.
 """
+import ast
 import os
 
 import pytest
@@ -155,3 +156,14 @@ def test_import_failure_under_self_test_prints_the_verdict_and_exits_1(tmp_path,
     assert "ImportError" in err  # the traceback still shows
     assert f"Throwaway folder kept for diagnosis: {tmp_path}" in out
     assert "TAVI SELF-TEST FAILED: TAVI could not load: ImportError: no module named widgets" in out
+
+
+def test_numpy_and_mcstasscript_import_after_the_failure_hook():
+    # a failed numpy or mcstasscript import must still end with the verdict line, so both load after the hook
+    tree = ast.parse(open(cm.__file__, encoding="utf-8").read())
+    hook = next(n.lineno for n in ast.walk(tree)
+                if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) == "sys.excepthook")
+    imported = {alias.name: n.lineno for n in tree.body if isinstance(n, ast.Import)
+                for alias in n.names}
+    assert imported["numpy"] > hook
+    assert imported["mcstasscript"] > hook

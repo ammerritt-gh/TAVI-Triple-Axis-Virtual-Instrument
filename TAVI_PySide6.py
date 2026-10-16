@@ -12,8 +12,6 @@ import copy
 import threading
 import queue
 import math
-import numpy as np
-import mcstasscript as ms
 import tempfile
 
 
@@ -66,6 +64,8 @@ if "--self-test" in sys.argv:
 
 from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
+import numpy as np
+import mcstasscript as ms
 
 # Import the instrument contract (the concrete instrument arrives via main())
 from tavi.local_state import config_path as local_config_path
