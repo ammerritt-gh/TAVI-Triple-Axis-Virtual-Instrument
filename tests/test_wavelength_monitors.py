@@ -1,7 +1,8 @@
 """Energy monitors recorded as wavelength monitors (u1 of job j43f00d74e4b3).
 
 With the diagnostic setting "Wavelength Monitors" true, each enabled E_monitor
-is emitted as an L_monitor under the same name, placement and size; absent or
+is emitted as an L_monitor at the same placement and size, its name carrying
+"Lmonitor" for "Emonitor" (job j7e540e562b4f); absent or
 false is today's tree. The fake-instrument tests cover all four plugin monitor
 tables and need no McStasScript. The real PUMA build is skipped where
 mcstasscript does not import. Construction only: no McStas compile or run.
@@ -61,6 +62,13 @@ def _one(spec, wavelength):
     return _emit([spec], _enabled([spec], wavelength))[0]
 
 
+def _wave_name(spec):
+    """The name a spec's component carries in wavelength mode."""
+    if spec.component_type != "E_monitor":
+        return spec.component_name
+    return spec.component_name.replace("Emonitor", "Lmonitor")
+
+
 @pytest.mark.parametrize("table", TABLES)
 def test_key_absent_and_false_emit_energy_monitors_unchanged(table):
     absent = _emit(table, _enabled(table))
@@ -78,11 +86,12 @@ def test_key_absent_and_false_emit_energy_monitors_unchanged(table):
 def test_key_true_swaps_each_energy_monitor_in_place(table):
     energy = _emit(table, _enabled(table))
     wave = _emit(table, _enabled(table, wavelength=True))
-    assert ([(c.name, c.AT, c.ROTATED, c.RELATIVE) for c in wave]
-            == [(c.name, c.AT, c.ROTATED, c.RELATIVE) for c in energy])
+    assert ([(c.AT, c.ROTATED, c.RELATIVE) for c in wave]
+            == [(c.AT, c.ROTATED, c.RELATIVE) for c in energy])
+    assert [c.name for c in wave] == [_wave_name(spec) for spec in table]
     by_name = {c.name: c for c in wave}
     for spec in table:
-        comp = by_name[spec.component_name]
+        comp = by_name[_wave_name(spec)]
         if spec.component_type != "E_monitor":
             assert comp.component_type == spec.component_type
             continue
@@ -95,6 +104,22 @@ def test_key_true_swaps_each_energy_monitor_in_place(table):
         assert comp.Lmax == 10.0
         for key in ("xwidth", "yheight", "restore_neutron"):
             assert getattr(comp, key) == spec.settings[key]
+
+
+@pytest.mark.parametrize("table", TABLES)
+def test_key_true_names_every_wavelength_monitor_lmonitor(table):
+    wave = _emit(table, _enabled(table, wavelength=True))
+    energy_names = {spec.component_name for spec in table if spec.component_type == "E_monitor"}
+    lmonitors = [c.name for c in wave if c.component_type == "L_monitor"]
+    assert lmonitors and all("Lmonitor" in n and n not in energy_names for n in lmonitors)
+    assert len({c.name for c in wave}) == len(wave)
+
+
+def test_name_without_emonitor_still_gets_a_wavelength_name():
+    spec = MonitorSpec("probe", "E_monitor", (0.0, 0.0, 0.1), "origin",
+                       settings=_probe().settings, component_name="probe_energy")
+    assert _one(spec, True).name == "probe_energy_Lmonitor"
+    assert _one(spec, False).name == "probe_energy"
 
 
 @pytest.mark.parametrize("emax, lambda_a", [(200, 0.64), (120, 0.83), (60, 1.17), (30, 1.65)])
@@ -177,9 +202,10 @@ def test_real_build_key_absent_and_false_are_the_same_tree(puma_absent, puma_fal
 def test_real_build_key_true_swaps_the_six_puma_energy_monitors(puma_absent, puma_wave):
     before = {c.name: c for c in puma_absent.component_list}
     after = {c.name: c for c in puma_wave.component_list}
-    assert set(before) == set(after)
+    assert {_wave_name(spec) for spec in _PUMA_MONITORS} <= set(after)
+    assert len(after) == len(before)
     for spec in _PUMA_MONITORS:
-        comp = after[spec.component_name]
+        comp = after[_wave_name(spec)]
         if spec.component_type != "E_monitor":
             assert comp.component_name == spec.component_type
             continue
@@ -195,7 +221,7 @@ def test_real_build_key_true_swaps_the_six_puma_energy_monitors(puma_absent, pum
 
 
 def test_real_build_postmono_keeps_crystal_size_as_wavelength_monitor(puma_wave):
-    comp = {c.name: c for c in puma_wave.component_list}["postmono_Emonitor"]
+    comp = {c.name: c for c in puma_wave.component_list}["postmono_Lmonitor"]
     assert comp.component_name == "L_monitor"
     assert comp.xwidth == 0.0202 * 13
     assert comp.yheight == 0.018 * 9
