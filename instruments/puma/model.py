@@ -9,7 +9,7 @@ import mcstasscript as ms
 from instruments.descriptor import CurvatureAxis
 from instruments.paths import COMPONENTS_DIR
 from tavi.quantities import crystal_theta
-from instruments.tas_runtime import TAS_Instrument
+from instruments.tas_runtime import TAS_Instrument, add_source
 from tavi.instrument_helpers import (
     crystal_info_from_descriptor,
     crystal_spec_to_info as _crystal_spec_to_info,
@@ -68,8 +68,7 @@ class PUMA_Instrument(TAS_Instrument):
         self.rva = 0 # analyzer mirror radius of curvature - vertical
         self.NMO_installed = "None"
         self.V_selector_installed = False
-        self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
-        self.source_dE = 2  # Energy half-spread for Mono source (meV)
+        self.reset_source()
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -177,6 +176,7 @@ def build_puma_point_params(PUMA, deltaE):
         "pbl_hgap_param": PUMA.pbl_hgap,
         "pbl_vgap_param": PUMA.pbl_vgap,
         "dbl_hgap_param": PUMA.dbl_hgap,
+        **PUMA.source_point_params(),
         **PUMA.sample_orientation_params(),
     }
 
@@ -210,7 +210,7 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
     instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
     instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
-    instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("E0_param", comment="Flat-band centre energy (meV); read only in flat-band mode.")
     instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -272,22 +272,10 @@ def build_PUMA_instrument(puma_config, diagnostic_mode, diagnostic_settings, num
         mono_width = monochromator_info['slabwidth']*monochromator_info['ncolumns'] + monochromator_info['gap']*(monochromator_info['ncolumns']-1)
         mono_height  =  monochromator_info['slabheight']*monochromator_info['nrows'] + monochromator_info['gap']*(monochromator_info['nrows']-1)
 
-        source = instrument.add_component("source", "Source_div_Maxwellian_v2")
-        source.xwidth= PUMA.hbl_hgap
-        source.yheight= PUMA.hbl_vgap
-        source.focus_aw=2*math.degrees(math.atan(mono_width/2/PUMA.L1)) # Want to completely illuminate the monochromator # FULL width half maximum, so multiply angle by x2
-        source.focus_ah=2*math.degrees(math.atan(mono_height/2/PUMA.L1))
-        # Source type: Mono (uniform, energy_distribution=0) or Maxwellian (energy_distribution=2)
-        if PUMA.source_type == "Mono":
-            source.energy_distribution = 0  # Uniform energy distribution
-            source.dE = PUMA.source_dE  # User-configurable energy half-spread for Mono
-            # Use E0_param for source energy (allows runtime adjustment without recompilation)
-            source.E0 = "E0_param"
-        else:  # Maxwellian
-            source.energy_distribution = 2  # Maxwellian energy distribution
-            source.dE = 3  # Default for Maxwellian (not used for sampling but affects weight)
-            source.E0 = "E0_param"  # Use E0_param for source energy (allows runtime adjustment without recompilation)
-        source.divergence_distribution=0
+        # Want to completely illuminate the monochromator; focus_aw/ah are FULL widths, so multiply the half angle by x2
+        add_source(instrument, PUMA.hbl_hgap, PUMA.hbl_vgap,
+                   2*math.degrees(math.atan(mono_width/2/PUMA.L1)),
+                   2*math.degrees(math.atan(mono_height/2/PUMA.L1)))
 
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 

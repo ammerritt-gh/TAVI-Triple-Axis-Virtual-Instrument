@@ -33,7 +33,7 @@ from instruments.descriptor import (
     ParameterSpec,
     Sense,
     SlitSpec,
-    SourceType,
+    SOURCE_PARAMS,
     tas_goniometer,
 )
 from tavi.quantities import slit_gap_id
@@ -64,7 +64,8 @@ _PUMA_PARAMS = (
                   quantity="mono_theta_deg"),
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
-    ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("E0_param", "Flat-band centre energy, read only in flat-band mode", unit="meV"),
+    *SOURCE_PARAMS,
     ParameterSpec("nu_param", "Velocity selector frequency"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending",
                   quantity="applied_mono_horizontal_radius_m"),
@@ -161,8 +162,8 @@ _SAMPLE_REGION = ("sample_region",)
 # INTENDED sizes; build() is fixed in Phase 3 when it loops over this table.
 _PUMA_MONITORS = (
     MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.144), "origin",
-                settings={"xwidth": 0.2, "yheight": 0.2, "nE": 100, "Emin": -2,
-                          "Emax": 200, "restore_neutron": 1},
+                settings={"xwidth": 0.2, "yheight": 0.2, "nE": 150, "Emin": 0,
+                          "Emax": 300, "restore_neutron": 1},
                 component_name="source_Emonitor"),
     MonitorSpec("Source PSD", "PSD_monitor", (0.0, 0.0, 0.145), "origin",
                 settings={"xwidth": _HBL_HGAP * 1.5, "yheight": _HBL_VGAP * 1.5,
@@ -321,10 +322,7 @@ def puma_descriptor() -> InstrumentDescriptor:
             SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50,
                      stable_id="detector"),
         ),
-        source_types=(
-            SourceType("Maxwellian", "Maxwellian"),
-            SourceType("Mono", "Mono", extra_params=("source_dE",)),
-        ),
+        default_moderator_profile="frm2_thermal",
         # Sample goniometer +/-20 deg: the MLZ PUMA page's tilt and
         # translation goniometer, read 2026-10-01 (MODEL_STATUS.md).
         goniometer=tas_goniometer(20.0),
@@ -341,7 +339,7 @@ class PUMAPlugin:
 
     id = PUMA_ID
     display_name = PUMA_DISPLAY_NAME
-    CONTRACT_VERSION = 1
+    CONTRACT_VERSION = 2
 
     def descriptor(self):
         return puma_descriptor()
@@ -375,8 +373,7 @@ class PUMAPlugin:
         scan_config.K_fixed = vals['K_fixed']
         scan_config.NMO_installed = modules['nmo']
         scan_config.V_selector_installed = modules['v_selector']
-        scan_config.source_type = vals['source_type']
-        scan_config.source_dE = vals['source_dE']
+        scan_config.apply_source_values(vals)
         # Curvature radii are plain magnitudes here: an NMO fixing rhm/rvm
         # flat, or a crystal's own fixed-axis/mechanical-limit policy, is
         # resolved once via TAS_Instrument.effective_curvature_axis and
@@ -428,14 +425,16 @@ class PUMAPlugin:
         import hashlib
         import json
 
+        from instruments.source import component_stamp
+
         build_state = {
             "monocris": config.monocris,
             "anacris": config.anacris,
             "sample_key": getattr(config, "sample_key", None),
             "NMO_installed": config.NMO_installed,
             "V_selector_installed": bool(config.V_selector_installed),
-            "source_type": config.source_type,
-            "source_dE": config.source_dE,
+            # The source is run-time state; only an edited component file recompiles.
+            "source_component": component_stamp()["source_component_sha256"],
             "alpha_1": config.alpha_1,
             "alpha_2": list(config.alpha_2),
             "alpha_3": config.alpha_3,
@@ -483,7 +482,7 @@ class PUMAPlugin:
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript. NMO
         selection is recorded as an invalidation (``cn_valid`` -> False); the
-        velocity selector and a monochromatic source add warnings.
+        velocity selector and the flat-band source add warnings.
         """
         from instruments.resolution_adapter import build_resolution_config
 

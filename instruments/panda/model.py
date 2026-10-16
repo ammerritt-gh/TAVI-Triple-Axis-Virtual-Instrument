@@ -28,6 +28,7 @@ from instruments.paths import COMPONENTS_DIR
 from tavi.quantities import crystal_theta
 from instruments.tas_runtime import (
     TAS_Instrument,
+    add_source,
     compute_scan_snapshot,  # noqa: F401  (re-export: the PANDA plugin's snapshot path)
     run_tas_point,  # noqa: F401  (re-export: the PANDA plugin's run path)
 )
@@ -86,9 +87,7 @@ class PANDA_Instrument(TAS_Instrument):
         self.rvm = 0
         self.rha = 0
         self.rva = 0
-        # Energy half-spread for the Mono source (meV). 1, not IN8's 2: the
-        # same E0 - dE > 0 guard applies, and PANDA runs down to E0 = 2.28 meV.
-        self.source_dE = 1
+        self.reset_source()
         # Experimental velocity selector (module "v_selector"); off by default.
         self.V_selector_installed = False
         self.diagnostic_mode = diagnostic_mode
@@ -139,6 +138,7 @@ class PANDA_Instrument(TAS_Instrument):
             "ss1_hgap_param": self.ss1_hgap,
             "ss2_wgap_param": self.ss2_wgap,
             "ss2_hgap_param": self.ss2_hgap,
+            **self.source_point_params(),
             **self.sample_orientation_params(),
         }
 
@@ -159,7 +159,7 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
     instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
     instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
-    instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("E0_param", comment="Flat-band centre energy (meV); read only in flat-band mode.")
     instrument.add_parameter("nu_param", comment="Velocity selector frequency.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
@@ -211,29 +211,11 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
 
         # The source sits AT the SR-2 guide exit / beam-port reference plane
         # with the guide's exit aperture, illuminating the full monochromator
-        # face at L1. Everything the real guide does upstream of this plane is
-        # folded into the Maxwellian spectrum.
-        source = instrument.add_component("source", "Source_div_Maxwellian_v2")
-        source.xwidth = PANDA.guide_exit_width
-        source.yheight = PANDA.guide_exit_height
-        source.focus_aw = 2 * math.degrees(math.atan(mono_width / 2 / PANDA.L1))
-        source.focus_ah = 2 * math.degrees(math.atan(mono_height / 2 / PANDA.L1))
-        if PANDA.source_type == "Mono":
-            source.energy_distribution = 0  # Uniform energy distribution
-            source.dE = PANDA.source_dE
-            source.E0 = "E0_param"
-        else:  # Maxwellian
-            source.energy_distribution = 2  # Maxwellian energy distribution
-            # Source_div_Maxwellian_v2 aborts in INITIALIZE when E0 - dE <= 0
-            # (components/Source_div_Maxwellian_v2.comp), and in Maxwellian mode
-            # dE is not sampled -- it only scales p_init. PANDA is COLD: its
-            # published floor kf = 1.05 A^-1 is E0 = 2.28 meV, so IN8's thermal
-            # dE = 3 would kill a routine cold run at initialization. 1 meV
-            # clears the guard down to k = 0.69 A^-1 and, being constant, adds
-            # no spurious energy trend across a scan that moves E0_param.
-            source.dE = 1
-            source.E0 = "E0_param"
-        source.divergence_distribution = 0
+        # face at L1. The guide is not modelled: the source emits the
+        # moderator's spectrum at this plane.
+        add_source(instrument, PANDA.guide_exit_width, PANDA.guide_exit_height,
+                   2 * math.degrees(math.atan(mono_width / 2 / PANDA.L1)),
+                   2 * math.degrees(math.atan(mono_height / 2 / PANDA.L1)))
 
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 

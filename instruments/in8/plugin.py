@@ -40,7 +40,7 @@ from instruments.descriptor import (
     ParameterSpec,
     Sense,
     SlitSpec,
-    SourceType,
+    SOURCE_PARAMS,
     tas_goniometer,
 )
 from tavi.quantities import slit_gap_id
@@ -96,7 +96,8 @@ _IN8_PARAMS = (
                   quantity="mono_theta_deg"),
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
-    ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("E0_param", "Flat-band centre energy, read only in flat-band mode", unit="meV"),
+    *SOURCE_PARAMS,
     ParameterSpec("rhm_param", "Monochromator horizontal bending",
                   quantity="applied_mono_horizontal_radius_m"),
     ParameterSpec("rvm_param", "Monochromator vertical bending",
@@ -128,8 +129,8 @@ _SAMPLE_REGION = ("sample_region",)
 # ids double as the diagnostic-settings keys and dialog labels.
 _IN8_MONITORS = (
     MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.10), "origin",
-                settings={"xwidth": 0.06, "yheight": 0.15, "nE": 100, "Emin": -2,
-                          "Emax": 200, "restore_neutron": 1},
+                settings={"xwidth": 0.06, "yheight": 0.15, "nE": 150, "Emin": 0,
+                          "Emax": 300, "restore_neutron": 1},
                 component_name="source_Emonitor"),
     MonitorSpec("Source PSD", "PSD_monitor", (0.0, 0.0, 0.11), "origin",
                 settings={"xwidth": 0.045, "yheight": 0.18, "nx": 100, "ny": 100,
@@ -244,10 +245,7 @@ def in8_descriptor() -> InstrumentDescriptor:
             SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=40,
                      stable_id="detector"),
         ),
-        source_types=(
-            SourceType("Maxwellian", "Maxwellian"),
-            SourceType("Mono", "Mono", extra_params=("source_dE",)),
-        ),
+        default_moderator_profile="ill_thermal_h12",
         # vTAS a2/a4/a6 mechanical limits; defaults are the standard elastic
         # Al (2,0,0) configuration at kf = 2.662 (signs per verified senses).
         # A2 is the exception: vTAS's inherited -40...110 deg admitted take-off
@@ -278,7 +276,7 @@ class IN8Plugin:
 
     id = IN8_ID
     display_name = IN8_DISPLAY_NAME
-    CONTRACT_VERSION = 1
+    CONTRACT_VERSION = 2
 
     def descriptor(self):
         return in8_descriptor()
@@ -308,8 +306,7 @@ class IN8Plugin:
 
         scan_config = copy.deepcopy(base_state)
         scan_config.K_fixed = vals['K_fixed']
-        scan_config.source_type = vals['source_type']
-        scan_config.source_dE = vals['source_dE']
+        scan_config.apply_source_values(vals)
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
@@ -344,17 +341,19 @@ class IN8Plugin:
     def build_fingerprint(self, config, diagnostic_mode=False, diagnostic_settings=None):
         """Stable hash of the build-time (ChangeImpact.BUILD) state.
 
-        Slit gaps and bending radii are runtime McStas parameters -- excluded.
+        Slit gaps, bending radii and the source values are runtime McStas
+        parameters -- excluded; only the source component file's hash is in.
         """
         import hashlib
         import json
+
+        from instruments.source import component_stamp
 
         build_state = {
             "monocris": config.monocris,
             "anacris": config.anacris,
             "sample_key": getattr(config, "sample_key", None),
-            "source_type": config.source_type,
-            "source_dE": config.source_dE,
+            "source_component": component_stamp()["source_component_sha256"],
             "alpha_1": config.alpha_1,
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,
@@ -402,7 +401,7 @@ class IN8Plugin:
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript. IN8
         has no NMO and no velocity selector, so no invalidations arise from
-        modules; a monochromatic source still warns. Every collimation slot
+        modules; the flat-band source still warns. Every collimation slot
         left open substitutes the adapter's documented 60 arcmin effective
         divergence with a recorded warning.
         """

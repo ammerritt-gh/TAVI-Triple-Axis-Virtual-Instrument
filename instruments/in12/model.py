@@ -18,9 +18,10 @@ Model boundary: the source is an *effective* source at the H144 guide exit,
 the velocity selector (>36 m upstream) and the transmission polarising cavity
 (~35 m upstream) -- is not modeled. Neither is the optional cooled Be filter.
 
-Higher orders: the default source is the broadband Maxwellian branch, whose
-``dE`` sets normalization rather than a sampling cutoff, so the model does not
-inherit the real instrument's narrow band. Both crystals are therefore pinned
+Higher orders: the default source is the full-spectrum ILL VCS cold-source
+moderator spectrum placed at the guide exit, which ignores the curved guide's
+wavelength-dependent transmission, so the model does not inherit the real
+instrument's narrow band. Both crystals are therefore pinned
 to ``order=1`` -- idealized, order-clean transport -- rather than relying on an
 upstream selector the model boundary excludes. That is why no filter is needed
 here; it is a modelling choice, not a claim that higher orders cannot arise.
@@ -36,6 +37,7 @@ from instruments.paths import COMPONENTS_DIR
 from tavi.quantities import crystal_theta
 from instruments.tas_runtime import (
     TAS_Instrument,
+    add_source,
     compute_scan_snapshot,  # noqa: F401  (re-export: the IN12 plugin's snapshot path)
     run_tas_point,  # noqa: F401  (re-export: the IN12 plugin's run path)
 )
@@ -112,9 +114,7 @@ class IN12_Instrument(TAS_Instrument):
         self.rvm = 0
         self.rha = 0
         self.rva = 0
-        # Energy half-spread for the Mono source (meV). Narrower than IN8's 3:
-        # IN12 is cold, with a 2.1-42 meV incident range.
-        self.source_dE = 2
+        self.reset_source()
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -172,6 +172,7 @@ class IN12_Instrument(TAS_Instrument):
             "sbl_wgap_param": self.sbl_wgap,
             "sbl_hgap_param": self.sbl_hgap,
             "dbl_hgap_param": self.dbl_hgap,
+            **self.source_point_params(),
             **self.sample_orientation_params(),
         }
 
@@ -191,7 +192,7 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
     instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
     instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
-    instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("E0_param", comment="Flat-band centre energy (meV); read only in flat-band mode.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
     instrument.add_parameter("rha_param", comment="Analyzer horizontal bending.")
@@ -227,20 +228,9 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
         # the instrument's virtual source: a 20 x 140 mm aperture 1.8 m from
         # the monochromator. Everything upstream (115 m of guide, the velocity
         # selector, the polarising cavity) is outside the model boundary.
-        source = instrument.add_component("source", "Source_div_Maxwellian_v2")
-        source.xwidth = IN12.guide_exit_width
-        source.yheight = IN12.guide_exit_height
-        source.focus_aw = 2 * math.degrees(math.atan(mono_width / 2 / IN12.L1))
-        source.focus_ah = 2 * math.degrees(math.atan(mono_height / 2 / IN12.L1))
-        if IN12.source_type == "Mono":
-            source.energy_distribution = 0  # Uniform energy distribution
-            source.dE = IN12.source_dE
-            source.E0 = "E0_param"
-        else:  # Maxwellian
-            source.energy_distribution = 2  # Maxwellian energy distribution
-            source.dE = 2                   # cold instrument: narrower than IN8's 3 meV
-            source.E0 = "E0_param"
-        source.divergence_distribution = 0
+        add_source(instrument, IN12.guide_exit_width, IN12.guide_exit_height,
+                   2 * math.degrees(math.atan(mono_width / 2 / IN12.L1)),
+                   2 * math.degrees(math.atan(mono_height / 2 / IN12.L1)))
 
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 
