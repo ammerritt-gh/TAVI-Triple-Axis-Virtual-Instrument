@@ -20,8 +20,36 @@ set "NoDefaultCurrentDirectoryInExePath="
 :: and exits before anything else runs; it changes nothing. It exists so that
 :: tests/test_installer_launchers.py can drive the real resolution, as
 :: /validate-only lets it drive :validate_base in the installer and uninstallers.
+::
+:: /quiet skips Notepad and every pause, for collect-diagnostics.bat and other
+:: scripted runs. /base <path> names the installation to examine, so the
+:: launcher's diagnostics look at the install that started them rather than
+:: whichever one the install record names. The path goes through
+:: :validate_base_var before any line expands it, and one that does not check
+:: out falls back to the record with an [INFO] line. It needs no INSTALL_ID
+:: match: a failed install, when diagnostics matter most, may not have written
+:: its INSTALL_INFO.txt yet. Record-TAVI.bat has no /base.
 set "RESOLVE_ONLY="
+set "QUIET="
+set "BASE_GIVEN="
+set "VBPATH="
+
+:parse_args
+if "%~1"=="" goto args_done
 if /i "%~1"=="/resolve-only" set "RESOLVE_ONLY=1"
+if /i "%~1"=="/quiet" set "QUIET=1"
+if /i "%~1"=="/base" goto parse_base
+shift
+goto parse_args
+
+:parse_base
+set "BASE_GIVEN=1"
+set "VBPATH=%~2"
+shift
+shift
+goto parse_args
+
+:args_done
 
 :: layout 2 (1.3.2+): the base folder is user-chosen at install time and
 :: cannot be computed by rule, so the installer leaves a locator behind at
@@ -35,6 +63,19 @@ if /i "%~1"=="/resolve-only" set "RESOLVE_ONLY=1"
 :: the same in tools\support\Record-TAVI.bat -- keep the two in step.
 set "LAYOUT=1"
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
+if not defined BASE_GIVEN goto from_record
+call :validate_base_var
+if defined VB_REASON goto base_unusable
+set "TAVI_BASE=%VBPATH%"
+echo [INFO] Examining the installation this was started from: %TAVI_BASE%
+goto layout2
+
+:base_unusable
+:: Never print the value: it is the one that failed validation.
+echo [INFO] The folder this was started from does not check out as a TAVI
+echo        installation, so the install record is used instead.
+
+:from_record
 if not exist "%RECORD%" goto default_base
 set "VBPATH="
 for /f "usebackq tokens=1,* delims==" %%A in ("%RECORD%") do if /i "%%A"=="TAVI_BASE" set "VBPATH=%%B"
@@ -57,14 +98,16 @@ if errorlevel 1 goto record_unusable
 set INFO_ID| findstr /r /x /c:"INFO_ID=[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*-[0123456789][0123456789]*" >nul
 if errorlevel 1 goto record_unusable
 if /i not "%MARK_ID%"=="%INFO_ID%" goto record_unusable
-set "LAYOUT=2"
 set "TAVI_BASE=%VBPATH%"
+echo [INFO] Installation found from the install record: %TAVI_BASE%
+
+:layout2
+set "LAYOUT=2"
 set "INSTALL_DIR=%TAVI_BASE%\app"
 set "ENV_PREFIX=%TAVI_BASE%\tavi-env"
 set "MICROMAMBA_DIR=%TAVI_BASE%\micromamba"
 set "MAMBA_ROOT_PREFIX=%TAVI_BASE%\mamba"
 set "RELOCATED=n/a (layout 2: user-chosen base)"
-echo [INFO] Installation found from the install record: %TAVI_BASE%
 goto paths_ready
 
 :record_unusable
@@ -102,7 +145,7 @@ set "MICROMAMBA_EXE=%MICROMAMBA_DIR%\micromamba.exe"
 :: kept it inside the program folder. Looking in the wrong one made every
 :: healthy 1.3.2 installation report "[PROBLEM] No INSTALL_INFO.txt".
 set "INFO_FILE=%INSTALL_DIR%\INSTALL_INFO.txt"
-if exist "%TAVI_BASE%\.tavi-install-root" set "INFO_FILE=%TAVI_BASE%\INSTALL_INFO.txt"
+if "%LAYOUT%"=="2" set "INFO_FILE=%TAVI_BASE%\INSTALL_INFO.txt"
 :: A folder of the operator's that happens to be called tavi_doctor is not
 :: ours to delete, and this file is a read-only diagnostic.
 set "WORK_DIR=%TAVI_BASE%\tavi_doctor_%RANDOM%%RANDOM%"
@@ -114,12 +157,12 @@ title TAVI Doctor
 mkdir "%WORK_DIR%" 2>nul
 if not exist "%WORK_DIR%" (
     echo [ERROR] Could not create the working folder: %WORK_DIR%
-    pause
+    if not defined QUIET pause
     exit /b 1
 )
 
 echo.
-echo Collecting a TAVI diagnostic report. This runs three short test
+echo Collecting a TAVI diagnostic report. This runs four short test
 echo simulations and takes a few minutes. Please leave the window open.
 echo.
 
@@ -140,10 +183,10 @@ echo.
 echo ============================================================================
 echo Summary  : %SUMMARY%
 echo Full log : %LOG%
-echo Please send BOTH files back.
+if not defined QUIET echo Please send BOTH files back.
 echo ============================================================================
 :: /quiet suppresses the Notepad window and the prompt, for scripted checks.
-if /i "%~1"=="/quiet" exit /b 0
+if defined QUIET exit /b 0
 start "" notepad "%SUMMARY%"
 pause
 exit /b 0
