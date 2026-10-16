@@ -215,6 +215,8 @@ goto :eof
 :try_log
 if not exist "%LOG_DIR%\" goto :eof
 set "TRY_LOG=%LOG_DIR%\repair-%STAMP%.log"
+:: Two repairs in the same second share a stamp: never truncate the other's log.
+if exist "%TRY_LOG%" set "TRY_LOG=%LOG_DIR%\repair-%STAMP%-%RANDOM%.log"
 copy /y nul "%TRY_LOG%" >nul 2>nul
 if exist "%TRY_LOG%" set "LOGFILE=%TRY_LOG%"
 goto :eof
