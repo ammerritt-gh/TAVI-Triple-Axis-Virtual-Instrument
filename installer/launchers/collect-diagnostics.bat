@@ -71,8 +71,9 @@ set "ZIP=%OUT_DIR%\%NAME%.zip"
 echo Collecting the log files...
 :: The logs folder holds only TAVI's own logs. In %TEMP%, where each log falls
 :: back when that folder cannot be written, only TAVI's own shapes are taken: a
-:: stamp, or tavi-rnd-digits-digits when PowerShell gave no clock. Another
-:: program's install-*.log is not ours to send.
+:: stamp, the same with a %RANDOM% suffix when two runs shared a second, or
+:: tavi-rnd-digits-digits when PowerShell gave no clock. Another program's
+:: install-*.log is not ours to send.
 set "FOUND="
 set "SRC=%LOG_HOME%"
 set "DST=%STAGE%"
@@ -80,7 +81,7 @@ set "PATTERN=*"
 if defined LOG_HOME call :copy_logs
 set "SRC=%TEMP%"
 set "DST=%STAGE%\temp-fallback"
-set "PATTERN=????????-??????"
+set "PATTERN=????????-??????*"
 if defined TEMP call :copy_logs
 set "PATTERN=tavi-rnd-*"
 if defined TEMP call :copy_logs
