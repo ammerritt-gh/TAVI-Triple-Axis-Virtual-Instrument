@@ -1,4 +1,4 @@
-"""instruments/source.py: facility table, flux spectrum, validation.
+"""instruments/source.py: facility table, flux spectrum, validation, stamp.
 
 Pure Python. The McStas reference files are read from the MCSTAS resources
 folder that the repo conftest.py sets; no McStas run happens here. The spectrum
@@ -204,3 +204,29 @@ def test_is_modified_tracks_only_the_six_values():
     assert src.is_modified(_values("frm2_thermal", moderator_t2_k=301.0)) is True
     assert src.is_modified(_values("frm2_thermal", moderator_i3=6.77e12 * 1.0000001)) is True
     assert src.is_modified(_values("frm2_thermal", mode="flat_band", dE=9.0)) is False
+
+
+def test_stamp_reads_version_and_hash_ignores_line_endings(tmp_path):
+    raw = COMPONENT.read_bytes()
+    lf, crlf = tmp_path / "lf.comp", tmp_path / "crlf.comp"
+    lf.write_bytes(raw.replace(b"\r\n", b"\n"))
+    crlf.write_bytes(raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    stamp_lf, stamp_crlf = src.component_stamp(lf), src.component_stamp(crlf)
+    assert stamp_lf == stamp_crlf == src.component_stamp(COMPONENT)
+    assert stamp_lf["source_component"] == "Source_Maxwell_direct"
+    assert stamp_lf["source_component_version"] == "1.0"
+    assert re.fullmatch(r"[0-9a-f]{12}", stamp_lf["source_component_sha256"])
+    # no cache: an edit without a version bump changes the hash, the version stays
+    lf.write_bytes(lf.read_bytes().replace(b"Version: 1.0", b"Version: 1.0\n* edited"))
+    assert src.component_stamp(lf)["source_component_sha256"] != stamp_lf["source_component_sha256"]
+    assert src.component_stamp(lf)["source_component_version"] == "1.0"
+
+
+def test_provenance_is_one_flat_dict():
+    values = _values("ill_vcs_cold", moderator_t2_k=34.0)
+    prov = src.provenance(values)
+    assert set(prov) == {"source_component", "source_component_version", "source_component_sha256",
+                         *src.FIELD_IDS, "moderator_profile_modified"}
+    assert prov["moderator_profile_modified"] is True
+    assert prov["moderator_profile"] == "ill_vcs_cold" and prov["moderator_t2_k"] == 34.0
+    assert all(not isinstance(v, dict) for v in prov.values())
