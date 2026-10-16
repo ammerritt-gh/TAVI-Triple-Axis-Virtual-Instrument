@@ -89,7 +89,7 @@ Both are modelling additions. The selector is off by default and is not a real P
 | Selector clipping | The 40 mm window against the 138 mm guide-exit height clips about 70% (1 - 40/138, about 71%). This compares two heights; it is not a beam profile taken at the selector. | Geometry | arithmetic good; the physical effect is only as good as the McStas model |
 | Selector transmission | McStas `V_selector`'s own model only. No tilt and no further transmission model is added. | McStas component | as good as that component |
 | Diagnostic monitors (21) | PUMA-style monitors at the beam stations from source to detector: source; virtual source; premono and postmono; pre-sample collimation and the sample region; pre-analyser; post-analyser; detector. Each is switched on in the diagnostic options dialog. Crystal-face monitors take the selected crystal's slab size. Energy monitors sit at the source, premono, postmono, sample, pre-analyser and post-analyser; the monochromator-side windows run -2 to 120 meV and the analyser-side windows -2 to 40 meV, which covers the MLZ reference's PG(002) analyser range of 2.3-33.2 meV. | Positions are simulation placements, not surveyed hardware. | provisional |
-| Monitor scope | Energy-axis monitors only. Wavelength monitors are not in this suite; they belong to a separate job. | Scope decision | not a physics claim |
+| Monitor scope | The energy monitors use the energy axis only. The suite has no wavelength monitors; they belong to a separate job. | Scope decision | not a physics claim |
 
 ## `vPANDA` defects, and how each was handled
 

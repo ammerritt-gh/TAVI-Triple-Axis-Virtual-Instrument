@@ -42,7 +42,7 @@ What is in the beam, in order:
 
 The experimental **velocity selector** (module `v_selector`, off by default) is a McStas `V_selector` 0.80 m past the guide exit, after the primary Soller, with its speed set from each point's incident energy; real PANDA has no selector at that position.
 
-The **diagnostic monitor suite** is 21 PUMA-style monitors at the beam stations from the source to the detector, each switched on in the diagnostic options dialog, with energy-axis monitors only and no wavelength monitors.
+The **diagnostic monitor suite** is 21 PUMA-style monitors at the beam stations from the source to the detector, each switched on in the diagnostic options dialog; its energy monitors use the energy axis and it has no wavelength monitors.
 
 Component dependencies: `Source_div_Maxwellian_v2` from the central
 `components/` tree; `Monochromator_curved`, `Collimator_linear`, `V_selector`, `Slit`,
