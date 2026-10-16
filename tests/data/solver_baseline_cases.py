@@ -12,6 +12,7 @@ import numbers
 
 from instruments.contract import CurvatureMode
 from instruments.rules import context_from_state, point_plan
+from instruments.source import profile_values
 from instruments.tas_runtime import (
     ATT, DE, HKL, HKL_CALC, MOTORS, MTT, Q, Q_CALC, SGL, SGU, STH, STT, compute_scan_snapshot,
 )
@@ -122,7 +123,10 @@ def _launch_vals(descriptor, **overrides):
         "K_fixed": "Kf Fixed", "fixed_E": FIXED_E_MEV, "deltaE": 0.0,
         "monocris": descriptor.mono_crystals[0].id,
         "anacris": descriptor.ana_crystals[0].id,
-        "source_type": descriptor.source_types[0].id, "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": descriptor.default_moderator_profile,
+        **profile_values(descriptor.default_moderator_profile),
+        "flat_band_half_width_mev": 2.0,
         "modules": {m.id: m.default for m in descriptor.modules},
         "collimation": {c.id: c.default for c in descriptor.collimation},
         "slits_mm": {s.id: ((s.default_width_mm, s.default_height_mm) if s.has_height

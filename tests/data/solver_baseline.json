@@ -46,6 +46,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -233,6 +273,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -418,6 +498,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -637,6 +757,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -852,6 +1012,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -1071,6 +1271,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -1288,6 +1528,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -1488,6 +1768,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -1692,6 +2012,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -1894,6 +2254,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -2094,6 +2494,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -2313,6 +2753,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -2528,6 +3008,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -2747,6 +3267,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 12400000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 10200000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 3042300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 216.8
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 33.9
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -2964,6 +3524,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -3151,6 +3751,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -3336,6 +3976,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -3555,6 +4235,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -3770,6 +4490,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -3989,6 +4749,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -4189,6 +4989,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -4393,6 +5233,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -4595,6 +5475,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -4795,6 +5715,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -5014,6 +5974,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -5229,6 +6229,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.04
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
     },
     {
      "name": "rha_param",
@@ -5448,6 +6488,46 @@
      "value": 0.04
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 5874000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 25099000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 1034300000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 683.7
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 257.7
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 16.7
+    },
+    {
      "name": "rha_param",
      "role": "applied_analyzer_horizontal_radius_m",
      "value": -0.0
@@ -5660,6 +6740,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -5862,6 +6982,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -6062,6 +7222,46 @@
      "name": "E0_param",
      "role": "E0_param",
      "value": 14.7
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
     },
     {
      "name": "ms1_wgap_param",
@@ -6296,6 +7496,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -6526,6 +7766,46 @@
      "name": "E0_param",
      "role": "E0_param",
      "value": 14.7
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
     },
     {
      "name": "ms1_wgap_param",
@@ -6760,6 +8040,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -6992,6 +8312,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -7207,6 +8567,46 @@
      "name": "E0_param",
      "role": "E0_param",
      "value": 14.7
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
     },
     {
      "name": "ms1_wgap_param",
@@ -7426,6 +8826,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -7643,6 +9083,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -7858,6 +9338,46 @@
      "name": "E0_param",
      "role": "E0_param",
      "value": 14.7
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
     },
     {
      "name": "ms1_wgap_param",
@@ -8092,6 +9612,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -8324,6 +9884,46 @@
      "value": 14.7
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
+    },
+    {
      "name": "ms1_wgap_param",
      "role": "slit.virtual_source.horizontal_gap",
      "value": 0.04
@@ -8554,6 +10154,46 @@
      "name": "E0_param",
      "role": "E0_param",
      "value": 14.7
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 9380000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 2230000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 12600000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 35.0
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 547.5
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 195.4
     },
     {
      "name": "ms1_wgap_param",
@@ -8793,6 +10433,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 1041.8524972941125
@@ -8990,6 +10670,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 1041.8524972941125
@@ -9185,6 +10905,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
     },
     {
      "name": "nu_param",
@@ -9414,6 +11174,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 899.9777888949696
@@ -9639,6 +11439,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
     },
     {
      "name": "nu_param",
@@ -9868,6 +11708,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 899.9777888949696
@@ -10095,6 +11975,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 899.9777888949696
@@ -10305,6 +12225,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
     },
     {
      "name": "nu_param",
@@ -10519,6 +12479,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 899.9777888949696
@@ -10731,6 +12731,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 1041.8524972941125
@@ -10941,6 +12981,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
     },
     {
      "name": "nu_param",
@@ -11170,6 +13250,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 899.9777888949696
@@ -11397,6 +13517,46 @@
      "value": 0.05
     },
     {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
+    },
+    {
      "name": "nu_param",
      "role": "nu_param",
      "value": 899.9777888949696
@@ -11622,6 +13782,46 @@
      "name": "dbl_hgap_param",
      "role": "slit.detector.horizontal_gap",
      "value": 0.05
+    },
+    {
+     "name": "flat_band_de_param",
+     "role": "flat_band_de_param",
+     "value": 2.0
+    },
+    {
+     "name": "moderator_flat_band_param",
+     "role": "moderator_flat_band_param",
+     "value": 0.0
+    },
+    {
+     "name": "moderator_i1_param",
+     "role": "moderator_i1_param",
+     "value": 30600000000000.0
+    },
+    {
+     "name": "moderator_i2_param",
+     "role": "moderator_i2_param",
+     "value": 1680000000000.0
+    },
+    {
+     "name": "moderator_i3_param",
+     "role": "moderator_i3_param",
+     "value": 6770000000000.0
+    },
+    {
+     "name": "moderator_t1_param",
+     "role": "moderator_t1_param",
+     "value": 285.6
+    },
+    {
+     "name": "moderator_t2_param",
+     "role": "moderator_t2_param",
+     "value": 300.0
+    },
+    {
+     "name": "moderator_t3_param",
+     "role": "moderator_t3_param",
+     "value": 429.9
     },
     {
      "name": "nu_param",
