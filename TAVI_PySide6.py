@@ -55,6 +55,7 @@ from instruments.tas_runtime import (
 )
 from instruments.paths import COMPONENTS_DIR
 from instruments.descriptor import CurvatureAxis
+from instruments import source as moderator
 
 log = logging.getLogger(__name__)
 
@@ -1401,6 +1402,7 @@ class TAVIController(QObject):
         
         # Load parameters
         self.load_parameters()
+        self._push_source_preview_ei()
         
         # Update crystal info based on loaded parameters
         self.update_monocris_info()
@@ -1911,6 +1913,9 @@ class TAVIController(QObject):
         # Energies - update related energies and angles
         self.window.instrument_dock.Ki_edit.editingFinished.connect(self.on_Ki_changed)
         self.window.instrument_dock.Ei_edit.editingFinished.connect(self.on_Ei_changed)
+        # The source preview marks Ei; a source edit can change what the scan labels say
+        self.window.instrument_dock.Ei_edit.textChanged.connect(self._push_source_preview_ei)
+        self.window.instrument_dock.source_changed.connect(self.validate_scan_commands)
         self.window.instrument_dock.Kf_edit.editingFinished.connect(self.on_Kf_changed)
         self.window.instrument_dock.Ef_edit.editingFinished.connect(self.on_Ef_changed)
         
@@ -2825,8 +2830,7 @@ class TAVIController(QObject):
                     'rva': CurvatureMode.AUTOFOCUS if self.is_bending_locked('rva')
                            else CurvatureMode.HELD,
                 },
-                'source_type': self.window.instrument_dock.selected_source_id(),
-                'source_dE': float(self.window.instrument_dock.source_dE_edit.text() or 2),
+                **self._source_vals(),
                 # Descriptor-driven categories (the plugin's scan_config owns the
                 # mapping from these containers to its instrument state fields).
                 'modules': modules,
@@ -3197,6 +3201,13 @@ class TAVIController(QObject):
                 details={"errors": errors},
             )
 
+        refusals = self._source_refusals({key: vals[key] for key in moderator.FIELD_IDS}, parsed)
+        if refusals:
+            raise ApiError(
+                400, "invalid_parameters", "One or more fields failed",
+                details={"errors": {submitted[name]: message for name, message in refusals.items()}},
+            )
+
         # The launch dict and point metadata keep the internal names until a follow-up
         # job renames them (plan amendment 7); slit gaps land in the nested slits_mm
         # each plugin indexes.
@@ -3204,6 +3215,9 @@ class TAVIController(QObject):
         named = frozenset(internal)   # the caller's own names; `patched` grows with derived ones
         patched = set(internal)
         vals.update(internal)
+        if 'moderator_profile' in parsed:   # the entry's T/I, under any the request names itself
+            vals.update({key: value for key, value in moderator.profile_values(parsed['moderator_profile']).items()
+                         if key not in parsed})
         for slit in self.descriptor.slits:
             width = parsed.get(slit_gap_id(slit.stable_id, "horizontal"))
             height = parsed.get(slit_gap_id(slit.stable_id, "vertical"))
@@ -4125,7 +4139,7 @@ class TAVIController(QObject):
             "mono_two_theta_deg": mtt, "sample_two_theta_deg": stt, "sample_rotation_deg": omega,
             "sample_lower_arc_deg": 0, "sample_upper_arc_deg": 0,
             "analyzer_two_theta_deg": att, "incident_wavevector_inv_angstrom": 2.6634, "final_wavevector_inv_angstrom": 2.6634,
-            "incident_energy_mev": 14.7, "final_energy_mev": 14.7, "source_dE_var": 2, "fixed_E_var": 14.7,
+            "incident_energy_mev": 14.7, "final_energy_mev": 14.7, "fixed_E_var": 14.7,
             "q_instrument_x_inv_angstrom": 3.1028, "q_instrument_y_inv_angstrom": 0, "q_instrument_z_inv_angstrom": 0, "h": 2, "k": 0,
             "l": 0, "energy_transfer_mev": 0,
             "lattice_a_angstrom": 4.05, "lattice_b_angstrom": 4.05, "lattice_c_angstrom": 4.05,
@@ -6299,8 +6313,7 @@ class TAVIController(QObject):
             "final_energy_mev": self.window.instrument_dock.Ef_edit.text(),
             "number_neutrons_var": self.window.simulation_dock.get_number_neutrons(),
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
-            "source_type_var": self.window.instrument_dock.selected_source_id(),
-            "source_dE_var": self.window.instrument_dock.source_dE_edit.text(),
+            **{f"{key}_var": value for key, value in self.window.instrument_dock.source_settings().items()},
             "modules": self.window.instrument_dock.module_values(),
             "mono_horizontal_radius_m": self.window.instrument_dock.rhm_edit.text(),
             "mono_vertical_radius_m": self.window.instrument_dock.rvm_edit.text(),
@@ -6764,10 +6777,7 @@ class TAVIController(QObject):
             self.window.instrument_dock.Kf_edit.setText(format_editable_number(parameters.get("final_wavevector_inv_angstrom", "2.6634")))
             self.window.instrument_dock.Ei_edit.setText(format_editable_number(parameters.get("incident_energy_mev", "14.7")))
             self.window.instrument_dock.Ef_edit.setText(format_editable_number(parameters.get("final_energy_mev", "14.7")))
-            self.window.instrument_dock.set_source_id(
-                parameters.get("source_type_var", self.descriptor.source_types[0].id)
-            )
-            self.window.instrument_dock.source_dE_edit.setText(format_editable_number(parameters.get("source_dE_var", "2")))
+            self._load_source_parameters(parameters)
             # Descriptor-driven categories (nested containers; legacy flat
             # keys from pre-Phase-2 files migrate through the fallbacks)
             self.window.instrument_dock.set_module_values(
@@ -7023,6 +7033,103 @@ class TAVIController(QObject):
         mtt, stt, sth, _sgl, att = angles
         return mtt, stt, sth, att
 
+    # --- the moderator source (instruments/source.py): GUI values, defaults, saved state ---
+
+    def _source_gui_values(self):
+        """The Instrument dock's nine source values; a number that does not parse is None.
+
+        A blank dE in full-spectrum mode is the old default 2: nothing reads it there.
+        """
+        values = self.window.instrument_dock.source_settings()
+        if values['moderator_mode'] == 'full_spectrum' and values['flat_band_half_width_mev'] is None:
+            values['flat_band_half_width_mev'] = 2.0
+        return values
+
+    def _source_vals(self):
+        """``_source_gui_values`` for ``get_gui_values``: a number that does not parse is a GUI that does not read."""
+        values = self._source_gui_values()
+        if None in values.values():
+            raise ValueError("a moderator field is not a number")
+        return values
+
+    def _default_source_values(self):
+        """Full spectrum on the descriptor's default profile, flat-band half-width 2 (Reset and the API's defaults)."""
+        profile = self.descriptor.default_moderator_profile
+        return {'moderator_mode': 'full_spectrum', 'moderator_profile': profile,
+                **moderator.profile_values(profile), 'flat_band_half_width_mev': 2.0}
+
+    def _push_source_preview_ei(self, *_):
+        """Give the dock's spectrum preview the Ei the GUI shows (the dock never reads Ei itself)."""
+        try:
+            ei = float(self.window.instrument_dock.Ei_edit.text())
+        except ValueError:
+            ei = None
+        self.window.instrument_dock.set_source_preview_ei(ei)
+
+    @staticmethod
+    def _source_refusals(base, parsed):
+        """``{public name: message}`` when the source a write would leave does not validate, else ``{}``.
+
+        ``base`` holds the nine values before the write; ``parsed`` the write's parsed values
+        by public name. A profile named in the write loads its T/I first, then the write's own
+        T/I stand over it, whatever their order in the request.
+        """
+        named = [key for key in moderator.FIELD_IDS if key in parsed]
+        if not named:
+            return {}
+        values = dict(base)
+        if 'moderator_profile' in parsed:
+            values.update(moderator.profile_values(parsed['moderator_profile']))
+        values.update({key: parsed[key] for key in named})
+        refusals = {}
+        for message in moderator.validate(values):
+            name = next((key for key in named if message.startswith(key)), named[0])
+            refusals[name] = f"{refusals[name]}; {message}" if name in refusals else message
+        return refusals
+
+    @staticmethod
+    def _saved_source_number(value):
+        """A saved T, I or dE as a finite number of 0 or more, else None."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) and number >= 0 else None
+
+    def _load_source_parameters(self, parameters):
+        """Set the dock's source from a saved block: the nine canonical IDs with the file's _var suffix.
+
+        A missing or unreadable value takes the instrument's default. The retired
+        source_type_var and source_dE_var are not migrated: one message says so.
+        """
+        values = self._default_source_values()
+        saved = {key: parameters.get(f"{key}_var") for key in moderator.FIELD_IDS}
+        unreadable = []
+        for key, table in (('moderator_mode', moderator.MODES), ('moderator_profile', moderator.PROFILES)):
+            if isinstance(saved[key], str) and saved[key] in table:
+                values[key] = saved[key]
+            elif saved[key] is not None:
+                unreadable.append(key)
+        values.update(moderator.profile_values(values['moderator_profile']))
+        for key in moderator.TI_IDS + ('flat_band_half_width_mev',):
+            number = self._saved_source_number(saved[key])
+            if number is not None:
+                values[key] = number
+            elif saved[key] is not None:
+                unreadable.append(key)
+        if unreadable:
+            self.print_to_message_center(
+                f"Parameters load: invalid {', '.join(unreadable)}; using the instrument's default source value")
+        retired = [key for key in ('source_type_var', 'source_dE_var') if key in parameters]
+        if retired:
+            applied = "" if any(v is not None for v in saved.values()) else (
+                f"; the instrument's default source ({moderator.PROFILES[values['moderator_profile']].label}, "
+                "full spectrum) was applied")
+            self.print_to_message_center(
+                f"Parameters load: {' and '.join(retired)} {'is' if len(retired) == 1 else 'are'} "
+                f"retired and ignored{applied}")
+        self.window.instrument_dock.set_source_settings(values)
+
     def _default_parameter_values(self):
         """Widget-free defaults dict with exactly get_gui_values()'s key set.
 
@@ -7076,8 +7183,7 @@ class TAVIController(QObject):
                 'rhm': CurvatureMode.AUTOFOCUS, 'rvm': CurvatureMode.AUTOFOCUS,
                 'rha': CurvatureMode.AUTOFOCUS, 'rva': CurvatureMode.AUTOFOCUS,
             },
-            'source_type': d.source_types[0].id,
-            'source_dE': 2.0,
+            **self._default_source_values(),
             'modules': modules,
             'collimation': collimation,
             'slits_mm': slits_mm,
@@ -7150,8 +7256,7 @@ class TAVIController(QObject):
         self.window.instrument_dock.Ef_edit.setText("14.7")
         # Descriptor defaults for modules/collimation/slits (empty dict = defaults)
         self.window.instrument_dock.set_module_values({})
-        self.window.instrument_dock.set_source_id(self.descriptor.source_types[0].id)
-        self.window.instrument_dock.source_dE_edit.setText("2")
+        self.window.instrument_dock.set_source_settings(self._default_source_values())
         self.window.instrument_dock.set_collimation_values({})
         # Slit apertures - descriptor defaults (SlitSpec.default_*_mm)
         self.window.instrument_dock.set_slit_values_mm({})
@@ -7220,6 +7325,12 @@ class TAVIController(QObject):
     
     def run_simulation_thread(self):
         """Start simulation in a separate thread."""
+        # The source the dock shows is what runs: refuse one the component would stop on.
+        problems = moderator.validate(self._source_gui_values())
+        if problems:
+            for problem in problems:
+                self.print_to_message_center(f"Simulation refused: {problem}")
+            return
         # Pre-flight validation - check for scan command issues
         hard_issues, soft_issues = self._preflight_scan_validation()
         from PySide6.QtWidgets import QMessageBox
@@ -8037,7 +8148,6 @@ class TAVIController(QObject):
 
         mono_ids = [c.id for c in self.descriptor.mono_crystals]
         ana_ids = [c.id for c in self.descriptor.ana_crystals]
-        source_ids = [s.id for s in self.descriptor.source_types]
         sample_ids = [s.id for s in self.descriptor.samples]
 
         # --- sample setter: select the sample combo by library id -----------
@@ -8049,6 +8159,15 @@ class TAVIController(QObject):
             key = None if sample_id == "none" else sample_id
             if not sam.set_sample_by_key(key):
                 raise ValueError("unknown sample %r" % (sample_id,))
+
+        # --- moderator setters (instruments/source.py); the dock redraws its own preview ---
+        def set_source(key):
+            return lambda v: idock.set_source_settings({key: v})
+
+        def set_profile(profile_id):
+            # a profile loads its entry's T/I; the apply order puts the write's own T/I after it
+            idock.set_source_settings({'moderator_profile': profile_id,
+                                       **moderator.profile_values(profile_id)})
 
         # --- line-edit setter factory (numeric) ---
         def set_text(edit):
@@ -8175,8 +8294,15 @@ class TAVIController(QObject):
             'rha': (p_curvature, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
             'rva': (p_curvature, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
             # source
-            'source_type': (p_choice(source_ids, "source_type"), idock.set_source_id, None),
-            'source_dE': (p_float, set_text(idock.source_dE_edit), None),
+            'moderator_mode': (p_choice(moderator.MODES, "moderator_mode"), set_source('moderator_mode'), None),
+            'moderator_profile': (p_choice(moderator.PROFILES, "moderator_profile"), set_profile, None),
+            'moderator_t1_k': (p_float, set_source('moderator_t1_k'), None),
+            'moderator_i1': (p_float, set_source('moderator_i1'), None),
+            'moderator_t2_k': (p_float, set_source('moderator_t2_k'), None),
+            'moderator_i2': (p_float, set_source('moderator_i2'), None),
+            'moderator_t3_k': (p_float, set_source('moderator_t3_k'), None),
+            'moderator_i3': (p_float, set_source('moderator_i3'), None),
+            'flat_band_half_width_mev': (p_float, set_source('flat_band_half_width_mev'), None),
             # descriptor-driven containers
             'modules': (p_modules, idock.set_module_values, self.update_ideal_bending_buttons),
             'collimation': (p_dict, idock.set_collimation_values, None),
@@ -8210,6 +8336,11 @@ class TAVIController(QObject):
     # never overwritten by an earlier group's derivation. Fields not listed are
     # applied last, in patch order.
     _API_APPLY_ORDER = tuple(tuple(_to_public(name) for name in group) for group in (
+        # A profile loads its entry's T/I, so the write's own T/I (next) stand over it
+        # whatever their order in the request.
+        ('moderator_profile',),
+        ('moderator_t1_k', 'moderator_i1', 'moderator_t2_k', 'moderator_i2',
+         'moderator_t3_k', 'moderator_i3'),
         # Sample first: selecting it adopts the sample's own lattice, so an
         # explicit lattice_* in the same patch (applied next) still wins.
         ('sample',),
@@ -8629,6 +8760,8 @@ class TAVIController(QObject):
                 parsed[name] = field_map[name][0](value)
             except (ValueError, TypeError) as exc:
                 errors[submitted[name]] = "invalid value: %s" % exc
+        if any(name in moderator.FIELD_IDS and name not in parsed for name in patch):
+            return applied, errors   # a source value that does not parse writes nothing at all
 
         # (a') The lock is validated over the whole body; a refused lock
         # request, or a field the lock holds, applies nothing at all.
@@ -8652,6 +8785,12 @@ class TAVIController(QObject):
         if conflict is not None:
             first, second, message = conflict
             errors[submitted[first]] = errors[submitted[second]] = message
+            return applied, errors
+
+        # (a4) A source that would not validate is refused before anything is written.
+        refusals = self._source_refusals(self._source_gui_values(), parsed)
+        if refusals:
+            errors.update({submitted[name]: message for name, message in refusals.items()})
             return applied, errors
 
         final_handlers = []  # run after every group, order preserved
@@ -8905,7 +9044,7 @@ class TAVIController(QObject):
             'K_fixed': ('string', None), 'fixed_E': ('number', 'meV'),
             'sample': ('string', None),
             'monocris': ('string', None), 'anacris': ('string', None),
-            'source_type': ('string', None), 'source_dE': ('number', 'meV'),
+            'moderator_mode': ('string', None), 'moderator_profile': ('string', None),
             'modules': ('object', None), 'collimation': ('object', None),
             'number_neutrons': ('integer', 'count'),
             'scan_command1': ('string', None), 'scan_command2': ('string', None),
@@ -8921,13 +9060,15 @@ class TAVIController(QObject):
             'sample': [s.id for s in self.descriptor.samples],
             'monocris': [c.id for c in self.descriptor.mono_crystals],
             'anacris': [c.id for c in self.descriptor.ana_crystals],
-            'source_type': [s.id for s in self.descriptor.source_types],
+            'moderator_mode': list(moderator.MODES),
+            'moderator_profile': list(moderator.PROFILES),
         }
 
         fields = []
         for name in field_names:
             ftype, units = meta.get(name, ('number', 'mm' if name.startswith("slit.") else None))
-            units = schema_unit(name) or units
+            registry_unit = schema_unit(name)   # "" for a unit-less registry row: published as is
+            units = units if registry_unit is None else registry_unit
             entry = {"name": name, "type": ftype}
             if units is not None:
                 entry["units"] = units
