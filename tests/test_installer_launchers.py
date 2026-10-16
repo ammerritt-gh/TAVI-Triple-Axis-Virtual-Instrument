@@ -1368,7 +1368,7 @@ def test_uninstall_without_powershell_leaves_the_desktop_alone(tmp_path):
     assert "The desktop could not be checked" in result.stdout, result.stdout
     assert "TAVI WAS UNINSTALLED" in result.stdout, result.stdout
     logs = os.listdir(os.path.join(env["LOCALAPPDATA"], "TAVI", "logs"))
-    assert len(logs) == 1 and re.fullmatch(r"uninstall-\d+-\d+\.log", logs[0]), logs
+    assert len(logs) == 1 and re.fullmatch(r"uninstall-tavi-rnd-\d+-\d+\.log", logs[0]), logs
 
 
 @pytest.mark.parametrize("whose", ["this installation", "another installation"])
