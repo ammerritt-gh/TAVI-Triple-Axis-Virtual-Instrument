@@ -43,7 +43,7 @@ _CORE_PARAMS = (
                   quantity="mono_theta_deg"),
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
-    ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("E0_param", "Flat-band centre energy, read only in flat-band mode", unit="meV"),
     ParameterSpec("sgl_param", "Lower arc sgl readout", default=0.0,
                   quantity="sample_lower_arc_deg"),
     ParameterSpec("sgu_param", "Upper arc sgu readout", default=0.0,

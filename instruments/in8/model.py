@@ -24,6 +24,7 @@ from instruments.paths import COMPONENTS_DIR
 from tavi.quantities import crystal_theta
 from instruments.tas_runtime import (
     TAS_Instrument,
+    add_source,
     compute_scan_snapshot,  # noqa: F401  (re-export: the IN8 plugin's snapshot path)
     run_tas_point,  # noqa: F401  (re-export: the IN8 plugin's run path)
 )
@@ -77,7 +78,7 @@ class IN8_Instrument(TAS_Instrument):
         self.rvm = 0
         self.rha = 0
         self.rva = 0
-        self.source_dE = 2  # Energy half-spread for Mono source (meV)
+        self.reset_source()
         self.diagnostic_mode = diagnostic_mode
         self.diagnostic_settings = diagnostic_settings if diagnostic_settings else {}
 
@@ -111,6 +112,7 @@ class IN8_Instrument(TAS_Instrument):
             "sbl_wgap_param": self.sbl_wgap,
             "sbl_hgap_param": self.sbl_hgap,
             "dbl_hgap_param": self.dbl_hgap,
+            **self.source_point_params(),
             **self.sample_orientation_params(),
         }
 
@@ -130,7 +132,7 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
     instrument.add_parameter("analyzer_two_theta_param", comment="Analyzer 2-theta angle.")
     instrument.add_parameter("mono_theta_param", comment="Monochromator crystal theta (rotation).")
     instrument.add_parameter("analyzer_theta_param", comment="Analyzer crystal theta (rotation).")
-    instrument.add_parameter("E0_param", comment="Source energy (meV) for monochromatic source.")
+    instrument.add_parameter("E0_param", comment="Flat-band centre energy (meV); read only in flat-band mode.")
     instrument.add_parameter("rhm_param", comment="Monochromator horizontal bending.")
     instrument.add_parameter("rvm_param", comment="Monochromator vertical bending.")
     instrument.add_parameter("rha_param", comment="Analyzer horizontal bending.")
@@ -165,20 +167,9 @@ def build_IN8_instrument(in8_config, diagnostic_mode, diagnostic_settings, numbe
         # The source sits AT the horizontal virtual source (an adjustable slit
         # in reality); its aperture is the HVS opening, illuminating the full
         # monochromator face at L1.
-        source = instrument.add_component("source", "Source_div_Maxwellian_v2")
-        source.xwidth = IN8.hvs_width
-        source.yheight = IN8.hvs_height
-        source.focus_aw = 2 * math.degrees(math.atan(mono_width / 2 / IN8.L1))
-        source.focus_ah = 2 * math.degrees(math.atan(mono_height / 2 / IN8.L1))
-        if IN8.source_type == "Mono":
-            source.energy_distribution = 0  # Uniform energy distribution
-            source.dE = IN8.source_dE
-            source.E0 = "E0_param"
-        else:  # Maxwellian
-            source.energy_distribution = 2  # Maxwellian energy distribution
-            source.dE = 3
-            source.E0 = "E0_param"
-        source.divergence_distribution = 0
+        add_source(instrument, IN8.hvs_width, IN8.hvs_height,
+                   2 * math.degrees(math.atan(mono_width / 2 / IN8.L1)),
+                   2 * math.degrees(math.atan(mono_height / 2 / IN8.L1)))
 
         emit_monitor_group(instrument, 'Source EMonitor', 'Source PSD')
 

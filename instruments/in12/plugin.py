@@ -61,7 +61,7 @@ from instruments.descriptor import (
     ParameterSpec,
     Sense,
     SlitSpec,
-    SourceType,
+    SOURCE_PARAMS,
     tas_goniometer,
 )
 from tavi.quantities import slit_gap_id
@@ -186,7 +186,8 @@ _IN12_PARAMS = (
                   quantity="mono_theta_deg"),
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
-    ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("E0_param", "Flat-band centre energy, read only in flat-band mode", unit="meV"),
+    *SOURCE_PARAMS,
     ParameterSpec("rhm_param", "Monochromator horizontal bending",
                   quantity="applied_mono_horizontal_radius_m"),
     ParameterSpec("rvm_param", "Monochromator vertical bending",
@@ -217,12 +218,14 @@ _SAMPLE_REGION = ("sample_region",)
 # trio, detector PSD. Positions are PLACEHOLDER (sensible beam-order spots, not
 # surveyed hardware); ids double as the diagnostic-settings keys and dialog
 # labels. Apertures follow IN12's real envelopes (narrow tall guide exit, wide
-# monochromator face) so the pictures are readable. Emin/Emax bracket IN12's
-# published 2.1-42 meV incident range.
+# monochromator face) so the pictures are readable. The sample monitor's
+# Emin/Emax bracket IN12's published 2.1-42 meV incident range; the source
+# monitor spans 0-300 meV, since the full-spectrum source emits the whole
+# moderator spectrum (the ILL hot source peaks near 146 meV).
 _IN12_MONITORS = (
     MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.10), "origin",
-                settings={"xwidth": 0.03, "yheight": 0.16, "nE": 100, "Emin": 0,
-                          "Emax": 60, "restore_neutron": 1},
+                settings={"xwidth": 0.03, "yheight": 0.16, "nE": 500, "Emin": 0,
+                          "Emax": 300, "restore_neutron": 1},
                 component_name="source_Emonitor"),
     MonitorSpec("Source PSD", "PSD_monitor", (0.0, 0.0, 0.11), "origin",
                 settings={"xwidth": 0.03, "yheight": 0.16, "nx": 100, "ny": 100,
@@ -373,10 +376,7 @@ def in12_descriptor() -> InstrumentDescriptor:
             SlitSpec("dbl_hgap", "Detector (width)", default_width_mm=50,
                      stable_id="detector"),
         ),
-        source_types=(
-            SourceType("Maxwellian", "Maxwellian"),
-            SourceType("Mono", "Mono", extra_params=("source_dE",)),
-        ),
+        default_moderator_profile="ill_vcs_cold",
         # ILL mechanical limits. The monochromator range is the signed evidence
         # for sense_mono = -1: it is entirely negative. Defaults are the
         # standard elastic Al (2,0,0) configuration at k = 2.0 A^-1 (E = 8.29
@@ -399,7 +399,7 @@ class IN12Plugin:
 
     id = IN12_ID
     display_name = IN12_DISPLAY_NAME
-    CONTRACT_VERSION = 1
+    CONTRACT_VERSION = 2
 
     def descriptor(self):
         return in12_descriptor()
@@ -434,8 +434,7 @@ class IN12Plugin:
 
         scan_config = copy.deepcopy(base_state)
         scan_config.K_fixed = vals['K_fixed']
-        scan_config.source_type = vals['source_type']
-        scan_config.source_dE = vals['source_dE']
+        scan_config.apply_source_values(vals)
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
@@ -472,17 +471,19 @@ class IN12Plugin:
     def build_fingerprint(self, config, diagnostic_mode=False, diagnostic_settings=None):
         """Stable hash of the build-time (ChangeImpact.BUILD) state.
 
-        Slit gaps and bending radii are runtime McStas parameters -- excluded.
+        Slit gaps, bending radii and the source values are runtime McStas
+        parameters -- excluded; only the source component file's hash is in.
         """
         import hashlib
         import json
+
+        from instruments.source import component_stamp
 
         build_state = {
             "monocris": config.monocris,
             "anacris": config.anacris,
             "sample_key": getattr(config, "sample_key", None),
-            "source_type": config.source_type,
-            "source_dE": config.source_dE,
+            "source_component": component_stamp()["source_component_sha256"],
             "alpha_1": config.alpha_1,
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,
@@ -530,7 +531,7 @@ class IN12Plugin:
 
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
         IN12 has no modules, so no invalidations arise from them; a
-        monochromatic source still warns. Unlike IN8, IN12 does declare an
+        flat-band source still warns. Unlike IN8, IN12 does declare an
         alpha_1 slot, so the adapter substitutes nothing for the primary
         collimation.
         """

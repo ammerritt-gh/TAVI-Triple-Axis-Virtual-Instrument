@@ -49,7 +49,7 @@ from instruments.descriptor import (
     ParameterSpec,
     Sense,
     SlitSpec,
-    SourceType,
+    SOURCE_PARAMS,
     tas_goniometer,
 )
 from tavi.quantities import slit_gap_id
@@ -127,7 +127,8 @@ _PANDA_PARAMS = (
                   quantity="mono_theta_deg"),
     ParameterSpec("analyzer_theta_param", "Analyzer crystal theta (rotation)",
                   quantity="analyzer_theta_deg"),
-    ParameterSpec("E0_param", "Source energy for monochromatic source", unit="meV"),
+    ParameterSpec("E0_param", "Flat-band centre energy, read only in flat-band mode", unit="meV"),
+    *SOURCE_PARAMS,
     ParameterSpec("nu_param", "Velocity selector frequency"),
     ParameterSpec("rhm_param", "Monochromator horizontal bending",
                   quantity="applied_mono_horizontal_radius_m"),
@@ -172,11 +173,13 @@ _ANA_W, _ANA_H = 0.013 * 11, 0.025 * 5
 # diagnostic dialog's energy/wavelength choice turns each into an L_monitor.
 # Primary windows span
 # PANDA's reach (Cu111 at ki = 7 A^-1 is ~101 meV). Secondary windows cover the
-# MLZ reference's PG(002) analyser kf range, 1.05-4.0 A^-1 = 2.3-33.2 meV.
+# MLZ reference's PG(002) analyser kf range, 1.05-4.0 A^-1 = 2.3-33.2 meV. The
+# source monitor spans 0-300 meV: the full-spectrum source emits the whole
+# moderator spectrum (the thermal and hot ones reach far past the cold one).
 _PANDA_MONITORS = (
     MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.10), "origin",
-                settings={"xwidth": 0.11, "yheight": 0.14, "nE": 100, "Emin": -2,
-                          "Emax": 120, "restore_neutron": 1},
+                settings={"xwidth": 0.11, "yheight": 0.14, "nE": 250, "Emin": 0,
+                          "Emax": 300, "restore_neutron": 1},
                 component_name="source_Emonitor"),
     MonitorSpec("Source PSD", "PSD_monitor", (0.0, 0.0, 0.11), "origin",
                 settings={"xwidth": 0.11, "yheight": 0.14, "nx": 100, "ny": 100,
@@ -379,10 +382,7 @@ def panda_descriptor() -> InstrumentDescriptor:
             SlitSpec("ss2", "Sample exit (W×H)", has_height=True,
                      default_width_mm=40, default_height_mm=80, stable_id="sample_exit"),
         ),
-        source_types=(
-            SourceType("Maxwellian", "Maxwellian"),
-            SourceType("Mono", "Mono", extra_params=("source_dE",)),
-        ),
+        default_moderator_profile="frm2_cold",
         # Axis travel. A4/A6 are the current MLZ figures verbatim
         # (5 < 2ThetaS < 125 deg, -130 < 2ThetaA < 100 deg); A6's asymmetric
         # range is a signed instrument range, not a magnitude. A2 is the 2007
@@ -407,7 +407,7 @@ class PANDAPlugin:
 
     id = PANDA_ID
     display_name = PANDA_DISPLAY_NAME
-    CONTRACT_VERSION = 1
+    CONTRACT_VERSION = 2
 
     def descriptor(self):
         return panda_descriptor()
@@ -433,8 +433,7 @@ class PANDAPlugin:
 
         scan_config = copy.deepcopy(base_state)
         scan_config.K_fixed = vals['K_fixed']
-        scan_config.source_type = vals['source_type']
-        scan_config.source_dE = vals['source_dE']
+        scan_config.apply_source_values(vals)
         scan_config.fixed_E = vals['fixed_E']
         scan_config.monocris = vals['monocris']
         scan_config.anacris = vals['anacris']
@@ -473,17 +472,19 @@ class PANDAPlugin:
     def build_fingerprint(self, config, diagnostic_mode=False, diagnostic_settings=None):
         """Stable hash of the build-time (ChangeImpact.BUILD) state.
 
-        Slit gaps and bending radii are runtime McStas parameters -- excluded.
+        Slit gaps, bending radii and the source values are runtime McStas
+        parameters -- excluded; only the source component file's hash is in.
         """
         import hashlib
         import json
+
+        from instruments.source import component_stamp
 
         build_state = {
             "monocris": config.monocris,
             "anacris": config.anacris,
             "sample_key": getattr(config, "sample_key", None),
-            "source_type": config.source_type,
-            "source_dE": config.source_dE,
+            "source_component": component_stamp()["source_component_sha256"],
             "alpha_1": config.alpha_1,
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,
@@ -533,7 +534,7 @@ class PANDAPlugin:
         Pure function of the descriptor + ``vals``; imports no mcstasscript.
         The velocity-selector module is handled generically by the resolution
         adapter (it warns that the band-pass is outside the divergence model);
-        a monochromatic source still warns. Unlike IN8 it does carry an alpha_1
+        the flat-band source still warns. Unlike IN8 it does carry an alpha_1
         slot, so no primary-collimation substitution is needed when one is selected.
         """
         from instruments.resolution_adapter import build_resolution_config
