@@ -529,6 +529,8 @@ REFUSALS = [  # (run key, strings the message must contain)
     ("refuse_flat_dE_zero", ["dE=0"]),
     ("refuse_flat_flux_zero", ["flux=0"]),
     ("refuse_flat_band_2", ["flat_band=2"]),
+    ("refuse_focus_aw_zero", ["focus_aw=0"]),
+    ("refuse_focus_ah_181", ["focus_ah=181"]),
 ]
 
 
@@ -668,6 +670,8 @@ def submit_all(runner, rows, rp_of):
         ("refuse_flat_dE_zero", dict(full_ti, flat_band=1, E0=25.0, dE=0.0)),
         ("refuse_flat_flux_zero", dict(full_ti, flat_band=1, E0=25.0, dE=5.0, flux=0.0)),
         ("refuse_flat_band_2", dict(full_ti, flat_band=2)),
+        ("refuse_focus_aw_zero", dict(full_ti, focus_aw=0.0)),
+        ("refuse_focus_ah_181", dict(full_ti, focus_ah=181.0)),
     ]
     for key, p in bad:
         runner.submit(key, dict(p, SRC=0), 100, SEED_DIRECT)
