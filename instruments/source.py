@@ -82,9 +82,17 @@ def validate(values):
             problems.append(f"{key} must be a finite number, got {v!r}")
         elif v < 0:
             problems.append(f"{key} must be >= 0, got {v:g}")
-    pairs = [(values.get(t), values.get(i)) for t, i in zip(TI_IDS[::2], TI_IDS[1::2])]
-    if not any(_number(t) and _number(i) and t > 0 and i > 0 for t, i in pairs):
+    active = []  # I keys of the active pairs, as the component's INITIALIZE refuses them
+    for t_key, i_key in zip(TI_IDS[::2], TI_IDS[1::2]):
+        t, i = values.get(t_key), values.get(i_key)
+        if _number(t) and _number(i) and t > 0 and i > 0:
+            active.append(i_key)
+            if not math.isfinite(C_E * t / A_OVER_T):
+                problems.append(f"{t_key} gives an energy scale that is not finite, got {t:g}")
+    if not active:
         problems.append("no active pair: at least one (T, I) needs T > 0 and I > 0")
+    elif not math.isfinite(sum(values[i_key] for i_key in active)):
+        problems.append(f"{', '.join(active)}: the sum of the active I is not finite")
     mode = values.get("moderator_mode")
     if not _known(mode, MODES):
         problems.append(f"unknown moderator_mode {mode!r}; choose one of {', '.join(MODES)}")

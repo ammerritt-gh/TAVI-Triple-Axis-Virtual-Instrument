@@ -169,6 +169,18 @@ def test_validate_names_each_bad_number(bad, names):
     assert problems and any(names in p for p in problems)
 
 
+def test_validate_refuses_energy_scale_overflow_per_active_pair():
+    problems = src.validate(_values(moderator_t1_k=1e307))  # C*T/949 overflows; one problem, one message
+    assert len(problems) == 1 and "moderator_t1_k" in problems[0] and "energy scale" in problems[0]
+    assert src.validate(_values(moderator_t1_k=1e307, moderator_i1=0.0)) == []  # an inactive pair is not read
+
+
+def test_validate_refuses_active_i_sum_overflow():
+    problems = src.validate(_values(moderator_i1=1e308, moderator_i2=1e308))
+    assert len(problems) == 1 and "moderator_i1" in problems[0] and "moderator_i2" in problems[0]
+    assert "sum" in problems[0]
+
+
 def test_validate_no_active_pair_and_unknown_names():
     none = dict(moderator_t2_k=0.0, moderator_i2=0.0, moderator_t3_k=0.0, moderator_i3=0.0)
     assert any("no active pair" in p for p in src.validate(_values(
