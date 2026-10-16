@@ -42,6 +42,7 @@ INSTALLER_DIR = os.path.join(ROOT, "installer")
 LAUNCHERS_DIR = os.path.join(INSTALLER_DIR, "launchers")
 
 INSTALL_1_3_2 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.3.2.bat")
+INSTALL_1_4_0 = os.path.join(INSTALLER_DIR, "WINDOWS-install-TAVI-v1.4.0.bat")
 UNINSTALL_STANDALONE = os.path.join(INSTALLER_DIR, "WINDOWS-uninstall-TAVI.bat")
 REPAIR_LAUNCHERS = os.path.join(INSTALLER_DIR, "TAVI-Repair-Launchers.bat")
 RUN_TAVI = os.path.join(LAUNCHERS_DIR, "run-tavi.bat")
@@ -56,7 +57,7 @@ COLLECT_DIAG = os.path.join(LAUNCHERS_DIR, "collect-diagnostics.bat")
 # still says "run -n"/"create -n". test_the_last_named_installer_still_uses_
 # named_selection (below) proves that file trips the same check this module
 # asserts is clean everywhere else -- i.e. the check can fail.
-NAMED_SELECTION_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
+NAMED_SELECTION_FILES = [INSTALL_1_3_2, INSTALL_1_4_0, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                           RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI, COLLECT_DIAG]
 # Its version is assembled rather than written out: the release tool refuses a
 # tracked file that still names the version being bumped away from, and this
@@ -70,10 +71,10 @@ LAST_NAMED_INSTALLER = os.path.join(
 # to keep working when the others are missing or stale).
 DOCTOR = os.path.join(INSTALLER_DIR, "TAVI-Doctor.bat")
 RECORD_TAVI = os.path.join(ROOT, "tools", "support", "Record-TAVI.bat")
-VALIDATE_BASE_COPIES = [INSTALL_1_3_2, UNINSTALL_TAVI, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
-                        DOCTOR, RECORD_TAVI]
+VALIDATE_BASE_COPIES = [INSTALL_1_3_2, INSTALL_1_4_0, UNINSTALL_TAVI, UNINSTALL_STANDALONE,
+                        REPAIR_LAUNCHERS, DOCTOR, RECORD_TAVI]
 
-LABEL_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
+LABEL_FILES = [INSTALL_1_3_2, INSTALL_1_4_0, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
                RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI, COLLECT_DIAG]
 
 
@@ -195,19 +196,29 @@ def _cmd_quote(arg):
     return f'"{escaped}"'
 
 
-def run_bat(path, *args, cwd=None, env=None, timeout=20, input_text=None):
+def run_bat(path, *args, cwd=None, env=None, timeout=20, input_text=None, input_file=None):
     """Run a .bat file through cmd.exe with every argument intact.
 
     Builds one command-line string with every argument caret-escaped and
     quoted (see _cmd_quote), then runs it via shell=True so cmd.exe parses
     it the same way a double-click or a "start" call would.
+
+    input_file: the keys come from that file instead of a pipe. A `set /p`
+    reading a pipe takes everything in it, not just its line, so a run that
+    answers a `set /p` and then a `choice` needs a file, which `set /p`
+    leaves positioned after its line.
     """
     cmdline = " ".join(_cmd_quote(str(a)) for a in [path, *args])
-    result = subprocess.run(
-        cmdline, shell=True, cwd=cwd, env=env, timeout=timeout,
-        capture_output=True, text=True,
-        input=input_text, stdin=None if input_text is not None else subprocess.DEVNULL,
-    )
+    if input_file is not None:
+        with open(input_file, "rb") as stdin:
+            result = subprocess.run(cmdline, shell=True, cwd=cwd, env=env, timeout=timeout,
+                                    capture_output=True, text=True, stdin=stdin)
+    else:
+        result = subprocess.run(
+            cmdline, shell=True, cwd=cwd, env=env, timeout=timeout,
+            capture_output=True, text=True,
+            input=input_text, stdin=None if input_text is not None else subprocess.DEVNULL,
+        )
     # A literal BEL on the output beeps too. choice's own beep is not on stdout
     # (see the choice_sensor fixture), so this covers everything else.
     assert "\x07" not in result.stdout + result.stderr, f"{path} wrote a BEL character"
@@ -333,12 +344,13 @@ _CALL_RE = re.compile(r"call\s+:([A-Za-z_][A-Za-z0-9_]*)")
 
 def _labels_and_targets(text):
     # TAVI-Repair-Launchers.bat writes whole launcher scripts a line at a
-    # time via "> "%TARGET%" echo ..."; those lines are text destined for a
-    # DIFFERENT file's control flow (e.g. "echo goto run"), not a real goto
+    # time via "> "%TARGET%" echo ...", and the 1.4 installer its heartbeat
+    # script via ">> "%HB_SCRIPT%" echo ..."; those lines are text destined for
+    # a DIFFERENT file's control flow (e.g. "echo goto run"), not a real goto
     # in this one, and would otherwise look like a dangling target here.
     real_flow = "\n".join(
         line for line in text.splitlines()
-        if not re.match(r'^\s*>>?\s*"%TARGET%"', line)
+        if not re.match(r'^\s*>>?\s*"%(TARGET|HB_SCRIPT)%"', line)
     )
     labels = {m.group(1).lower() for m in _LABEL_RE.finditer(text)}
     labels.add("eof")  # built in
@@ -383,6 +395,7 @@ GRAMMAR_COPIES = {
     "TAVI_VERSION": [(UPDATE_TAVI, "TAVI_VERSION"), (REPAIR_LAUNCHERS, "TAVI_VERSION"),
                      (TAVI_LAUNCHER, "TAVI_VERSION")],
     "INSTALL_ID": [(INSTALL_1_3_2, "RI_MARK"), (INSTALL_1_3_2, "RI_INFO"),
+                   (INSTALL_1_4_0, "RI_MARK"), (INSTALL_1_4_0, "RI_INFO"),
                    (UNINSTALL_TAVI, "MARK_ID"), (UNINSTALL_TAVI, "INFO_ID"),
                    (DOCTOR, "MARK_ID"), (DOCTOR, "INFO_ID"),
                    (RECORD_TAVI, "MARK_ID"), (RECORD_TAVI, "INFO_ID")],
@@ -412,7 +425,7 @@ def test_value_grammar_is_identical_across_its_copies(grammar):
 # 3. Path validation, table-driven, through the real /validate-only switch.
 # ===========================================================================
 
-VALIDATE_ONLY_FILES = [INSTALL_1_3_2, UNINSTALL_TAVI]
+VALIDATE_ONLY_FILES = [INSTALL_1_3_2, INSTALL_1_4_0, UNINSTALL_TAVI]
 
 ACCEPT_CASES = [
     "C:\\TAVI",
@@ -1039,11 +1052,10 @@ def test_doctor_does_not_expand_a_hostile_base(tmp_path):
 #     runs close on `choice /c C`, quiet ones never wait. The Doctor keeps its
 #     standalone pauses (collect-diagnostics.bat runs it with /quiet) and the
 #     legacy TAVI-Repair-Launchers.bat keeps generating v1.3 launchers.
-#     Packet u2-p3 adds WINDOWS-install-TAVI-v1.4.0.bat to NO_PAUSE_FILES.
 # ===========================================================================
 
-NO_PAUSE_FILES = [TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI, UPDATE_TAVI, UNINSTALL_TAVI,
-                  UNINSTALL_STANDALONE]
+NO_PAUSE_FILES = [INSTALL_1_4_0, TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI, UPDATE_TAVI,
+                  UNINSTALL_TAVI, UNINSTALL_STANDALONE]
 
 
 def _pause_commands(path):
@@ -1381,8 +1393,9 @@ def _desktop_routine(path):
     return text[start:end]
 
 
-def test_the_desktop_routine_is_identical_in_both_uninstallers():
+def test_the_desktop_routine_is_identical_in_both_uninstallers_and_the_installer():
     assert _desktop_routine(UNINSTALL_TAVI) == _desktop_routine(UNINSTALL_STANDALONE)
+    assert _desktop_routine(UNINSTALL_TAVI) == _desktop_routine(INSTALL_1_4_0)
 
 
 @pytest.mark.parametrize("script", LABEL_FILES)
@@ -1400,12 +1413,18 @@ def test_nothing_in_the_install_path_opens_a_console(script):
     installer/TAVI-Doctor.bat is not in this list: it opens its own report in
     Notepad for a human who double-clicked it, and has a /quiet flag for
     everyone else.
+
+    The 1.4 installer has the two forms that open no console: `start "" /b`,
+    which runs its heartbeat in the console already open, and `start ""
+    "%NOTEPAD%"`, a window program (Notepad on the install log, attended
+    failures only), which a batch file would otherwise wait for.
     """
     with open(script, encoding="utf-8", errors="replace", newline="") as stream:
         offenders = [
             f"{number}: {line.strip()}"
             for number, line in enumerate(stream, 1)
             if re.match(r"^\s*start\s", line)
+            and not re.match(r'^\s*start ""\s+(/b\s|"%NOTEPAD%"\s)', line)
         ]
     assert not offenders, (
         f"{os.path.basename(script)} opens a console window: {offenders}"
@@ -1450,11 +1469,12 @@ def test_no_redirection_follows_a_value_on_an_echo_line(script):
     )
 
 
-def test_the_installer_writes_a_layout_line_the_uninstaller_can_read():
+@pytest.mark.parametrize("installer", [INSTALL_1_3_2, INSTALL_1_4_0], ids=os.path.basename)
+def test_the_installer_writes_a_layout_line_the_uninstaller_can_read(installer):
     """The ownership gate is keyed on LAYOUT, so it has to reach the file."""
     # newline="" keeps the CRLF that .gitattributes pins for *.bat, so the
     # end-of-line anchor has to allow the \r before it.
-    with open(INSTALL_1_3_2, encoding="utf-8", newline="") as stream:
+    with open(installer, encoding="utf-8", newline="") as stream:
         text = stream.read()
     assert re.search(r'(?m)^>>? "%TAVI_BASE%\\INSTALL_INFO\.txt" echo LAYOUT=%LAYOUT%\r?$', text), \
         "INSTALL_INFO.txt must get a LAYOUT line, written with the redirection first"
@@ -1777,21 +1797,35 @@ def test_repair_launchers_follows_a_good_record(tmp_path):
 PARTIAL_NOTICE = "An earlier installation into this folder did not finish"
 
 
-def _install_into_occupied_folder(tmp_path, record_base=None, state="installing"):
+def _install_into_occupied_folder(tmp_path, record_base=None, state="installing",
+                                  installer=INSTALL_1_3_2):
     base = tmp_path / "base"
     base.mkdir()
     (base / "stray.txt").write_text("x\n", encoding="utf-8", newline="\n")
     record = str(base) if record_base is None else record_base
     env = _sandbox_env(tmp_path, record_value=record, state=state)
-    result = run_bat(INSTALL_1_3_2, "/dir", str(base), env=env, timeout=20, input_text="N\n\n")
+    # 1.3.2 asks before clearing and is answered N; 1.4.0 under /dir asks nothing.
+    keys = "N\n\n" if installer == INSTALL_1_3_2 else None
+    result = run_bat(installer, "/dir", str(base), env=env, timeout=60, input_text=keys)
     assert (base / "stray.txt").exists(), result.stdout
     return result
 
 
-def test_the_installer_recognises_a_partial_install_the_record_names(tmp_path):
-    result = _install_into_occupied_folder(tmp_path)
+def _never_waited(result):
+    """A 1.4.0 /dir run ends on its headline and asks for no key."""
+    assert "INSTALLATION FAILED" in result.stdout, result.stdout + result.stderr
+    assert "Press" not in result.stdout, result.stdout
+    assert "does not contain the valid choices" not in result.stderr, "a choice prompt ran"
+
+
+@pytest.mark.parametrize("installer", [INSTALL_1_3_2, INSTALL_1_4_0], ids=os.path.basename)
+def test_the_installer_recognises_a_partial_install_the_record_names(tmp_path, installer):
+    result = _install_into_occupied_folder(tmp_path, installer=installer)
     assert PARTIAL_NOTICE in result.stdout, result.stdout + result.stderr
     assert result.returncode == 1, result.stdout
+    if installer == INSTALL_1_4_0:
+        _never_waited(result)
+        assert "never removes an installation" in result.stdout, result.stdout
 
 
 @pytest.mark.parametrize("field", ["TAVI_BASE", "STATE"])
@@ -2041,21 +2075,27 @@ def test_uninstall_does_not_expand_a_hostile_identity(tmp_path, field, template,
 # installation already in the chosen folder. /dir at that folder; N declines
 # the removal and /dir then stops, so nothing is deleted either way.
 
-def _install_over_marked_folder(tmp_path, **identity):
+def _install_over_marked_folder(tmp_path, installer=INSTALL_1_3_2, **identity):
     base = tmp_path / "base"
     base.mkdir()
     _install_id_files(base, **identity)
-    result = run_bat(INSTALL_1_3_2, "/dir", str(base), env=_sandbox_env(tmp_path), timeout=20,
-                     input_text="N\n\n")
+    keys = "N\n\n" if installer == INSTALL_1_3_2 else None
+    result = run_bat(installer, "/dir", str(base), env=_sandbox_env(tmp_path), timeout=60,
+                     input_text=keys)
     assert (base / ".tavi-install-root").exists(), result.stdout
     assert (base / "INSTALL_INFO.txt").exists(), result.stdout
     return result
 
 
-def test_the_installer_recognises_its_own_installation(tmp_path):
-    result = _install_over_marked_folder(tmp_path)
+@pytest.mark.parametrize("installer", [INSTALL_1_3_2, INSTALL_1_4_0], ids=os.path.basename)
+def test_the_installer_recognises_its_own_installation(tmp_path, installer):
+    result = _install_over_marked_folder(tmp_path, installer=installer)
     assert "There is already a TAVI installation" in result.stdout, result.stdout + result.stderr
     assert result.returncode == 1, result.stdout
+    if installer == INSTALL_1_4_0:
+        _never_waited(result)
+        # A folder this run refused is not its to write into.
+        assert not (tmp_path / "base" / "install-status.txt").exists()
 
 
 @pytest.mark.parametrize("field", IDENTITY_FIELDS)
@@ -2138,3 +2178,90 @@ def test_run_bat_fails_on_a_bel_character_in_the_output(tmp_path):
     script.write_bytes(b"@echo off\r\necho \x07\r\n")
     with pytest.raises(AssertionError, match="BEL"):
         run_bat(str(script), timeout=20)
+
+
+# ===========================================================================
+# 13. The 1.4.0 installer's log and endings. Driven through the test-only
+#     /test-fail switch, so nothing is downloaded: the run stops at the named
+#     step. LOCALAPPDATA, USERPROFILE and TEMP are sandboxed (section 8), and
+#     the desktop is TAVI_TEST_DESKTOP (the autouse fixture).
+# ===========================================================================
+
+def _install_logs(env):
+    logs = os.path.join(env["LOCALAPPDATA"], "TAVI", "logs")
+    return [os.path.join(logs, name) for name in os.listdir(logs)
+            if re.fullmatch(r"install-\d{8}-\d{6}\.log", name)]
+
+
+def test_an_unattended_install_that_fails_says_so_logs_it_and_does_not_wait(tmp_path):
+    base = tmp_path / "base"
+    env = _sandbox_env(tmp_path)
+    result = run_bat(INSTALL_1_4_0, "/dir", str(base), "/ref", "acs/j6c1ef11cf2ba",
+                     "/test-fail", "micromamba", env=env, timeout=60)
+    out = result.stdout
+    assert result.returncode == 1, out + result.stderr
+    _never_waited(result)
+    assert "Failed step : Setting up micromamba" in out, out
+    assert "forced failure (test run)" in out, out
+    # The step's last log lines first, then the headline with the step and error.
+    tail = out.index("The last lines of the installation log:")
+    assert tail < out.rindex("INSTALLATION FAILED") < out.rindex("Failed step :"), out
+    logs = _install_logs(env)
+    assert len(logs) == 1, os.listdir(os.path.dirname(logs[0]) if logs else env["LOCALAPPDATA"])
+    assert logs[0] in out, "the screen names the log"
+    text = _text(logs[0])
+    for expected in ("---- System snapshot ----", f"Install folder: {base}",
+                     "Test switch /ref: cloning branch acs/j6c1ef11cf2ba",
+                     "[Step 1/8] Setting up micromamba: started",
+                     "[TAVI] Failed step: Setting up micromamba", "[TAVI] INSTALLATION FAILED"):
+        assert expected in text, (expected, text)
+    status = (base / "install-status.txt").read_text(encoding="utf-8")
+    assert "OUTCOME=INSTALLATION FAILED" in status, status
+    assert "FAILED_STEP=Setting up micromamba" in status, status
+    assert "ERROR=forced failure (test run)" in status, status
+    assert f"LOG={logs[0]}" in status, status
+    assert not (base / "micromamba").exists(), "the forced step ran anyway"
+
+
+def test_a_malformed_ref_is_refused_before_anything_is_made(tmp_path):
+    base = tmp_path / "base"
+    env = _sandbox_env(tmp_path)
+    result = run_bat(INSTALL_1_4_0, "/dir", str(base), "/ref", "-upload-pack=x",
+                     "/test-fail", "micromamba", env=env, timeout=60)
+    assert result.returncode == 1, result.stdout + result.stderr
+    _never_waited(result)
+    assert "Failed step : Reading the test switches" in result.stdout, result.stdout
+    assert not base.exists(), "a refused switch must stop before the folder is made"
+    assert "[TAVI] INSTALLATION FAILED" in _text(_install_logs(env)[0])
+
+
+@pytest.mark.parametrize("whose", ["this installation", "another installation"])
+def test_replacing_a_legacy_installation_removes_only_its_own_desktop_shortcut(tmp_path, whose):
+    """v1.3.2 deleted %USERPROFILE%\\Desktop\\TAVI Launcher.lnk whatever it pointed
+    at. Attended: the folder is typed, Y removes the legacy installation, N at
+    "Continue?" stops before anything is installed, C closes."""
+    base = _legacy_base(tmp_path)
+    (base / "run-tavi.bat").write_text("rem stub\n", encoding="utf-8", newline="\n")
+    env = _sandbox_env(tmp_path)
+    legacy_desktop = tmp_path / "userprofile" / "Desktop"
+    legacy_desktop.mkdir()
+    lnk = legacy_desktop / "TAVI Launcher.lnk"
+    target = base / "TAVI-Launcher.bat" if whose == "this installation" else (
+        tmp_path / "elsewhere" / "TAVI-Launcher.bat")
+    _make_shortcut(lnk, target)
+
+    # The folder for set /p, then Y (remove it), N (do not continue), C (close).
+    keys = tmp_path / "keys.txt"
+    keys.write_bytes(f"{base}\r\nYNC".encode("ascii"))
+    result = run_bat(INSTALL_1_4_0, env=env, timeout=60, input_file=keys)
+    out = result.stdout
+    assert result.returncode == 0, out + result.stderr
+    assert "from before version 1.3.2" in out, out
+    assert not base.exists(), out
+    assert lnk.exists() == (whose == "another installation"), out
+    assert "INSTALLATION CANCELLED" in out, out
+    assert out.rindex("Press C to close this window.") > out.rindex("INSTALLATION CANCELLED")
+    text = _text(_install_logs(env)[0])
+    assert "Delete the old installation and continue? Answer: Y" in text, text
+    assert "Continue with TAVI installation? Answer: N" in text, text
+    assert str(lnk) in text, "the desktop step is not in the log"
