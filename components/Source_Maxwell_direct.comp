@@ -115,7 +115,8 @@
 *    bins wholly inside the range Source_gen samples, N>=20 in both). chi2/n from
 *    0.87 to 1.11 over 26 comparisons, at least 276 bins each, every chi2 inside
 *    n +- 4 sqrt(2n). Control: the FRM2 thermal row with I2 doubled gives chi2 6786
-*    (500 bins) and 6693 (365 bins) and fails the band, as it must.
+*    (500 bins) and 6693 (365 bins) and fails the band, as it must. The %D table
+*    matches Source_gen's labels, order and numbers.
 * 2. Absolute total in [Lmin, Lmax] equals the analytic sum of Ii times the
 *    Gamma(2) mass in range, times 1e4*xwidth*yheight*Omega: 26 totals (both
 *    sources), the largest deviation 1.26 sigma.
@@ -129,8 +130,10 @@
 *    flux*1e4*xwidth*yheight*Omega (ratio 1.000000 in two settings); uniform in
 *    energy (chi2 69.5 for 60 bins, 104.4 for 100 bins).
 * 6. Refusals: T1<0, I1<0, T2=nan, no active pair (T=0 and I=0), flat band with
-*    E0<=dE, dE=0, flux=0 and flat_band=2 each stop the run with a message naming
-*    the parameter; the same E0 and dE are accepted in full-spectrum mode.
+*    E0<=dE, dE=0, flux=0, flat_band=2, focus_aw=0 and focus_ah=181 each stop the
+*    run with a message naming the parameter; the same E0 and dE are accepted in
+*    full-spectrum mode. The I-sum and ray-weight overflow refusals were checked by
+*    hand on the test instrument, not by the tool.
 * 7. Uniform per steradian: a 60 x 120 deg window, 5e6 rays. The vertical angle as
 *    McStas's Divergence_monitor measures it, atan2(vy,vz), matches the exact
 *    per-steradian expectation (chi2 95.2, 128 bins, band 64..192) and fails the
