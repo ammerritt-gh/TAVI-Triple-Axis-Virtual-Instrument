@@ -178,8 +178,8 @@ Phase-4 additions (`docs/CONFIGURABLE_INSTRUMENTS.md` §20 — IN8, senses):
 - `test_in8_build_tree.py` — object-level IN8 build-tree tests (construction
   only, no compile): backbone beam order, parameter set, monitor
   gating/settings, collimator selection, crystal properties per descriptor,
-  detector contract, Mono/Maxwellian source wiring, shared-library sample
-  emission, no PUMA-only components.
+  detector contract, `Source_Maxwell_direct` wiring (its run-time parameters in
+  both modes), shared-library sample emission, no PUMA-only components.
 - `test_in12_plugin.py` — IN12 plugin conformance, same shape as IN8's plus
   what is specific to IN12: the provisional senses (−1, +1, −1), the entirely
   negative monochromator travel that evidences them, the derived slab sizes
@@ -241,6 +241,16 @@ name is accepted:
   a pre-break folder is refused on load and left untouched.
 - `test_saved_parameters.py` — also pins `parameters.json` version 5, its
   canonical keys and the per-gap slit keys.
+- `test_source_settings_api.py` — offscreen, real controller and server: the
+  moderator source's nine canonical IDs. `source_type`/`source_dE` refuse in any
+  letter case naming the new IDs; a profile write loads its T/I and the same
+  request's T/I win in either key order; an invalid source is refused with no
+  state change; `/schema` lists the choices; `scan_parameters.txt` and
+  `result.metadata['source']` carry the provenance; the dock's values survive save
+  and load and equal what the plugin gets; Run is blocked on an invalid source.
+  The block's other tests are `test_source_integration.py` (all four
+  instruments), `test_instrument_dock_source.py` (the dock) and
+  `test_source_profiles.py` (`instruments/source.py`).
 - `test_documentation.py` — runs the shared documentation checker
   (`Agentic-Control-Scheme/bin/doc_check.py`) over this repository so a
   missing banner, an unreachable document or a broken link fails the suite.
