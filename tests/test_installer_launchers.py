@@ -1274,6 +1274,21 @@ def test_repair_launchers_refuses_a_malformed_version(tmp_path, version, label):
         assert not (prog / name).exists(), (label, f"{name} was written")
 
 
+@pytest.mark.parametrize("where", ["in the folder given", "in the base folder above app"])
+def test_repair_launchers_refuses_a_v14_installation(tmp_path, where):
+    """A 1.4 installation has collect-diagnostics.bat beside its launchers;
+    rewriting them would put the 1.3 menu back."""
+    prog = _repair_target(tmp_path, "v1.3.2")
+    holder = prog if where == "in the folder given" else prog.parent
+    (holder / "collect-diagnostics.bat").write_text("@echo off\n", encoding="utf-8", newline="\r\n")
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), timeout=30, input_text="Y\nC\n")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert ("[ERROR] This installation is newer than this repair tool; "
+            "use Repair TAVI in its launcher menu.") in result.stdout, result.stdout
+    for name in ("update-tavi.bat", "run-tavi.bat", "TAVI-Launcher.bat"):
+        assert not (prog / name).exists(), f"{name} was written"
+
+
 # The launcher menu prints the same value in its banner. A refused value is
 # shown as "unknown" and the menu keeps working. Each hostile value would
 # create a marker file if its banner line ran it; the second gets there past a
