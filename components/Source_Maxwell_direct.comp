@@ -321,8 +321,8 @@ MCDISPLAY
                 xwidth/2.0,  yheight/2.0, 0.0,
                -xwidth/2.0,  yheight/2.0, 0.0,
                -xwidth/2.0, -yheight/2.0, 0.0);
-  /* tan(focus_aw/2) diverges at 180 deg and flips sign beyond, so no dashed window there */
-  if (dist && focus_aw < 180) { /* the dashed window needs a next component to reach */
+  /* tan(focus_aw/2) and tan(focus_ah/2) diverge at 180 deg, so no dashed window there */
+  if (dist && focus_aw < 180 && focus_ah < 180) { /* the dashed window needs a next component to reach */
     double hw = dist*tan(focus_aw*DEG2RAD/2);
     double hh = dist*tan(focus_ah*DEG2RAD/2)/cos(focus_aw*DEG2RAD/2); /* latitude/longitude corner */
     dashed_line(0,0,0, -hw,-hh,dist, 4);
