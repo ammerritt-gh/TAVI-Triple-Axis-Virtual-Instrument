@@ -454,9 +454,15 @@ if not exist "%WORK_DIR%" mkdir "%WORK_DIR%" 2>nul
 :: environment solve has 3 GB on disk in a folder only the user knows about,
 :: and the uninstaller and the Doctor need to be able to find it.
 if not exist "%RECORD_DIR%" mkdir "%RECORD_DIR%" 2>nul
+:: An unwritable %LOCALAPPDATA% costs the record, never raw cmd errors on screen.
+if not exist "%RECORD_DIR%\" goto record_start_skipped
 > "%RECORD%" echo TAVI_BASE=%TAVI_BASE%
 >> "%RECORD%" echo STATE=installing
 >> "%RECORD%" echo INSTALL_ID=%INSTALL_ID%
+goto record_start_done
+:record_start_skipped
+>> "%LOG%" echo [TAVI] [WARN] %RECORD_DIR% could not be created; no install record is kept.
+:record_start_done
 
 call :step 0 "Cleaning broken cmd.exe AutoRun hooks" "5 seconds"
 reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun > "%WORK_DIR%\tavi_autorun_hkcu.txt" 2>nul
@@ -710,9 +716,11 @@ if defined REF >> "%TAVI_BASE%\INSTALL_INFO.txt" echo CLONED_BRANCH=%REF%
 set "LNK_TARGET=%TAVI_BASE%\TAVI-Launcher.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($env:SHORTCUT); $s.TargetPath=$env:LNK_TARGET; $s.WorkingDirectory=$env:TAVI_BASE; $s.Description='TAVI Launcher'; $s.Save()" <nul 2>nul
 
+if not exist "%RECORD_DIR%\" goto record_end_done
 > "%RECORD%" echo TAVI_BASE=%TAVI_BASE%
 >> "%RECORD%" echo STATE=complete
 >> "%RECORD%" echo INSTALL_ID=%INSTALL_ID%
+:record_end_done
 
 if exist "%SHORTCUT%" goto shortcut_made
 echo [WARN] The "TAVI Launcher" shortcut could not be made. Start TAVI by
