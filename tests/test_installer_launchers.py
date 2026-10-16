@@ -10,8 +10,17 @@ exercise the path-validation and destructive-uninstall behaviour it depends
 on.
 
 Pure Python + cmd.exe. No McStas, no Qt, no network, no micromamba binary.
-Every subprocess call below carries an explicit timeout: a ``choice`` prompt
-reading from an exhausted pipe re-prompts forever and would hang the suite.
+Every subprocess call below carries an explicit timeout, in case a prompt
+ever waits for input that never comes.
+
+No test here may make a console beep. ``choice`` calls kernel32 ``Beep`` (a
+blocking half second at the sound device, nothing on stdout) for every input
+character outside its /C list, and that includes the CR LF a test sends after
+a key. ``choice`` takes one character per prompt and leaves the rest in the
+pipe, so a test feeds exactly the keys the prompts accept, in order, with no
+line ending, and a ``set /p`` prompt is the only place a line ending belongs.
+The ``choice_sensor`` fixture enforces this: a stand-in ``choice.exe`` first on
+PATH logs every character it would have beeped at, and a test fails if any.
 """
 import difflib
 import os
@@ -21,6 +30,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import warnings
 import zipfile
 
 import pytest
@@ -87,6 +97,80 @@ def _sandboxed_localappdata(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("TAVI_TEST_DESKTOP", str(tmp_path_factory.mktemp("desktop-guard")))
 
 
+# A stand-in for choice.exe that behaves like it for every use in these files
+# (/C list, /N, /M, one character at a time, 255 and a message at end of input)
+# and records each character outside the /C list instead of beeping at it.
+# Test-only: nothing in installer/ refers to it.
+_CHOICE_CS = textwrap.dedent(r"""
+    using System;
+    using System.IO;
+
+    class ChoiceSensor
+    {
+        static int Main(string[] args)
+        {
+            string keys = "", message = "";
+            string log = Environment.GetEnvironmentVariable("TAVI_CHOICE_LOG");
+            for (int i = 0; i < args.Length; i++)
+            {
+                string a = args[i].ToUpperInvariant();
+                if (a == "/C" && i + 1 < args.Length) keys = args[++i].ToUpperInvariant();
+                else if (a == "/M" && i + 1 < args.Length) message = args[++i];
+                else if (a != "/N" && log != null)
+                    File.AppendAllText(log, "UNSUPPORTED choice argument " + args[i] + "\n");
+            }
+            Console.Out.Write(message + " ");
+            Console.Out.Flush();
+            Stream input = Console.OpenStandardInput();
+            while (true)
+            {
+                int b = input.ReadByte();
+                if (b < 0)
+                {
+                    Console.Error.Write("\r\nERROR: The file is either empty or does not contain the valid choices.\r\n");
+                    return 255;
+                }
+                int at = keys.IndexOf(char.ToUpperInvariant((char)b));
+                if (at >= 0)
+                {
+                    Console.Out.Write(keys[at] + "\r\n");
+                    return at + 1;
+                }
+                if (log != null)
+                    File.AppendAllText(log, "BEEP at 0x" + b.ToString("X2") + " in /C " + keys + "\n");
+            }
+        }
+    }
+    """)
+
+
+@pytest.fixture(scope="session")
+def _choice_sensor_dir(tmp_path_factory):
+    if not os.path.exists(CSC):
+        warnings.warn("no csc.exe: the suite cannot check that its input stays silent")
+        return None
+    work = tmp_path_factory.mktemp("choice_sensor")
+    (work / "Choice.cs").write_text(_CHOICE_CS, encoding="utf-8", newline="\n")
+    result = subprocess.run([CSC, "/nologo", f"/out:{work / 'choice.exe'}", str(work / "Choice.cs")],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return str(work)
+
+
+@pytest.fixture(autouse=True)
+def choice_sensor(_choice_sensor_dir, tmp_path_factory, monkeypatch):
+    """Fail the test if anything it ran beeped (see the module docstring).
+    A child that sets its own PATH adds os.environ["TAVI_CHOICE_SENSOR_DIR"]."""
+    log = tmp_path_factory.mktemp("choice-log") / "choice-sensor.log"
+    if _choice_sensor_dir is not None:
+        monkeypatch.setenv("TAVI_CHOICE_SENSOR_DIR", _choice_sensor_dir)
+        monkeypatch.setenv("TAVI_CHOICE_LOG", str(log))
+        monkeypatch.setenv("PATH", _choice_sensor_dir + os.pathsep + os.environ["PATH"])
+    yield
+    beeps = log.read_text(encoding="utf-8") if log.exists() else ""
+    assert not beeps, "choice would have beeped:\n" + beeps
+
+
 # ---------------------------------------------------------------------------
 # Helpers: run a real .bat file through cmd.exe without losing &, ^ or ;.
 #
@@ -119,11 +203,15 @@ def run_bat(path, *args, cwd=None, env=None, timeout=20, input_text=None):
     it the same way a double-click or a "start" call would.
     """
     cmdline = " ".join(_cmd_quote(str(a)) for a in [path, *args])
-    return subprocess.run(
+    result = subprocess.run(
         cmdline, shell=True, cwd=cwd, env=env, timeout=timeout,
         capture_output=True, text=True,
         input=input_text, stdin=None if input_text is not None else subprocess.DEVNULL,
     )
+    # A literal BEL on the output beeps too. choice's own beep is not on stdout
+    # (see the choice_sensor fixture), so this covers everything else.
+    assert "\x07" not in result.stdout + result.stderr, f"{path} wrote a BEL character"
+    return result
 
 
 def run_validate_only(path, value, **kwargs):
@@ -594,7 +682,7 @@ def test_launcher_shell_option_ignores_inherited_mamba_root_prefix(tmp_path, mic
 
     # [4] Open TAVI shell, then [7] Exit.
     result = run_bat(str(base / "TAVI-Launcher.bat"), env=_stub_env(log, wrong_root),
-                      timeout=30, input_text="4\n7\n")
+                      timeout=30, input_text="47")
     assert result.returncode == 0, result.stdout + result.stderr
 
     calls = _read_stub_log(log)
@@ -608,7 +696,7 @@ def test_launcher_shell_option_ignores_inherited_mamba_root_prefix(tmp_path, mic
 
 def test_run_tavi_fails_visibly_when_python_is_missing(tmp_path, micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base4", micromamba_stub_exe, with_python=False)
-    result = run_bat(str(base / "run-tavi.bat"), timeout=30, input_text="C\n")
+    result = run_bat(str(base / "run-tavi.bat"), timeout=30, input_text="C")
     assert result.returncode != 0
     assert "[ERROR]" in result.stdout
     assert "Press C to continue." in result.stdout, "the incomplete-install message must end on C"
@@ -628,7 +716,7 @@ def test_launcher_shell_option_fails_visibly_when_python_is_missing(tmp_path, mi
     # back rather than terminating the process), so unlike run-tavi.bat and
     # update-tavi.bat above there is no non-zero exit to assert here -- only
     # that the failure was reported before the menu let the user continue.
-    result = run_bat(str(base / "TAVI-Launcher.bat"), timeout=30, input_text="4\nC\n7\n")
+    result = run_bat(str(base / "TAVI-Launcher.bat"), timeout=30, input_text="4C7")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "[ERROR]" in result.stdout
 
@@ -668,7 +756,7 @@ def test_diagnostics_is_five_uninstall_six_and_exit_seven():
 
 
 def test_menu_exits_cleanly_on_seven():
-    result = run_bat(TAVI_LAUNCHER, timeout=20, input_text="7\n")
+    result = run_bat(TAVI_LAUNCHER, timeout=20, input_text="7")
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -691,7 +779,7 @@ def test_menu_one_runs_tavi_with_no_arguments(tmp_path, micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
     stub_log = tmp_path / "stub.log"
     env = _launch_env(tmp_path, MICROMAMBA_STUB_LOG=str(stub_log))
-    result = run_bat(str(base / "TAVI-Launcher.bat"), env=env, timeout=30, input_text="1\n7\n")
+    result = run_bat(str(base / "TAVI-Launcher.bat"), env=env, timeout=30, input_text="17")
     assert result.returncode == 0, result.stdout + result.stderr
     calls = _read_stub_log(stub_log)
     assert calls and calls[0][-1] == "TAVI_PySide6.py", calls
@@ -703,7 +791,7 @@ def test_menu_five_runs_the_diagnostics_collector_attended(tmp_path, micromamba_
     (base / "collect-diagnostics.bat").write_text(
         '@echo off\n> "%~dp0collector-ran.txt" echo args=[%*]\n', encoding="utf-8", newline="\r\n")
     result = run_bat(str(base / "TAVI-Launcher.bat"), env=_launch_env(tmp_path),
-                     timeout=30, input_text="5\n7\n")
+                     timeout=30, input_text="57")
     assert result.returncode == 0, result.stdout + result.stderr
     ran = base / "collector-ran.txt"
     assert ran.exists(), "menu item 5 did not run collect-diagnostics.bat"
@@ -764,7 +852,7 @@ def test_run_tavi_shows_the_last_30_lines_and_waits_on_c_after_an_error(tmp_path
                                                                          micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
     env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="50", MICROMAMBA_STUB_EXIT="3")
-    result = run_bat(str(base / "run-tavi.bat"), env=env, timeout=30, input_text="C\n")
+    result = run_bat(str(base / "run-tavi.bat"), env=env, timeout=30, input_text="C")
     assert result.returncode == 1, result.stdout + result.stderr
     out = result.stdout
     assert "TAVI STOPPED WITH AN ERROR" in out, out
@@ -1166,7 +1254,7 @@ def test_uninstall_writes_its_log_and_keeps_the_logs_folder(tmp_path):
                                              ("N", "UNINSTALL CANCELLED")])
 def test_uninstall_asked_in_person_ends_on_its_headline_and_c(tmp_path, answer, headline):
     base = _uninstallable_base(tmp_path, "asked")
-    result = run_bat(UNINSTALL_TAVI, str(base), timeout=60, input_text=f"{answer}\nC\n")
+    result = run_bat(UNINSTALL_TAVI, str(base), timeout=60, input_text=f"{answer}C")
     assert result.returncode == 0, result.stdout + result.stderr
     out = result.stdout
     assert headline in out and "Press C to close this window." in out, out
@@ -1205,7 +1293,10 @@ def test_uninstall_without_powershell_leaves_the_desktop_alone(tmp_path):
     lnk = _desktop_shortcut()
     _make_shortcut(lnk, base / "TAVI-Launcher.bat")
     env = dict(os.environ)
-    env["PATH"] = os.path.join(os.environ["SYSTEMROOT"], "System32")
+    # System32 alone has no PowerShell; the choice stand-in's folder is only there
+    # so that anything that did ask would be heard by the suite.
+    env["PATH"] = os.pathsep.join(filter(None, [os.environ.get("TAVI_CHOICE_SENSOR_DIR"),
+                                                os.path.join(os.environ["SYSTEMROOT"], "System32")]))
     result = run_bat(UNINSTALL_TAVI, str(base), "/y", env=env, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
@@ -1229,7 +1320,7 @@ def test_a_legacy_removal_removes_only_its_own_desktop_shortcut(tmp_path, whose)
         tmp_path / "elsewhere" / "TAVI-Launcher.bat")
     _make_shortcut(lnk, target)
 
-    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=60, input_text="Y\nC\n")
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=60, input_text="YC")
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
     assert lnk.exists() == (whose == "another installation"), result.stdout
@@ -1377,7 +1468,7 @@ def test_update_tavi_checks_out_a_well_formed_version(tmp_path, micromamba_stub_
 def test_repair_succeeds_with_its_log_and_closes_on_c(tmp_path, micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
     env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="2")
-    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=60, input_text="C\n")
+    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=60, input_text="C")
     assert result.returncode == 0, result.stdout + result.stderr
     out = result.stdout
     assert "REPAIR SUCCEEDED" in out and "Press C to continue." in out, out
@@ -1392,7 +1483,7 @@ def test_repair_succeeds_with_its_log_and_closes_on_c(tmp_path, micromamba_stub_
 def test_repair_failure_names_the_step_and_shows_the_last_30_lines(tmp_path, micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
     env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="50", MICROMAMBA_STUB_EXIT="3")
-    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=60, input_text="C\n")
+    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=60, input_text="C")
     assert result.returncode == 1, result.stdout + result.stderr
     out = result.stdout
     assert "REPAIR FAILED" in out, out
@@ -1443,7 +1534,8 @@ def _repair_target(tmp_path, version, **override):
 @pytest.mark.parametrize("version", GOOD_VERSIONS)
 def test_repair_launchers_writes_a_well_formed_version(tmp_path, version):
     prog = _repair_target(tmp_path, version)
-    # "Y" answers the repair's own confirmation prompt.
+    # "Y" answers the repair's own confirmation prompt; the Enter is the key the
+    # closing pause takes: pause accepts any key.
     result = run_bat(REPAIR_LAUNCHERS, str(prog), timeout=30, input_text="Y\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert f'git checkout "{version}"' in _read(str(prog / "update-tavi.bat"))
@@ -1468,7 +1560,7 @@ def test_repair_launchers_refuses_a_v14_installation(tmp_path, where):
     prog = _repair_target(tmp_path, "v1.3.2")
     holder = prog if where == "in the folder given" else prog.parent
     (holder / "collect-diagnostics.bat").write_text("@echo off\n", encoding="utf-8", newline="\r\n")
-    result = run_bat(REPAIR_LAUNCHERS, str(prog), timeout=30, input_text="Y\nC\n")
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), timeout=30, input_text="\n")
     assert result.returncode == 1, result.stdout + result.stderr
     assert ("[ERROR] This installation is newer than this repair tool; "
             "use Repair TAVI in its launcher menu.") in result.stdout, result.stdout
@@ -1490,7 +1582,7 @@ def _run_launcher_with_version(tmp_path, stub_exe, version):
     base, _, _ = _make_layout2_base(tmp_path, "base", stub_exe)
     _write_install_info(base, version, LAYOUT="2", INSTALL_ID="1-2-3-4")
     # [7] Exit, so the menu never waits on its prompt.
-    return run_bat(str(base / "TAVI-Launcher.bat"), timeout=20, input_text="7\n")
+    return run_bat(str(base / "TAVI-Launcher.bat"), timeout=20, input_text="7")
 
 
 def test_launcher_banner_shows_a_well_formed_version(tmp_path, micromamba_stub_exe):
@@ -1551,8 +1643,8 @@ HOSTILE_IDS = [label for _, label in HOSTILE_PATHS]
 def test_a_hostile_install_record_is_not_expanded(tmp_path, script, template, label):
     marker = tmp_path / "marker.txt"
     env = _sandbox_env(tmp_path, record_value=template.format(marker=marker))
-    # Enter at the folder prompt (nothing found), C at the closing prompt.
-    result = run_bat(script, env=env, timeout=20, input_text="\nC\n")
+    # An empty line for the folder prompt (nothing found), C for the closing one.
+    result = run_bat(script, env=env, timeout=20, input_text="\nC")
     assert not marker.exists(), (label, "a line expanded the record's value", result.stdout)
     assert "does not hold a usable path" in result.stdout, (label, result.stdout)
 
@@ -1563,7 +1655,7 @@ def test_a_hostile_typed_path_is_not_expanded(tmp_path, script, template, label)
     marker = tmp_path / "marker.txt"
     env = _sandbox_env(tmp_path)
     result = run_bat(script, env=env, timeout=20,
-                     input_text=template.format(marker=marker) + "\nC\n")
+                     input_text=template.format(marker=marker) + "\nC")
     assert not marker.exists(), (label, "a line expanded the typed value", result.stdout)
     assert result.returncode == 1, (label, result.stdout)
     assert "[ERROR]" in result.stdout, (label, result.stdout)
@@ -1590,7 +1682,7 @@ def test_dropping_the_record_does_not_expand_it(tmp_path, which, template, label
     if which == "standalone":
         base = _legacy_base(tmp_path)
         # Y removes the legacy installation; C closes the window.
-        result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\nC\n")
+        result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="YC")
     else:
         base = _uninstallable_base(tmp_path, "installed")
         result = run_bat(UNINSTALL_TAVI, str(base), "/y", env=env, timeout=30)
@@ -1609,7 +1701,7 @@ def test_the_standalone_uninstaller_follows_a_good_record(tmp_path):
     base = _uninstallable_base(tmp_path, "installed")
     env = _sandbox_env(tmp_path, record_value=str(base))
     # Y answers the installed uninstaller it hands over to; C closes it.
-    result = run_bat(UNINSTALL_STANDALONE, env=env, timeout=30, input_text="Y\nC\n")
+    result = run_bat(UNINSTALL_STANDALONE, env=env, timeout=30, input_text="YC")
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
     assert not (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), result.stdout
@@ -1618,7 +1710,7 @@ def test_the_standalone_uninstaller_follows_a_good_record(tmp_path):
 def test_a_legacy_removal_drops_a_record_that_names_it(tmp_path):
     base = _legacy_base(tmp_path)
     env = _sandbox_env(tmp_path, record_value=str(base))
-    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\nC\n")
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="YC")
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
     assert not (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), result.stdout
@@ -1752,8 +1844,8 @@ def test_repair_launchers_does_not_expand_a_hostile_install_info_path(tmp_path, 
     marker = tmp_path / "marker.txt"
     env = _sandbox_env(tmp_path)
     prog = _repair_target(tmp_path, "v1.3.2", **{field: template.format(marker=marker)})
-    # Y would answer the repair prompt, which a refusal never reaches.
-    result = run_bat(REPAIR_LAUNCHERS, str(prog), env=env, timeout=30, input_text="Y\n\n")
+    # A refusal never reaches the repair prompt: only the closing pause reads.
+    result = run_bat(REPAIR_LAUNCHERS, str(prog), env=env, timeout=30, input_text="\n")
     assert not marker.exists(), (label, "a line expanded the value", result.stdout)
     assert result.returncode == 1, (label, result.stdout + result.stderr)
     assert "will not write into" in result.stdout, (label, result.stdout)
@@ -1777,7 +1869,7 @@ def test_a_legacy_removal_does_not_expand_a_hostile_env_prefix(tmp_path, templat
     _write_install_info(base, "main", ENV_PREFIX=template.format(marker=marker))
     # Y removes the legacy installation; C closes the window.
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\nC\n")
+                     input_text="YC")
     assert not marker.exists(), (label, "a line expanded the value", result.stdout)
     assert result.returncode == 0, (label, result.stdout + result.stderr)
     assert "Not removing the recorded environment path" in result.stdout, (label, result.stdout)
@@ -1791,7 +1883,7 @@ def test_a_legacy_removal_removes_its_recorded_environment(tmp_path):
     (env_prefix / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
     _write_install_info(base, "main", ENV_PREFIX=env_prefix)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\nC\n")
+                     input_text="YC")
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"Removing the environment: {env_prefix}" in result.stdout, result.stdout
     assert not env_prefix.exists(), result.stdout
@@ -1807,7 +1899,7 @@ def test_a_legacy_removal_keeps_a_recorded_path_that_is_no_environment(tmp_path)
     (other / "data.txt").write_text("keep\n", encoding="utf-8", newline="\n")
     _write_install_info(base, "v1.1.0", ENV_PREFIX=other)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\nC\n")
+                     input_text="YC")
     assert (other / "data.txt").exists(), result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
@@ -1826,7 +1918,7 @@ def test_a_legacy_removal_keeps_another_conda_environment(tmp_path):
     (other / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
     _write_install_info(base, "v1.1.0", ENV_PREFIX=other)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\nC\n")
+                     input_text="YC")
     assert (other / "conda-meta" / "history").exists(), result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
@@ -1843,9 +1935,10 @@ def test_a_source_checkout_is_not_removed_as_a_legacy_installation(tmp_path, how
     (checkout / ".git").mkdir(parents=True)
     (checkout / "TAVI_PySide6.py").write_text("# stub\n", encoding="utf-8", newline="\n")
     args = [str(checkout)] if how == "by argument" else []
-    # Y would confirm a removal. With no argument the folder prompt comes first
-    # and takes the leading Enter; choice skips a key it does not offer.
-    keys = "Y\nC\n" if how == "by argument" else "\nY\nC\n"
+    # Neither run reaches the removal question, so only C is fed to the closing
+    # prompt. With no argument the folder prompt (set /p) comes first and takes
+    # a line, which is empty here.
+    keys = "C" if how == "by argument" else "\nC"
     result = run_bat(UNINSTALL_STANDALONE, *args, env=env, timeout=30, input_text=keys)
     assert (checkout / ".git").is_dir(), (how, result.stdout)
     assert (checkout / "TAVI_PySide6.py").exists(), (how, result.stdout)
@@ -1865,7 +1958,7 @@ def test_the_standalone_uninstaller_does_not_expand_a_hostile_layout(tmp_path, t
     value = template.format(marker=marker)
     _write_install_info(base, "main", LAYOUT=value)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="C\n")
+                     input_text="C")
     assert not marker.exists(), (label, "a line expanded the value", result.stdout)
     assert result.returncode == 1, (label, result.stdout + result.stderr)
     assert 'folder layout "unrecognised"' in result.stdout, (label, result.stdout)
@@ -1944,3 +2037,60 @@ def test_resolver_does_not_expand_a_hostile_install_id(tmp_path, script, field, 
     assert result.returncode == 0, (label, result.stdout + result.stderr)
     assert "LAYOUT=1" in result.stdout.splitlines(), (label, result.stdout)
     assert "[INFO]" in result.stdout, (label, result.stdout)
+
+
+# ===========================================================================
+# 12. The choice stand-in that keeps this suite silent is itself checked: it
+#     must agree with the real choice.exe wherever the real one is silent, and
+#     it must record what the real one would beep at.
+# ===========================================================================
+
+REAL_CHOICE = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "choice.exe")
+
+# Each case ends in valid keys or at end of input, so the real choice does not
+# beep for any of them. The second batch line shows that both read one
+# character per prompt and leave the rest of the pipe alone.
+CHOICE_BATCH = (
+    "@echo off\r\n"
+    '"%CHOICE_EXE%" /C AB /N /M "First?"\r\n'
+    "echo first=%ERRORLEVEL%\r\n"
+    '"%CHOICE_EXE%" /C XYZ /N /M "Second?"\r\n'
+    "echo second=%ERRORLEVEL%\r\n"
+)
+
+
+@pytest.mark.skipif(not os.path.exists(REAL_CHOICE), reason="no System32\\choice.exe")
+@pytest.mark.parametrize("keys", ["BZ", "az", "B", "", "AY", "bx"])
+def test_the_choice_stand_in_agrees_with_the_real_choice(tmp_path, keys, _choice_sensor_dir):
+    if _choice_sensor_dir is None:
+        pytest.skip("no stand-in was built")
+    script = tmp_path / "two-prompts.bat"
+    script.write_text(CHOICE_BATCH, encoding="utf-8", newline="")
+    outcomes = []
+    for exe in (REAL_CHOICE, os.path.join(_choice_sensor_dir, "choice.exe")):
+        env = dict(os.environ, CHOICE_EXE=exe)
+        done = run_bat(str(script), env=env, timeout=30, input_text=keys or None)
+        outcomes.append((done.returncode, done.stdout, done.stderr))
+    assert outcomes[0] == outcomes[1], outcomes
+
+
+def test_the_choice_stand_in_records_a_stray_line_ending(tmp_path, _choice_sensor_dir):
+    """The sensor can fail: a line ending after a key is two characters the
+    next prompt would beep at, and that is the mistake this suite had."""
+    if _choice_sensor_dir is None:
+        pytest.skip("no stand-in was built")
+    script = tmp_path / "one-prompt.bat"
+    script.write_text('@echo off\r\nchoice /C C /N /M "Press C"\r\n', encoding="utf-8", newline="")
+    log = tmp_path / "own-log.txt"
+    env = dict(os.environ, TAVI_CHOICE_LOG=str(log))
+    done = run_bat(str(script), env=env, timeout=30, input_text="\nC")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "BEEP at 0x0D in /C C", "BEEP at 0x0A in /C C"]
+
+
+def test_run_bat_fails_on_a_bel_character_in_the_output(tmp_path):
+    script = tmp_path / "bell.bat"
+    script.write_bytes(b"@echo off\r\necho \x07\r\n")
+    with pytest.raises(AssertionError, match="BEL"):
+        run_bat(str(script), timeout=20)
