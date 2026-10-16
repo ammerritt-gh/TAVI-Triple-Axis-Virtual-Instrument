@@ -11144,7 +11144,7 @@ def _self_test_verdict(state, error, executed_mask, skipped_points, output_folde
 
 
 def _self_test_main(qt_args):
-    """``--self-test`` (for the installer): one real McStas point on PUMA through the controller's
+    """``--self-test`` (for the installer): one real McStas point on puma through the controller's
     job queue, in a hidden offscreen window, nothing written to output/ or the real config.
 
     Never returns: ends the process with ``TAVI SELF-TEST PASSED`` / exit 0 or
@@ -11357,7 +11357,7 @@ def main():
     parser.add_argument(
         "--self-test", action="store_true",
         help="For the installer, not for everyday use: start TAVI hidden, run one small "
-             "McStas point on PUMA into a throwaway folder, print TAVI SELF-TEST PASSED or "
+             "McStas point on puma into a throwaway folder, print TAVI SELF-TEST PASSED or "
              "TAVI SELF-TEST FAILED: <reason>, and exit 0 or 1.",
     )
     args, qt_args = parser.parse_known_args()  # leftover args go to Qt
