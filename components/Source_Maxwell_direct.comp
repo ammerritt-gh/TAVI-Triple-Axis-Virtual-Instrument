@@ -1,0 +1,285 @@
+/*******************************************************************************
+*
+* McStas, neutron ray-tracing package
+*         Copyright (C) 1997-2026, All rights reserved
+*         Risoe National Laboratory, Roskilde, Denmark
+*         Institut Laue Langevin, Grenoble, France
+*
+* Component: Source_Maxwell_direct
+*
+* %I
+* Written by: Adrian Merritt (TAVI project)
+* Date: October 16, 2026
+* Version: 1.0
+* Origin: TAVI
+* Release: McStas 3.x
+*
+* Rectangular neutron source with a facility spectrum of up to three Maxwellians,
+* sampled directly in energy: every ray leaves with the same weight.
+*
+* %D
+* A rectangular neutron source that emits into a rectangular angular window and
+* has one of two modes, chosen by the setting parameter flat_band.
+*
+* Full spectrum (flat_band=0, the default). The flux spectrum is the sum of up
+* to three Maxwellians, exactly the one Source_gen builds from the same T1..T3,
+* I1..I3 (P. Ageron, Nucl. Inst. Meth. A 284 (1989) 197). In wavelength each
+* Maxwellian is normalised to one,
+*   SG(L,T) = 2 a^2 exp(-a/L^2) / L^5,  a = 949/T  (T in K, L in Angstrom),
+* and the flux per steradian, cm^2 and second is the sum of Ii*SG(L,Ti). In
+* energy, with E = C/L^2 and C = VS2E*K2V^2*4*PI^2 (about 81.80 meV Angstrom^2),
+* the same kernel is the density E exp(-E/th)/th^2 with th = C*T/949 meV, a
+* Gamma(2,th) distribution. The component draws E from it directly: it picks
+* one active pair i with probability Ii/sum(I) and sets E = -th_i ln(U1 U2). A
+* pair is active when T>0 and I>0. There are no energy or wavelength cut-offs:
+* the source emits over the whole spectrum, however far the tails reach.
+*
+* Flat band (flat_band=1). E is uniform in [E0-dE, E0+dE] and T1..I3 are ignored.
+* This mode is deliberately unphysical. It exists to get good statistics around
+* one energy quickly, and its total intensity scales with dE: flux is the
+* intensity per energy unit, n/cm^2/s/sr/meV, and is arbitrary (default 1).
+* Do not compare its absolute intensity with the full spectrum.
+*
+* Emission geometry. The position is uniform on the rectangle in the z=0 plane
+* and t=0. The direction is drawn with randvec_target_rect_angular, as Source_gen
+* does, uniform per steradian in a window focus_aw wide (horizontal) and focus_ah
+* high (vertical), both full widths, centred on the z axis. The window has the
+* solid angle Omega = 2*focus_aw*sin(focus_ah/2) (radians). The window is a
+* latitude/longitude rectangle: the horizontal angle is uniform in
+* +-focus_aw/2 and the vertical angle is asin(U*sin(focus_ah/2)); focus_ah must
+* not exceed 180 deg and focus_aw must not exceed 360 deg.
+*
+* One weight. Every ray leaves with the same weight, set in INITIALIZE:
+*   full spectrum: p = sum(Ii) * 1e4 * xwidth * yheight * Omega / ncount
+*   flat band:     p = flux * 2*dE * 1e4 * xwidth * yheight * Omega / ncount
+* (the sum runs over the active pairs; the 1e4 turns m^2 into cm^2). The source
+* never reweights a ray by its energy, direction or position, so a downstream
+* histogram of rays shows the spectrum, not a weighted sample of a flat one.
+*
+* No guides. The spectrum is the moderator's, at the source plane. Place guides,
+* windows and filters after this component to model what a real beam line adds.
+*
+* Invalid input stops the run. INITIALIZE prints a message that names the
+* component, its instance and the parameter with its value on stderr, then
+* exits. It refuses a non-positive xwidth, yheight, focus_aw or focus_ah, a
+* window beyond 360 x 180 deg, any T or I that is negative or not finite, an
+* input with no active pair, a flat_band other than 0 or 1, and, with
+* flat_band=1, a dE or flux that is not positive or an E0-dE that is not
+* positive. In full-spectrum mode E0, dE and flux are neither read nor checked.
+*
+* Switching flat_band at run time (for example from an instrument parameter)
+* does not need a recompile.
+*
+* Version. The Version line in %I is the component's version number. A change to
+* the physics, to the weight or to the parameters is a version change.
+*
+* Facility parameters (the table of Source_gen, copied unchanged; every row
+* works here, all use T1..T3 and I1..I3). Source_Maxwell_direct is rectangular
+* only: the HZB cold row names a radius, which this component does not take, so
+* give xwidth and yheight instead.
+*
+* PSI cold source     T1=296.2,I1=8.5E11, T2=40.68,I2=5.2E11
+* ILL VCS cold source T1=216.8,I1=1.24e+13,T2=33.9,I2=1.02e+13
+*        (H1, 58 MW)  T3=16.7 ,I3=3.0423e+12
+* ILL HCS cold source T1=413.5,I1=10.22e12,T2=145.8,I2=3.44e13
+*        (H5, 58 MW)  T3=40.1 ,I3=2.78e13
+* ILL Thermal tube    T1=683.7,I1=0.5874e+13,T2=257.7,I2=2.5099e+13
+*        (H12, 58 MW) T3=16.7 ,I3=1.0343e+12
+* ILL Hot source      T1=1695, I1=1.74e13,T2=708,  I2=3.9e12 (58MW)
+* HZB cold source     T1=43.7 ,I1=1.4e12, T2=137.2,I2=2.08e12,radius=.155 (10MW)
+* HZB bi-spectral     T1=43.7, I1=1.4e12, T2=137.2,I2=2.08e12,T3=293.0,I3=1.77e12
+* HZB thermal tube    T1=293.0,I1=2.64e12 (10MW)
+* FRM2 cold,20MW      T1=35.0, I1=9.38e12,T2=547.5,I2=2.23e12,T3=195.4,I3=1.26e13
+* FRM2 thermal,20MW   T1=285.6,I1=3.06e13,T2=300.0,I2=1.68e12,T3=429.9,I3=6.77e12
+* LLB cold,14MW       T1=220,  I1=2.09e12,T2=60,   I2=3.83e12,T3=20,   I3=1.04e12
+* TRIGA thermal 1MW   T1=300,  I1=3.5e11 (scale by thermal power in MW)
+*
+* Usage example:
+*   Source_Maxwell_direct(xwidth=0.1, yheight=0.1, focus_aw=2, focus_ah=2,
+*     T1=285.6, I1=3.06e13, T2=300.0, I2=1.68e12, T3=429.9, I3=6.77e12)
+*   Source_Maxwell_direct(xwidth=0.1, yheight=0.1, focus_aw=2, focus_ah=2,
+*     T1=300, I1=1e13, flat_band=1, E0=14.7, dE=2)
+*
+* %VALIDATION
+* Pending: the verification record is filled in from a run of
+* tools/verify_source_maxwell_direct.py.
+*
+* %P
+* xwidth: [m]           Width of the source
+* yheight: [m]          Height of the source
+* focus_aw: [deg]       Full horizontal width of the emission window (uniform per steradian)
+* focus_ah: [deg]       Full vertical height of the emission window (uniform per steradian)
+* T1: [K]               Temperature of the first Maxwellian
+* I1: [1/(s*cm**2*sr)]  Integrated flux per solid angle and area of the first Maxwellian
+* T2: [K]               Temperature of the second Maxwellian, 0=none
+* I2: [1/(s*cm**2*sr)]  Integrated flux of the second Maxwellian, 0=none
+* T3: [K]               Temperature of the third Maxwellian, 0=none
+* I3: [1/(s*cm**2*sr)]  Integrated flux of the third Maxwellian, 0=none
+* flat_band: [0|1]      0: full spectrum (default), 1: unphysical flat band in energy
+* E0: [meV]             Flat band: centre energy (read only when flat_band=1)
+* dE: [meV]             Flat band: half width (read only when flat_band=1)
+* flux: [1/(s*cm**2*sr*meV)]  Flat band: flux per energy unit (read only when flat_band=1)
+*
+* %L
+* Source_gen, McStas component library (the spectrum and facility table).
+* P. Ageron, Nucl. Inst. Meth. A 284 (1989) 197
+*
+* %E
+*******************************************************************************/
+
+DEFINE COMPONENT Source_Maxwell_direct
+
+SETTING PARAMETERS (xwidth, yheight, focus_aw, focus_ah, T1, I1, T2=0, I2=0,
+                    T3=0, I3=0, int flat_band=0, E0=0, dE=0, flux=1)
+
+/* Neutron parameters: (x,y,z,vx,vy,vz,t,sx,sy,sz,p) */
+
+SHARE
+%{
+#ifndef SOURCE_MAXWELL_DIRECT_DEF
+#define SOURCE_MAXWELL_DIRECT_DEF
+  /* Report one refused parameter and stop. Only INITIALIZE calls it. */
+  void smd_refuse(const char *comp, const char *param, double value, const char *rule)
+  {
+    fprintf(stderr, "Source_Maxwell_direct: %s: %s=%g %s\n", comp, param, value, rule);
+    exit(-1);
+  }
+#endif
+%}
+
+DECLARE
+%{
+  double pair_theta[3]; /* energy scale of each active pair [meV] */
+  double pair_cum[3];   /* cumulative selection probability over the active pairs */
+  int    n_pairs;       /* number of active pairs */
+  double dist;          /* distance to the next component [m], 0 if none; display only */
+  double p_ray;         /* the one weight of every ray */
+%}
+
+INITIALIZE
+%{
+  double Tv[3], Iv[3];
+  double sumI = 0, omega_sr, c_e;
+  int k;
+
+  Tv[0] = T1; Tv[1] = T2; Tv[2] = T3;
+  Iv[0] = I1; Iv[1] = I2; Iv[2] = I3;
+
+  if (!(isfinite(xwidth)   && xwidth   > 0)) smd_refuse(NAME_CURRENT_COMP, "xwidth",   xwidth,   "must be finite and > 0");
+  if (!(isfinite(yheight)  && yheight  > 0)) smd_refuse(NAME_CURRENT_COMP, "yheight",  yheight,  "must be finite and > 0");
+  if (!(isfinite(focus_aw) && focus_aw > 0 && focus_aw <= 360))
+    smd_refuse(NAME_CURRENT_COMP, "focus_aw", focus_aw, "must be finite, > 0 and <= 360 deg");
+  if (!(isfinite(focus_ah) && focus_ah > 0 && focus_ah <= 180))
+    smd_refuse(NAME_CURRENT_COMP, "focus_ah", focus_ah, "must be finite, > 0 and <= 180 deg");
+  if (flat_band != 0 && flat_band != 1) smd_refuse(NAME_CURRENT_COMP, "flat_band", flat_band, "must be 0 (full spectrum) or 1 (flat band)");
+
+  for (k = 0; k < 3; k++) {
+    static const char *tname[3] = {"T1", "T2", "T3"};
+    static const char *iname[3] = {"I1", "I2", "I3"};
+    if (!(isfinite(Tv[k]) && Tv[k] >= 0)) smd_refuse(NAME_CURRENT_COMP, tname[k], Tv[k], "must be finite and >= 0");
+    if (!(isfinite(Iv[k]) && Iv[k] >= 0)) smd_refuse(NAME_CURRENT_COMP, iname[k], Iv[k], "must be finite and >= 0");
+  }
+
+  /* active pairs: T>0 and I>0, kept in order; the selection probability is I/sum(I) */
+  c_e = VS2E*K2V*K2V*4*PI*PI; /* E = c_e/L^2, the same constant Source_gen's kernel implies */
+  n_pairs = 0;
+  for (k = 0; k < 3; k++) {
+    if (Tv[k] > 0 && Iv[k] > 0) {
+      pair_theta[n_pairs] = c_e*Tv[k]/949.0;
+      pair_cum[n_pairs]   = Iv[k];
+      sumI += Iv[k];
+      n_pairs++;
+    }
+  }
+  if (n_pairs == 0) {
+    fprintf(stderr, "Source_Maxwell_direct: %s: T1=%g I1=%g T2=%g I2=%g T3=%g I3=%g: no pair has T>0 and I>0\n",
+            NAME_CURRENT_COMP, T1, I1, T2, I2, T3, I3);
+    exit(-1);
+  }
+  for (k = 0; k < n_pairs; k++) pair_cum[k] = (k ? pair_cum[k-1] : 0) + pair_cum[k]/sumI;
+  pair_cum[n_pairs-1] = 1.0; /* no rounding gap at the top */
+
+  if (flat_band) {
+    if (!(isfinite(dE)   && dE   > 0)) smd_refuse(NAME_CURRENT_COMP, "dE",   dE,   "must be finite and > 0 in flat-band mode");
+    if (!(isfinite(E0)))               smd_refuse(NAME_CURRENT_COMP, "E0",   E0,   "must be finite in flat-band mode");
+    if (!(E0 - dE > 0)) {
+      fprintf(stderr, "Source_Maxwell_direct: %s: E0=%g dE=%g: the flat band must have E0 - dE > 0\n", NAME_CURRENT_COMP, E0, dE);
+      exit(-1);
+    }
+    if (!(isfinite(flux) && flux > 0)) smd_refuse(NAME_CURRENT_COMP, "flux", flux, "must be finite and > 0 in flat-band mode");
+  }
+
+  /* the one weight; Omega is the solid angle of the emission window */
+  omega_sr = 2*focus_aw*DEG2RAD*sin(focus_ah*DEG2RAD/2);
+  if (flat_band)
+    p_ray = flux*2*dE*1e4*xwidth*yheight*omega_sr/mcget_ncount();
+  else
+    p_ray = sumI*1e4*xwidth*yheight*omega_sr/mcget_ncount();
+
+  /* distance to the next component, for the display only */
+  dist = 0;
+  if (INDEX_CURRENT_COMP + 1 < mcNUMCOMP) {
+    Coords ToTarget;
+    double tx, ty, tz;
+    ToTarget = coords_sub(POS_A_COMP_INDEX(INDEX_CURRENT_COMP+1), POS_A_CURRENT_COMP);
+    ToTarget = rot_apply(ROT_A_CURRENT_COMP, ToTarget);
+    coords_get(ToTarget, &tx, &ty, &tz);
+    dist = sqrt(tx*tx + ty*ty + tz*tz);
+  }
+%}
+
+TRACE
+%{
+  double E, v, u, u1, u2, nrm, solid_angle;
+  int k;
+
+  /* position: uniform on the rectangle */
+  x = randpm1()*xwidth/2;
+  y = randpm1()*yheight/2;
+  z = 0;
+  t = 0;
+
+  /* energy */
+  if (flat_band) {
+    E = E0 + dE*randpm1();
+  } else {
+    u = rand01();
+    for (k = 0; k < n_pairs - 1; k++)
+      if (u < pair_cum[k]) break; /* u==1 or rounding falls to the last active pair */
+    do { /* rand01 can return exactly 0 (log) or 1 (E=0): redraw */
+      u1 = rand01();
+      u2 = rand01();
+    } while (u1 <= 0 || u2 <= 0 || u1*u2 >= 1);
+    E = -pair_theta[k]*log(u1*u2);
+  }
+
+  /* direction: uniform per steradian in the window, speed from E */
+  randvec_target_rect_angular(&vx, &vy, &vz, &solid_angle, 0, 0, 1,
+                              focus_aw*DEG2RAD, focus_ah*DEG2RAD, ROT_A_CURRENT_COMP);
+  nrm = sqrt(vx*vx + vy*vy + vz*vz);
+  v = SE2V*sqrt(E)/nrm;
+  vx *= v; vy *= v; vz *= v;
+
+  p = p_ray; /* the only assignment to p */
+
+  SCATTER;
+%}
+
+MCDISPLAY
+%{
+  multiline(5, -xwidth/2.0, -yheight/2.0, 0.0,
+                xwidth/2.0, -yheight/2.0, 0.0,
+                xwidth/2.0,  yheight/2.0, 0.0,
+               -xwidth/2.0,  yheight/2.0, 0.0,
+               -xwidth/2.0, -yheight/2.0, 0.0);
+  if (dist) { /* the dashed window needs a next component to reach */
+    double hw = dist*tan(focus_aw*DEG2RAD/2);
+    double hh = dist*tan(focus_ah*DEG2RAD/2);
+    dashed_line(0,0,0, -hw,-hh,dist, 4);
+    dashed_line(0,0,0,  hw,-hh,dist, 4);
+    dashed_line(0,0,0,  hw, hh,dist, 4);
+    dashed_line(0,0,0, -hw, hh,dist, 4);
+  }
+%}
+
+END
