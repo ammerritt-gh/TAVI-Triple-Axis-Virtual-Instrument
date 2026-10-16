@@ -954,10 +954,8 @@ def test_doctor_does_not_expand_a_hostile_base(tmp_path):
 #     Packet u2-p3 adds WINDOWS-install-TAVI-v1.4.0.bat to NO_PAUSE_FILES.
 # ===========================================================================
 
-NO_PAUSE_FILES = [TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI, UNINSTALL_TAVI, UNINSTALL_STANDALONE]
-# Converted by packet u2-p2. Strict: once its pauses are gone this XPASSes
-# and fails, so the move into NO_PAUSE_FILES cannot be forgotten.
-NO_PAUSE_PENDING = [UPDATE_TAVI]
+NO_PAUSE_FILES = [TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI, UPDATE_TAVI, UNINSTALL_TAVI,
+                  UNINSTALL_STANDALONE]
 
 
 def _pause_commands(path):
@@ -969,11 +967,7 @@ def _pause_commands(path):
     ]
 
 
-@pytest.mark.parametrize("script", [
-    *[pytest.param(path, id=os.path.basename(path)) for path in NO_PAUSE_FILES],
-    *[pytest.param(path, id=os.path.basename(path), marks=pytest.mark.xfail(
-        strict=True, reason="packet u2-p2 replaces its pauses")) for path in NO_PAUSE_PENDING],
-])
+@pytest.mark.parametrize("script", NO_PAUSE_FILES, ids=os.path.basename)
 def test_no_pause_in_a_v14_outcome_file(script):
     offenders = _pause_commands(script)
     assert not offenders, f"{os.path.basename(script)} still pauses: {offenders}"
@@ -1378,6 +1372,41 @@ def test_update_tavi_checks_out_a_well_formed_version(tmp_path, micromamba_stub_
     assert checkouts, f"update-tavi.bat never reached git checkout: {calls}"
     argv = checkouts[0]
     assert argv[argv.index("checkout") + 1] == version
+
+
+def test_repair_succeeds_with_its_log_and_closes_on_c(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="2")
+    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=60, input_text="C\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert "REPAIR SUCCEEDED" in out and "Press C to continue." in out, out
+    assert "stub line" not in out, "the steps' output belongs in the log"
+    logs = _new_logs("repair", env)
+    assert len(logs) == 1 and logs[0] in out, (logs, out)
+    text = _text(logs[0])
+    assert text.count("stub line 2") == 3, text  # fetch, checkout, the load check
+    assert "[TAVI] REPAIR SUCCEEDED" in text, text
+
+
+def test_repair_failure_names_the_step_and_shows_the_last_30_lines(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="50", MICROMAMBA_STUB_EXIT="3")
+    result = run_bat(str(base / "update-tavi.bat"), env=env, timeout=60, input_text="C\n")
+    assert result.returncode == 1, result.stdout + result.stderr
+    out = result.stdout
+    assert "REPAIR FAILED" in out, out
+    assert "Failed step: Fetching the release from GitHub" in out, out
+    # The fetch's output ends the log at "stub line 50": its last 30 lines
+    # start at stub line 21.
+    assert re.search(r"(?m)^stub line 21\r?$", out), out
+    assert re.search(r"(?m)^stub line 50\r?$", out), out
+    assert not re.search(r"(?m)^stub line 20\r?$", out), out
+    assert out.rindex("REPAIR FAILED") > out.rindex("stub line 50"), "the headline comes last"
+    logs = _new_logs("repair", env)
+    assert len(logs) == 1 and logs[0] in out, (logs, out)
+    assert "REPAIR FAILED at: Fetching the release from GitHub" in _text(logs[0])
+    assert "Press C to continue." in out and "Press any key" not in out, out
 
 
 @pytest.mark.parametrize("version,label", BAD_VERSIONS)
