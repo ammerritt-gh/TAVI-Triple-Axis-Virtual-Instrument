@@ -11320,7 +11320,9 @@ def _relaunch_std_kwargs():
             return {}
         try:
             stream.fileno()
-        except (OSError, ValueError):  # io.UnsupportedOperation is both: no file behind it
+        except (OSError, ValueError) as exc:  # io.UnsupportedOperation is both: no file behind it
+            log.warning("Relaunch: a standard stream has no file (%s); the new TAVI "
+                        "inherits the streams instead", exc)
             return {}
     sys.stdout.flush()
     sys.stderr.flush()

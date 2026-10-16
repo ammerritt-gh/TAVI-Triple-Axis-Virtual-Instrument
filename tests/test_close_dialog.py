@@ -329,7 +329,7 @@ def test_instrument_switch_force_stops_without_a_second_dialog(rig, monkeypatch)
     assert rig.window._restart_instrument_id == other
 
 
-def test_a_relaunch_hands_the_new_session_this_process_output(tmp_path, monkeypatch):
+def test_a_relaunch_hands_the_new_session_this_process_output(tmp_path, monkeypatch, caplog):
     """The relaunched TAVI writes where this one writes, which under run-tavi.bat is
     the launch log. A stream with no file behind it gives nothing, and the child
     inherits as it always did."""
@@ -348,5 +348,7 @@ def test_a_relaunch_hands_the_new_session_this_process_output(tmp_path, monkeypa
         assert cm._relaunch_std_kwargs() == {"stdout": log, "stderr": log}
         monkeypatch.setattr(sys, "stderr", NoFile())
         assert cm._relaunch_std_kwargs() == {}
+        assert any(r.levelname == "WARNING" and "no file" in r.getMessage()
+                   for r in caplog.records), caplog.text
     monkeypatch.setattr(sys, "stdout", None)
     assert cm._relaunch_std_kwargs() == {}
