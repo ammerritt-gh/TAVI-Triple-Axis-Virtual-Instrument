@@ -7038,13 +7038,14 @@ class TAVIController(QObject):
     # --- the moderator source (instruments/source.py): GUI values, defaults, saved state ---
 
     def _source_gui_values(self):
-        """The Instrument dock's nine source values; a number that does not parse is None.
+        """The Instrument dock's nine source values; a number that does not parse is None."""
+        return self._with_unused_de(self.window.instrument_dock.source_settings())
 
-        A blank dE in full-spectrum mode is the old default 2: nothing reads it there.
-        """
-        values = self.window.instrument_dock.source_settings()
+    @staticmethod
+    def _with_unused_de(values):
+        """A blank dE in full-spectrum mode is the old default 2: nothing reads it there."""
         if values['moderator_mode'] == 'full_spectrum' and values['flat_band_half_width_mev'] is None:
-            values['flat_band_half_width_mev'] = 2.0
+            return {**values, 'flat_band_half_width_mev': 2.0}
         return values
 
     def _source_vals(self):
@@ -7068,13 +7069,13 @@ class TAVIController(QObject):
             ei = None
         self.window.instrument_dock.set_source_preview_ei(ei)
 
-    @staticmethod
-    def _source_refusals(base, parsed):
+    def _source_refusals(self, base, parsed):
         """``{public name: message}`` when the source a write would leave does not validate, else ``{}``.
 
-        ``base`` holds the nine values before the write; ``parsed`` the write's parsed values
-        by public name. A profile named in the write loads its T/I first, then the write's own
-        T/I stand over it, whatever their order in the request.
+        ``base`` holds the nine values before the write, dE as the dock shows it (None when
+        blank); ``parsed`` the write's parsed values by public name. A profile named in the
+        write loads its T/I first, then the write's own T/I stand over it, whatever their
+        order in the request.
         """
         named = [key for key in moderator.FIELD_IDS if key in parsed]
         if not named:
@@ -7083,6 +7084,7 @@ class TAVIController(QObject):
         if 'moderator_profile' in parsed:
             values.update(moderator.profile_values(parsed['moderator_profile']))
         values.update({key: parsed[key] for key in named})
+        values = self._with_unused_de(values)   # judged on the mode the write leaves
         refusals = {}
         for message in moderator.validate(values):
             name = next((key for key in named if message.startswith(key)), named[0])
@@ -8790,7 +8792,7 @@ class TAVIController(QObject):
             return applied, errors
 
         # (a4) A source that would not validate is refused before anything is written.
-        refusals = self._source_refusals(self._source_gui_values(), parsed)
+        refusals = self._source_refusals(self.window.instrument_dock.source_settings(), parsed)
         if refusals:
             errors.update({submitted[name]: message for name, message in refusals.items()})
             return applied, errors
