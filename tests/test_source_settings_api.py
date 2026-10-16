@@ -161,6 +161,27 @@ def test_an_invalid_source_is_refused_with_no_state_change(fresh, body, names):
     assert _state(call) == before
 
 
+def test_a_flat_band_write_over_a_blank_de_is_refused_while_full_spectrum_ignores_it(fresh):
+    """The dock's dE is judged as it stands: blank is refused in flat band, allowed in full spectrum."""
+    controller, call = fresh
+    controller.window.instrument_dock.flat_band_edit.setText("")
+    before = _state(call)
+
+    status, reply = _patch(call, {"moderator_mode": "flat_band"})
+
+    assert status == 400, reply
+    assert "flat_band_half_width_mev" in reply["error"]["details"]["errors"]["moderator_mode"]
+    assert _state(call) == before
+    assert _source(call)["moderator_mode"] == "full_spectrum"
+
+    status, reply = _patch(call, {"moderator_t1_k": 300.0})     # dE is unused in full spectrum
+    assert status == 200, reply
+
+    status, reply = _patch(call, {"moderator_mode": "flat_band", "flat_band_half_width_mev": 2.5})
+    assert status == 200, reply
+    assert _source(call)["moderator_mode"] == "flat_band"
+
+
 def test_a_valid_source_that_would_leave_no_pair_is_judged_on_the_result(fresh):
     """A zero I is fine while another pair stays active: validation sees the source the write leaves."""
     _controller, call = fresh
