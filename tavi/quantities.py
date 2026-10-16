@@ -162,6 +162,24 @@ QUANTITIES: tuple[Quantity, ...] = (
              "vertical radius applied to the analyzer", "signed by the take-off branch",
              derived_only=True, refusal=APPLIED_REFUSAL, name="applied analyzer vertical radius"),
     *_SLIT_ROWS,
+    Quantity("moderator_mode", "", "Moderator mode", "which of the source's two modes runs",
+             "full_spectrum: the facility spectrum, sampled directly; "
+             "flat_band: an unphysical flat band of half-width dE about Ei",
+             writable=True, name="moderator mode"),
+    Quantity("moderator_profile", "", "Moderator profile",
+             "the facility entry the moderator values started from",
+             "a profile id; writing it loads that entry's T and I", writable=True,
+             name="moderator profile"),
+    *(Quantity(f"moderator_t{n}_k", "K", f"T{n} (K)", f"temperature {n} of the moderator's Maxwellians",
+               "0 = this pair unused; a pair counts when T > 0 and I > 0", writable=True,
+               name=f"moderator T{n}") for n in (1, 2, 3)),
+    *(Quantity(f"moderator_i{n}", "n/cm²/s/sr", f"I{n} (n/cm²/s/sr)",
+               f"integrated flux {n} of the moderator's Maxwellians",
+               "McStas Source_gen's I; 0 = this pair unused", writable=True,
+               name=f"moderator I{n}") for n in (1, 2, 3)),
+    Quantity("flat_band_half_width_mev", "meV", "Flat-band half-width dE (meV)",
+             "half-width of the unphysical flat band about Ei", "used only in flat-band mode",
+             writable=True, name="flat-band half-width"),
     Quantity("lattice_a_angstrom", "Å", "Lattice a (Å)", "sample lattice parameter a",
              "API writes only", aliases=("a",), writable=True, refusal=LATTICE_REFUSAL,
              name="lattice a"),
@@ -198,6 +216,10 @@ _RETIRED = {
     "kappa": "kappa is a diffraction-goniometer axis that TAVI does not have",
     **{old: f"{old} is retired: it was in metres; use {new}, which is in millimetres"
        for old, new in _OLD_SLITS.items()},
+    "source_type": "source_type is retired: choose moderator_mode (full_spectrum or flat_band) and "
+                   "moderator_profile, or set moderator_t1_k..moderator_i3",
+    "source_de": "source_dE is retired: use flat_band_half_width_mev (the flat band's half-width, "
+                 "used only when moderator_mode is flat_band)",
     "slits_mm": "slits_mm is retired: set each gap by its own key, "
                 "slit.<stable_id>.horizontal_gap_mm or .vertical_gap_mm (millimetres)",
     **{f"lattice_{axis}": f"lattice_{axis} is retired: use lattice_{axis}_{unit} (or {axis})"
@@ -238,7 +260,7 @@ def by_id(canonical_id: str) -> Quantity:
 
 
 # GET /schema publishes ASCII unit spellings; the registry keeps the typographic ones.
-_SCHEMA_UNIT = {"°": "degrees", "Å⁻¹": "angstrom^-1", "Å": "angstrom"}
+_SCHEMA_UNIT = {"°": "degrees", "Å⁻¹": "angstrom^-1", "Å": "angstrom", "n/cm²/s/sr": "n/cm^2/s/sr"}
 
 
 def schema_unit(canonical_id: str):
