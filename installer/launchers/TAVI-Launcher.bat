@@ -148,7 +148,7 @@ echo.
 :: ends the process itself - this file is inside the folder being deleted, so
 :: cmd could not read another line from it afterwards.
 cd /d "%TEMP%"
-call "%UNINST_COPY%" "%TAVI_BASE%" /y
+call "%UNINST_COPY%" "%TAVI_BASE%" /confirmed
 :: Not reached when the copy runs: it ends the process. Never fall through into
 :: the menu from here - this file may already have been deleted.
 exit 1

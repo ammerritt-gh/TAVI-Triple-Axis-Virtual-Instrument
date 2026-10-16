@@ -3,12 +3,16 @@ setlocal DisableDelayedExpansion
 
 :: TAVI uninstaller (layout 2).
 ::
-::   uninstall-tavi.bat [<base folder>] [/y]
+::   uninstall-tavi.bat [<base folder>] [/confirmed | /y]
 ::
 :: With no argument it uninstalls the installation it sits in. The launcher
-:: menu copies it to %TEMP% and runs it with the base folder and /y, having
-:: already confirmed; a copy outside the tree is what makes deleting the tree
-:: possible at all.
+:: menu copies it to %TEMP% and runs it with the base folder and /confirmed,
+:: having already asked; a copy outside the tree is what makes deleting the
+:: tree possible at all.
+::
+:: /confirmed skips this file's own question and nothing else: the run is
+:: attended, so it still ends on the headline and waits for C. /y is the
+:: unattended switch for test harnesses: no question and no wait at all.
 ::
 :: It never runs "rd /s /q" on the base folder itself. It removes the children
 :: the installer created, by name, and then a bare "rd" on the base, which
@@ -21,8 +25,7 @@ setlocal DisableDelayedExpansion
 ::
 :: 1.4: each run writes %LOCALAPPDATA%\TAVI\logs\uninstall-<yyyyMMdd-HHmmss>.log
 :: (%TEMP% when that folder cannot be written) and ends on TAVI WAS UNINSTALLED
-:: or UNINSTALL FAILED with the log's path. It waits for C, except with /y,
-:: which never waits. The logs folder is never removed, so an uninstall that
+:: or UNINSTALL FAILED with the log's path. It waits for C, except with /y. The logs folder is never removed, so an uninstall that
 :: went wrong can still be diagnosed. A "TAVI Launcher" shortcut on the desktop
 :: Windows reports is removed only when it opens this installation's
 :: TAVI-Launcher.bat; any other shortcut of that name is left and named.
@@ -73,6 +76,7 @@ cd /d "%SystemDrive%\"
 call :open_log
 >> "%LOG%" echo [TAVI] Uninstall started %STAMP%, run from %SELF_DIR%
 if /i "%AUTO%"=="/y" >> "%LOG%" echo [TAVI] /y: already confirmed, so no question and no wait at the end.
+if /i "%AUTO%"=="/confirmed" >> "%LOG%" echo [TAVI] /confirmed: already asked, so no question.
 
 call :validate_base "%TAVI_BASE%"
 if defined VB_REASON goto refused
@@ -117,6 +121,7 @@ echo Removing the TAVI installation in:
 echo     %TAVI_BASE%
 echo.
 if /i "%AUTO%"=="/y" goto remove
+if /i "%AUTO%"=="/confirmed" goto remove
 echo This deletes the program, your scan results in app\output, your saved
 echo settings in app\config, the Python/McStas environment and the downloaded
 echo package cache. None of it can be recovered, and reinstalling later
@@ -293,8 +298,8 @@ set "HEADLINE=TAVI WAS UNINSTALLED"
 :the_end_ok
 set "RC=0"
 
-:: One ending for every outcome. /y (the launcher menu, which has already
-:: asked) never waits; otherwise only C closes the window.
+:: One ending for every outcome. /y (a test harness) never waits; otherwise,
+:: /confirmed from the launcher menu included, only C closes the window.
 :the_end
 >> "%LOG%" echo [TAVI] %HEADLINE%
 echo.
