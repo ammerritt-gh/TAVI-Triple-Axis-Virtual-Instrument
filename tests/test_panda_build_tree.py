@@ -122,6 +122,7 @@ def test_selector_sits_after_the_primary_soller():
 def test_all_monitors_present_once_and_in_descriptor_order(diag_all_instrument):
     names = _component_names(diag_all_instrument)
     monitor_names = [m.component_name for m in _PANDA_MONITORS]
+    assert len(_PANDA_MONITORS) == 21
     assert [n for n in names if n in set(monitor_names)] == monitor_names
 
 
@@ -295,3 +296,51 @@ def test_maxwellian_de_clears_the_source_init_guard_at_pandas_cold_floor():
 def test_mono_source_de_default_also_clears_the_guard():
     source_dE = _build(source_type="Mono").get_component("source").dE
     assert 2.072142 * 1.05 ** 2 - source_dE > 0
+
+
+def test_monitor_order_holds_with_the_selector_and_primary_soller_in_beam():
+    enabled = {m.id: True for m in _PANDA_MONITORS}
+    instrument = _build(sample_key="Al_bragg", diagnostic_mode=True,
+                        diagnostic_settings=enabled, alpha_1="40",
+                        modules={"v_selector": True})
+    names = _component_names(instrument)
+    monitor_names = [m.component_name for m in _PANDA_MONITORS]
+    assert [n for n in names if n in set(monitor_names)] == monitor_names
+    assert (names.index("primary_collimator") < names.index("v_selector")
+            < names.index("source_DSD") < names.index("virtual_source"))
+
+
+def test_crystal_face_monitors_follow_the_selected_crystal(monkeypatch):
+    """Crystal-face monitors take the selected crystal's slab extents.
+
+    PG(002) and Cu(111) share slab extents, so a real crystal swap cannot show
+    a missing override; doubling the slabs in crystal_info does.
+    """
+    from instruments.panda.model import PANDA_Instrument
+
+    mono_info, ana_info = PANDA_Instrument().crystal_info("pg002", "pg002")
+
+    def doubled(info):
+        return {**info, "slabwidth": 2 * info["slabwidth"],
+                "slabheight": 2 * info["slabheight"]}
+
+    monkeypatch.setattr(PANDA_Instrument, "crystal_info",
+                        lambda self, monocris, anacris: (doubled(mono_info),
+                                                         doubled(ana_info)))
+    enabled = {m.id: True for m in _PANDA_MONITORS}
+    by_name = {c.name: c for c in
+               _build(diagnostic_mode=True, diagnostic_settings=enabled).component_list}
+    mono_w = 2 * mono_info["slabwidth"] * mono_info["ncolumns"]
+    mono_h = 2 * mono_info["slabheight"] * mono_info["nrows"]
+    ana_w = 2 * ana_info["slabwidth"] * ana_info["ncolumns"]
+    ana_h = 2 * ana_info["slabheight"] * ana_info["nrows"]
+    expected = {"premono_Emonitor": (mono_w, mono_h),
+                "postmono_Emonitor": (mono_w, mono_h),
+                "preanalyzer_Emonitor": (ana_w, ana_h),
+                "preanalyzer_PSD": (ana_w, ana_h),
+                "postanalyzer_Emonitor": (ana_w, ana_h),
+                "postanalyzer_PSD": (ana_w, ana_h)}
+    for name, (w, h) in expected.items():
+        assert by_name[name].xwidth == pytest.approx(w), name
+        assert by_name[name].yheight == pytest.approx(h), name
+

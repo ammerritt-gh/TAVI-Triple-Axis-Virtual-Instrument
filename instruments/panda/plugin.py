@@ -158,10 +158,19 @@ _PANDA_PARAMS = (
 
 _SAMPLE_REGION = ("sample_region",)
 
-# Minimal diagnostic set (IN8's shape): guide-exit pair, sample-position trio,
-# detector PSD. Apertures follow vPANDA's monitor windows where it has one;
-# positions are sensible beam-order spots, not surveyed hardware.
-# The energy window spans PANDA's whole reach: Cu111 at ki = 7 A^-1 is ~101 meV.
+# PG(002) mono and analyser slab extents (slabwidth * ncolumns, slabheight *
+# nrows, no gaps): the crystal-face monitors' default sizes. build() replaces
+# them with the SELECTED crystal's extents, as PUMA does.
+_MONO_W, _MONO_H = 0.020 * 11, 0.018 * 11
+_ANA_W, _ANA_H = 0.013 * 11, 0.025 * 5
+
+# Diagnostic monitors, 1:1 with the diagnostic_settings gates in build(), in
+# beam order (McStas component order is physics; tests/test_panda_build_tree.py
+# checks it). Positions are sensible beam-order spots, not surveyed hardware.
+# Ids reuse PUMA's where the station matches. Energy monitors only;
+# the energy/wavelength switch is another job's work. Primary windows span
+# PANDA's reach (Cu111 at ki = 7 A^-1 is ~101 meV). Secondary windows cover the
+# MLZ reference's PG(002) analyser kf range, 1.05-4.0 A^-1 = 2.3-33.2 meV.
 _PANDA_MONITORS = (
     MonitorSpec("Source EMonitor", "E_monitor", (0.0, 0.0, 0.10), "origin",
                 settings={"xwidth": 0.11, "yheight": 0.14, "nE": 100, "Emin": -2,
@@ -171,6 +180,46 @@ _PANDA_MONITORS = (
                 settings={"xwidth": 0.11, "yheight": 0.14, "nx": 100, "ny": 100,
                           "restore_neutron": 1},
                 component_name="source_PSD"),
+    MonitorSpec("Source DSD", "Divergence_monitor", (0.0, 0.0, 0.97), "origin",
+                settings={"xwidth": 0.11, "yheight": 0.14, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="source_DSD"),
+    MonitorSpec("Virtual source PSD", "PSD_monitor", (0.0, 0.0, 2.19), "origin",
+                settings={"xwidth": 0.11, "yheight": 0.20, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="virtual_source_PSD"),
+    MonitorSpec("Virtual source DSD", "Divergence_monitor", (0.0, 0.0, 2.20), "origin",
+                settings={"xwidth": 0.11, "yheight": 0.20, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="virtual_source_DSD"),
+    MonitorSpec("Premono PSD", "PSD_monitor", (0.0, 0.0, _L1 - 0.003), "origin",
+                settings={"xwidth": 0.25, "yheight": 0.25, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="premono_PSD"),
+    MonitorSpec("Premono DSD", "Divergence_monitor", (0.0, 0.0, _L1 - 0.002), "origin",
+                settings={"xwidth": 0.25, "yheight": 0.25, "nh": 100, "nv": 100,
+                          "restore_neutron": 1},
+                component_name="premono_DSD"),
+    MonitorSpec("Premono Emonitor", "E_monitor", (0.0, 0.0, _L1 - 0.001), "origin",
+                settings={"xwidth": _MONO_W, "yheight": _MONO_H, "nE": 400,
+                          "Emin": -2, "Emax": 120, "restore_neutron": 1},
+                component_name="premono_Emonitor"),
+    MonitorSpec("Postmono Emonitor", "E_monitor", (0.0, 0.0, 0.1), "sample_arm",
+                settings={"xwidth": _MONO_W, "yheight": _MONO_H, "nE": 400,
+                          "Emin": -2, "Emax": 120, "restore_neutron": 1},
+                component_name="postmono_Emonitor"),
+    MonitorSpec("Pre-sample collimation PSD", "PSD_monitor", (0.0, 0.0, 0.85), "sample_arm",
+                settings={"xwidth": 0.06, "yheight": 0.15, "nx": 200, "ny": 200,
+                          "restore_neutron": 1},
+                component_name="sample1_PSD"),
+    MonitorSpec("Sample PSD @ L2-0.5", "PSD_monitor", (0.0, 0.0, _L2 - 0.5), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.20, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample2_PSD"),
+    MonitorSpec("Sample PSD @ L2-0.3", "PSD_monitor", (0.0, 0.0, _L2 - 0.3), "sample_arm",
+                settings={"xwidth": 0.10, "yheight": 0.20, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                tags=_SAMPLE_REGION, component_name="sample3_PSD"),
     MonitorSpec("Sample PSD @ Sample", "PSD_monitor", (0.0, 0.0, _L2 - 0.03), "sample_arm",
                 settings={"xwidth": 0.10, "yheight": 0.20, "nx": 100, "ny": 100,
                           "restore_neutron": 1},
@@ -183,6 +232,26 @@ _PANDA_MONITORS = (
                 settings={"xwidth": 0.2, "yheight": 0.2, "nE": 100, "Emin": -2,
                           "Emax": 120, "restore_neutron": 1},
                 tags=_SAMPLE_REGION, component_name="sample_Emonitor"),
+    MonitorSpec("Pre-analyzer collimation PSD", "PSD_monitor", (0.0, 0.0, 0.45), "analyzer_arm",
+                settings={"xwidth": 1.0, "yheight": 1.0, "nx": 200, "ny": 200,
+                          "restore_neutron": 1},
+                component_name="precollim_PSD"),
+    MonitorSpec("Pre-analyzer EMonitor", "E_monitor", (0.0, 0.0, _L3 - 0.1), "analyzer_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nE": 100,
+                          "Emin": -2, "Emax": 40, "restore_neutron": 1},
+                component_name="preanalyzer_Emonitor"),
+    MonitorSpec("Pre-analyzer PSD", "PSD_monitor", (0.0, 0.0, _L3 - 0.1), "analyzer_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="preanalyzer_PSD"),
+    MonitorSpec("Post-analyzer EMonitor", "E_monitor", (0.0, 0.0, 0.10), "detector_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nE": 100,
+                          "Emin": -2, "Emax": 40, "restore_neutron": 1},
+                component_name="postanalyzer_Emonitor"),
+    MonitorSpec("Post-analyzer PSD", "PSD_monitor", (0.0, 0.0, 0.35), "detector_arm",
+                settings={"xwidth": _ANA_W, "yheight": _ANA_H, "nx": 100, "ny": 100,
+                          "restore_neutron": 1},
+                component_name="postanalyzer_PSD"),
     MonitorSpec("Detector PSD", "PSD_monitor", (0.0, 0.0, _L4 - 0.005), "detector_arm",
                 settings={"xwidth": 0.06, "yheight": 0.20, "nx": 100, "ny": 100,
                           "restore_neutron": 1},
