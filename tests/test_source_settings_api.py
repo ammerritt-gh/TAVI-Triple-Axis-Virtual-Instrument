@@ -182,6 +182,19 @@ def test_a_flat_band_write_over_a_blank_de_is_refused_while_full_spectrum_ignore
     assert _source(call)["moderator_mode"] == "flat_band"
 
 
+def test_an_api_source_write_refreshes_the_scan_verdict_once(fresh, monkeypatch):
+    """The GUI's source_changed refreshes the scan-command verdict; an API write does the same, once."""
+    controller, call = fresh
+    refreshes = []
+    monkeypatch.setattr(controller, "validate_scan_commands", lambda: refreshes.append(True))
+
+    status, reply = _patch(call, {"moderator_profile": "frm2_cold", "moderator_t2_k": 300.0,
+                                  "moderator_mode": "flat_band", "flat_band_half_width_mev": 2.0})
+
+    assert status == 200, reply
+    assert len(refreshes) == 1
+
+
 def test_a_valid_source_that_would_leave_no_pair_is_judged_on_the_result(fresh):
     """A zero I is fine while another pair stays active: validation sees the source the write leaves."""
     _controller, call = fresh
