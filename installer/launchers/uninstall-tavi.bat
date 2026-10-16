@@ -18,6 +18,18 @@ setlocal DisableDelayedExpansion
 :: Deleting requires an ownership token: <base>\.tavi-install-root must exist
 :: and its INSTALL_ID must match INSTALL_INFO.txt. A TAVI_PySide6.py sentinel
 :: is not enough - every checkout of the project has one.
+::
+:: 1.4: each run writes %LOCALAPPDATA%\TAVI\logs\uninstall-<yyyyMMdd-HHmmss>.log
+:: (%TEMP% when that folder cannot be written) and ends on TAVI WAS UNINSTALLED
+:: or UNINSTALL FAILED with the log's path. It waits for C, except with /y,
+:: which never waits. The logs folder is never removed, so an uninstall that
+:: went wrong can still be diagnosed. A "TAVI Launcher" shortcut on the desktop
+:: Windows reports is removed only when it opens this installation's
+:: TAVI-Launcher.bat; any other shortcut of that name is left and named.
+::
+:: TAVI_TEST_DESKTOP, when set, replaces the desktop Windows reports. It exists
+:: for tests/test_installer_launchers.py only, so that a test never reaches a
+:: real desktop; nothing a student runs sets it.
 
 :: /validate-only <path> prints ACCEPT or REFUSE <reason> and changes nothing.
 :: It exists so that tests/test_installer_launchers.py can drive :validate_base
@@ -43,6 +55,7 @@ title TAVI Uninstaller
 :: script cannot suppress a console that cmd creates for a detached process.
 :: `cd` first so nothing here holds the folder, then `call` - and the copy
 :: ends the whole process with `exit`, so control never returns to this file.
+:: The copy opens the log, so one uninstall writes one.
 if /i not "%SELF_DIR%"=="%TAVI_BASE%" goto not_in_place
 set "SELF_COPY=%TEMP%\tavi-uninstall-%RANDOM%%RANDOM%.bat"
 copy /Y "%~f0" "%SELF_COPY%" >nul
@@ -57,9 +70,13 @@ exit 1
 
 :not_in_place
 cd /d "%SystemDrive%\"
+call :open_log
+>> "%LOG%" echo [TAVI] Uninstall started %STAMP%, run from %SELF_DIR%
+if /i "%AUTO%"=="/y" >> "%LOG%" echo [TAVI] /y: already confirmed, so no question and no wait at the end.
 
 call :validate_base "%TAVI_BASE%"
 if defined VB_REASON goto refused
+>> "%LOG%" echo [TAVI] Installation: %TAVI_BASE%
 
 set "INSTALL_DIR=%TAVI_BASE%\app"
 set "ENV_PREFIX=%TAVI_BASE%\tavi-env"
@@ -108,6 +125,7 @@ echo Anything else you have put in the folder is left alone.
 echo.
 choice /C YN /N /M "Remove TAVI? (Y/N): "
 if not "%ERRORLEVEL%"=="1" goto cancelled
+>> "%LOG%" echo [TAVI] Answer to "Remove TAVI?": Y
 
 :remove
 set "TRIES=0"
@@ -115,6 +133,7 @@ set "TRIES=0"
 :remove_attempt
 set /a TRIES+=1
 echo [INFO] Removing TAVI files (attempt %TRIES%)...
+>> "%LOG%" echo [TAVI] Removing TAVI files, attempt %TRIES%
 if exist "%INSTALL_DIR%" rd /s /q "%INSTALL_DIR%" 2>nul
 if exist "%ENV_PREFIX%" rd /s /q "%ENV_PREFIX%" 2>nul
 if exist "%TAVI_BASE%\micromamba" rd /s /q "%TAVI_BASE%\micromamba" 2>nul
@@ -123,6 +142,7 @@ if exist "%TAVI_BASE%\compile_check" rd /s /q "%TAVI_BASE%\compile_check" 2>nul
 if exist "%TAVI_BASE%\run-tavi.bat" del /f /q "%TAVI_BASE%\run-tavi.bat" 2>nul
 if exist "%TAVI_BASE%\update-tavi.bat" del /f /q "%TAVI_BASE%\update-tavi.bat" 2>nul
 if exist "%TAVI_BASE%\TAVI-Launcher.bat" del /f /q "%TAVI_BASE%\TAVI-Launcher.bat" 2>nul
+if exist "%TAVI_BASE%\collect-diagnostics.bat" del /f /q "%TAVI_BASE%\collect-diagnostics.bat" 2>nul
 if exist "%TAVI_BASE%\TAVI Launcher.lnk" del /f /q "%TAVI_BASE%\TAVI Launcher.lnk" 2>nul
 
 :: rd reports success even when it skipped a file another process had open, so
@@ -147,10 +167,13 @@ goto remove_attempt
 :: INSTALL_INFO.txt and the marker have outlived every step that can fail and
 :: leave something to retry. What remains below cannot strand anything: if the
 :: base will not go, it is because the user's own files are in it.
+>> "%LOG%" echo [TAVI] Program, environment, package cache and launchers removed.
 if exist "%TAVI_BASE%\uninstall-tavi.bat" del /f /q "%TAVI_BASE%\uninstall-tavi.bat" 2>nul
 if exist "%INFO%" del /f /q "%INFO%" 2>nul
 if exist "%MARKER%" del /f /q "%MARKER%" 2>nul
 rd "%TAVI_BASE%" 2>nul
+set "DESK_LEGACY="
+call :remove_desktop_shortcut
 
 if exist "%TAVI_BASE%" goto base_kept
 call :drop_record
@@ -167,12 +190,14 @@ echo These files were not TAVI's, so they were left alone:
 dir /b "%TAVI_BASE%"
 echo.
 echo They are in: %TAVI_BASE%
-goto finished
+>> "%LOG%" echo [TAVI] Left in place, not TAVI's:
+>> "%LOG%" dir /b "%TAVI_BASE%"
+goto uninstalled
 
 :removed_clean
 echo.
 echo [OK] TAVI has been removed, and %TAVI_BASE% is gone.
-goto finished
+goto uninstalled
 
 :payload_stuck
 echo.
@@ -185,14 +210,19 @@ echo.
 echo Still present:
 if exist "%INSTALL_DIR%" echo     %INSTALL_DIR%
 if exist "%ENV_PREFIX%" echo     %ENV_PREFIX%
-echo.
-pause
-endlocal
-exit 1
+>> "%LOG%" echo [TAVI] Some files were still open after %TRIES% attempts. Still present:
+if exist "%INSTALL_DIR%" >> "%LOG%" echo     %INSTALL_DIR%
+if exist "%ENV_PREFIX%" >> "%LOG%" echo     %ENV_PREFIX%
+if exist "%TAVI_BASE%\micromamba" >> "%LOG%" echo     %TAVI_BASE%\micromamba
+if exist "%TAVI_BASE%\mamba" >> "%LOG%" echo     %TAVI_BASE%\mamba
+if exist "%TAVI_BASE%\compile_check" >> "%LOG%" echo     %TAVI_BASE%\compile_check
+goto failed
 
 :not_installed
 echo [INFO] Nothing to remove: %TAVI_BASE% does not exist.
-goto finished
+>> "%LOG%" echo [TAVI] Nothing to remove: the folder does not exist.
+set "HEADLINE=NOTHING TO UNINSTALL"
+goto the_end_ok
 
 :no_marker
 echo [ERROR] %TAVI_BASE% does not carry a TAVI ownership marker
@@ -202,11 +232,13 @@ echo.
 echo [INFO] If this really is a TAVI installation from before version 1.3.2,
 echo        use the WINDOWS-uninstall-TAVI.bat from the releases page, which
 echo        knows the older layout.
+>> "%LOG%" echo [TAVI] Refused: no ownership marker with a matching INSTALL_ID.
 goto refused_end
 
 :id_mismatch
 echo [ERROR] The ownership marker in %TAVI_BASE% does not match its
 echo         INSTALL_INFO.txt. Refusing to delete anything.
+>> "%LOG%" echo [TAVI] Refused: the ownership marker does not match INSTALL_INFO.txt.
 goto refused_end
 
 :wrong_layout
@@ -217,6 +249,7 @@ echo [ERROR] %TAVI_BASE% was made by a different version of the TAVI
 echo         installer (layout "%LAYOUT%", this uninstaller understands 2).
 echo [INFO]  Use the uninstaller that came with that installation, or download
 echo         the one from its release page.
+>> "%LOG%" echo [TAVI] Refused: layout "%LAYOUT%", this uninstaller understands 2.
 goto refused_end
 
 :refused
@@ -228,28 +261,56 @@ echo         The path was:
 :: line and run whatever follows. Measured: a rejected C:\TAVI&calc launched
 :: Calculator from this very line.
 set VBPATH
+>> "%LOG%" echo [TAVI] Refused the path: %VB_REASON%
+>> "%LOG%" set VBPATH
 goto refused_end
 
 :cancelled
 echo.
 echo Uninstall cancelled. Nothing was removed.
-goto finished
+>> "%LOG%" echo [TAVI] Cancelled at the question; nothing was removed.
+set "HEADLINE=UNINSTALL CANCELLED"
+goto the_end_ok
 
 :copy_failed
+call :open_log
 echo [ERROR] Could not copy the uninstaller to a temporary folder.
+>> "%LOG%" echo [TAVI] Could not copy the uninstaller to %TEMP%.
 goto refused_end
 
 :refused_end
 echo.
-pause
-endlocal
-exit 1
+echo Nothing was removed.
 
-:finished
+:failed
+set "HEADLINE=UNINSTALL FAILED"
+set "RC=1"
+goto the_end
+
+:uninstalled
+set "HEADLINE=TAVI WAS UNINSTALLED"
+
+:the_end_ok
+set "RC=0"
+
+:: One ending for every outcome. /y (the launcher menu, which has already
+:: asked) never waits; otherwise only C closes the window.
+:the_end
+>> "%LOG%" echo [TAVI] %HEADLINE%
 echo.
-pause
-endlocal
-exit 0
+echo ============================================================================
+echo  %HEADLINE%
+echo ============================================================================
+if defined LOGFILE echo What this uninstaller did is saved in:
+if defined LOGFILE echo     %LOGFILE%
+if defined LOGFILE echo That log stays on this computer after TAVI is removed.
+if /i "%AUTO%"=="/y" goto end_exit
+echo.
+choice /C C /N /M "Press C to close this window."
+
+:end_exit
+if "%RC%"=="0" exit 0
+exit 1
 
 :drop_record
 :: There is one record for the user, not one per installation. Removing it
@@ -266,7 +327,77 @@ call :validate_base_var
 if defined VB_REASON goto :eof
 if /i not "%VBPATH%"=="%TAVI_BASE%" goto :eof
 del /f /q "%RECORD%" 2>nul
+:: A bare rd: it fails, as it should, while the logs folder is inside.
 rd "%LOCALAPPDATA%\TAVI" 2>nul
+goto :eof
+
+:: ---------------------------------------------------------------------------
+:: The desktop copy of the shortcut, removed only when it is this
+:: installation's: its target must be <base>\TAVI-Launcher.bat. Any other
+:: "TAVI Launcher" shortcut there is another installation's or the user's, and
+:: is named and left. Windows is asked where the desktop is, because OneDrive
+:: and university policies move it away from %USERPROFILE%\Desktop. The whole
+:: decision is made inside PowerShell from environment variables, so no path
+:: is ever re-parsed by cmd. Without PowerShell, or where it is locked down,
+:: this is one line and changes nothing. DESK_LEGACY, when a caller sets it,
+:: is one more folder to look in.
+:: Keep this routine identical in WINDOWS-uninstall-TAVI.bat.
+:: ---------------------------------------------------------------------------
+:remove_desktop_shortcut
+set "DESK_SAID="
+for /f "delims=" %%L in ('powershell -NoProfile -NonInteractive -Command "try { $want=[IO.Path]::GetFullPath([IO.Path]::Combine($env:TAVI_BASE,'TAVI-Launcher.bat')); $dirs=@(); if ($env:TAVI_TEST_DESKTOP) { $dirs+=$env:TAVI_TEST_DESKTOP } else { $dirs+=[Environment]::GetFolderPath('Desktop') }; if ($env:DESK_LEGACY) { $dirs+=$env:DESK_LEGACY }; $sh=New-Object -ComObject WScript.Shell; $seen=@{}; $found=$false; foreach ($d in $dirs) { if (-not $d) { continue }; $p=[IO.Path]::GetFullPath([IO.Path]::Combine($d,'TAVI Launcher.lnk')); if ($seen.ContainsKey($p) -or -not (Test-Path -LiteralPath $p)) { continue }; $seen[$p]=1; $found=$true; $t=$sh.CreateShortcut($p).TargetPath; if ($t -and [IO.Path]::GetFullPath($t) -eq $want) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop; '[OK] Removed the TAVI Launcher shortcut from the desktop: '+$p } else { '[INFO] Left the shortcut '+$p+' in place: it does not open this TAVI installation.' } }; if (-not $found) { '[INFO] There is no TAVI Launcher shortcut on the desktop.' } } catch { '[WARN] The desktop could not be checked for a TAVI Launcher shortcut: '+$_.Exception.Message }" ^<nul 2^>nul') do (
+    set "DESK_SAID=yes"
+    echo %%L
+    >> "%LOG%" echo %%L
+)
+if defined DESK_SAID goto :eof
+echo [INFO] The desktop could not be checked for a TAVI Launcher shortcut, so any shortcut there was left in place.
+>> "%LOG%" echo [TAVI] PowerShell did not answer; the desktop was not checked.
+goto :eof
+
+:: ---------------------------------------------------------------------------
+:: The uninstall log. It must never be what stops an uninstall: each folder
+:: that cannot be written falls through to the next, and with none left LOG is
+:: nul and the uninstall goes ahead without one.
+:: ---------------------------------------------------------------------------
+:open_log
+set "LOGFILE="
+call :stamp
+set "LOG_DIR="
+if defined LOCALAPPDATA set "LOG_DIR=%LOCALAPPDATA%\TAVI\logs"
+if defined LOG_DIR if not exist "%LOG_DIR%\" mkdir "%LOG_DIR%" >nul 2>nul
+if defined LOG_DIR call :try_log
+if defined LOGFILE goto log_opened
+set "LOG_DIR=%TEMP%"
+if defined LOG_DIR call :try_log
+
+:log_opened
+set "LOG=nul"
+if defined LOGFILE set "LOG=%LOGFILE%"
+if not defined LOGFILE echo [INFO] This uninstall could not be saved to a log file; it goes ahead without one.
+goto :eof
+
+:try_log
+if not exist "%LOG_DIR%\" goto :eof
+set "TRY_LOG=%LOG_DIR%\uninstall-%STAMP%.log"
+:: The standalone uninstaller may have opened its own log in this same second
+:: before handing over; never truncate it.
+if exist "%TRY_LOG%" set "TRY_LOG=%LOG_DIR%\uninstall-%STAMP%-%RANDOM%.log"
+copy /y nul "%TRY_LOG%" >nul 2>nul
+if exist "%TRY_LOG%" set "LOGFILE=%TRY_LOG%"
+goto :eof
+
+:: yyyyMMdd-HHmmss from PowerShell, which formats the clock the same way on
+:: every locale; %DATE% and %TIME% change layout with the region setting and
+:: wmic is gone from current Windows 11. "<nul" keeps PowerShell off this
+:: console's input. Anything not shaped like a stamp, PowerShell missing or
+:: locked down included, gives a %RANDOM% name instead.
+:stamp
+set "STAMP="
+for /f "delims=" %%S in ('powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd-HHmmss" ^<nul 2^>nul') do set "STAMP=%%S"
+if not defined STAMP set "STAMP=none"
+set STAMP| findstr /r /x /c:"STAMP=[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]-[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]" >nul
+if errorlevel 1 set "STAMP=%RANDOM%-%RANDOM%"
 goto :eof
 
 :validate_only

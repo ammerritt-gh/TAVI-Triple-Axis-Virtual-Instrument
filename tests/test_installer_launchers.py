@@ -78,8 +78,13 @@ def _sandboxed_localappdata(tmp_path_factory, monkeypatch):
     run-tavi.bat deletes all but the ten newest launch logs there. A child that
     inherits this process's environment must never reach the operator's real
     folder, so every test here starts with LOCALAPPDATA in a temp folder; a
-    test that builds its own environment from os.environ inherits that too."""
+    test that builds its own environment from os.environ inherits that too.
+
+    The uninstallers remove a "TAVI Launcher" shortcut from the desktop Windows
+    reports. TAVI_TEST_DESKTOP, which they honour for tests only, points that
+    lookup at a temp folder too, so no test here ever reaches a real desktop."""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata-guard")))
+    monkeypatch.setenv("TAVI_TEST_DESKTOP", str(tmp_path_factory.mktemp("desktop-guard")))
 
 
 # ---------------------------------------------------------------------------
@@ -949,10 +954,10 @@ def test_doctor_does_not_expand_a_hostile_base(tmp_path):
 #     Packet u2-p3 adds WINDOWS-install-TAVI-v1.4.0.bat to NO_PAUSE_FILES.
 # ===========================================================================
 
-NO_PAUSE_FILES = [TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI]
-# Converted by packet u2-p2. Strict: once their pauses are gone these XPASS
-# and fail, so the move into NO_PAUSE_FILES cannot be forgotten.
-NO_PAUSE_PENDING = [UPDATE_TAVI, UNINSTALL_TAVI, UNINSTALL_STANDALONE]
+NO_PAUSE_FILES = [TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI, UNINSTALL_TAVI, UNINSTALL_STANDALONE]
+# Converted by packet u2-p2. Strict: once its pauses are gone this XPASSes
+# and fails, so the move into NO_PAUSE_FILES cannot be forgotten.
+NO_PAUSE_PENDING = [UPDATE_TAVI]
 
 
 def _pause_commands(path):
@@ -1017,7 +1022,8 @@ def _uninstallable_base(tmp_path, name, install_id="1-2-3-4", info_id=None, extr
     (base / "mamba").mkdir()
     (base / "compile_check").mkdir()
     (base / "compile_check" / "PSI_DMC.instr").write_text("x", encoding="utf-8", newline="\n")
-    for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat", "uninstall-tavi.bat"):
+    for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat", "uninstall-tavi.bat",
+                     "collect-diagnostics.bat"):
         shutil.copy2(os.path.join(LAUNCHERS_DIR, launcher), base / launcher)
     _install_id_files(base, install_id=install_id, info_id=info_id, layout=layout)
     if extra_file:
@@ -1038,6 +1044,7 @@ def test_uninstall_refuses_a_base_with_no_marker(tmp_path):
     result = run_bat(UNINSTALL_TAVI, str(base), "/y", timeout=20)
     assert result.returncode == 1
     assert "ownership marker" in result.stdout
+    assert "UNINSTALL FAILED" in result.stdout and "Nothing was removed." in result.stdout
     assert (base / "app").exists(), "an unmarked folder must be left untouched"
 
 
@@ -1079,9 +1086,12 @@ def test_uninstall_succeeds_on_a_well_formed_installation(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "has been removed" in result.stdout
     for child in ("app", "tavi-env", "micromamba", "mamba", "compile_check",
-                  "run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat", "uninstall-tavi.bat"):
+                  "run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat", "uninstall-tavi.bat",
+                  "collect-diagnostics.bat"):
         assert not (base / child).exists(), f"{child} should have been removed"
     assert not base.exists(), "a clean install's base folder must be removed entirely"
+    assert "TAVI WAS UNINSTALLED" in result.stdout, result.stdout
+    assert "Press C" not in result.stdout, "/y must never wait"
 
 
 def test_uninstall_leaves_extra_user_files_and_the_base_folder_standing(tmp_path):
@@ -1096,6 +1106,154 @@ def test_uninstall_leaves_extra_user_files_and_the_base_folder_standing(tmp_path
     assert base.exists(), "a base folder holding user files must survive"
     assert (base / "my_notes.txt").exists(), "the user's own file must survive"
     assert "were not TAVI's" in result.stdout
+
+
+# ===========================================================================
+# 6a. Uninstall (1.4): its own log in %LOCALAPPDATA%\TAVI\logs, a folder that
+#     outlives the installation; a headline; C to close unless /y; and the
+#     desktop copy of the shortcut removed only when it opens this
+#     installation. "The desktop" here is TAVI_TEST_DESKTOP, a temp folder
+#     set by the autouse fixture, never the real one.
+# ===========================================================================
+
+def _make_shortcut(lnk, target):
+    """A real .lnk written by WScript.Shell, in a PowerShell child that
+    conftest.py starts with no window. The target need not exist."""
+    env = dict(os.environ, TAVI_LNK=str(lnk), TAVI_LNK_TARGET=str(target))
+    script = ("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:TAVI_LNK); "
+              "$s.TargetPath=$env:TAVI_LNK_TARGET; $s.Save()")
+    made = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                          env=env, capture_output=True, text=True, timeout=60,
+                          stdin=subprocess.DEVNULL)
+    assert made.returncode == 0 and os.path.exists(lnk), made.stdout + made.stderr
+
+
+def _desktop_shortcut():
+    return os.path.join(os.environ["TAVI_TEST_DESKTOP"], "TAVI Launcher.lnk")
+
+
+def _new_logs(kind, env=None):
+    logs = os.path.join((env or os.environ)["LOCALAPPDATA"], "TAVI", "logs")
+    return [os.path.join(logs, name) for name in os.listdir(logs)
+            if re.fullmatch(rf"{kind}-\d{{8}}-\d{{6}}\.log", name)]
+
+
+def _text(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def test_uninstall_writes_its_log_and_keeps_the_logs_folder(tmp_path):
+    base = _uninstallable_base(tmp_path, "logged")
+    tavi_dir = os.path.join(os.environ["LOCALAPPDATA"], "TAVI")
+    os.makedirs(os.path.join(tavi_dir, "logs"))
+    earlier = os.path.join(tavi_dir, "logs", "install-20261016-101500.log")
+    with open(earlier, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("the install\n")
+    # The record names this installation, so it goes, and with it the attempt
+    # to remove %LOCALAPPDATA%\TAVI - which the logs folder must stop.
+    record = os.path.join(tavi_dir, "install-record.txt")
+    with open(record, "w", encoding="utf-8", newline="\r\n") as fh:
+        fh.write(f"TAVI_BASE={base}\nSTATE=complete\n")
+
+    result = run_bat(UNINSTALL_TAVI, str(base), "/y", timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    assert not os.path.exists(record), result.stdout
+    assert os.path.exists(earlier), "the uninstaller removed an earlier log"
+    logs = _new_logs("uninstall")
+    assert len(logs) == 1, os.listdir(os.path.join(tavi_dir, "logs"))
+    text = _text(logs[0])
+    assert f"Installation: {base}" in text and "[TAVI] TAVI WAS UNINSTALLED" in text, text
+    assert logs[0] in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize("answer,headline", [("Y", "TAVI WAS UNINSTALLED"),
+                                             ("N", "UNINSTALL CANCELLED")])
+def test_uninstall_asked_in_person_ends_on_its_headline_and_c(tmp_path, answer, headline):
+    base = _uninstallable_base(tmp_path, "asked")
+    result = run_bat(UNINSTALL_TAVI, str(base), timeout=60, input_text=f"{answer}\nC\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert headline in out and "Press C to close this window." in out, out
+    assert out.rindex("Press C") > out.rindex(headline), "C is asked for after the headline"
+    assert "Press any key" not in out, out
+    assert base.exists() == (answer == "N"), out
+
+
+@pytest.mark.parametrize("whose", ["this installation", "another installation"])
+def test_uninstall_removes_only_its_own_desktop_shortcut(tmp_path, whose):
+    base = _uninstallable_base(tmp_path, "mine")
+    if whose == "this installation":
+        target = base / "TAVI-Launcher.bat"
+    else:
+        target = tmp_path / "mine2" / "TAVI-Launcher.bat"
+    lnk = _desktop_shortcut()
+    _make_shortcut(lnk, target)
+
+    result = run_bat(UNINSTALL_TAVI, str(base), "/y", timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    if whose == "this installation":
+        assert not os.path.exists(lnk), result.stdout
+        assert f"Removed the TAVI Launcher shortcut from the desktop: {lnk}" in result.stdout
+    else:
+        assert os.path.exists(lnk), "another installation's shortcut was removed"
+        assert f"Left the shortcut {lnk} in place" in result.stdout, result.stdout
+    assert lnk in _text(_new_logs("uninstall")[0]), "the desktop step is not in the log"
+
+
+def test_uninstall_without_powershell_leaves_the_desktop_alone(tmp_path):
+    """No PowerShell (missing, or locked down by a managed laptop): the desktop
+    step is one line, nothing there changes, and the uninstall still ends
+    well, with a log named from %RANDOM% instead of the clock."""
+    base = _uninstallable_base(tmp_path, "nops")
+    lnk = _desktop_shortcut()
+    _make_shortcut(lnk, base / "TAVI-Launcher.bat")
+    env = dict(os.environ)
+    env["PATH"] = os.path.join(os.environ["SYSTEMROOT"], "System32")
+    result = run_bat(UNINSTALL_TAVI, str(base), "/y", env=env, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    assert os.path.exists(lnk), result.stdout
+    assert "The desktop could not be checked" in result.stdout, result.stdout
+    assert "TAVI WAS UNINSTALLED" in result.stdout, result.stdout
+    logs = os.listdir(os.path.join(env["LOCALAPPDATA"], "TAVI", "logs"))
+    assert len(logs) == 1 and re.fullmatch(r"uninstall-\d+-\d+\.log", logs[0]), logs
+
+
+@pytest.mark.parametrize("whose", ["this installation", "another installation"])
+def test_a_legacy_removal_removes_only_its_own_desktop_shortcut(tmp_path, whose):
+    """Installers before 1.3.2 wrote %USERPROFILE%\\Desktop\\TAVI Launcher.lnk
+    with <base>\\TAVI-Launcher.bat as its target."""
+    base = _legacy_base(tmp_path)
+    env = _sandbox_env(tmp_path)
+    legacy_desktop = tmp_path / "userprofile" / "Desktop"
+    legacy_desktop.mkdir()
+    lnk = legacy_desktop / "TAVI Launcher.lnk"
+    target = base / "TAVI-Launcher.bat" if whose == "this installation" else (
+        tmp_path / "elsewhere" / "TAVI-Launcher.bat")
+    _make_shortcut(lnk, target)
+
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=60, input_text="Y\nC\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not base.exists(), result.stdout
+    assert lnk.exists() == (whose == "another installation"), result.stdout
+    assert "TAVI WAS UNINSTALLED" in result.stdout, result.stdout
+    assert "Press C to close this window." in result.stdout, result.stdout
+    logs = _new_logs("uninstall", env)
+    assert len(logs) == 1 and "[TAVI] TAVI WAS UNINSTALLED" in _text(logs[0]), logs
+
+
+def _desktop_routine(path):
+    text = _read(path)
+    start = re.search(r"(?m)^:remove_desktop_shortcut\r?$", text).start()
+    end = text.index("goto :eof", text.index("PowerShell did not answer", start))
+    return text[start:end]
+
+
+def test_the_desktop_routine_is_identical_in_both_uninstallers():
+    assert _desktop_routine(UNINSTALL_TAVI) == _desktop_routine(UNINSTALL_STANDALONE)
 
 
 @pytest.mark.parametrize("script", LABEL_FILES)
@@ -1364,8 +1522,8 @@ HOSTILE_IDS = [label for _, label in HOSTILE_PATHS]
 def test_a_hostile_install_record_is_not_expanded(tmp_path, script, template, label):
     marker = tmp_path / "marker.txt"
     env = _sandbox_env(tmp_path, record_value=template.format(marker=marker))
-    # Enter at the folder prompt (nothing found), Enter at the closing pause.
-    result = run_bat(script, env=env, timeout=20, input_text="\n\n")
+    # Enter at the folder prompt (nothing found), C at the closing prompt.
+    result = run_bat(script, env=env, timeout=20, input_text="\nC\n")
     assert not marker.exists(), (label, "a line expanded the record's value", result.stdout)
     assert "does not hold a usable path" in result.stdout, (label, result.stdout)
 
@@ -1376,7 +1534,7 @@ def test_a_hostile_typed_path_is_not_expanded(tmp_path, script, template, label)
     marker = tmp_path / "marker.txt"
     env = _sandbox_env(tmp_path)
     result = run_bat(script, env=env, timeout=20,
-                     input_text=template.format(marker=marker) + "\n\n")
+                     input_text=template.format(marker=marker) + "\nC\n")
     assert not marker.exists(), (label, "a line expanded the typed value", result.stdout)
     assert result.returncode == 1, (label, result.stdout)
     assert "[ERROR]" in result.stdout, (label, result.stdout)
@@ -1402,8 +1560,8 @@ def test_dropping_the_record_does_not_expand_it(tmp_path, which, template, label
     env = _sandbox_env(tmp_path, record_value=template.format(marker=marker))
     if which == "standalone":
         base = _legacy_base(tmp_path)
-        # Y removes the legacy installation; Enter answers the closing pause.
-        result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\n\n")
+        # Y removes the legacy installation; C closes the window.
+        result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\nC\n")
     else:
         base = _uninstallable_base(tmp_path, "installed")
         result = run_bat(UNINSTALL_TAVI, str(base), "/y", env=env, timeout=30)
@@ -1421,8 +1579,8 @@ def test_dropping_the_record_does_not_expand_it(tmp_path, which, template, label
 def test_the_standalone_uninstaller_follows_a_good_record(tmp_path):
     base = _uninstallable_base(tmp_path, "installed")
     env = _sandbox_env(tmp_path, record_value=str(base))
-    # Y answers the installed uninstaller it hands over to; Enter its pause.
-    result = run_bat(UNINSTALL_STANDALONE, env=env, timeout=30, input_text="Y\n\n")
+    # Y answers the installed uninstaller it hands over to; C closes it.
+    result = run_bat(UNINSTALL_STANDALONE, env=env, timeout=30, input_text="Y\nC\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
     assert not (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), result.stdout
@@ -1431,7 +1589,7 @@ def test_the_standalone_uninstaller_follows_a_good_record(tmp_path):
 def test_a_legacy_removal_drops_a_record_that_names_it(tmp_path):
     base = _legacy_base(tmp_path)
     env = _sandbox_env(tmp_path, record_value=str(base))
-    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\n\n")
+    result = run_bat(UNINSTALL_STANDALONE, str(base), env=env, timeout=30, input_text="Y\nC\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
     assert not (tmp_path / "localappdata" / "TAVI" / "install-record.txt").exists(), result.stdout
@@ -1588,9 +1746,9 @@ def test_a_legacy_removal_does_not_expand_a_hostile_env_prefix(tmp_path, templat
     marker = tmp_path / "marker.txt"
     base = _legacy_base(tmp_path)
     _write_install_info(base, "main", ENV_PREFIX=template.format(marker=marker))
-    # Y removes the legacy installation; Enter answers the closing pause.
+    # Y removes the legacy installation; C closes the window.
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\n\n")
+                     input_text="Y\nC\n")
     assert not marker.exists(), (label, "a line expanded the value", result.stdout)
     assert result.returncode == 0, (label, result.stdout + result.stderr)
     assert "Not removing the recorded environment path" in result.stdout, (label, result.stdout)
@@ -1604,7 +1762,7 @@ def test_a_legacy_removal_removes_its_recorded_environment(tmp_path):
     (env_prefix / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
     _write_install_info(base, "main", ENV_PREFIX=env_prefix)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\n\n")
+                     input_text="Y\nC\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert f"Removing the environment: {env_prefix}" in result.stdout, result.stdout
     assert not env_prefix.exists(), result.stdout
@@ -1620,7 +1778,7 @@ def test_a_legacy_removal_keeps_a_recorded_path_that_is_no_environment(tmp_path)
     (other / "data.txt").write_text("keep\n", encoding="utf-8", newline="\n")
     _write_install_info(base, "v1.1.0", ENV_PREFIX=other)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\n\n")
+                     input_text="Y\nC\n")
     assert (other / "data.txt").exists(), result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
@@ -1639,7 +1797,7 @@ def test_a_legacy_removal_keeps_another_conda_environment(tmp_path):
     (other / "conda-meta" / "history").write_text("", encoding="utf-8", newline="\n")
     _write_install_info(base, "v1.1.0", ENV_PREFIX=other)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="Y\n\n")
+                     input_text="Y\nC\n")
     assert (other / "conda-meta" / "history").exists(), result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
     assert not base.exists(), result.stdout
@@ -1658,7 +1816,7 @@ def test_a_source_checkout_is_not_removed_as_a_legacy_installation(tmp_path, how
     args = [str(checkout)] if how == "by argument" else []
     # Y would confirm a removal. With no argument the folder prompt comes first
     # and takes the leading Enter; choice skips a key it does not offer.
-    keys = "Y\n\n" if how == "by argument" else "\nY\n\n"
+    keys = "Y\nC\n" if how == "by argument" else "\nY\nC\n"
     result = run_bat(UNINSTALL_STANDALONE, *args, env=env, timeout=30, input_text=keys)
     assert (checkout / ".git").is_dir(), (how, result.stdout)
     assert (checkout / "TAVI_PySide6.py").exists(), (how, result.stdout)
@@ -1666,6 +1824,7 @@ def test_a_source_checkout_is_not_removed_as_a_legacy_installation(tmp_path, how
     if how == "by argument":
         assert result.returncode == 1, result.stdout + result.stderr
         assert "does not look like a TAVI installation" in result.stdout, result.stdout
+        assert "UNINSTALL FAILED" in result.stdout, result.stdout
     else:  # not taken for an installation, so the search goes on to ask
         assert "No TAVI installation was found" in result.stdout, result.stdout
 
@@ -1677,7 +1836,7 @@ def test_the_standalone_uninstaller_does_not_expand_a_hostile_layout(tmp_path, t
     value = template.format(marker=marker)
     _write_install_info(base, "main", LAYOUT=value)
     result = run_bat(UNINSTALL_STANDALONE, str(base), env=_sandbox_env(tmp_path), timeout=30,
-                     input_text="\n")
+                     input_text="C\n")
     assert not marker.exists(), (label, "a line expanded the value", result.stdout)
     assert result.returncode == 1, (label, result.stdout + result.stderr)
     assert 'folder layout "unrecognised"' in result.stdout, (label, result.stdout)
