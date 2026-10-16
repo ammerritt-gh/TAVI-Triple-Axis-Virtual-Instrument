@@ -5,10 +5,8 @@ spectral form; components/Source_Maxwell_direct.comp samples the same spectrum.
 A profile is up to three Maxwellians (T in K, I in n/cm2/s/sr); a pair is active
 when T > 0 and I > 0, and an unused pair is written as 0.
 """
-import hashlib
 import math
 import numbers
-import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -16,7 +14,6 @@ import numpy as np
 
 from instruments.paths import COMPONENTS_DIR
 
-COMPONENT_NAME = "Source_Maxwell_direct"
 COMPONENT_PATH = Path(COMPONENTS_DIR) / "Source_Maxwell_direct.comp"
 
 K2V = 629.622368     # McStas mcstas-r.h: AA2MS, k [1/A] -> v [m/s]
@@ -116,26 +113,3 @@ def flux_per_mev(energies, values):
             theta = C_E * T / A_OVER_T  # Gamma(2, theta) scale in meV; I * E e^(-E/theta) / theta^2
             out += I * E * np.exp(-E / theta) / theta ** 2
     return out
-
-
-def component_stamp(path=COMPONENT_PATH):
-    """Name, version and short hash of the component file, read fresh on every call."""
-    raw = Path(path).read_bytes()
-    m = re.search(r"^\*\s*Version:\s*(\S+)", raw.decode("utf-8"), re.M)
-    if m is None:
-        raise ValueError(f"{path}: no 'Version:' line in the component header")
-    return {
-        "source_component": COMPONENT_NAME,
-        "source_component_version": m.group(1),
-        # CRLF folded to LF, so a Windows and a POSIX checkout stamp the same hash
-        "source_component_sha256": hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()[:12],
-    }
-
-
-def provenance(values):
-    """The flat dict every output carries: the component stamp, the nine values, and the edit flag."""
-    return {
-        **component_stamp(),
-        **{key: values[key] for key in FIELD_IDS},
-        "moderator_profile_modified": is_modified(values),
-    }
