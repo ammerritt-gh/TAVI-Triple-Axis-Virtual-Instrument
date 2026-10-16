@@ -319,12 +319,15 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   `k`, `l` derived from it. Everything `applied` lists therefore reads back, at the readouts'
   precision.
 - One request is applied **in groups**, each group's values written and their dependants
-  recomputed before the next group writes: sample, lattice, crystals, energy mode, fixed
+  recomputed before the next group writes: moderator profile and then its T/I, sample,
+  lattice, crystals, energy mode, fixed
   energy, energies (the crystal 2θ last), energy transfer, position (Q or h, k, l), stage
   motors. Setting `A2`,
   `A6` or an energy leaves Q, h, k, l and the transfer at the motors, as the dock does.
 - A **value** problem (not a number, outside an arc's travel ...) is reported
-  per field: that field is skipped and the other valid fields still apply.
+  per field: that field is skipped and the other valid fields still apply. The
+  exception is the moderator source (§6): a source value that is not a number, or a
+  source that would not validate, refuses the whole request and applies nothing.
   `details.applied` lists what did:
 ```json
 {"error": {"code": "invalid_parameters", "message": "One or more fields failed",
@@ -840,7 +843,7 @@ instrument data (no hand-maintained duplicate). Read-only, no side effects,
 ```
 Each field carries `name` (the canonical ID, §6), `type`, `units` (where
 known), and `allowed` (the permitted values for choice fields — crystal ids,
-`K_fixed` modes, source types). `api_version` is the version the server
+`K_fixed` modes, the `moderator_mode` and `moderator_profile` ids). `api_version` is the version the server
 speaks (§1). `scan_variables` lists canonical IDs; the aliases accepted in a
 scan command (§7) are not repeated there. The slit gaps appear as
 `slit.<stable_id>.horizontal_gap_mm` / `.vertical_gap_mm` fields, only for the
@@ -1113,6 +1116,18 @@ replayed after a descriptor or module-state change (a different NMO
 selection, an updated crystal declaration) legitimately produces a different
 number, not a bug.
 
+**Source block in `result.metadata`.** Every finished scan, from either engine,
+carries a `source` object next to `background`, and every `scan_parameters.txt`
+(the scan's and each point's) carries the same keys:
+
+| Key | Meaning |
+|-----|---------|
+| `source_component` | The McStas component that made the neutrons (`"Source_Maxwell_direct"`). |
+| `source_component_version` | The `Version:` line of that component's header. |
+| `source_component_sha256` | The first 12 hex digits of the component file's SHA-256 (line endings folded to LF); it catches an edit made without a version bump. |
+| `moderator_mode`, `moderator_profile`, `moderator_t1_k` ... `moderator_i3`, `flat_band_half_width_mev` | The nine values the scan ran with (§6). |
+| `moderator_profile_modified` | `true` when any T or I differs from the `moderator_profile` entry. |
+
 **Background block in `result.metadata`.** Every finished scan — from either
 engine, and **even when no background was planted** — carries a `background`
 object stamped by the one shared helper, so background provenance never depends
@@ -1253,9 +1268,9 @@ convenience that may change meaning later: `A2` is the monochromator 2θ, `A4`
 the sample 2θ and `A6` the analyzer 2θ (§15). `A1` and `A5` are derived Bragg
 angles and are not fields.
 
-A PUMA `GET /state` returns 50 parameter keys (`GET /parameters` the same 49
-without `lock_stale`); 46 are writable via `PATCH /parameters`. IN8 and IN12
-have 49 keys and 45 writable, PANDA 51 and 47: the difference is the slit gaps,
+A PUMA `GET /state` returns 57 parameter keys (`GET /parameters` the same 56
+without `lock_stale`); 53 are writable via `PATCH /parameters`. IN8 and IN12
+have 56 keys and 52 writable, PANDA 58 and 54: the difference is the slit gaps,
 which are the active instrument's own. `curvature_modes`, `mount_plane_u`,
 `mount_plane_v` and `lock_stale` are read-only. In the text below, short names
 such as `sgl` and `sgu` stand for their canonical IDs (`sample_lower_arc_deg`,
@@ -1303,8 +1318,11 @@ user presses Enter, so dependent fields update automatically.
 | `analyzer_horizontal_radius_m` | `rha` | number | m | Analyzer horizontal bending radius, magnitude. `0` = flat. |
 | `analyzer_vertical_radius_m` | `rva` | number | m | Analyzer vertical bending radius, magnitude. `0` = flat. |
 | `curvature_modes` | — | object | — | **Read-only.** `{"mono_horizontal_radius_m"/"mono_vertical_radius_m"/"analyzer_horizontal_radius_m"/"analyzer_vertical_radius_m": "autofocus"\|"held"\|"scanned"}`. Derived, never writable — see §5 *Crystal curvature*. |
-| `source_type` | — | string | — | Source model id. PUMA: `"Maxwellian"` or `"Mono"`. |
-| `source_dE` | — | number | meV | Source energy spread (only meaningful for the `"Mono"` source). |
+| `moderator_mode` | — | string | — | Which of the source's two modes runs: `"full_spectrum"` (every ray's energy is drawn directly from the facility spectrum; nothing about the scan or instrument reaches it) or `"flat_band"` (an unphysical flat band of half-width `flat_band_half_width_mev` about the point's Ei, ignoring the profile). The choices are the field's `allowed` list in `GET /schema`. |
+| `moderator_profile` | — | string | — | The facility entry the T/I values started from; the ids are listed under the table. Writing it **loads that entry's T/I** (see *Moderator source* below). Each instrument starts on the moderator it views: PUMA `frm2_thermal`, PANDA `frm2_cold`, IN8 `ill_thermal_h12`, IN12 `ill_vcs_cold`. |
+| `moderator_t1_k`, `moderator_t2_k`, `moderator_t3_k` | — | number | K | The three Maxwellian temperatures. `0` means the pair is unused. |
+| `moderator_i1`, `moderator_i2`, `moderator_i3` | — | number | n/cm²/s/sr | The three integrated fluxes, McStas `Source_gen`'s `I`. A pair counts when both its T and its I are above `0`. |
+| `flat_band_half_width_mev` | — | number | meV | Half-width dE of the flat band; read only when `moderator_mode` is `"flat_band"`, where it must be above `0`. |
 | `modules` | — | object | — | Experimental modules. See below. |
 | `collimation` | — | object | — | Collimator selections. See below. |
 | `slit.<stable_id>.horizontal_gap_mm` | `<stable_id>_hgap` | number | mm | Horizontal gap of one slit of the **active instrument**, full width in millimetres. One key per gap; see *Slit gaps* below for the IDs. |
@@ -1313,6 +1331,42 @@ user presses Enter, so dependent fields update automatically.
 | `scan_command1` | — | string | — | First scan command (§7). Empty string = no scan on this axis. |
 | `scan_command2` | — | string | — | Second scan command (§7). Both set = 2D scan. |
 | `diagnostic_mode` | — | boolean | — | Enable per-point diagnostic capture. |
+
+**Moderator source.** The source emits a fixed facility spectrum: up to three
+flux-form Maxwellians, each a temperature T (K) and an integrated flux I
+(n/cm²/s/sr), exactly as in McStas's `Source_gen`. It never depends on a scan or
+instrument setting (not Ei, kf, the scan mode or the point); it changes only when
+one of these nine fields does, and a change never recompiles. `moderator_profile`
+names the facility entry the values started from. A write that names it loads the
+entry's six T/I values first, and any `moderator_t*_k` / `moderator_i*` the same
+request names are applied after it and win, whatever their order in the request;
+the entry stays the starting point, and the saved files and outputs record whether
+the values still equal it (`moderator_profile_modified`). The source a request would
+leave must be valid: no negative or non-finite T or I, at least one active pair, a
+known mode and profile, and a dE above `0` in flat-band mode. A source that does not
+validate (and a source value that is not a number) refuses the **whole** request
+with `400 invalid_parameters` and changes nothing, in `PATCH /parameters`,
+`POST /scan` and `POST /validate`. The profile ids are:
+
+| `moderator_profile` | Facility entry |
+|---|---|
+| `frm2_cold` | FRM2 cold source, 20 MW |
+| `frm2_thermal` | FRM2 thermal source, 20 MW |
+| `ill_vcs_cold` | ILL VCS cold source (H1, 58 MW) |
+| `ill_hcs_cold` | ILL HCS cold source (H5, 58 MW) |
+| `ill_thermal_h12` | ILL thermal tube (H12, 58 MW) |
+| `ill_hot` | ILL hot source, 58 MW |
+| `psi_cold` | PSI cold source |
+| `hzb_cold` | HZB cold source, 10 MW |
+| `hzb_bispectral` | HZB bi-spectral source |
+| `hzb_thermal` | HZB thermal tube, 10 MW |
+| `llb_cold` | LLB cold source, 14 MW |
+| `triga_thermal` | TRIGA thermal source, 1 MW |
+| `single_temperature` | Single temperature (T1 = 300 K, I1 = 1e13, the others unused) |
+
+The source is an idealised moderator at TAVI's source plane: guides are not modelled,
+so the spectrum of a guided instrument (PANDA, IN12) overstates its higher-order
+contamination (`instruments/<name>/MODEL_STATUS.md`).
 
 **Slit gaps.** `slit.<stable_id>.horizontal_gap_mm` (and `.vertical_gap_mm`
 where the slit has a height) replace the old `slits_mm` object: one key per gap,
@@ -1337,7 +1391,9 @@ sample tilt arcs are `sgl` and `sgu`); `slits_mm` and the old metre-valued slit
 names (`vbl_hgap`, `pbl_hgap`, `pbl_vgap`, `dbl_hgap`, `sbl_wgap`, `sbl_hgap`,
 `ms1_wgap`, `ss1_wgap`, `ss1_hgap`, `ss2_wgap`, `ss2_hgap`); the unit-less
 `lattice_a` ... `lattice_gamma` (use `lattice_a_angstrom` ...
-`lattice_gamma_deg`); the derived `A1`, `mono_theta_deg`, `A5`,
+`lattice_gamma_deg`); `source_type` and `source_dE` (use `moderator_mode`,
+`moderator_profile`, `moderator_t1_k` ... `moderator_i3` and
+`flat_band_half_width_mev`); the derived `A1`, `mono_theta_deg`, `A5`,
 `analyzer_theta_deg` (set A2 or A6) and the four `applied_*_radius_m` (derived
 by the take-off branch). `psi` is **no longer retired**: the old ψ correction is
 gone, and the name is now just another alias of `sample_rotation_deg`, the
@@ -2023,6 +2079,9 @@ guessed: an old client is **refused**, never reinterpreted.
     `analyzer_theta_param` for the derived Bragg angles; they show in the `detector.dat` headers.
 15. **PUMA's velocity selector follows the incident energy** of each point in a direct-motor
     scan, instead of being re-derived from the fixed energy and ΔE.
+16. **The neutron source has nine canonical IDs.** `source_type` and `source_dE` are retired
+    (refused naming the new IDs); see *Moderator source* in §6 and the table below. The version
+    stays 2: the old names are refused, never reinterpreted.
 
 ### Old to new: the angles
 
@@ -2055,6 +2114,8 @@ read this section.
 | `qx`, `qy`, `qz` | `q_instrument_x_inv_angstrom`, `q_instrument_y_inv_angstrom`, `q_instrument_z_inv_angstrom` |
 | `H`, `K`, `L` | `h`, `k`, `l` |
 | `deltaE` | `energy_transfer_mev` |
+| `source_type` (`"Maxwellian"` / `"Mono"`) | `moderator_mode` (`"full_spectrum"` / `"flat_band"`) with `moderator_profile`, or the six `moderator_t1_k` ... `moderator_i3` |
+| `source_dE` | `flat_band_half_width_mev` (read only in flat-band mode) |
 | `lattice_a`, `lattice_b`, `lattice_c` | `lattice_a_angstrom`, `lattice_b_angstrom`, `lattice_c_angstrom` |
 | `lattice_alpha`, `lattice_beta`, `lattice_gamma` | `lattice_alpha_deg`, `lattice_beta_deg`, `lattice_gamma_deg` |
 | `rhm`, `rvm`, `rha`, `rva` | `mono_horizontal_radius_m`, `mono_vertical_radius_m`, `analyzer_horizontal_radius_m`, `analyzer_vertical_radius_m` |
@@ -2085,6 +2146,9 @@ IDs, so a client that reads `state["parameters"]["mtt"]` must read
   `400 bad_request`.
 - A pre-break `parameters.json`: set aside as a backup, defaults load. A
   pre-break scan folder: refused on load, left untouched.
+- A saved `parameters.json` of version 5 that still holds `source_type_var` and
+  `source_dE_var`: both are ignored (not migrated), with one message in the message
+  centre naming them as retired; the instrument's default source applies.
 
 There is no converter and no compatibility mode, on purpose: a quiet
 translation of `A2` would be exactly the silent change of axis the version
