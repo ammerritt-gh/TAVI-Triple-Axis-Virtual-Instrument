@@ -34,7 +34,9 @@
 * pair is active when T>0 and I>0. There are no energy or wavelength cut-offs:
 * the source emits over the whole spectrum, however far the tails reach.
 *
-* Flat band (flat_band=1). E is uniform in [E0-dE, E0+dE] and T1..I3 are ignored.
+* Flat band (flat_band=1). E is uniform in [E0-dE, E0+dE] and the facility
+* spectrum (T1..I3) plays no part in the sampling or the weight, though T1..I3
+* must still be valid.
 * This mode is deliberately unphysical. It exists to get good statistics around
 * one energy quickly, and its total intensity scales with dE: flux is the
 * intensity per energy unit, n/cm^2/s/sr/meV, and is arbitrary (default 1).
@@ -218,7 +220,7 @@ INITIALIZE
 
   /* distance to the next component, for the display only */
   dist = 0;
-  if (INDEX_CURRENT_COMP + 1 < mcNUMCOMP) {
+  if (INDEX_CURRENT_COMP < mcNUMCOMP) { /* component indices run 1..mcNUMCOMP */
     Coords ToTarget;
     double tx, ty, tz;
     ToTarget = coords_sub(POS_A_COMP_INDEX(INDEX_CURRENT_COMP+1), POS_A_CURRENT_COMP);
@@ -274,7 +276,7 @@ MCDISPLAY
                -xwidth/2.0, -yheight/2.0, 0.0);
   if (dist) { /* the dashed window needs a next component to reach */
     double hw = dist*tan(focus_aw*DEG2RAD/2);
-    double hh = dist*tan(focus_ah*DEG2RAD/2);
+    double hh = dist*tan(focus_ah*DEG2RAD/2)/cos(focus_aw*DEG2RAD/2); /* latitude/longitude corner */
     dashed_line(0,0,0, -hw,-hh,dist, 4);
     dashed_line(0,0,0,  hw,-hh,dist, 4);
     dashed_line(0,0,0,  hw, hh,dist, 4);
