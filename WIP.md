@@ -284,6 +284,9 @@ Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
   scan with a transmitting monochromator still comes from the typed energy fields.
 - Flake watch: `test_mark_updates_leave_focus_selection_style_and_names_alone`
   failed once on focus in a combined targeted run.
+- `tests/test_parameters_persistence.py::test_a_missing_slit_gap_keeps_its_descriptor_default`
+  fails when its file runs alone (also at base): it relies on another test
+  importing `instruments.builtin` first; one import in the test fixes it.
 - The scan conflict label hides a per-box refusal while a zero take-off refusal
   stands (Run's preflight and the API still list both); a field-marks display
   change, deferred by job j52ca1d7b6e04's repair check.
