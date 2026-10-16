@@ -181,9 +181,6 @@ physics, the weight or the parameters bumps the version and gets a changelog lin
 A new file name is for a breaking change only, meaning the interface: a rename, a
 removed parameter, or a parameter whose meaning changes. A correction that makes
 the component do what it always documented goes in place with a version bump.
-TAVI stamps the component name, version and the first 12 hex digits of the file's
-SHA-256 (line endings normalised to LF) into its outputs; the hash catches an
-edit made without a version bump. TAVI does not refuse a version mismatch.
 
 ### Test instrument
 `examples/Tests_sources/Test_Source_Maxwell_direct/Test_Source_Maxwell_direct.instr`

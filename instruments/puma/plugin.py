@@ -425,16 +425,12 @@ class PUMAPlugin:
         import hashlib
         import json
 
-        from instruments.source import component_stamp
-
         build_state = {
             "monocris": config.monocris,
             "anacris": config.anacris,
             "sample_key": getattr(config, "sample_key", None),
             "NMO_installed": config.NMO_installed,
             "V_selector_installed": bool(config.V_selector_installed),
-            # The source is run-time state; only an edited component file recompiles.
-            "source_component": component_stamp()["source_component_sha256"],
             "alpha_1": config.alpha_1,
             "alpha_2": list(config.alpha_2),
             "alpha_3": config.alpha_3,

@@ -473,18 +473,15 @@ class PANDAPlugin:
         """Stable hash of the build-time (ChangeImpact.BUILD) state.
 
         Slit gaps, bending radii and the source values are runtime McStas
-        parameters -- excluded; only the source component file's hash is in.
+        parameters -- excluded.
         """
         import hashlib
         import json
-
-        from instruments.source import component_stamp
 
         build_state = {
             "monocris": config.monocris,
             "anacris": config.anacris,
             "sample_key": getattr(config, "sample_key", None),
-            "source_component": component_stamp()["source_component_sha256"],
             "alpha_1": config.alpha_1,
             "alpha_2": config.alpha_2,
             "alpha_3": config.alpha_3,

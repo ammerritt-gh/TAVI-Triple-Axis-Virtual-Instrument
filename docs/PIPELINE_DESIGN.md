@@ -145,7 +145,6 @@ Build-time (affect component tree / require recompilation):
 - sample_key — selects which sample component (Phonon_simple, Single_crystal, Phonon_DFT, etc.)
 - Collimator selection (alpha_1, alpha_2 list, alpha_3, alpha_4) — alpha_2 controls which collimator components are present
 - V_selector_installed — controls whether velocity selector component is added
-- the hash of `components/Source_Maxwell_direct.comp` — an edited component file is recompiled (the source values themselves are per-point, below)
 - diagnostic_mode, diagnostic_settings — control which monitor components are added
 
 Per-point (McStas parameters, set via `set_parameters()`):

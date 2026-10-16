@@ -3,12 +3,11 @@
 The nine canonical IDs (tavi/quantities.py) replace source_type and source_dE. The old
 names are refused naming the new ones. A profile write loads its entry's T/I and the same
 request's own T/I stand over it in either key order. An invalid source is refused (API 400,
-Run blocked) before any state changes. Every scan file and result carries the provenance.
+Run blocked) before any state changes. Every scan file carries the nine values.
 All of it runs offscreen on the real controller, the HTTP cases through the real server.
 """
 import json
 import os
-import re
 import time
 from types import SimpleNamespace
 
@@ -19,12 +18,9 @@ import pytest
 pytest.importorskip("mcstasscript")
 pytest.importorskip("PySide6")
 
-import TAVI_PySide6 as cm  # noqa: E402
 from instruments import source as moderator  # noqa: E402
-from tavi import deterministic_engine as det  # noqa: E402
 from tavi.data_processing import write_parameters_to_file  # noqa: E402
 from tavi.quantities import API_VERSION  # noqa: E402
-from tavi.scan_jobs import JobState, ScanJob  # noqa: E402
 
 from test_api_canonical_names import _patch, _state, api, fresh  # noqa: E402,F401  (the real-server fixtures)
 from test_saved_parameters import _log, _write_block, saved_file  # noqa: E402,F401
@@ -223,24 +219,21 @@ def test_schema_publishes_types_units_and_choices(fresh):
     assert fields["flat_band_half_width_mev"]["units"] == "meV"
 
 
-# --- the outputs carry the full provenance -----------------------------------------------
+# --- the outputs carry the nine values and no component stamp ----------------------------
 
 def _file_values(folder):
-    """scan_parameters.txt as text pairs (a hash can look like a float, so nothing is parsed)."""
+    """scan_parameters.txt as text pairs, nothing parsed."""
     with open(os.path.join(folder, "scan_parameters.txt"), encoding="utf-8") as handle:
         return dict(line.rstrip("\n").split(": ", 1) for line in handle if ": " in line)
 
 
-def _assert_provenance(written, vals):
-    expected = moderator.provenance({key: vals[key] for key in NINE})
-    assert set(expected) <= set(written), sorted(set(expected) - set(written))
-    for key, value in expected.items():
-        assert written[key] == str(value), (key, written[key], value)
-    assert expected["source_component"] == "Source_Maxwell_direct"
-    assert re.fullmatch(r"[0-9a-f]{12}", expected["source_component_sha256"])
+def _assert_nine_and_no_stamp(written, vals):
+    for key in NINE:
+        assert written[key] == str(vals[key]), (key, written[key], vals[key])
+    assert not [key for key in written if key.startswith("source_component")], sorted(written)
 
 
-def test_scan_and_point_parameter_files_carry_the_source_provenance(fresh, tmp_path):
+def test_scan_and_point_parameter_files_carry_the_nine_values_and_no_component_stamp(fresh, tmp_path):
     controller, call = fresh
     _patch(call, {"moderator_profile": "ill_hot", "moderator_t2_k": 700.0, "moderator_mode": "flat_band"})
     vals = controller.get_gui_values()
@@ -252,13 +245,13 @@ def test_scan_and_point_parameter_files_carry_the_source_provenance(fresh, tmp_p
 
     for folder in (scan_folder, point_folder):
         written = _file_values(str(folder))
-        _assert_provenance(written, vals)
+        _assert_nine_and_no_stamp(written, vals)
         assert written["moderator_profile"] == "ill_hot"
-        assert written["moderator_profile_modified"] == "True"
+        assert written["moderator_t2_k"] == "700.0"
         assert written["moderator_mode"] == "flat_band"
 
 
-def test_a_deterministic_scan_stamps_its_folder_and_result_metadata(fresh):
+def test_a_deterministic_scan_writes_its_nine_values_and_returns_no_source_block(fresh):
     _controller, call = fresh
     status, reply = call("POST", "/scan", {
         "api_version": API_VERSION,
@@ -274,124 +267,11 @@ def test_a_deterministic_scan_stamps_its_folder_and_result_metadata(fresh):
         time.sleep(0.05)
     assert job["state"] == "done", job
 
-    stamp = job["result"]["metadata"]["source"]
-    assert stamp["moderator_profile"] == "psi_cold" and stamp["moderator_t1_k"] == 296.2
-    assert stamp["moderator_i2"] == 4.0e11 and stamp["moderator_profile_modified"] is True
-    assert stamp["source_component"] == "Source_Maxwell_direct"
-    assert stamp == moderator.provenance(stamp)                # every key the stamp lists, and no other
-    assert "source_component_version" in stamp and "source_component_sha256" in stamp
-    assert "background" in job["result"]["metadata"]           # next to the background block
-
+    assert "source" not in job["result"]["metadata"]
+    assert "background" in job["result"]["metadata"]
     written = _file_values(job["result"]["output_folder"])     # the scan's own scan_parameters.txt
     assert written["moderator_profile"] == "psi_cold" and written["moderator_i2"] == "400000000000.0"
-    assert written["source_component"] == "Source_Maxwell_direct"
-    assert written["source_component_sha256"] == stamp["source_component_sha256"]
-
-
-def test_both_result_paths_stamp_the_source_beside_the_background():
-    """The McStas path cannot run in the suite (no McStas): its stamp is read from the source.
-    The source is stamped once, at the result both engines share, before the engine split."""
-    with open(cm.__file__, encoding="utf-8") as handle:
-        text = handle.read()
-    background = len(re.findall(r"result\.metadata\['background'\] = ", text))
-    stamp = text.index("result.metadata['source'] = launch_state['source']")
-    assert background == 2 and text.count("result.metadata['source'] = ") == 1
-    assert stamp < text.index("return self._run_scan_deterministic(")
-
-
-def _raise(_spec):
-    raise RuntimeError("no analytic truth in this test")
-
-
-def test_a_failed_scan_still_carries_the_source_stamp(fresh, monkeypatch):
-    """The stamp is made at launch, so a run that fails before its points keeps it."""
-    controller, _call = fresh
-    monkeypatch.setattr(det, "ground_truth", _raise)
-    launch = controller.build_api_launch_state({**SCAN, "moderator_profile": "psi_cold"})
-    launch["engine"] = "deterministic"
-    controller._compile_launch(launch)
-    job = ScanJob(job_id="t-source-failed", source="api", launch_state=launch)
-
-    controller.run_simulation(launch, job=job)
-
-    assert job.state == JobState.FAILED, job.state
-    assert job.result.metadata["source"] == moderator.provenance(launch["vals"])
-
-
-def test_a_queued_launch_records_the_hash_its_run_starts_with(fresh, monkeypatch):
-    """The binary is built when the run starts, so an edit made between Run and the run is what it records."""
-    controller, _call = fresh
-    launch = controller.build_api_launch_state(SCAN)
-    launch["engine"] = "deterministic"
-    controller._compile_launch(launch)
-    real = moderator.component_stamp
-    monkeypatch.setattr(moderator, "component_stamp",
-                        lambda *args, **kwargs: {**real(), "source_component_sha256": "0" * 12})
-    job = ScanJob(job_id="t-source-queued", source="api", launch_state=launch)
-
-    controller.run_simulation(launch, job=job)
-
-    assert job.result.metadata["source"]["source_component_sha256"] == "0" * 12
-
-
-def test_a_component_edited_mid_run_leaves_the_result_and_scan_file_on_the_run_start_hash(fresh, monkeypatch):
-    """The component is read once per run: an edit during the run changes neither the result nor the file."""
-    controller, _call = fresh
-    real = moderator.component_stamp
-    start_hash = real()["source_component_sha256"]
-    edited = {"on": False}
-    monkeypatch.setattr(moderator, "component_stamp",
-                        lambda *args, **kwargs: {**real(), "source_component_sha256": "0" * 12}
-                        if edited["on"] else real())
-    real_signal = controller._post_signal
-
-    def edit_as_the_run_writes_its_folder(name, *args):
-        # after the run's stamp, before its scan_parameters.txt: the file is the only later reader
-        if name == "actual_output_folder_updated":
-            edited["on"] = True
-        return real_signal(name, *args)
-
-    monkeypatch.setattr(controller, "_post_signal", edit_as_the_run_writes_its_folder)
-    launch = controller.build_api_launch_state(SCAN)
-    launch["engine"] = "deterministic"
-    controller._compile_launch(launch)
-    job = ScanJob(job_id="t-source-midrun", source="api", launch_state=launch)
-
-    controller.run_simulation(launch, job=job)
-
-    assert edited["on"] and job.state == JobState.DONE, (edited, job.state)
-    assert job.result.metadata["source"]["source_component_sha256"] == start_hash
-    assert _file_values(job.result.output_folder)["source_component_sha256"] == start_hash
-
-
-def test_a_point_file_takes_the_source_its_run_started_with(fresh, monkeypatch, tmp_path):
-    controller, _call = fresh
-    vals = controller.get_gui_values()
-    started = moderator.provenance(vals)
-    real = moderator.component_stamp
-    monkeypatch.setattr(moderator, "component_stamp",
-                        lambda *args, **kwargs: {**real(), "source_component_sha256": "0" * 12})
-
-    point_folder = tmp_path / "point"
-    write_parameters_to_file(str(point_folder), controller.point_output_parameters(
-        vals, {"deltaE": 0.5}, 2, 1000, source=started))
-
-    assert _file_values(str(point_folder))["source_component_sha256"] == started["source_component_sha256"]
-    assert started["source_component_sha256"] != "0" * 12
-
-
-def test_the_scan_label_preview_reads_no_source_file(fresh, monkeypatch):
-    controller, _call = fresh
-    reads = []
-    real = moderator.component_stamp
-
-    def counted(*args, **kwargs):
-        reads.append(True)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(moderator, "component_stamp", counted)
-    controller._preview_launch("deltaE 0 1 1", "")
-    assert reads == []
+    assert not [key for key in written if key.startswith("source_component")], sorted(written)
 
 
 # --- the GUI: what is shown is what is saved, restored and sent to the plugin ------------

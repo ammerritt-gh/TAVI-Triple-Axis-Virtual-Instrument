@@ -245,8 +245,8 @@ name is accepted:
   moderator source's nine canonical IDs. `source_type`/`source_dE` refuse in any
   letter case naming the new IDs; a profile write loads its T/I and the same
   request's T/I win in either key order; an invalid source is refused with no
-  state change; `/schema` lists the choices; `scan_parameters.txt` and
-  `result.metadata['source']` carry the provenance; the dock's values survive save
+  state change; `/schema` lists the choices; `scan_parameters.txt`
+  carries the nine values; the dock's values survive save
   and load and equal what the plugin gets; Run is blocked on an invalid source.
   The block's other tests are `test_source_integration.py` (all four
   instruments), `test_instrument_dock_source.py` (the dock) and
