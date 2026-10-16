@@ -2287,3 +2287,37 @@ def test_cancelling_after_an_old_installation_was_removed_says_so(tmp_path, layo
     assert "The old TAVI installation was removed. Nothing new was installed." in out, out
     assert "Nothing was installed and nothing was removed." not in out, out
     assert "Continue with TAVI installation? Answer: N" in _text(_install_logs(env)[0])
+
+
+def _fixed_clock(tmp_path, env, stamp="20260101-000000"):
+    """The launchers take their log stamp from powershell. A stub on PATH fixes
+    it, so a log name can be known in advance and a clash made on purpose."""
+    stub = tmp_path / "clock-stub"
+    stub.mkdir(exist_ok=True)
+    (stub / "powershell.bat").write_text(f"@echo off\necho {stamp}\n", encoding="ascii",
+                                         newline="\r\n")
+    env["PATH"] = f"{stub}{os.pathsep}{env['PATH']}"
+    return env
+
+
+@pytest.mark.parametrize("script,kind", [("run-tavi.bat", "launch"),
+                                         ("update-tavi.bat", "repair")])
+def test_a_second_run_in_the_same_second_gets_its_own_log(tmp_path, micromamba_stub_exe,
+                                                          script, kind):
+    """Two runs in one second share a stamp. The second must not truncate the
+    first's log: it gets a suffixed name, as the install and uninstall logs do."""
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    env = _fixed_clock(tmp_path, _launch_env(tmp_path, MICROMAMBA_STUB_LINES="1"))
+    logs = _logs_dir(env)
+    os.makedirs(logs)
+    first = os.path.join(logs, f"{kind}-20260101-000000.log")
+    with open(first, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("the first run\n")
+    result = run_bat(str(base / script), env=env, timeout=60, input_text="C")
+    assert result.returncode == 0, result.stdout + result.stderr
+    with open(first, encoding="utf-8", newline="") as fh:
+        assert fh.read() == "the first run\n", "the second run truncated the first log"
+    fresh = [name for name in os.listdir(logs) if name != os.path.basename(first)]
+    assert len(fresh) == 1 and re.fullmatch(rf"{kind}-20260101-000000-\d+\.log", fresh[0]), fresh
+    with open(os.path.join(logs, fresh[0]), encoding="utf-8", newline="") as fh:
+        assert "stub line 1" in fh.read()
