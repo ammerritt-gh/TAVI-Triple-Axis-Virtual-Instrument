@@ -24,7 +24,7 @@ from instruments.descriptor import CurvatureAxis
 from tavi import mcstas_paths
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
-from tavi.neutron_conversions import angle2k, energy2k, k2angle, k2energy
+from tavi.neutron_conversions import angle2k, energy2k, energy2lambda, k2angle, k2energy
 from tavi.orientation import (
     StageUnreachable,
     check_travel,
@@ -764,6 +764,22 @@ class TAS_Instrument:
             "Ef": Ef,
             "Kf": energy2k(max(Ef, 1e-9)) if Ef is not None else None,
         }
+
+    def v_selector_frequency(self, deltaE):
+        """Selector frequency (Hz) for this point's Ei; shared by every V_selector instrument."""
+        selector_alpha_rad = math.radians(48.3)
+        selector_length = 0.25
+        # The mono's Ei, as the point records it: fixed_E + deltaE would follow the analyser in angle mode.
+        selector_energy = self.point_energy_metadata(deltaE)["Ei"]
+        if selector_energy is None:
+            # Fallback: the mono transmits, so no crystal selects Ei; K_fixed arithmetic.
+            if self.K_fixed == "Ki Fixed":
+                selector_energy = self.fixed_E
+            else:
+                selector_energy = self.fixed_E + deltaE
+
+        selector_energy = max(selector_energy, 1e-9)
+        return 3956 * selector_alpha_rad / 2 / math.pi / selector_length / energy2lambda(selector_energy)
 
     def nominal_energies_from_angles(self, mtt, att):
         """(Ei, Ef) as the two crystals actually select them, per crystal.
