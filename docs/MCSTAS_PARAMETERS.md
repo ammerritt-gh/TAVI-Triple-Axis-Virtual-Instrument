@@ -199,7 +199,7 @@ crystal axes will not be where the UB says.
 
 The following changes **always require recompilation** because they are baked into the generated instrument, either as which components are present or as component configuration that is not a McStas parameter. The authoritative list is the build-time state hashed by `PUMAPlugin.build_fingerprint()` (`instruments/puma/plugin.py`); the controller reuses the previous compiled binary only when that hash matches:
 
-- **Diagnostic mode and settings**: adding/removing monitors (PSD, DSD, E_monitor)
+- **Diagnostic mode and settings**: adding/removing monitors (PSD, DSD, E_monitor), and switching the energy monitors to wavelength monitors (`L_monitor`, the `Wavelength Monitors` setting)
 - **NMO configuration**: changing between None/Vertical/Horizontal/Both
 - **Velocity selector**: enabling/disabling
 - **Collimators**: `alpha_1`, the installed `alpha_2` set (30', 40', 60'), `alpha_3`, `alpha_4`
