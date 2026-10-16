@@ -34,6 +34,7 @@ import TAVI_PySide6 as cm  # noqa: E402
 from instruments.in8.plugin import IN8Plugin
 from instruments.registry import get_instrument  # noqa: E402
 from instruments.rules import PointCheck, build_plan, expand  # noqa: E402
+from instruments.source import profile_values  # noqa: E402
 from instruments.tas_runtime import MOTORS, Q_CALC, compute_scan_snapshot  # noqa: E402
 from plan_helpers import context, motors_point, plan_for, q_point  # noqa: E402
 from tavi.api_server import TaviApiServer, API_PREFIX, VALIDATE_BODY_KEYS  # noqa: E402
@@ -45,11 +46,13 @@ _FIXED_E = 14.68  # meV, the standard IN8 kf = 2.662 setting
 _D_PG002 = 3.355
 
 
-def _base_vals(k_fixed, source_type, deltaE_field=0.0):
+def _base_vals(k_fixed, mode, deltaE_field=0.0):
     return {
         "K_fixed": k_fixed,
-        "source_type": source_type,
-        "source_dE": 2,
+        "moderator_mode": mode,
+        "moderator_profile": "ill_thermal_h12",
+        **profile_values("ill_thermal_h12"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31,
         "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002",
@@ -61,13 +64,13 @@ def _base_vals(k_fixed, source_type, deltaE_field=0.0):
     }
 
 
-def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field=0.0, stt=-71.25):
+def _angle_snapshot(k_fixed, mode, mtt, att, deltaE_field=0.0, stt=-71.25):
     """One ``angle``-mode point: the user drives A2..A6 directly.
 
     Same rig as ``tests/test_point_energy_metadata.py``'s ``_angle_snapshot``.
     """
     plugin = IN8Plugin()
-    vals = _base_vals(k_fixed, source_type, deltaE_field)
+    vals = _base_vals(k_fixed, mode, deltaE_field)
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
     return compute_scan_snapshot(plan_for(plugin, config, vals, MOTORS),
@@ -75,9 +78,9 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field=0.0, stt=-71.25
                                  data_folder=".")
 
 
-def _momentum_snapshot(k_fixed, source_type, qx, qy, qz, deltaE, fixed_E=_FIXED_E):
+def _momentum_snapshot(k_fixed, mode, qx, qy, qz, deltaE, fixed_E=_FIXED_E):
     plugin = IN8Plugin()
-    vals = _base_vals(k_fixed, source_type)
+    vals = _base_vals(k_fixed, mode)
     vals["fixed_E"] = fixed_E
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
@@ -104,7 +107,7 @@ def test_att_zero_records_ana_transmission_and_keeps_e0_continuous():
 
     results = {}
     for att in (-1.0, 0.0, 1.0):
-        snap = _angle_snapshot("Kf Fixed", "Mono", mtt, att, deltaE_field=0.0)
+        snap = _angle_snapshot("Kf Fixed", "flat_band", mtt, att, deltaE_field=0.0)
         assert not snap.error_flags
         results[att] = snap.metadata
 
@@ -115,8 +118,8 @@ def test_att_zero_records_ana_transmission_and_keeps_e0_continuous():
     assert zero["Kf"] is None
     assert zero["deltaE"] is None
     assert zero["transmission"] == ["ana"]
-    assert not _angle_snapshot("Kf Fixed", "Mono", mtt, 0.0).error_flags
-    assert _angle_snapshot("Kf Fixed", "Mono", mtt, 0.0).params is not None
+    assert not _angle_snapshot("Kf Fixed", "flat_band", mtt, 0.0).error_flags
+    assert _angle_snapshot("Kf Fixed", "flat_band", mtt, 0.0).params is not None
 
     # Continuity: the source tracks A2's Ei across the zero crossing, not a
     # jump to fixed_E and back.
@@ -129,7 +132,7 @@ def test_mtt_zero_records_mono_transmission():
     """The monochromator transmits; the analyser still selects Ef."""
     att = -41.19  # a real, non-degenerate analyser angle (existing test rig)
     deltaE_field = 1.5
-    snap = _angle_snapshot("Kf Fixed", "Mono", 0.0, att, deltaE_field=deltaE_field)
+    snap = _angle_snapshot("Kf Fixed", "flat_band", 0.0, att, deltaE_field=deltaE_field)
     meta = snap.metadata
     assert not snap.error_flags
 
@@ -144,12 +147,12 @@ def test_mtt_zero_records_mono_transmission():
     # E0_param falls back exactly as it did before this fix touched anything:
     # with the monochromator's slot absent, e0_param_value cannot read Ei off
     # the crystals and uses the existing K_fixed fallback on the frozen
-    # deltaE field (fixed_E + deltaE for a Mono source in Kf-fixed mode).
+    # deltaE field (fixed_E + deltaE in Kf-fixed mode, in every source mode).
     assert meta["E0_param"] == pytest.approx(_FIXED_E + deltaE_field, rel=1e-9)
 
 
 def test_both_zero_records_full_transmission():
-    snap = _angle_snapshot("Kf Fixed", "Maxwellian", 0.0, 0.0, deltaE_field=1.5)
+    snap = _angle_snapshot("Kf Fixed", "full_spectrum", 0.0, 0.0, deltaE_field=1.5)
     meta = snap.metadata
     assert not snap.error_flags
     assert snap.params is not None
@@ -164,7 +167,7 @@ def test_both_zero_records_full_transmission():
 def test_stt_zero_in_angle_mode_marks_forward_scattering():
     """Both crystals reflect; the sample take-off itself is zero."""
     mtt, att = 41.19, -41.19
-    snap = _angle_snapshot("Kf Fixed", "Maxwellian", mtt, att,
+    snap = _angle_snapshot("Kf Fixed", "full_spectrum", mtt, att,
                            deltaE_field=0.0, stt=0.0)
     meta = snap.metadata
     assert not snap.error_flags
@@ -185,7 +188,7 @@ def test_qspace_forward_scattering_marks_sample_transmission():
     Ei = Ef + deltaE
     ki = energy2k(Ei)
     kf = energy2k(Ef)
-    snap = _momentum_snapshot("Kf Fixed", "Maxwellian", ki - kf, 0.0, 0.0,
+    snap = _momentum_snapshot("Kf Fixed", "full_spectrum", ki - kf, 0.0, 0.0,
                               deltaE, fixed_E=fixed_E)
     assert not snap.error_flags
     assert snap.metadata["transmission"] == ["sample"]
@@ -197,7 +200,7 @@ def test_qspace_forward_scattering_survives_float_noise():
     fixed_E = 14.68
     Ei = 25.0
     ki, kf = energy2k(Ei), energy2k(fixed_E)
-    snap = _momentum_snapshot("Kf Fixed", "Maxwellian", ki - kf, 0.0, 0.0,
+    snap = _momentum_snapshot("Kf Fixed", "full_spectrum", ki - kf, 0.0, 0.0,
                               Ei - fixed_E, fixed_E=fixed_E)
     assert not snap.error_flags
     assert abs(snap.metadata["stt"]) < 1e-5
@@ -208,7 +211,7 @@ def test_angle_mode_near_zero_a2_is_not_transmission():
     """The tolerance is for a SOLVED sample angle. In angle mode the operator
     typed the number, so 0.000005 deg is an ordinary point, not forward
     scattering (external reader)."""
-    snap = _angle_snapshot("Kf Fixed", "Maxwellian", 41.19, -41.19,
+    snap = _angle_snapshot("Kf Fixed", "full_spectrum", 41.19, -41.19,
                            deltaE_field=0.0, stt=5e-6)
     assert not snap.error_flags
     assert snap.metadata["transmission"] == []
@@ -216,7 +219,7 @@ def test_angle_mode_near_zero_a2_is_not_transmission():
 
 def test_ordinary_point_transmission_is_empty():
     """Preservation check: an ordinary point is untouched by this change."""
-    snap = _momentum_snapshot("Kf Fixed", "Maxwellian", 2.0, 0.0, 0.5, 2.0)
+    snap = _momentum_snapshot("Kf Fixed", "full_spectrum", 2.0, 0.0, 0.5, 2.0)
     meta = snap.metadata
     assert not snap.error_flags
     assert meta["transmission"] == []
@@ -235,7 +238,7 @@ def test_flagged_qspace_point_has_empty_transmission():
     a Ki-fixed transfer that leaves Ef <= 0 trips the "energy" guard before
     any angle is solved.
     """
-    snap = _momentum_snapshot("Ki Fixed", "Maxwellian", 2.0, 0.0, 0.5,
+    snap = _momentum_snapshot("Ki Fixed", "full_spectrum", 2.0, 0.0, 0.5,
                               _FIXED_E + 3.0)
     assert snap.error_flags
     assert "energy" in snap.error_flags
@@ -331,7 +334,7 @@ def test_deterministic_engine_a4_scan_skips_only_the_transmission_point(tmp_path
         ctrl.output_directory = str(tmp_path)
         launch = ctrl.build_api_launch_state({
             "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
-            "monocris": "pg002", "anacris": "pg002", "source_type": "Mono",
+            "monocris": "pg002", "anacris": "pg002", "moderator_mode": "flat_band",
             "mtt": mtt, "stt": -71.25, "omega": -35.63,
             "scan_command1": "A6 -1 1 1",
         })
@@ -365,7 +368,7 @@ def test_deterministic_engine_stt_scan_skips_forward_scattering_point(tmp_path):
         ctrl.output_directory = str(tmp_path)
         launch = ctrl.build_api_launch_state({
             "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
-            "monocris": "pg002", "anacris": "pg002", "source_type": "Maxwellian",
+            "monocris": "pg002", "anacris": "pg002", "moderator_mode": "full_spectrum",
             "mtt": 41.19, "stt": -1.0, "omega": -35.63, "att": -41.19,
             "scan_command1": "A4 -1 1 1",
         })
@@ -418,7 +421,7 @@ def test_deterministic_scan_command_at_a4_zero_needs_allow_partial(monkeypatch, 
     mtt = _in8_mtt_for_ei(20.0)
     patch = {
         "K_fixed": "Kf Fixed", "fixed_E": _FIXED_E,
-        "monocris": "pg002", "anacris": "pg002", "source_type": "Mono",
+        "monocris": "pg002", "anacris": "pg002", "moderator_mode": "flat_band",
         "mtt": mtt, "stt": -71.25, "omega": -35.63,
         "scan_command1": "A6 -1 1 1",
     }
@@ -479,7 +482,7 @@ def test_deterministic_engine_never_relabels_an_already_infeasible_point():
     deterministic launch state -- never relabelled ``transmission`` (the
     plan-verifier's second-pass blocker)."""
     plugin = IN8Plugin()
-    vals = _base_vals("Kf Fixed", "Maxwellian")
+    vals = _base_vals("Kf Fixed", "full_spectrum")
     state = plugin.default_state()
     config = plugin.scan_config(state, vals, None, {}, state.sample_mount)
     plan = build_plan([("deltaE 3.0 3.0 1.0", False), ("", False)],

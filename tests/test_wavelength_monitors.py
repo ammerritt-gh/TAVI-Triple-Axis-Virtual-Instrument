@@ -150,12 +150,15 @@ def _build_puma(diagnostic_settings):
     pytest.importorskip("mcstasscript")
     import instruments.builtin  # noqa: F401
     from instruments.registry import get_instrument
+    from instruments.source import profile_values
 
     plugin = get_instrument("puma")
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": "Mono",
-        "source_dE": 2,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "frm2_thermal",
+        **profile_values("frm2_thermal"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 13.0272,
         "rvm": 1.6102,
         "rha": 2.3034,

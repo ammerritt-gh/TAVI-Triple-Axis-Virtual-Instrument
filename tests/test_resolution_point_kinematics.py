@@ -20,6 +20,7 @@ import pytest
 
 from instruments.contract import PointSnapshot
 from instruments.panda.plugin import PANDAPlugin
+from instruments.source import profile_values
 from instruments.tas_runtime import MOTORS
 from plan_helpers import motors_point, plan_for
 from tavi.neutron_conversions import energy2k
@@ -29,8 +30,10 @@ def _panda_vals(**overrides):
     """Same shape as ``tests/test_resolution_point_sense.py::_panda_vals``."""
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": "Maxwellian",
-        "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "frm2_cold",
+        **profile_values("frm2_cold"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 4.0, "rvm": 1.8, "rha": 1.65, "rva": 0.60,
         "fixed_E": 4.978451631466585,
         "Ei": 4.978451631466585, "Ki": energy2k(4.978451631466585),

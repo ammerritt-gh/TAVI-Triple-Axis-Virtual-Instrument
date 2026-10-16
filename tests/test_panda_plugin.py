@@ -14,6 +14,7 @@ from instruments.panda.plugin import (
     PANDAPlugin,
     panda_descriptor,
 )
+from instruments.source import profile_values
 from instruments.validation import validate_descriptor
 from instruments.tas_runtime import MOTORS, Q_CALC
 from plan_helpers import motors_point, plan_for, q_point
@@ -95,8 +96,10 @@ def _gui_vals(**overrides):
     """The instrument-config subset of get_gui_values() the scan config maps."""
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": "Maxwellian",
-        "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "frm2_cold",
+        **profile_values("frm2_cold"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 4.0,
         "rvm": 1.8,
         "rha": 1.65,
@@ -124,7 +127,8 @@ def test_default_state_matches_descriptor_geometry():
     assert (state.L1, state.L2, state.L3, state.L4) == (5.00, 2.10, 1.05, 0.95)
     assert (state.sense_mono, state.sense_sample, state.sense_ana) == (-1, 1, -1)
     assert (state.alpha_1, state.alpha_2, state.alpha_3, state.alpha_4) == (0, 0, 0, 0)
-    assert state.source_type == "Maxwellian"
+    assert state.moderator_mode == "full_spectrum"
+    assert state.moderator_profile == "frm2_cold"
     # The horizontal virtual source sits 2.180 m past the guide exit.
     assert state.l_virtual_source_mono == pytest.approx(2.82)
 

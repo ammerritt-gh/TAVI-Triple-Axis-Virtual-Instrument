@@ -43,7 +43,7 @@ def fixture_descriptor() -> InstrumentDescriptor:
 class ContractFixturePlugin:
     id = "contract_fixture"
     display_name = "Contract fixture"
-    CONTRACT_VERSION = 1
+    CONTRACT_VERSION = 2
 
     def descriptor(self):
         return fixture_descriptor()
@@ -53,7 +53,7 @@ class ContractFixturePlugin:
 
 
 class WrongVersionPlugin(ContractFixturePlugin):
-    CONTRACT_VERSION = 2
+    CONTRACT_VERSION = 1   # the retired version
 
 
 class UndeclaredVersionPlugin:

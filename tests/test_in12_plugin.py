@@ -19,6 +19,7 @@ from instruments.in12.plugin import (
     IN12Plugin,
     in12_descriptor,
 )
+from instruments.source import profile_values
 from instruments.tas_runtime import MOTORS, Q_CALC
 from instruments.validation import validate_descriptor
 from plan_helpers import motors_point, plan_for, q_point
@@ -119,8 +120,10 @@ def _gui_vals(**overrides):
     """The instrument-config subset of get_gui_values() the scan config maps."""
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": "Maxwellian",
-        "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "ill_vcs_cold",
+        **profile_values("ill_vcs_cold"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.84,
         "rvm": 0.84,
         "rha": 1.98,
@@ -148,7 +151,8 @@ def test_default_state_matches_descriptor_geometry():
     assert (state.L1, state.L2, state.L3, state.L4) == (1.80, 1.80, 1.30, 0.72)
     assert (state.sense_mono, state.sense_sample, state.sense_ana) == (-1, 1, -1)
     assert (state.alpha_1, state.alpha_2, state.alpha_3, state.alpha_4) == (0, 0, 0, 0)
-    assert state.source_type == "Maxwellian"
+    assert state.moderator_mode == "full_spectrum"
+    assert state.moderator_profile == "ill_vcs_cold"
 
 
 def test_mcstas_name_matches_definition_module():
@@ -487,7 +491,9 @@ def test_scan_config_passes_through_rva_regardless_of_analyser():
 
     def _config(anacris, rva):
         vals = {
-            "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2,
+            "K_fixed": "Kf Fixed", "moderator_mode": "full_spectrum",
+            "moderator_profile": "ill_vcs_cold", **profile_values("ill_vcs_cold"),
+            "flat_band_half_width_mev": 2,
             "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": rva,
             "fixed_E": 8.288785, "monocris": "pg002", "anacris": anacris,
             "modules": {},

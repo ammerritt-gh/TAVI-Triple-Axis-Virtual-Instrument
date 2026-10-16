@@ -16,6 +16,7 @@ import math
 import numpy as np
 import pytest
 
+from instruments.source import profile_values
 from instruments.tas_runtime import HKL_CALC, MOTORS, Q_CALC
 from plan_helpers import context, hkl_point, motors_point, plan_for, q_point
 from tavi.neutron_conversions import energy2k, k2energy
@@ -653,7 +654,9 @@ def test_a_point_exactly_at_the_travel_corner_solves(azimuth):
 
 def _in12_vals(**overrides):
     vals = {
-        "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2.0,
+        "K_fixed": "Kf Fixed", "moderator_mode": "full_spectrum",
+        "moderator_profile": "ill_vcs_cold", **profile_values("ill_vcs_cold"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.84, "rvm": 0.84, "rha": 1.98, "rva": 1.40,
         "fixed_E": IN12_E, "monocris": "pg002", "anacris": "pg002",
         "modules": {},
