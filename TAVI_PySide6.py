@@ -11179,7 +11179,10 @@ def _self_test_main(qt_args):
         log_stream = getattr(crash_log, "_stream", None)
         if log_stream is not None:
             crash_log._stream = None
-            log_stream.close()
+            try:
+                log_stream.close()
+            except Exception as exc:  # a failed flush here must not stop the verdict and the exit
+                print(f"Self-test: could not close the crash log: {exc}", flush=True)
         if ok:
             try:
                 shutil.rmtree(work)
