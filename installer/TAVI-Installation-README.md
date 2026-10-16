@@ -47,11 +47,19 @@ Your last screen says one of these. Only the `C` key closes that window; other k
 | Headline | What it means |
 |----------|---------------|
 | `INSTALLATION SUCCEEDED` | TAVI is installed and its test simulation worked. Start it from the TAVI Launcher. |
-| `INSTALLATION FAILED` | A step did not finish. The screen names the step and the error. Nothing was removed; the install folder stays as it is. |
+| `INSTALLATION FAILED` | A step did not finish. The screen names the step and the error, and says what was removed (see below). Nothing of the new install is removed: what was installed so far stays in the TAVI folder. |
 | `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED` | TAVI is installed and will open, but its test simulation did not work, so simulations will probably fail too. |
-| `INSTALLATION CANCELLED` | You answered No to "Continue with TAVI installation?". Nothing was installed. |
+| `INSTALLATION CANCELLED` | You answered No to "Continue with TAVI installation?". Nothing new was installed, and it is not a failure. |
 
 On a failure, the last lines of the install log appear on screen and Notepad opens the full log. The screen offers **D**: press D to collect diagnostics for support, which makes the zip described under Troubleshooting. The screen then comes back; press **C** to close it.
+
+Removal of anything that was already there is limited to one case. If you agreed to replace an older TAVI installation (or one that did not finish), the installer removes it before the new install begins, and the last screen says so, with one of these sentences:
+
+- `The old TAVI installation was removed before this install began. Nothing of the new install was removed: what was installed so far is still in that folder.` (failure)
+- `Part of the old TAVI installation could not be removed, and part of it may already have gone. Nothing of the new install was removed: what was installed so far is still in that folder.` (failure)
+- `The old TAVI installation was removed. Nothing new was installed.` (cancelled)
+
+When no old installation was removed, a failure says `Nothing was removed: what was installed so far is still in that folder.`, and a cancelled install says `Nothing was installed and nothing was removed.`
 
 After a successful install, or one whose test simulation failed, the installer asks: *Also put a copy of the TAVI Launcher shortcut on your desktop?* Press Enter for yes (the recommended answer), or type N and Enter for no. The shortcut also stays in your install folder, which opens in Explorer when the installer finishes.
 
