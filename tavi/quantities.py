@@ -173,7 +173,7 @@ QUANTITIES: tuple[Quantity, ...] = (
     *(Quantity(f"moderator_t{n}_k", "K", f"T{n} (K)", f"temperature {n} of the moderator's Maxwellians",
                "0 = this pair unused; a pair counts when T > 0 and I > 0", writable=True,
                name=f"moderator T{n}") for n in (1, 2, 3)),
-    *(Quantity(f"moderator_i{n}", "n/cm²/s/sr", f"I{n} (n/cm²/s/sr)",
+    *(Quantity(f"moderator_i{n}", "n/cm^2/s/sr", f"I{n} (n/cm²/s/sr)",
                f"integrated flux {n} of the moderator's Maxwellians",
                "McStas Source_gen's I; 0 = this pair unused", writable=True,
                name=f"moderator I{n}") for n in (1, 2, 3)),
@@ -260,7 +260,7 @@ def by_id(canonical_id: str) -> Quantity:
 
 
 # GET /schema publishes ASCII unit spellings; the registry keeps the typographic ones.
-_SCHEMA_UNIT = {"°": "degrees", "Å⁻¹": "angstrom^-1", "Å": "angstrom", "n/cm²/s/sr": "n/cm^2/s/sr"}
+_SCHEMA_UNIT = {"°": "degrees", "Å⁻¹": "angstrom^-1", "Å": "angstrom"}
 
 
 def schema_unit(canonical_id: str):
