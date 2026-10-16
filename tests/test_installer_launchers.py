@@ -399,6 +399,9 @@ GRAMMAR_COPIES = {
                    (UNINSTALL_TAVI, "MARK_ID"), (UNINSTALL_TAVI, "INFO_ID"),
                    (DOCTOR, "MARK_ID"), (DOCTOR, "INFO_ID"),
                    (RECORD_TAVI, "MARK_ID"), (RECORD_TAVI, "INFO_ID")],
+    # The collector takes TEMP fallback logs by this shape, so every copy must agree.
+    "STAMP": [(INSTALL_1_4_0, "STAMP"), (RUN_TAVI, "STAMP"), (UPDATE_TAVI, "STAMP"),
+              (UNINSTALL_TAVI, "STAMP"), (UNINSTALL_STANDALONE, "STAMP"), (COLLECT_DIAG, "STAMP")],
 }
 
 
