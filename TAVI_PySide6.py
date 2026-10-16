@@ -7641,8 +7641,14 @@ class TAVIController(QObject):
         flag, tags it ``source="benchmark"``, pre-filters infeasible points, and
         submits it through the job worker. Appends the new job id to
         ``_benchmark_job_ids``. Returns the submitted job, or ``None`` when the
-        GUI launch state could not be read or its plan was refused.
+        GUI launch state could not be read, its source or its plan was refused.
         """
+        # The source the dock shows is what runs: refuse one the component would stop on (as Run does).
+        problems = moderator.validate(self._source_gui_values())
+        for problem in problems:
+            self.print_to_message_center(f"Benchmark refused: {problem}")
+        if problems:
+            return None
         launch_state = self._collect_simulation_launch_state()
         if not launch_state:
             self.print_to_message_center(
