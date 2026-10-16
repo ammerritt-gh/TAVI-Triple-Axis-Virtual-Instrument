@@ -2388,6 +2388,32 @@ def test_failing_on_a_partly_removed_old_installation_says_so(tmp_path):
     assert f"Folder: {base}" in out or f"TAVI folder : {base}" in out, out
 
 
+@pytest.mark.parametrize("old_removed", ["yes", "partly", ""])
+def test_selftest_screen_names_an_old_removal_and_how_to_start(tmp_path, old_removed):
+    """The test-simulation-failed screen says TAVI is whole and how to start it, and
+    never says nothing was removed when an older installation was replaced first."""
+    src = _read(INSTALL_1_4_0)
+    start = src.index("\n:end_screen\r\n") + 1
+    block = src[start:src.index("\r\n:write_status", start)]
+    harness = tmp_path / "end_screen.bat"
+    harness.write_bytes((
+        "@echo off\r\nsetlocal\r\n"
+        'set "OUTCOME=selftest"\r\nset "BASE_OURS=yes"\r\n'
+        f'set "OLD_REMOVED={old_removed}"\r\nset "UNATTENDED=yes"\r\n'
+        'set "LOGFILE=C:\\x\\install.log"\r\nset "TAVI_BASE=C:\\TAVI"\r\n'
+        'set "STEP_NAME=Running a test simulation with TAVI"\r\nset "ERR1=forced"\r\n'
+        'set "HEADLINE=TAVI INSTALLED, BUT THE TEST SIMULATION FAILED"\r\n'
+        "call :end_screen\r\nexit /b 0\r\n" + block + "\r\n").encode("utf-8"))
+    out = run_bat(str(harness), timeout=20).stdout
+    assert "fully installed in that folder" in out and 'double-click "TAVI Launcher"' in out, out
+    assert "so far is still in that folder" not in out, out
+    if old_removed:
+        assert "Nothing was removed" not in out, out
+        assert "old TAVI installation" in out, out
+    else:
+        assert "Nothing was removed: TAVI is fully installed in that folder." in out, out
+
+
 def _fixed_clock(tmp_path, env, stamp="20260101-000000"):
     """The launchers take their log stamp from powershell. A stub on PATH fixes
     it, so a log name can be known in advance and a clash made on purpose."""
