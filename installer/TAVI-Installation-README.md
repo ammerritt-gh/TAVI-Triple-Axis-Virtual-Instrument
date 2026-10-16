@@ -151,6 +151,8 @@ Every install, launch, repair and uninstall writes a log file to this folder:
 
 Paste that into the address bar of Explorer. The file names start with `install-`, `launch-`, `repair-` or `uninstall-`, followed by the date and time. The file `install-status.txt` in your install folder says how the last install ended. These logs stay on your computer when TAVI is removed.
 
+If that folder cannot be written (some managed laptops block it), the logs go into the Windows temporary folder instead. Type `%TEMP%` in the Explorer address bar to open it. The diagnostics zip goes to the same place. Whichever folder is used, the last screen of each run prints the full path of the file to send, so copy the path from there. If nothing could be saved in either place, that screen says so.
+
 If something goes wrong, open the **TAVI Launcher** and choose **[5] Collect diagnostics for support**. It takes a few minutes, because it runs TAVI's Doctor, which runs four short test simulations. When it finishes, Explorer opens the logs folder with one file selected, named `TAVI-diagnostics-<date and time>.zip`. Send that one file to the person who helps you with TAVI. It holds the logs, the crash log, the install status, the version record, the compiler-check logs and the Doctor's report. It contains your user name and folder paths. TAVI does not send it anywhere; you send it.
 
 ### TAVI crashes or closes unexpectedly
