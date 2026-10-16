@@ -2853,8 +2853,10 @@ class TAVIController(QObject):
         return _public_values(vals, self.descriptor.slits)
 
     def output_parameters(self, params):
-        """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only."""
-        return self.public_values(params)
+        """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only,
+        and the source stamp (component name, version, hash, the nine values, the edit flag)."""
+        public = self.public_values(params)
+        return {**public, **moderator.provenance(public)}
 
     def point_output_parameters(self, vals, metadata, scan_index, number_neutrons):
         """One scan point's scan_parameters.txt: the launch values overlaid by the point's own
@@ -9958,6 +9960,7 @@ class TAVIController(QObject):
                     )
                 )
                 job.result.metadata['noiseless'] = noiseless
+                job.result.metadata['source'] = moderator.provenance(vals)
                 # Stamped even when the profile is disabled and even when
                 # cn_valid is false: absence of background is provenance too.
                 job.result.metadata['background'] = _background.metadata_block(
@@ -11155,6 +11158,7 @@ class TAVIController(QObject):
         if job is not None and job.result is not None \
                 and simulation_error_message is None:
             with job.lock:
+                job.result.metadata['source'] = moderator.provenance(vals)
                 job.result.metadata['background'] = _background.metadata_block(
                     background, background_source,
                     background_seed=(
