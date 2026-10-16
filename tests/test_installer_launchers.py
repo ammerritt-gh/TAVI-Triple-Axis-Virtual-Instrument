@@ -1215,6 +1215,21 @@ def test_uninstall_leaves_extra_user_files_and_the_base_folder_standing(tmp_path
     assert "were not TAVI's" in result.stdout
 
 
+def test_uninstall_keeps_a_tavi_doctor_folder_without_the_report(tmp_path):
+    """The Doctor's folders hold its TAVI-doctor-report.txt. Any other
+    tavi_doctor_* folder in the base is the student's: it stays, and is named."""
+    base = _uninstallable_base(tmp_path, "notes")
+    notes = base / "tavi_doctor_notes"
+    notes.mkdir()
+    (notes / "my_plan.txt").write_text("keep me\n", encoding="utf-8", newline="\n")
+    result = run_bat(UNINSTALL_TAVI, str(base), "/y", timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (notes / "my_plan.txt").exists(), "a tavi_doctor folder the Doctor did not make must survive"
+    assert "tavi_doctor_notes" in result.stdout, result.stdout
+    assert "were not TAVI's" in result.stdout, result.stdout
+    assert not (base / "tavi_doctor_12345678").exists(), "the Doctor's own report folder is removed"
+
+
 # ===========================================================================
 # 6a. Uninstall (1.4): its own log in %LOCALAPPDATA%\TAVI\logs, a folder that
 #     outlives the installation; a headline; C to close unless /y; and the
