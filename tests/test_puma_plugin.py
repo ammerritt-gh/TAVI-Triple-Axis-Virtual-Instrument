@@ -10,6 +10,7 @@ import pytest
 
 from instruments.contract import InstrumentPlugin, RunExecutionState
 from instruments.puma.plugin import PUMA_MCSTAS_NAME, PUMAPlugin, puma_descriptor
+from instruments.source import profile_values
 from instruments.tas_runtime import MOTORS
 from plan_helpers import motors_point, plan_for
 
@@ -45,8 +46,10 @@ def _gui_vals(**overrides):
     """The instrument-config subset of get_gui_values() the scan config maps."""
     vals = {
         "K_fixed": "Ki Fixed",
-        "source_type": "Maxwellian",
-        "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "frm2_thermal",
+        **profile_values("frm2_thermal"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 2.5,
         "rvm": 1.2,
         "rha": 2.5,
@@ -78,7 +81,8 @@ def test_default_state_matches_legacy_defaults():
     assert (state.L1, state.L2, state.L3, state.L4) == (2.150, 2.290, 0.880, 0.750)
     assert state.NMO_installed == "None"
     assert state.V_selector_installed is False
-    assert state.source_type == "Maxwellian"
+    assert state.moderator_mode == "full_spectrum"
+    assert state.moderator_profile == "frm2_thermal"
 
 
 def test_scan_config_applies_gui_mapping():

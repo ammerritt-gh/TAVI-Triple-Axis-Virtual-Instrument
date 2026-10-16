@@ -1,7 +1,7 @@
 """The saved per-point energies must agree with the emitted crystal angles.
 
 ``calculate_angles`` picks the nominal Ei/Ef from ``K_fixed`` alone.
-``point_energy_metadata`` used to consult ``source_type`` as well, so a
+``point_energy_metadata`` used to consult the source type as well, so a
 fixed-Ef point on the default (Maxwellian) source got angles for
 (Ei = Ef + dE, Ef) alongside metadata for (Ei = fixed_E, Ef = fixed_E - dE).
 Anything reconstructing kinematics or resolution from the saved Ki/Kf then
@@ -17,6 +17,7 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 from instruments.in8.plugin import IN8Plugin
+from instruments.source import profile_values
 from instruments.tas_runtime import MOTORS, Q_CALC, compute_scan_snapshot
 from plan_helpers import motors_point, plan_for, q_point
 from tavi.neutron_conversions import angle2k, k2energy
@@ -24,12 +25,14 @@ from tavi.neutron_conversions import angle2k, k2energy
 _FIXED_E = 14.68  # meV, the standard IN8 kf = 2.662 setting
 
 
-def _snapshot(k_fixed, source_type, deltaE):
+def _snapshot(k_fixed, mode, deltaE):
     plugin = IN8Plugin()
     vals = {
         "K_fixed": k_fixed,
-        "source_type": source_type,
-        "source_dE": 2,
+        "moderator_mode": mode,
+        "moderator_profile": "ill_thermal_h12",
+        **profile_values("ill_thermal_h12"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31,
         "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002",
@@ -46,11 +49,11 @@ def _snapshot(k_fixed, source_type, deltaE):
 
 
 @pytest.mark.parametrize("k_fixed", ["Ki Fixed", "Kf Fixed"])
-@pytest.mark.parametrize("source_type", ["Maxwellian", "Mono"])
+@pytest.mark.parametrize("mode", ["full_spectrum", "flat_band"])
 @pytest.mark.parametrize("deltaE", [-3.0, 2.0])
-def test_saved_energies_match_the_crystal_angles(k_fixed, source_type, deltaE):
-    meta = _snapshot(k_fixed, source_type, deltaE).metadata
-    assert not _snapshot(k_fixed, source_type, deltaE).error_flags
+def test_saved_energies_match_the_crystal_angles(k_fixed, mode, deltaE):
+    meta = _snapshot(k_fixed, mode, deltaE).metadata
+    assert not _snapshot(k_fixed, mode, deltaE).error_flags
 
     d_pg002 = 3.355
     # mtt/att are signed two-theta; k2angle returns theta, so halve and unsign.
@@ -66,32 +69,34 @@ def test_saved_energies_match_the_crystal_angles(k_fixed, source_type, deltaE):
     assert meta["Ef"] > 0
 
 
-@pytest.mark.parametrize("source_type", ["Maxwellian", "Mono"])
-def test_fixed_ef_holds_ef_and_fixed_ki_holds_ei(source_type):
+@pytest.mark.parametrize("mode", ["full_spectrum", "flat_band"])
+def test_fixed_ef_holds_ef_and_fixed_ki_holds_ei(mode):
     """Which energy is held constant is a property of K_fixed, not the source."""
     for deltaE in (-3.0, 2.0):
-        assert _snapshot("Kf Fixed", source_type, deltaE).metadata["Ef"] == _FIXED_E
-        assert _snapshot("Ki Fixed", source_type, deltaE).metadata["Ei"] == _FIXED_E
+        assert _snapshot("Kf Fixed", mode, deltaE).metadata["Ef"] == _FIXED_E
+        assert _snapshot("Ki Fixed", mode, deltaE).metadata["Ei"] == _FIXED_E
 
 
 def test_e0_param_stays_a_source_parameter():
     """E0_param describes the source, not the nominal energies.
 
-    A "Mono" source is a narrow band steered onto the selected Ei; a Maxwellian
-    source is a broadband moderator whose peak does not move with the scan.
+    The flat band is steered onto the selected Ei; the full-spectrum source is
+    a moderator whose spectrum does not move with the scan, and ignores E0.
     """
-    assert _snapshot("Kf Fixed", "Mono", 2.0).metadata["E0_param"] == _FIXED_E + 2.0
-    assert _snapshot("Kf Fixed", "Maxwellian", 2.0).metadata["E0_param"] == _FIXED_E
-    assert _snapshot("Ki Fixed", "Mono", 2.0).metadata["E0_param"] == _FIXED_E
+    assert _snapshot("Kf Fixed", "flat_band", 2.0).metadata["E0_param"] == _FIXED_E + 2.0
+    assert _snapshot("Kf Fixed", "full_spectrum", 2.0).metadata["E0_param"] == _FIXED_E
+    assert _snapshot("Ki Fixed", "flat_band", 2.0).metadata["E0_param"] == _FIXED_E
 
 
-def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
+def _angle_snapshot(k_fixed, mode, mtt, att, deltaE_field):
     """One ``angle``-mode point: the user drives A2..A6 directly."""
     plugin = IN8Plugin()
     vals = {
         "K_fixed": k_fixed,
-        "source_type": source_type,
-        "source_dE": 2,
+        "moderator_mode": mode,
+        "moderator_profile": "ill_thermal_h12",
+        **profile_values("ill_thermal_h12"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31,
         "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002",
@@ -108,8 +113,8 @@ def _angle_snapshot(k_fixed, source_type, mtt, att, deltaE_field):
                                  data_folder=".")
 
 
-@pytest.mark.parametrize("source_type", ["Maxwellian", "Mono"])
-def test_angle_mode_reads_both_crystals(source_type):
+@pytest.mark.parametrize("mode", ["full_spectrum", "flat_band"])
+def test_angle_mode_reads_both_crystals(mode):
     """In angle mode NEITHER energy is held at fixed_E.
 
     The user drives A2 and A6 directly, so Ei comes from the monochromator and
@@ -121,7 +126,7 @@ def test_angle_mode_reads_both_crystals(source_type):
     d = 3.355
     for mtt, att in ((41.19, -41.19), (50.0, -41.19), (41.19, -50.0),
                      (55.0, -60.0)):
-        meta = _angle_snapshot("Kf Fixed", source_type, mtt, att,
+        meta = _angle_snapshot("Kf Fixed", mode, mtt, att,
                                deltaE_field=0.0).metadata
         ki = angle2k(abs(mtt) / 2, d)
         kf = angle2k(abs(att) / 2, d)
@@ -136,7 +141,7 @@ def test_angle_mode_an_analyser_scan_moves_ef():
     """The specific case that was wrong: Kf-fixed, scanning A6."""
     transfers, finals = [], []
     for att in (-41.19, -50.0, -60.0):
-        meta = _angle_snapshot("Kf Fixed", "Maxwellian", 41.19, att,
+        meta = _angle_snapshot("Kf Fixed", "full_spectrum", 41.19, att,
                                deltaE_field=0.0).metadata
         transfers.append(meta["deltaE"])
         finals.append(meta["Ef"])
@@ -149,7 +154,7 @@ def test_angle_mode_an_analyser_scan_moves_ef():
 def test_angle_mode_a_monochromator_scan_moves_ei():
     incidents = []
     for mtt in (41.19, 50.0, 60.0):
-        meta = _angle_snapshot("Ki Fixed", "Maxwellian", mtt, -41.19,
+        meta = _angle_snapshot("Ki Fixed", "full_spectrum", mtt, -41.19,
                                deltaE_field=0.0).metadata
         incidents.append(meta["Ei"])
     assert len(set(incidents)) == 3, "Ei must track the monochromator angle"
@@ -163,7 +168,7 @@ def test_angle_mode_falls_back_when_the_angle_is_degenerate():
     -- while ``snapshot.deltaE``, the frozen McStas INPUT the point actually
     ran with, is untouched.
     """
-    snap = _angle_snapshot("Kf Fixed", "Maxwellian", 0.0, -41.19,
+    snap = _angle_snapshot("Kf Fixed", "full_spectrum", 0.0, -41.19,
                            deltaE_field=1.5)
     assert snap.metadata["deltaE"] is None
     assert snap.deltaE == 1.5
@@ -184,7 +189,7 @@ def test_a_transfer_that_leaves_no_neutron_is_rejected(k_fixed, deltaE):
     every axis-limit comparison against NaN is False -- so the point used to
     pass feasibility and the scan ran with NaN motor angles.
     """
-    snap = _snapshot(k_fixed, "Maxwellian", deltaE)
+    snap = _snapshot(k_fixed, "full_spectrum", deltaE)
     assert "energy" in snap.error_flags
     assert snap.params is None
     assert all(math.isfinite(snap.metadata[k]) for k in ("mtt", "att"))
@@ -197,9 +202,9 @@ def test_a_positive_final_energy_never_trips_the_guard():
     reach that Bragg condition and the triangle does not close -- but it must
     fail for those reasons, not be swallowed by the energy guard.
     """
-    snap = _snapshot("Ki Fixed", "Maxwellian", _FIXED_E - 0.01)
+    snap = _snapshot("Ki Fixed", "full_spectrum", _FIXED_E - 0.01)
     assert "energy" not in snap.error_flags
-    assert not _snapshot("Ki Fixed", "Maxwellian", 5.0).error_flags
+    assert not _snapshot("Ki Fixed", "full_spectrum", 5.0).error_flags
 
 
 def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
@@ -208,7 +213,9 @@ def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
 
     plugin = IN8Plugin()
     vals = {
-        "K_fixed": "Ki Fixed", "source_type": "Maxwellian", "source_dE": 2,
+        "K_fixed": "Ki Fixed", "moderator_mode": "full_spectrum",
+        "moderator_profile": "ill_thermal_h12", **profile_values("ill_thermal_h12"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.0, "rvm": 1.2, "rha": 1.5, "rva": 0.31, "fixed_E": _FIXED_E,
         "monocris": "pg002", "anacris": "pg002", "modules": {},
         "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0",
@@ -225,17 +232,17 @@ def test_feasibility_agrees_with_the_snapshot_on_a_dead_transfer():
     assert "no neutron" in reason
 
 
-def test_angle_mode_mono_source_follows_the_monochromator():
-    """E0 for a Mono source is the energy A2 selects, not fixed_E + deltaE.
+def test_angle_mode_flat_band_follows_the_monochromator():
+    """E0 for the flat band is the energy A2 selects, not fixed_E + deltaE.
 
     That arithmetic is only equal to Ei while the other crystal is held at
     fixed_E. In angle mode neither is, so an A6 scan would have walked the
-    source band away from the energy the monochromator was still selecting,
+    flat band away from the energy the monochromator was still selecting,
     starving the beam while every angle stayed valid.
     """
     d = 3.355
     for att in (-41.19, -50.0, -60.0):
-        snap = _angle_snapshot("Kf Fixed", "Mono", 41.19, att, deltaE_field=0.0)
+        snap = _angle_snapshot("Kf Fixed", "flat_band", 41.19, att, deltaE_field=0.0)
         meta = snap.metadata
         ei = k2energy(angle2k(41.19 / 2, d))
         assert meta["Ei"] == pytest.approx(ei, rel=1e-9)
@@ -245,8 +252,8 @@ def test_angle_mode_mono_source_follows_the_monochromator():
                                            rel=1e-9)
 
 
-def test_momentum_mode_mono_source_is_unchanged():
+def test_momentum_mode_flat_band_is_unchanged():
     """The override must not touch the modes that were already right."""
-    assert _snapshot("Kf Fixed", "Mono", 2.0).metadata["E0_param"] == _FIXED_E + 2.0
-    assert _snapshot("Ki Fixed", "Mono", 2.0).metadata["E0_param"] == _FIXED_E
-    assert _snapshot("Kf Fixed", "Maxwellian", 2.0).metadata["E0_param"] == _FIXED_E
+    assert _snapshot("Kf Fixed", "flat_band", 2.0).metadata["E0_param"] == _FIXED_E + 2.0
+    assert _snapshot("Ki Fixed", "flat_band", 2.0).metadata["E0_param"] == _FIXED_E
+    assert _snapshot("Kf Fixed", "full_spectrum", 2.0).metadata["E0_param"] == _FIXED_E

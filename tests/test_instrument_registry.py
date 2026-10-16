@@ -41,7 +41,7 @@ def _registry_snapshot():
 class _DummyPlugin:
     id = "dummy"
     display_name = "Dummy"
-    CONTRACT_VERSION = 1
+    CONTRACT_VERSION = 2
 
 
 def test_register_and_get_roundtrip():
@@ -66,8 +66,8 @@ def test_a_lambda_factory_registers_by_the_version_its_plugin_declares():
 
 def test_a_lambda_factory_whose_plugin_declares_another_version_is_refused():
     class _WrongPlugin(_DummyPlugin):
-        CONTRACT_VERSION = 2
-    with pytest.raises(ValueError, match="CONTRACT_VERSION 2"):
+        CONTRACT_VERSION = 1
+    with pytest.raises(ValueError, match="CONTRACT_VERSION 1"):
         register("dummy", "Dummy", lambda: _WrongPlugin())
 
 

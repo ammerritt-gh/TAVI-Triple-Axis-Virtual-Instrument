@@ -13,6 +13,7 @@ from instruments.in8.plugin import (
     IN8Plugin,
     in8_descriptor,
 )
+from instruments.source import profile_values
 from instruments.validation import validate_descriptor
 from instruments.tas_runtime import MOTORS, Q_CALC
 from plan_helpers import motors_point, plan_for, q_point
@@ -55,8 +56,10 @@ def _gui_vals(**overrides):
     """The instrument-config subset of get_gui_values() the scan config maps."""
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": "Maxwellian",
-        "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "ill_thermal_h12",
+        **profile_values("ill_thermal_h12"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.0,
         "rvm": 1.2,
         "rha": 1.5,
@@ -84,7 +87,8 @@ def test_default_state_matches_descriptor_geometry():
     assert (state.L1, state.L2, state.L3, state.L4) == (2.28, 2.48, 1.05, 0.70)
     assert (state.sense_mono, state.sense_sample, state.sense_ana) == (1, 1, -1)
     assert (state.alpha_1, state.alpha_2, state.alpha_3, state.alpha_4) == (0, 0, 0, 0)
-    assert state.source_type == "Maxwellian"
+    assert state.moderator_mode == "full_spectrum"
+    assert state.moderator_profile == "ill_thermal_h12"
 
 
 def test_mcstas_name_matches_definition_module():

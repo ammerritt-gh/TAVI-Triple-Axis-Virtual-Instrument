@@ -22,7 +22,7 @@ def _puma_vals(**overrides):
     vals = {
         "K_fixed": "Ki Fixed",
         "fixed_E": 14.7,
-        "source_type": "Maxwellian",
+        "moderator_mode": "full_spectrum",
         "monocris": "pg002",
         "anacris": "pg002",
         "rhm": 2.5, "rvm": 1.2, "rha": 2.5,
@@ -42,7 +42,7 @@ def _in8_vals(**overrides):
     vals = {
         "K_fixed": "Kf Fixed",
         "fixed_E": 14.7,
-        "source_type": "Maxwellian",
+        "moderator_mode": "full_spectrum",
         "monocris": "pg002",
         "anacris": "pg002",
         "rhm": 5.0, "rvm": 3.0, "rha": 5.0,
@@ -146,14 +146,22 @@ def test_puma_nmo_invalidates_and_cn_reports_invalid():
     assert res.invalidations == cfg.invalidations
 
 
-def test_puma_v_selector_and_mono_source_warn():
+def test_puma_v_selector_and_flat_band_source_warn():
     cfg = PUMAPlugin().resolution_config(
-        _puma_vals(modules={"nmo": "None", "v_selector": True}, source_type="Mono"),
+        _puma_vals(modules={"nmo": "None", "v_selector": True}, moderator_mode="flat_band"),
         2.0, 0.0,
     )
     assert any("velocity selector" in w for w in cfg.warnings)
-    assert any("monochromatic source" in w for w in cfg.warnings)
+    assert any("flat-band source differs from the Maxwellian moderator" in w
+               for w in cfg.warnings)
+    assert cfg.provenance["moderator_mode"] == "flat_band"
     assert cfg.invalidations == ()          # warnings, not invalidations
+
+
+def test_full_spectrum_source_raises_no_source_warning():
+    cfg = PUMAPlugin().resolution_config(_puma_vals(), 2.0, 0.0)
+    assert not any("source" in w for w in cfg.warnings)
+    assert "moderator_mode" not in cfg.provenance
 
 
 # ------------------------------------------------------------------ end-to-end CN
@@ -244,7 +252,7 @@ def _in12_vals(**overrides):
     vals = {
         "K_fixed": "Kf Fixed",
         "fixed_E": 8.2888,
-        "source_type": "Maxwellian",
+        "moderator_mode": "full_spectrum",
         "monocris": "pg002",
         "anacris": "pg002",
         "rhm": 3.84, "rvm": 0.84, "rha": 1.98, "rva": 1.40,

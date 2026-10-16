@@ -9,17 +9,20 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 from instruments.panda.plugin import _PANDA_MONITORS, PANDAPlugin
+from instruments.source import profile_values
 
 
 def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
-           monocris="pg002", source_type="Maxwellian",
+           monocris="pg002", mode="full_spectrum",
            alpha_1="0", alpha_2="0", alpha_3="0", alpha_4="0", modules=None):
     plugin = PANDAPlugin()
     diagnostic_settings = diagnostic_settings or {}
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": source_type,
-        "source_dE": 2,
+        "moderator_mode": mode,
+        "moderator_profile": "frm2_cold",
+        **profile_values("frm2_cold"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 4.0,
         "rvm": 1.8,
         "rha": 1.65,
@@ -189,7 +192,7 @@ def test_both_crystals_are_first_order_only():
 
     ``Monochromator_curved`` at its default ``order=0`` reflects at every
     multiple of the supplied reciprocal-lattice vector, and the default source
-    is the broadband Maxwellian branch, so nothing else here would exclude a
+    is the full-spectrum moderator, so nothing else here would exclude a
     lambda/2 component. This is the assertion that makes the documented
     "no higher-order contamination" true rather than aspirational.
     """
@@ -251,20 +254,18 @@ def test_detector_contract(plain_instrument):
     assert detector.yheight == 0.100
 
 
-def test_source_wiring_mono_vs_maxwellian():
-    maxwellian = _build(source_type="Maxwellian")
-    by_name = {c.name: c for c in maxwellian.component_list}
-    source = by_name["source"]
-    assert source.component_name == "Source_div_Maxwellian_v2"
-    assert source.energy_distribution == 2
-    assert source.E0 == "E0_param"
-    # The source aperture is the SR-2 guide exit, not a virtual source.
-    assert source.xwidth == 0.107 and source.yheight == 0.138
-
-    mono_source = _build(source_type="Mono")
-    by_name = {c.name: c for c in mono_source.component_list}
-    assert by_name["source"].energy_distribution == 0
-    assert by_name["source"].dE == 2
+def test_source_wiring_is_the_same_in_both_modes():
+    """The mode is a run-time parameter: it never changes the tree."""
+    for mode in ("full_spectrum", "flat_band"):
+        by_name = {c.name: c for c in _build(mode=mode).component_list}
+        source = by_name["source"]
+        assert source.component_name == "Source_Maxwell_direct"
+        assert source.E0 == "E0_param" and source.dE == "flat_band_de_param"
+        assert source.flat_band == "moderator_flat_band_param"
+        assert [source.T1, source.I1, source.T2, source.I2, source.T3, source.I3] == [
+            f"moderator_{kind}{n}_param" for n in (1, 2, 3) for kind in ("t", "i")]
+        # The source aperture is the SR-2 guide exit, not a virtual source.
+        assert source.xwidth == 0.107 and source.yheight == 0.138
 
 
 def test_sample_emission_from_shared_library():
@@ -282,20 +283,15 @@ def test_no_sample_warns_and_omits_component(capsys):
     assert "No sample selected" in capsys.readouterr().out
 
 
-def test_maxwellian_de_clears_the_source_init_guard_at_pandas_cold_floor():
-    """Source_div_Maxwellian_v2 exits in INITIALIZE when E0 - dE <= 0.
+def test_default_flat_band_half_width_clears_the_source_guard_at_pandas_cold_floor():
+    """Source_Maxwell_direct stops a flat-band run when E0 - dE <= 0.
 
-    PANDA's published floor is kf = 1.05 A^-1, i.e. E0 = 2.28 meV, so IN8's
-    thermal dE = 3 would abort a routine cold run before any detector data.
+    PANDA's published floor is kf = 1.05 A^-1, i.e. E0 = 2.28 meV, so the
+    default half-width must stay below that or a routine cold flat-band run
+    is refused at that floor.
     """
-    source_dE = _build(source_type="Maxwellian").get_component("source").dE
-    e0_floor_meV = 2.072142 * 1.05 ** 2          # kf = 1.05 A^-1
-    assert e0_floor_meV - source_dE > 0, (e0_floor_meV, source_dE)
-
-
-def test_mono_source_de_default_also_clears_the_guard():
-    source_dE = _build(source_type="Mono").get_component("source").dE
-    assert 2.072142 * 1.05 ** 2 - source_dE > 0
+    dE = PANDAPlugin().default_state().flat_band_half_width_mev
+    assert 2.072142 * 1.05 ** 2 - dE > 0, dE
 
 
 def test_monitor_order_holds_with_the_selector_and_primary_soller_in_beam():

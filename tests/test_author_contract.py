@@ -59,8 +59,8 @@ def test_wrong_contract_version_is_refused_at_load():
         registry.register("contract_fixture", "Contract fixture", WrongVersionPlugin)
     message = str(excinfo.value)
     assert "WrongVersionPlugin" in message
-    assert "CONTRACT_VERSION 2" in message
-    assert "TAVI supports CONTRACT_VERSION 1" in message
+    assert "CONTRACT_VERSION 1" in message
+    assert "TAVI supports CONTRACT_VERSION 2" in message
     assert "contract_fixture" not in {info.id for info in registry.available_instruments()}
 
 
@@ -102,7 +102,7 @@ def test_a_slit_binding_no_descriptor_parameter_tags_is_refused_at_load():
 
 
 @pytest.mark.parametrize("instrument_id", [info.id for info in registry.available_instruments()])
-def test_builtin_plugins_declare_version_one_and_valid_capabilities(instrument_id):
+def test_builtin_plugins_declare_version_two_and_valid_capabilities(instrument_id):
     plugin = registry.get_instrument(instrument_id)
-    assert plugin.CONTRACT_VERSION == 1
+    assert plugin.CONTRACT_VERSION == 2
     assert validate_capabilities(plugin.capabilities(), instrument_id, plugin.descriptor()) == []

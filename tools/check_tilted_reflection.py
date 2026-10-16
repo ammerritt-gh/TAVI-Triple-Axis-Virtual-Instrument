@@ -60,7 +60,7 @@ POINTS = 13
 HKL = (2.0, 0.0, 0.0)
 KF = 2.662
 IN8_VALS = {
-    "K_fixed": "Kf Fixed", "source_type": "Maxwellian", "source_dE": 2.0,
+    "K_fixed": "Kf Fixed",
     "rhm": 0.0, "rvm": 0.0, "rha": 0.0, "rva": 0.0,
     "monocris": "pg002", "anacris": "pg002", "modules": {},
     "collimation": {"alpha_1": "0", "alpha_2": "0", "alpha_3": "0", "alpha_4": "0"},
@@ -161,7 +161,7 @@ def main():
     u_true = _rot((1, 0, 1), 4.0) @ _rot((0, 1, 0), 45.0)
     mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90, R_mount=u_true)
     plugin = IN8Plugin()
-    vals = dict(IN8_VALS, fixed_E=fixed_e)
+    vals = dict(IN8_VALS, fixed_E=fixed_e, **plugin.default_state().source_values())
     config = plugin.scan_config(plugin.default_state(), vals, "Al_bragg", {}, mount)
     # Belief (the mount above) and physical truth agree, as the docstring says:
     # the sample arm and the closure check below read U_true, which the

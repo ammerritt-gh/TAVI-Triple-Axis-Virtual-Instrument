@@ -20,6 +20,7 @@ import pytest
 
 from instruments.panda.plugin import PANDAPlugin, panda_descriptor
 from instruments.resolution_adapter import build_resolution_config
+from instruments.source import profile_values
 from tavi.resolution import resolution
 
 
@@ -28,8 +29,10 @@ def _panda_vals(**overrides):
     curvature axes non-zero, so ``resolution()`` dispatches to Popovici."""
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": "Maxwellian",
-        "source_dE": 2.0,
+        "moderator_mode": "full_spectrum",
+        "moderator_profile": "frm2_cold",
+        **profile_values("frm2_cold"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 4.0, "rvm": 1.8, "rha": 1.65, "rva": 0.60,
         "fixed_E": 4.978451631466585,
         "monocris": "pg002",

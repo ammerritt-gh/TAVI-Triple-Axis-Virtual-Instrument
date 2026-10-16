@@ -9,17 +9,20 @@ import pytest
 pytest.importorskip("mcstasscript")
 
 from instruments.in8.plugin import _IN8_MONITORS, IN8Plugin
+from instruments.source import profile_values
 
 
 def _build(sample_key=None, diagnostic_mode=False, diagnostic_settings=None,
-           monocris="pg002", source_type="Maxwellian",
+           monocris="pg002", mode="full_spectrum",
            alpha_1="0", alpha_2="0", alpha_3="0", alpha_4="0"):
     plugin = IN8Plugin()
     diagnostic_settings = diagnostic_settings or {}
     vals = {
         "K_fixed": "Kf Fixed",
-        "source_type": source_type,
-        "source_dE": 2,
+        "moderator_mode": mode,
+        "moderator_profile": "ill_thermal_h12",
+        **profile_values("ill_thermal_h12"),
+        "flat_band_half_width_mev": 2.0,
         "rhm": 3.0,
         "rvm": 1.2,
         "rha": 1.5,
@@ -206,19 +209,17 @@ def test_detector_contract(plain_instrument):
     assert detector.yheight == 0.089
 
 
-def test_source_wiring_mono_vs_maxwellian():
-    maxwellian = _build(source_type="Maxwellian")
-    by_name = {c.name: c for c in maxwellian.component_list}
-    source = by_name["source"]
-    assert source.component_name == "Source_div_Maxwellian_v2"
-    assert source.energy_distribution == 2
-    assert source.E0 == "E0_param"
-    assert source.xwidth == 0.030 and source.yheight == 0.120
-
-    mono_source = _build(source_type="Mono")
-    by_name = {c.name: c for c in mono_source.component_list}
-    assert by_name["source"].energy_distribution == 0
-    assert by_name["source"].dE == 2
+def test_source_wiring_is_the_same_in_both_modes():
+    """The mode is a run-time parameter: it never changes the tree."""
+    for mode in ("full_spectrum", "flat_band"):
+        by_name = {c.name: c for c in _build(mode=mode).component_list}
+        source = by_name["source"]
+        assert source.component_name == "Source_Maxwell_direct"
+        assert source.E0 == "E0_param" and source.dE == "flat_band_de_param"
+        assert source.flat_band == "moderator_flat_band_param"
+        assert [source.T1, source.I1, source.T2, source.I2, source.T3, source.I3] == [
+            f"moderator_{kind}{n}_param" for n in (1, 2, 3) for kind in ("t", "i")]
+        assert source.xwidth == 0.030 and source.yheight == 0.120
 
 
 def test_sample_emission_from_shared_library():

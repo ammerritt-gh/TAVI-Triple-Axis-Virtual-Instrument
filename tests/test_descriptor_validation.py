@@ -12,7 +12,7 @@ import re
 import pytest
 
 from instruments._descriptor_examples import in8_descriptor, in12_descriptor
-from instruments.descriptor import AxisLimits, CurvatureAxis, GonioAxis
+from instruments.descriptor import SOURCE_PARAMS, AxisLimits, CurvatureAxis, GonioAxis
 from instruments.in8.plugin import IN8Plugin
 from instruments.in12.plugin import IN12Plugin
 from instruments.panda.plugin import PANDAPlugin, panda_descriptor
@@ -133,6 +133,16 @@ def test_structural_negative_cases(mutate, expected_substring):
     assert expected_substring in errors
 
 
+@pytest.mark.parametrize("profile", ["", "no_such_facility"])
+def test_runnable_instrument_must_name_a_known_moderator_profile(profile):
+    broken = _replace(puma_descriptor(), default_moderator_profile=profile)
+    errors = "\n".join(validate_descriptor(broken, runnable=True))
+    assert "default_moderator_profile" in errors
+    assert "instruments.source.PROFILES" in errors
+    # An example descriptor may omit it; only a registered instrument must name one.
+    assert validate_descriptor(broken, runnable=False) == []
+
+
 def test_multi_select_collimation_may_default_to_empty():
     d = puma_descriptor()
     alpha_2 = next(slot for slot in d.collimation if slot.id == "alpha_2")
@@ -148,10 +158,15 @@ def test_multi_select_collimation_may_default_to_empty():
 
 
 def test_puma_build_declares_descriptor_params():
-    """The builder's add_parameter set must equal the descriptor's parameter set."""
+    """The builder's add_parameter set must equal the descriptor's parameter set.
+
+    The source's parameters are declared by the shared ``add_source`` from
+    ``SOURCE_PARAMS``, so they are added to the model module's own declarations.
+    """
     with open(PUMA_MODULE_PATH, encoding="utf-8") as f:
         source = f.read()
     declared = set(re.findall(r'add_parameter\(\s*"(\w+)"', source))
+    declared |= {p.name for p in SOURCE_PARAMS}
     descriptor_names = {p.name for p in puma_descriptor().scannable_parameters}
     assert declared == descriptor_names, (
         f"builder-only: {sorted(declared - descriptor_names)}; "
