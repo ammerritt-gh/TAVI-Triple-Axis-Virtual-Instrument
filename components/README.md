@@ -223,12 +223,12 @@ ships.** The seven checks:
 
 **Verification record** (the same summary as the component's `%VALIDATION`):
 verified 2026-10-16 with McStas 3.7.1 (git) and MSVC, component version 1.0, file
-hash 547bf45f49e3; ray counts 2e7 per facility row and source, 5e6 for the flat
+hash 03a3017c469e; ray counts 2e7 per facility row and source, 5e6 for the flat
 band and the wide window, 1e6 for the E0/dE comparison; all seven checks passed, with
-11 refusals (including focus_aw=0 and focus_ah=181). The I-sum and ray-weight overflow
-refusals were checked by hand, not by the tool. Run: about 17 s wall on the 16-core
-machine (tool total 17.3 s, compile 1.4 s); report
-`output/source_verification/20261016-174434/report.md` (gitignored).
+11 refusals (including focus_aw=0 and focus_ah=181). The I-sum, energy-scale and ray-weight
+overflow refusals, and the dashed window at focus_ah=180, were checked by hand, not
+by the tool. Run: about 16 s wall on the 16-core machine (tool total 15.5 s, compile
+1.3 s); report `output/source_verification/20261016-180745/report.md` (gitignored).
 Spectrum: chi2/n from 0.87 to 1.11 over 26 comparisons (at least 276 bins each);
 the I2-doubled control gave chi2 6786 and 6693 and failed. Totals: 26 within 1.26
 sigma. One weight: deviation at most 5e-10. Flat band: level ratio 1.000000.
