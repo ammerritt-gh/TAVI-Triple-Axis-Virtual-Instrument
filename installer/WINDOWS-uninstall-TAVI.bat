@@ -409,7 +409,7 @@ set "STAMP="
 for /f "delims=" %%S in ('powershell -NoProfile -NonInteractive -Command "Get-Date -Format yyyyMMdd-HHmmss" ^<nul 2^>nul') do set "STAMP=%%S"
 if not defined STAMP set "STAMP=none"
 set STAMP| findstr /r /x /c:"STAMP=[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]-[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]" >nul
-if errorlevel 1 set "STAMP=%RANDOM%-%RANDOM%"
+if errorlevel 1 set "STAMP=tavi-rnd-%RANDOM%-%RANDOM%"
 goto :eof
 
 :validate_only

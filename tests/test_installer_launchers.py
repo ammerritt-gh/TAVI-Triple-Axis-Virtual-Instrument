@@ -926,6 +926,12 @@ def _diagnostics_env(tmp_path):
         fh.write("fallback\n")
     with open(os.path.join(env["TEMP"], "install-other.log"), "w", encoding="utf-8") as fh:
         fh.write("another program's log\n")
+    # The fallback when PowerShell gives no clock: TAVI's own shape, taken.
+    with open(os.path.join(env["TEMP"], "install-tavi-rnd-12345-6789.log"), "w", encoding="utf-8") as fh:
+        fh.write("fallback, no clock\n")
+    # A bare %RANDOM% name is not TAVI's shape, so it is left alone.
+    with open(os.path.join(env["TEMP"], "install-12345-6789.log"), "w", encoding="utf-8") as fh:
+        fh.write("another program's log\n")
     return env
 
 
@@ -953,9 +959,11 @@ def test_collect_diagnostics_quiet_zips_the_logs_and_the_doctor_report(tmp_path,
         assert archive.read(by_tail["tavi-crash.log"]).decode() == "Traceback: the crash\n"
         for expected in ("INSTALL_INFO.txt", "install-status.txt", "compile_check-serial.log",
                          "TAVI-doctor-report.txt", "TAVI-doctor-summary.txt", "collected.txt",
-                         "temp-fallback/install-20261016-091500.log"):
+                         "temp-fallback/install-20261016-091500.log",
+                         "temp-fallback/install-tavi-rnd-12345-6789.log"):
             assert expected in by_tail, (expected, names)
-        assert not any(name.endswith("install-other.log") for name in names), names
+        assert not any(name.endswith(("install-other.log", "install-12345-6789.log"))
+                       for name in names), names
         assert b"missing: compile check log, MPI" in archive.read(by_tail["collected.txt"])
     assert "DIAGNOSTICS SAVED" in result.stdout, result.stdout
     assert path in result.stdout, result.stdout
@@ -2321,3 +2329,15 @@ def test_a_second_run_in_the_same_second_gets_its_own_log(tmp_path, micromamba_s
     assert len(fresh) == 1 and re.fullmatch(rf"{kind}-20260101-000000-\d+\.log", fresh[0]), fresh
     with open(os.path.join(logs, fresh[0]), encoding="utf-8", newline="") as fh:
         assert "stub line 1" in fh.read()
+
+
+# The %RANDOM% stamp used when PowerShell gives no clock has TAVI's own shape,
+# so the diagnostics collector can take it from %TEMP% while no other
+# program's install-*.log can pass for it.
+LOG_NAMING_FILES = [INSTALL_1_4_0, RUN_TAVI, UPDATE_TAVI, UNINSTALL_TAVI, UNINSTALL_STANDALONE,
+                    COLLECT_DIAG]
+
+
+@pytest.mark.parametrize("path", LOG_NAMING_FILES, ids=os.path.basename)
+def test_the_random_fallback_stamp_has_tavi_shape(path):
+    assert 'set "STAMP=tavi-rnd-%RANDOM%-%RANDOM%"' in _read(path), path
