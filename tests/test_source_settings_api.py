@@ -318,20 +318,80 @@ def test_a_failed_scan_still_carries_the_source_stamp(fresh, monkeypatch):
     assert job.result.metadata["source"] == moderator.provenance(launch["vals"])
 
 
-def test_the_stamp_is_the_hash_read_at_launch_not_when_the_run_ends(fresh, monkeypatch):
-    """A component edited during a run does not change the hash the run's result records."""
+def test_a_queued_launch_records_the_hash_its_run_starts_with(fresh, monkeypatch):
+    """The binary is built when the run starts, so an edit made between Run and the run is what it records."""
     controller, _call = fresh
     launch = controller.build_api_launch_state(SCAN)
     launch["engine"] = "deterministic"
     controller._compile_launch(launch)
-    at_launch = moderator.component_stamp()
+    real = moderator.component_stamp
     monkeypatch.setattr(moderator, "component_stamp",
-                        lambda *args, **kwargs: {**at_launch, "source_component_sha256": "0" * 12})
-    job = ScanJob(job_id="t-source-hash", source="api", launch_state=launch)
+                        lambda *args, **kwargs: {**real(), "source_component_sha256": "0" * 12})
+    job = ScanJob(job_id="t-source-queued", source="api", launch_state=launch)
 
     controller.run_simulation(launch, job=job)
 
-    assert job.result.metadata["source"]["source_component_sha256"] == at_launch["source_component_sha256"]
+    assert job.result.metadata["source"]["source_component_sha256"] == "0" * 12
+
+
+def test_a_component_edited_mid_run_leaves_the_result_and_scan_file_on_the_run_start_hash(fresh, monkeypatch):
+    """The component is read once per run: an edit during the run changes neither the result nor the file."""
+    controller, _call = fresh
+    real = moderator.component_stamp
+    start_hash = real()["source_component_sha256"]
+    edited = {"on": False}
+    monkeypatch.setattr(moderator, "component_stamp",
+                        lambda *args, **kwargs: {**real(), "source_component_sha256": "0" * 12}
+                        if edited["on"] else real())
+    real_signal = controller._post_signal
+
+    def edit_as_the_run_writes_its_folder(name, *args):
+        # after the run's stamp, before its scan_parameters.txt: the file is the only later reader
+        if name == "actual_output_folder_updated":
+            edited["on"] = True
+        return real_signal(name, *args)
+
+    monkeypatch.setattr(controller, "_post_signal", edit_as_the_run_writes_its_folder)
+    launch = controller.build_api_launch_state(SCAN)
+    launch["engine"] = "deterministic"
+    controller._compile_launch(launch)
+    job = ScanJob(job_id="t-source-midrun", source="api", launch_state=launch)
+
+    controller.run_simulation(launch, job=job)
+
+    assert edited["on"] and job.state == JobState.DONE, (edited, job.state)
+    assert job.result.metadata["source"]["source_component_sha256"] == start_hash
+    assert _file_values(job.result.output_folder)["source_component_sha256"] == start_hash
+
+
+def test_a_point_file_takes_the_source_its_run_started_with(fresh, monkeypatch, tmp_path):
+    controller, _call = fresh
+    vals = controller.get_gui_values()
+    started = moderator.provenance(vals)
+    real = moderator.component_stamp
+    monkeypatch.setattr(moderator, "component_stamp",
+                        lambda *args, **kwargs: {**real(), "source_component_sha256": "0" * 12})
+
+    point_folder = tmp_path / "point"
+    write_parameters_to_file(str(point_folder), controller.point_output_parameters(
+        vals, {"deltaE": 0.5}, 2, 1000, source=started))
+
+    assert _file_values(str(point_folder))["source_component_sha256"] == started["source_component_sha256"]
+    assert started["source_component_sha256"] != "0" * 12
+
+
+def test_the_scan_label_preview_reads_no_source_file(fresh, monkeypatch):
+    controller, _call = fresh
+    reads = []
+    real = moderator.component_stamp
+
+    def counted(*args, **kwargs):
+        reads.append(True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(moderator, "component_stamp", counted)
+    controller._preview_launch("deltaE 0 1 1", "")
+    assert reads == []
 
 
 # --- the GUI: what is shown is what is saved, restored and sent to the plugin ------------
