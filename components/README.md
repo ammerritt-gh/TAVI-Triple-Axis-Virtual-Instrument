@@ -160,17 +160,18 @@ never reweights a ray by its energy, direction or position (decision 1 below).
 
 Invalid input stops the run: INITIALIZE prints the component, the instance and
 the parameter with its value on stderr and exits. It refuses a non-positive or
-non-finite `xwidth`, `yheight`, `focus_aw`, `focus_ah`; a negative or non-finite
-T or I; no active pair; `flat_band` other than 0 or 1; and, with `flat_band=1`, a
-`dE` or `flux` that is not positive, or `E0 - dE <= 0`.
+non-finite `xwidth`, `yheight`, `focus_aw`, `focus_ah`, or a window beyond 360 x 180
+deg; a negative or non-finite T or I; no active pair; an I sum that overflows; a ray
+weight that is not finite or not positive; `flat_band` other than 0 or 1; and, with
+`flat_band=1`, a `dE` or `flux` that is not positive, or `E0 - dE <= 0`.
 
 ### Facility table
 The `%D` block of the component lists `Source_gen`'s facility rows (PSI, ILL VCS,
 HCS, thermal tube and hot source, HZB, FRM2 cold and thermal, LLB, TRIGA) unchanged,
 in its `T1=..,I1=..` notation. Every row pastes into the component and works (the
 HZB cold row's `radius` does not exist here: give `xwidth` and `yheight`). The
-verification tool checks the table against the installed `Source_gen.comp`
-number for number.
+verification tool checks the table against the installed `Source_gen.comp`:
+labels, order and numbers.
 
 ### Versioning
 The `* Version:` line in the `%I` header is the component's version. There is one
