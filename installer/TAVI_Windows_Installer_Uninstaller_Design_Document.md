@@ -1756,7 +1756,7 @@ Before publishing a new installer:
       ownership token or an installation-only file the repository never carries.
 - [ ] The uninstaller refuses a base folder without a matching ownership token (`.tavi-install-root` `INSTALL_ID` == `INSTALL_INFO.txt` `INSTALL_ID`).
 - [ ] The cold install (`/dir <path>`) has been run against the real tag on a clean directory.
-- [ ] Before the release tag exists, the cold install runs with `/dir <path> /ref <branch>` (test-only: it clones that branch instead of the tag), and each failure headline is shown once: `/test-fail micromamba` gives `INSTALLATION FAILED`, `/test-fail selftest` gives `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED`. Each run ends with its exit code, and nothing is removed on any of them.
+- [ ] Before the release tag exists, the cold install runs with `/dir <path> /ref <branch>` (test-only: it clones that branch instead of the tag, and `INSTALL_INFO.txt` then carries `CLONED_BRANCH=<branch>`), and each failure headline is shown once: `/test-fail micromamba` gives `INSTALLATION FAILED`, `/test-fail selftest` gives `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED`. Each run ends with its exit code, and nothing is removed on any of them.
 - [ ] On that installation, launcher menu items 5 (diagnostics), 1 (Run) and 6 (Uninstall) are each exercised once. The desktop copy and the attended questions are checked at a real desktop, since an unattended run touches none of them.
 
 ---
