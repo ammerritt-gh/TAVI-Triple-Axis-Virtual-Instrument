@@ -11,16 +11,23 @@ groups:
   from descriptor lists and reached through the accessor methods below; the
   controller no longer touches them by attribute name.
 """
+import logging
 import math
+import re
 from dataclasses import dataclass
+
+import numpy as np
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QComboBox,
                                 QCheckBox, QGroupBox, QFormLayout, QGridLayout,
-                                QWidget)
+                                QSizePolicy, QWidget)
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 
 from gui.docks.base_dock import (BaseDockWidget, CollapsibleGroup, NoScrollComboBox, pack_grid,
                                  COLLIMATION_OPEN_TOOLTIP, collimation_label)
+from instruments import source
 from instruments.descriptor import ModuleKind
 from gui import metrics, theme
 from tavi import quantities
@@ -32,6 +39,47 @@ def _half(text):
         return f"{quantities.crystal_theta(float(text)):g}"
     except ValueError:
         return "--"
+
+
+log = logging.getLogger(__name__)
+
+# The scan boxes' refused state (UnifiedSimulationDock.STYLE_WARNING), for a source field that cannot be used.
+SOURCE_INVALID_STYLE = "background-color: #ffcccc; border: 1px solid #cc0000;"
+
+
+def _parse_number(text):
+    """A finite number from a field's text, or None."""
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _field_text(value):
+    """A source field's text for ``value``: the shortest that parses back to the same number; '' for None."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    value = float(value)
+    for digits in range(6, 18):
+        text = f"{value:.{digits}g}"
+        if float(text) == value:
+            break
+    return text
+
+
+def _active_pairs(values):
+    """The (T, I) pairs of ``values`` that are active: both numbers, both above 0."""
+    pairs = zip(source.TI_IDS[::2], source.TI_IDS[1::2])
+    return [(values[t], values[i]) for t, i in pairs
+            if values[t] is not None and values[i] is not None and values[t] > 0 and values[i] > 0]
+
+
+def _short_label(label):
+    """A facility label without its power or tube detail: 'FRM2 thermal source, 20 MW' -> 'FRM2 thermal'."""
+    return re.sub(r"\s+source$", "", re.sub(r"\s*\(.*$|,.*$", "", label))
 
 
 FOCUSING_AXES = ("rhm", "rvm", "rha", "rva")
@@ -77,6 +125,8 @@ class InstrumentDock(BaseDockWidget):
     track_clicked = Signal(str, bool)
     # Some axis's track/hold choice changed (not a scan, fixed or no-model update).
     tracking_changed = Signal()
+    # The operator changed the source: mode, entry, a T/I field or dE (never a programmatic set).
+    source_changed = Signal()
 
     def __init__(self, parent=None, descriptor=None):
         super().__init__("Instrument Configuration", parent, use_scroll_area=True,
@@ -403,31 +453,7 @@ class InstrumentDock(BaseDockWidget):
         self.nmo_combo = self.module_widgets.get("nmo")
         self.v_selector_check = self.module_widgets.get("v_selector")
 
-        # Source Control section (types + extra-param rows from descriptor)
-        source_group = CollapsibleGroup("Source Control")
-        source_layout = QFormLayout()
-        source_group.set_body_layout(source_layout)
-
-        self.source_type_combo = NoScrollComboBox()
-        self.source_type_combo.setObjectName("source_type_combo")
-        for source_type in descriptor.source_types:
-            self.source_type_combo.addItem(source_type.display_name, source_type.id)
-        self.source_type_combo.setToolTip("Maxwellian: thermal distribution peaking at E0 = 25 meV\nMono: narrow, uniform energy distribution centered on E_i")
-        source_layout.addRow("Source type:", self.source_type_combo)
-
-        # Source dE input (shown for source types declaring the extra param)
-        self.source_dE_label = QLabel("Source dE (meV):")
-        self.source_dE_edit = QLineEdit()
-        self.source_dE_edit.setMaximumWidth(70)
-        self.source_dE_edit.setText("2")
-        self.source_dE_edit.setToolTip("Energy half-spread for Mono source (E0 ± dE)")
-        source_layout.addRow(self.source_dE_label, self.source_dE_edit)
-
-        self._update_source_extra_visibility()
-        self.source_type_combo.currentTextChanged.connect(self._on_source_type_changed)
-
-        self.add_block(source_group)
-        self.collapsible_groups["instrument.source"] = source_group
+        self._build_source_section()
 
         # Each folded block's summary follows its fields.
         for axis in FOCUSING_AXES:
@@ -441,9 +467,6 @@ class InstrumentDock(BaseDockWidget):
             else:
                 widget.toggled.connect(self._refresh_modules_summary)
         self._refresh_modules_summary()
-        self.source_type_combo.currentIndexChanged.connect(self._refresh_source_summary)
-        self.source_dE_edit.textChanged.connect(self._refresh_source_summary)
-        self._refresh_source_summary()
 
         # Canonical ID -> the field that shows it, for the scan-field marks.
         self._quantity_fields = {
@@ -486,14 +509,6 @@ class InstrumentDock(BaseDockWidget):
         index = self.anacris_combo.findData(crystal_id)
         if index >= 0:
             self.anacris_combo.setCurrentIndex(index)
-
-    def selected_source_id(self):
-        return self.source_type_combo.currentData()
-
-    def set_source_id(self, source_id):
-        index = self.source_type_combo.findData(source_id)
-        if index >= 0:
-            self.source_type_combo.setCurrentIndex(index)
 
     def module_values(self):
         """{module_id: current value} -- str for CHOICE, bool for TOGGLE."""
@@ -586,21 +601,156 @@ class InstrumentDock(BaseDockWidget):
 
     # ------------------------------------------------------------- internals
 
-    def _source_needs_dE(self):
-        source_id = self.source_type_combo.currentData()
-        for source_type in self.descriptor.source_types:
-            if source_type.id == source_id:
-                return "source_dE" in source_type.extra_params
-        return False
+    # ------------------------------------------------------- Source Control state
 
-    def _update_source_extra_visibility(self):
-        needs_dE = self._source_needs_dE()
-        self.source_dE_label.setVisible(needs_dE)
-        self.source_dE_edit.setVisible(needs_dE)
+    def source_settings(self):
+        """The nine source values as the widgets show them, by canonical ID.
 
-    def _on_source_type_changed(self, _source_type):
-        """Show/hide extra source fields based on the selected source type."""
-        self._update_source_extra_visibility()
+        A T/I or dE field that is not a finite number is None; the entry is the
+        facility entry's ID whether or not its fields were edited.
+        """
+        values = {"moderator_mode": self.source_mode_combo.currentData(),
+                  "moderator_profile": self.source_profile_combo.currentData()}
+        for key, edit in self.source_ti_edits.items():
+            values[key] = _parse_number(edit.text())
+        values["flat_band_half_width_mev"] = _parse_number(self.flat_band_edit.text())
+        return values
+
+    def set_source_settings(self, values):
+        """Show ``values`` (any of the nine IDs; None clears a field), without emitting source_changed."""
+        unknown = set(values) - set(source.FIELD_IDS)
+        if unknown:
+            raise ValueError(f"unknown source setting(s): {', '.join(sorted(unknown))}")
+        for key, table in (("moderator_mode", source.MODES), ("moderator_profile", source.PROFILES)):
+            if key in values and values[key] not in table:
+                raise ValueError(f"unknown {key} {values[key]!r}; choose one of {', '.join(table)}")
+        self._source_filling = True
+        try:
+            for key, combo in (("moderator_mode", self.source_mode_combo),
+                               ("moderator_profile", self.source_profile_combo)):
+                if key in values:
+                    combo.setCurrentIndex(combo.findData(values[key]))
+            for key, edit in (*self.source_ti_edits.items(),
+                              ("flat_band_half_width_mev", self.flat_band_edit)):
+                if key in values:
+                    edit.setText(_field_text(values[key]))
+        finally:
+            self._source_filling = False
+        self._refresh_source()
+        self._source_shown = self.source_settings()
+
+    def set_source_preview_ei(self, ei_mev):
+        """The Ei (meV) the preview marks; None (or anything but a positive number) marks nothing."""
+        ei = _parse_number(str(ei_mev)) if ei_mev is not None else None
+        ei = ei if ei is not None and ei > 0 else None
+        if ei != self._source_ei:
+            self._source_ei = ei
+            self._redraw_source_preview()
+
+    def _fill_source_profile(self):
+        """Put the shown entry's six values in the fields (callers set _source_filling)."""
+        for key, value in source.profile_values(self.source_profile_combo.currentData()).items():
+            self.source_ti_edits[key].setText(_field_text(value))
+
+    def _on_source_profile_picked(self, *_):
+        if self._source_filling:
+            return
+        self._source_filling = True
+        try:
+            self._fill_source_profile()
+        finally:
+            self._source_filling = False
+        self._on_source_edit()
+
+    def _on_source_edit(self, *_):
+        """A user change: redraw, and tell the controller if the settings differ from the last shown."""
+        if self._source_filling:
+            return
+        self._refresh_source()
+        settings = self.source_settings()
+        if settings != self._source_shown:
+            self._source_shown = settings
+            self.source_changed.emit()
+
+    def _refresh_source(self):
+        """Everything derived from the widgets: marks, note, dE row, entry text, summary, preview."""
+        values = self.source_settings()
+        flat = values["moderator_mode"] == "flat_band"
+        modified = source.is_modified(values)
+        combo = self.source_profile_combo
+        for index, (_pid, profile) in enumerate(source.PROFILES.items()):
+            combo.setItemText(index, profile.label)
+        if modified:
+            combo.setItemText(combo.currentIndex(), combo.currentText() + " (modified)")
+        self.flat_band_label.setVisible(flat)
+        self.flat_band_edit.setVisible(flat)
+        for key, edit in self.source_ti_edits.items():
+            v = values[key]
+            edit.setStyleSheet(SOURCE_INVALID_STYLE if v is None or v < 0 else "")
+        dE = values["flat_band_half_width_mev"]
+        self.flat_band_edit.setStyleSheet(SOURCE_INVALID_STYLE if dE is None or dE <= 0 else "")
+        self.source_note_label.setVisible(not _active_pairs(values))
+        short = _short_label(source.PROFILES[values["moderator_profile"]].label)
+        text = short + (" (modified)" if modified else "")
+        text += f", flat band ±{self.flat_band_edit.text() or 'empty'} meV" if flat else ", full spectrum"
+        self.collapsible_groups["instrument.source"].set_summary(text)
+        self._redraw_source_preview()
+
+    def _redraw_source_preview(self):
+        ax = self.source_ax
+        try:
+            self._draw_source_preview(ax)
+        except Exception:   # the preview is a nicety: show an empty plot, say why in the log
+            log.exception("source preview could not be drawn")
+            ax.clear()
+        self.source_canvas.draw_idle()
+
+    def _draw_source_preview(self, ax):
+        values = self.source_settings()
+        flat = values["moderator_mode"] == "flat_band"
+        dE, ei = values["flat_band_half_width_mev"], self._source_ei
+        ax.clear()
+        ax.set_xscale("log")
+        ax.tick_params(labelsize=6, length=2)
+        ax.yaxis.get_offset_text().set_fontsize(6)
+        ax.set_xlabel("E (meV)", fontsize=6, labelpad=1)
+        ax.set_ylabel("Φ (n/cm²/s/sr/meV)", fontsize=6, labelpad=1)
+
+        # The spectrum's own span: from well below its coldest scale to well above its hottest.
+        scales = [source.C_E * t / source.A_OVER_T for t, _i in _active_pairs(values)]
+        lo, hi = (min(scales) / 50, max(scales) * 20) if scales else (None, None)
+        if ei is not None:   # a margin of 1.5 either side of Ei and 4·Ei
+            lo = ei / 1.5 if lo is None else min(lo, ei / 1.5)
+            hi = 6 * ei if hi is None else max(hi, 6 * ei)
+        if lo is None or not (0 < lo < hi < math.inf):
+            lo, hi = 0.1, 100.0   # nothing to span: an empty plot, not an error
+        ymax = 1.0
+        if scales:
+            energies = np.logspace(math.log10(lo), math.log10(hi), 240)
+            numbers = {k: (v if v is not None else 0.0) for k, v in values.items() if k in source.TI_IDS}
+            with np.errstate(all="ignore"):
+                flux = source.flux_per_mev(energies, numbers)
+            if np.all(np.isfinite(flux)) and flux.max() > 0:
+                ax.plot(energies, flux, color=theme.COMMAND_COLORS[1], lw=1.2,
+                        alpha=0.3 if flat else 1.0, label="moderator spectrum")
+                ymax = 1.05 * flux.max()
+        ax.set_ylim(0, ymax)
+        ax.set_xlim(lo, hi)
+        if ei is None:
+            return
+        edge = ax.get_xaxis_transform()   # x in data, y as a fraction of the plot height
+        if flat and dE is not None and dE > 0:
+            left, right = max(ei - dE, lo), ei + dE
+            if right > left:
+                ax.axvspan(left, right, color=theme.WARNING_FILL, alpha=0.5, lw=0,
+                           label="flat band (unphysical)")
+                ax.text(math.sqrt(left * min(right, hi)), 0.5, "flat band (unphysical)", transform=edge,
+                        rotation=90, ha="center", va="center", fontsize=6, color=theme.NOTE_TEXT)
+        for x, text, color, style in ((ei, "Ei", theme.COMMAND_COLORS[2], "-"),
+                                      (4 * ei, "4·Ei (λ/2)", theme.DERIVED_OUTLINE, "--")):
+            ax.axvline(x, color=color, ls=style, lw=1.2, label=text)
+            ax.text(x, 0.97, text, transform=edge, rotation=90, ha="right", va="top",
+                    fontsize=6, color=color)
 
     # ------------------------------------------------- Crystal Focusing state
     # Effective mode, in precedence order: fixed (the hardware fixes it), scanned
@@ -795,8 +945,93 @@ class InstrumentDock(BaseDockWidget):
                 fitted.append(module.display_name)
         group.set_summary(", ".join(fitted) if fitted else "none fitted")
 
-    def _refresh_source_summary(self, *_):
-        text = self.source_type_combo.currentText()
-        if self._source_needs_dE():
-            text += f", dE {self.source_dE_edit.text() or 'empty'} meV"
-        self.collapsible_groups["instrument.source"].set_summary(text)
+    def _build_source_section(self):
+        """Source Control: mode, facility entry, six T/I fields, dE and the spectrum preview."""
+        if self.descriptor.default_moderator_profile not in source.PROFILES:
+            raise ValueError("InstrumentDock needs the descriptor's default_moderator_profile, got "
+                             f"{self.descriptor.default_moderator_profile!r}")
+        group = CollapsibleGroup("Source Control")
+        layout = QGridLayout()
+        layout.setSpacing(3)
+        group.set_body_layout(layout)
+        self._source_filling = False    # a programmatic fill is not an edit
+        self._source_ei = None          # the preview's Ei, pushed by the controller
+
+        self.source_mode_combo = NoScrollComboBox()
+        self.source_mode_combo.setObjectName("source_mode_combo")
+        for mode_id, label in source.MODES.items():
+            self.source_mode_combo.addItem(label, mode_id)
+        self.source_mode_combo.setToolTip(
+            "Full spectrum: neutrons follow the moderator spectrum below.\n"
+            "Flat band (unphysical): uniform in energy over Ei ± dE, for tests only.")
+        self.source_profile_combo = NoScrollComboBox()
+        self.source_profile_combo.setObjectName("source_profile_combo")
+        for profile_id, profile in source.PROFILES.items():
+            self.source_profile_combo.addItem(profile.label, profile_id)
+        self.source_profile_combo.setToolTip(
+            "Facility moderator entry. Picking one fills the six T/I fields; "
+            "editing a field marks it (modified); picking it again restores it.")
+        for combo in (self.source_mode_combo, self.source_profile_combo):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(18)
+        layout.addWidget(QLabel("Mode:"), 0, 0)
+        layout.addWidget(self.source_mode_combo, 0, 1, 1, 3)
+        layout.addWidget(QLabel("Facility:"), 1, 0, 1, 4)
+        layout.addWidget(self.source_profile_combo, 2, 0, 1, 4)  # full width: "<label> (modified)" is long
+
+        self.source_ti_edits = {}
+        for pair in range(3):
+            for col, (key, text) in enumerate((
+                    (source.TI_IDS[2 * pair], f"T{pair + 1} (K)"),
+                    (source.TI_IDS[2 * pair + 1], f"I{pair + 1} (n/cm²/s/sr)"))):
+                edit = QLineEdit()
+                edit.setObjectName(f"source_{key}_edit")
+                edit.setMaximumWidth(64)
+                edit.setAccessibleName(text)
+                label = QLabel(text)
+                label.setBuddy(edit)
+                label.setToolTip("A pair is active when T > 0 and I > 0; 0 leaves it unused.")
+                layout.addWidget(label, 3 + pair, 2 * col)
+                layout.addWidget(edit, 3 + pair, 2 * col + 1)
+                self.source_ti_edits[key] = edit
+
+        self.source_note_label = QLabel("No active pair: at least one T and I must both be above 0.")
+        self.source_note_label.setWordWrap(True)
+        self.source_note_label.setStyleSheet("color: #c1121f;")
+        layout.addWidget(self.source_note_label, 6, 0, 1, 4)
+
+        self.flat_band_label = QLabel("Flat-band half-width dE (meV):")
+        self.flat_band_edit = QLineEdit("2")
+        self.flat_band_edit.setObjectName("flat_band_edit")
+        self.flat_band_edit.setMaximumWidth(64)
+        self.flat_band_edit.setAccessibleName("Flat-band half-width dE (meV)")
+        self.flat_band_label.setBuddy(self.flat_band_edit)
+        layout.addWidget(self.flat_band_label, 7, 0, 1, 3)
+        layout.addWidget(self.flat_band_edit, 7, 3)
+
+        self.source_figure = Figure(figsize=(3.0, 1.9), dpi=100)
+        self.source_figure.subplots_adjust(left=0.2, right=0.97, bottom=0.24, top=0.95)
+        self.source_canvas = FigureCanvasQTAgg(self.source_figure)
+        self.source_canvas.setFixedHeight(150)
+        self.source_canvas.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)  # its width is the block's, not the figure's
+        self.source_ax = self.source_figure.add_subplot(111)
+        layout.addWidget(self.source_canvas, 8, 0, 1, 4)
+
+        # The initial entry, from the descriptor's default.
+        self._source_filling = True
+        self.source_profile_combo.setCurrentIndex(
+            self.source_profile_combo.findData(self.descriptor.default_moderator_profile))
+        self._fill_source_profile()
+        self._source_filling = False
+        self.source_mode_combo.currentIndexChanged.connect(self._on_source_edit)
+        # activated fires on a re-pick of the shown entry (no index change), currentIndexChanged on
+        # any other change; both firing on one pick is harmless, the second fill changes nothing.
+        self.source_profile_combo.activated.connect(self._on_source_profile_picked)
+        self.source_profile_combo.currentIndexChanged.connect(self._on_source_profile_picked)
+        for edit in (*self.source_ti_edits.values(), self.flat_band_edit):
+            edit.textChanged.connect(self._on_source_edit)
+
+        self.add_block(group)
+        self.collapsible_groups["instrument.source"] = group
+        self._refresh_source()
+        self._source_shown = self.source_settings()
