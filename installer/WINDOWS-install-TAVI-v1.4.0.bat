@@ -879,7 +879,7 @@ goto failed
 
 :mcstasscript_config_failed
 set "ERR1=Could not configure McStasScript's McStas paths."
-set "ERR2=The lines above say why. Run this installer again; if it repeats,"
+set "ERR2=The log lines shown on this screen say why. Run this installer again; if it repeats,"
 set "ERR3=send the diagnostics file."
 goto failed
 
@@ -922,7 +922,7 @@ set "ERR3="
 goto selftest_failed_said
 
 :selftest_failed
-set "ERR1=TAVI could not run its test simulation. The lines above say why."
+set "ERR1=TAVI could not run its test simulation. The log lines shown on this screen say why."
 set "ERR2="
 set "ERR3="
 
