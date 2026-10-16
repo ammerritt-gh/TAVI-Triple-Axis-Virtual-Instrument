@@ -21,7 +21,7 @@ KEYS = ("T1", "I1", "T2", "I2", "T3", "I3")
 
 
 def _rows(text, start, end):
-    """(T1, I1, T2, I2, T3, I3) per facility row of a McStas header table between two markers."""
+    """{row label: (T1, I1, T2, I2, T3, I3)} for each facility row of a McStas header table between two markers."""
     block = text.split(start, 1)[1].split(end, 1)[0]
     bodies = []
     for line in block.splitlines():
@@ -30,10 +30,11 @@ def _rows(text, start, end):
             bodies.append([s])
         elif s and bodies:
             bodies[-1].append(s)
-    rows = []
+    rows = {}
     for parts in bodies:
+        label = parts[0].split("T1=", 1)[0].strip()
         found = dict(re.findall(r"\b([TI][123])\s*=\s*([-+0-9.eE]+)", " ".join(parts)))
-        rows.append(tuple(float(found.get(k, 0)) for k in KEYS))
+        rows[label] = tuple(float(found.get(k, 0)) for k in KEYS)
     return rows
 
 
@@ -78,14 +79,33 @@ def _values(profile="frm2_thermal", mode="full_spectrum", dE=2.0, **over):
     return values
 
 
-def test_table_matches_source_gen_and_component_and_order():
+# profile id -> its row label in Source_gen's table and in the component's %D table (same text in both)
+LABELS = {
+    "frm2_cold": "FRM2 cold,20MW",
+    "frm2_thermal": "FRM2 thermal,20MW",
+    "ill_vcs_cold": "ILL VCS cold source",
+    "ill_hcs_cold": "ILL HCS cold source",
+    "ill_thermal_h12": "ILL Thermal tube",
+    "ill_hot": "ILL Hot source",
+    "psi_cold": "PSI cold source",
+    "hzb_cold": "HZB cold source",
+    "hzb_bispectral": "HZB bi-spectral",
+    "hzb_thermal": "HZB thermal tube",
+    "llb_cold": "LLB cold,14MW",
+    "triga_thermal": "TRIGA thermal 1MW",
+}
+
+
+def test_table_matches_source_gen_and_component_per_profile():
     gen = _rows((MCSTAS / "sources" / "Source_gen.comp").read_text(encoding="utf-8"),
                 "Some neutron facility parameters", "%VALIDATION")
     comp = _rows(COMPONENT.read_text(encoding="utf-8"),
                  "Facility parameters (the table", "Usage example")
-    ours = [src.PROFILES[pid].ti for pid in src.PROFILES if pid != src.SINGLE_TEMPERATURE]
-    assert len(gen) == len(comp) == len(set(ours)) == 12
-    assert set(gen) == set(comp) == set(ours)
+    assert len(gen) == len(comp) == 12
+    assert set(LABELS) == set(src.PROFILES) - {src.SINGLE_TEMPERATURE}
+    # per id, not by position or as a set: a swapped pair of rows must fail here
+    for pid, label in LABELS.items():
+        assert src.PROFILES[pid].ti == gen[label] == comp[label], (pid, label)
     assert list(src.PROFILES) == [
         "frm2_cold", "frm2_thermal", "ill_vcs_cold", "ill_hcs_cold", "ill_thermal_h12", "ill_hot",
         "psi_cold", "hzb_cold", "hzb_bispectral", "hzb_thermal", "llb_cold", "triga_thermal",
