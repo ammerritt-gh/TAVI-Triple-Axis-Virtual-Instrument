@@ -138,3 +138,18 @@ def test_config_dir_reads_the_variable_at_call_time(tmp_path, monkeypatch):
     monkeypatch.setenv("TAVI_CONFIG_DIR", str(tmp_path / "b"))
     assert local_state.config_dir() != first
     assert local_state.config_dir() == tmp_path / "b"
+
+
+def test_import_failure_under_self_test_prints_the_verdict_and_exits_1(tmp_path, monkeypatch, capsys):
+    exits = []
+    monkeypatch.setattr(cm.os, "_exit", exits.append)  # restored after the test; the real exit would end pytest
+    try:
+        raise ImportError("no module named widgets")
+    except ImportError as exc:
+        cm._self_test_load_failed(type(exc), exc, exc.__traceback__, str(tmp_path))
+
+    out, err = capsys.readouterr()
+    assert exits == [1]
+    assert "ImportError" in err  # the traceback still shows
+    assert f"Throwaway folder kept for diagnosis: {tmp_path}" in out
+    assert "TAVI SELF-TEST FAILED: TAVI could not load: ImportError: no module named widgets" in out
