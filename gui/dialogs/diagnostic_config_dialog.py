@@ -8,8 +8,10 @@ which are also the exact gate strings build() checks.
 """
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                 QCheckBox, QGroupBox, QPushButton, QGridLayout,
-                                QScrollArea, QWidget)
+                                QScrollArea, QWidget, QRadioButton, QButtonGroup)
 from PySide6.QtCore import Qt
+
+from tavi.instrument_helpers import WAVELENGTH_MONITORS_KEY
 
 
 # App-level extras that are not instrument monitors ("Show Instrument Diagram"
@@ -60,11 +62,31 @@ class DiagnosticConfigDialog(QDialog):
             "These settings will be applied when running in Diagnostic Mode.\n\n"
             "PSD: Position Sensitive Detector\n"
             "DSD: Divergence Sensitive Detector\n"
-            "EMonitor: Energy Monitor"
+            "EMonitor: Energy Monitor\n"
+            "LMonitor: Wavelength Monitor"
         )
         explanation_label = QLabel(explanation_text)
         explanation_label.setWordWrap(True)
         main_layout.addWidget(explanation_label)
+
+        # Energy monitors record energy (E_monitor) or wavelength (L_monitor)
+        choice_label = QLabel("Energy monitors record:")
+        self.energy_radio = QRadioButton("Energy (EMonitor)")
+        self.wavelength_radio = QRadioButton("Wavelength (LMonitor)")
+        group = QButtonGroup(self)
+        group.addButton(self.energy_radio)
+        group.addButton(self.wavelength_radio)
+        wavelength = bool(self.current_settings.get(WAVELENGTH_MONITORS_KEY, False))
+        self.energy_radio.setChecked(not wavelength)
+        self.wavelength_radio.setChecked(wavelength)
+        tooltip = ("Converts the energy monitors between E and L monitors. Both record the same "
+                   "neutron spectrum, binned in energy E or in wavelength λ = 9.045/√E Å.")
+        choice_row = QHBoxLayout()
+        for widget in (choice_label, self.energy_radio, self.wavelength_radio):
+            widget.setToolTip(tooltip)
+            choice_row.addWidget(widget)
+        choice_row.addStretch()
+        main_layout.addLayout(choice_row)
 
         # Create scrollable area for checkboxes
         scroll_area = QScrollArea()
@@ -80,8 +102,9 @@ class DiagnosticConfigDialog(QDialog):
         monitors_layout.setSpacing(5)
         monitors_group.setLayout(monitors_layout)
 
-        for i, option in enumerate(self.monitor_ids):
-            checkbox = QCheckBox(option)
+        for i, monitor in enumerate(self.monitors):
+            option = monitor.id
+            checkbox = QCheckBox(self._monitor_label(monitor))
             checkbox.setChecked(self.current_settings.get(option, False))
             self.checkboxes[option] = checkbox
 
@@ -90,6 +113,7 @@ class DiagnosticConfigDialog(QDialog):
             col = i % 2
             monitors_layout.addWidget(checkbox, row, col)
 
+        self.wavelength_radio.toggled.connect(self._relabel_monitors)
         scroll_layout.addWidget(monitors_group)
 
         # Group: Additional Options
@@ -151,6 +175,17 @@ class DiagnosticConfigDialog(QDialog):
 
         main_layout.addLayout(button_layout)
 
+    def _monitor_label(self, monitor):
+        """Checkbox text; E_monitors read LMonitor while wavelength is chosen."""
+        if monitor.component_type != "E_monitor" or not self.wavelength_radio.isChecked():
+            return monitor.id
+        return monitor.id.replace("EMonitor", "LMonitor").replace("Emonitor", "LMonitor")
+
+    def _relabel_monitors(self):
+        """Follow the energy/wavelength choice in the monitor checkbox texts."""
+        for monitor in self.monitors:
+            self.checkboxes[monitor.id].setText(self._monitor_label(monitor))
+
     def _monitor_tags(self):
         """Distinct tags in descriptor order."""
         tags = []
@@ -185,6 +220,7 @@ class DiagnosticConfigDialog(QDialog):
         settings = {}
         for option, checkbox in self.checkboxes.items():
             settings[option] = checkbox.isChecked()
+        settings[WAVELENGTH_MONITORS_KEY] = self.wavelength_radio.isChecked()
         return settings
 
     @staticmethod
@@ -197,4 +233,5 @@ class DiagnosticConfigDialog(QDialog):
         settings = {monitor.id: False for monitor in monitors}
         for option in ADDITIONAL_OPTIONS:
             settings[option] = False
+        settings[WAVELENGTH_MONITORS_KEY] = False
         return settings
