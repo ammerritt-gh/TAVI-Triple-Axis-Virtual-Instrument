@@ -6,8 +6,8 @@ descriptor from these types, and ``instruments/validation.py`` checks it. The mo
 itself does no McStas or GUI work.
 
 The descriptor is the *only* part of an instrument the GUI binds to: crystals,
-samples, monitors, optional modules, collimation, slits, source types, scannable
-parameters, geometry, and axis limits. The component tree itself is **not** here --
+samples, monitors, optional modules, collimation, slits, the default moderator
+profile, scannable parameters, geometry, and axis limits. The component tree itself is **not** here --
 it stays as imperative Python in each instrument's ``build()`` (decided: instruments
 are Python modules, not data files). The descriptor is deliberately small and
 serialization-friendly so a JSON export could be added later if ever needed.
@@ -343,16 +343,6 @@ class SlitSpec:
 
 
 @dataclass(frozen=True, slots=True)
-class SourceType:
-    """A selectable source model (PUMA: Maxwellian, Mono)."""
-
-    id: str
-    display_name: str
-    extra_params: tuple[str, ...] = ()      # e.g. ("source_dE",) for Mono
-    change_impact: ChangeImpact = ChangeImpact.BUILD  # source model is a build choice
-
-
-@dataclass(frozen=True, slots=True)
 class ParameterSpec:
     """A McStas instrument parameter that ``build()`` declares and the per-point
     snapshot fills.
@@ -371,6 +361,22 @@ class ParameterSpec:
     # the conversion: McStas value = scale * the quantity's value (mm -> m: 1e-3).
     quantity: str = ""
     scale: float = 1.0
+
+
+# The run-time McStas parameters of Source_Maxwell_direct that every runnable
+# instrument declares (``tas_runtime.add_source``) and its snapshot fills
+# (``TAS_Instrument.source_point_params``); each plugin splices them into its
+# parameter tuple. The component's E0 stays on the instrument's ``E0_param``.
+SOURCE_PARAMS = (
+    ParameterSpec("moderator_flat_band_param", "Moderator mode: 0 full spectrum, 1 flat band"),
+    ParameterSpec("moderator_t1_param", "Moderator temperature T1 (0 = unused)", unit="K"),
+    ParameterSpec("moderator_i1_param", "Moderator integrated flux I1 (0 = unused)", unit="n/cm2/s/sr"),
+    ParameterSpec("moderator_t2_param", "Moderator temperature T2 (0 = unused)", unit="K"),
+    ParameterSpec("moderator_i2_param", "Moderator integrated flux I2 (0 = unused)", unit="n/cm2/s/sr"),
+    ParameterSpec("moderator_t3_param", "Moderator temperature T3 (0 = unused)", unit="K"),
+    ParameterSpec("moderator_i3_param", "Moderator integrated flux I3 (0 = unused)", unit="n/cm2/s/sr"),
+    ParameterSpec("flat_band_de_param", "Flat-band half-width dE, read only in flat-band mode", unit="meV"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,7 +406,9 @@ class InstrumentDescriptor:
     modules: tuple[ModuleSpec, ...] = ()
     collimation: tuple[CollimationSlot, ...] = ()
     slits: tuple[SlitSpec, ...] = ()
-    source_types: tuple[SourceType, ...] = ()
+    # The facility entry (instruments.source.PROFILES id) the moderator this
+    # instrument views starts from; a runnable instrument must name one.
+    default_moderator_profile: str = ""
     axis_limits: dict[str, AxisLimits] = field(default_factory=dict)
     # The sample stage, outermost axis (the vertical turntable) first; see
     # GonioAxis. A runnable instrument must declare one.

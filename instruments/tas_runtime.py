@@ -20,7 +20,8 @@ from instruments.contract import (
     PointSnapshot,
     RunExecutionState,
 )
-from instruments.descriptor import CurvatureAxis
+from instruments.descriptor import SOURCE_PARAMS, CurvatureAxis
+from instruments.source import FIELD_IDS, profile_values
 from tavi import mcstas_paths
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
@@ -193,6 +194,43 @@ def curvature_run_error(axis, values, curvature_axis, crystal_name=None):
     return None
 
 
+# Source_Maxwell_direct's temperature and flux parameters -> the state field of
+# the same value (instruments.source.FIELD_IDS); SOURCE_PARAMS lists them all.
+_SOURCE_TI_FIELDS = {
+    "moderator_t1_param": "moderator_t1_k", "moderator_i1_param": "moderator_i1",
+    "moderator_t2_param": "moderator_t2_k", "moderator_i2_param": "moderator_i2",
+    "moderator_t3_param": "moderator_t3_k", "moderator_i3_param": "moderator_i3",
+}
+
+
+def add_source(instrument, xwidth, yheight, focus_aw, focus_ah):
+    """Declare the source's run-time parameters and add its component, bound to them.
+
+    Everything about the spectrum is a run-time parameter, so a change of the
+    moderator or of the mode never recompiles; ``E0`` rides the instrument's
+    ``E0_param``, which the caller declares. ``xwidth``/``yheight`` (m) are the
+    emitting rectangle and ``focus_aw``/``focus_ah`` (deg, full widths) the
+    emission window.
+    """
+    for spec in SOURCE_PARAMS:
+        if spec.name == "moderator_flat_band_param":
+            instrument.add_parameter("int", spec.name, comment=spec.comment)
+        else:
+            instrument.add_parameter(spec.name, comment=spec.comment)
+    source = instrument.add_component("source", "Source_Maxwell_direct")
+    source.xwidth = xwidth
+    source.yheight = yheight
+    source.focus_aw = focus_aw
+    source.focus_ah = focus_ah
+    for index in (1, 2, 3):
+        setattr(source, f"T{index}", f"moderator_t{index}_param")
+        setattr(source, f"I{index}", f"moderator_i{index}_param")
+    source.flat_band = "moderator_flat_band_param"
+    source.E0 = "E0_param"
+    source.dE = "flat_band_de_param"
+    return source
+
+
 class TAS_Instrument:
     """The general setup of a triple-axes spectrometer (TAS) instrument, with useful functions for setting the geometries."""
     def __init__(self, L1=1.0, L2=1.0, L3=1.0, L4=1.0, mono_two_theta_deg=0, sample_two_theta_deg=0, sample_rotation_deg=0, analyzer_two_theta_deg=0, **kwargs):
@@ -219,8 +257,9 @@ class TAS_Instrument:
         self.K_fixed = "Ki_fixed" # working in Ki- or Kf-fixed mode
         self.monocris = None # must have some monochromator crystal
         self.anacris = None # must have some analyzer crystal
-        self.fixed_E = 0 # The fixed energy to work with, for the source.
-        self.source_type = "Maxwellian"  # "Mono" or "Maxwellian"
+        self.fixed_E = 0 # The fixed energy to work with, for the flat-band source's centre.
+        # The source's nine values (instruments.source.FIELD_IDS) are attributes
+        # of the same names; each instrument's model fills them with reset_source().
         # The operator's belief: lattice fields + UB. Read by HKL <-> Q, the
         # solver and feasibility, never by the McStas sample arm.
         self.sample_mount = SampleMount.from_lattice_tas(4.05, 4.05, 4.05, 90, 90, 90)
@@ -691,26 +730,58 @@ class TAS_Instrument:
         """Return the runtime parameter dict for one instrument point."""
         raise NotImplementedError("Instrument state must supply build_point_params().")
 
+    def reset_source(self):
+        """Full spectrum on the descriptor's default moderator profile, flat-band dE 2 meV.
+
+        Each instrument's model calls it once, so the initial values come from the
+        descriptor's ``default_moderator_profile`` and from no second literal.
+        """
+        profile = self.descriptor().default_moderator_profile
+        self.apply_source_values({
+            "moderator_mode": "full_spectrum",
+            "moderator_profile": profile,
+            **profile_values(profile),
+            "flat_band_half_width_mev": 2.0,
+        })
+
+    def apply_source_values(self, vals):
+        """Take the nine source values (``instruments.source.FIELD_IDS``) from ``vals``."""
+        for key in FIELD_IDS:
+            setattr(self, key, vals[key])
+
+    def source_values(self):
+        """The nine source values, by canonical ID."""
+        return {key: getattr(self, key) for key in FIELD_IDS}
+
+    def source_point_params(self):
+        """Source_Maxwell_direct's run-time McStas parameters (``SOURCE_PARAMS``).
+
+        In full-spectrum mode these are the facility spectrum alone: nothing here
+        reads a scan or instrument setting. ``E0_param`` is separate
+        (:meth:`e0_param_value`).
+        """
+        return {
+            "moderator_flat_band_param": 1 if self.moderator_mode == "flat_band" else 0,
+            **{param: getattr(self, field) for param, field in _SOURCE_TI_FIELDS.items()},
+            "flat_band_de_param": self.flat_band_half_width_mev,
+        }
+
     def e0_param_value(self, deltaE):
         """Return the runtime source-energy parameter for the current point.
 
-        A "Mono" source is a narrow band the model steers onto the energy the
-        monochromator will select, so in Kf-fixed mode it tracks Ei. A
-        Maxwellian source is a broadband moderator whose peak is a property of
-        the source, not of the scan, so it stays put. Pinning that peak to
-        ``fixed_E`` is a placeholder for every instrument here (no measured
-        SR-2 / H144 / H10 spectrum is modelled); in Kf-fixed mode it therefore
-        peaks at Ef, and large positive transfers sample the tail.
-        """
-        if self.source_type != "Mono":
-            return self.fixed_E
+        This is the centre of the flat band, and the source component reads it
+        only in flat-band mode. The facility spectrum of full-spectrum mode is
+        fixed, so E0 plays no part in it and stays at ``fixed_E``.
 
-        # A Mono source is steered onto the energy the monochromator selects,
-        # which IS Ei: fixed_E in Ki-fixed mode, and fixed_E + deltaE in
-        # Kf-fixed mode only because Ef is then held at fixed_E. In angle mode
-        # neither is held, so that arithmetic drifts -- an A6 scan would move
-        # E0 while A2, and therefore the real Ei, stood still, starving the
-        # beam. Take Ei from the crystals when they are the authority.
+        The flat band is steered onto the energy the monochromator will select,
+        which IS Ei: fixed_E in Ki-fixed mode, and fixed_E + deltaE in Kf-fixed
+        mode only because Ef is then held at fixed_E. In angle mode neither is
+        held, so that arithmetic drifts -- an A6 scan would move E0 while A2,
+        and therefore the real Ei, stood still, starving the beam. Take Ei from
+        the crystals when they are the authority.
+        """
+        if self.moderator_mode != "flat_band":
+            return self.fixed_E
         if self._angle_energies is not None and self._angle_energies[0] is not None:
             return self._angle_energies[0]
         if self.K_fixed == "Kf Fixed":
@@ -998,6 +1069,7 @@ _ERROR_FLAG_REASONS = {
     "q": "invalid Q from sample angles",
     "K_fixed": "invalid fixed-energy mode",
     "energy": "energy transfer leaves no neutron (Ei or Ef would be <= 0)",
+    "flat_band": "flat band reaches zero energy (Ei − dE ≤ 0); lower the flat-band half-width",
 }
 
 # A flag that carries its own reason: the stage solver's refusal
@@ -1114,6 +1186,13 @@ def _solve_point_geometry(point_state, calculation, point, vals):
             transmission.append("sample")
         if angle_energies is not None and angle_energies[1] is None:
             transmission.append("ana")
+
+    # Source_Maxwell_direct stops the whole McStas run when the flat band
+    # reaches zero energy, so such a point is refused here, once, for the
+    # feasibility checks and the run alike.
+    if (not error_flags and point_state.moderator_mode == "flat_band"
+            and point_state.e0_param_value(deltaE) - point_state.flat_band_half_width_mev <= 0):
+        error_flags.append("flat_band")
 
     return {
         "qx": qx, "qy": qy, "qz": qz,
