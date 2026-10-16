@@ -20,8 +20,10 @@ pytest.importorskip("PySide6")
 
 import TAVI_PySide6 as cm  # noqa: E402
 from instruments import source as moderator  # noqa: E402
+from tavi import deterministic_engine as det  # noqa: E402
 from tavi.data_processing import write_parameters_to_file  # noqa: E402
 from tavi.quantities import API_VERSION  # noqa: E402
+from tavi.scan_jobs import JobState, ScanJob  # noqa: E402
 
 from test_api_canonical_names import _patch, _state, api, fresh  # noqa: E402,F401  (the real-server fixtures)
 from test_saved_parameters import _log, _write_block, saved_file  # noqa: E402,F401
@@ -252,13 +254,49 @@ def test_a_deterministic_scan_stamps_its_folder_and_result_metadata(fresh):
 
 
 def test_both_result_paths_stamp_the_source_beside_the_background():
-    """The McStas path cannot run in the suite (no McStas): its stamp is read from the source,
-    one source line per background line, so a path added later cannot skip it unseen."""
+    """The McStas path cannot run in the suite (no McStas): its stamp is read from the source.
+    The source is stamped once, at the result both engines share, before the engine split."""
     with open(cm.__file__, encoding="utf-8") as handle:
         text = handle.read()
     background = len(re.findall(r"result\.metadata\['background'\] = ", text))
-    source = len(re.findall(r"result\.metadata\['source'\] = moderator\.provenance\(vals\)", text))
-    assert background == 2 and source == background
+    stamp = text.index("result.metadata['source'] = launch_state['source']")
+    assert background == 2 and text.count("result.metadata['source'] = ") == 1
+    assert stamp < text.index("return self._run_scan_deterministic(")
+
+
+def _raise(_spec):
+    raise RuntimeError("no analytic truth in this test")
+
+
+def test_a_failed_scan_still_carries_the_source_stamp(fresh, monkeypatch):
+    """The stamp is made at launch, so a run that fails before its points keeps it."""
+    controller, _call = fresh
+    monkeypatch.setattr(det, "ground_truth", _raise)
+    launch = controller.build_api_launch_state({**SCAN, "moderator_profile": "psi_cold"})
+    launch["engine"] = "deterministic"
+    controller._compile_launch(launch)
+    job = ScanJob(job_id="t-source-failed", source="api", launch_state=launch)
+
+    controller.run_simulation(launch, job=job)
+
+    assert job.state == JobState.FAILED, job.state
+    assert job.result.metadata["source"] == moderator.provenance(launch["vals"])
+
+
+def test_the_stamp_is_the_hash_read_at_launch_not_when_the_run_ends(fresh, monkeypatch):
+    """A component edited during a run does not change the hash the run's result records."""
+    controller, _call = fresh
+    launch = controller.build_api_launch_state(SCAN)
+    launch["engine"] = "deterministic"
+    controller._compile_launch(launch)
+    at_launch = moderator.component_stamp()
+    monkeypatch.setattr(moderator, "component_stamp",
+                        lambda *args, **kwargs: {**at_launch, "source_component_sha256": "0" * 12})
+    job = ScanJob(job_id="t-source-hash", source="api", launch_state=launch)
+
+    controller.run_simulation(launch, job=job)
+
+    assert job.result.metadata["source"]["source_component_sha256"] == at_launch["source_component_sha256"]
 
 
 # --- the GUI: what is shown is what is saved, restored and sent to the plugin ------------

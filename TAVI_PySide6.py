@@ -8917,6 +8917,8 @@ class TAVIController(QObject):
         plan = self._launch_plan(launch_state)
         expansion = (expand if points else scan_axes)(plan, launch_state['snapshot'])
         launch_state['plan'], launch_state['expansion'] = plan, expansion
+        # The source record is read once here, so a result carries the hash the run used.
+        launch_state['source'] = moderator.provenance(launch_state['vals'])
         return plan, expansion
 
     def _launch_plan(self, launch_state, commands=None):
@@ -9960,7 +9962,6 @@ class TAVIController(QObject):
                     )
                 )
                 job.result.metadata['noiseless'] = noiseless
-                job.result.metadata['source'] = moderator.provenance(vals)
                 # Stamped even when the profile is disabled and even when
                 # cn_valid is false: absence of background is provenance too.
                 job.result.metadata['background'] = _background.metadata_block(
@@ -10282,6 +10283,11 @@ class TAVIController(QObject):
                 'valid_mask_1': [],
                 'valid_mask_2d': None,
             })
+
+        # The launch's source record, before any point runs: a failed run keeps it too.
+        if job is not None:
+            with job.lock:
+                job.result.metadata['source'] = launch_state['source']
 
         # API feasibility: submission pre-determined some points infeasible.
         # Drop those points so
@@ -11158,7 +11164,6 @@ class TAVIController(QObject):
         if job is not None and job.result is not None \
                 and simulation_error_message is None:
             with job.lock:
-                job.result.metadata['source'] = moderator.provenance(vals)
                 job.result.metadata['background'] = _background.metadata_block(
                     background, background_source,
                     background_seed=(
