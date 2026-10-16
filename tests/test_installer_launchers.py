@@ -2350,6 +2350,34 @@ def test_failing_after_an_old_installation_was_removed_says_so(tmp_path, layout)
     assert "Nothing was removed: what was installed so far" not in out, out
 
 
+def test_failing_on_a_partly_removed_old_installation_says_so(tmp_path):
+    """A file held open in tavi-env stops that folder going, so the wipe fails
+    after app is gone. The failed screen must not say nothing was removed, and
+    must name the folder."""
+    base = _uninstallable_base(tmp_path, "base")
+    env = _sandbox_env(tmp_path)
+    # An attended failure opens Notepad: see test_failing_after_an_old_installation_was_removed_says_so.
+    sysroot = tmp_path / "sysroot"
+    (sysroot / "System32").mkdir(parents=True)
+    for name in ("find.exe", "more.com", "where.exe", "ping.exe", "tar.exe"):
+        shutil.copy(os.path.join(os.environ["SYSTEMROOT"], "System32", name),
+                    sysroot / "System32")
+    env["SYSTEMROOT"] = str(sysroot)
+    # The folder for set /p, then Y (delete it), then C at the failure screen.
+    keys = tmp_path / "keys.txt"
+    keys.write_bytes(f"{base}\r\nYC".encode("ascii"))
+    with open(base / "tavi-env" / "python.exe", "rb"):
+        result = run_bat(INSTALL_1_4_0, env=env, timeout=60, input_file=keys)
+    out = result.stdout
+    assert result.returncode == 1, out + result.stderr
+    assert "INSTALLATION FAILED" in out, out
+    assert (base / "tavi-env" / "python.exe").exists(), "the held file must survive the wipe"
+    assert not (base / "app").exists(), "the program folder should have gone before the wipe failed"
+    assert "Part of the old TAVI installation could not be removed" in out, out
+    assert "Nothing was removed: what was installed so far" not in out, out
+    assert f"Folder: {base}" in out or f"TAVI folder : {base}" in out, out
+
+
 def _fixed_clock(tmp_path, env, stamp="20260101-000000"):
     """The launchers take their log stamp from powershell. A stub on PATH fixes
     it, so a log name can be known in advance and a clash made on purpose."""

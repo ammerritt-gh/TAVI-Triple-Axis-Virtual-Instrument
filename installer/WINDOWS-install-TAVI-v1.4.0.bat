@@ -379,6 +379,9 @@ set "DESK_LEGACY="
 goto base_ready
 
 :wipe_failed
+:: Some of the old installation may already be gone; the screen says so, and
+:: never that nothing was removed.
+set "OLD_REMOVED=partly"
 set "ERR1=The old installation could not be removed. Close TAVI, Explorer"
 set "ERR2=windows and command prompts using that folder, then try again."
 set "ERR3=Folder: %TAVI_BASE%"
@@ -1019,7 +1022,8 @@ if defined ERR2 echo         %ERR2%
 if defined ERR3 echo         %ERR3%
 if "%BASE_OURS%"=="yes" echo TAVI folder : %TAVI_BASE%
 if "%BASE_OURS%"=="yes" if "%OLD_REMOVED%"=="yes" echo The old TAVI installation was removed before this install began. Nothing of the new install was removed: what was installed so far is still in that folder.
-if "%BASE_OURS%"=="yes" if not "%OLD_REMOVED%"=="yes" echo Nothing was removed: what was installed so far is still in that folder.
+if "%BASE_OURS%"=="yes" if "%OLD_REMOVED%"=="partly" echo Part of the old TAVI installation could not be removed, and part of it may already have gone. Nothing of the new install was removed: what was installed so far is still in that folder.
+if "%BASE_OURS%"=="yes" if not "%OLD_REMOVED%"=="yes" if not "%OLD_REMOVED%"=="partly" echo Nothing was removed: what was installed so far is still in that folder.
 call :end_screen_log
 if "%UNATTENDED%"=="yes" goto :eof
 echo.
