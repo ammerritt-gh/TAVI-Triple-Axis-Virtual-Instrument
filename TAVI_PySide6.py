@@ -11310,6 +11310,23 @@ def _self_test_main(qt_args):
         fail_with("TAVI could not start", exc)
 
 
+def _relaunch_std_kwargs():
+    """stdout and stderr for the relaunched TAVI: this process's own, so its output
+    still reaches the launch log run-tavi.bat gives it. A stream with no file behind
+    it (pythonw's None, a closed one) gives nothing, and the child inherits as before.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None or stream.closed:
+            return {}
+        try:
+            stream.fileno()
+        except (OSError, ValueError):  # io.UnsupportedOperation is both: no file behind it
+            return {}
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return {"stdout": sys.stdout, "stderr": sys.stderr}
+
+
 def main():
     """Main entry point for the application.
 
@@ -11448,7 +11465,7 @@ def main():
         # The old process must fully exit before the new one binds the API port;
         # the new process's slow imports (Qt/McStasScript) make this safe in
         # practice. close_fds detaches so the child outlives this process.
-        subprocess.Popen(new_argv, close_fds=True)
+        subprocess.Popen(new_argv, close_fds=True, **_relaunch_std_kwargs())
 
     sys.exit(exit_code)
 
