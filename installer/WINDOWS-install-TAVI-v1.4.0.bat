@@ -26,8 +26,9 @@ set "NoDefaultCurrentDirectoryInExePath="
 ::   rather than the screen. A log write never changes an outcome.
 :: - While a long step runs, a heartbeat prints a "still running" line every
 ::   30 seconds (with the MB downloaded so far while the environment builds).
-:: - After the launchers, TAVI_PySide6.py --self-test runs one real McStas
-::   point through TAVI itself, offscreen.
+:: - After the launchers, TAVI_PySide6.py --self-test --instrument puma runs
+::   one real McStas point through TAVI itself, offscreen. Any nonzero exit
+::   (1: the point failed, 2: the command line was refused) is the third outcome.
 :: - Every outcome ends in one routine, on one of three headlines:
 ::     INSTALLATION SUCCEEDED                          exit code 0
 ::     INSTALLATION FAILED                             exit code 1
@@ -742,7 +743,7 @@ set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 cd /d "%INSTALL_DIR%"
 call :hb_start
-call :run_logged "%MICROMAMBA_EXE%" -r "%MAMBA_ROOT_PREFIX%" run -p "%ENV_PREFIX%" python TAVI_PySide6.py --self-test
+call :run_logged "%MICROMAMBA_EXE%" -r "%MAMBA_ROOT_PREFIX%" run -p "%ENV_PREFIX%" python TAVI_PySide6.py --self-test --instrument puma
 set "RC=%ERRORLEVEL%" & call :hb_stop
 if not "%RC%"=="0" goto selftest_failed
 call :step_ok "The test simulation ran."
