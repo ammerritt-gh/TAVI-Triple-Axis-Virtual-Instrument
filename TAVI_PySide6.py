@@ -11188,7 +11188,10 @@ def _self_test_main(qt_args):
                 shutil.rmtree(work)
             except OSError as exc:
                 print(f"Self-test: could not delete {work}: {exc}", flush=True)
-            print(f"Self-test point: {reason}. Throwaway folder {work} deleted.", flush=True)
+                print(f"Self-test point: {reason}. Throwaway folder {work} could not be deleted "
+                      f"and was left in place.", flush=True)
+            else:
+                print(f"Self-test point: {reason}. Throwaway folder {work} deleted.", flush=True)
             print("TAVI SELF-TEST PASSED", flush=True)
         else:
             if crash_path and os.path.isfile(crash_path):
