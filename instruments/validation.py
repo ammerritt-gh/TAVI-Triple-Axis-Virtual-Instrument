@@ -11,8 +11,7 @@ ID slug rule (``^[a-z0-9_]+$``) applies to the instrument id and to crystal,
 module, collimation-slot, and slit ids. Documented exceptions -- checked only for
 non-empty + unique -- are ids that intentionally equal existing GUI/config
 strings for the 1:1 Phase-1 wiring: ``SampleSpec.id`` (legacy ``sample_key``
-strings), ``MonitorSpec.id`` (diagnostic-settings display keys), and
-``SourceType.id`` (the GUI source-type combo strings, e.g. ``"Maxwellian"``).
+strings) and ``MonitorSpec.id`` (diagnostic-settings display keys).
 Phase 2 revisits these when the GUI binds to the descriptor.
 
 ``validate_capabilities(caps, id, descriptor)`` applies the same quantity rules to a plugin's
@@ -29,6 +28,7 @@ import os
 import re
 
 from instruments.descriptor import InstrumentDescriptor, ModuleKind, Sense
+from instruments.source import PROFILES
 from tavi.quantities import QUANTITIES, by_id, slit_gap_id, slit_gap_ids
 
 _SLUG_RE = re.compile(r"^[a-z0-9_]+$")
@@ -169,7 +169,6 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
     # Documented exceptions: legacy-string ids, non-empty + unique only.
     _check_ids(errors, d.samples, "samples", slug=False)
     _check_ids(errors, d.monitors, "monitors", slug=False)
-    _check_ids(errors, d.source_types, "source_types", slug=False)
 
     # --- S4: scannable parameter names -------------------------------------------
     seen_params = set()
@@ -414,11 +413,15 @@ def validate_descriptor(d: InstrumentDescriptor, *, runnable: bool = False) -> l
         ("mono_crystals", d.mono_crystals),
         ("ana_crystals", d.ana_crystals),
         ("samples", d.samples),
-        ("source_types", d.source_types),
         ("scannable_parameters", d.scannable_parameters),
     ):
         if not items:
             errors.append(f"{list_name}: runnable instrument needs at least one entry")
+    if d.default_moderator_profile not in PROFILES:
+        errors.append(
+            f"default_moderator_profile: {d.default_moderator_profile!r} must name a "
+            f"profile of instruments.source.PROFILES ({', '.join(PROFILES)})"
+        )
 
     # --- R5b: public slit names ---------------------------------------------------------------------
     for slit in d.slits:
