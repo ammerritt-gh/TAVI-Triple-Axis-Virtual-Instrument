@@ -7,12 +7,11 @@ guards, per instrument:
   that carry the default profile's numbers;
 - in full-spectrum mode no scan setting (Ei, kf, the fixed side, the transfer)
   reaches those parameters;
-- an edited component file changes the build fingerprint, and a changed source
-  (mode, profile, T/I, dE) does not, so a source change never recompiles;
+- a changed source (mode, profile, T/I, dE) does not change the build
+  fingerprint, so a source change never recompiles;
 - a flat band that reaches zero energy is refused at the point, as the
   component would otherwise stop the whole McStas run.
 """
-import functools
 import importlib
 import importlib.util
 from pathlib import Path
@@ -102,19 +101,6 @@ def test_full_spectrum_source_ignores_the_scan(instrument_id):
     for fixed_e, side in ((4.0, "Ki Fixed"), (35.0, "Kf Fixed")):
         config.fixed_E, config.K_fixed = fixed_e, side
         assert _source_params(config.build_point_params(-1.5)) == reference
-
-
-@pytest.mark.parametrize("instrument_id", DEFAULTS)
-def test_fingerprint_changes_when_the_component_file_changes(instrument_id, tmp_path, monkeypatch):
-    plugin, config, _ = _config(instrument_id)
-    same = plugin.build_fingerprint(config)
-    assert plugin.build_fingerprint(config) == same
-
-    edited = tmp_path / "Source_Maxwell_direct.comp"
-    edited.write_bytes(source.COMPONENT_PATH.read_bytes() + b"/* edited */\n")
-    monkeypatch.setattr(source, "component_stamp",
-                        functools.partial(source.component_stamp, edited))
-    assert plugin.build_fingerprint(config) != same
 
 
 @pytest.mark.parametrize("instrument_id", DEFAULTS)

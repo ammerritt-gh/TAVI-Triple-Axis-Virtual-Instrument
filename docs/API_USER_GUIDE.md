@@ -1116,18 +1116,6 @@ replayed after a descriptor or module-state change (a different NMO
 selection, an updated crystal declaration) legitimately produces a different
 number, not a bug.
 
-**Source block in `result.metadata`.** Every finished scan, from either engine,
-carries a `source` object next to `background`, and every `scan_parameters.txt`
-(the scan's and each point's) carries the same keys:
-
-| Key | Meaning |
-|-----|---------|
-| `source_component` | The McStas component that made the neutrons (`"Source_Maxwell_direct"`). |
-| `source_component_version` | The `Version:` line of that component's header. |
-| `source_component_sha256` | The first 12 hex digits of the component file's SHA-256 (line endings folded to LF); it catches an edit made without a version bump. |
-| `moderator_mode`, `moderator_profile`, `moderator_t1_k` ... `moderator_i3`, `flat_band_half_width_mev` | The nine values the scan ran with (§6). |
-| `moderator_profile_modified` | `true` when any T or I differs from the `moderator_profile` entry. |
-
 **Background block in `result.metadata`.** Every finished scan — from either
 engine, and **even when no background was planted** — carries a `background`
 object stamped by the one shared helper, so background provenance never depends
@@ -1340,8 +1328,7 @@ one of these nine fields does, and a change never recompiles. `moderator_profile
 names the facility entry the values started from. A write that names it loads the
 entry's six T/I values first, and any `moderator_t*_k` / `moderator_i*` the same
 request names are applied after it and win, whatever their order in the request;
-the entry stays the starting point, and the saved files and outputs record whether
-the values still equal it (`moderator_profile_modified`). The source a request would
+the entry stays the starting point. The source a request would
 leave must be valid: no negative or non-finite T or I, at least one active pair, a
 known mode and profile, and a dE above `0` in flat-band mode. A source that does not
 validate (and a source value that is not a number) refuses the **whole** request

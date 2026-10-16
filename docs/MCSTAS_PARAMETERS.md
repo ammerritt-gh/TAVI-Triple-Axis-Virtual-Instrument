@@ -219,7 +219,6 @@ The following changes **always require recompilation** because they are baked in
 - **Velocity selector**: enabling/disabling
 - **Collimators**: `alpha_1`, the installed `alpha_2` set (30', 40', 60'), `alpha_3`, `alpha_4`
 - **Crystals**: `monocris`, `anacris` (baked into the component tree at build time)
-- **Source**: only the hash of `components/Source_Maxwell_direct.comp`, so an edited component file is recompiled; the source values themselves are run-time parameters (see Source Parameters)
 - **Sample type**: changing the sample component (`sample_key`)
 
 These are typically configuration changes made between scans, not during scans, so recompilation is acceptable.

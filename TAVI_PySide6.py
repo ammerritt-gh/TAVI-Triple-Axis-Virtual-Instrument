@@ -2852,18 +2852,15 @@ class TAVIController(QObject):
         """An internal parameter dict under canonical IDs (what the API and job results show)."""
         return _public_values(vals, self.descriptor.slits)
 
-    def output_parameters(self, params, source=None):
-        """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only,
-        and the source stamp (component name, version, hash, the nine values, the edit flag).
-        ``source`` is the run's stamp, taken once at run start; without one the component is read now."""
-        public = self.public_values(params)
-        return {**public, **(moderator.provenance(public) if source is None else source)}
+    def output_parameters(self, params):
+        """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only."""
+        return self.public_values(params)
 
-    def point_output_parameters(self, vals, metadata, scan_index, number_neutrons, source=None):
+    def point_output_parameters(self, vals, metadata, scan_index, number_neutrons):
         """One scan point's scan_parameters.txt: the launch values overlaid by the point's own
         (``public_values`` puts requested radii under their IDs, applied under applied_*)."""
         return self.output_parameters({**vals, **metadata, 'scan_index': scan_index,
-                                       'number_neutrons': number_neutrons}, source)
+                                       'number_neutrons': number_neutrons})
 
     def api_parameters(self):
         """GET /parameters: the GUI values under canonical IDs, or None when a field will not parse."""
@@ -10110,9 +10107,6 @@ class TAVIController(QObject):
         if 'plan' not in launch_state:
             raise RuntimeError("the launch state carries no compiled plan")
         plan, expansion = launch_state['plan'], launch_state['expansion']
-        # The run's source record, read once at run start: the binary is built from the component
-        # as it is then, and every file and the result carry this dict, never a later read.
-        launch_state['source'] = moderator.provenance(vals)
 
         data_folder = launch_state['save_folder_input']
         # If the folder already exists, increment instead
@@ -10146,7 +10140,7 @@ class TAVIController(QObject):
         # text holds offsets, and the Display reload places points on these values.
         write_parameters_to_file(data_folder, self.output_parameters({
             **vals, **{f"scan_values_{c.number}": [float(v) for v in expansion.values[c.number]]
-                       for c in plan.commands}}, launch_state['source']))
+                       for c in plan.commands}}))
         
         # The plan's axes: command 1 inner, command 2 outer; a lone command
         # (in either box) is the only axis.
@@ -10296,11 +10290,6 @@ class TAVIController(QObject):
                 'valid_mask_1': [],
                 'valid_mask_2d': None,
             })
-
-        # The run's source record, before any point runs: a failed run keeps it too.
-        if job is not None:
-            with job.lock:
-                job.result.metadata['source'] = launch_state['source']
 
         # API feasibility: submission pre-determined some points infeasible.
         # Drop those points so
@@ -10710,7 +10699,7 @@ class TAVIController(QObject):
                     # saved record and the API result cannot disagree with
                     # each other about what was determined.
                     write_parameters_to_file(scan_folder, self.point_output_parameters(
-                        vals, metadata, i, number_neutrons, launch_state['source']))
+                        vals, metadata, i, number_neutrons))
 
                     if metadata.get('transmission'):
                         self._post_log(
