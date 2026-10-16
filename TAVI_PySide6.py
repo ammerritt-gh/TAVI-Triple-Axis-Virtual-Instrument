@@ -2852,17 +2852,18 @@ class TAVIController(QObject):
         """An internal parameter dict under canonical IDs (what the API and job results show)."""
         return _public_values(vals, self.descriptor.slits)
 
-    def output_parameters(self, params):
+    def output_parameters(self, params, source=None):
         """A point's or scan's parameters as scan_parameters.txt records them: canonical IDs only,
-        and the source stamp (component name, version, hash, the nine values, the edit flag)."""
+        and the source stamp (component name, version, hash, the nine values, the edit flag).
+        ``source`` is the run's stamp, taken once at run start; without one the component is read now."""
         public = self.public_values(params)
-        return {**public, **moderator.provenance(public)}
+        return {**public, **(moderator.provenance(public) if source is None else source)}
 
-    def point_output_parameters(self, vals, metadata, scan_index, number_neutrons):
+    def point_output_parameters(self, vals, metadata, scan_index, number_neutrons, source=None):
         """One scan point's scan_parameters.txt: the launch values overlaid by the point's own
         (``public_values`` puts requested radii under their IDs, applied under applied_*)."""
         return self.output_parameters({**vals, **metadata, 'scan_index': scan_index,
-                                       'number_neutrons': number_neutrons})
+                                       'number_neutrons': number_neutrons}, source)
 
     def api_parameters(self):
         """GET /parameters: the GUI values under canonical IDs, or None when a field will not parse."""
@@ -8928,8 +8929,6 @@ class TAVIController(QObject):
         plan = self._launch_plan(launch_state)
         expansion = (expand if points else scan_axes)(plan, launch_state['snapshot'])
         launch_state['plan'], launch_state['expansion'] = plan, expansion
-        # The source record is read once here, so a result carries the hash the run used.
-        launch_state['source'] = moderator.provenance(launch_state['vals'])
         return plan, expansion
 
     def _launch_plan(self, launch_state, commands=None):
@@ -10111,6 +10110,9 @@ class TAVIController(QObject):
         if 'plan' not in launch_state:
             raise RuntimeError("the launch state carries no compiled plan")
         plan, expansion = launch_state['plan'], launch_state['expansion']
+        # The run's source record, read once at run start: the binary is built from the component
+        # as it is then, and every file and the result carry this dict, never a later read.
+        launch_state['source'] = moderator.provenance(vals)
 
         data_folder = launch_state['save_folder_input']
         # If the folder already exists, increment instead
@@ -10144,7 +10146,7 @@ class TAVIController(QObject):
         # text holds offsets, and the Display reload places points on these values.
         write_parameters_to_file(data_folder, self.output_parameters({
             **vals, **{f"scan_values_{c.number}": [float(v) for v in expansion.values[c.number]]
-                       for c in plan.commands}}))
+                       for c in plan.commands}}, launch_state['source']))
         
         # The plan's axes: command 1 inner, command 2 outer; a lone command
         # (in either box) is the only axis.
@@ -10295,7 +10297,7 @@ class TAVIController(QObject):
                 'valid_mask_2d': None,
             })
 
-        # The launch's source record, before any point runs: a failed run keeps it too.
+        # The run's source record, before any point runs: a failed run keeps it too.
         if job is not None:
             with job.lock:
                 job.result.metadata['source'] = launch_state['source']
@@ -10708,7 +10710,7 @@ class TAVIController(QObject):
                     # saved record and the API result cannot disagree with
                     # each other about what was determined.
                     write_parameters_to_file(scan_folder, self.point_output_parameters(
-                        vals, metadata, i, number_neutrons))
+                        vals, metadata, i, number_neutrons, launch_state['source']))
 
                     if metadata.get('transmission'):
                         self._post_log(
