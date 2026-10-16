@@ -8304,7 +8304,7 @@ class TAVIController(QObject):
             'rha': (p_curvature, set_bend('rha', idock.rha_edit), self.update_ideal_bending_buttons),
             'rva': (p_curvature, set_bend('rva', idock.rva_edit), self.update_ideal_bending_buttons),
             # source
-            # the source refresh is the GUI's source_changed wiring: one per write (_API_APPLY_ORDER)
+            # the source refresh is the GUI's source_changed wiring: one per write (its apply group runs last)
             'moderator_mode': (p_choice(moderator.MODES, "moderator_mode"), set_source('moderator_mode'),
                                self.validate_scan_commands),
             'moderator_profile': (p_choice(moderator.PROFILES, "moderator_profile"), set_profile,
