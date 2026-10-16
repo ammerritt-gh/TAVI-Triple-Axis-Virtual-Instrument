@@ -352,7 +352,7 @@ def check1_and_2(runner, rows, rp_of, results, same_table):
     """Spectrum vs Source_gen (check 1) and the absolute total (check 2) for every row."""
     c1, c2 = Check("1. Spectrum equals Source_gen's"), Check("2. Absolute total in [Lmin, Lmax]")
     final = {}
-    c1.need(same_table, "the component's facility table (%D) equals Source_gen's, number for number")
+    c1.need(same_table, "the component's facility table (%D) equals Source_gen's: labels, order and numbers")
     for label, vals in rows:
         rp = rp_of[label]
         d, g = runner.get(f"row_{slug(label)}_direct"), runner.get(f"row_{slug(label)}_gen")
@@ -715,7 +715,7 @@ def main() -> int:
         rows = facility_rows(env) + [("Single temperature", {"T1": 300.0, "I1": 1e13, "T2": 0.0, "I2": 0.0, "T3": 0.0, "I3": 0.0})]
         ver, sha = component_stamp(COMP)
         comp_rows = parse_facility_rows(COMP.read_text(encoding="utf-8"))
-        same_table = ({tuple(sorted(v.items())) for _, v in comp_rows} == {tuple(sorted(v.items())) for _, v in rows[:12]})
+        same_table = comp_rows == rows[:12]  # ordered (label, values): a label swap fails too
         exe, cwall, mcver, mcrun = compile_instrument(out_dir / "build", env, deadline)
         print(f"compiled in {cwall:.1f} s with {mcver}", flush=True)
         workers = max(2, min(16, os.cpu_count() or 4))
