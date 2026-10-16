@@ -188,7 +188,7 @@ echo Locator at %RECORD%:
 if exist "%RECORD%" (
     type "%RECORD%"
 ) else (
-    echo    (not present)
+    echo    ^(not present^)
 )
 echo.
 if exist "%INFO_FILE%" (
@@ -234,16 +234,16 @@ echo Both candidates are reported so this stays useful against either layout:
 set "MCSTAS_CFG_L1=%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_%ENV_NAME%\mccode_config.json"
 set "MCSTAS_CFG_L2=%USERPROFILE%\AppData\mcstas\%MCSTAS_VERSION%_tavi-env\mccode_config.json"
 if exist "%MCSTAS_CFG_L1%" (
-    echo [PROBLEM] (layout 1) %MCSTAS_CFG_L1% exists
+    echo [PROBLEM] ^(layout 1^) %MCSTAS_CFG_L1% exists
     echo           and takes precedence over the compiler the installer configured.
 ) else (
-    echo [OK] (layout 1) No overriding per-user McStas config at %MCSTAS_CFG_L1%
+    echo [OK] ^(layout 1^) No overriding per-user McStas config at %MCSTAS_CFG_L1%
 )
 if exist "%MCSTAS_CFG_L2%" (
-    echo [PROBLEM] (layout 2) %MCSTAS_CFG_L2% exists
+    echo [PROBLEM] ^(layout 2^) %MCSTAS_CFG_L2% exists
     echo           and takes precedence over the compiler the installer configured.
 ) else (
-    echo [OK] (layout 2) No overriding per-user McStas config.
+    echo [OK] ^(layout 2^) No overriding per-user McStas config.
 )
 echo.
 echo Environment's own compiler settings:
