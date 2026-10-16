@@ -1128,6 +1128,11 @@ def _uninstallable_base(tmp_path, name, install_id="1-2-3-4", info_id=None, extr
                      "collect-diagnostics.bat"):
         shutil.copy2(os.path.join(LAUNCHERS_DIR, launcher), base / launcher)
     _install_id_files(base, install_id=install_id, info_id=info_id, layout=layout)
+    (base / "install-status.txt").write_text("OUTCOME=INSTALLATION SUCCEEDED\n",
+                                             encoding="utf-8", newline="\n")
+    (base / "tavi_doctor_12345678").mkdir()
+    (base / "tavi_doctor_12345678" / "TAVI-doctor-report.txt").write_text(
+        "report\n", encoding="utf-8", newline="\n")
     if extra_file:
         (base / extra_file).write_text("keep me\n", encoding="utf-8", newline="\n")
     return base
@@ -1189,7 +1194,7 @@ def test_uninstall_succeeds_on_a_well_formed_installation(tmp_path):
     assert "has been removed" in result.stdout
     for child in ("app", "tavi-env", "micromamba", "mamba", "compile_check",
                   "run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat", "uninstall-tavi.bat",
-                  "collect-diagnostics.bat"):
+                  "collect-diagnostics.bat", "install-status.txt", "tavi_doctor_12345678"):
         assert not (base / child).exists(), f"{child} should have been removed"
     assert not base.exists(), "a clean install's base folder must be removed entirely"
     assert "TAVI WAS UNINSTALLED" in result.stdout, result.stdout
