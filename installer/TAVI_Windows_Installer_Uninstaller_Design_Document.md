@@ -166,7 +166,7 @@ The uninstaller must affect only the user-installed copy, not the developer chec
 
 - the install, launch, repair and uninstall logs from the logs folder, and from `%TEMP%` only the names TAVI itself makes (a stamp, a stamp with a `%RANDOM%` suffix, or `tavi-rnd-` numbers), so another program's `install-*.log` is never sent;
 - `app\output\tavi-crash.log`, `install-status.txt`, `INSTALL_INFO.txt`, and the compile-check logs `compile_check\serial.log` and `mpi.log`;
-- the TAVI Doctor's report and summary. The zip is written before the Doctor runs and again with its report added, so a Doctor that hangs does not cost the logs;
+- the TAVI Doctor's report and summary, and its console output (`TAVI-doctor-console.txt`, kept off the student's screen). The zip is written before the Doctor runs and again with its report added, so a Doctor that hangs does not cost the logs;
 - `collected.txt`, which lists what was found and what was missing.
 
 The zip is made with Windows' own `tar.exe`, from inside the logs folder. Without `tar.exe` the collected folder is left in place and opened instead. Exit code 0 when the zip was made, 1 when not. Nothing is sent anywhere; the student sends the file.

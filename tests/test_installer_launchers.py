@@ -966,6 +966,7 @@ def test_collect_diagnostics_quiet_zips_the_logs_and_the_doctor_report(tmp_path,
         assert archive.read(by_tail["tavi-crash.log"]).decode() == "Traceback: the crash\n"
         for expected in ("INSTALL_INFO.txt", "install-status.txt", "compile_check-serial.log",
                          "TAVI-doctor-report.txt", "TAVI-doctor-summary.txt", "collected.txt",
+                         "TAVI-doctor-console.txt",
                          "temp-fallback/install-20261016-091500.log",
                          "temp-fallback/install-tavi-rnd-12345-6789.log",
                          "temp-fallback/install-20261016-091500-1234.log"):
@@ -974,6 +975,7 @@ def test_collect_diagnostics_quiet_zips_the_logs_and_the_doctor_report(tmp_path,
                        for name in names), names
         assert b"missing: compile check log, MPI" in archive.read(by_tail["collected.txt"])
     assert "DIAGNOSTICS SAVED" in result.stdout, result.stdout
+    assert "Summary  :" not in result.stdout, "the Doctor's console reached the student's screen"
     assert path in result.stdout, result.stdout
     assert "Press C" not in result.stdout, "/quiet must not wait"
 

@@ -146,7 +146,8 @@ echo logs are already saved, as shown above.
 echo.
 call :newest_doctor
 set "PREV_DOC=%DOC_DIR%"
-call "%DOCTOR%" /quiet /base "%TAVI_BASE%"
+:: The Doctor's console is for support, not the student: it goes into the zip.
+call "%DOCTOR%" /quiet /base "%TAVI_BASE%" > "%STAGE%\TAVI-doctor-console.txt" 2>&1
 call :newest_doctor
 if not defined DOC_DIR goto doctor_no_report
 if /i "%DOC_DIR%"=="%PREV_DOC%" goto doctor_no_report
