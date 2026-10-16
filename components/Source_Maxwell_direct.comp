@@ -103,8 +103,40 @@
 *     T1=300, I1=1e13, flat_band=1, E0=14.7, dE=2)
 *
 * %VALIDATION
-* Pending: the verification record is filled in from a run of
-* tools/verify_source_maxwell_direct.py.
+* 2026-10-16, McStas 3.7.1 (git) with MSVC, by tools/verify_source_maxwell_direct.py
+* in the TAVI repository, against Source_gen. Run that tool before any change to
+* this component (about 15 s; it compiles Test_Source_Maxwell_direct and checks the
+* monitors' I, I_err and N). Fixed seeds, so a rerun gives the same numbers. Every
+* check below passed. Ray counts: 2e7 per facility row and source, 5e6 for the flat
+* band and the wide window, 1e6 for the E0/dE comparison.
+* 1. Spectrum equals Source_gen's: all 12 Source_gen facility rows and a single
+*    temperature (300 K, 1e13), in the wavelength and the energy monitor (500 bins,
+*    bins wholly inside the range Source_gen samples, N>=20 in both). chi2/n from
+*    0.87 to 1.11 over 26 comparisons, at least 276 bins each, every chi2 inside
+*    n +- 4 sqrt(2n). Control: the FRM2 thermal row with I2 doubled gives chi2 6786
+*    (500 bins) and 6693 (365 bins) and fails the band, as it must.
+* 2. Absolute total in [Lmin, Lmax] equals the analytic sum of Ii times the
+*    Gamma(2) mass in range, times 1e4*xwidth*yheight*Omega: 26 totals (both
+*    sources), the largest deviation 1.26 sigma.
+* 3. One weight: I/N equals the predicted weight to 5e-10 and I_err^2*N equals I^2
+*    to 2e-9 in every non-empty bin of the wavelength, energy, position and
+*    divergence monitors (tolerance 1e-4), full spectrum and flat band. Control:
+*    Source_gen's own output fails the same test.
+* 4. Full spectrum ignores E0 and dE: four runs with other E0 and dE give monitor
+*    arrays bit-identical to the baseline; a different seed differs.
+* 5. Flat band: no counts outside [E0-dE, E0+dE]; intensity per meV equals
+*    flux*1e4*xwidth*yheight*Omega (ratio 1.000000 in two settings); uniform in
+*    energy (chi2 69.5 for 60 bins, 104.4 for 100 bins).
+* 6. Refusals: T1<0, I1<0, T2=nan, no active pair (T=0 and I=0), flat band with
+*    E0<=dE, dE=0, flux=0 and flat_band=2 each stop the run with a message naming
+*    the parameter; the same E0 and dE are accepted in full-spectrum mode.
+* 7. Uniform per steradian: a 60 x 120 deg window, 5e6 rays. The vertical angle as
+*    McStas's Divergence_monitor measures it, atan2(vy,vz), matches the exact
+*    per-steradian expectation (chi2 95.2, 128 bins, band 64..192) and fails the
+*    expectation of a sampler uniform in angle (chi2 117325) and of one uniform in
+*    latitude (chi2 167130). The horizontal angle is uniform (chi2 123.8, 120 bins).
+* Resolution: an energy-scale error as small as 0.04 percent (kT instead of
+* C*T/949) is not detected.
 *
 * %P
 * xwidth: [m]           Width of the source
