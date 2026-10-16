@@ -265,7 +265,43 @@ point-metadata keys still use TAVI's old internal names; they are documented in
 plugin contract v1 (`docs/INSTRUMENT_AUTHORING.md`). Operator, 2026-10-10: "7a
 is fine. I'm not worried about breaking saved scans."
 
-Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
+Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped. Job
+j0236ccacd89b (parked, below) bumps it to 2 for the source rework without
+this; it rides the next bump after that.
+
+## Facility moderator source: Source_Maxwell_direct (job j0236ccacd89b)
+
+**State:** parked
+
+A new component, `Source_Maxwell_direct`, replaces `Source_div_Maxwellian_v2`:
+the McStas `Source_gen` flux-form spectrum (up to three T/I Maxwellians, every
+`Source_gen` facility row) sampled directly with one constant ray weight, plus a
+deliberately unphysical flat band at Ei. Each instrument defaults to its
+facility profile (PUMA FRM2 thermal, PANDA FRM2 cold, IN8 ILL thermal tube,
+IN12 ILL VCS cold), editable in the Instrument dock with a spectrum preview;
+`source_type`/`source_dE` are retired for nine `moderator_*` names; plugin
+contract version 2; all four `model_version` 1.1.0. Design approved
+2026-10-16 (transcript `docs/transcripts/2026-10-16-tavi-source-maxwellian-review-b5b7377a.md`);
+amendment 5, operator: the per-run component stamp and rebuild hash struck
+("strip that fucking thing right out").
+
+Parked at refine on candidate `d432fef81dc6`, branch `acs/j0236ccacd89b`,
+worktree `..\.jobs\TAVI\source-rework-source`. Build and verify are done; the
+acceptance suite passed (3277 passed, 5 skipped). Remaining: refine
+(`slice_refine`, `lens_refine`: the design_fit lens's "component version and
+file hash" clause is superseded by amendment 5; the gui lens needs offscreen Qt
+with real widgets), `external_slice` on ChatGPT Pro (receipt r6e5022d9aca7),
+`external_verdict`, the PR for the operator to see, land. Deferred P4
+a724d25870322-1: `components/README.md:134` still claims exact `Source_gen`
+equivalence (one clause). Resume: `acs-job bind --handoff
+acafe92c009780824edfac7c9f3ba00cb300d8d7b330f3dba760edc4aa72d2c2 --session
+<new> --host claude`, then a fresh slice coordinator from `acs-job next`.
+
+When it lands: `docs/HANDOFF-spaced-profile-install.md:149` names
+`source_type`/`source_dE` in `gui_values`; update it on main. `TODO.md:140`
+(slit bindings) was keyed to this contract bump.
+
+Done when: the job lands, or the operator cancels it.
 
 ## Small API and housekeeping follow-ups
 
@@ -295,7 +331,12 @@ Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped.
   not read as a number; run the named-only checks before that guard with the
   next change to `_write_conflict` (deferred by the same job).
 - The full suite took 404–541 s on 2026-10-13 against 229 s on 2026-10-10
-  (2882 tests against 2342); the per-test time rose too.
+  (2882 tests against 2342); the per-test time rose too. On job
+  j0236ccacd89b's branch it took 9–13 min (3282 tests).
+- Flake: `tests/test_api_scan_maximum.py::test_a_scan_over_the_maximum_is_refused_whatever_the_flags[A3 0 1000 1-A4 0 1000 1-None-1002001]`
+  fails in some full runs (the GUI's debounced scan-estimate timer fires while
+  the test has `parse_scan_steps` patched to raise); passes alone; also seen in
+  job j7e540e562b4f.
 
 Done when: each is fixed or dropped by the operator.
 
