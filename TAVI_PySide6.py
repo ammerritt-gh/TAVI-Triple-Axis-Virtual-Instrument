@@ -11143,12 +11143,39 @@ def _self_test_verdict(state, error, executed_mask, skipped_points, output_folde
     return True, f"detector.dat read back, N = {counts:g}"
 
 
-def _self_test_main(qt_args):
-    """``--self-test`` (for the installer): one real McStas point on puma through the controller's
-    job queue, in a hidden offscreen window, nothing written to output/ or the real config.
+def _self_test_instrument(requested, known_ids):
+    """The instrument ``--self-test`` runs, from ``--instrument``: ``(id, None)``, or
+    ``(None, reason)`` when it was not given or names no registered instrument. The controller
+    never picks one itself, so there is no default."""
+    known = ", ".join(sorted(known_ids))
+    if requested is None or not str(requested).strip():
+        return None, f"--instrument was not given; the test needs one of: {known}"
+    wanted = str(requested).strip().lower()
+    if wanted not in known_ids:
+        return None, f"--instrument '{requested}' is not a known instrument; use one of: {known}"
+    return wanted, None
 
-    Never returns: ends the process with ``TAVI SELF-TEST PASSED`` / exit 0 or
-    ``TAVI SELF-TEST FAILED: <reason>`` / exit 1, whatever goes wrong.
+
+def _self_test_refuse(reason, work):
+    """A ``--self-test`` that was refused before any job ran (bad command line): delete the
+    throwaway folder, print the verdict line, exit 2 (a run that fails exits 1)."""
+    if work:
+        try:
+            shutil.rmtree(work)
+        except OSError as exc:
+            print(f"Self-test: could not delete {work}: {exc}", flush=True)
+    print(f"TAVI SELF-TEST FAILED: {reason}", flush=True)
+    os._exit(2)
+
+
+def _self_test_main(qt_args, requested_instrument=None):
+    """``--self-test`` (for the installer): one real McStas point on the instrument named by
+    ``--instrument`` through the controller's job queue, in a hidden offscreen window, nothing
+    written to output/ or the real config.
+
+    Never returns: ends the process with ``TAVI SELF-TEST PASSED`` / exit 0,
+    ``TAVI SELF-TEST FAILED: <reason>`` / exit 1 (the test ran and failed), or the same line /
+    exit 2 (``--instrument`` missing or unknown: the test did not start).
     """
     import traceback
     from tavi import crash_log
@@ -11215,11 +11242,15 @@ def _self_test_main(qt_args):
         os._exit(1)
 
     try:
-        print(f"Self-test folder: {work}", flush=True)
-        print(f"Crash log: {crash_log.install(crash_path)}", flush=True)
         import instruments.builtin  # noqa: F401  (explicit built-in registration)
         from instruments.registry import (available_instruments, get_instrument,
                                            save_last_instrument)
+        infos = available_instruments()
+        instrument_id, refusal = _self_test_instrument(requested_instrument, {i.id for i in infos})
+        if refusal:
+            _self_test_refuse(refusal, work)
+        print(f"Self-test folder: {work}", flush=True)
+        print(f"Crash log: {crash_log.install(crash_path)}", flush=True)
         from instruments.validation import assert_valid_capabilities, assert_valid_descriptor
         from PySide6.QtCore import QTimer, qVersion
 
@@ -11234,8 +11265,7 @@ def _self_test_main(qt_args):
                    f"possibly a dialog waiting offscreen)"))
         watchdog.start(_SELF_TEST_TIMEOUT_MS)
 
-        infos = available_instruments()
-        instrument = get_instrument("puma")
+        instrument = get_instrument(instrument_id)
         assert_valid_descriptor(instrument.descriptor(), runnable=True)
         assert_valid_capabilities(instrument.capabilities(), instrument.id, instrument.descriptor())
         window = TAVIMainWindow(
@@ -11357,12 +11387,21 @@ def main():
     parser.add_argument(
         "--self-test", action="store_true",
         help="For the installer, not for everyday use: start TAVI hidden, run one small "
-             "McStas point on puma into a throwaway folder, print TAVI SELF-TEST PASSED or "
-             "TAVI SELF-TEST FAILED: <reason>, and exit 0 or 1.",
+             "McStas point on the instrument named by --instrument (required with this "
+             "option) into a throwaway folder, print TAVI SELF-TEST PASSED or "
+             "TAVI SELF-TEST FAILED: <reason>, and exit 0 (passed), 1 (failed) or 2 "
+             "(--instrument missing or unknown).",
     )
-    args, qt_args = parser.parse_known_args()  # leftover args go to Qt
+    try:
+        args, qt_args = parser.parse_known_args()  # leftover args go to Qt
+    except SystemExit as exc:
+        # e.g. "--instrument" with no value: argparse has printed its usage; end as a refusal
+        if exc.code and "--self-test" in sys.argv:
+            _self_test_refuse("the command line was not understood (see above); "
+                              "use --self-test --instrument <id>", _SELF_TEST_DIR)
+        raise
     if args.self_test:
-        _self_test_main(qt_args)  # never returns; its crash log is in the throwaway folder
+        _self_test_main(qt_args, args.instrument)  # never returns; its crash log is in the throwaway folder
 
     try:
         print(f"Crash log: {crash_log.install()}", flush=True)

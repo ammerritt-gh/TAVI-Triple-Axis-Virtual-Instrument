@@ -167,3 +167,42 @@ def test_numpy_and_mcstasscript_import_after_the_failure_hook():
                 for alias in n.names}
     assert imported["numpy"] > hook
     assert imported["mcstasscript"] > hook
+
+
+KNOWN = {"puma", "in8", "in12", "panda"}
+
+
+def test_self_test_takes_its_instrument_from_the_option_not_a_default():
+    for wanted in ("in8", "panda", "PUMA", " in12 "):
+        assert cm._self_test_instrument(wanted, KNOWN) == (wanted.strip().lower(), None)
+
+
+@pytest.mark.parametrize("requested", [None, "", "   "])
+def test_self_test_without_an_instrument_is_refused_and_names_the_option(requested):
+    wanted, reason = cm._self_test_instrument(requested, KNOWN)
+    assert wanted is None
+    assert "--instrument" in reason and "in12, in8, panda, puma" in reason
+
+
+def test_self_test_with_an_unknown_instrument_is_refused_and_names_the_ids():
+    wanted, reason = cm._self_test_instrument("nonesuch", KNOWN)
+    assert wanted is None
+    assert "--instrument 'nonesuch'" in reason and "in12, in8, panda, puma" in reason
+
+
+def test_a_refused_self_test_deletes_its_folder_prints_the_line_and_exits_2(tmp_path, monkeypatch, capsys):
+    work = tmp_path / "selftest-abc"
+    (work / "config").mkdir(parents=True)
+    exits = []
+    monkeypatch.setattr(cm.os, "_exit", exits.append)  # restored after the test; the real exit would end pytest
+
+    cm._self_test_refuse("--instrument was not given; the test needs one of: puma", str(work))
+
+    assert exits == [2]
+    assert not work.exists()
+    assert "TAVI SELF-TEST FAILED: --instrument was not given" in capsys.readouterr().out
+
+
+def test_the_controller_file_never_names_an_instrument_for_the_self_test():
+    source = open(cm.__file__, encoding="utf-8").read()
+    assert 'get_instrument("puma")' not in source and "get_instrument('puma')" not in source
