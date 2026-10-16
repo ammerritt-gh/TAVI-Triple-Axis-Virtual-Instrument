@@ -1,0 +1,110 @@
+/*******************************************************************************
+*         McStas instrument definition URL=http://mcstas.risoe.dk
+*
+* Instrument: Test_Source_Maxwell_direct
+*
+* %Identification
+* Written by: Adrian Merritt (TAVI project)
+* Date: October 16, 2026
+* Origin: TAVI
+* %INSTRUMENT_SITE: Tests_sources
+*
+* A test instrument for the component 'Source_Maxwell_direct'
+*
+* %Description
+* Compares Source_Maxwell_direct (SRC=0) with Source_gen (SRC=1) for the same
+* temperatures, fluxes and emission window, and exercises the flat-band mode.
+* Four monitors sit right after the source, each larger than the beam footprint
+* and restoring the neutron: a wavelength monitor, an energy monitor, a position
+* monitor and a divergence monitor. For the default FRM2 thermal row the two
+* sources give the same spectrum and the same total intensity (Source_gen only
+* within its wavelength range Lmin..Lmax; Source_Maxwell_direct has no range).
+* With flat_band=1 the intensity is flux*2*dE*area*solid angle, unphysical by design.
+*
+* %Example: -n 1e6 -s 1000 SRC=0              Detector: PSD_mon_I=4.75716e+12
+* %Example: -n 1e6 -s 1000 SRC=0 flat_band=1  Detector: PSD_mon_I=1.21822
+* %Example: -n 1e6 -s 1000 SRC=1              Detector: PSD_mon_I=4.78348e+12
+*
+* %Parameters
+* SRC: [1]        0: Source_Maxwell_direct, 1: Source_gen with the same T1..I3 and window
+* flat_band: [0|1]  Source_Maxwell_direct only: 0 full spectrum, 1 flat band
+* E0: [meV]       Flat band centre (flat_band=1 only)
+* dE: [meV]       Flat band half width (flat_band=1 only)
+* flux: [1/(s*cm**2*sr*meV)]  Flat band flux per energy unit (flat_band=1 only)
+* T1: [K]         Temperature of the first Maxwellian (default: FRM2 thermal, 20 MW)
+* I1: [1/(s*cm**2*sr)]  Flux of the first Maxwellian
+* T2: [K]         Temperature of the second Maxwellian
+* I2: [1/(s*cm**2*sr)]  Flux of the second Maxwellian
+* T3: [K]         Temperature of the third Maxwellian
+* I3: [1/(s*cm**2*sr)]  Flux of the third Maxwellian
+* focus_aw: [deg] Full horizontal width of the emission window
+* focus_ah: [deg] Full vertical height of the emission window
+* Lmin: [AA]      Source_gen: minimum wavelength, and the L monitor's lower limit
+* Lmax: [AA]      Source_gen: maximum wavelength, and the L monitor's upper limit
+* Emax: [meV]     Upper limit of the energy monitor (from 0)
+* Zmon: [m]       Distance of the monitors from the source
+* Msize: [m]      Width and height of the L, E and PSD monitors
+*
+* %End
+*******************************************************************************/
+DEFINE INSTRUMENT Test_Source_Maxwell_direct(int SRC=0, int flat_band=0,
+  E0=25, dE=5, flux=1,
+  T1=285.6, I1=3.06e13, T2=300.0, I2=1.68e12, T3=429.9, I3=6.77e12,
+  focus_aw=4, focus_ah=4, Lmin=0.2, Lmax=20, Emax=400, Zmon=0.01, Msize=0.2)
+
+DECLARE
+%{
+%}
+
+INITIALIZE
+%{
+  printf("%s: ", NAME_INSTRUMENT);
+  if (SRC == 0)      printf("using Source_Maxwell_direct (%s)\n", flat_band ? "flat band" : "full spectrum");
+  else if (SRC == 1) printf("using Source_gen (wavelength range [%g %g] AA)\n", Lmin, Lmax);
+  else {
+    printf("SRC=%d is undefined (0: Source_Maxwell_direct, 1: Source_gen), exiting\n", SRC);
+    exit(-1);
+  }
+%}
+
+TRACE
+
+COMPONENT Origin = Progress_bar()
+AT (0, 0, 0) ABSOLUTE
+
+/* the sources ============================================================== */
+
+COMPONENT src_direct = Source_Maxwell_direct(
+  xwidth=0.05, yheight=0.05, focus_aw=focus_aw, focus_ah=focus_ah,
+  T1=T1, I1=I1, T2=T2, I2=I2, T3=T3, I3=I3,
+  flat_band=flat_band, E0=E0, dE=dE, flux=flux
+) WHEN (SRC == 0)
+AT (0, 0, 0) ABSOLUTE
+
+COMPONENT src_gen = Source_gen(
+  xwidth=0.05, yheight=0.05, focus_aw=focus_aw, focus_ah=focus_ah,
+  Lmin=Lmin, Lmax=Lmax,
+  T1=T1, I1=I1, T2=T2, I2=I2, T3=T3, I3=I3
+) WHEN (SRC == 1)
+AT (0, 0, 0) ABSOLUTE
+
+/* the monitors, all at one plane and all restoring the neutron ================ */
+
+COMPONENT L_mon = L_monitor(
+  xwidth=Msize, yheight=Msize, Lmin=Lmin, Lmax=Lmax, nL=200, restore_neutron=1
+) AT (0, 0, Zmon) ABSOLUTE
+
+COMPONENT E_mon = E_monitor(
+  xwidth=Msize, yheight=Msize, Emin=0, Emax=Emax, nE=200, restore_neutron=1
+) AT (0, 0, Zmon) ABSOLUTE
+
+COMPONENT PSD_mon = PSD_monitor(
+  xwidth=Msize, yheight=Msize, nx=40, ny=40, restore_neutron=1
+) AT (0, 0, Zmon) ABSOLUTE
+
+COMPONENT Div_mon = Divergence_monitor(
+  xwidth=Msize, yheight=Msize, nh=40, nv=40,
+  maxdiv_h=focus_aw, maxdiv_v=focus_ah, restore_neutron=1
+) AT (0, 0, Zmon) ABSOLUTE
+
+END
