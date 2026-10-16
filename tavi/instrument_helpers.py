@@ -49,6 +49,13 @@ def _wavelength_settings(settings):
     }
 
 
+def _wavelength_name(name):
+    """An L_monitor's instance name: ``Emonitor`` -> ``Lmonitor``, so its output file says so."""
+    if "Emonitor" in name:
+        return name.replace("Emonitor", "Lmonitor")
+    return f"{name}_Lmonitor"
+
+
 def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
     """Add each enabled diagnostic monitor from an ordered group of MonitorSpecs.
 
@@ -57,7 +64,8 @@ def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
     ``size_overrides`` maps a spec's ``component_name`` to parameter overrides
     applied over ``spec.settings`` -- used for monitors sized from the selected
     crystal's slab geometry at build time. With ``WAVELENGTH_MONITORS_KEY`` true,
-    each enabled E_monitor is emitted as an L_monitor in the same place.
+    each enabled E_monitor is emitted as an L_monitor in the same place, named
+    with ``Lmonitor`` in place of ``Emonitor``.
 
     Returns the list of added components.
     """
@@ -74,6 +82,7 @@ def emit_monitors(instrument, specs, enabled, *, size_overrides=None):
         if wavelength and component_type == "E_monitor":
             component_type = "L_monitor"
             settings = _wavelength_settings(settings)
+            name = _wavelength_name(name)  # after the size lookup, which is keyed by the energy name
         component = instrument.add_component(
             name,
             component_type,
