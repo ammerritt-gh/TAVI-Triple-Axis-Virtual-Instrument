@@ -110,7 +110,8 @@ def test_isolation_copies_the_folder_the_variable_names(tmp_path, monkeypatch):
     named = tmp_path / "elsewhere"
     named.mkdir()
     (named / "settings.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("TAVI_CONFIG_DIR", str(named))
+    monkeypatch.setenv("TAVI_CONFIG_DIR", str(named))  # both restored by monkeypatch afterwards
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
 
     work = cm._self_test_isolate(str(root))
 
@@ -121,7 +122,8 @@ def test_isolation_copies_the_folder_the_variable_names(tmp_path, monkeypatch):
 def test_isolation_without_any_config_makes_an_empty_copy(tmp_path, monkeypatch):
     root = tmp_path / "tavi"
     root.mkdir()
-    monkeypatch.delenv("TAVI_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("TAVI_CONFIG_DIR", "")  # empty: no override, so the source is <root>/config (absent)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
 
     work = cm._self_test_isolate(str(root))
 
