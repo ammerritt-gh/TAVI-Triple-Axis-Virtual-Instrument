@@ -41,20 +41,23 @@ echo   [1] Run TAVI
 echo   [2] Repair TAVI
 echo   [3] Open TAVI folder
 echo   [4] Open TAVI shell
-echo   [5] Exit
+echo   [5] Collect diagnostics for support - runs the TAVI Doctor, takes a few minutes
 echo   [6] Uninstall TAVI
+echo   [7] Exit
 echo.
-choice /C 123456 /N /M "Select option (1-6): "
+choice /C 1234567 /N /M "Select option (1-7): "
 :: Exact comparisons, never an "if errorlevel" ladder: choice returns 255 on
 :: error and 0 when the user presses Ctrl-C, and a descending ladder with the
 :: destructive option at the top would route both of those straight into it.
+:: Since 1.4 Exit is the last item, below Uninstall.
 set "PICK=%ERRORLEVEL%"
 if "%PICK%"=="1" goto run
 if "%PICK%"=="2" goto update
 if "%PICK%"=="3" goto folder
 if "%PICK%"=="4" goto shell
-if "%PICK%"=="5" goto quit
+if "%PICK%"=="5" goto diagnostics
 if "%PICK%"=="6" goto uninstall
+if "%PICK%"=="7" goto quit
 goto menu
 
 :run
@@ -69,6 +72,22 @@ goto menu
 explorer "%TAVI_BASE%"
 goto menu
 
+:diagnostics
+if not exist "%TAVI_BASE%\collect-diagnostics.bat" goto diagnostics_missing
+call "%TAVI_BASE%\collect-diagnostics.bat"
+:: The Doctor retitles the window.
+title TAVI Launcher
+goto menu
+
+:diagnostics_missing
+echo.
+echo [ERROR] collect-diagnostics.bat was not found in:
+echo         %TAVI_BASE%
+echo         Run the TAVI installer again to restore it.
+echo.
+choice /C C /N /M "Press C to go back to the menu."
+goto menu
+
 :shell
 if not exist "%ENV_PREFIX%\python.exe" goto shell_missing
 cd /d "%INSTALL_DIR%"
@@ -80,7 +99,7 @@ goto menu
 echo.
 echo [ERROR] The TAVI environment was not found at:
 echo         %ENV_PREFIX%
-pause
+choice /C C /N /M "Press C to go back to the menu."
 goto menu
 
 :uninstall
@@ -139,13 +158,13 @@ echo.
 echo [ERROR] uninstall-tavi.bat was not found in:
 echo         %TAVI_BASE%
 echo         Download WINDOWS-uninstall-TAVI.bat from the TAVI releases page.
-pause
+choice /C C /N /M "Press C to go back to the menu."
 goto menu
 
 :uninstall_copy_failed
 echo.
 echo [ERROR] Could not copy the uninstaller to a temporary folder.
-pause
+choice /C C /N /M "Press C to go back to the menu."
 goto menu
 
 :quit

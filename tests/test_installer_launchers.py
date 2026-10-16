@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
+import zipfile
 
 import pytest
 
@@ -36,6 +38,7 @@ RUN_TAVI = os.path.join(LAUNCHERS_DIR, "run-tavi.bat")
 UPDATE_TAVI = os.path.join(LAUNCHERS_DIR, "update-tavi.bat")
 TAVI_LAUNCHER = os.path.join(LAUNCHERS_DIR, "TAVI-Launcher.bat")
 UNINSTALL_TAVI = os.path.join(LAUNCHERS_DIR, "uninstall-tavi.bat")
+COLLECT_DIAG = os.path.join(LAUNCHERS_DIR, "collect-diagnostics.bat")
 
 # LAST_NAMED_INSTALLER (the last release's installer, still kept in the tree
 # for reference) is deliberately EXCLUDED from every table below: it is the
@@ -44,7 +47,7 @@ UNINSTALL_TAVI = os.path.join(LAUNCHERS_DIR, "uninstall-tavi.bat")
 # named_selection (below) proves that file trips the same check this module
 # asserts is clean everywhere else -- i.e. the check can fail.
 NAMED_SELECTION_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
-                          RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
+                          RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI, COLLECT_DIAG]
 # Its version is assembled rather than written out: the release tool refuses a
 # tracked file that still names the version being bumped away from, and this
 # reference to a historical file is deliberate, not a leftover.
@@ -61,12 +64,22 @@ VALIDATE_BASE_COPIES = [INSTALL_1_3_2, UNINSTALL_TAVI, UNINSTALL_STANDALONE, REP
                         DOCTOR, RECORD_TAVI]
 
 LABEL_FILES = [INSTALL_1_3_2, UNINSTALL_STANDALONE, REPAIR_LAUNCHERS,
-               RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI]
+               RUN_TAVI, UPDATE_TAVI, TAVI_LAUNCHER, UNINSTALL_TAVI, COLLECT_DIAG]
 
 
 def _read(path):
     with open(path, encoding="utf-8", newline="") as fh:
         return fh.read()
+
+
+@pytest.fixture(autouse=True)
+def _sandboxed_localappdata(tmp_path_factory, monkeypatch):
+    """Since 1.4 the launchers write logs under %LOCALAPPDATA%\\TAVI\\logs, and
+    run-tavi.bat deletes all but the ten newest launch logs there. A child that
+    inherits this process's environment must never reach the operator's real
+    folder, so every test here starts with LOCALAPPDATA in a temp folder; a
+    test that builds its own environment from os.environ inherits that too."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata-guard")))
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +452,19 @@ _STUB_CS = textwrap.dedent(r"""
             {
                 File.AppendAllText(log, string.Join("\u0001", args) + "\n");
             }
-            return 0;
+            // Optional: print numbered lines and exit with a given code, so a
+            // launcher's log and its failure screen can be checked.
+            string lines = Environment.GetEnvironmentVariable("MICROMAMBA_STUB_LINES");
+            if (lines != null)
+            {
+                Console.WriteLine("PYTHONUNBUFFERED=" + Environment.GetEnvironmentVariable("PYTHONUNBUFFERED"));
+                for (int i = 1; i <= int.Parse(lines); i++)
+                {
+                    Console.WriteLine("stub line " + i);
+                }
+            }
+            string code = Environment.GetEnvironmentVariable("MICROMAMBA_STUB_EXIT");
+            return code == null ? 0 : int.Parse(code);
         }
     }
     """)
@@ -499,7 +524,8 @@ def _make_layout2_base(tmp_path, name, stub_exe, with_python=True):
     (base / "INSTALL_INFO.txt").write_text(
         "TAVI_VERSION=v1.3.2\nLAYOUT=2\nINSTALL_ID=1-2-3-4\n", encoding="utf-8", newline="\n")
 
-    for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat"):
+    for launcher in ("run-tavi.bat", "update-tavi.bat", "TAVI-Launcher.bat",
+                     "collect-diagnostics.bat"):
         shutil.copy2(os.path.join(LAUNCHERS_DIR, launcher), base / launcher)
 
     return base, env_prefix, base / "mamba"
@@ -561,9 +587,9 @@ def test_launcher_shell_option_ignores_inherited_mamba_root_prefix(tmp_path, mic
     wrong_root.mkdir()
     log = tmp_path / "stub3.log"
 
-    # [4] Open TAVI shell, then [5] Exit.
+    # [4] Open TAVI shell, then [7] Exit.
     result = run_bat(str(base / "TAVI-Launcher.bat"), env=_stub_env(log, wrong_root),
-                      timeout=30, input_text="4\n5\n")
+                      timeout=30, input_text="4\n7\n")
     assert result.returncode == 0, result.stdout + result.stderr
 
     calls = _read_stub_log(log)
@@ -577,9 +603,10 @@ def test_launcher_shell_option_ignores_inherited_mamba_root_prefix(tmp_path, mic
 
 def test_run_tavi_fails_visibly_when_python_is_missing(tmp_path, micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base4", micromamba_stub_exe, with_python=False)
-    result = run_bat(str(base / "run-tavi.bat"), timeout=30)
+    result = run_bat(str(base / "run-tavi.bat"), timeout=30, input_text="C\n")
     assert result.returncode != 0
     assert "[ERROR]" in result.stdout
+    assert "Press C to continue." in result.stdout, "the incomplete-install message must end on C"
 
 
 def test_update_tavi_fails_visibly_when_python_is_missing(tmp_path, micromamba_stub_exe):
@@ -591,19 +618,19 @@ def test_update_tavi_fails_visibly_when_python_is_missing(tmp_path, micromamba_s
 
 def test_launcher_shell_option_fails_visibly_when_python_is_missing(tmp_path, micromamba_stub_exe):
     base, _, _ = _make_layout2_base(tmp_path, "base6", micromamba_stub_exe, with_python=False)
-    # [4] Open TAVI shell -> "[ERROR]" + pause (consumes the blank line) ->
-    # back to the menu -> [5] Exit. The menu recovers by design (it loops
+    # [4] Open TAVI shell -> "[ERROR]" + "Press C" (consumes the C) ->
+    # back to the menu -> [7] Exit. The menu recovers by design (it loops
     # back rather than terminating the process), so unlike run-tavi.bat and
     # update-tavi.bat above there is no non-zero exit to assert here -- only
     # that the failure was reported before the menu let the user continue.
-    result = run_bat(str(base / "TAVI-Launcher.bat"), timeout=30, input_text="4\n\n5\n")
+    result = run_bat(str(base / "TAVI-Launcher.bat"), timeout=30, input_text="4\nC\n7\n")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "[ERROR]" in result.stdout
 
 
 # ===========================================================================
 # 5. The menu dispatches on exact ERRORLEVEL comparisons, never a descending
-#    ladder; Exit is 5, Uninstall is 6.
+#    ladder; diagnostics is 5, Uninstall 6, Exit 7 (1.4 moved Exit last).
 # ===========================================================================
 
 def test_menu_dispatch_has_no_if_errorlevel_ladder():
@@ -616,24 +643,335 @@ def test_menu_dispatch_has_no_if_errorlevel_ladder():
     the top -- which must never be Uninstall.
     """
     text = _read(TAVI_LAUNCHER)
-    start = text.index("choice /C 123456")
+    start = text.index("choice /C 1234567 ")
     end = text.index("goto menu", start)
     dispatch_block = text[start:end]
     offenders = [l for l in dispatch_block.splitlines() if re.match(r"^\s*if\s+errorlevel\b", l, re.I)]
     assert not offenders, f"menu dispatch uses an errorlevel ladder: {offenders}"
 
 
-def test_exit_is_five_and_uninstall_is_six():
+def test_diagnostics_is_five_uninstall_six_and_exit_seven():
     text = _read(TAVI_LAUNCHER)
-    assert 'if "%PICK%"=="5" goto quit' in text
+    assert 'if "%PICK%"=="5" goto diagnostics' in text
     assert 'if "%PICK%"=="6" goto uninstall' in text
-    assert "[5] Exit" in text
+    assert 'if "%PICK%"=="7" goto quit' in text
+    item = re.search(r"(?m)^echo   \[5\] (.*)$", text).group(1)
+    assert item.startswith("Collect diagnostics for support")
+    assert "Doctor" in item and "few minutes" in item, item
     assert "[6] Uninstall TAVI" in text
+    assert "[7] Exit" in text
 
 
-def test_menu_exits_cleanly_on_five():
-    result = run_bat(TAVI_LAUNCHER, timeout=20, input_text="5\n")
+def test_menu_exits_cleanly_on_seven():
+    result = run_bat(TAVI_LAUNCHER, timeout=20, input_text="7\n")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _launch_env(tmp_path, **extra):
+    """os.environ with LOCALAPPDATA and TEMP in tmp_path, plus extra."""
+    env = dict(os.environ)  # Windows: os.environ keys are upper case
+    for name in ("LOCALAPPDATA", "TEMP", "TMP"):
+        folder = tmp_path / f"{name.lower()}-sandbox"
+        folder.mkdir(exist_ok=True)
+        env[name] = str(folder)
+    env.update(extra)
+    return env
+
+
+def _logs_dir(env):
+    return os.path.join(env["LOCALAPPDATA"], "TAVI", "logs")
+
+
+def test_menu_one_runs_tavi_with_no_arguments(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    stub_log = tmp_path / "stub.log"
+    env = _launch_env(tmp_path, MICROMAMBA_STUB_LOG=str(stub_log))
+    result = run_bat(str(base / "TAVI-Launcher.bat"), env=env, timeout=30, input_text="1\n7\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _read_stub_log(stub_log)
+    assert calls and calls[0][-1] == "TAVI_PySide6.py", calls
+
+
+def test_menu_five_runs_the_diagnostics_collector_attended(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    # A stand-in: the real collector, run attended, opens Explorer.
+    (base / "collect-diagnostics.bat").write_text(
+        '@echo off\n> "%~dp0collector-ran.txt" echo args=[%*]\n', encoding="utf-8", newline="\r\n")
+    result = run_bat(str(base / "TAVI-Launcher.bat"), env=_launch_env(tmp_path),
+                     timeout=30, input_text="5\n7\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    ran = base / "collector-ran.txt"
+    assert ran.exists(), "menu item 5 did not run collect-diagnostics.bat"
+    # No /quiet: the student gets Explorer and the wait on C.
+    assert ran.read_text(encoding="utf-8").strip() == "args=[]"
+
+
+# ===========================================================================
+# 5a. run-tavi.bat's launch log (1.4): TAVI's whole output goes to
+#     %LOCALAPPDATA%\TAVI\logs\launch-<stamp>.log, ten are kept, an error shows
+#     the last 30 lines and waits on C, and with no log TAVI runs live.
+# ===========================================================================
+
+def test_run_tavi_writes_a_launch_log_and_passes_arguments_through(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    stub_log = tmp_path / "stub.log"
+    env = _launch_env(tmp_path, MICROMAMBA_STUB_LOG=str(stub_log), MICROMAMBA_STUB_LINES="3")
+    result = run_bat(str(base / "run-tavi.bat"), "--self-test", env=env, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    argv = _read_stub_log(stub_log)[0]
+    assert argv[-2:] == ["TAVI_PySide6.py", "--self-test"], argv
+
+    logs = os.listdir(_logs_dir(env))
+    assert len(logs) == 1 and re.fullmatch(r"launch-\d{8}-\d{6}\.log", logs[0]), logs
+    log_path = os.path.join(_logs_dir(env), logs[0])
+    with open(log_path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    assert "PYTHONUNBUFFERED=1" in text and "stub line 3" in text, text
+    assert "[TAVI] Exit code: 0" in text, text
+    # The window says only that TAVI runs and where its messages go.
+    assert "stub line" not in result.stdout, result.stdout
+    assert log_path in result.stdout, result.stdout
+
+
+def test_run_tavi_keeps_the_ten_newest_launch_logs(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    env = _launch_env(tmp_path)
+    logs = _logs_dir(env)
+    os.makedirs(logs)
+    old = [f"launch-20200101-0000{i:02d}.log" for i in range(12)]
+    now = time.time()
+    for age, name in zip(range(12, 0, -1), old):
+        path = os.path.join(logs, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("old\n")
+        os.utime(path, (now - 3600 * age, now - 3600 * age))
+
+    result = run_bat(str(base / "run-tavi.bat"), env=env, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    remaining = set(os.listdir(logs))
+    new = remaining - set(old)
+    assert len(new) == 1, remaining
+    assert remaining == set(old[-9:]) | new, sorted(remaining)
+
+
+def test_run_tavi_shows_the_last_30_lines_and_waits_on_c_after_an_error(tmp_path,
+                                                                         micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="50", MICROMAMBA_STUB_EXIT="3")
+    result = run_bat(str(base / "run-tavi.bat"), env=env, timeout=30, input_text="C\n")
+    assert result.returncode == 1, result.stdout + result.stderr
+    out = result.stdout
+    assert "TAVI STOPPED WITH AN ERROR" in out, out
+    # The log ends "stub line 50", a blank line, "[TAVI] Exit code: 3": its
+    # last 30 lines start at stub line 23.
+    assert re.search(r"(?m)^stub line 23\r?$", out), out
+    assert re.search(r"(?m)^stub line 50\r?$", out), out
+    assert not re.search(r"(?m)^stub line 22\r?$", out), out
+    assert "[TAVI] Exit code: 3" in out, out
+    assert "Press C to continue." in out, out
+    assert "Press any key" not in out, out
+
+
+def test_run_tavi_runs_live_when_no_log_can_be_opened(tmp_path, micromamba_stub_exe):
+    base, _, _ = _make_layout2_base(tmp_path, "base", micromamba_stub_exe)
+    blocker = tmp_path / "a-file-not-a-folder"
+    blocker.write_text("x", encoding="utf-8")
+    env = _launch_env(tmp_path, MICROMAMBA_STUB_LINES="2")
+    for name in ("LOCALAPPDATA", "TEMP", "TMP"):
+        env[name] = str(blocker)
+    result = run_bat(str(base / "run-tavi.bat"), env=env, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "could not be saved to a log file" in result.stdout, result.stdout
+    assert "stub line 2" in result.stdout, result.stdout
+
+
+# ===========================================================================
+# 5b. collect-diagnostics.bat (1.4): one zip in the logs folder, made before
+#     the Doctor runs and rewritten with its report; /quiet never waits and
+#     never opens Explorer. The Doctor runs for real against the stub
+#     micromamba and stops at its first simulation, which has no McStas here.
+# ===========================================================================
+
+def _diagnostics_base(tmp_path, stub_exe, with_app=True):
+    base, _, _ = _make_layout2_base(tmp_path, "inst", stub_exe)
+    if with_app:
+        (base / "app" / "installer").mkdir()
+        shutil.copy2(DOCTOR, base / "app" / "installer" / "TAVI-Doctor.bat")
+        (base / "app" / "output").mkdir()
+        (base / "app" / "output" / "tavi-crash.log").write_text(
+            "Traceback: the crash\n", encoding="utf-8", newline="\n")
+    else:
+        shutil.rmtree(base / "app")
+    (base / "compile_check").mkdir()
+    (base / "compile_check" / "serial.log").write_text("serial ok\n", encoding="utf-8", newline="\n")
+    (base / "install-status.txt").write_text("OUTCOME=failed\n", encoding="utf-8", newline="\n")
+    return base
+
+
+def _diagnostics_env(tmp_path):
+    env = _launch_env(tmp_path)
+    logs = _logs_dir(env)
+    os.makedirs(logs)
+    with open(os.path.join(logs, "install-20261016-101500.log"), "w", encoding="utf-8") as fh:
+        fh.write("[Step 1/8] the install log\n")
+    # The %TEMP% fallback: a stamp-shaped log is TAVI's, anything else is not.
+    with open(os.path.join(env["TEMP"], "install-20261016-091500.log"), "w", encoding="utf-8") as fh:
+        fh.write("fallback\n")
+    with open(os.path.join(env["TEMP"], "install-other.log"), "w", encoding="utf-8") as fh:
+        fh.write("another program's log\n")
+    return env
+
+
+def _the_zip(env):
+    logs = _logs_dir(env)
+    zips = [name for name in os.listdir(logs) if name.endswith(".zip")]
+    assert len(zips) == 1 and re.fullmatch(r"TAVI-diagnostics-\d{8}-\d{6}\.zip", zips[0]), zips
+    leftovers = [name for name in os.listdir(logs) if os.path.isdir(os.path.join(logs, name))]
+    assert not leftovers, f"the collecting folder must be removed once zipped: {leftovers}"
+    return os.path.join(logs, zips[0])
+
+
+def test_collect_diagnostics_quiet_zips_the_logs_and_the_doctor_report(tmp_path,
+                                                                       micromamba_stub_exe):
+    base = _diagnostics_base(tmp_path, micromamba_stub_exe)
+    env = _diagnostics_env(tmp_path)
+    result = run_bat(str(base / "collect-diagnostics.bat"), "/quiet", env=env, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    path = _the_zip(env)
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        by_tail = {name.split("/", 1)[-1]: name for name in names}
+        assert "install-20261016-101500.log" in by_tail, names
+        assert archive.read(by_tail["tavi-crash.log"]).decode() == "Traceback: the crash\n"
+        for expected in ("INSTALL_INFO.txt", "install-status.txt", "compile_check-serial.log",
+                         "TAVI-doctor-report.txt", "TAVI-doctor-summary.txt", "collected.txt",
+                         "temp-fallback/install-20261016-091500.log"):
+            assert expected in by_tail, (expected, names)
+        assert not any(name.endswith("install-other.log") for name in names), names
+        assert b"missing: compile check log, MPI" in archive.read(by_tail["collected.txt"])
+    assert "DIAGNOSTICS SAVED" in result.stdout, result.stdout
+    assert path in result.stdout, result.stdout
+    assert "Press C" not in result.stdout, "/quiet must not wait"
+
+
+def test_collect_diagnostics_works_without_the_program_folder(tmp_path, micromamba_stub_exe):
+    base = _diagnostics_base(tmp_path, micromamba_stub_exe, with_app=False)
+    env = _diagnostics_env(tmp_path)
+    result = run_bat(str(base / "collect-diagnostics.bat"), "/quiet", env=env, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "The TAVI Doctor was not found" in result.stdout, result.stdout
+    with zipfile.ZipFile(_the_zip(env)) as archive:
+        by_tail = {name.split("/", 1)[-1]: name for name in archive.namelist()}
+        assert "install-20261016-101500.log" in by_tail, by_tail
+        collected = archive.read(by_tail["collected.txt"]).decode()
+    assert "missing: crash log" in collected, collected
+    assert "missing: TAVI Doctor report" in collected, collected
+
+
+def test_collect_diagnostics_run_from_the_checkout_finds_the_base(tmp_path, micromamba_stub_exe):
+    """The installer's D runs the checkout's copy when an install died before
+    the launchers were copied into the base folder."""
+    base = _diagnostics_base(tmp_path, micromamba_stub_exe)
+    launchers = base / "app" / "installer" / "launchers"
+    launchers.mkdir()
+    shutil.copy2(COLLECT_DIAG, launchers / "collect-diagnostics.bat")
+    env = _diagnostics_env(tmp_path)
+    result = run_bat(str(launchers / "collect-diagnostics.bat"), "/quiet", env=env, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"TAVI installation: {base}" in result.stdout, result.stdout
+    with zipfile.ZipFile(_the_zip(env)) as archive:
+        tails = {name.split("/", 1)[-1] for name in archive.namelist()}
+    assert {"tavi-crash.log", "INSTALL_INFO.txt", "TAVI-doctor-report.txt"} <= tails, tails
+
+
+def test_collect_diagnostics_leaves_a_folder_when_tar_is_missing(tmp_path, micromamba_stub_exe):
+    base = _diagnostics_base(tmp_path, micromamba_stub_exe, with_app=False)
+    env = _diagnostics_env(tmp_path)
+    # tar.exe is looked up under %SystemRoot%\System32; point that elsewhere.
+    env["SYSTEMROOT"] = str(tmp_path / "no-windows-here")
+    result = run_bat(str(base / "collect-diagnostics.bat"), "/quiet", env=env, timeout=60)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "tar.exe is not on this computer" in result.stdout, result.stdout
+    logs = _logs_dir(env)
+    folders = [name for name in os.listdir(logs) if os.path.isdir(os.path.join(logs, name))]
+    assert len(folders) == 1, os.listdir(logs)
+    assert os.path.exists(os.path.join(logs, folders[0], "install-20261016-101500.log"))
+    assert not [name for name in os.listdir(logs) if name.endswith(".zip")]
+
+
+# ===========================================================================
+# 5c. The Doctor's /base: the installation that started it, vetted by
+#     :validate_base_var before any line expands it.
+# ===========================================================================
+
+def _doctor_resolve(env, *args):
+    result = run_bat(DOCTOR, *args, "/resolve-only", env=env, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    found = dict(line.split("=", 1) for line in result.stdout.splitlines()
+                 if line.startswith(("LAYOUT=", "TAVI_BASE=")))
+    return result, found
+
+
+def test_doctor_base_wins_over_the_install_record(tmp_path):
+    recorded = _marked_base(tmp_path)
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    env = _sandbox_env(tmp_path, record_value=str(recorded))
+    _, found = _doctor_resolve(env, "/base", str(mine))
+    assert found == {"LAYOUT": "2", "TAVI_BASE": str(mine)}
+
+
+def test_doctor_base_that_does_not_check_out_falls_back(tmp_path):
+    spaced = tmp_path / "with space"
+    spaced.mkdir()
+    env = _sandbox_env(tmp_path)
+    result, found = _doctor_resolve(env, "/quiet", "/base", str(spaced))
+    assert found == {"LAYOUT": "1", "TAVI_BASE": env["USERPROFILE"]}, result.stdout
+    assert "[INFO]" in result.stdout
+    assert str(spaced) not in result.stdout, "the refused value was printed"
+
+
+def test_doctor_does_not_expand_a_hostile_base(tmp_path):
+    marker = tmp_path / "marker.txt"
+    env = _sandbox_env(tmp_path)
+    result, found = _doctor_resolve(env, "/base", f"C:\\x&type nul> {marker}")
+    assert not marker.exists(), ("a line expanded the /base value", result.stdout)
+    assert found.get("LAYOUT") == "1", result.stdout
+
+
+# ===========================================================================
+# 5d. No v1.4 outcome file ends on, or contains, a bare `pause`: attended
+#     runs close on `choice /c C`, quiet ones never wait. The Doctor keeps its
+#     standalone pauses (collect-diagnostics.bat runs it with /quiet) and the
+#     legacy TAVI-Repair-Launchers.bat keeps generating v1.3 launchers.
+#     Packet u2-p3 adds WINDOWS-install-TAVI-v1.4.0.bat to NO_PAUSE_FILES.
+# ===========================================================================
+
+NO_PAUSE_FILES = [TAVI_LAUNCHER, COLLECT_DIAG, RUN_TAVI]
+# Converted by packet u2-p2. Strict: once their pauses are gone these XPASS
+# and fail, so the move into NO_PAUSE_FILES cannot be forgotten.
+NO_PAUSE_PENDING = [UPDATE_TAVI, UNINSTALL_TAVI, UNINSTALL_STANDALONE]
+
+
+def _pause_commands(path):
+    return [
+        f"{number}: {line.strip()}"
+        for number, line in enumerate(_read(path).splitlines(), 1)
+        if not re.match(r"^\s*(::|rem\b|@?echo\b|>>?\s*\"[^\"]*\"\s+echo\b)", line, re.I)
+        and re.search(r"(?i)\bpause\b", line)
+    ]
+
+
+@pytest.mark.parametrize("script", [
+    *[pytest.param(path, id=os.path.basename(path)) for path in NO_PAUSE_FILES],
+    *[pytest.param(path, id=os.path.basename(path), marks=pytest.mark.xfail(
+        strict=True, reason="packet u2-p2 replaces its pauses")) for path in NO_PAUSE_PENDING],
+])
+def test_no_pause_in_a_v14_outcome_file(script):
+    offenders = _pause_commands(script)
+    assert not offenders, f"{os.path.basename(script)} still pauses: {offenders}"
 
 
 # ===========================================================================
@@ -949,8 +1287,8 @@ HOSTILE_BANNER_VERSIONS = [
 def _run_launcher_with_version(tmp_path, stub_exe, version):
     base, _, _ = _make_layout2_base(tmp_path, "base", stub_exe)
     _write_install_info(base, version, LAYOUT="2", INSTALL_ID="1-2-3-4")
-    # [5] Exit, so the menu never waits on its prompt.
-    return run_bat(str(base / "TAVI-Launcher.bat"), timeout=20, input_text="5\n")
+    # [7] Exit, so the menu never waits on its prompt.
+    return run_bat(str(base / "TAVI-Launcher.bat"), timeout=20, input_text="7\n")
 
 
 def test_launcher_banner_shows_a_well_formed_version(tmp_path, micromamba_stub_exe):
