@@ -305,6 +305,7 @@ if exist "%TAVI_BASE%\tavi-env" rd /s /q "%TAVI_BASE%\tavi-env" 2>nul
 if exist "%TAVI_BASE%\compile_check" rd /s /q "%TAVI_BASE%\compile_check" 2>nul
 if exist "%TAVI_BASE%\app" goto wipe_failed
 if exist "%TAVI_BASE%\tavi-env" goto wipe_failed
+set "OLD_REMOVED=yes"
 >> "%LOG%" echo [TAVI] Removed the old program, environment and compile check.
 goto base_ready
 
@@ -324,6 +325,7 @@ if exist "%TAVI_BASE%\tavi-env" rd /s /q "%TAVI_BASE%\tavi-env" 2>nul
 if exist "%TAVI_BASE%\compile_check" rd /s /q "%TAVI_BASE%\compile_check" 2>nul
 if exist "%TAVI_BASE%\app" goto wipe_failed
 if exist "%TAVI_BASE%\tavi-env" goto wipe_failed
+set "OLD_REMOVED=yes"
 >> "%LOG%" echo [TAVI] Cleared the unfinished program folder and environment.
 goto base_ready
 
@@ -359,6 +361,7 @@ if not "%WIPE_OK%"=="yes" goto retry_base
 set "BASE_OURS=yes"
 rd /s /q "%TAVI_BASE%" 2>nul
 if exist "%TAVI_BASE%" goto wipe_failed
+set "OLD_REMOVED=yes"
 >> "%LOG%" echo [TAVI] Removed the installation from before 1.3.2.
 :: An installation from before 1.3.2 also put a shortcut on the desktop; it
 :: would dangle now that the launcher lives in the install folder. Only a
@@ -1038,7 +1041,8 @@ echo To remove TAVI later, start the launcher and choose "Uninstall TAVI".
 goto :eof
 
 :end_screen_cancelled
-echo Nothing was installed and nothing was removed.
+if "%OLD_REMOVED%"=="yes" echo The old TAVI installation was removed. Nothing new was installed.
+if not "%OLD_REMOVED%"=="yes" echo Nothing was installed and nothing was removed.
 call :end_screen_log
 goto :eof
 
