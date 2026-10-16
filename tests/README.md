@@ -64,11 +64,11 @@ Notes:
 
 ## Suite size and timing
 
-Measured 2026-10-13 on the 9950X3D with the command above, one run at a time:
-2882 passed and 5 skipped (three in `test_api_stage_solve.py` where an instrument's
+Measured 2026-10-16 on the 9950X3D with the command above, one run at a time:
+3281 passed and 5 skipped (three in `test_api_stage_solve.py` where an instrument's
 stage cannot level the h = l plane, `test_dispersion_map.py` in a fresh worktree, and
-`test_documentation.py` when the shared doc checker is absent) in 541 s
-(547 s wall). `test_orientation_gui.py` alone, 85 offscreen tests, takes about
+`test_documentation.py` when the shared doc checker is absent) in 763 s
+(771 s wall). `test_orientation_gui.py` alone, 85 offscreen tests, takes about
 16 s with its two controllers' construction; its operator acceptance test
 takes about 1.6 s of that. Pass `--durations=15` to see the slowest tests.
 
