@@ -325,7 +325,7 @@ curl -X PATCH http://127.0.0.1:8642/api/v1/parameters \
   motors. Setting `A2`,
   `A6` or an energy leaves Q, h, k, l and the transfer at the motors, as the dock does.
 - A **value** problem (not a number, outside an arc's travel ...) is reported
-  per field: that field is skipped and the other valid fields still apply. The
+  per field: that field is skipped and the other valid fields still apply. A JSON `true` or `false` is not a number and is refused the same way, never read as 1 or 0. The
   exception is the moderator source (§6): a source value that is not a number, or a
   source that would not validate, refuses the whole request and applies nothing.
   `details.applied` lists what did:

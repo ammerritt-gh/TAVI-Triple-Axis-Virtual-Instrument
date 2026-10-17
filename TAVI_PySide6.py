@@ -8079,9 +8079,14 @@ class TAVIController(QObject):
 
         # --- parse helpers ---
         def p_float(v):
+            # a JSON true/false is not a number: float(True) would apply as 1.0
+            if isinstance(v, bool):
+                raise ValueError("must be a number")
             return float(v)
 
         def p_int_pos(v):
+            if isinstance(v, bool):
+                raise ValueError("must be a number")
             n = int(float(v))
             if n <= 0:
                 raise ValueError("must be a positive integer")
@@ -8204,6 +8209,8 @@ class TAVIController(QObject):
         # p_float's acceptance of "nan" for the ~30 other numeric fields is a
         # wider, separately tracked gap.
         def p_curvature(v):
+            if isinstance(v, bool):
+                raise ValueError("must be a number")
             value = float(v)
             if not math.isfinite(value):
                 raise ValueError("must be a finite number")
@@ -8211,6 +8218,8 @@ class TAVIController(QObject):
 
         # A negative gap is a closed beam McStas cannot model; refusing it here keeps PATCH and launch agreed.
         def p_slit_gap(v):
+            if isinstance(v, bool):
+                raise ValueError("must be a number")
             value = float(v)
             if not math.isfinite(value) or value < 0:
                 raise ValueError("must be a finite number of 0 mm or more")
