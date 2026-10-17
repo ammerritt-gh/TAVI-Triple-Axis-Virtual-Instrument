@@ -3201,7 +3201,7 @@ class TAVIController(QObject):
                 details={"errors": errors},
             )
 
-        refusals = self._source_refusals({key: vals[key] for key in moderator.FIELD_IDS}, parsed)
+        source_values, refusals = self._source_refusals({key: vals[key] for key in moderator.FIELD_IDS}, parsed)
         if refusals:
             raise ApiError(
                 400, "invalid_parameters", "One or more fields failed",
@@ -3215,9 +3215,7 @@ class TAVIController(QObject):
         named = frozenset(internal)   # the caller's own names; `patched` grows with derived ones
         patched = set(internal)
         vals.update(internal)
-        if 'moderator_profile' in parsed:   # the entry's T/I, under any the request names itself
-            vals.update({key: value for key, value in moderator.profile_values(parsed['moderator_profile']).items()
-                         if key not in parsed})
+        vals.update(source_values)   # the nine values the check above judged, so the scan runs exactly those
         for slit in self.descriptor.slits:
             width = parsed.get(slit_gap_id(slit.stable_id, "horizontal"))
             height = parsed.get(slit_gap_id(slit.stable_id, "vertical"))
@@ -7066,16 +7064,17 @@ class TAVIController(QObject):
         self.window.instrument_dock.set_source_preview_ei(ei)
 
     def _source_refusals(self, base, parsed):
-        """``{public name: message}`` when the source a write would leave does not validate, else ``{}``.
+        """``(values, {public name: message})``: the nine values the write leaves, and the refusals when they do not validate.
 
         ``base`` holds the nine values before the write, dE as the dock shows it (None when
         blank); ``parsed`` the write's parsed values by public name. A profile named in the
         write loads its T/I first, then the write's own T/I stand over it, whatever their
-        order in the request.
+        order in the request. The scan launch runs the returned values, so what is judged
+        is what runs.
         """
         named = [key for key in moderator.FIELD_IDS if key in parsed]
         if not named:
-            return {}
+            return dict(base), {}
         values = dict(base)
         if 'moderator_profile' in parsed:
             values.update(moderator.profile_values(parsed['moderator_profile']))
@@ -7085,7 +7084,7 @@ class TAVIController(QObject):
         for message in moderator.validate(values):
             name = next((key for key in named if message.startswith(key)), named[0])
             refusals[name] = f"{refusals[name]}; {message}" if name in refusals else message
-        return refusals
+        return values, refusals
 
     @staticmethod
     def _saved_source_number(value):
@@ -8797,7 +8796,7 @@ class TAVIController(QObject):
             return applied, errors
 
         # (a4) A source that would not validate is refused before anything is written.
-        refusals = self._source_refusals(self.window.instrument_dock.source_settings(), parsed)
+        _values, refusals = self._source_refusals(self.window.instrument_dock.source_settings(), parsed)
         if refusals:
             errors.update({submitted[name]: message for name, message in refusals.items()})
             return applied, errors
