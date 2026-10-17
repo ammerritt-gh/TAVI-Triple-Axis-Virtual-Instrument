@@ -7098,8 +7098,9 @@ class TAVIController(QObject):
     def _load_source_parameters(self, parameters):
         """Set the dock's source from a saved block: the nine canonical IDs, bare.
 
-        A missing or unreadable value takes the instrument's default. The retired
-        source_type_var and source_dE_var are not migrated: one message says so.
+        A missing value takes the instrument's default silently; an unreadable one takes it
+        with a message, null included (the dock saves a field it cannot parse as null). The
+        retired source_type_var and source_dE_var are not migrated: one message says so.
         """
         values = self._default_source_values()
         saved = {key: parameters.get(key) for key in moderator.FIELD_IDS}
@@ -7107,21 +7108,21 @@ class TAVIController(QObject):
         for key, table in (('moderator_mode', moderator.MODES), ('moderator_profile', moderator.PROFILES)):
             if isinstance(saved[key], str) and saved[key] in table:
                 values[key] = saved[key]
-            elif saved[key] is not None:
+            elif key in parameters:
                 unreadable.append(key)
         values.update(moderator.profile_values(values['moderator_profile']))
         for key in moderator.TI_IDS + ('flat_band_half_width_mev',):
             number = self._saved_source_number(saved[key])
             if number is not None:
                 values[key] = number
-            elif saved[key] is not None:
+            elif key in parameters:
                 unreadable.append(key)
         if unreadable:
             self.print_to_message_center(
                 f"Parameters load: invalid {', '.join(unreadable)}; using the instrument's default source value")
         retired = [key for key in ('source_type_var', 'source_dE_var') if key in parameters]
         if retired:
-            applied = "" if any(v is not None for v in saved.values()) else (
+            applied = "" if any(key in parameters for key in moderator.FIELD_IDS) else (
                 f"; the instrument's default source ({moderator.PROFILES[values['moderator_profile']].label}, "
                 "full spectrum) was applied")
             self.print_to_message_center(
