@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 
 # The scan boxes' refused state (UnifiedSimulationDock.STYLE_WARNING), for a source field that cannot be used.
 SOURCE_INVALID_STYLE = "background-color: #ffcccc; border: 1px solid #cc0000;"
+NO_PAIR_NOTE = "No active pair: at least one T and I must both be above 0."
+ZERO_BAND_NOTE = "Flat band reaches 0 meV (Ei - dE <= 0): Run refuses this point."
 
 
 def _parse_number(text):
@@ -638,7 +640,19 @@ class InstrumentDock(BaseDockWidget):
         ei = ei if ei is not None and ei > 0 else None
         if ei != self._source_ei:
             self._source_ei = ei
+            self._update_source_note(self.source_settings())
             self._redraw_source_preview()
+
+    def _update_source_note(self, values):
+        """The red note under the fields: no active pair, and/or a flat band the run refuses (Ei - dE <= 0)."""
+        notes = []
+        if not source.active_pairs(values):
+            notes.append(NO_PAIR_NOTE)
+        dE, ei = values["flat_band_half_width_mev"], self._source_ei
+        if values["moderator_mode"] == "flat_band" and dE is not None and dE > 0 and ei is not None and ei - dE <= 0:
+            notes.append(ZERO_BAND_NOTE)
+        self.source_note_label.setText(" ".join(notes))
+        self.source_note_label.setVisible(bool(notes))
 
     def _fill_source_profile(self):
         """Put the shown entry's six values in the fields (callers set _source_filling)."""
@@ -682,7 +696,7 @@ class InstrumentDock(BaseDockWidget):
             edit.setStyleSheet(SOURCE_INVALID_STYLE if v is None or v < 0 else "")
         dE = values["flat_band_half_width_mev"]
         self.flat_band_edit.setStyleSheet(SOURCE_INVALID_STYLE if dE is None or dE <= 0 else "")
-        self.source_note_label.setVisible(not source.active_pairs(values))
+        self._update_source_note(values)
         short = _short_label(source.PROFILES[values["moderator_profile"]].label)
         text = short + (" (modified)" if modified else "")
         text += f", flat band ±{self.flat_band_edit.text() or 'empty'} meV" if flat else ", full spectrum"
@@ -737,8 +751,8 @@ class InstrumentDock(BaseDockWidget):
             if right > left:
                 ax.axvspan(left, right, color=theme.WARNING_FILL, alpha=0.5, lw=0,
                            label="flat band (unphysical)")
-                ax.text(math.sqrt(left * min(right, hi)), 0.5, "flat band (unphysical)", transform=edge,
-                        rotation=90, ha="center", va="center", fontsize=6, color=theme.NOTE_TEXT)
+                # a caption above the axes: on the band it sat over the Ei label and line at the default width
+                ax.set_title("shaded: flat band (unphysical)", loc="right", fontsize=6, pad=2, color=theme.NOTE_TEXT)
         for x, text, color, style in ((ei, "Ei", theme.COMMAND_COLORS[2], "-"),
                                       (4 * ei, "4·Ei (λ/2)", theme.DERIVED_OUTLINE, "--")):
             ax.axvline(x, color=color, ls=style, lw=1.2, label=text)
@@ -988,7 +1002,7 @@ class InstrumentDock(BaseDockWidget):
                 layout.addWidget(edit, 3 + pair, 2 * col + 1)
                 self.source_ti_edits[key] = edit
 
-        self.source_note_label = QLabel("No active pair: at least one T and I must both be above 0.")
+        self.source_note_label = QLabel(NO_PAIR_NOTE)
         self.source_note_label.setWordWrap(True)
         self.source_note_label.setStyleSheet("color: #c1121f;")
         layout.addWidget(self.source_note_label, 6, 0, 1, 4)
@@ -1003,7 +1017,7 @@ class InstrumentDock(BaseDockWidget):
         layout.addWidget(self.flat_band_edit, 7, 3)
 
         self.source_figure = Figure(figsize=(3.0, 1.9), dpi=100)
-        self.source_figure.subplots_adjust(left=0.2, right=0.97, bottom=0.24, top=0.95)
+        self.source_figure.subplots_adjust(left=0.2, right=0.97, bottom=0.24, top=0.86)   # top: room for the band caption
         self.source_canvas = FigureCanvasQTAgg(self.source_figure)
         self.source_canvas.setFixedHeight(150)
         self.source_canvas.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)  # its width is the block's, not the figure's
