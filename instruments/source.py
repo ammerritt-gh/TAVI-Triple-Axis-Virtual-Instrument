@@ -41,6 +41,8 @@ PROFILES = {
     SINGLE_TEMPERATURE: Profile("Single temperature", (300.0, 1e13, 0.0, 0.0, 0.0, 0.0)),
 }
 
+DEFAULT_FLAT_BAND_DE = 2.0   # meV, the half-width every fresh source starts with
+
 TI_IDS = ("moderator_t1_k", "moderator_i1", "moderator_t2_k", "moderator_i2", "moderator_t3_k", "moderator_i3")
 FIELD_IDS = ("moderator_mode", "moderator_profile") + TI_IDS + ("flat_band_half_width_mev",)
 
@@ -50,9 +52,25 @@ def profile_values(profile_id):
     return dict(zip(TI_IDS, PROFILES[profile_id].ti))
 
 
+def default_values(profile_id):
+    """The nine source values a fresh source, GUI Reset and the API's defaults start from."""
+    return {"moderator_mode": "full_spectrum", "moderator_profile": profile_id,
+            **profile_values(profile_id), "flat_band_half_width_mev": DEFAULT_FLAT_BAND_DE}
+
+
 def _number(x):
     """A finite real number; bool is refused although Python counts it as an int."""
     return isinstance(x, numbers.Real) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def active_pairs(values):
+    """The (T key, I key) pairs of ``values`` that are active: both numbers (None is not), both above 0.
+
+    The one place the rule lives; it is where the component departs from Source_gen.
+    """
+    return [(t_key, i_key) for t_key, i_key in zip(TI_IDS[::2], TI_IDS[1::2])
+            if _number(values.get(t_key)) and _number(values.get(i_key))
+            and values[t_key] > 0 and values[i_key] > 0]
 
 
 def _known(x, table):
@@ -75,12 +93,10 @@ def validate(values):
         elif v < 0:
             problems.append(f"{key} must be >= 0, got {v:g}")
     active = []  # I keys of the active pairs, as the component's INITIALIZE refuses them
-    for t_key, i_key in zip(TI_IDS[::2], TI_IDS[1::2]):
-        t, i = values.get(t_key), values.get(i_key)
-        if _number(t) and _number(i) and t > 0 and i > 0:
-            active.append(i_key)
-            if not math.isfinite(C_E * t / A_OVER_T):
-                problems.append(f"{t_key} gives an energy scale that is not finite, got {t:g}")
+    for t_key, i_key in active_pairs(values):
+        active.append(i_key)
+        if not math.isfinite(C_E * values[t_key] / A_OVER_T):
+            problems.append(f"{t_key} gives an energy scale that is not finite, got {values[t_key]:g}")
     if not active:
         problems.append("no active pair: at least one (T, I) needs T > 0 and I > 0")
     elif not math.isfinite(sum(values[i_key] for i_key in active)):
@@ -102,9 +118,8 @@ def flux_per_mev(energies, values):
     """Facility flux, n/cm2/s/sr/meV, at energies in meV; the profile's, whatever the mode."""
     E = np.asarray(energies, dtype=float)
     out = np.zeros_like(E)
-    for t_key, i_key in zip(TI_IDS[::2], TI_IDS[1::2]):
+    for t_key, i_key in active_pairs(values):
         T, I = values[t_key], values[i_key]
-        if T > 0 and I > 0:
-            theta = C_E * T / A_OVER_T  # Gamma(2, theta) scale in meV; I * E e^(-E/theta) / theta^2
-            out += I * E * np.exp(-E / theta) / theta ** 2
+        theta = C_E * T / A_OVER_T  # Gamma(2, theta) scale in meV; I * E e^(-E/theta) / theta^2
+        out += I * E * np.exp(-E / theta) / theta ** 2
     return out

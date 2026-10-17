@@ -70,13 +70,6 @@ def _field_text(value):
     return text
 
 
-def _active_pairs(values):
-    """The (T, I) pairs of ``values`` that are active: both numbers, both above 0."""
-    pairs = zip(source.TI_IDS[::2], source.TI_IDS[1::2])
-    return [(values[t], values[i]) for t, i in pairs
-            if values[t] is not None and values[i] is not None and values[t] > 0 and values[i] > 0]
-
-
 def _short_label(label):
     """A facility label without its power or tube detail: 'FRM2 thermal source, 20 MW' -> 'FRM2 thermal'."""
     return re.sub(r"\s+source$", "", re.sub(r"\s*\(.*$|,.*$", "", label))
@@ -689,7 +682,7 @@ class InstrumentDock(BaseDockWidget):
             edit.setStyleSheet(SOURCE_INVALID_STYLE if v is None or v < 0 else "")
         dE = values["flat_band_half_width_mev"]
         self.flat_band_edit.setStyleSheet(SOURCE_INVALID_STYLE if dE is None or dE <= 0 else "")
-        self.source_note_label.setVisible(not _active_pairs(values))
+        self.source_note_label.setVisible(not source.active_pairs(values))
         short = _short_label(source.PROFILES[values["moderator_profile"]].label)
         text = short + (" (modified)" if modified else "")
         text += f", flat band ±{self.flat_band_edit.text() or 'empty'} meV" if flat else ", full spectrum"
@@ -717,7 +710,7 @@ class InstrumentDock(BaseDockWidget):
         ax.set_ylabel("Φ (n/cm²/s/sr/meV)", fontsize=6, labelpad=1)
 
         # The spectrum's own span: from well below its coldest scale to well above its hottest.
-        scales = [source.C_E * t / source.A_OVER_T for t, _i in _active_pairs(values)]
+        scales = [source.C_E * values[t_key] / source.A_OVER_T for t_key, _i in source.active_pairs(values)]
         lo, hi = (min(scales) / 50, max(scales) * 20) if scales else (None, None)
         if ei is not None:   # a margin of 1.5 either side of Ei and 4·Ei
             lo = ei / 1.5 if lo is None else min(lo, ei / 1.5)
@@ -1001,7 +994,7 @@ class InstrumentDock(BaseDockWidget):
         layout.addWidget(self.source_note_label, 6, 0, 1, 4)
 
         self.flat_band_label = QLabel("Flat-band half-width dE (meV):")
-        self.flat_band_edit = QLineEdit("2")
+        self.flat_band_edit = QLineEdit(_field_text(source.DEFAULT_FLAT_BAND_DE))
         self.flat_band_edit.setObjectName("flat_band_edit")
         self.flat_band_edit.setMaximumWidth(64)
         self.flat_band_edit.setAccessibleName("Flat-band half-width dE (meV)")
