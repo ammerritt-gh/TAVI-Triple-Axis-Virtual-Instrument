@@ -7,14 +7,9 @@ when T > 0 and I > 0, and an unused pair is written as 0.
 """
 import math
 import numbers
-from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
-
-from instruments.paths import COMPONENTS_DIR
-
-COMPONENT_PATH = Path(COMPONENTS_DIR) / "Source_Maxwell_direct.comp"
 
 K2V = 629.622368     # McStas mcstas-r.h: AA2MS, k [1/A] -> v [m/s]
 VS2E = 5.22703725e-6  # McStas mcstas-r.h: v^2 [(m/s)^2] -> E [meV]

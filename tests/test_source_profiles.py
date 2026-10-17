@@ -14,9 +14,10 @@ import numpy as np
 import pytest
 
 from instruments import source as src
+from instruments.paths import COMPONENTS_DIR
 
 MCSTAS = Path(os.environ["MCSTAS"])
-COMPONENT = src.COMPONENT_PATH
+COMPONENT = Path(COMPONENTS_DIR) / "Source_Maxwell_direct.comp"
 KEYS = ("T1", "I1", "T2", "I2", "T3", "I3")
 
 
