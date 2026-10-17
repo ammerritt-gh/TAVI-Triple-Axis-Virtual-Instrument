@@ -204,6 +204,55 @@ def test_a_valid_source_that_would_leave_no_pair_is_judged_on_the_result(fresh):
     assert _source(call)["moderator_i2"] == 0.0
 
 
+# --- a JSON boolean is not a number, in any numeric field (float(True) would be 1.0) ------
+
+@pytest.mark.parametrize("name, plain", [
+    ("moderator_t1_k", 300.0),
+    ("incident_energy_mev", 14.7),
+    ("mono_horizontal_radius_m", 20.0),
+    ("number_neutrons", 1000),
+])
+def test_a_json_boolean_is_refused_for_a_numeric_field_and_a_number_still_applies(fresh, name, plain):
+    _controller, call = fresh
+    before = _state(call)
+
+    status, reply = _patch(call, {name: True})
+    assert status == 400, reply
+    assert name in reply["error"]["details"]["errors"], reply
+    assert _state(call) == before
+
+    status, reply = call("POST", "/scan", {"api_version": API_VERSION,
+                                           "parameters": {**SCAN, name: True}})
+    assert status == 400 and name in reply["error"]["details"]["errors"], reply
+    assert _state(call) == before
+
+    status, reply = _patch(call, {name: plain})
+    assert status == 200 and reply["applied"] == [name], reply
+
+
+def test_a_json_boolean_source_write_refuses_the_whole_request(fresh):
+    _controller, call = fresh
+    before = _state(call)
+
+    status, reply = _patch(call, {"moderator_profile": "single_temperature", "moderator_t1_k": True, "H": 1.5})
+    assert status == 400 and "moderator_t1_k" in reply["error"]["details"]["errors"], reply
+    assert reply["error"]["details"]["applied"] == []
+    assert _state(call) == before
+
+
+def test_a_json_boolean_is_refused_for_a_slit_gap_and_a_number_still_applies(fresh):
+    _controller, call = fresh
+    slit = next(key for key in call("GET", "/parameters")[1] if key.startswith("slit."))
+    before = _state(call)
+
+    status, reply = _patch(call, {slit: False})
+    assert status == 400 and slit in reply["error"]["details"]["errors"], reply
+    assert _state(call) == before
+
+    status, reply = _patch(call, {slit: 2.0})
+    assert status == 200 and reply["applied"] == [slit], reply
+
+
 # --- /schema publishes types, units and the choices --------------------------------------
 
 def test_schema_publishes_types_units_and_choices(fresh):
