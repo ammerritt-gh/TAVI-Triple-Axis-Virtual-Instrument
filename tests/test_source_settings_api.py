@@ -348,6 +348,32 @@ def test_old_saved_source_keys_are_ignored_with_one_message(in12, saved_file):
     assert "default source" in lines[0] and "ILL VCS cold" in lines[0]
 
 
+def test_a_field_saved_unparsable_is_named_on_load_and_takes_the_entrys_value(in12, saved_file):
+    dock = in12.window.instrument_dock
+    in12.set_default_parameters()
+    dock.source_ti_edits["moderator_t2_k"].setText("abc")      # shown red; the dock reports it as None
+    assert _shown(in12)["moderator_t2_k"] is None
+    in12.save_parameters()
+    with open(saved_file, encoding="utf-8") as handle:
+        assert json.load(handle)["in12"]["moderator_t2_k"] is None
+
+    in12.set_default_parameters()
+    before = _log(in12)
+    in12.load_parameters(keep_current_on_refusal=True)
+
+    assert "Parameters load: invalid moderator_t2_k" in _log(in12)[len(before):]
+    assert _shown(in12)["moderator_t2_k"] == moderator.profile_values("ill_vcs_cold")["moderator_t2_k"]
+
+    def without_t2(block):                                     # an old file simply lacks the key: no message
+        block.pop("moderator_t2_k")
+
+    _write_block(in12, saved_file, without_t2)
+    before = _log(in12)
+    in12.load_parameters(keep_current_on_refusal=True)
+    assert "invalid moderator_t2_k" not in _log(in12)[len(before):]
+    in12.set_default_parameters()
+
+
 def test_reset_fills_the_default_profile_in_full_spectrum_with_de_2(in12):
     dock = in12.window.instrument_dock
     dock.set_source_settings({"moderator_mode": "flat_band", "flat_band_half_width_mev": 9.0,
