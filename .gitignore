@@ -406,3 +406,6 @@ figures/
 CLAUDE.md
 .github/
 CODEX.md
+
+# --self-test throwaway folders (kept only after a failed self-test)
+selftest-*/

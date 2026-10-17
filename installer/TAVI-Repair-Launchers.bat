@@ -68,6 +68,11 @@ call :validate_base "%INSTALL_DIR%"
 :dir_checked
 if defined VB_REASON goto typed_refused
 set "INSTALL_DIR=%VBPATH%"
+:: A 1.4 installation carries collect-diagnostics.bat beside its launchers, in
+:: the base folder above app\. Rewriting those launchers would put the 1.3
+:: menu back, so such an installation is refused before anything is read.
+if exist "%INSTALL_DIR%\collect-diagnostics.bat" goto too_new
+if exist "%INSTALL_DIR%\..\collect-diagnostics.bat" goto too_new
 if not exist "%INSTALL_DIR%\TAVI_PySide6.py" goto no_install
 if not exist "%INSTALL_DIR%\INSTALL_INFO.txt" goto no_info
 
@@ -265,6 +270,10 @@ echo [ERROR] That path cannot be used: %VB_REASON%
 echo         The path was:
 :: Through "set", never "echo %VAR%" - see the note on :validate_base.
 set VBPATH
+goto failed
+
+:too_new
+echo [ERROR] This installation is newer than this repair tool; use Repair TAVI in its launcher menu.
 goto failed
 
 :no_install
