@@ -6311,7 +6311,7 @@ class TAVIController(QObject):
             "final_energy_mev": self.window.instrument_dock.Ef_edit.text(),
             "number_neutrons_var": self.window.simulation_dock.get_number_neutrons(),
             "K_fixed_var": self.window.scattering_dock.K_fixed_combo.currentText(),
-            **{f"{key}_var": value for key, value in self.window.instrument_dock.source_settings().items()},
+            **self.window.instrument_dock.source_settings(),   # bare canonical IDs, like every registry quantity here
             "modules": self.window.instrument_dock.module_values(),
             "mono_horizontal_radius_m": self.window.instrument_dock.rhm_edit.text(),
             "mono_vertical_radius_m": self.window.instrument_dock.rvm_edit.text(),
@@ -7096,13 +7096,13 @@ class TAVIController(QObject):
         return number if math.isfinite(number) and number >= 0 else None
 
     def _load_source_parameters(self, parameters):
-        """Set the dock's source from a saved block: the nine canonical IDs with the file's _var suffix.
+        """Set the dock's source from a saved block: the nine canonical IDs, bare.
 
         A missing or unreadable value takes the instrument's default. The retired
         source_type_var and source_dE_var are not migrated: one message says so.
         """
         values = self._default_source_values()
-        saved = {key: parameters.get(f"{key}_var") for key in moderator.FIELD_IDS}
+        saved = {key: parameters.get(key) for key in moderator.FIELD_IDS}
         unreadable = []
         for key, table in (('moderator_mode', moderator.MODES), ('moderator_profile', moderator.PROFILES)):
             if isinstance(saved[key], str) and saved[key] in table:

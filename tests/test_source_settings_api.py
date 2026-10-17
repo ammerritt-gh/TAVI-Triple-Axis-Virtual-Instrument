@@ -317,7 +317,8 @@ def test_gui_values_survive_save_and_load_and_equal_what_the_plugin_gets(in12, s
     assert _dock_text(in12).endswith("(modified)")             # the mark is derived, so it returns too
     with open(saved_file, encoding="utf-8") as handle:
         block = json.load(handle)["in12"]
-    assert {key: block[f"{key}_var"] for key in NINE} == shown   # canonical IDs with the file's _var suffix
+    assert {key: block[key] for key in NINE} == shown          # bare canonical IDs, one name in every file
+    assert not [key for key in block if key.startswith(("moderator_", "flat_band")) and key.endswith("_var")]
     assert "source_type_var" not in block and "source_dE_var" not in block
     in12.set_default_parameters()
 
@@ -328,7 +329,7 @@ def test_old_saved_source_keys_are_ignored_with_one_message(in12, saved_file):
 
     def old_file(block):
         for key in NINE:
-            block.pop(f"{key}_var", None)
+            block.pop(key, None)
         block["source_type_var"], block["source_dE_var"] = "Mono", "7"
 
     _write_block(in12, saved_file, old_file)
