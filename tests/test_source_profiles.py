@@ -205,3 +205,22 @@ def test_is_modified_tracks_only_the_six_values():
     assert src.is_modified(_values("frm2_thermal", moderator_t2_k=301.0)) is True
     assert src.is_modified(_values("frm2_thermal", moderator_i3=6.77e12 * 1.0000001)) is True
     assert src.is_modified(_values("frm2_thermal", mode="flat_band", dE=9.0)) is False
+
+
+def test_active_pairs_is_the_one_rule():
+    ti = dict(src.profile_values("frm2_thermal"))
+    assert src.active_pairs(ti) == [("moderator_t1_k", "moderator_i1"), ("moderator_t2_k", "moderator_i2"),
+                                    ("moderator_t3_k", "moderator_i3")]
+    ti.update(moderator_t1_k=0.0, moderator_i2=0.0, moderator_t3_k=None, moderator_i3="x")
+    assert src.active_pairs(ti) == []   # T = 0, I = 0, None and a non-number are all inactive
+    assert src.active_pairs(dict(ti, moderator_t1_k=5.0)) == [("moderator_t1_k", "moderator_i1")]
+    # flux_per_mev reads the same rule: a pair the rule drops adds nothing
+    assert not src.flux_per_mev([10.0], dict(ti, moderator_t1_k=0.0)).any()
+
+
+def test_default_values_are_one_definition():
+    values = src.default_values("ill_vcs_cold")
+    assert values["moderator_mode"] == "full_spectrum" and values["moderator_profile"] == "ill_vcs_cold"
+    assert values["flat_band_half_width_mev"] == src.DEFAULT_FLAT_BAND_DE == 2.0
+    assert {k: values[k] for k in src.TI_IDS} == src.profile_values("ill_vcs_cold")
+    assert set(values) == set(src.FIELD_IDS) and src.validate(values) == []

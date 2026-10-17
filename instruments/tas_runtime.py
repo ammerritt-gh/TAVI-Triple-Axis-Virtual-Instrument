@@ -21,7 +21,7 @@ from instruments.contract import (
     RunExecutionState,
 )
 from instruments.descriptor import SOURCE_PARAMS, CurvatureAxis
-from instruments.source import FIELD_IDS, profile_values
+from instruments.source import FIELD_IDS, default_values
 from tavi import mcstas_paths
 from tavi.instrument_helpers import find_crystal_spec
 from tavi.mcstas_config import resolve_mpi_launcher_argv
@@ -736,13 +736,7 @@ class TAS_Instrument:
         Each instrument's model calls it once, so the initial values come from the
         descriptor's ``default_moderator_profile`` and from no second literal.
         """
-        profile = self.descriptor().default_moderator_profile
-        self.apply_source_values({
-            "moderator_mode": "full_spectrum",
-            "moderator_profile": profile,
-            **profile_values(profile),
-            "flat_band_half_width_mev": 2.0,
-        })
+        self.apply_source_values(default_values(self.descriptor().default_moderator_profile))
 
     def apply_source_values(self, vals):
         """Take the nine source values (``instruments.source.FIELD_IDS``) from ``vals``."""

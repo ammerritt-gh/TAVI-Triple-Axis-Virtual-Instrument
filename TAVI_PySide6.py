@@ -7043,7 +7043,7 @@ class TAVIController(QObject):
     def _with_unused_de(values):
         """A blank dE in full-spectrum mode is the old default 2: nothing reads it there."""
         if values['moderator_mode'] == 'full_spectrum' and values['flat_band_half_width_mev'] is None:
-            return {**values, 'flat_band_half_width_mev': 2.0}
+            return {**values, 'flat_band_half_width_mev': moderator.DEFAULT_FLAT_BAND_DE}
         return values
 
     def _source_vals(self):
@@ -7055,9 +7055,7 @@ class TAVIController(QObject):
 
     def _default_source_values(self):
         """Full spectrum on the descriptor's default profile, flat-band half-width 2 (Reset and the API's defaults)."""
-        profile = self.descriptor.default_moderator_profile
-        return {'moderator_mode': 'full_spectrum', 'moderator_profile': profile,
-                **moderator.profile_values(profile), 'flat_band_half_width_mev': 2.0}
+        return moderator.default_values(self.descriptor.default_moderator_profile)
 
     def _push_source_preview_ei(self, *_):
         """Give the dock's spectrum preview the Ei the GUI shows (the dock never reads Ei itself)."""
