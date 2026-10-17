@@ -20,7 +20,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import instruments.builtin  # noqa: F401,E402
-from gui.docks.instrument_dock import InstrumentDock  # noqa: E402
+from gui.docks.instrument_dock import NO_PAIR_NOTE, ZERO_BAND_NOTE, InstrumentDock  # noqa: E402
 from instruments import source  # noqa: E402
 from instruments.registry import get_instrument  # noqa: E402
 
@@ -146,7 +146,8 @@ def test_flat_band_shows_dE_and_shades_ei_plus_minus_dE_over_the_full_height(doc
     (shade,) = band(dock)
     assert shade.get_x() == pytest.approx(8.0) and shade.get_width() == pytest.approx(4.0)
     assert (shade.get_y(), shade.get_height()) == (0, 1)  # axes fraction: the full plot height
-    assert FLAT in [t.get_text() for t in dock.source_ax.texts]
+    assert dock.source_ax.get_title("right") == "shaded: " + FLAT   # a caption above the axes, clear of the Ei label
+    assert dock.source_ax.get_title("right") not in [t.get_text() for t in dock.source_ax.texts]
     assert curve(dock).get_alpha() < 1.0  # the profile curve is faded beside the band
     assert "flat band ±2 meV" in dock.collapsible_groups["instrument.source"].summary_label.text()
 
@@ -157,6 +158,32 @@ def test_flat_band_shows_dE_and_shades_ei_plus_minus_dE_over_the_full_height(doc
 
     dock.set_source_preview_ei(None)  # no Ei: no band
     assert band(dock) == []
+    assert dock.source_ax.get_title("right") == ""
+
+
+def test_a_flat_band_reaching_zero_says_the_run_refuses_it_and_clears(dock):
+    dock.source_mode_combo.setCurrentIndex(dock.source_mode_combo.findData("flat_band"))
+    dock.set_source_preview_ei(1.0)
+    dock.flat_band_edit.setText("2")  # Ei - dE = -1: the run refuses this point
+    assert not dock.source_note_label.isHidden()
+    assert dock.source_note_label.text() == ZERO_BAND_NOTE
+    dock.flat_band_edit.setText("1")  # Ei - dE = 0 is refused too
+    assert dock.source_note_label.text() == ZERO_BAND_NOTE
+    dock.flat_band_edit.setText("0.5")
+    assert dock.source_note_label.isHidden()
+    dock.flat_band_edit.setText("2")
+    dock.set_source_preview_ei(10.0)  # the other direction: a larger Ei clears it
+    assert dock.source_note_label.isHidden()
+    dock.set_source_preview_ei(1.0)
+    assert not dock.source_note_label.isHidden()
+    dock.source_mode_combo.setCurrentIndex(dock.source_mode_combo.findData("full_spectrum"))
+    assert dock.source_note_label.isHidden()  # full spectrum never reads dE
+
+    for key in source.TI_IDS[::2]:  # both notes can show at once
+        dock.source_ti_edits[key].setText("0")
+    assert dock.source_note_label.text() == NO_PAIR_NOTE
+    dock.source_mode_combo.setCurrentIndex(dock.source_mode_combo.findData("flat_band"))
+    assert dock.source_note_label.text() == f"{NO_PAIR_NOTE} {ZERO_BAND_NOTE}"
 
 
 def test_preview_marks_ei_and_four_ei_and_spans_them(dock):
