@@ -2,7 +2,7 @@
 
 > **Status:** live
 
-_Last updated: 2026-09-17_
+_Last updated: 2026-10-16 (v1.4.0: install log, three endings with a test simulation, desktop copy, diagnostics menu item; §1, §3, §4, §16, §17, §20-§22)_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.
 
@@ -43,6 +43,9 @@ The Windows installer is responsible for:
     - `update-tavi.bat`
     - `TAVI-Launcher.bat`
     - `uninstall-tavi.bat`
+
+    > **Superseded 2026-10-16 (v1.4.0):** the installer also copies
+    > `collect-diagnostics.bat`, so five launchers. See §16.
 
     > **Superseded 2026-09-17 (v1.3.2):** launchers were previously written
     > by the installer from base64/echo templates. See "One chosen folder
@@ -100,7 +103,7 @@ shortcut) describe releases through 1.3.0. Current defaults, one chosen
 folder, layout 2 (see "One chosen folder (v1.3.2)" under §5):
 
 ```bat
-set "TAVI_VERSION=v1.3.2"
+set "TAVI_VERSION=v1.4.0"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "LAYOUT=2"
@@ -118,6 +121,8 @@ set "GATE_DIR=%TAVI_BASE%\compile_check"
 set "SHORTCUT=%TAVI_BASE%\TAVI Launcher.lnk"
 set "MARKER=%TAVI_BASE%\.tavi-install-root"
 set "RECORD=%LOCALAPPDATA%\TAVI\install-record.txt"
+set "LOG_DIR=%LOCALAPPDATA%\TAVI\logs"
+set "STATUS=%TAVI_BASE%\install-status.txt"
 ```
 
 There is no `ENV_NAME` any more: the environment is always selected by its
@@ -138,6 +143,33 @@ Important distinction:
   environment at `%TAVI_BASE%\tavi-env`.
 
 The uninstaller must affect only the user-installed copy, not the developer checkout, and refuses to act on any base folder it cannot prove it owns (§17).
+
+### Logs, install status and diagnostics (v1.4.0)
+
+**Added 2026-10-16 (v1.4.0).** Every installer run, launch, repair and uninstall writes a log of its own, in `%LOCALAPPDATA%\TAVI\logs\`, falling back to `%TEMP%` when that folder cannot be written. With neither, the run goes on and says once that it has no log. A failed log write never changes an outcome.
+
+| File | Where | Written by |
+|------|-------|------------|
+| `install-<stamp>.log` | logs folder | the installer: a system snapshot, every question and answer, every step, and the long steps' full output |
+| `launch-<stamp>.log` | logs folder | Run TAVI (`run-tavi.bat`): all of TAVI's console output; the ten newest are kept |
+| `repair-<stamp>.log` | logs folder | Repair TAVI (`update-tavi.bat`) |
+| `uninstall-<stamp>.log` | logs folder | either uninstaller; the logs folder itself is never removed |
+| `TAVI-diagnostics-<stamp>.zip` | logs folder | `collect-diagnostics.bat` (below) |
+| `install-status.txt` | `<base>\` | the installer: `OUTCOME=` (one of the headlines in §4), `FAILED_STEP=` and `ERROR=` on failure, then `TAVI_VERSION`, `INSTALLER_VERSION`, `LOG` and `STARTED` |
+| `collect-diagnostics.bat` | `<base>\` | copied by the installer; removed by the uninstaller |
+
+`<stamp>` is `yyyyMMdd-HHmmss`, taken from PowerShell's `Get-Date`, because `%DATE%` and `%TIME%` change layout with the regional settings and `wmic` is gone from Windows 11. When PowerShell gives no clock, the stamp is `tavi-rnd-<RANDOM>-<RANDOM>`. A name already taken in the same second gets `-<RANDOM>` added, so a second run never truncates the first one's log.
+
+`install-status.txt` is written only into a folder that run made, or was told it may clear. `/dir` never removes an installation, so it never writes into one it declined.
+
+**`collect-diagnostics.bat`** (launcher menu item 5, and the installer's **D** key on a failure screen) gathers one zip, `TAVI-diagnostics-<stamp>.zip`, in the logs folder:
+
+- the install, launch, repair and uninstall logs from the logs folder, and from `%TEMP%` only the names TAVI itself makes (a stamp, a stamp with a `%RANDOM%` suffix, or `tavi-rnd-` numbers), so another program's `install-*.log` is never sent;
+- `app\output\tavi-crash.log`, `install-status.txt`, `INSTALL_INFO.txt`, and the compile-check logs `compile_check\serial.log` and `mpi.log`;
+- the TAVI Doctor's report and summary, and its console output (`TAVI-doctor-console.txt`, kept off the student's screen). The zip is written before the Doctor runs and again with its report added, so a Doctor that hangs does not cost the logs;
+- `collected.txt`, which lists what was found and what was missing.
+
+The zip is made with Windows' own `tar.exe`, from inside the logs folder. Without `tar.exe` the collected folder is left in place and opened instead. Exit code 0 when the zip was made, 1 when not. Nothing is sent anywhere; the student sends the file.
 
 ---
 
@@ -194,6 +226,23 @@ choice /C YN /M "Continue with TAVI installation"
 ```
 
 The safe uninstaller must likewise explain what it removes and what it does not remove, then prompt before proceeding — twice, when `app\output` holds scan results (§17).
+
+### What the student sees (v1.4.0)
+
+**Added 2026-10-16 (v1.4.0).**
+
+- Every step announces itself as `[Step n/8] <what>: about <time>. Started HH:MM.` and ends `[OK] ...` or `[ERROR] ...`. The steps are 0 (AutoRun clean-up), 1 (micromamba), 2 (the environment), 3 (the TAVI source), 4 (McStas paths), 5 (the compiler check), 6 (the lead-sample map), 7 (the launchers) and 8 (the test simulation).
+- The long steps (2, 5, 6 and 8) send all their output to the log only. While one runs, a heartbeat prints `       ... still running, M min S s` every 30 seconds. During step 2 it adds `, N MB downloaded so far`: micromamba gives no percentage, so the size of the package archives in the cache is the progress signal. The heartbeat stops with its step. A failed step prints its last 30 lines of output on screen; the full output is in the log.
+- The installer ends on one of four headlines, each followed by the path of the install log (or a line saying none could be written). `INSTALLATION SUCCEEDED` also lists the install folder, program and environment folders and the versions; the two failure headlines list the failed step, its error and the install folder, the folder only when this run created it or was allowed to clear it; `INSTALLATION CANCELLED` gives only its one sentence about what was removed:
+  - `INSTALLATION SUCCEEDED` (exit 0).
+  - `INSTALLATION FAILED` (exit 1): the failed step and its error, then the removal sentence in the last bullet of this section, and Notepad opens the log.
+  - `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED` (exit 2): everything is in place and TAVI opens, but its test simulation failed, so simulations will probably fail too. In place of the removal sentence the screen says `Nothing was removed: TAVI is fully installed in that folder.`, or, when an older installation was replaced, `The old TAVI installation was removed before this install began. The new TAVI is fully installed in that folder.` (with the `Part of the old TAVI installation could not be removed, ...` opening when only part of it went), and how to start TAVI from the TAVI Launcher. Notepad opens the log.
+  - `INSTALLATION CANCELLED` (exit 0): the answer to "Continue with TAVI installation?" was No, or the input ended. Nothing new was installed, and it is not reported as a failure; the screen says `The old TAVI installation was removed. Nothing new was installed.` if an old installation had been removed first, else `Nothing was installed and nothing was removed.`
+- On a failure screen, only `C` closes the window; `D` collects diagnostics (`collect-diagnostics.bat`, §3) and returns to the same screen. On the other endings only `C` closes it. Other keys are ignored, and the computer beeps.
+- The test simulation (step 8) runs TAVI's own `--self-test --instrument puma` option, offscreen, with the remote API off. TAVI builds its main window and every panel, then runs one small McStas point on PUMA through its own simulation path: it compiles with McStas from the install folder and reads the result back. The point's output goes to a throwaway folder inside `app\`, so `output\` and the saved settings are untouched. It adds about a minute, mostly the compile.
+- **Desktop copy.** After a success, or a failed test simulation, attended runs only, the installer asks "Also put a copy of the TAVI Launcher shortcut on your desktop?". Enter means yes and is the recommended answer; typing N means no; any other answer also counts as yes. The copy goes to the desktop Windows reports (`[Environment]::GetFolderPath('Desktop')`), which is right on OneDrive- and policy-redirected machines, unlike `%USERPROFILE%\Desktop`. A failure is one line and changes nothing else. The shortcut stays in the install folder, which Explorer opens as before.
+- Unattended runs (`/dir`) ask nothing, never wait, open nothing and never touch the desktop; the exit code is the outcome.
+- Nothing of the new install is removed on any outcome; a failed install stays on disk, as before. The only removal of anything that was already there is an older TAVI installation, or one that did not finish, that the student agreed to replace; it happens before the new install begins. A failure then says `The old TAVI installation was removed before this install began. Nothing of the new install was removed: what was installed so far is still in that folder.`, or `Part of the old TAVI installation could not be removed, and part of it may already have gone. Nothing of the new install was removed: what was installed so far is still in that folder.` when only part of it could be. With no removal, a failure says `Nothing was removed: what was installed so far is still in that folder.`
 
 ---
 
@@ -732,14 +781,16 @@ It should warn clearly if `Progress_bar.comp` or any future required component i
 pattern and the five-item menu below describe releases through 1.3.0.
 Current behaviour, layout 2 (§3, §5 "One chosen folder"):
 
-The installer copies, rather than generates, four launchers from
-`installer/launchers/` into `%TAVI_BASE%`:
+The installer copies, rather than generates, launchers from
+`installer/launchers/` into `%TAVI_BASE%`. Since v1.4.0 there are five, and
+`collect-diagnostics.bat` is the fifth; the list below was written for the four of v1.3.2:
 
 ```text
 %TAVI_BASE%\run-tavi.bat
 %TAVI_BASE%\update-tavi.bat
 %TAVI_BASE%\TAVI-Launcher.bat
 %TAVI_BASE%\uninstall-tavi.bat
+%TAVI_BASE%\collect-diagnostics.bat   (v1.4.0)
 %TAVI_BASE%\TAVI Launcher.lnk
 ```
 
@@ -770,7 +821,17 @@ Required behavior:
 "%MICROMAMBA_EXE%" -r "%MAMBA_ROOT%" run -p "%ENV_PREFIX%" python TAVI_PySide6.py
 ```
 
-7. Pause if TAVI exits with an error.
+7. ~~Pause if TAVI exits with an error.~~
+
+   > **Superseded 2026-10-16 (v1.4.0):** TAVI's whole console output goes to a
+   > launch log, `%LOCALAPPDATA%\TAVI\logs\launch-<stamp>.log`, falling back to
+   > `%TEMP%`. The ten newest are kept; when no log can be opened, TAVI runs with its
+   > output in the window. The window says only that TAVI is running and where the log
+   > is. If TAVI exits with an error it shows `TAVI STOPPED WITH AN ERROR`, the last 30
+   > lines of the log and `Press C to continue.` (`choice /C C`, not `pause`). Arguments
+   > pass through to `TAVI_PySide6.py`; the launcher menu passes none. The launcher also
+   > clears `NoDefaultCurrentDirectoryInExePath` and sets `PYTHONUNBUFFERED=1` and
+   > `PYTHONIOENCODING=utf-8`, so the log is written as TAVI prints.
 
 ### `update-tavi.bat`
 
@@ -784,12 +845,21 @@ Required behavior:
 3. Check that PySide6 (a `QApplication`) and mcstasscript load; on failure
    say to run the installer again. The script never installs or upgrades
    packages (2026-09-15).
-4. Pause and report failures clearly.
+4. ~~Pause and report failures clearly.~~
+
+   > **Superseded 2026-10-16 (v1.4.0):** Repair writes `repair-<stamp>.log` (logs
+   > folder, else `%TEMP%`) and ends on `REPAIR SUCCEEDED`, with the pinned version and
+   > the log path, or `REPAIR FAILED`. The failure screen names the step that failed,
+   > shows the last 30 lines of that step's output, gives the log path and the hint to
+   > use menu item 5, and waits for `C`. Each step's output goes to the log, not the
+   > screen. Exit code 0 or 1.
 
 ### `TAVI-Launcher.bat`
 
-Required menu, six items — `[5] Exit` keeps its pre-1.3.2 number so that an
-existing user's muscle memory does not land on the destructive option:
+Required menu, six items (v1.3.2) — `[5] Exit` keeps its pre-1.3.2 number so that an
+existing user's muscle memory does not land on the destructive option.
+**Superseded 2026-10-16 (v1.4.0):** seven items, with `[5] Collect diagnostics for
+support` and Exit moved to the end, so the last item is Exit and not Uninstall:
 
 ```text
 [1] Run TAVI
@@ -800,7 +870,19 @@ existing user's muscle memory does not land on the destructive option:
 [6] Uninstall TAVI
 ```
 
-The menu dispatches on exact `ERRORLEVEL` comparisons for each of 1-6, never
+**As built in v1.4.0 (seven items):**
+
+```text
+[1] Run TAVI
+[2] Repair TAVI
+[3] Open TAVI folder
+[4] Open TAVI shell
+[5] Collect diagnostics for support
+[6] Uninstall TAVI
+[7] Exit
+```
+
+The menu dispatches on exact `ERRORLEVEL` comparisons for each of 1-7, never
 a descending `if errorlevel` ladder: `choice` returns 255 on error and 0 on
 Ctrl-C, and a ladder with the destructive option first would route both of
 those into it.
@@ -808,7 +890,11 @@ those into it.
 `[6] Uninstall TAVI` confirms (twice when `app\output` is non-empty), copies
 `<base>\uninstall-tavi.bat` to `%TEMP%`, runs it detached with
 `cd /d "%TEMP%"` and `call`, in the console already open, so nothing here
-holds the base folder open.
+holds the base folder open. **Since v1.4.0** the menu passes
+`/confirmed`: the uninstaller skips its own question, which the menu has just asked,
+and nothing else. It still ends on its headline and waits for `C`. `/y` is the
+unattended switch for test harnesses: no question and no wait. `[5]` runs
+`collect-diagnostics.bat` (§21) and comes back to the menu.
 
 The shell option should run a shell inside the environment but must not alter global shell startup.
 
@@ -918,6 +1004,14 @@ payload folder is confirmed gone does it remove `INSTALL_INFO.txt`, the
 run a bare `rd` on the base — which Windows refuses for a non-empty folder,
 so anything the user put beside `app\` survives and is reported by name
 rather than deleted.
+
+**Added 2026-10-16 (v1.4.0): what else goes, and what stays.**
+
+- Also removed, once the payload is confirmed gone: `install-status.txt`, the `collect-diagnostics.bat` copy, and the `tavi_doctor_*` folders that hold `TAVI-doctor-report.txt`. Any other folder of that name is the student's, so it stays and is named in the list of what was left.
+- The desktop copy, `TAVI Launcher.lnk` on the desktop Windows reports, is removed only when its target is `<base>\TAVI-Launcher.bat` (compared in full, case ignored). Another shortcut of that name is left, and a line says why. Where PowerShell is unavailable or locked down, the shortcut is kept and a line says so. The standalone uninstaller also checks `%USERPROFILE%\Desktop` for a legacy shortcut under the same rule, and does so only once the old folder is confirmed gone. The unconditional `del` of v1.3.2 is gone.
+- The logs folder `%LOCALAPPDATA%\TAVI\logs\` is never removed, so an uninstall that went wrong can still be diagnosed. Each uninstall writes `uninstall-<stamp>.log` there. The install record `%LOCALAPPDATA%\TAVI\install-record.txt` is removed; the `TAVI` folder stays because the logs are in it.
+- Headlines and exit codes: `TAVI WAS UNINSTALLED` (0); `UNINSTALL FAILED` (1), for a refusal (`Nothing was removed.`) or when files are still open after the retries; `UNINSTALL CANCELLED` (0) when the question is answered No; `NOTHING TO UNINSTALL` (0) when the folder does not exist. Every ending waits for `C`, except under `/y`.
+- Switches: `/confirmed` (the launcher menu's) skips the question and nothing else. `/y` is for test harnesses. Neither is a student feature.
 
 It must explicitly not remove:
 
@@ -1423,7 +1517,52 @@ the Doctor, the support recorder and the standalone uninstaller fall back to:
 
 ## 20. Expected successful install output
 
-A successful install ends with (v1.3.2, `<base>` the chosen folder):
+A successful install prints one line per step and then ends (v1.4.0, `<base>` the chosen
+folder). The times are examples. v1.3.2 ended with `Installation complete.` and had no
+log path.
+
+```text
+[Step 0/8] Cleaning broken cmd.exe AutoRun hooks: about 5 seconds. Started 10:14.
+[OK] No stale HKCU micromamba AutoRun hook found.
+[Step 1/8] Setting up micromamba: about 30 seconds. Started 10:14.
+[OK] Micromamba ready.
+[Step 2/8] Creating the TAVI environment: about 15 minutes, longer on a slow internet connection. Started 10:15.
+       ... still running, 4 min 30 s, 820 MB downloaded so far
+[OK] The TAVI environment is ready.
+[Step 3/8] Installing TAVI: about a minute. Started 10:30.
+[OK] TAVI source ready.
+[Step 4/8] Detecting McStas paths: about 30 seconds. Started 10:31.
+[OK] McStasScript configured.
+[Step 5/8] Configuring and checking the McStas compiler: about 2 minutes. Started 10:31.
+[OK] Compiler check passed, serial and MPI.
+[Step 6/8] Building the lead-sample dispersion map: about 5 minutes. Started 10:33.
+[OK] Lead-sample dispersion map built.
+[Step 7/8] Installing the launchers: about 5 seconds. Started 10:38.
+[OK] Launchers and shortcut created.
+[Step 8/8] Running a test simulation with TAVI: about 2 minutes. Started 10:38.
+[OK] The test simulation ran.
+
+============================================================================
+ INSTALLATION SUCCEEDED
+============================================================================
+Installed in : <base>
+Program      : <base>\app
+Environment  : <base>\tavi-env
+TAVI version : v1.4.0
+Installer    : v1.4.0-1
+McStas       : 3.7.1
+Compiler     : GCC (conda-forge)
+The full record of this installation is saved in:
+    %LOCALAPPDATA%\TAVI\logs\install-<stamp>.log
+
+To start TAVI, double-click "TAVI Launcher" in the folder that is about to
+open. You can move that shortcut anywhere you like - your desktop, for
+instance - and it will still work. The folder itself must stay where it is.
+
+To remove TAVI later, start the launcher and choose "Uninstall TAVI".
+```
+
+v1.3.2's screen, for history:
 
 ```text
 Installation complete.
@@ -1437,8 +1576,9 @@ McStas       : 3.7.1
 Compiler     : GCC (conda-forge)
 ```
 
-followed by a pointer to the "TAVI Launcher" shortcut in `<base>`, which
-Explorer opens unless the run was unattended (`/dir`).
+**Superseded 2026-10-16 (v1.4.0):** then the desktop question (attended runs only, §4),
+Explorer opening `<base>`, and `Press C to close this window.` Unattended (`/dir`) runs
+open nothing and wait for nothing. v1.3.2 pointed at the shortcut and ended on `pause`.
 
 Expected files:
 
@@ -1450,10 +1590,13 @@ Expected files:
 <base>\TAVI-Launcher.bat
 <base>\uninstall-tavi.bat
 <base>\TAVI Launcher.lnk
+<base>\collect-diagnostics.bat      (v1.4.0)
+<base>\install-status.txt          (v1.4.0: OUTCOME=INSTALLATION SUCCEEDED)
 <base>\INSTALL_INFO.txt          LAYOUT=2, INSTALL_ID, TAVI_VERSION, paths
 <base>\.tavi-install-root        the ownership marker, same INSTALL_ID
 <base>\compile_check\            the compile gate's logs
 %LOCALAPPDATA%\TAVI\install-record.txt
+%LOCALAPPDATA%\TAVI\logs\install-<stamp>.log   (v1.4.0)
 ```
 
 Expected environment:
@@ -1498,6 +1641,19 @@ launchers do, never `-n tavi`:
 set "B=C:\Users\<USER>\TAVI"
 set "MM="%B%\micromamba\micromamba.exe" -r "%B%\mamba""
 ```
+
+### Logs and the diagnostics zip (v1.4.0)
+
+**Added 2026-10-16 (v1.4.0).** Start here. The logs are in `%LOCALAPPDATA%\TAVI\logs\` (§3). `<base>\install-status.txt` says how the last install ended (`OUTCOME=`), and on a failure `FAILED_STEP=` and `ERROR=`. Launcher menu item 5, or `<base>\collect-diagnostics.bat` run by hand, makes `TAVI-diagnostics-<stamp>.zip` in the logs folder. It runs the Doctor, which takes a few minutes; the zip is written once before the Doctor and again with its report added.
+
+Support and test switches. None is a student feature; each lets scripts and tests run without a window on a desk:
+
+- `collect-diagnostics.bat /quiet`: no Explorer and no wait. Exit 0 when the zip was made, 1 when not.
+- `TAVI-Doctor.bat /base <path>`: examines the named installation, not the one the install record names. A path that fails validation falls back to the record with an `[INFO]` line that does not print the path. It needs no `INSTALL_ID` match, because a failed install may not have written its `INSTALL_INFO.txt` yet. `/quiet` skips Notepad and every pause; `/resolve-only` prints the resolved installation and exits.
+- `TAVI_PySide6.py --self-test --instrument <id>` (`run-tavi.bat --self-test --instrument puma` passes it through): the installer's step 8, which names `puma`. The instrument comes from `--instrument` alone; TAVI picks none itself. Prints `TAVI SELF-TEST PASSED`, or `TAVI SELF-TEST FAILED: <reason>` after the crash log, and exits 0 or 1. A missing or unknown `--instrument` prints the FAILED line naming the known ids, runs nothing and exits 2. The installer reads any nonzero exit as a failed test simulation. Its throwaway folder inside `app\` is removed after a pass and kept after a failure.
+- Installer `/dir <path>`: unattended, as in §4. `/validate-only <path>` prints `ACCEPT` or `REFUSE <reason>` and changes nothing.
+- Test-only: installer `/ref <branch>` (clone that branch instead of the release tag), `/test-fail micromamba|env|selftest` (record that step as `forced failure (test run)`), and the `TAVI_TEST_DESKTOP` variable, which replaces the desktop Windows reports in the installer, both uninstallers and the desktop copy. The test suite also feeds `choice` a stand-in; that is not a product feature.
+- Uninstaller `/confirmed` (the launcher menu's: skips the question, still waits for `C`) and `/y` (for harnesses: no question, no wait).
 
 ### List relevant packages
 
@@ -1590,15 +1746,18 @@ Before publishing a new installer:
 - [ ] Install, update, run, and uninstall have been tested from both PowerShell and `cmd.exe`.
 - [ ] No environment is selected by name (`-n`) anywhere in the installer or any launcher — every micromamba call passes both `-r` and `-p`.
 - [ ] `:validate_base`'s path-validation table (accept/refuse cases) passes in all
-      six copies (`WINDOWS-install-TAVI-vX.Y.Z.bat`,
+      seven copies (six until v1.4.0: `WINDOWS-install-TAVI-vX.Y.Z.bat` for the current
+      installer, `WINDOWS-install-TAVI-v1.3.2.bat` for the one before it,
       `installer/launchers/uninstall-tavi.bat`, `WINDOWS-uninstall-TAVI.bat`,
       `installer/TAVI-Repair-Launchers.bat`, `installer/TAVI-Doctor.bat`,
-      `tools/support/Record-TAVI.bat`) and the six copies are byte-identical.
+      `tools/support/Record-TAVI.bat`) and the seven copies are byte-identical.
 - [ ] No recursive delete is authorised by a `TAVI_PySide6.py` sentinel alone:
       the installer's migration branches and the uninstaller all require an
       ownership token or an installation-only file the repository never carries.
 - [ ] The uninstaller refuses a base folder without a matching ownership token (`.tavi-install-root` `INSTALL_ID` == `INSTALL_INFO.txt` `INSTALL_ID`).
 - [ ] The cold install (`/dir <path>`) has been run against the real tag on a clean directory.
+- [ ] Before the release tag exists, the cold install runs with `/dir <path> /ref <branch>` (test-only: it clones that branch instead of the tag, and `INSTALL_INFO.txt` then carries `CLONED_BRANCH=<branch>`), and each failure headline is shown once: `/test-fail micromamba` gives `INSTALLATION FAILED`, `/test-fail selftest` gives `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED`. Each run ends with its exit code, and nothing is removed on any of them.
+- [ ] On that installation, launcher menu items 5 (diagnostics), 1 (Run) and 6 (Uninstall) are each exercised once. The desktop copy and the attended questions are checked at a real desktop, since an unattended run touches none of them.
 
 ---
 
@@ -1685,6 +1844,13 @@ written after the tag exists.
     `TAVI-Repair-Launchers.bat` is a new one-shot field repair that rewrites
     a pre-1.3.2 machine's three launchers to select its environment by exact
     prefix, without reinstalling anything.
+
+(i) 2026-10-16: v1.4.0 (`WINDOWS-install-TAVI-v1.4.0.bat`,
+    `INSTALLER_VERSION=v1.4.0-1`; built from v1.3.2) — the install log and logs folder
+    (§3), the three endings with the test simulation (§4, §20), the desktop copy, the
+    five launchers with `collect-diagnostics.bat`, and the launcher menu with its item 5
+    (§16, §21). The release tag `v1.4.0` does not exist yet, so the cold install runs
+    with `/ref` (§22). Nothing here tags or publishes the release.
 
 ## 23. Recommended future improvements
 

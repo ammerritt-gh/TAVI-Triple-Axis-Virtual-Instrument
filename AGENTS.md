@@ -332,3 +332,7 @@ committed DFT grid; API `force` clears soft scan-command issues only).*
 
 - 2026-09-30 · skill: an external_unit payload must ask ChatGPT to name the revision SHA on line 1, or `acs-job submit` refuses its reply.
 - 2026-10-12 · floor: the ACS runtime's files check treats a file another unit owns as outside a packet even when the packet lists it.
+- 2026-10-16 · floor: FAILURE: an "agent default" turned "version number inside the component" into a per-run output stamp plus rebuild hash; operator: YAGNI. Build only what was ruled.
+- 2026-10-16 · floor: a unit's commit may not touch files an earlier accepted unit owns; such edits land as slice-level repairs after build acceptance.
+- 2026-10-16 · floor: a background submit/accept running the full suite needs timeout 3600000; 600000 killed one at 10 min (suite ~9-13 min).
+- 2026-10-16 · floor: FAILURE: closeout ran the ~10 min full suite twice to land docs-only commits. A docs-only land's test is `git diff --check`, never pytest.

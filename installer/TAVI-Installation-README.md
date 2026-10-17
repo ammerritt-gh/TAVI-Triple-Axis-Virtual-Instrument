@@ -9,11 +9,11 @@ TAVI is a simulation tool for triple-axis spectrometer (TAS) experiments, built 
 
 ## Quick Start
 
-1. **Download** `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself)
+1. **Download** `WINDOWS-install-TAVI-v1.4.0.bat` from the v1.4.0 release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself)
 2. **Double-click** the downloaded `.bat` to run the installer
 3. **Choose where TAVI goes.** Press Enter to accept the suggested folder, or type a full path such as `D:\TAVI`. Everything — the program, its Python environment, McStas, the compiler and the downloaded packages, about 3 GB — lives inside that one folder. The path can only use letters, digits, dot, dash and underscore, with no spaces, because McStas cannot compile from a path with a space in it.
-4. **Wait** 10–20 minutes for installation to complete
-5. **Run a 2-point scan** to validate the installation (see First-Run Validation below)
+4. **Wait** about 15–25 minutes for installation to complete, longer on a slow connection. The window prints a `still running` line every 30 seconds; that means it has not stopped.
+5. **Read the last screen.** It should say `INSTALLATION SUCCEEDED`. If it says anything else, see Troubleshooting below. Then you can run a 2-point scan to check further (see First-Run Validation below)
 
 The installation cannot be moved afterwards once it exists — the Python environment stores its own location internally. The **TAVI Launcher** shortcut it creates, inside that folder, can be moved anywhere you like (your desktop, for instance).
 
@@ -37,7 +37,31 @@ After you choose (or confirm) the install folder, the installer performs these s
 4. **Configures McStasScript** — so it can find the McStas installation in the conda environment
 5. **Configures and compile-checks the McStas compiler** — points McStas's own config at the environment's GCC (five overrides, written into the environment's copy of `mccode_config.json`), moves aside any stale per-user McStas config that would override it, then compiles and runs the `PSI_DMC` example serially and under MPI. Either failure stops the install: TAVI runs every simulation under MPI
 6. **Builds the lead-sample dispersion map** — `components\Pb_dft_phonons.dat`, about 150 MB, a few minutes with no output. It is optional: if the step fails the installer warns, records `PB_MAP=missing` in `INSTALL_INFO.txt` and continues; the "Pb: Phonon DFT" sample then stays listed but a run with it fails at asset load until you open the TAVI shell and run `python tools\make_pb_assets.py`
-7. **Installs the launcher scripts** — copies the four launchers into your chosen install folder and creates the "TAVI Launcher" shortcut there
+7. **Installs the launcher scripts** — copies the launchers, including `collect-diagnostics.bat`, into your chosen install folder and creates the "TAVI Launcher" shortcut there
+8. **Runs a test simulation** — starts TAVI without a window and runs one small McStas simulation through TAVI itself, so a broken TAVI is caught here and not at your first scan. It takes a minute or two and writes nothing into your `output` folder.
+
+### When the installer finishes
+
+Your last screen says one of these. Only the `C` key closes that window; other keys do nothing.
+
+| Headline | What it means |
+|----------|---------------|
+| `INSTALLATION SUCCEEDED` | TAVI is installed and its test simulation worked. Start it from the TAVI Launcher. |
+| `INSTALLATION FAILED` | A step did not finish. The screen names the step and the error, and says what was removed (see below). Nothing of the new install is removed: what was installed so far stays in the TAVI folder. |
+| `TAVI INSTALLED, BUT THE TEST SIMULATION FAILED` | TAVI is installed and will open, but its test simulation did not work, so simulations will probably fail too. The screen says `Nothing was removed: TAVI is fully installed in that folder.` (or, when an older installation was replaced, that it was removed and the new TAVI is fully installed) and how to start it from the TAVI Launcher. |
+| `INSTALLATION CANCELLED` | You answered No to "Continue with TAVI installation?". Nothing new was installed, and it is not a failure. |
+
+On a failure, the last lines of the install log appear on screen and Notepad opens the full log. The screen offers **D**: press D to collect diagnostics for support, which makes the zip described under Troubleshooting. The screen then comes back; press **C** to close it.
+
+Removal of anything that was already there is limited to one case. If you agreed to replace an older TAVI installation (or one that did not finish), the installer removes it before the new install begins, and the last screen says so, with one of these sentences:
+
+- `The old TAVI installation was removed before this install began. Nothing of the new install was removed: what was installed so far is still in that folder.` (failure)
+- `Part of the old TAVI installation could not be removed, and part of it may already have gone. Nothing of the new install was removed: what was installed so far is still in that folder.` (failure)
+- `The old TAVI installation was removed. Nothing new was installed.` (cancelled)
+
+When no old installation was removed, a failure says `Nothing was removed: what was installed so far is still in that folder.`, and a cancelled install says `Nothing was installed and nothing was removed.`
+
+After a successful install, or one whose test simulation failed, the installer asks: *Also put a copy of the TAVI Launcher shortcut on your desktop?* Press Enter for yes (the recommended answer), or type N and Enter for no. The shortcut also stays in your install folder, which opens in Explorer when the installer finishes.
 
 ### Installed Components
 
@@ -57,7 +81,7 @@ After you choose (or confirm) the install folder, the installer performs these s
 
 ## Versioning
 
-The installer pins a specific TAVI release via the `TAVI_VERSION` variable near the top of the script. Installers published as release artifacts will always pin a specific tag (e.g. `v1.3.0`). Development builds may set `TAVI_VERSION=main`.
+The installer pins a specific TAVI release via the `TAVI_VERSION` variable near the top of the script. Installers published as release artifacts will always pin a specific tag (e.g. `v1.4.0`). Development builds may set `TAVI_VERSION=main`.
 
 To check which version is installed:
 
@@ -82,8 +106,9 @@ After installation, use the **"TAVI Launcher"** shortcut, which lives inside you
 | **[2] Repair TAVI** | Repair the current pinned installation (re-fetch and re-check-out the same tag, check that the GUI toolkit and McStasScript load) |
 | **[3] Open TAVI folder** | Browse installation files |
 | **[4] Open TAVI shell** | Command prompt inside the TAVI environment |
-| **[5] Exit** | Close the launcher |
+| **[5] Collect diagnostics for support** | Gather the logs and the TAVI Doctor's report into one zip file for the person helping you (see Troubleshooting). Takes a few minutes. |
 | **[6] Uninstall TAVI** | Remove the installation (see Uninstalling TAVI below) |
+| **[7] Exit** | Close the launcher |
 
 ### Direct Scripts
 
@@ -95,6 +120,7 @@ These scripts are installed directly in your chosen install folder (not inside t
 | `run-tavi.bat` | Launch TAVI directly |
 | `update-tavi.bat` | Repair the pinned release |
 | `uninstall-tavi.bat` | Remove the installation |
+| `collect-diagnostics.bat` | Gather the logs and the TAVI Doctor's report into one zip (menu item 5) |
 
 `run-tavi.bat` sets `MCSTAS` to the environment's resources and starts TAVI; the launcher menu's Run option delegates to it. No compiler bootstrap is needed — the environment's McStas config already points at its own GCC.
 
@@ -117,13 +143,25 @@ The installer already compile-checks the compiler before it finishes, so a first
 
 ## Troubleshooting
 
+### Where the logs are, and what to send
+
+Every install, launch, repair and uninstall writes a log file to this folder:
+
+    %LOCALAPPDATA%\TAVI\logs\
+
+Paste that into the address bar of Explorer. The file names start with `install-`, `launch-`, `repair-` or `uninstall-`, followed by the date and time. The file `install-status.txt` in your install folder says how the last install ended. These logs stay on your computer when TAVI is removed.
+
+If that folder cannot be written (some managed laptops block it), the logs go into the Windows temporary folder instead. Type `%TEMP%` in the Explorer address bar to open it. The diagnostics zip goes to the same place. Whichever folder is used, the last screen of each run prints the full path of the file to send, so copy the path from there. If nothing could be saved in either place, that screen says so.
+
+If something goes wrong, open the **TAVI Launcher** and choose **[5] Collect diagnostics for support**. It takes a few minutes, because it runs TAVI's Doctor, which runs four short test simulations. When it finishes, Explorer opens the logs folder with one file selected, named `TAVI-diagnostics-<date and time>.zip`. Send that one file to the person who helps you with TAVI. It holds the logs, the crash log, the install status, the version record, the compiler-check logs and the Doctor's report. It contains your user name and folder paths. TAVI does not send it anywhere; you send it.
+
 ### TAVI crashes or closes unexpectedly
 
-Send `output/tavi-crash.log` from the TAVI folder with your report; the console prints its full path at startup. It records your operating system, library versions and display session (on Linux, Wayland or X11), uncaught errors and Qt warnings, and on Linux and macOS the Python stack of every thread when TAVI crashes.
+Send `output/tavi-crash.log` from the TAVI folder with your report; the console prints its full path at startup. It records your operating system, library versions and display session (on Linux, Wayland or X11), uncaught errors and Qt warnings, and on Linux and macOS the Python stack of every thread when TAVI crashes. The diagnostics zip (launcher menu item 5) includes this file, so you can send that instead.
 
 ### Compiler check failed during install
 
-Look at `<base>\compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed), where `<base>` is the install folder you chose, for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI.
+Look at `<base>\compile_check\serial.log` (or `mpi.log` if the MPI run was the one that failed), where `<base>` is the install folder you chose, for the compiler error, then re-run the installer; it rebuilds the environment from scratch. The MPI run uses `mpiexec` from the environment, not a system-wide MS-MPI. The diagnostics zip (launcher menu item 5) includes both logs.
 
 ### Monte Carlo simulations fail but the deterministic engine still works (installation from before 1.3.2)
 
@@ -135,7 +173,7 @@ Check your internet connection and try again. If behind a proxy, configure Windo
 
 ### "Failed to create environment"
 
-Check available disk space (~3 GB needed) and internet connection. Run again with `--verbose` for detailed output.
+Check available disk space (~3 GB needed) and internet connection. The full output is in the install log; see "Where the logs are, and what to send" above.
 
 ### Import errors on launch (`No module named 'PySide6'`, etc.)
 
@@ -169,9 +207,10 @@ The normal way is the **TAVI Launcher**'s **[6] Uninstall TAVI** option. It asks
 - your scan results (`app\output`) and saved settings (`app\config`)
 - the Python/McStas environment (`tavi-env`)
 - the downloaded package cache (`mamba`)
-- the four launcher scripts and the shortcut
+- the five launcher scripts and the shortcut in the install folder, and the copy on your desktop if it opens this installation
+- the installer's status file and any diagnostics folders TAVI made
 
-Anything else you have put in the install folder is left alone and reported at the end. Reinstalling later downloads about 1.5 GB of packages again.
+Anything else you have put in the install folder is left alone and reported at the end. Reinstalling later downloads about 1.5 GB of packages again. Your logs in `%LOCALAPPDATA%\TAVI\logs` are kept, so a problem with the uninstall can still be looked at; delete that folder by hand if you do not want them.
 
 If the launcher itself is missing or damaged, run `<your install folder>\uninstall-tavi.bat` directly, or download `WINDOWS-uninstall-TAVI.bat` from the releases page — a standalone fallback that finds your installation (by argument, by its own saved location record, in the usual default folders, or by asking) and hands off to the uninstaller that came with it. It also knows how to remove an installation from before version 1.3.2.
 
@@ -213,6 +252,8 @@ Everything lives under the one folder you chose during install (`<base>` below �
 | Simulation output | `<base>\app\output\` |
 | Saved settings | `<base>\app\config\` |
 | Install record (used to locate the installation) | `%LOCALAPPDATA%\TAVI\install-record.txt` |
+| Install, launch, repair and uninstall logs; the diagnostics zip | `%LOCALAPPDATA%\TAVI\logs\` |
+| Outcome of the last install | `<base>\install-status.txt` |
 
 **The installation cannot be moved.** The environment and its generated McStas configuration store the absolute install path internally; moving or renaming `<base>` breaks it. Only the "TAVI Launcher" shortcut can be moved.
 
@@ -335,4 +376,4 @@ itself, the root prefix or any other environment.
 
 ---
 
-*Last updated: 2026-09-17 (v1.3.2: one chosen install folder, environment selected by prefix, shipped launchers, uninstall from the launcher menu; provisional macOS/Linux script)*
+*Last updated: 2026-10-16 (v1.4.0: install log and logs folder, three endings with a test simulation, desktop copy, diagnostics menu item; the macOS/Linux script is unchanged at v1.3.2)*

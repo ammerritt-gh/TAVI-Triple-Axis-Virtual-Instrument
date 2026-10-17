@@ -12,11 +12,60 @@ import copy
 import threading
 import queue
 import math
-import numpy as np
-import mcstasscript as ms
+import tempfile
+
+
+def _self_test_isolate(root):
+    """Prepare the ``--self-test`` run: a throwaway folder inside ``root`` holding a copy of the
+    config, ``TAVI_CONFIG_DIR`` pointed at that copy and Qt set to offscreen.
+
+    Inside the TAVI folder, never %TEMP%: the installer has vetted this folder, and a profile with
+    spaces or non-ASCII characters can make ``tavi.mcstas_paths`` refuse a %TEMP% one. The source is
+    the config folder as resolved now (the variable, else ``<root>/config``). Returns the folder.
+    """
+    source = os.environ.get("TAVI_CONFIG_DIR") or os.path.join(root, "config")
+    work = tempfile.mkdtemp(prefix="selftest-", dir=root)
+    target = os.path.join(work, "config")
+    try:
+        if os.path.isdir(source):
+            shutil.copytree(source, target)
+        else:
+            os.makedirs(target)
+    except Exception:
+        shutil.rmtree(work, ignore_errors=True)  # nothing of value yet: no job has run
+        raise
+    os.environ["TAVI_CONFIG_DIR"] = target
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    return work
+
+
+def _self_test_load_failed(exc_type, exc, tb, folder):
+    """``sys.excepthook`` under ``--self-test``: a module-level import failed before ``main()``.
+    Prints the traceback and the verdict line, then exits 1."""
+    import traceback
+    traceback.print_exception(exc_type, exc, tb)
+    sys.stderr.flush()
+    print(f"Throwaway folder kept for diagnosis: {folder}", flush=True)
+    print(f"TAVI SELF-TEST FAILED: TAVI could not load: {exc_type.__name__}: {exc}", flush=True)
+    os._exit(1)
+
+
+# tavi.mcstas_config reads its file path from TAVI_CONFIG_DIR at import, so the
+# isolation has to happen here, before the tavi imports below.
+_SELF_TEST_DIR = None
+if "--self-test" in sys.argv:
+    try:
+        _SELF_TEST_DIR = _self_test_isolate(os.path.dirname(os.path.abspath(__file__)))
+    except Exception as _exc:
+        print(f"TAVI SELF-TEST FAILED: could not prepare the throwaway folder: "
+              f"{type(_exc).__name__}: {_exc}", flush=True)
+        sys.exit(1)
+    sys.excepthook = lambda t, e, tb: _self_test_load_failed(t, e, tb, _SELF_TEST_DIR)
 
 from PySide6.QtWidgets import QApplication, QComboBox, QFileDialog, QLineEdit
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
+import numpy as np
+import mcstasscript as ms
 
 # Import the instrument contract (the concrete instrument arrives via main())
 from tavi.local_state import config_path as local_config_path
@@ -11221,6 +11270,260 @@ def _route_qt_messages(crash_log):
     qInstallMessageHandler(handler)
 
 
+_SELF_TEST_TIMEOUT_MS = 15 * 60 * 1000  # the one time limit: a modal dialog offscreen would hang for ever
+_SELF_TEST_NEUTRONS = 100000
+
+
+def _self_test_verdict(state, error, executed_mask, skipped_points, output_folder):
+    """Did the self-test's one point run? Returns ``(passed, reason)``.
+
+    Passes only when the job completed, exactly one point executed, none was skipped, and that
+    point's ``detector.dat`` exists and reads back with ``read_1Ddetector_file``.
+    """
+    import glob
+    import math
+
+    state = str(getattr(state, "value", state))
+    if state != JobState.DONE.value:
+        return False, f"the test point ended '{state}'" + (f": {error}" if error else "")
+    if skipped_points:
+        reasons = "; ".join(str(p.get("reason") or p.get("kind") or p) for p in skipped_points)
+        return False, f"the test point was skipped: {reasons}"
+    executed = sum(1 for flag in (executed_mask or []) if flag)
+    if executed != 1 or len(executed_mask) != 1:
+        return False, f"{executed} point(s) executed, expected exactly 1"
+    detectors = glob.glob(os.path.join(output_folder, "scan_*", "detector.dat"))
+    if len(detectors) != 1:
+        return False, f"{len(detectors)} detector.dat file(s) found under {output_folder}, expected 1"
+    try:
+        intensity, intensity_error, counts = read_1Ddetector_file(os.path.dirname(detectors[0]))
+    except Exception as exc:
+        return False, f"detector.dat is unreadable: {type(exc).__name__}: {exc}"
+    if counts is None:
+        return False, f"detector.dat holds no readable detector data: {detectors[0]}"
+    # a numerical failure can write nan or inf in a file that still parses
+    if not all(math.isfinite(v) for v in (intensity, intensity_error, counts)):
+        return False, (f"detector.dat holds a non-finite value (I = {intensity}, "
+                       f"I_err = {intensity_error}, N = {counts}): {detectors[0]}")
+    return True, f"detector.dat read back, N = {counts:g}"
+
+
+def _self_test_instrument(requested, known_ids):
+    """The instrument ``--self-test`` runs, from ``--instrument``: ``(id, None)``, or
+    ``(None, reason)`` when it was not given or names no registered instrument. The controller
+    never picks one itself, so there is no default."""
+    known = ", ".join(sorted(known_ids))
+    if requested is None or not str(requested).strip():
+        return None, f"--instrument was not given; the test needs one of: {known}"
+    wanted = str(requested).strip().lower()
+    if wanted not in known_ids:
+        return None, f"--instrument '{requested}' is not a known instrument; use one of: {known}"
+    return wanted, None
+
+
+def _self_test_refuse(reason, work):
+    """A ``--self-test`` that was refused before any job ran (bad command line): delete the
+    throwaway folder, print the verdict line, exit 2 (a run that fails exits 1)."""
+    if work:
+        try:
+            shutil.rmtree(work)
+        except OSError as exc:
+            print(f"Self-test: could not delete {work}: {exc}", flush=True)
+    print(f"TAVI SELF-TEST FAILED: {reason}", flush=True)
+    os._exit(2)
+
+
+def _self_test_main(qt_args, requested_instrument=None):
+    """``--self-test`` (for the installer): one real McStas point on the instrument named by
+    ``--instrument`` through the controller's job queue, in a hidden offscreen window, nothing
+    written to output/ or the real config.
+
+    Never returns: ends the process with ``TAVI SELF-TEST PASSED`` / exit 0,
+    ``TAVI SELF-TEST FAILED: <reason>`` / exit 1 (the test ran and failed), or the same line /
+    exit 2 (``--instrument`` missing or unknown: the test did not start).
+    """
+    import traceback
+    from tavi import crash_log
+
+    sys.excepthook = sys.__excepthook__  # the import-failure hook is for module level only
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # a non-ASCII path must not break the verdict line
+        except (AttributeError, ValueError) as exc:
+            print(f"Self-test: could not set the output encoding: {exc}", file=sys.__stderr__)
+
+    work = _SELF_TEST_DIR
+    crash_path = os.path.join(work, "tavi-crash.log") if work else None
+    held = {}   # app, window, controller: whatever got built, for finish() to tear down
+    done = []
+
+    def finish(ok, reason):
+        if done:
+            return
+        done.append(True)
+        controller = held.get("controller")
+        if controller is not None:
+            try:
+                controller.shutdown()  # kills a McStas run still going when the watchdog fires
+            except Exception as exc:
+                print(f"Self-test: controller shutdown failed: {exc}", flush=True)
+        # shortcut: crash_log has no close(); Windows cannot delete a folder holding an open file
+        log_stream = getattr(crash_log, "_stream", None)
+        if log_stream is not None:
+            crash_log._stream = None
+            try:
+                log_stream.close()
+            except Exception as exc:  # a failed flush here must not stop the verdict and the exit
+                print(f"Self-test: could not close the crash log: {exc}", flush=True)
+        if ok:
+            try:
+                shutil.rmtree(work)
+            except OSError as exc:
+                print(f"Self-test: could not delete {work}: {exc}", flush=True)
+                print(f"Self-test point: {reason}. Throwaway folder {work} could not be deleted "
+                      f"and was left in place.", flush=True)
+            else:
+                print(f"Self-test point: {reason}. Throwaway folder {work} deleted.", flush=True)
+            print("TAVI SELF-TEST PASSED", flush=True)
+        else:
+            if crash_path and os.path.isfile(crash_path):
+                try:
+                    with open(crash_path, "r", encoding="utf-8", errors="replace") as fh:
+                        print(f"--- crash log ({crash_path}) ---\n{fh.read()}--- end of crash log ---",
+                              flush=True)
+                except OSError as exc:
+                    print(f"Self-test: could not read the crash log: {exc}", flush=True)
+            print(f"Throwaway folder kept for diagnosis: {work}", flush=True)
+            print(f"TAVI SELF-TEST FAILED: {reason}", flush=True)
+        os._exit(0 if ok else 1)  # not sys.exit: a stuck worker thread or nested modal loop must not block it
+
+    def fail_with(prefix, exc):
+        crash_log.record("Self-test error", traceback.format_exc())
+        finish(False, f"{prefix}: {type(exc).__name__}: {exc}")
+
+    if work is None:
+        print("TAVI SELF-TEST FAILED: the throwaway folder was not prepared (run TAVI_PySide6.py "
+              "--self-test as a script)", flush=True)
+        os._exit(1)
+
+    try:
+        import instruments.builtin  # noqa: F401  (explicit built-in registration)
+        from instruments.registry import (available_instruments, get_instrument,
+                                           save_last_instrument)
+        infos = available_instruments()
+        instrument_id, refusal = _self_test_instrument(requested_instrument, {i.id for i in infos})
+        if refusal:
+            _self_test_refuse(refusal, work)
+        print(f"Self-test folder: {work}", flush=True)
+        print(f"Crash log: {crash_log.install(crash_path)}", flush=True)
+        from instruments.validation import assert_valid_capabilities, assert_valid_descriptor
+        from PySide6.QtCore import QTimer, qVersion
+
+        _route_qt_messages(crash_log)
+        held["app"] = app = QApplication([sys.argv[0], *qt_args])
+        crash_log.record("Qt", f"Qt {qVersion()}  platform plugin: {app.platformName()}")
+
+        watchdog = QTimer()
+        watchdog.setSingleShot(True)
+        watchdog.timeout.connect(lambda: finish(
+            False, f"no result after {_SELF_TEST_TIMEOUT_MS // 60000} minutes (a hang, "
+                   f"possibly a dialog waiting offscreen)"))
+        watchdog.start(_SELF_TEST_TIMEOUT_MS)
+
+        instrument = get_instrument(instrument_id)
+        assert_valid_descriptor(instrument.descriptor(), runnable=True)
+        assert_valid_capabilities(instrument.capabilities(), instrument.id, instrument.descriptor())
+        window = TAVIMainWindow(
+            instrument.descriptor(),
+            instrument_infos=infos,
+            current_instrument_id=instrument.id,
+            save_selection=save_last_instrument,
+        )
+        held["window"] = window
+        controller = TAVIController(window, instrument, api_overrides={"disabled": True})
+        held["controller"] = controller
+        window.controller = controller
+        window.show()  # offscreen: every dock is constructed, nothing reaches a screen
+
+        poller = QTimer()
+
+        def poll(job_id):
+            try:
+                job = controller._job_registry.get(job_id)
+                with job.lock:
+                    state, error, result = job.state, job.error, job.result
+                if state in (JobState.QUEUED, JobState.RUNNING):
+                    return
+                poller.stop()
+                ok, reason = _self_test_verdict(
+                    state, error,
+                    result.executed_feasible_mask if result else [],
+                    result.skipped_points if result else [],
+                    result.output_folder if result else "")
+                finish(ok, reason)
+            except Exception as exc:
+                fail_with("could not read the test point's result", exc)
+
+        def submit():
+            try:
+                # Modelled on _submit_benchmark_stage: one point at the current position.
+                launch_state = controller._collect_simulation_launch_state()
+                if not launch_state:
+                    finish(False, "the GUI values could not be read")
+                    return
+                vals = launch_state["vals"]
+                vals["scan_command1"] = ""
+                vals["scan_command2"] = ""
+                try:
+                    wanted = int(vals.get("number_neutrons") or _SELF_TEST_NEUTRONS)
+                except (TypeError, ValueError):
+                    wanted = _SELF_TEST_NEUTRONS
+                vals["number_neutrons"] = max(1, min(wanted, _SELF_TEST_NEUTRONS))
+                vals["diagnostic_mode"] = False
+                launch_state["engine"] = "mcstas"
+                launch_state["relative_mode_1"] = False
+                launch_state["relative_mode_2"] = False
+                launch_state["save_folder_input"] = os.path.join(work, "scan")
+                controller._compile_launch(launch_state)
+                validation = controller.validate_scan_launch_state(launch_state)
+                if validation.get("infeasible"):
+                    finish(False, "the test point is not reachable: "
+                                  + "; ".join(str(e.get("reason")) for e in validation["infeasible"]))
+                    return
+                launch_state["planned_feasible_mask"] = validation.get("planned_feasible_mask", [])
+                launch_state["feasible_segments"] = validation.get("feasible_segments", [])
+                job = controller.submit_scan_job(launch_state, "self-test")
+                poller.timeout.connect(lambda: poll(job.job_id))
+                poller.start(500)
+            except Exception as exc:
+                fail_with("the test point could not be submitted", exc)
+
+        QTimer.singleShot(0, submit)
+        app.exec()
+        finish(False, "TAVI stopped before the test point finished")
+    except Exception as exc:
+        fail_with("TAVI could not start", exc)
+
+
+def _relaunch_std_kwargs():
+    """stdout and stderr for the relaunched TAVI: this process's own, so its output
+    still reaches the launch log run-tavi.bat gives it. A stream with no file behind
+    it (pythonw's None, a closed one) gives nothing, and the child inherits as before.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None or stream.closed:
+            return {}
+        try:
+            stream.fileno()
+        except (OSError, ValueError) as exc:  # io.UnsupportedOperation is both: no file behind it
+            log.warning("Relaunch: a standard stream has no file (%s); the new TAVI "
+                        "inherits the streams instead", exc)
+            return {}
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return {"stdout": sys.stdout, "stderr": sys.stderr}
+
+
 def main():
     """Main entry point for the application.
 
@@ -11232,11 +11535,6 @@ def main():
     """
     import argparse
     from tavi import crash_log
-
-    try:
-        print(f"Crash log: {crash_log.install()}", flush=True)
-    except OSError as exc:
-        print(f"Crash log unavailable: {exc}", file=sys.stderr)
 
     parser = argparse.ArgumentParser(prog="TAVI")
     parser.add_argument(
@@ -11251,7 +11549,29 @@ def main():
         "--no-api", action="store_true",
         help="Disable the remote API server regardless of config.",
     )
-    args, qt_args = parser.parse_known_args()  # leftover args go to Qt
+    parser.add_argument(
+        "--self-test", action="store_true",
+        help="For the installer, not for everyday use: start TAVI hidden, run one small "
+             "McStas point on the instrument named by --instrument (required with this "
+             "option) into a throwaway folder, print TAVI SELF-TEST PASSED or "
+             "TAVI SELF-TEST FAILED: <reason>, and exit 0 (passed), 1 (failed) or 2 "
+             "(--instrument missing or unknown).",
+    )
+    try:
+        args, qt_args = parser.parse_known_args()  # leftover args go to Qt
+    except SystemExit as exc:
+        # e.g. "--instrument" with no value: argparse has printed its usage; end as a refusal
+        if exc.code and "--self-test" in sys.argv:
+            _self_test_refuse("the command line was not understood (see above); "
+                              "use --self-test --instrument <id>", _SELF_TEST_DIR)
+        raise
+    if args.self_test:
+        _self_test_main(qt_args, args.instrument)  # never returns; its crash log is in the throwaway folder
+
+    try:
+        print(f"Crash log: {crash_log.install()}", flush=True)
+    except OSError as exc:
+        print(f"Crash log unavailable: {exc}", file=sys.stderr)
 
     # Remote-API CLI overrides handed to the controller (see _start_api_server).
     api_overrides = {}
@@ -11351,7 +11671,7 @@ def main():
         # The old process must fully exit before the new one binds the API port;
         # the new process's slow imports (Qt/McStasScript) make this safe in
         # practice. close_fds detaches so the child outlives this process.
-        subprocess.Popen(new_argv, close_fds=True)
+        subprocess.Popen(new_argv, close_fds=True, **_relaunch_std_kwargs())
 
     sys.exit(exit_code)
 
