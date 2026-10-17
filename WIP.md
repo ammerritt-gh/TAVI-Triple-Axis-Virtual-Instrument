@@ -266,12 +266,12 @@ plugin contract v1 (`docs/INSTRUMENT_AUTHORING.md`). Operator, 2026-10-10: "7a
 is fine. I'm not worried about breaking saved scans."
 
 Done when: they use canonical IDs and `CONTRACT_VERSION` is bumped. Job
-j0236ccacd89b (parked, below) bumps it to 2 for the source rework without
+j0236ccacd89b (landed, below) bumped it to 2 for the source rework without
 this; it rides the next bump after that.
 
 ## Facility moderator source: Source_Maxwell_direct (job j0236ccacd89b)
 
-**State:** in progress, slice 1 of 1
+**State:** done
 
 A new component, `Source_Maxwell_direct`, replaces `Source_div_Maxwellian_v2`:
 the McStas `Source_gen` flux-form spectrum (up to three T/I Maxwellians, every
@@ -285,11 +285,10 @@ contract version 2; all four `model_version` 1.1.0. Design approved
 amendment 5, operator: the per-run component stamp and rebuild hash struck
 ("strip that fucking thing right out").
 
-Parked by the operator at refine on candidate `d432fef81dc6`; build and verify
-are done and the acceptance suite passed. The frontier, how to resume and what
-remains are in [the handoff](docs/HANDOFF-source-rework.md).
-
-Done when: the job lands, or the operator cancels it.
+Landed 2026-10-17 as PR #70 (`86577173`), the full suite passing on that exact
+revision. Review fixes on top: one source default, one API merge path, the nine
+values saved under their bare IDs, and numeric API fields refuse JSON booleans
+(ChatGPT Pro's finding: `true` ran as a 1 K source).
 
 ## Small API and housekeeping follow-ups
 
@@ -324,7 +323,10 @@ Done when: the job lands, or the operator cancels it.
 - Flake: `tests/test_api_scan_maximum.py::test_a_scan_over_the_maximum_is_refused_whatever_the_flags[A3 0 1000 1-A4 0 1000 1-None-1002001]`
   fails in some full runs (the GUI's debounced scan-estimate timer fires while
   the test has `parse_scan_steps` patched to raise); passes alone; also seen in
-  job j7e540e562b4f.
+  job j7e540e562b4f, and as `[A3 0 100000 1]` in job j0236ccacd89b.
+- `components/README.md:134` says the full spectrum is exactly the one
+  `Source_gen` builds; the component's `%D` states the one difference (pairs
+  2/3 count without pair 1). Deferred P4 from job j0236ccacd89b.
 
 Done when: each is fixed or dropped by the operator.
 

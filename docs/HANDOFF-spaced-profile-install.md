@@ -146,8 +146,8 @@ API surface, verified against source:
 - Plugin methods ([instruments/puma/plugin.py:320](../instruments/puma/plugin.py#L320)):
   - `default_state()` → `PUMA_Instrument`
   - `scan_config(base_state, gui_values, sample_key, diagnostic_settings, sample_mount)`
-    — `gui_values` needs `modules`, `collimation`, `slits_mm`, `K_fixed`, `source_type`,
-    `source_dE`, `rhm`/`rvm`/`rha`/`rva`, `fixed_E`, `monocris`, `anacris`
+    — `gui_values` needs `modules`, `collimation`, `slits_mm`, `K_fixed`, the nine
+    source values (`instruments.source.FIELD_IDS`), `rhm`/`rvm`/`rha`/`rva`, `fixed_E`, `monocris`, `anacris`
   - `build(config, diagnostic_mode, diagnostic_settings, number_neutrons)`
   - `compute_snapshot(scan_item, scan_index, scan_mode, config, vals, data_folder, ...)`
   - `run_point(instrument, snapshot, output_folder, number_neutrons, execution_state, mpi_count)`
