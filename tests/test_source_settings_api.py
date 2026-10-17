@@ -124,6 +124,10 @@ def test_a_scan_body_loads_a_profile_under_its_own_t_and_i_too(fresh):
     expected = {**moderator.profile_values("hzb_bispectral"), "moderator_t2_k": 111.0}
     assert {key: vals[key] for key in moderator.TI_IDS} == expected
     assert launch["scan_config"].source_values()["moderator_profile"] == "hzb_bispectral"
+    # what the check judged is what the scan runs: the nine launched values are the merge's
+    judged, refusals = controller._source_refusals(
+        controller._default_source_values(), {"moderator_t2_k": 111.0, "moderator_profile": "hzb_bispectral"})
+    assert refusals == {} and {key: vals[key] for key in NINE} == judged
 
 
 # --- an invalid source is refused before anything changes --------------------------------
