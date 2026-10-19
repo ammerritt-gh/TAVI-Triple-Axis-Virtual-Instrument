@@ -252,7 +252,7 @@ name is accepted:
   instruments), `test_instrument_dock_source.py` (the dock) and
   `test_source_profiles.py` (`instruments/source.py`).
 - `test_documentation.py` — runs the shared documentation checker
-  (`Agentic-Control-Scheme/bin/doc_check.py`) over this repository so a
+  (`Workflow/acs/bin/doc_check.py`) over this repository so a
   missing banner, an unreachable document or a broken link fails the suite.
   The checker path comes from `DOC_CHECK`, falling back to the maintainer's
   checkout; where neither exists the test skips with the reason printed.
