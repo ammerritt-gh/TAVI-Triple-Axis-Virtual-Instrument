@@ -2,3 +2,10 @@ name = "TAVI"                       # release title prefix: "TAVI vX.Y.Z"
 version_file = "tavi/__init__.py"   # holds the one __version__ = "X.Y.Z" line
 test_command = "\"%LOCALAPPDATA%\\micromamba\\micromamba.exe\" run -n tavi-dev python -m pytest tests -q -ra"  # absolute launcher: micromamba is not on PATH for a subprocess
 test_timeout_seconds = 900          # kills the whole process tree and reports
+# Dated history that names the previous version on purpose; prepare's stray-version check skips these.
+allow_old_version_paths = [
+    "docs/READING_GUIDE.md",              # the row on the 1.3.2 installer handoff
+    "docs/audits/release-1-4.md",         # the audit's baseline, v1.3.2
+    "tools/support/Record-TAVI.bat",      # installation layout 2 began in 1.3.2
+    "tests/test_installer_launchers.py",  # tests of the shipped v1.3.2 installer
+]
