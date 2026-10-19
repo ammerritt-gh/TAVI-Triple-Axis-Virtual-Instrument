@@ -23,10 +23,10 @@ Notes:
   (`test_api_server.py`, `test_api_validation_schema.py`); it fails spuriously
   and reproduces as green when run alone.
 - **Local state is isolated.** `conftest.py` sets `TAVI_CONFIG_DIR` for the
-  whole session to a temp copy of `config/`; every reader/writer in the app
+  whole session to an empty temp `config/`; every reader/writer in the app
   resolves its config path through `tavi.local_state.config_path()`, which
   honors that override, so nothing a test does reaches the operator's real
-  `config/` files. An autouse session fixture re-hashes the real `config/`
+  `config/` files and no result depends on the settings saved there. An autouse session fixture re-hashes the real `config/`
   at teardown and fails the session if anything changed anyway. A test that
   needs to write local state uses `tmp_path`.
 - **A fresh `git worktree` skips a test silently.** `components/Pb_dft_phonons.dat`

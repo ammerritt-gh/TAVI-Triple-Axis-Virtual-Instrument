@@ -37,9 +37,10 @@ operator's real ``config/view_layout.json`` with every dock hidden --
 ``closeEvent`` in ``gui/main_window.py`` does that on any window close, test
 or not. Every config reader/writer in the app resolves its path through
 ``tavi.local_state.config_path()``, which honors the ``TAVI_CONFIG_DIR``
-environment variable; this file points that variable at a temp copy of
+environment variable; this file points that variable at an empty temp
 ``config/`` for the whole session, so nothing a test does can reach the real
-files. A session-scoped tripwire fixture below re-hashes the real
+files, and no test reads the operator's saved settings (copying them in made
+results depend on whose machine ran the suite). A session-scoped tripwire fixture below re-hashes the real
 ``config/`` directory at teardown and fails the session if anything changed
 regardless -- a test that bypassed the override, or a second process writing
 beside this one.
@@ -143,14 +144,10 @@ def install_no_window_guard():
 def pytest_configure(config):
     # Guard 0: local state isolation -- must run before anything imports
     # tavi.local_state, so every reader/writer this session touches resolves
-    # to the temp copy instead of the operator's real config/.
+    # to an empty temp dir instead of the operator's real config/.
     tmp_dir = tempfile.mkdtemp(prefix="tavi-test-config-")
-    real_config = os.path.join(REPO_ROOT, "config")
     tmp_config = os.path.join(tmp_dir, "config")
-    if os.path.isdir(real_config):
-        shutil.copytree(real_config, tmp_config, dirs_exist_ok=True)
-    else:
-        os.makedirs(tmp_config, exist_ok=True)
+    os.makedirs(tmp_config, exist_ok=True)
     os.environ["TAVI_CONFIG_DIR"] = tmp_config
     config._tavi_config_tmp_dir = tmp_dir
     # The tripwire baseline is taken here, before collection, so a module
