@@ -154,6 +154,7 @@ The [release 1.4 audit](docs/audits/release-1-4.md) (`4efb3eb8`, 2026-10-17) rep
 - P3: a fine-step scan warning rounds its endpoint to three decimals (`tavi/utilities.py` `scan_stop_note`).
 - P3: `diagnostic_settings: null` in a saved record crashes startup and leaves scan-command signals blocked on Load.
 - P3: a failed install whose external record could not be created blocks a retry into the same folder.
+- Release checklist (installer design document §22, last item): v1.4.0 shipped 2026-10-19 (tag on `e1d98048`), and the unattended cold install at the tag ended INSTALLATION SUCCEEDED, but launcher items 5, 1 and 6 and the attended questions (desktop copy) are not yet exercised at a desk. The test installation at `%LOCALAPPDATA%\Temp\tavi-cold-1.4.0` serves; its item 6 removes it.
 
 Done when: the ledger is empty and deleted.
 
