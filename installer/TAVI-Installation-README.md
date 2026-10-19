@@ -261,8 +261,9 @@ Everything lives under the one folder you chose during install (`<base>` below â
 
 ## macOS and Linux (provisional, never executed)
 
-`POSIX-install-TAVI-v1.3.2.sh` and `POSIX-uninstall-TAVI.sh` are attached to the
-v1.3.2 release. They were written on 2026-09-14 (for v1.3.0) by mirroring the
+`POSIX-install-TAVI-v1.4.0.sh` and `POSIX-uninstall-TAVI.sh` are attached to the
+v1.4.0 release. The v1.4.0 script is the v1.3.2 one pinned to the new tag; the
+Windows installer's 1.4 additions (install log, test simulation) are not in it. They were written on 2026-09-14 (for v1.3.0) by mirroring the
 Windows installer step by step and have **never been run on macOS or Linux** by
 the maintainer, who has neither machine. v1.3.2 adds one check after the McStas
 step: it compiles and runs a McStas example under MPI with two processes, as
@@ -296,7 +297,7 @@ refused before anything is downloaded.
 ### Running it
 
 ```bash
-bash POSIX-install-TAVI-v1.3.2.sh
+bash POSIX-install-TAVI-v1.4.0.sh
 ```
 
 If it stops at the compile check, the message names the log it kept. The likely
@@ -339,7 +340,7 @@ $MM create -n tavi python=3.11 mcstas=3.7.1 mcstas-core=3.7.1 mcstas-data=3.7.1 
   pyside6 mcstasscript -c conda-forge -c nodefaults -y
 
 # 3. source, pinned to the release tag
-$MM run -n tavi git clone --branch v1.3.2 --depth 1 --single-branch \
+$MM run -n tavi git clone --branch v1.4.0 --depth 1 --single-branch \
   https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git ~/TAVI
 
 # 4. McStasScript paths (PREFIX is ~/micromamba/envs/tavi)
@@ -376,4 +377,4 @@ itself, the root prefix or any other environment.
 
 ---
 
-*Last updated: 2026-10-16 (v1.4.0: install log and logs folder, three endings with a test simulation, desktop copy, diagnostics menu item; the macOS/Linux script is unchanged at v1.3.2)*
+*Last updated: 2026-10-16 (v1.4.0: install log and logs folder, three endings with a test simulation, desktop copy, diagnostics menu item; the macOS/Linux script is unchanged at v1.3.2; 2026-10-19: re-stamped as v1.4.0)*
