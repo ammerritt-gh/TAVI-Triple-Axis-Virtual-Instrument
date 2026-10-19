@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use TAVI in your research, please cite this software."
+type: software
+
+title: "TAVI: Triple-Axis Virtual Instrument"
+
+authors:
+  - family-names: Merritt
+    given-names: Adrian
+
+abstract: >-
+  TAVI is a graphical interface for simulating neutron
+  triple-axis spectrometer experiments, providing
+  instrument configuration, scans, and visualization
+  using McStas and McStasScript.
+
+repository-code: "https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument"
+url: "https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument"
+
+keywords:
+  - neutron scattering
+  - triple-axis spectrometry
+  - instrument simulation
+  - McStas
