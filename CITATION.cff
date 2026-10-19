@@ -6,7 +6,8 @@ title: "TAVI: Triple-Axis Virtual Instrument"
 
 authors:
   - family-names: Merritt
-    given-names: Adrian
+    given-names: Adrian M.
+    orcid: "https://orcid.org/0000-0002-5457-8444"
 
 abstract: >-
   TAVI is a graphical interface for simulating neutron
