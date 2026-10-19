@@ -144,6 +144,19 @@ The [release 1.3 audit](docs/audits/release-1-3.md) recorded two independently c
 
 Done when: the ledger is empty and deleted.
 
+## Audit ledger: release 1.4
+
+**State:** pinned
+
+The [release 1.4 audit](docs/audits/release-1-4.md) (`4efb3eb8`, 2026-10-17) reproduced four findings; the operator ruled none of them blocks the release (2026-10-19), so all four are pinned for later:
+
+- P1: Repair reports success without restoring deleted tracked files (`installer/launchers/update-tavi.bat`).
+- P3: a fine-step scan warning rounds its endpoint to three decimals (`tavi/utilities.py` `scan_stop_note`).
+- P3: `diagnostic_settings: null` in a saved record crashes startup and leaves scan-command signals blocked on Load.
+- P3: a failed install whose external record could not be created blocks a retry into the same folder.
+
+Done when: the ledger is empty and deleted.
+
 ## MPI rank default fails on small Linux hosts
 
 **State:** landed untested
