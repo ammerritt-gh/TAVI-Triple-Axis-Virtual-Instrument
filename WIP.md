@@ -297,9 +297,6 @@ values saved under their bare IDs, and numeric API fields refuse JSON booleans
 - PATCH /parameters on a radius the installed crystal fixes (e.g. rva on PUMA
   PG(002), fixed 0.8 m) reports applied and silently snaps back; refuse the
   write naming the hardware (API behaviour change). goto CEN already refuses.
-- `tests/test_documentation.py` skips because the shared doc checker path is
-  stale (`Agentic-Control-Scheme\bin\doc_check.py`), so the doc check never
-  runs in the suite.
 - Bare `except` blocks in `_update_scan_estimates` and `_count_scan_points` set
   a count of 0 or 1 without logging; a refused >1000-point scan still prints
   "validation deferred until simulation starts".

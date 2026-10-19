@@ -1,6 +1,6 @@
 """The shared documentation checker, run as a test so documentation drift fails the suite.
 
-The checker (Agentic-Control-Scheme/bin/doc_check.py) is stdlib-only and lives outside
+The checker (Workflow/acs/bin/doc_check.py) is stdlib-only and lives outside
 this repository. Its path comes from the DOC_CHECK environment variable, falling back to
 the maintainer's checkout. Where neither resolves to a file the test skips with the reason
 printed (the suite runs with -ra), because a fresh clone of the public mirror must not go
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-DEFAULT_CHECKER = Path(r"C:\Users\AMM\Documents\Github\Agentic-Control-Scheme\bin\doc_check.py")
+DEFAULT_CHECKER = Path(r"C:\Users\AMM\Documents\Github\Workflow\acs\bin\doc_check.py")
 ROOT = Path(__file__).resolve().parents[1]
 
 
