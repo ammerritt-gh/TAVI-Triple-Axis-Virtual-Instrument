@@ -1,32 +1,20 @@
 # TAVI - Triple-Axis Virtual Instrument
 
-> **Status:** live
-
 TAVI is a graphical user interface for simulating triple-axis spectrometer (TAS) experiments using McStas, a neutron experiment simulation package. It is a Python-based GUI that runs the Python-based McStasScript, to call McStas, then save and display the results. TAVI ships four runnable instrument models (PUMA at MLZ, IN8 and IN12 at ILL, PANDA at MLZ) selected in the GUI.
 
-Documentation map: [docs/READING_GUIDE.md](docs/READING_GUIDE.md). Work in flight: [WIP.md](WIP.md). What TAVI is for: [DESIGN_GOALS.md](DESIGN_GOALS.md).
-
 ## Why use TAVI?
+
 TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users who are not as familiar with McStas and/or neutron scattering; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan. We see the clear optic and acoustic phonon branches dispersing away from the zone center at (2,0,0) along (H,0,0).
 
 <img width="2555" height="1389" alt="TAVI_usage_screenshot" src="https://github.com/user-attachments/assets/8d407749-adb3-4a4f-ae0a-f857e18ec29b" />
 
-TAVI writes an instrument file at runtime through McStasScript, then calls McStas. This is a fairly fast process, and normal compile times are <10s. We have found that runtimes on a modern computer are roughly similar to nominal TAS counting times, i.e. 1 second per point for Bragg peak scan and ~1 minute per point for phonons. An example scan is shown below (a Bragg peak scan):
+TAVI writes an instrument file at runtime through McStasScript, then calls McStas. This is a fairly fast process, and normal compile times are &lt;10s. We have found that runtimes on a modern computer are roughly similar to nominal TAS counting times, i.e. 1 second per point for Bragg peak scan and ~1 minute per point for phonons. An example scan is shown below (a Bragg peak scan):
 
 <img width="787" height="581" alt="TAVI_scan_animation" src="https://github.com/user-attachments/assets/1fc212dd-165b-4f52-aa20-ab452c246610" />
 
-
 ## Requirements
 
-- Python 3.x
-- McStas 3.4 or later
-- Required Python packages:
-  - mcstasscript
-  - numpy
-  - matplotlib
-  - PySide6 (for the new modular GUI)
- 
-  - TAVI includes custom McStas components that are present in `components`. These do not need to be placed in the McStas installation folders unless you try to use them in other programs.
+TAVI installs itself with a one-click installer, including Python+packages, McStas and the C-compilers McStas requires.
 
 ## Installation
 
@@ -34,25 +22,9 @@ TAVI writes an instrument file at runtime through McStasScript, then calls McSta
 
 The installer brings its own C compiler; Visual Studio is not needed.
 
-Download `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself) and run it. 
+Download `WINDOWS-install-TAVI-vX.Y.Z.bat` from the latest release at [https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases](https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases) (the installer is attached to each release; it may appear a little after the release itself) and run it.
 
 macOS and Linux: `POSIX-install-TAVI-vX.Y.Z.sh` on the same release page is a provisional script that has not yet been run on either platform; `installer/TAVI-Installation-README.md` says how to run it and what to do when it fails.
-
-### Standalone Installation
-1. **Install McStas**
-   
-   Follow the instructions at [https://mcstas.org/](https://mcstas.org/) to install McStas for your operating system. Do NOT use the McStas package, but install the McStas metapackage (under legacy options). Be sure to add McStas to your system path. As well, you still need the C++ compiler here.
-
-2. **Install Python dependencies**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   Alternatively, install packages individually:
-   ```bash
-   pip install mcstasscript numpy matplotlib pyside6
-   ```
 
 ## Running the Application
 
@@ -67,6 +39,7 @@ The GUI will launch. Adjust the instrument settings to your liking, decide on th
 ## Output
 
 Simulation results are saved in the `output` directory with the following structure:
+
 - Each simulation run creates a timestamped folder
 - Individual scan points are saved in subfolders
 - Data files include detector readings and scan parameters
@@ -88,19 +61,7 @@ with `python -m instruments.package_validation`.
 
 ## Troubleshooting
 
-**"No module named 'mcstasscript'"**
-- Install mcstasscript: `pip install mcstasscript`
-
-**McStas not found**
-- Ensure McStas is installed and in your PATH
-
-## TODO List
-TAVI is still in development, and several major features still need to be integrated:
-- Improved integration of varied samples and sample configuration
-- Tutorial documentation
-- Package development for deployment
-
-You are welcome to make other suggestions. If you find any bugs or problems, please report them!
+For help, please raise a Github issue or contact me directly.
 
 ## External Credits
 

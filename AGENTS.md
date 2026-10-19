@@ -319,6 +319,7 @@ not-docs: instruments/panda/references/2026-09-09__mlz-panda-page__v01.md  # dat
 stale: "45-field"  # the parameter table is 52/53/54 writable (49 common) plus four read-only per instrument since the nine source fields; corrected 2026-10-16
 not-docs: changelog.d/   # release fragments, harvested and deleted
 not-docs: CHANGELOG.md   # generated release artifact
+exempt: banner README.md  # public front page; status is tracked in WIP.md, not shown to visitors
 ```
 
 ---
