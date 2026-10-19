@@ -14,6 +14,8 @@ abstract: >-
   instrument configuration, scans, and visualization
   using McStas and McStasScript.
 
+license: GPL-3.0-or-later
+
 repository-code: "https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument"
 url: "https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument"
 
