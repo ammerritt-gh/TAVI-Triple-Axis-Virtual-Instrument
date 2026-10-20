@@ -130,6 +130,22 @@ Done when: a config key selects a bounded prep queue, or the operator drops this
 
 Done when: one document, reached from [docs/READING_GUIDE.md](docs/READING_GUIDE.md), describes each file's keys, defaults and who writes it.
 
+## Release 1.4.1: higher orders restored on PANDA and IN12
+
+**State:** pinned
+
+The fix landed in PR #74 (job j4db74ad6c59e, 2026-10-20; full suite 3426 passed, 3 skipped on the landed SHA): PANDA's and IN12's crystals are back at `order=0` like PUMA's, and a registry-wide guard test (`tests/test_plugin_bindings.py`) holds every instrument there. From v1.3.0 through v1.4.0 both instruments reflected first order only, so their results on those versions lack harmonic contamination. The changelog fragment `changelog.d/higher-orders-restored.md` waits for the release. The version bump, tag and GitHub release (which likely mints a Zenodo version) wait for the operator's go-ahead.
+
+Done when: v1.4.1 is released with that fragment in its notes.
+
+## Open collimators leave no aperture in the beam
+
+**State:** pinned
+
+Since `f38769de` (2026-09-09, shipped in v1.3.0), `emit_collimator` emits nothing for an open (divergence 0) Soller on every instrument, PUMA included. Before that, the housing's rectangular apertures stayed in the beam. PUMA's mono (40 × 220 mm), analyser (50 × 1280 mm) and detector (30 × 79 mm) collimators are affected; its fixed `sample_collimator_dia` stays in the beam (`removable=False`). Operator ruling, 2026-10-20: it depends on the instrument, but a large aperture only clips the fringes, so leave it, pinned in case it comes up.
+
+Done when: an instrument where a narrow open housing matters marks it `removable=False`, or the operator drops this item.
+
 ## Documentation baseline
 
 **State:** done
