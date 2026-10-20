@@ -1,5 +1,7 @@
 # TAVI - Triple-Axis Virtual Instrument
 
+[![DOI](https://zenodo.org/badge/1129648649.svg)](https://zenodo.org/badge/latestdoi/1129648649)
+
 TAVI is a graphical user interface for simulating triple-axis spectrometer (TAS) experiments using McStas, a neutron experiment simulation package. It is a Python-based GUI that runs the Python-based McStasScript, to call McStas, then save and display the results. TAVI ships four runnable instrument models (PUMA at MLZ, IN8 and IN12 at ILL, PANDA at MLZ) selected in the GUI.
 
 ## Why use TAVI?
