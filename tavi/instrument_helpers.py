@@ -149,15 +149,12 @@ def emit_crystal_assembly(instrument, *, cradle_name, crystal_name, relative,
     ``d_key`` selects its d-spacing key ('dm' for a monochromator, 'da' for an
     analyzer). Returns the crystal component.
 
-    ``order`` is McStas's reflection order: 0 (the component default, and the
-    default here) transports *all* orders off the one supplied d-spacing, so a
-    lambda/2 component at four times the nominal energy reaches the sample
-    unless something downstream removes it. ``order=1`` selects first-order
-    reflection only -- an idealized, order-clean spectrometer. An instrument
-    whose model has no filter or narrow-band source to suppress higher orders
-    should pass ``order=1`` and say so in its status record rather than claim
-    higher orders do not arise. The default stays 0 so existing instruments
-    keep the tree they were validated against.
+    ``order`` is McStas's reflection order: 0 (the default here, and the intended
+    behaviour for every instrument) transports *all* orders off the one supplied
+    d-spacing, so a lambda/2 component at four times the nominal energy reaches
+    the sample unless something downstream removes it. ``order=1`` selects
+    first-order reflection only -- an idealized, order-clean spectrometer that an
+    instrument uses only on the operator's decision, recorded in its status record.
     """
     instrument.add_component(cradle_name, "Arm",
                              AT=[0, 0, distance],
