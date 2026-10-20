@@ -86,7 +86,7 @@ inverse.
 | Model boundary | effective source AT the H144 exit; 115 m of guide not modeled | a real H144 model or an MCPL file at the exit. 2016 says the guide was calculated in McStas and the primary spectrometer in SIMRES plus in-house routines, so models existed — **none is public**. *needs IS* |
 | Spectrum | An idealised ILL vertical-cold-source spectrum (`Source_Maxwell_direct`, profile `ill_vcs_cold`) at the guide exit, full spectrum by default; the guide is not modelled, so its wavelength-dependent transmission is ignored. By a rough estimate the curved guide cuts off steeply above about 22 meV (λ ≈ 1.9 Å), so the full-spectrum mode **overstates IN12's higher-order contamination** | the true cold-source spectrum at the H144 exit for absolute flux. 2016 measured ~30 % more capture flux than the contemporary McStas cold-source description predicted. *needs IS* |
 | Guide geometry | not modeled, but the public record supports what would be modeled: ~115 m from the vertical cold source, last ~80 m at R = −2000 m in 45 × 105 mm with an m = 2.4 outer wall, final 8 m widening 105 → 140 mm vertically and focusing 45 → 20 mm horizontally at up to m = 3.2 | the upstream 6 m at R = 2700 m and ~21 m at R = 4000 m belong to the **common H14 system** before the four branches split, not to H144 specifically |
-| Velocity selector | **absent** | >36 m upstream, outside the model boundary. Its higher-order suppression is replaced by pinning both crystals to `order=1` (see *Higher orders* below), not inherited from a narrow band this model does not have. Only Astrium, >36 m, in/out, and the 2.23–6.3 Å design range are confirmed; the rotor blade count, helix angle, Δλ/λ, transmission, speed range and rpm↔λ calibration are **all unconfirmed for the IN12 unit** and must not be copied from other Astrium selectors |
+| Velocity selector | **absent** | >36 m upstream, outside the model boundary. Its higher-order suppression is absent from the model: both crystals transport all orders (see *Higher orders* below), so the simulated contamination overestimates the real instrument's. Only Astrium, >36 m, in/out, and the 2.23–6.3 Å design range are confirmed; the rotor blade count, helix angle, Δλ/λ, transmission, speed range and rpm↔λ calibration are **all unconfirmed for the IN12 unit** and must not be copied from other Astrium selectors |
 | Polarising cavity, guide fields, flippers | **absent** | ~35 m upstream, and TAVI models no polarisation |
 
 ### Monochromator
@@ -127,11 +127,13 @@ default `order=0` reflects at every multiple of the supplied reciprocal-lattice
 vector, so a λ/2 component at four times the nominal energy would reach the
 sample with nothing in the tree to stop it.
 
-Both crystals are therefore pinned to **`order=1`**: this is an *idealized,
-order-clean* cold TAS. The alternative — an effective filtered spectrum plus
-the real secondary filtering (the Be filter, and a selector transmission
-function) — is a different model, not a refinement of this one. No
-contamination fraction has been measured here.
+Both crystals transport all orders (**`order=0`**, as PUMA does). The real
+instrument's suppression — the upstream velocity selector, the unmodelled guide
+and the optional cooled Be filter — is absent from the model, so the simulated
+higher-order contamination overestimates the real instrument's. The alternative
+— an effective filtered spectrum plus the real secondary filtering (the Be
+filter, and a selector transmission function) — is a different model, not a
+refinement of this one. No contamination fraction has been measured here.
 
 ### Collimation, slits, filters
 
@@ -141,7 +143,7 @@ contamination fraction has been measured here.
 | α2/α3/α4 Sollers | PLACEHOLDER positions, lengths and apertures | " |
 | Pre-sample slit `sbl` | 30 × 60 mm at L2 − 0.25 | real diaphragm positions and openings. *needs IS* |
 | Detector slit `dbl` | 50 mm wide at L4 − 0.03 | " |
-| Cooled Be filter | **absent** | still in use post-upgrade, but there is no single position: published experiments put it in the **incident** beam (with the selector out) and **between sample and analyser**. It has no higher orders to remove here because `order=1` already excludes them (see *Higher orders* below). McCode's `Be.trm` — header: "Be transmission, as measured on IN12. T=80 K", B. Fåk — is what an order-transporting model would need |
+| Cooled Be filter | **absent** | still in use post-upgrade, but there is no single position: published experiments put it in the **incident** beam (with the selector out) and **between sample and analyser**. Its higher-order removal is absent from the model, which transports all orders (see *Higher orders* below). McCode's `Be.trm` — header: "Be transmission, as measured on IN12. T=80 K", B. Fåk — is what an order-transporting model would need |
 
 ### Detector
 
@@ -204,11 +206,12 @@ freely.
   defocusing. This is gross-geometry and execution evidence, not a flux
   calibration; the two instruments are at different energies on different
   sources and the numbers are not comparable beyond their order.
-  The smoke also certifies what the Python suite cannot: the emitted tree, with
-  withdrawn collimators and `order=1` on both crystals, still generates a
-  `.instr` that compiles and counts.
+  The figures above were measured on the earlier `order=1` tree; both crystals
+  now transport all orders. The smoke also certified what the Python suite
+  cannot: that tree, with withdrawn collimators and `order=1` on both crystals,
+  generated a `.instr` that compiled and counted.
 - **Compiled McStas smoke run: passed** (2026-09-11, re-run on the
-  `crystal-bending-generality` tree, same configuration: Al (2,0,0) elastic
+  `crystal-bending-generality` tree, `order=1` on both crystals (since restored), same configuration: Al (2,0,0) elastic
   at kf = 2.000 Å⁻¹, 1e7 neutrons, all Soller collimators open, ideal
   focusing). `detector_I = 5.44329e-07`, `detector_N = 6901` — up from the
   2026-09-09 run above, the expected direction: the corrected monochromator

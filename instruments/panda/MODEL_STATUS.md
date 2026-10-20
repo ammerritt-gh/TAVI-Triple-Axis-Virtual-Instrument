@@ -123,7 +123,7 @@ model does not represent. None is an oversight.
 | Heusler monochromator/analyzer, spin flippers, guide fields | TAVI models no spin-dependent transport. A Heusler entry would emit an unpolarized beam under a polarizing label — worse than its absence. |
 | Si(111) monochromator | A bent-perfect crystal; `Monochromator_curved`'s mosaic model misrepresents it. Same call as IN8's Si faces. |
 | Upstream sapphire filter | `Al2O3_sapphire.trm` is in the PANDA team's repository, not in `components/` and not stock McStas data. Adding a transmission table we cannot source would be worse than omitting a component that only attenuates. |
-| Analyzer-side PG / cold-Be / BeO filters | They suppress higher-order contamination, and this model has none to suppress **because both crystals are pinned to `order=1`**, not because a single-Q reflection cannot produce it. `Monochromator_curved` at its default `order=0` reflects at every multiple of the supplied reciprocal-lattice vector, and the default source is the full-spectrum moderator (no energy cut-off), so nothing else in the tree would exclude a λ/2 component at four times the nominal energy. The model is therefore an **idealized, order-clean conventional TAS**. The alternative — an effective filtered spectrum plus the real secondary filtering — is a different model, not a refinement of this one. Contamination fractions are unmeasured here. |
+| Analyzer-side PG / cold-Be / BeO filters | **Absent.** They suppress higher-order contamination, and this model has none of them: both crystals transport all orders (`order=0`, as PUMA does), and the default source is the full-spectrum moderator (no energy cut-off), so nothing in the tree excludes a λ/2 component at four times the nominal energy. The real instrument's filters and its unmodelled supermirror guide suppress those orders, so the simulated higher-order contamination overestimates the real instrument's. The alternative — an effective filtered spectrum plus the real secondary filtering — is a different model, not a refinement of this one. Contamination fractions are unmeasured here. |
 | Proposed 1.48 m, m = 6 elliptic mono→sample guide | The 2016 study is prospective ("shall", "expected") and no post-2016 source says the specific m = 6, 1.48 m design was fabricated or installed. Note the distinction that verification drew: PANDA **has** used sample-focusing guide optics experimentally (e.g. earlier small-sample work on NiS₂), so "PANDA has used a focusing guide" is true while "the 2016 guide is standard hardware" is not. |
 | Fixed beam-defining apertures `sk1`–`sk5` | Not motorized and not scannable; they shape flux, never angles. `ca1`–`ca4`, `ms1`, `ss1`, `ss2` are the operational apertures and are all present. |
 | 2″ ³He detector (collimated configuration) | Only the 1″ focusing-mode tube is selectable. A detector choice would need a descriptor-level module, which no current task requires. |
@@ -189,20 +189,21 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   configuration this model no longer emits. They are kept only to explain the
   difference: the IN8 control fell ~28% from the sampler correction alone (a
   correctly sampled Gamma(3/2) is hotter and broader, so fewer neutrons sit
-  near E0), and the remaining ~2.4× drop for PANDA is `order=1` removing
+  near E0), and the remaining ~2.4× drop for PANDA was `order=1` removing
   higher-order transport. Roughly half of what the old tree counted at this
   setting was higher-order — one setting, not a contamination figure for the
   instrument, but it makes the point of that change concrete.
-  The smoke also certifies what the Python suite cannot: the emitted tree, with
-  withdrawn collimators and `order=1`, still generates a `.instr` that compiles
-  and counts.
+  The figures in the 2026-09-11 run were measured on the earlier `order=1`
+  tree, which this model no longer emits. The smoke also certified what the
+  Python suite cannot: that tree, with withdrawn collimators and `order=1`,
+  generated a `.instr` that compiled and counted.
   Al (1,1,1) is *not* a usable smoke point despite being reachable at the cold
   kf = 1.55 setting — it is out of the horizontal scattering plane for the
   default cubic mount and returns `I = 0`, `N = 18`. Al (2,0,0) at that kf has
   Q = 3.103 Å⁻¹, just past 2k = 3.10, and is unreachable. Hence kf = 2.662 for
   the smoke.
 - **Compiled McStas smoke run: passed** (2026-09-11, re-run on the
-  `crystal-bending-generality` tree, same configuration: Al (2,0,0) elastic
+  `crystal-bending-generality` tree, `order=1` on both crystals (since restored), same configuration: Al (2,0,0) elastic
   at kf = 2.662 Å⁻¹, 1e7 neutrons, all Soller collimators open, ideal
   focusing). `detector_I = 2.07537e-07`, `detector_N = 7663` — up from the
   2026-09-09 run above, the expected direction: the corrected monochromator

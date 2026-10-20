@@ -1674,6 +1674,8 @@ cannot hide behind the triple.
   remove and either component would only attenuate. McCode's `Be.trm` — a
   transmission curve measured *on IN12* at 80 K — is available the day a
   broadband source model lands.
+  > Note (2026-10-20): 1.4.1 restores higher-order transport on IN12 and PANDA
+  > (both crystals at `order=0`); see `instruments/in12/MODEL_STATUS.md`.
 - **No IN12-UFO** — but it was built, which the first pass got wrong. The 2016
   CRG annual report describes commissioning the fifteen-channel
   multi-analyser/multi-detector, with neutron tests performed and
