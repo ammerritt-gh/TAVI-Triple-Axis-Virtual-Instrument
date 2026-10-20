@@ -211,7 +211,8 @@ freely.
   cannot: that tree, with withdrawn collimators and `order=1` on both crystals,
   generated a `.instr` that compiled and counted.
 - **Compiled McStas smoke run: passed** (2026-09-11, re-run on the
-  `crystal-bending-generality` tree, `order=1` on both crystals (since restored), same configuration: Al (2,0,0) elastic
+  `crystal-bending-generality` tree, `order=1` on both crystals (since
+  restored), same configuration: Al (2,0,0) elastic
   at kf = 2.000 Å⁻¹, 1e7 neutrons, all Soller collimators open, ideal
   focusing). `detector_I = 5.44329e-07`, `detector_N = 6901` — up from the
   2026-09-09 run above, the expected direction: the corrected monochromator
