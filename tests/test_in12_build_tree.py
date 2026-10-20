@@ -157,18 +157,15 @@ def test_each_soller_is_independent():
         assert names & set(_SOLLERS) == {inserted}
 
 
-def test_both_crystals_are_first_order_only():
-    """The status record claims an order-clean beam; the tree must deliver it.
-
-    The default source is the full-spectrum moderator (it emits every energy
-    and cuts none), and ``Monochromator_curved`` at its default ``order=0``
-    reflects at every multiple of the supplied reciprocal-lattice vector -- so
-    the velocity selector and Be filter this model omits are not what excludes
-    a lambda/2 component. ``order=1`` is.
+def test_both_crystals_transport_all_orders():
+    """The real IN12 suppresses higher orders with hardware this model lacks
+    (upstream velocity selector, unmodelled guide, optional cooled Be filter), so
+    the tree transports every order and its simulated higher-order contamination
+    overestimates the real instrument's.
     """
     by_name = {c.name: c for c in _build().component_list}
-    assert by_name["monochromator"].order == 1
-    assert by_name["analyzer"].order == 1
+    assert by_name["monochromator"].order == 0
+    assert by_name["analyzer"].order == 0
 
 
 def test_collimators_track_selection_including_the_primary_arm():
