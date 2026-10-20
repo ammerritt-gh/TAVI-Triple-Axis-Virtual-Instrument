@@ -286,6 +286,7 @@ def pytest_collection_modifyitems(config, items):
         config.workeroutput["installer_left_out"] = len(dropped)
 
 
+@pytest.hookimpl(optionalhook=True)  # an xdist hook: the conftest must still load without xdist
 def pytest_testnodedown(node, error):
     left_out = (getattr(node, "workeroutput", None) or {}).get("installer_left_out", 0)
     node.config._installer_left_out = max(left_out, getattr(node.config, "_installer_left_out", 0))
