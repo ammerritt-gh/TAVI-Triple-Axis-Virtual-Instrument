@@ -1,12 +1,14 @@
 # TAVI - Triple-Axis Virtual Instrument
 
+[![DOI](https://zenodo.org/badge/1129648649.svg)](https://zenodo.org/badge/latestdoi/1129648649)
+
 TAVI is a graphical user interface for simulating triple-axis spectrometer (TAS) experiments using McStas, a neutron experiment simulation package. It is a Python-based GUI that runs the Python-based McStasScript, to call McStas, then save and display the results. TAVI ships four runnable instrument models (PUMA at MLZ, IN8 and IN12 at ILL, PANDA at MLZ) selected in the GUI.
 
 ## Why use TAVI?
 
-TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users who are not as familiar with McStas and/or neutron scattering; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan. We see the clear optic and acoustic phonon branches dispersing away from the zone center at (2,0,0) along (H,0,0).
+TAVI is built with a user-friendly GUI that makes it (subjectively speaking) easier to use compared to using McStas directly. In particular, it requires no special knowledge of McStas components or Python programming, which makes it ideal for e.g. students and users who are not as familiar with McStas and/or neutron scattering; students who have used it for Praktika have responded positively to TAVI. An example of the GUI interface is shown below after a 2D phonon scan of lead based on DFT calculations.
 
-<img width="2555" height="1389" alt="TAVI_usage_screenshot" src="https://github.com/user-attachments/assets/8d407749-adb3-4a4f-ae0a-f857e18ec29b" />
+<img width="2560" height="1392" alt="image" src="https://github.com/user-attachments/assets/efc9d071-74cf-4cee-a533-956edfc43315" />
 
 TAVI writes an instrument file at runtime through McStasScript, then calls McStas. This is a fairly fast process, and normal compile times are &lt;10s. We have found that runtimes on a modern computer are roughly similar to nominal TAS counting times, i.e. 1 second per point for Bragg peak scan and ~1 minute per point for phonons. An example scan is shown below (a Bragg peak scan):
 
