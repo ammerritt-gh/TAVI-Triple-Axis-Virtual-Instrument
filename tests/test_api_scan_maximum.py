@@ -26,13 +26,26 @@ def _no_run(*_args):
     raise AssertionError("a scan over the maximum was expanded")
 
 
+@pytest.fixture
+def quiet_estimate(in8):
+    """The GUI's debounced estimate (300 ms) parses each box on purpose; on a loaded machine
+    it fired inside a test that patches the parser to catch the API gate expanding a scan."""
+    timer = in8._scan_update_timer
+    timer.stop()
+    timer.blockSignals(True)
+    yield
+    timer.stop()
+    timer.blockSignals(False)
+
+
 @pytest.mark.parametrize("cmd1, cmd2, box, count", [
     ("A3 0 100 0.000001", "", 1, 100_000_001),
     ("A3 0 100000 1", "", 1, 100_001),
     ("", "A3 0 100 0.000001", 2, 100_000_001),
     ("A3 0 1000 1", "A4 0 1000 1", None, 1_002_001),       # each 1001 alone, the pair over it
 ])
-def test_a_scan_over_the_maximum_is_refused_whatever_the_flags(in8, monkeypatch, cmd1, cmd2, box, count):
+def test_a_scan_over_the_maximum_is_refused_whatever_the_flags(in8, quiet_estimate, monkeypatch,
+                                                               cmd1, cmd2, box, count):
     monkeypatch.setattr(rules, "parse_scan_steps", _no_run)
     text = MESSAGE.format(count)
     if box is not None:
