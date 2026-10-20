@@ -9,7 +9,7 @@ TAVI is a simulation tool for triple-axis spectrometer (TAS) experiments, built 
 
 ## Quick Start
 
-1. **Download** `WINDOWS-install-TAVI-v1.4.0.bat` from the v1.4.0 release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself)
+1. **Download** `WINDOWS-install-TAVI-v1.4.1.bat` from the v1.4.1 release at https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument/releases (the installer is attached to each release; it may appear a little after the release itself)
 2. **Double-click** the downloaded `.bat` to run the installer
 3. **Choose where TAVI goes.** Press Enter to accept the suggested folder, or type a full path such as `D:\TAVI`. Everything — the program, its Python environment, McStas, the compiler and the downloaded packages, about 3 GB — lives inside that one folder. The path can only use letters, digits, dot, dash and underscore, with no spaces, because McStas cannot compile from a path with a space in it.
 4. **Wait** about 15–25 minutes for installation to complete, longer on a slow connection. The window prints a `still running` line every 30 seconds; that means it has not stopped.
@@ -81,7 +81,7 @@ After a successful install, or one whose test simulation failed, the installer a
 
 ## Versioning
 
-The installer pins a specific TAVI release via the `TAVI_VERSION` variable near the top of the script. Installers published as release artifacts will always pin a specific tag (e.g. `v1.4.0`). Development builds may set `TAVI_VERSION=main`.
+The installer pins a specific TAVI release via the `TAVI_VERSION` variable near the top of the script. Installers published as release artifacts will always pin a specific tag (e.g. `v1.4.1`). Development builds may set `TAVI_VERSION=main`.
 
 To check which version is installed:
 
@@ -261,8 +261,8 @@ Everything lives under the one folder you chose during install (`<base>` below �
 
 ## macOS and Linux (provisional, never executed)
 
-`POSIX-install-TAVI-v1.4.0.sh` and `POSIX-uninstall-TAVI.sh` are attached to the
-v1.4.0 release. The v1.4.0 script is the v1.3.2 one pinned to the new tag; the
+`POSIX-install-TAVI-v1.4.1.sh` and `POSIX-uninstall-TAVI.sh` are attached to the
+v1.4.1 release. The v1.4.1 script is the v1.3.2 one pinned to the new tag; the
 Windows installer's 1.4 additions (install log, test simulation) are not in it. They were written on 2026-09-14 (for v1.3.0) by mirroring the
 Windows installer step by step and have **never been run on macOS or Linux** by
 the maintainer, who has neither machine. v1.3.2 adds one check after the McStas
@@ -297,7 +297,7 @@ refused before anything is downloaded.
 ### Running it
 
 ```bash
-bash POSIX-install-TAVI-v1.4.0.sh
+bash POSIX-install-TAVI-v1.4.1.sh
 ```
 
 If it stops at the compile check, the message names the log it kept. The likely
@@ -340,7 +340,7 @@ $MM create -n tavi python=3.11 mcstas=3.7.1 mcstas-core=3.7.1 mcstas-data=3.7.1 
   pyside6 mcstasscript -c conda-forge -c nodefaults -y
 
 # 3. source, pinned to the release tag
-$MM run -n tavi git clone --branch v1.4.0 --depth 1 --single-branch \
+$MM run -n tavi git clone --branch v1.4.1 --depth 1 --single-branch \
   https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument.git ~/TAVI
 
 # 4. McStasScript paths (PREFIX is ~/micromamba/envs/tavi)
@@ -377,4 +377,4 @@ itself, the root prefix or any other environment.
 
 ---
 
-*Last updated: 2026-10-16 (v1.4.0: install log and logs folder, three endings with a test simulation, desktop copy, diagnostics menu item; the macOS/Linux script is unchanged at v1.3.2; 2026-10-19: re-stamped as v1.4.0)*
+*Last updated: 2026-10-16 (v1.4.0: install log and logs folder, three endings with a test simulation, desktop copy, diagnostics menu item; the macOS/Linux script is unchanged at v1.3.2; 2026-10-19: re-stamped as v1.4.0; 2026-10-20: re-stamped as v1.4.1)*

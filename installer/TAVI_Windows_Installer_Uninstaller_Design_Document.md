@@ -2,7 +2,7 @@
 
 > **Status:** live
 
-_Last updated: 2026-10-16 (v1.4.0: install log, three endings with a test simulation, desktop copy, diagnostics menu item; §1, §3, §4, §16, §17, §20-§22)_
+_Last updated: 2026-10-16 (v1.4.0: install log, three endings with a test simulation, desktop copy, diagnostics menu item; §1, §3, §4, §16, §17, §20-§22; 2026-10-20: re-stamped as v1.4.1)_
 
 This document records the intended design, constraints, failure modes, and regression checks for the TAVI Windows user installer and uninstaller. Its purpose is to prevent future installer updates from reintroducing the failures encountered during the May 2026 rewrite/debug cycle.
 
@@ -103,7 +103,7 @@ shortcut) describe releases through 1.3.0. Current defaults, one chosen
 folder, layout 2 (see "One chosen folder (v1.3.2)" under §5):
 
 ```bat
-set "TAVI_VERSION=v1.4.0"
+set "TAVI_VERSION=v1.4.1"
 set "PYTHON_VERSION=3.11"
 set "MCSTAS_VERSION=3.7.1"
 set "LAYOUT=2"
@@ -1747,7 +1747,8 @@ Before publishing a new installer:
 - [ ] No environment is selected by name (`-n`) anywhere in the installer or any launcher — every micromamba call passes both `-r` and `-p`.
 - [ ] `:validate_base`'s path-validation table (accept/refuse cases) passes in all
       seven copies (six until v1.4.0: `WINDOWS-install-TAVI-vX.Y.Z.bat` for the current
-      installer, `WINDOWS-install-TAVI-v1.3.2.bat` for the one before it,
+      installer, `WINDOWS-install-TAVI-v1.3.2.bat` for the one before it (kept for its
+      layout-migration tests),
       `installer/launchers/uninstall-tavi.bat`, `WINDOWS-uninstall-TAVI.bat`,
       `installer/TAVI-Repair-Launchers.bat`, `installer/TAVI-Doctor.bat`,
       `tools/support/Record-TAVI.bat`) and the seven copies are byte-identical.
@@ -1794,11 +1795,11 @@ written after the tag exists.
     DisableDelayedExpansion parse-time trap: `%VSINSTALLDIR%` inside the
     block was always empty, so no v1.2.0 launcher carried `vcvars64.bat`).
 
-(d) macOS and Linux: `POSIX-install-TAVI-v1.3.2.sh` and
+(d) macOS and Linux: `POSIX-install-TAVI-v1.4.1.sh` and
     `POSIX-uninstall-TAVI.sh`, a bash pair pinned to the same tag and
     uploaded the same way, provisional and never executed on either
     platform (§25). A later release copies and re-stamps them like the
-    Windows file; `POSIX-install-TAVI-v1.3.0.sh` stays as history. The
+    Windows file; the v1.3.0, v1.3.2 and v1.4.0 POSIX installers stay as history. The
     v1.3.2 copy adds an MPI compile check after the McStas step, which
     exists but has never been run.
 
