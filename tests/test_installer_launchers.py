@@ -35,7 +35,10 @@ import zipfile
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows batch/cmd.exe behaviour")
+pytestmark = [
+    pytest.mark.installer,
+    pytest.mark.skipif(sys.platform != "win32", reason="Windows batch/cmd.exe behaviour"),
+]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALLER_DIR = os.path.join(ROOT, "installer")

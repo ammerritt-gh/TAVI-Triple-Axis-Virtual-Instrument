@@ -163,6 +163,11 @@ def pytest_configure(config):
     # Guard 2: nothing this session starts may open a console window.
     install_no_window_guard()
 
+    # Eight xdist workers would each start a BLAS pool on every core; a caller's own setting wins.
+    if "PYTEST_XDIST_WORKER" in os.environ:
+        for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+            os.environ.setdefault(var, "1")
+
 
 def pytest_unconfigure(config):
     tmp_dir = getattr(config, "_tavi_config_tmp_dir", None)
@@ -234,4 +239,49 @@ def _no_console_windows():
     if sys.platform == "win32":
         assert getattr(subprocess.Popen.__init__, "_tavi_no_window", False), (
             "the CREATE_NO_WINDOW guard is not installed; see conftest.py"
+        )
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--installer", action="store_true",
+        help="include the installer-marked tests (tests/test_installer_launchers.py)",
+    )
+
+
+def installer_tests_wanted(args, flag):
+    """True when the run includes installer-marked tests: the flag, or a named installer file."""
+    if flag:
+        return True
+    return any(
+        os.path.basename(arg.split("::")[0].replace("\\", "/")) == "test_installer_launchers.py"
+        for arg in args
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if installer_tests_wanted(config.args, config.getoption("installer")):
+        return
+    dropped = [item for item in items if item.get_closest_marker("installer")]
+    if not dropped:
+        return
+    items[:] = [item for item in items if not item.get_closest_marker("installer")]
+    config.hook.pytest_deselected(items=dropped)
+    config._installer_left_out = len(dropped)
+    if hasattr(config, "workeroutput"):
+        # Every xdist worker collects the whole suite (loadfile), so the controller takes one count.
+        config.workeroutput["installer_left_out"] = len(dropped)
+
+
+def pytest_testnodedown(node, error):
+    left_out = (getattr(node, "workeroutput", None) or {}).get("installer_left_out", 0)
+    node.config._installer_left_out = max(left_out, getattr(node.config, "_installer_left_out", 0))
+
+
+def pytest_terminal_summary(terminalreporter, config):
+    left_out = getattr(config, "_installer_left_out", 0)
+    if left_out:
+        terminalreporter.write_line(
+            f"{left_out} installer test(s) left out; pass --installer, or name "
+            "tests/test_installer_launchers.py, to run them"
         )

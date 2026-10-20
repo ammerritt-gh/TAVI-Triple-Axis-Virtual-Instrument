@@ -4,3 +4,5 @@
 pytest
 # tests/test_reciprocal_interaction.py uses pytest-qt's qapp fixture.
 pytest-qt
+# pytest.ini runs the suite on eight workers (-n 8).
+pytest-xdist
