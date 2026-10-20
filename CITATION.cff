@@ -19,6 +19,7 @@ license: GPL-3.0-or-later
 
 repository-code: "https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument"
 url: "https://github.com/ammerritt-gh/TAVI-Triple-Axis-Virtual-Instrument"
+doi: "10.5281/zenodo.23483988"
 
 keywords:
   - neutron scattering
