@@ -38,8 +38,9 @@ operator's real ``config/view_layout.json`` with every dock hidden --
 or not. Every config reader/writer in the app resolves its path through
 ``tavi.local_state.config_path()``, which honors the ``TAVI_CONFIG_DIR``
 environment variable; this file points that variable at an empty temp
-``config/`` for the whole session, so nothing a test does can reach the real
-files, and no test reads the operator's saved settings (copying them in made
+``config/`` for each test file (``_config_dir_per_file``), so nothing a test
+does can reach the real files, no file sees another file's saved state, and
+no test reads the operator's saved settings (copying them in made
 results depend on whose machine ran the suite). A session-scoped tripwire fixture below re-hashes the real
 ``config/`` directory at teardown and fails the session if anything changed
 regardless -- a test that bypassed the override, or a second process writing
