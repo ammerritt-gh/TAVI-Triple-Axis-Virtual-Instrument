@@ -242,6 +242,18 @@ def _no_console_windows():
         )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _config_dir_per_file(request):
+    """Each test file starts from an empty config/: xdist changes which files share a
+    worker, so one file's saved parameters.json must never reach the next."""
+    session_dir = os.environ["TAVI_CONFIG_DIR"]
+    file_dir = os.path.join(tempfile.mkdtemp(dir=request.config._tavi_config_tmp_dir), "config")
+    os.makedirs(file_dir)
+    os.environ["TAVI_CONFIG_DIR"] = file_dir
+    yield
+    os.environ["TAVI_CONFIG_DIR"] = session_dir
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--installer", action="store_true",
