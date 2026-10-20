@@ -203,7 +203,8 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   Q = 3.103 Å⁻¹, just past 2k = 3.10, and is unreachable. Hence kf = 2.662 for
   the smoke.
 - **Compiled McStas smoke run: passed** (2026-09-11, re-run on the
-  `crystal-bending-generality` tree, `order=1` on both crystals (since restored), same configuration: Al (2,0,0) elastic
+  `crystal-bending-generality` tree, `order=1` on both crystals (since
+  restored), same configuration: Al (2,0,0) elastic
   at kf = 2.662 Å⁻¹, 1e7 neutrons, all Soller collimators open, ideal
   focusing). `detector_I = 2.07537e-07`, `detector_N = 7663` — up from the
   2026-09-09 run above, the expected direction: the corrected monochromator
