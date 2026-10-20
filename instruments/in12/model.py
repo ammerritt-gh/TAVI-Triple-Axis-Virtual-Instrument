@@ -21,10 +21,10 @@ the velocity selector (>36 m upstream) and the transmission polarising cavity
 Higher orders: the default source is the full-spectrum ILL VCS cold-source
 moderator spectrum placed at the guide exit, which ignores the curved guide's
 wavelength-dependent transmission, so the model does not inherit the real
-instrument's narrow band. Both crystals are therefore pinned
-to ``order=1`` -- idealized, order-clean transport -- rather than relying on an
-upstream selector the model boundary excludes. That is why no filter is needed
-here; it is a modelling choice, not a claim that higher orders cannot arise.
+instrument's narrow band. Both crystals transport all orders (``order=0``, as
+PUMA does). The real instrument's suppression -- the upstream velocity selector,
+the unmodelled guide and the optional cooled Be filter -- is absent from the
+model, so its simulated higher-order contamination overestimates the real one's.
 See ``MODEL_STATUS.md``.
 
 Values marked PLACEHOLDER affect intensity/resolution only, never angles.
@@ -249,8 +249,7 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
                               distance=IN12.L1, rotation_expr="mono_theta_param",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
-                              split=2, extend="if(!SCATTERED) ABSORB;",
-                              order=1)
+                              split=2, extend="if(!SCATTERED) ABSORB;")
 
         ## sample arm
 
@@ -299,11 +298,10 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
         analyzer_arm = instrument.add_component("analyzer_arm", "Arm", AT=[0, 0, IN12.L2],
                                                 ROTATED=[0, "sample_two_theta_param", 0], RELATIVE="sample_arm")
 
-        # No permanent filter: the real instrument's higher-order suppression
-        # is the velocity selector, far upstream of the model boundary, and the
-        # optional cooled Be filter is not modeled. What keeps this model
-        # order-clean is order=1 on both crystals, not the selector it does not
-        # contain (see the module docstring).
+        # No permanent filter. The real instrument's higher-order suppression
+        # (the velocity selector, the optional cooled Be filter) is not modeled,
+        # and both crystals transport all orders, so this model's higher-order
+        # contamination overestimates the real one's (see the module docstring).
         emit_collimator(instrument, "analyzer_collimator", relative="analyzer_arm",
                         at=(0, 0, 0.65), divergence=IN12.alpha_3, length=0.2,
                         xwidth=0.06, yheight=0.14)
@@ -313,7 +311,7 @@ def build_IN12_instrument(in12_config, diagnostic_mode, diagnostic_settings, num
                               distance=IN12.L3, rotation_expr="analyzer_theta_param",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
-                              split=5, order=1)
+                              split=5)
 
         ## detector
 

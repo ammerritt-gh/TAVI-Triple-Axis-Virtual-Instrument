@@ -262,8 +262,7 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
                               distance=PANDA.L1, rotation_expr="mono_theta_param",
                               info=monochromator_info, d_key='dm',
                               rv_param="rvm_param", rh_param="rhm_param",
-                              split=2, extend="if(!SCATTERED) ABSORB;",
-                              order=1)
+                              split=2, extend="if(!SCATTERED) ABSORB;")
 
         ## sample arm
 
@@ -332,20 +331,16 @@ def build_PANDA_instrument(panda_config, diagnostic_mode, diagnostic_settings,
 
         emit_monitor_group(instrument, 'Pre-analyzer EMonitor', 'Pre-analyzer PSD')
 
-        # No analyzer-side filter. PANDA's PG / cold-Be / BeO filters remove
-        # higher-order contamination, and this model has no contamination to
-        # remove -- not because a single-Q reflection cannot produce it (it
-        # can: Monochromator_curved with order=0 transports every multiple of
-        # the supplied reciprocal-lattice vector), but because both crystals
-        # are pinned to order=1. That is an idealized, order-clean
-        # spectrometer, and it is what MODEL_STATUS.md records; a broadband
-        # model with real filters is the alternative, not a free upgrade.
+        # No analyzer-side filter. The real PANDA suppresses higher orders with
+        # its PG / cold-Be / BeO filters and an unmodelled supermirror guide;
+        # both crystals transport all orders (order=0, as PUMA does), so this
+        # model's higher-order contamination overestimates the real one's.
         emit_crystal_assembly(instrument, cradle_name="analyzer_cradle",
                               crystal_name="analyzer", relative="analyzer_arm",
                               distance=PANDA.L3, rotation_expr="analyzer_theta_param",
                               info=analyzer_info, d_key='da',
                               rv_param="rva_param", rh_param="rha_param",
-                              split=5, order=1)
+                              split=5)
 
         ## detector
 
