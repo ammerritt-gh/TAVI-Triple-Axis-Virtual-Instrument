@@ -142,17 +142,18 @@ Roadmap order per CONTROL_FEATURES §9:
 
 ## Housekeeping
 
+- routine suite 2.0 min, over its 1-min budget (2026-10-20, after PR #77; splitting `tests/test_installer_launchers.py` only speeds `--installer` runs)
+
 - [x] **Test-runner note** - done 2026-09-09. The interpreter crash on a full
       `pytest tests/` (fault 0xc06d007f, a delay-load failure in matplotlib and
       Qt native code) is *not* a broken environment: it is what happens when the
       env's interpreter is invoked **directly**, which leaves `Library\bin` off
       PATH. Run the suite through the activation the launcher uses --
       `micromamba run -n tavi-dev python -m pytest tests -q` -- and it passes
-      whole in ~70 s. No allowlist needed. Run one suite at a time, and never a targeted
-      file while a full run is in flight: concurrent runs contend for the
-      API server port (`test_api_server.py` / `test_api_validation_schema.py`)
-      and for the shared `config/parameters.json` (every test that constructs
-      a real `TAVIController`) and fail spuriously. In Git Bash
+      whole. No allowlist needed. Since PR #77 (2026-10-20) the suite runs on
+      eight workers and leaves out the installer tests unless `--installer` is
+      passed; run one full suite at a time because a run takes 8 of the 32
+      threads (the old API-port and shared-config contention is gone). In Git Bash
       `micromamba` is not on PATH; the absolute launcher is in
       `tests/README.md`, as is the worktree hardlink for the Pb map that
       `test_dispersion_map.py` otherwise skips silently.
