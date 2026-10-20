@@ -132,9 +132,9 @@ Done when: one document, reached from [docs/READING_GUIDE.md](docs/READING_GUIDE
 
 ## Release 1.4.1: higher orders restored on PANDA and IN12
 
-**State:** pinned
+**State:** done
 
-The fix landed in PR #74 (job j4db74ad6c59e, 2026-10-20; full suite 3426 passed, 3 skipped on the landed SHA): PANDA's and IN12's crystals are back at `order=0` like PUMA's, and a registry-wide guard test (`tests/test_plugin_bindings.py`) holds every instrument there. From v1.3.0 through v1.4.0 both instruments reflected first order only, so their results on those versions lack harmonic contamination. The changelog fragment `changelog.d/higher-orders-restored.md` waits for the release. The version bump, tag and GitHub release (which likely mints a Zenodo version) wait for the operator's go-ahead.
+The fix landed in PR #74 (job j4db74ad6c59e, 2026-10-20): PANDA's and IN12's crystals are back at `order=0` like PUMA's, and a registry-wide guard test (`tests/test_plugin_bindings.py`) holds every instrument there. v1.4.1 was released 2026-10-20 (PR #75, tag on `4fa9050c`) with the fragment in its notes; its installers (PR #76) are attached to the release, and an unattended cold install of the tag ended INSTALLATION SUCCEEDED.
 
 Done when: v1.4.1 is released with that fragment in its notes.
 
@@ -170,7 +170,7 @@ The [release 1.4 audit](docs/audits/release-1-4.md) (`4efb3eb8`, 2026-10-17) rep
 - P3: a fine-step scan warning rounds its endpoint to three decimals (`tavi/utilities.py` `scan_stop_note`).
 - P3: `diagnostic_settings: null` in a saved record crashes startup and leaves scan-command signals blocked on Load.
 - P3: a failed install whose external record could not be created blocks a retry into the same folder.
-- Release checklist (installer design document §22, last item): v1.4.0 shipped 2026-10-19 (tag on `e1d98048`), and the unattended cold install at the tag ended INSTALLATION SUCCEEDED, but launcher items 5, 1 and 6 and the attended questions (desktop copy) are not yet exercised at a desk. The test installation at `%LOCALAPPDATA%\Temp\tavi-cold-1.4.0` serves; its item 6 removes it.
+- Release checklist (installer design document §22, last item): v1.4.1 shipped 2026-10-20 (tag on `4fa9050c`), and the unattended cold install at the tag ended INSTALLATION SUCCEEDED, but launcher items 5, 1 and 6 and the attended questions (desktop copy) are not yet exercised at a desk. The test installation at `%LOCALAPPDATA%\Temp\tavi-cold-1.4.1` serves; its item 6 removes it (the v1.4.0 one at `tavi-cold-1.4.0` can go the same way).
 
 Done when: the ledger is empty and deleted.
 
@@ -350,7 +350,8 @@ values saved under their bare IDs, and numeric API fields refuse JSON booleans
 - Flake: `tests/test_api_scan_maximum.py::test_a_scan_over_the_maximum_is_refused_whatever_the_flags[A3 0 1000 1-A4 0 1000 1-None-1002001]`
   fails in some full runs (the GUI's debounced scan-estimate timer fires while
   the test has `parse_scan_steps` patched to raise); passes alone; also seen in
-  job j7e540e562b4f, and as `[A3 0 100000 1]` in job j0236ccacd89b.
+  job j7e540e562b4f, as `[A3 0 100000 1]` in job j0236ccacd89b, and in the
+  v1.4.1 release preflight (2026-10-20; the rerun passed).
 - `components/README.md:134` says the full spectrum is exactly the one
   `Source_gen` builds; the component's `%D` states the one difference (pairs
   2/3 count without pair 1). Deferred P4 from job j0236ccacd89b.
