@@ -193,8 +193,8 @@ Question 1 in `SCIENTIST_REVIEW.md` is what would close this.
   higher-order transport. Roughly half of what the old tree counted at this
   setting was higher-order — one setting, not a contamination figure for the
   instrument, but it makes the point of that change concrete.
-  The figures in the 2026-09-11 run were measured on the earlier `order=1`
-  tree, which this model no longer emits. The smoke also certified what the
+  The figures above were measured on the earlier `order=1` tree; both
+  crystals now transport all orders. The smoke also certified what the
   Python suite cannot: that tree, with withdrawn collimators and `order=1`,
   generated a `.instr` that compiled and counted.
   Al (1,1,1) is *not* a usable smoke point despite being reachable at the cold
