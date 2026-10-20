@@ -18,17 +18,30 @@ From Git Bash `micromamba` is not on PATH; use the absolute launcher:
 
 Notes:
 
-- **Run one suite at a time, and never a targeted file while a full run is in
-  flight.** Two concurrent runs contend for the API server port
-  (`test_api_server.py`, `test_api_validation_schema.py`); it fails spuriously
-  and reproduces as green when run alone.
-- **Local state is isolated.** `conftest.py` sets `TAVI_CONFIG_DIR` for the
-  whole session to an empty temp `config/`; every reader/writer in the app
-  resolves its config path through `tavi.local_state.config_path()`, which
-  honors that override, so nothing a test does reaches the operator's real
-  `config/` files and no result depends on the settings saved there. An autouse session fixture re-hashes the real `config/`
-  at teardown and fails the session if anything changed anyway. A test that
-  needs to write local state uses `tmp_path`.
+- **The suite runs on eight workers.** `pytest.ini` adds `-n 8 --dist loadfile`
+  to every run, so each test file stays on one worker with its module-scoped
+  controllers. `-n 0` runs serially. Each worker sets the OpenBLAS, OpenMP and
+  MKL thread counts to 1 unless the caller already set them (`conftest.py`).
+  Every test server binds port 0 and every test controller starts with the API
+  disabled, so runs do not contend for the API port. A full run still takes
+  eight of the machine's 32 threads, so run one at a time.
+- **Local state is isolated.** `conftest.py` gives each test file its own empty
+  temp `config/` through `TAVI_CONFIG_DIR`, so a file's saved `parameters.json`
+  never reaches the next file on its worker and no result depends on the
+  settings saved in the operator's real `config/`. Every reader/writer in the
+  app resolves its config path through `tavi.local_state.config_path()`, which
+  honors that override, so nothing a test does reaches the real `config/`
+  files. An autouse session fixture re-hashes the real `config/` at teardown
+  and fails the session if anything changed anyway. A test that needs to write
+  local state uses `tmp_path`.
+- **Installer tests run only with `--installer`.** `tests/test_installer_launchers.py`
+  is marked `installer` and is left out of a run unless `--installer` is given
+  or that file is named on the command line (`pytest tests/test_installer_launchers.py`
+  runs it). The run's summary says how many were left out. Every release runs
+  the suite with `--installer`, and so does a change to `installer/`,
+  `installer/launchers/`, `tools/support/Record-TAVI.bat` or the root launchers
+  (`run-tavi-dev.bat`, `setup-tavi-dev.bat`, `run-dispersion-viewer.bat`); a job
+  for such a change carries `--installer` in its `--test-command`.
 - **A fresh `git worktree` skips a test silently.** `components/Pb_dft_phonons.dat`
   (143 MB, gitignored) is not in a new worktree, so `test_dispersion_map.py`
   skips. `-ra` above prints the skip; hardlink the file from the main checkout
@@ -64,13 +77,19 @@ Notes:
 
 ## Suite size and timing
 
-Measured 2026-10-16 on the 9950X3D with the command above, one run at a time:
-3281 passed and 5 skipped (three in `test_api_stage_solve.py` where an instrument's
-stage cannot level the h = l plane, `test_dispersion_map.py` in a fresh worktree, and
-`test_documentation.py` when the shared doc checker is absent) in 763 s
-(771 s wall). `test_orientation_gui.py` alone, 85 offscreen tests, takes about
-16 s with its two controllers' construction; its operator acceptance test
-takes about 1.6 s of that. Pass `--durations=15` to see the slowest tests.
+Measured 2026-10-20 on the 9950X3D with eight workers (eight of the 32 threads),
+while other sessions shared the machine:
+
+- `pytest tests -q -ra`: 3141 passed, 3 skipped, 288 installer tests left out, 70.6 s.
+- `pytest tests -q -ra --installer`: 3429 passed, 3 skipped, 129.3 s.
+- `pytest tests -n 0 -q -ra` (serial): 3141 passed, 3 skipped, 288 deselected,
+  735.7 s on a heavily loaded machine. An earlier serial run of the whole suite,
+  installer tests included, on an unloaded machine took 638 s.
+
+`test_take_position_records_the_stage_readouts_ki_kf_and_the_sense` in
+`test_orientation_gui.py` failed once under the rejected layout that spread the
+installer tests across workers, and passes alone. Pass `--durations=15` to see
+the slowest tests.
 
 ## Current contents
 

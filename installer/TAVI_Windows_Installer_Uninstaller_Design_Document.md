@@ -1779,7 +1779,7 @@ written after the tag exists.
     `WINDOWS-install-TAVI-vX.Y.Z.bat`, stamp the header comment and the
     `TAVI_VERSION` and `INSTALLER_VERSION` lines by hand, make whatever
     changes the release needs, run it cold on a clean directory against the
-    real tag, commit it on main, and upload it with `gh release upload
+    real tag, run the suite with `--installer`, commit it on main, and upload it with `gh release upload
     vX.Y.Z installer\WINDOWS-install-TAVI-vX.Y.Z.bat --clobber`. The release
     page may exist before its installer does.
 
