@@ -187,18 +187,15 @@ def test_each_soller_is_independent():
         assert names & set(_SOLLERS) == {inserted}
 
 
-def test_both_crystals_are_first_order_only():
-    """PANDA's status record claims an order-clean beam; the tree must deliver it.
-
-    ``Monochromator_curved`` at its default ``order=0`` reflects at every
-    multiple of the supplied reciprocal-lattice vector, and the default source
-    is the full-spectrum moderator, so nothing else here would exclude a
-    lambda/2 component. This is the assertion that makes the documented
-    "no higher-order contamination" true rather than aspirational.
+def test_both_crystals_transport_all_orders():
+    """The real PANDA suppresses higher orders with hardware this model lacks
+    (analyser-side PG, cold-Be and BeO filters; the unmodelled supermirror guide),
+    so the tree transports every order and its simulated higher-order contamination
+    overestimates the real instrument's.
     """
     by_name = {c.name: c for c in _build().component_list}
-    assert by_name["monochromator"].order == 1
-    assert by_name["analyzer"].order == 1
+    assert by_name["monochromator"].order == 0
+    assert by_name["analyzer"].order == 0
 
 
 def test_virtual_source_is_a_scannable_slit_at_the_right_place():

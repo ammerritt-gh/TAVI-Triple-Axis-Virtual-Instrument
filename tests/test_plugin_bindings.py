@@ -23,6 +23,8 @@ from instruments.rules import (
 )
 from instruments.validation import validate_descriptor
 from tavi.quantities import public_values, slit_gap_ids
+import instruments.builtin  # noqa: E402,F401  (registers the built-in instruments)
+from instruments.registry import available_instruments, get_instrument
 
 _spec = importlib.util.spec_from_file_location(
     "solver_baseline_cases", Path(__file__).resolve().parent / "data" / "solver_baseline_cases.py")
@@ -157,3 +159,17 @@ def test_validation_refuses_a_bad_binding(change, message):
     params[index] = dataclasses.replace(params[index], **change)
     bad = dataclasses.replace(descriptor, scannable_parameters=tuple(params))
     assert any(message in error for error in validate_descriptor(bad)), validate_descriptor(bad)
+
+
+@pytest.mark.parametrize("instrument_id", [info.id for info in available_instruments()])
+def test_every_registered_crystal_transports_all_orders(instrument_id):
+    """Both crystals keep McStas's order=0, so every reflection order is transported."""
+    plugin = get_instrument(instrument_id)
+    base = plugin.default_state()
+    config = plugin.scan_config(base, cases._launch_vals(plugin.descriptor()), None, {},
+                                base.sample_mount)
+    crystals = {c.name: c for c in plugin.build(config, False, {}, 1000).component_list
+                if c.component_name == "Monochromator_curved"}
+    for name in ("monochromator", "analyzer"):
+        assert name in crystals, (instrument_id, name, sorted(crystals))
+        assert crystals[name].order == 0, (instrument_id, name, crystals[name].order)
