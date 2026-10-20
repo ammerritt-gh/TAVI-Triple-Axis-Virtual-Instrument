@@ -4,7 +4,7 @@ Fragments for the next release live in `changelog.d`; see `changelog.d\README.md
 
 ## v1.4.1 — 2026-10-20
 
-**Read this first.** **Read this first.** 1.4.1 is a bug-fix release that restores higher-order (harmonic) reflections on PANDA and IN12. From v1.3.0 through v1.4.0 both instruments reflected first order only at the monochromator and analyzer, so their simulated scans from those versions lack the higher-order contamination a real triple-axis measurement carries; rerun any PANDA or IN12 result where that matters. The filters, guides and velocity selector that suppress this contamination on the real instruments are not modelled, so the simulated contamination is larger than the real instruments'. PUMA and IN8 are unaffected.
+**Read this first.** 1.4.1 is a bug-fix release that restores higher-order (harmonic) reflections on PANDA and IN12. From v1.3.0 through v1.4.0 both instruments reflected first order only at the monochromator and analyzer, so their simulated scans from those versions lack the higher-order contamination a real triple-axis measurement carries; rerun any PANDA or IN12 result where that matters. The filters, guides and velocity selector that suppress this contamination on the real instruments are not modelled, so the simulated contamination is larger than the real instruments'. PUMA and IN8 are unaffected.
 
 ### Bug fixes
 
